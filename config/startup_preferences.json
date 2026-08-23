@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "selected": {
+    "workspace": "C:\\Users\\user\\Desktop\\tool\\Localmodel",
+    "gpt_url": "https://chatgpt.com/g/g-p-6a818bab5be0819188aa5bfab333f9aa-localagentspace/c/6a859cbe-a480-83e8-8641-54c2135d5347",
+    "planner_key": "web_chatgpt",
+    "executor_key": "cloud_gptoss",
+    "operator_key": "cloud_gptoss"
+  },
+  "updated_at": 1787451698.753739
+}
