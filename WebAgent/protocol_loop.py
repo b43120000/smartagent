@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Independent WebAgent protocol/result/ACK loop."""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import uuid
+from pathlib import Path
+from typing import Callable
+
+from agent_core.smartagent_protocol import (
+    analyze_tool_transport,
+    format_tool_parse_diagnostics,
+    validate_ack_turn,
+)
+
+from .tool_context import WebAgentToolContext
+
+
+PlannerCall = Callable[[str, dict, list[str]], str]
+
+
+def extract_authorized_paths(request: str) -> list[str]:
+    return [
+        match.group(0).strip().rstrip(".,;，；。")
+        for match in re.finditer(r"[A-Za-z]:[\\/][^\r\n]+", str(request or ""))
+    ]
+
+
+def local_commit_line(expected: dict) -> str:
+    payload = {
+        "run_id": expected["run_id"],
+        "turn_id": expected["turn_id"],
+        "local_nonce": expected["local_nonce"],
+        "ack_result_id": expected["ack_result_id"],
+        "ack_web_ack_id": expected["ack_web_ack_id"],
+        "protocol_name": "web_agent_direct",
+        "protocol_version": 1,
+    }
+    return "[WEBAGENT_LOCAL_COMMIT] " + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def action_signature(action: dict) -> str:
+    blob = json.dumps(action, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8", errors="replace")).hexdigest()
+
+
+class WebAgentProtocolLoop:
+    def __init__(
+        self,
+        workspace: str | Path,
+        planner: PlannerCall,
+        *,
+        tool_context: WebAgentToolContext | None = None,
+        max_turns: int = 100,
+    ):
+        self.workspace = Path(workspace).expanduser().resolve()
+        self.planner = planner
+        self.tools = tool_context or WebAgentToolContext(self.workspace)
+        self.max_turns = max(1, int(max_turns))
+        self.run_id = ""
+        self.turn_id = 0
+        self.pending_result_ack_id = ""
+        self.pending_web_ack_id = ""
+        self.seen_web_ack_ids: set[str] = set()
+        self.action_ledger: dict[str, dict] = {}
+
+    def _new_commit(self) -> dict:
+        self.turn_id += 1
+        self.tools._protocol_turn_seq = self.turn_id
+        return {
+            "run_id": self.run_id,
+            "turn_id": self.turn_id,
+            "local_nonce": uuid.uuid4().hex,
+            "ack_result_id": self.pending_result_ack_id,
+            "ack_web_ack_id": self.pending_web_ack_id,
+        }
+
+    @staticmethod
+    def _with_commit(prompt: str, expected: dict) -> str:
+        return (
+            str(prompt).rstrip()
+            + "\n\n[WEBAGENT_ACK_REQUIRED]\n"
+            + "只輸出 smartagent_tool blocks；最後一個 block 必須是 matching turn_commit。\n"
+            + local_commit_line(expected)
+        )
+
+    def _accept_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
+        actions, commit, diagnostics = validate_ack_turn(calls, expected)
+        web_ack_id = str((commit or {}).get("web_ack_id", "") or "").strip()
+        if not diagnostics and web_ack_id in self.seen_web_ack_ids:
+            diagnostics.append({
+                "marker": "[WEBAGENT_ACK_REJECTED]",
+                "reason": "replayed_web_ack_id",
+                "detail": f"web_ack_id={web_ack_id}",
+                "suggestion": "產生新的唯一 web_ack_id 後重送同一決策。",
+            })
+            actions = []
+        if not diagnostics:
+            self.seen_web_ack_ids.add(web_ack_id)
+            self.pending_web_ack_id = web_ack_id
+            self.pending_result_ack_id = ""
+        return actions, diagnostics
+
+    def _execute_action(self, action: dict) -> str:
+        action_id = str(action.get("action_id", "") or "")
+        signature = action_signature(action)
+        cached = self.action_ledger.get(action_id)
+        if cached:
+            if cached["signature"] != signature:
+                raise RuntimeError(f"action_id payload mismatch: {action_id}")
+            return str(cached["result"])
+        result = self.tools.execute(action)
+        self.action_ledger[action_id] = {"signature": signature, "result": result}
+        return str(result)
+
+    def run(self, request: str) -> str:
+        request = str(request or "").strip()
+        if not request:
+            raise ValueError("WebAgent request 不可為空")
+        self.run_id = "WA-" + uuid.uuid4().hex[:12].upper()
+        self.turn_id = 0
+        self.pending_result_ack_id = ""
+        self.pending_web_ack_id = ""
+        self.seen_web_ack_ids.clear()
+        self.action_ledger.clear()
+        authorized = extract_authorized_paths(request)
+        self.tools.begin_run(self.run_id, request, authorized)
+
+        prompt = (
+            "[WEBAGENT_USER_REQUEST]\n"
+            + request
+            + "\n[/WEBAGENT_USER_REQUEST]\n"
+            + f"[WEBAGENT_WORKSPACE]\n{self.workspace}\n[/WEBAGENT_WORKSPACE]"
+        )
+
+        for _ in range(self.max_turns):
+            expected = self._new_commit()
+            attachments = self.tools.take_pending_attachments()
+            response = self.planner(self._with_commit(prompt, expected), expected, attachments)
+            report = analyze_tool_transport(response)
+            diagnostics = list(report["diagnostics"])
+            calls = list(report["calls"])
+            if diagnostics:
+                prompt = (
+                    "[WEBAGENT_PROTOCOL_REJECTED]\n"
+                    + format_tool_parse_diagnostics(diagnostics)
+                    + "\n修正 transport/schema 後重送同一決策；不得假設 action 已執行。"
+                )
+                continue
+
+            actions, ack_diagnostics = self._accept_ack(calls, expected)
+            if ack_diagnostics:
+                prompt = (
+                    "[WEBAGENT_ACK_REJECTED]\n"
+                    + format_tool_parse_diagnostics(ack_diagnostics)
+                    + "\n修正 ACK 後重送同一決策；不得重做尚未執行的 action。"
+                )
+                continue
+
+            if len(actions) == 1 and actions[0].get("tool") == "final_response":
+                if self.tools.last_verification_status in {"FAIL", "UNVERIFIED"}:
+                    prompt = (
+                        "[WEBAGENT_VERIFICATION_GATE]\n"
+                        f"run_command verification={self.tools.last_verification_status}; "
+                        "不可結束。請執行必要修正或明確 verification，PASS 後再 final_response。"
+                    )
+                    continue
+                return str(actions[0].get("content", ""))
+
+            results = []
+            for action in actions:
+                result = self._execute_action(action)
+                results.append({
+                    "action_id": action.get("action_id", ""),
+                    "tool": action.get("tool", ""),
+                    "result": result,
+                })
+            result_id = "RES-" + uuid.uuid4().hex[:12].upper()
+            self.pending_result_ack_id = result_id
+            prompt = (
+                f"[WEBAGENT_TOOL_RESULTS]\nRUN_ID={self.run_id}\nRESULT_ID={result_id}\n"
+                + json.dumps(results, ensure_ascii=False, separators=(",", ":"))
+                + "\n[/WEBAGENT_TOOL_RESULTS]\n"
+                + "根據結果決定下一步；下一輪 turn_commit 必須 ACK 此 RESULT_ID。"
+            )
+        raise RuntimeError(f"WebAgent 超過最大 protocol turns: {self.max_turns}")
