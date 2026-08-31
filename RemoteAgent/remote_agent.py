@@ -259,14 +259,21 @@ class RemoteAgentSupervisor:
         enriched = dict(request)
         enriched["conversation_url"] = conv.conversation_url
         enriched["workspace"] = str(Path(workspace).resolve())
+        enriched["transport"] = "WEBGPT"
+        enriched["endpoint"] = "chatgpt.com"
         from agent_core.routing import build_route_context
         route_context = build_route_context(
             request=str(enriched.get("request", "") or ""),
             source="remote",
             conversation_url=conv.conversation_url,
-            requested_mode=enriched.get("requested_mode", "AUTO"),
-            requested_carrier=enriched.get("requested_carrier", "AUTO"),
+            requested_mode="AUTO",
+            requested_carrier="AUTO",
         )
+        reply_route = {
+            "transport": "WEBGPT",
+            "endpoint": "chatgpt.com",
+            "conversation_url": conv.conversation_url,
+        }
         return self.task_queue.enqueue_remote_request(
             enriched,
             origin_turn_fingerprint=origin_turn_fingerprint,
@@ -275,6 +282,8 @@ class RemoteAgentSupervisor:
                 "detected_by": "RemoteAgentSupervisor",
                 "routing_source": "conversation_registry",
                 "route_context": route_context,
+                "reply_route": reply_route,
+                "transport": "WEBGPT",
             },
         )
 
@@ -564,12 +573,12 @@ def run_remote_supervisor_self_tests() -> dict[str, Any]:
             and not any(e.kind in ("TASK_QUEUED", "REMOTE_REQUEST_DETECTED") for e in detected_again)
         )
 
-        # Replay the same control envelope as a new human turn. request_id dedupe
-        # must still resolve to the original durable task.
+        # V1 identity is transport + conversation + turn identity. Repeating the
+        # same request_id/text in a distinct human turn is a distinct task.
         scraper.conversations[url2].append(format_remote_message(remote))
         replay_events = sup.poll_once()
-        results["same_request_new_turn_deduped"] = (
-            len(task_store.all()) == 1 and any(e.kind == "TASK_DEDUPED" for e in replay_events)
+        results["same_request_new_turn_distinct"] = (
+            len(task_store.all()) == 2 and any(e.kind == "TASK_QUEUED" for e in replay_events)
         )
 
         # Remote-supplied routing is ignored; the authorized monitored binding
@@ -581,11 +590,14 @@ def run_remote_supervisor_self_tests() -> dict[str, Any]:
         scraper.conversations[url2].append(format_remote_message(wrong))
         wrong_events = sup.poll_once()
         routed_tasks = task_store.all()
+        wrong_task = next((t for t in routed_tasks if t.request_id == "RR-WRONG-ROUTE"), None)
         results["remote_routing_override_ignored"] = (
-            len(routed_tasks) == 2
+            len(routed_tasks) == 3
             and any(e.kind == "TASK_QUEUED" for e in wrong_events)
-            and routed_tasks[-1].conversation_url == url2
-            and Path(routed_tasks[-1].workspace).resolve() == PROJECT_ROOT.resolve()
+            and wrong_task is not None
+            and wrong_task.conversation_url == url2
+            and Path(wrong_task.workspace).resolve() == PROJECT_ROOT.resolve()
+            and wrong_task.metadata.get("reply_route", {}).get("conversation_url") == url2
         )
 
         # Durable enqueue must happen before watcher cursor ACK.  Simulate a

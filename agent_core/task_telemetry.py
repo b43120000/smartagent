@@ -7,7 +7,7 @@ class TaskTelemetry:
  def __init__(self,root:str|Path):
   self.root=Path(root);self.run_id='';self.started=0.0;self.events=[];self.counters={}
  def begin(self,run_id:str):
-  self.run_id=str(run_id);self.started=time.perf_counter();self.events=[];self.counters={'web_round_trip_count':0,'tool_action_count':0,'file_read_count':0,'uploaded_file_count':0,'build_count':0};self.event('task_received')
+  self.run_id=str(run_id);self.started=time.perf_counter();self.events=[];self.counters={'web_round_trip_count':0,'tool_action_count':0,'file_read_count':0,'uploaded_file_count':0,'build_count':0,'stage_count':0,'stage_retry_count':0,'stage_result_bytes':0,'attachment_cache_hit_count':0,'attachment_cache_miss_count':0};self.event('task_received')
  def event(self,name:str,**data):
   self.events.append({'name':str(name),'elapsed_ms':round((time.perf_counter()-self.started)*1000,3) if self.started else 0.0,**data})
  def inc(self,name:str,value:int=1): self.counters[name]=int(self.counters.get(name,0))+int(value)

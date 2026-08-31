@@ -195,7 +195,10 @@ TOOL_ENVELOPE_SCHEMAS = {
             "web_ack_id": str,
             "action_count": int,
         },
-        "optional": {},
+        # v6 keeps the ACK envelope wire-compatible and piggybacks its stage
+        # manifest here.  The nested manifest is validated atomically after
+        # all action envelopes have passed their own schemas.
+        "optional": {"stage": dict},
     },
 }
 
@@ -1438,6 +1441,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 - PC LocalAgent turn（訊息中含 `[SMARTAGENT_LOCAL_COMMIT]`）每一輪回覆都必須只包含一個或多個 ```smartagent_tool``` 區塊；區塊外不得有任何文字。
 
 【RemoteAgent Mobile Ingress / Result Return — protocol v4】：
+- 若 human user turn 含 `[REMOTE_AGENT_ACK]` 或 `[REMOTE_AGENT_EVENT]`，這是 RemoteAgent 單向狀態通知；此規則優先於 mobile ingress。只用一般繁體中文簡短確認 request_id、event、status；禁止輸出任何 remoteagent_control 或 smartagent_tool 區塊，禁止建立或重送任務。
 - 若 human user turn 含 `[REMOTE_AGENT_RESULT]`，這是 PC LocalAgent 的完成結果回傳；此規則優先於 mobile ingress。只用一般繁體中文回覆結果，必須包含 request_id、status、summary；禁止輸出任何 remoteagent_control 或 smartagent_tool 區塊。
 - 若 mobile user 要求取消既有 request_id，只輸出 `REMOTE_AGENT_CANCEL`，欄位為 `target_request_id`；若要求重試 FAILED/INTERRUPTED 任務，只輸出 `REMOTE_AGENT_RETRY`。兩者都不可建立新的 REMOTE_AGENT_REQUEST。
 - 若目前 human user turn **不含** `[SMARTAGENT_LOCAL_COMMIT]`，且訊息以 `remoteAgent`、`remote agent`、`@remoteAgent` 或 `@remote agent` 開頭，這是 mobile RemoteAgent ingress；此規則優先於一般 SmartAgent Tool Envelope。
@@ -1500,6 +1504,12 @@ SYSTEM_PROMPT_TEMPLATE = """
 10. 保存本次 project session summary：{{"tool":"save_session_summary","summary":"本次已理解/完成內容","decisions":["重要架構決策"],"modified_files":["路徑"],"verification":["驗證與結果"],"pending":["未完成/風險"],"next_steps":["下次可直接接續的事項"]}}
 11. Web 直接修改單一檔案：{{"tool":"web_edit_file","path":"絕對路徑","instruction":"要對此檔案做的修改","output_path":"可省略；預設覆寫原檔"}}
 12. 下載本輪 WebGPT 已生成完成的檔案/圖片：{{"tool":"download_artifact","output_path":"本機目的路徑或目錄","expected_filename":"可省略；已知檔名時填入","timeout":45}}
+12a. 專案快照（一次取得 manifest/build/git facts）：{{"tool":"inspect_project_scope","workspace":"可省略；預設 Workspace Root"}}
+12b. 原子 project sync：{{"tool":"project_sync","strategy":"DIRECT|DELTA|FULL_BUNDLE","base_snapshot_id":"DELTA 時必要","max_bytes":500000,"max_files":50}}
+12c. 先驗證 edit plan：{{"tool":"validate_edit_plan","plan":{{"base_snapshot_id":"project_sync snapshot_id","files_to_modify":[],"verification_commands":[],"expected_observable_result":"...","rollback_condition":"..."}}}}
+12d. 套用已驗證 edit plan：{{"tool":"apply_edit_plan","plan":{{"base_snapshot_id":"project_sync snapshot_id","files_to_modify":[],"verification_commands":[],"expected_observable_result":"...","rollback_condition":"..."}}}}
+12e. 批次驗證：{{"tool":"aggregate_verification","commands":["短測試命令"],"timeout":120}}
+12f. Protocol v6（只有 Local Commit protocol_version=6 且明確啟用時）：turn_commit 可加 `stage`，例如 {{"stage_id":"S-2","seq":2,"kind":"EXECUTE_VERIFY","task_size":"MEDIUM","execution":"SEQUENTIAL","result_policy":"COMPACT","stop_on_error":true,"actions":[{{"action_id":"A-APPLY","depends_on":[]}},{{"action_id":"A-VERIFY","depends_on":["A-APPLY"]}}]}}。所有 action_id 必須與本輪 envelopes 完全相同；v6 first release 只接受 SEQUENTIAL，任何 mutation stage 若無 resumable run 會安全拒絕。
 13. 完成並回覆使用者：{{"tool":"final_response","action_id":"A-唯一值","content":"顯示在 CMD 的最終回覆"}}
 14. 回覆提交 ACK（每輪最後必須有）：{{"tool":"turn_commit","run_id":"目前 RUN_ID","turn_id":1,"ack_local_nonce":"Local Commit nonce","ack_result_id":"上一輪 result_id 或空字串","ack_web_ack_id":"Local Commit 的 ack_web_ack_id","web_ack_id":"本輪新唯一值","action_count":1}}
 

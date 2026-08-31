@@ -5,7 +5,7 @@ from collections import Counter
 from pathlib import Path
 
 SNAPSHOT_SCHEMA_VERSION=2
-IGNORED_DIRS={'.git','.agents','build','out','dist','__pycache__','.gradle','.idea','.vs','node_modules'}
+IGNORED_DIRS={'.git','.agents','.venv','venv','env','build','out','dist','__pycache__','.gradle','.idea','.vs','node_modules'}
 BUILD_NAMES={'CMakeLists.txt','build.gradle','build.gradle.kts','settings.gradle','settings.gradle.kts','Android.mk','Android.bp'}
 LANGUAGE_BY_EXT={'.c':'c','.h':'c-cpp-header','.cc':'cpp','.cpp':'cpp','.cxx':'cpp','.hpp':'cpp-header','.java':'java','.kt':'kotlin','.kts':'kotlin','.py':'python','.js':'javascript','.ts':'typescript','.rs':'rust','.go':'go','.cmake':'cmake','.gradle':'gradle','.xml':'xml','.json':'json','.md':'markdown'}
 

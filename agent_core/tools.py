@@ -375,7 +375,10 @@ def _project_workspace(tool_call:dict,agent):
     candidate=Path(requested or default).expanduser().resolve()
     allowed=list(getattr(agent,"_authorized_local_paths",[]) or []) if agent else []
     if agent and getattr(agent,"workspace_root",None): allowed.append(str(agent.workspace_root))
-    if not _path_within_allowed_roots(candidate,allowed): raise ValueError(f"workspace_not_authorized:{candidate}")
+    repo=Path(__file__).resolve().parent.parent
+    explicit=list(getattr(agent,"_authorized_local_paths",[]) or []) if agent else []
+    repo_ok=os.path.normcase(str(candidate))==os.path.normcase(str(repo)) and any(_path_within_allowed_roots(Path(x).expanduser().resolve(),[str(repo)]) for x in explicit)
+    if not (_path_within_allowed_roots(candidate,allowed) or repo_ok): raise ValueError(f"workspace_not_authorized:{candidate}")
     return str(candidate)
 
 def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str:

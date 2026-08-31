@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any
+from pathlib import Path
+import re
 
 MODE_AUTO = "AUTO"
 MODE_FAST_TOOL = "FAST_TOOL"
@@ -25,7 +27,12 @@ EXECUTION_CURRENT_PLANNER_LOOP = "CURRENT_PLANNER_LOOP"
 CARRIER_AUTO = "AUTO"
 CARRIER_CHATGPT_CONVERSATION = "CHATGPT_CONVERSATION"
 CARRIER_LOCAL_CONSOLE = "LOCAL_CONSOLE"
-CARRIERS = {CARRIER_AUTO, CARRIER_CHATGPT_CONVERSATION, CARRIER_LOCAL_CONSOLE}
+CARRIER_REMOTE_TRANSPORT = "REMOTE_TRANSPORT"
+SOURCE_WEBGPT_COPILOT = "WEBGPT_COPILOT"
+CARRIERS = {
+    CARRIER_AUTO, CARRIER_CHATGPT_CONVERSATION, CARRIER_LOCAL_CONSOLE,
+    CARRIER_REMOTE_TRANSPORT,
+}
 
 SYNC_AUTO="AUTO"
 SYNC_NONE="NONE"
@@ -33,6 +40,8 @@ SYNC_DIRECT="DIRECT"
 SYNC_DELTA="DELTA"
 SYNC_FULL_BUNDLE="FULL_BUNDLE"
 CONTEXT_SYNC_STRATEGIES={SYNC_AUTO,SYNC_NONE,SYNC_DIRECT,SYNC_DELTA,SYNC_FULL_BUNDLE}
+
+TASK_SIZE_SMALL="SMALL"; TASK_SIZE_MEDIUM="MEDIUM"; TASK_SIZE_LARGE="LARGE"
 
 
 @dataclass(frozen=True)
@@ -111,18 +120,48 @@ def select_context_sync(request: str, requested_strategy: object = SYNC_AUTO) ->
     return ContextSyncRoute(requested_strategy=requested,selected_strategy=selected,explicit_override=explicit)
 
 
+def advisory_stage1_context(request: str, workspace: str | Path | None = None, *, include_snapshot: bool = False) -> dict[str, Any]:
+    """Programmatic Stage 1A facts only; never infer a semantic edit plan."""
+    text = str(request or "")
+    explicit_paths = sorted(set(re.findall(r"[A-Za-z]:[\\/][^\r\n\"']+|(?:[\w.-]+/)+[\w.-]+", text)))
+    root = Path(workspace).expanduser().resolve() if workspace else None
+    files = []
+    build_files = []
+    git_dirty = None
+    snapshot_id = ""
+    if include_snapshot and root and root.is_dir():
+        try:
+            from .project_sync import inspect_project_scope
+            snapshot = inspect_project_scope(root)
+            snapshot_id = str(snapshot.get("snapshot_id", ""))
+            build_files = list(snapshot.get("build_files", []))[:20]
+            git_dirty = bool(snapshot.get("git_dirty", False))
+            files = [x.get("path", "") for x in snapshot.get("files", []) if x.get("path") in {Path(p).name for p in explicit_paths}][:20]
+        except Exception:
+            pass
+    # This is deliberately conservative: many paths or an explicit broad
+    # request simply asks the Planner to use a bundle; it does not decide code.
+    lowered = text.lower()
+    size = TASK_SIZE_SMALL if len(explicit_paths) <= 2 and not any(x in lowered for x in ("project", "全", "全部", "refactor", "架構")) else TASK_SIZE_MEDIUM
+    if any(x in lowered for x in ("跨模組", "整個", "所有", "architecture", "migration")): size = TASK_SIZE_LARGE
+    return {"schema":"SMARTAGENT_STAGE1A_V1","task_size":size,"explicit_paths":explicit_paths,"matched_paths":files,"workspace":str(root) if root else "","snapshot_id":snapshot_id,"build_files":build_files,"git_dirty":git_dirty}
+
+
 def select_carrier(
     *, source: str, conversation_url: str = "", requested_carrier: object = CARRIER_AUTO
 ) -> CarrierRoute:
     requested = _normalized_choice(requested_carrier, CARRIERS, CARRIER_AUTO)
-    normalized_source = str(source or "local").strip().lower()
-    if normalized_source == "remote" or conversation_url:
+    raw_source = str(source or "local").strip()
+    upper_source = raw_source.upper()
+    normalized_source = upper_source if upper_source in {SOURCE_WEBGPT_COPILOT, "TELEGRAM"} else raw_source.lower()
+    if normalized_source == SOURCE_WEBGPT_COPILOT or conversation_url:
         selected = CARRIER_CHATGPT_CONVERSATION
+    elif normalized_source not in {"local", "remote"}:
+        selected = CARRIER_REMOTE_TRANSPORT
     else:
         selected = CARRIER_LOCAL_CONSOLE
-    # Requested future adapters intentionally fall back until implemented.
-    if requested not in {CARRIER_AUTO, selected}:
-        selected = CARRIER_CHATGPT_CONVERSATION if conversation_url else CARRIER_LOCAL_CONSOLE
+    # A source transport owns its carrier. Unsupported explicit overrides keep
+    # the detected safe carrier instead of redirecting to ChatGPT.
     return CarrierRoute(
         requested_carrier=requested,
         selected_carrier=selected,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Durable exactly-once checkpoints for SmartAgent task/tool boundaries."""
 from __future__ import annotations
-import json, os, threading, time
+import json, os, threading, time, hashlib
 from pathlib import Path
 from typing import Any
 from .workspace import AGENT_PROJECT_ROOT
@@ -44,3 +44,27 @@ class TaskCheckpointStore:
     def resume_policy(self,run_id:str,action_id:str)->str:
         a=self.load(run_id).get("actions",{}).get(action_id,{})
         return {COMMITTED:"REUSE_RESULT",NOT_STARTED:"EXECUTE",STARTED_UNCONFIRMED:"RECONCILE"}.get(a.get("boundary"),"EXECUTE")
+    def admit_stage(self, run_id:str, manifest:dict, actions:list[dict])->dict:
+        """Durably bind stage identity/sequence/action signatures."""
+        encoded=json.dumps(manifest,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+        signature=hashlib.sha256(encoded.encode()).hexdigest(); stage_id=str(manifest.get("stage_id", "")); seq=int(manifest.get("seq",0))
+        with self._lock:
+            d=self.load(run_id); stages=d.setdefault("stages",{}); existing=stages.get(stage_id)
+            if existing and existing.get("manifest_sha256")!=signature: raise ValueError("stage_id_reused_with_changed_manifest")
+            last=max((int(x.get("seq",0)) for x in stages.values()),default=0)
+            if not existing and seq<=last: raise ValueError("stage_seq_regression")
+            if not existing:
+                stages[stage_id]={"seq":seq,"manifest_sha256":signature,"actions":{str(a.get("action_id", "")):self._sig(a) for a in actions},"outcomes":{}}
+            d["updated_at"]=time.time(); return self._save(d)
+    def stage_resume_policy(self, run_id:str, stage_id:str, action:dict)->tuple[str,object]:
+        """Never replay an uncertain mutation after a restart."""
+        d=self.load(run_id); stage=dict(d.get("stages",{}).get(stage_id) or {}); action_id=str(action.get("action_id", ""))
+        if stage and stage.get("actions",{}).get(action_id) not in {None,self._sig(action)}: raise ValueError("stage_action_signature_conflict")
+        item=dict(d.get("actions",{}).get(action_id) or {})
+        boundary=item.get("boundary")
+        if boundary==COMMITTED: return "REUSE_RESULT",item.get("result")
+        if boundary==STARTED_UNCONFIRMED: return "RECONCILE_REQUIRED",None
+        return "EXECUTE",None
+    @staticmethod
+    def _sig(action:dict)->str:
+        return hashlib.sha256(json.dumps(action,ensure_ascii=False,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()

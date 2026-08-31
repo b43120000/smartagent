@@ -32,6 +32,16 @@ from pathlib import Path
 from typing import Optional
 
 try:
+    from .webgpt_rate_governor import WebGPTRateGovernor
+except ImportError:  # standalone execution compatibility
+    from webgpt_rate_governor import WebGPTRateGovernor
+
+try:
+    from .process_file_lock import exclusive_process_lock
+except ImportError:  # standalone execution compatibility
+    from process_file_lock import exclusive_process_lock
+
+try:
     from .artifact_transfer import (
         download_latest_artifact, download_latest_artifact_with_evidence, file_evidence,
         snapshot_artifact_signatures, has_fresh_artifact,
@@ -48,6 +58,7 @@ PROFILE_DIR = Path(os.environ.get("APPDATA", Path.home())) / "WebLLMScraper"
 DEBUG_LOG_PATH = Path(__file__).resolve().parent.parent / ".agents" / "web_llm_scraper_debug.log"
 CHATGPT_CDP_PORT = 1272
 CHATGPT_CDP_ENDPOINT = f"http://127.0.0.1:{CHATGPT_CDP_PORT}"
+REMOTE_PAGE_START_LOCK = Path(__file__).resolve().parent.parent / ".agents" / "remote_page_start.lock"
 
 
 def _debug_log(message: str) -> None:
@@ -141,6 +152,10 @@ class WebLLMScraper:
         self._pw = None
         self._browser = None
         self._page = None
+        self._cdp_browser = None
+        self._attached_over_cdp = False
+        self._owns_attached_page = False
+        self._isolated_browser = None
         self._profile_dir = PROFILE_DIR / self.cfg["profile_subdir"]
         self._profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -181,6 +196,8 @@ class WebLLMScraper:
         self._rate_limited_until = 0.0
         self._rate_limit_dialog_dismissed_at = 0.0
         self._rate_limit_dialog_repeat_window_sec = 120.0
+        self._rate_limit_dialog_streak = 0
+        self._rate_governor = None
 
     def set_status_callback(self, callback) -> None:
         self._status_callback = callback
@@ -328,7 +345,11 @@ class WebLLMScraper:
             "--hide-crash-restore-bubble",
             "--disable-session-crashed-bubble",
         ]
-        if self.service == "chatgpt":
+        isolated_worker = (
+            self.service == "chatgpt"
+            and os.environ.get("SMARTAGENT_ISOLATED_BROWSER", "") == "1"
+        )
+        if self.service == "chatgpt" and not isolated_worker:
             # Stage 7: expose the authenticated Chromium context on localhost so
             # RemoteAgent-0 can attach without a second browser/profile.
             browser_args.extend([
@@ -344,27 +365,146 @@ class WebLLMScraper:
             # or resizes, allowing the page's responsive UI to reflow normally.
             viewport = None
 
-        self._browser = self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(self._profile_dir),
-            headless=self.headless,
-            slow_mo=self.slow_mo,
-            args=browser_args,
-            ignore_https_errors=True,
-            **({"viewport": viewport} if self.headless else {"no_viewport": True}),
+        attach_cdp = (
+            self.service == "chatgpt"
+            and not isolated_worker
+            and os.environ.get("SMARTAGENT_ATTACH_CDP", "") == "1"
         )
+        if isolated_worker:
+            state_path = Path(os.environ.get("SMARTAGENT_REMOTE_BROWSER_STATE", "")).resolve()
+            if not state_path.is_file():
+                raise RuntimeError("isolated worker browser state missing")
+            try:
+                storage_state = json.loads(state_path.read_text(encoding="utf-8"))
+            finally:
+                try:
+                    state_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if not isinstance(storage_state, dict):
+                raise RuntimeError("isolated worker browser state invalid")
+            self._log_stage("isolated_browser_start", f"task={os.environ.get('SMARTAGENT_REMOTE_WORKER_TASK', '')}")
+            self._emit_status("CDP_CONNECTING", message="啟動 Agent1 獨立瀏覽器", detail="isolated_process")
+            self._isolated_browser = self._pw.chromium.launch(
+                headless=self.headless,
+                slow_mo=self.slow_mo,
+                args=browser_args,
+            )
+            self._browser = self._isolated_browser.new_context(
+                storage_state=storage_state,
+                ignore_https_errors=True,
+                **({"viewport": viewport} if self.headless else {"no_viewport": True}),
+            )
+        elif attach_cdp:
+            endpoint = os.environ.get("SMARTAGENT_CHATGPT_CDP", CHATGPT_CDP_ENDPOINT)
+            self._log_stage("cdp_connecting", f"endpoint={endpoint}")
+            self._emit_status("CDP_CONNECTING", message="連線共用瀏覽器", detail=endpoint)
+            self._cdp_browser = self._pw.chromium.connect_over_cdp(endpoint)
+            if not self._cdp_browser.contexts:
+                raise RuntimeError("CDP browser has no context")
+            self._browser = self._cdp_browser.contexts[0]
+            self._attached_over_cdp = True
+        else:
+            self._browser = self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(self._profile_dir),
+                headless=self.headless,
+                slow_mo=self.slow_mo,
+                args=browser_args,
+                ignore_https_errors=True,
+                **({"viewport": viewport} if self.headless else {"no_viewport": True}),
+            )
 
-        # Reuse existing page or open new one
-        pages = self._browser.pages
-        self._page = pages[0] if pages else self._browser.new_page()
+            # LocalAgent owns its persistent profile and foreground page.
+            pages = self._browser.pages
+            self._page = pages[0] if pages else self._browser.new_page()
 
-        # Navigate to service
-        self._page.goto(self.cfg["url"], wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
+        # Chromium/CDP can accept concurrent clients, but creating and navigating
+        # several fresh targets at the same instant is not reliable. Serialize
+        # only this short bootstrap section; once each page commits, Agent1
+        # workers continue concurrently on their own marked target.
+        startup_lock = (
+            exclusive_process_lock(
+                REMOTE_PAGE_START_LOCK, timeout_sec=120.0,
+                label="RemoteAgent page startup", legacy_kind="remote-page-start-v1",
+            ) if attach_cdp else None
+        )
+        if attach_cdp:
+            self._log_stage("page_start_wait", f"lock={REMOTE_PAGE_START_LOCK}")
+            self._emit_status("PAGE_START_WAIT", message="等待配置獨立網頁")
+        from contextlib import nullcontext
+        with (startup_lock if startup_lock is not None else nullcontext()):
+            isolated_page = attach_cdp or isolated_worker
+            startup_attempts = 3 if isolated_page else 1
+            for startup_attempt in range(startup_attempts):
+                try:
+                    if isolated_page:
+                        marker = os.environ.get("SMARTAGENT_REMOTE_WORKER_TASK", "REMOTE_WORKER")
+                        target_id=self._conversation_id_from_url(self.cfg.get("url",""))
+                        matches=[page for page in list(self._browser.pages) if self._conversation_id_from_url(str(getattr(page,"url","") or ""))==target_id] if target_id else []
+                        if matches:
+                            self._page=matches[0]
+                            self._owns_attached_page=False
+                            for duplicate in matches[1:]:
+                                try: duplicate.close(run_before_unload=False)
+                                except Exception: pass
+                        else:
+                            self._page = self._browser.new_page()
+                            self._owns_attached_page=True
+                            self._page.evaluate("value => { window.name = value; }",f"SMARTAGENT_REMOTE_WORKER:{marker}")
+                        self._log_stage(
+                            "page_starting",
+                            f"attempt={startup_attempt + 1} pages={len(self._browser.pages)} marker={marker} isolated={isolated_worker}",
+                        )
+                        self._emit_status(
+                            "PAGE_STARTING", message="建立獨立網頁",
+                            progress={"current": startup_attempt + 1, "total": startup_attempts},
+                        )
+                    self._page.goto(
+                        self.cfg["url"],
+                        wait_until="commit" if attach_cdp else "domcontentloaded",
+                        timeout=30000,
+                    )
+                    time.sleep(2)
+                    if isolated_page:
+                        page_url = str(getattr(self._page, "url", "") or "")
+                        if isolated_worker and (
+                            not page_url.startswith(("https://", "http://"))
+                            or not self._is_logged_in()
+                        ):
+                            raise RuntimeError(
+                                f"isolated_worker_page_not_ready: url={page_url or 'EMPTY'}"
+                            )
+                        self._log_stage("page_ready", f"url={page_url}")
+                        self._emit_status("PAGE_READY", message="獨立網頁已就緒", detail=page_url)
+                    break
+                except Exception as exc:
+                    self._log_stage(
+                        "cdp_startup_retry" if startup_attempt + 1 < startup_attempts else "page_start_failed",
+                        f"attempt={startup_attempt + 1} error={type(exc).__name__}: {exc}",
+                    )
+                    if isolated_page and self._page is not None:
+                        try:
+                            self._page.close(run_before_unload=False)
+                        except Exception:
+                            pass
+                        self._page = None
+                    if isolated_page and startup_attempt + 1 < startup_attempts:
+                        time.sleep(1.5 * (startup_attempt + 1))
+                        continue
+                    if attach_cdp:
+                        try:
+                            self._pw.stop()
+                        except Exception:
+                            pass
+                        self._pw = None
+                    raise
 
         self._dismiss_known_blocking_dialogs()
 
         # Check if logged in
         if not self._is_logged_in():
+            if isolated_worker:
+                raise RuntimeError("isolated worker authentication state rejected by ChatGPT")
             print(f"\n[!] 尚未登入 {self.service}！")
             print(f"    請在開啟的瀏覽器視窗中手動完成登入...")
             while not self._is_logged_in():
@@ -645,32 +785,50 @@ class WebLLMScraper:
         return False
 
     def _record_rate_limit_dialog_dismissal(self, detail: str, *, now: float | None = None) -> bool:
-        """First dismissal is recoverable; a prompt reappearance confirms rate limiting."""
+        """Dismiss and count dialogs; trip cooldown only at the configured threshold."""
         now = time.time() if now is None else float(now)
         previous = float(getattr(self, "_rate_limit_dialog_dismissed_at", 0.0) or 0.0)
         window = float(getattr(self, "_rate_limit_dialog_repeat_window_sec", 120.0) or 120.0)
-        confirmed = bool(previous and 0.0 <= now - previous <= window)
+        consecutive = bool(previous and 0.0 <= now - previous <= window)
+        local_streak = (int(getattr(self, "_rate_limit_dialog_streak", 0) or 0) + 1) if consecutive else 1
+        self._rate_limit_dialog_streak = local_streak
         self._rate_limit_dialog_dismissed_at = now
-        if confirmed:
+        governor = getattr(self, "_rate_governor", None)
+        if governor is not None:
+            result = governor.record_rate_limit(detail)
+            triggered = bool(result.get("triggered", False))
+            streak = int(result.get("streak", local_streak) or local_streak)
+            threshold = int(result.get("threshold", 5) or 5)
+            cooldown_until = float(result.get("cooldown_until", 0.0) or 0.0)
+        else:
+            threshold = max(1, int(os.environ.get("SMARTAGENT_WEBGPT_DISMISSALS_BEFORE_COOLDOWN", "5")))
+            streak = local_streak
+            triggered = streak >= threshold
+            cooldown_until = now + 600.0 if triggered else 0.0
+        if triggered:
             self._rate_limited_until = max(
-                float(getattr(self, "_rate_limited_until", 0.0) or 0.0), now + 300.0
+                float(getattr(self, "_rate_limited_until", 0.0) or 0.0), cooldown_until
             )
-            self._emit_status(
-                "UI_ESCALATION_REQUIRED", message="ChatGPT 已確認限制要求",
-                task_phase="COMPOSER", observed_state="RATE_LIMITED",
-                ui_confidence="CONFIRMED", primary_method="DOM",
-                error_code="RATE_LIMITED", retryable=True, retry_budget=0,
-                detail=str(detail or "")[:500],
-            )
-            return True
+            message = f"ChatGPT 限流提示已連續關閉 {streak} 次，啟動全域冷卻"
+            stage = "UI_ESCALATION_REQUIRED"
+            observed_state = "RATE_LIMITED"
+            error_code = "RATE_LIMITED"
+            retry_budget = 0
+        else:
+            message = f"已關閉 ChatGPT 限流提示（{streak}/{threshold}），尚未進入冷卻"
+            stage = "UI_ESCALATION_RESULT"
+            observed_state = "RATE_LIMIT_DIALOG_DISMISSED"
+            error_code = "RATE_LIMIT_DIALOG_DISMISSED"
+            retry_budget = 1
+        print(f"  [WebGPT Governor] {message}", flush=True)
         self._emit_status(
-            "UI_ESCALATION_RESULT", message="限制提示已關閉，重新確認輸入框",
-            task_phase="COMPOSER", observed_state="RATE_LIMIT_DIALOG_DISMISSED",
+            stage, message=message,
+            task_phase="COMPOSER", observed_state=observed_state,
             ui_confidence="CONFIRMED", primary_method="DOM",
-            error_code="RATE_LIMIT_DIALOG_DISMISSED", retryable=True, retry_budget=1,
+            error_code=error_code, retryable=True, retry_budget=retry_budget,
             detail=str(detail or "")[:500],
         )
-        return False
+        return triggered
 
     def _is_logged_in(self) -> bool:
         """Check if the user is logged in by looking for the input box."""
@@ -971,6 +1129,12 @@ class WebLLMScraper:
     def _submit_verified_prompt(self, send_locator) -> None:
         """Cross the submit boundary exactly once for the verified prompt."""
         self._log_stage("submit_begin", "mode=send_button")
+        rate_lease = (
+            getattr(self, "_rate_submit_lease", None)
+            if self.service == "chatgpt" else None
+        )
+        if rate_lease is not None:
+            rate_lease.before_submit()
         try:
             if self.service == "chatgpt":
                 # Dispatch a real DOM click on the currently resolved send button.
@@ -986,6 +1150,11 @@ class WebLLMScraper:
                 stage="submit",
                 safe_to_retry=False,
             ) from exc
+        finally:
+            # A click exception is delivery-ambiguous. Record the attempt so a
+            # following request still respects the >10 second safety interval.
+            if rate_lease is not None:
+                rate_lease.record_submit()
         self._log_stage("submit_returned")
 
     def _reconcile_submit_delivery(self, snapshot: dict, prompt: str, timeout_sec: float = 3.0) -> str:
@@ -2335,8 +2504,12 @@ class WebLLMScraper:
         return merged
 
     def _try_existing_file_inputs(self, path: str) -> bool:
-        """Try all currently-present file inputs, preferring generic inputs."""
-        inputs = self._page.query_selector_all('input[type="file"]')
+        """Try file inputs belonging to the active composer, never stale page inputs."""
+        inputs = self._page.query_selector_all(
+            'form[data-type="unified-composer"] input[type="file"], '
+            '[data-testid="composer"] input[type="file"], '
+            '[data-testid*="composer"] input[type="file"]'
+        )
         if not inputs:
             return False
 
@@ -2480,8 +2653,15 @@ class WebLLMScraper:
                 if (!composer) return {text: '', busy: [], chips: [], alerts};
                 const busy = [...composer.querySelectorAll('[role="progressbar"], [aria-busy="true"], [data-state="loading"], [class*="uploading"], [class*="processing"]')]
                     .filter(visible).map(el => el.getAttribute('aria-valuenow') || el.getAttribute('data-state') || el.textContent?.trim().slice(0,120) || el.tagName);
-                const chips = [...composer.querySelectorAll('[data-testid*="attachment"], [class*="attachment"], [data-testid="file-thumbnail"], [data-testid="composer-file"]')]
-                    .filter(visible).map(el => (el.textContent || el.getAttribute('aria-label') || '').trim()).filter(Boolean);
+                const chips = [...composer.querySelectorAll('[data-testid*="attachment"], [class*="attachment"], [data-testid="file-thumbnail"], [data-testid="composer-file"], [data-file-name]')]
+                    .filter(visible).map(el => {
+                        const child = el.querySelector('[data-file-name], [aria-label], [title]');
+                        return [
+                            el.textContent, el.getAttribute('aria-label'), el.getAttribute('title'),
+                            el.getAttribute('data-file-name'), child?.getAttribute('data-file-name'),
+                            child?.getAttribute('aria-label'), child?.getAttribute('title')
+                        ].filter(Boolean).join(' ').trim();
+                    }).filter(Boolean);
                 return {text: composer.innerText || '', busy, chips, alerts};
             }""") or composer_state
         except Exception:
@@ -2491,7 +2671,11 @@ class WebLLMScraper:
         attachment_chips = list(composer_state.get("chips", []) or [])
         alert_text = "\n".join(str(value) for value in (composer_state.get("alerts", []) or []))
         expected_names = [Path(path).name for path in paths]
-        visible_names = [name for name in expected_names if name and name in composer_text]
+        attachment_text = "\n".join(str(value) for value in attachment_chips)
+        visible_names = [
+            name for name in expected_names
+            if name and (name in composer_text or name in attachment_text)
+        ]
 
         error_text = ""
         error_terms = (
@@ -2971,12 +3155,27 @@ class WebLLMScraper:
     def close(self):
         """Close browser (profile/cookies are saved automatically)."""
         self._cancel_requested.set()
-        if self._browser:
+        if self._attached_over_cdp:
+            if self._page and self._owns_attached_page:
+                try:
+                    self._page.close()
+                except Exception:
+                    pass
+        elif self._browser:
             self._browser.close()
+        if getattr(self, "_isolated_browser", None):
+            try:
+                self._isolated_browser.close()
+            except Exception:
+                pass
         if self._pw:
             self._pw.stop()
         self._page = None
         self._browser = None
+        self._cdp_browser = None
+        self._attached_over_cdp = False
+        self._owns_attached_page = False
+        self._isolated_browser = None
         self._pw = None
         self._activity_observer_installed = False
         print(f"[WebScraper] 瀏覽器已關閉（登入狀態已儲存）")
@@ -3005,6 +3204,7 @@ class ScraperManager:
         self._service_locks: dict[str, threading.Lock] = {}
         self._last_request_end: dict[str, float] = {}
         self._request_cooldown_sec = 3.0
+        self._rate_governor = WebGPTRateGovernor(Path(__file__).resolve().parent.parent)
 
     def _service_lock(self, service: str) -> threading.Lock:
         lock = self._service_locks.get(service)
@@ -3014,6 +3214,10 @@ class ScraperManager:
         return lock
 
     def _respect_request_cooldown(self, service: str) -> None:
+        # ChatGPT spacing is governed from the exact Send-button timestamp.
+        # Do not add a second completion-relative delay after a long answer.
+        if service == "chatgpt":
+            return
         previous = float(self._last_request_end.get(service, 0.0) or 0.0)
         remaining = self._request_cooldown_sec - (time.monotonic() - previous)
         if remaining > 0:
@@ -3027,9 +3231,13 @@ class ScraperManager:
         if scraper is not None:
             scraper.set_status_callback(callback)
 
-    def get_or_create(self, service: str, headless: bool = False) -> WebLLMScraper:
+    def get_or_create(self, service: str, headless: bool = False, status_callback=None) -> WebLLMScraper:
         if service not in self._scrapers:
             scraper = WebLLMScraper(service=service, headless=headless)
+            if service == "chatgpt":
+                scraper._rate_governor = self._rate_governor
+            if status_callback is not None:
+                scraper.set_status_callback(status_callback)
             scraper.start()
             self._scrapers[service] = scraper
         scraper = self._scrapers[service]
@@ -3072,8 +3280,42 @@ class ScraperManager:
                 "file_paths": file_paths,
                 "protocol_expected": protocol_expected,
             }
+            rate_lease = None
+            if service == "chatgpt":
+                print(
+                    "  [WebGPT Governor] 等待共用 WebGPT 執行時段；其他 Agent1 可繼續在各自視窗顯示狀態。",
+                    flush=True,
+                )
+                emit_status = getattr(scraper, "_emit_status", None)
+                if emit_status is not None:
+                    emit_status(
+                        "WAITING_BRAIN", message="等待共用 WebGPT 執行時段",
+                        detail="global_submit_lock",
+                    )
+                rate_lease = self._rate_governor.acquire(wait=True)
+                scraper._rate_submit_lease = rate_lease
+                if emit_status is not None:
+                    emit_status(
+                        "PREPARING_PROMPT", message="已取得 WebGPT 執行時段",
+                        detail="global_submit_lock_acquired",
+                    )
             try:
                 result = scraper.ask(prompt, **kwargs)
+                if service == "chatgpt":
+                    try:
+                        self._rate_governor.record_success()
+                    except Exception as exc:
+                        _debug_log(
+                            f"RATE_SUCCESS_RESET_FAILED type={type(exc).__name__} error={exc}"
+                        )
+                        print(
+                            f"  [WebGPT Governor] 無法重置限流連續計數：{type(exc).__name__}: {exc}",
+                            flush=True,
+                        )
+                    if hasattr(scraper, "_rate_limit_dialog_streak"):
+                        scraper._rate_limit_dialog_streak = 0
+                    if hasattr(scraper, "_rate_limited_until"):
+                        scraper._rate_limited_until = 0.0
                 _debug_log(f"MANAGER_ASK_SUCCESS service={service} result_len={len(result)}")
                 return result
             except WebScraperStageError as exc:
@@ -3099,6 +3341,8 @@ class ScraperManager:
                     pass
                 self._scrapers.pop(service, None)
                 scraper = self.get_or_create(service, headless)
+                if rate_lease is not None:
+                    scraper._rate_submit_lease = rate_lease
                 return scraper.ask(prompt, **kwargs)
             except Exception as exc:
                 _debug_log(f"MANAGER_UNKNOWN_ERROR service={service} exc={exc!r}")
@@ -3106,6 +3350,10 @@ class ScraperManager:
                 raise
             finally:
                 self._last_request_end[service] = time.monotonic()
+                if rate_lease is not None:
+                    if getattr(scraper, "_rate_submit_lease", None) is rate_lease:
+                        scraper._rate_submit_lease = None
+                    rate_lease.release()
 
     def cancel_current_generation(
         self,
@@ -3165,11 +3413,23 @@ class ScraperManager:
         lock = self._service_lock(service)
         with lock:
             self._respect_request_cooldown(service)
+            rate_lease = None
+            scraper = None
             try:
                 scraper = self.get_or_create(service, False)
-                return scraper.edit_file(source_path, instruction, output_path=output_path, run_id=run_id)
+                if service == "chatgpt":
+                    rate_lease = self._rate_governor.acquire(wait=True)
+                    scraper._rate_submit_lease = rate_lease
+                result = scraper.edit_file(source_path, instruction, output_path=output_path, run_id=run_id)
+                if service == "chatgpt":
+                    self._rate_governor.record_success()
+                return result
             finally:
                 self._last_request_end[service] = time.monotonic()
+                if rate_lease is not None:
+                    if scraper is not None and getattr(scraper, "_rate_submit_lease", None) is rate_lease:
+                        scraper._rate_submit_lease = None
+                    rate_lease.release()
 
     def download_latest_artifact(self, service: str, output_path: str, expected_filename: str = "", timeout_sec: float = 45.0) -> dict:
         """Generic manager entry point for WebGPT-produced files/images."""

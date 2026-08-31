@@ -10,7 +10,7 @@ Safety invariants:
 - durable enqueue happens before a conversation watcher cursor is acknowledged;
 - a dedupe_key maps to at most one task across process restarts;
 - COMPLETED tasks are never implicitly re-queued;
-- only one RUNNING task may be claimed at a time;
+- RUNNING reservations are bounded by the Agent0 worker concurrency cap;
 - orphaned RUNNING state is reconciled conservatively to INTERRUPTED on restart,
   never silently re-executed;
 - corrupted task state fails closed instead of pretending the store is empty.
@@ -28,14 +28,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .process_file_lock import exclusive_process_lock
+
 TASK_QUEUED = "QUEUED"
 TASK_RUNNING = "RUNNING"
+TASK_PAUSING = "PAUSING"
+TASK_PAUSED = "PAUSED"
+TASK_RESUMING = "RESUMING"
 TASK_COMPLETED = "COMPLETED"
 TASK_FAILED = "FAILED"
 TASK_INTERRUPTED = "INTERRUPTED"
 TASK_CANCELLED = "CANCELLED"
 TASK_TERMINAL_STATES = {TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED}
-TASK_ACTIVE_STATES = {TASK_RUNNING}
+TASK_ACTIVE_STATES = {TASK_RUNNING, TASK_PAUSING, TASK_RESUMING}
 TASK_PENDING_STATES = {TASK_QUEUED}
 TASK_STORE_VERSION = 2
 DEFAULT_LEASE_TIMEOUT_SEC = 90.0
@@ -62,9 +67,16 @@ class TaskRecord:
     request_id: str = ""
     request: str = ""
     request_fingerprint: str = ""
+    session_id: str = ""
+    priority: int = 100
+    assigned_agent: str = ""
+    checkpoint: str = ""
+    current_stage: str = ""
+    next_action: str = ""
     workspace: str = ""
     conversation_url: str = ""
     origin_turn_fingerprint: str = ""
+    reply_route: dict = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     completed_at: float | None = None
@@ -88,29 +100,18 @@ class TaskStateStore:
 
     @contextmanager
     def process_lock(self, timeout_sec: float = 10.0):
-        """Serialize read/modify/write cycles shared by receiver and worker."""
+        """Serialize transactions with a crash-safe kernel lock."""
         lock_path = self.path.with_name(self.path.name + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.time() + max(0.1, float(timeout_sec))
-        fd = None
-        while fd is None:
-            try:
-                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, f"{os.getpid()}\n".encode("ascii", errors="ignore"))
-            except FileExistsError:
-                if time.time() >= deadline:
-                    raise TaskStateError(f"task store lock timeout: {lock_path}")
-                time.sleep(0.05)
         try:
-            yield
-        finally:
-            try:
-                os.close(fd)
-            finally:
-                try:
-                    lock_path.unlink()
-                except FileNotFoundError:
-                    pass
+            with exclusive_process_lock(
+                lock_path,
+                timeout_sec=timeout_sec,
+                label="task store",
+                legacy_kind="remote-task-sentinel-v2",
+            ):
+                yield
+        except RuntimeError as exc:
+            raise TaskStateError(str(exc)) from exc
 
     def load(self) -> dict[str, TaskRecord]:
         with self._lock:
@@ -208,21 +209,28 @@ def request_fingerprint(request_text: str) -> str:
 
 
 def remote_request_dedupe_key(message: dict[str, Any], *, origin_turn_fingerprint: str = "") -> str:
-    """Stable cross-restart dedupe key for one validated Remote request.
+    """Durable RemoteAgent request identity.
 
-    request_id is the logical control-plane identity. Routing context is included
-    so a malformed/reused request_id in another conversation cannot alias a task.
-    ``origin_turn_fingerprint`` is recorded for evidence but intentionally is not
-    required for identity: the same control envelope rediscovered after DOM drift
-    still resolves to the same task.
+    V1 identity is transport + endpoint + conversation + source turn/message
+    identity. Request text and request_id are payload/correlation data only and
+    must not collapse two distinct turns. A legacy request_id fallback is used
+    only when a caller has no durable turn identity.
     """
+    turn_identity = str(
+        origin_turn_fingerprint
+        or message.get("origin_turn_fingerprint", "")
+        or ""
+    ).strip()
     payload = {
-        "protocol": str(message.get("protocol", "remote_agent") or "remote_agent"),
-        "protocol_version": int(message.get("protocol_version", 1) or 1),
-        "request_id": str(message.get("request_id", "") or ""),
-        "workspace": os.path.normcase(str(message.get("workspace", "") or "")),
+        "transport": str(message.get("transport", "WEBGPT") or "WEBGPT").upper(),
+        "endpoint": str(message.get("endpoint", "chatgpt.com") or "chatgpt.com").lower(),
         "conversation_url": str(message.get("conversation_url", "") or ""),
     }
+    if turn_identity:
+        payload["turn_identity"] = turn_identity
+    else:
+        payload["legacy_request_id"] = str(message.get("request_id", "") or "")
+        payload["workspace"] = os.path.normcase(str(message.get("workspace", "") or ""))
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8", errors="replace")).hexdigest()
 
@@ -231,8 +239,29 @@ def task_id_from_dedupe_key(dedupe_key: str) -> str:
     return "TASK-" + str(dedupe_key)[:20].upper()
 
 
+def _normalize_task_origin(message: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
+    meta = dict(metadata or {})
+    route = meta.get("reply_route") or message.get("reply_route") or {}
+    def token(v: object) -> str:
+        return str(v or "").strip().upper().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "WEBCOPILOT": "WEBGPT_COPILOT", "WEB_COPILOT": "WEBGPT_COPILOT",
+        "WEBGPTCOPILOT": "WEBGPT_COPILOT", "WEBGPT_COPILOT": "WEBGPT_COPILOT",
+        "REMOTEAGENT": "REMOTE_AGENT", "REMOTE_AGENT": "REMOTE_AGENT",
+    }
+    explicit = token(message.get("origin") or meta.get("origin"))
+    if explicit:
+        return aliases.get(explicit, explicit)
+    candidates = [token(message.get("transport") or meta.get("transport"))]
+    if isinstance(route, dict):
+        candidates.extend(token(route.get(k)) for k in ("type", "transport", "source", "origin"))
+    if any(v in {"WEBCOPILOT", "WEB_COPILOT", "WEBGPTCOPILOT", "WEBGPT_COPILOT"} for v in candidates):
+        return "WEBGPT_COPILOT"
+    return "REMOTE_AGENT"
+
+
 class RemoteTaskQueue:
-    """Single-active-worker persistent queue used by RemoteAgent Stage 7+."""
+    """Persistent queue for bounded request-scoped RemoteAgent workers."""
     def __init__(self, store: TaskStateStore):
         self.store = store
         self._lock = threading.RLock()
@@ -258,11 +287,12 @@ class RemoteTaskQueue:
                 task = TaskRecord(
                     task_id=task_id_from_dedupe_key(dedupe),
                     state=TASK_QUEUED,
-                    origin="REMOTE_AGENT_REQUEST",
+                    origin=_normalize_task_origin(message, metadata),
                     dedupe_key=dedupe,
                     request_id=str(message.get("request_id", "") or ""),
                     request=text,
                     request_fingerprint=request_fingerprint(text),
+                    session_id=str(message.get("session_id", "") or ""),
                     workspace=str(message.get("workspace", "") or ""),
                     conversation_url=str(message.get("conversation_url", "") or ""),
                     origin_turn_fingerprint=str(
@@ -270,7 +300,8 @@ class RemoteTaskQueue:
                         or message.get("origin_turn_fingerprint", "")
                         or ""
                     ),
-                    metadata=dict(metadata or {}),
+                    reply_route=dict((metadata or {}).get("reply_route") or {}),
+                    metadata={**dict(metadata or {}), "source_text": text, "delivery_state": "PENDING"},
                 )
                 self.store.put(task, persist=True)
                 return task, True
@@ -283,6 +314,92 @@ class RemoteTaskQueue:
 
     def queued(self) -> list[TaskRecord]:
         return self.store.list_by_state({TASK_QUEUED})
+
+    def running(self) -> list[TaskRecord]:
+        return self.store.list_by_state({TASK_RUNNING})
+
+    def dispatch_next(
+        self,
+        *,
+        max_active: int = 3,
+        allowed_bindings: Iterable[tuple[str, str]] | None = None,
+        dispatcher_pid: int | None = None,
+    ) -> tuple[TaskRecord, str] | None:
+        """Reserve one queued task for a request-scoped worker process."""
+        with self._lock:
+            with self.store.process_lock():
+                self.store.load()
+                if len(self.running()) >= max(1, int(max_active)):
+                    return None
+                queued = self.queued()
+                if allowed_bindings is not None:
+                    allowed = {
+                        (os.path.normcase(os.path.abspath(workspace)), url)
+                        for workspace, url in allowed_bindings
+                    }
+                    queued = [
+                        task for task in queued
+                        if (os.path.normcase(os.path.abspath(task.workspace)), task.conversation_url) in allowed
+                    ]
+                if not queued:
+                    return None
+                task = queued[0]
+                token = uuid.uuid4().hex
+                now = time.time()
+                task.state = TASK_RUNNING
+                task.started_at = now
+                task.completed_at = None
+                task.error = ""
+                task.metadata.update({
+                    "dispatcher_pid": int(dispatcher_pid or os.getpid()),
+                    "dispatch_token": token,
+                    "dispatched_at": now,
+                    "heartbeat_at": now,
+                    "worker_pid": 0,
+                    "cancel_requested": False,
+                    "attempt": int(task.metadata.get("attempt", 0) or 0) + 1,
+                })
+                self.store.put(task, persist=True)
+                return task, token
+
+    def adopt_dispatched(self, task_id: str, dispatch_token: str, *, worker_pid: int | None = None) -> TaskRecord:
+        """Bind a reserved task to exactly one spawned worker PID."""
+        with self._lock:
+            with self.store.process_lock():
+                self.store.load()
+                task = self.store.get(task_id)
+                if task is None or task.state != TASK_RUNNING:
+                    raise TaskStateError(f"task is not dispatched: {task_id}")
+                if str(task.metadata.get("dispatch_token", "")) != str(dispatch_token or ""):
+                    raise TaskStateError(f"dispatch token mismatch: {task_id}")
+                owner = int(task.metadata.get("worker_pid", 0) or 0)
+                wanted = int(worker_pid or os.getpid())
+                if owner and owner != wanted:
+                    raise TaskStateError(f"worker already adopted: {task_id}")
+                task.metadata["worker_pid"] = wanted
+                task.metadata["adopted_at"] = time.time()
+                task.metadata["heartbeat_at"] = task.metadata["adopted_at"]
+                return self.store.put(task, persist=True)
+
+    def interrupt_stale_workers(self, *, timeout_sec: float = 45.0, now: float | None = None) -> list[TaskRecord]:
+        """Fail closed when a dispatched/adopted worker stops heartbeating."""
+        now = float(time.time() if now is None else now)
+        changed = []
+        with self._lock:
+            with self.store.process_lock():
+                self.store.load()
+                for task in self.running():
+                    heartbeat = float(task.metadata.get("heartbeat_at", 0.0) or 0.0)
+                    if heartbeat and now - heartbeat <= max(1.0, float(timeout_sec)):
+                        continue
+                    task.state = TASK_INTERRUPTED
+                    task.completed_at = now
+                    task.error = "remote_worker_heartbeat_timeout"
+                    task.metadata["interrupted_at"] = now
+                    changed.append(self.store.put(task, persist=False))
+                if changed:
+                    self.store.save()
+        return changed
 
     def claim_next(
         self,
@@ -345,6 +462,7 @@ class RemoteTaskQueue:
                 task.error = ""
                 if result is not None:
                     task.result_ledger["final"] = result
+                task.metadata["delivery_state"] = "READY"
                 return self.store.put(task, persist=True)
 
     def heartbeat(self, task_id: str, *, worker_pid: int | None = None) -> TaskRecord:
@@ -383,25 +501,42 @@ class RemoteTaskQueue:
                     task.metadata["cancel_reason"] = reason
                 return self.store.put(task, persist=True)
 
+    def _requeue_retryable(self, task: TaskRecord) -> TaskRecord:
+        attempts = int(task.metadata.get("attempt", 0) or 0)
+        if task.state not in {TASK_INTERRUPTED, TASK_FAILED}:
+            raise TaskStateError(f"task is not retryable: {task.state}")
+        if attempts >= DEFAULT_MAX_ATTEMPTS:
+            raise TaskStateError(f"max attempts reached: {attempts}")
+        task.state = TASK_QUEUED
+        task.error = ""
+        task.started_at = None
+        task.completed_at = None
+        task.metadata["cancel_requested"] = False
+        task.metadata["retry_requested_at"] = time.time()
+        return self.store.put(task, persist=True)
+
+    def retry_task(self, *, task_id: str) -> TaskRecord:
+        """Retry one exact durable task without ambiguous request-id lookup."""
+        with self._lock:
+            with self.store.process_lock():
+                self.store.load()
+                task = self.store.get(str(task_id))
+                if task is None:
+                    raise TaskStateError(f"unknown task_id: {task_id}")
+                return self._requeue_retryable(task)
+
     def retry_interrupted(self, *, request_id: str) -> TaskRecord:
         with self._lock:
             with self.store.process_lock():
                 self.store.load()
-                task = next((t for t in self.store.all() if t.request_id == request_id), None)
-                if task is None:
+                matches = [t for t in self.store.all() if t.request_id == request_id]
+                if not matches:
                     raise TaskStateError(f"unknown request_id: {request_id}")
-                attempts = int(task.metadata.get("attempt", 0) or 0)
-                if task.state not in {TASK_INTERRUPTED, TASK_FAILED}:
-                    raise TaskStateError(f"task is not retryable: {task.state}")
-                if attempts >= DEFAULT_MAX_ATTEMPTS:
-                    raise TaskStateError(f"max attempts reached: {attempts}")
-                task.state = TASK_QUEUED
-                task.error = ""
-                task.started_at = None
-                task.completed_at = None
-                task.metadata["cancel_requested"] = False
-                task.metadata["retry_requested_at"] = time.time()
-                return self.store.put(task, persist=True)
+                if len(matches) != 1:
+                    raise TaskStateError(
+                        f"ambiguous request_id: {request_id}; use retry_task(task_id=...)"
+                    )
+                return self._requeue_retryable(matches[0])
 
     def mark_cancelled(self, task_id: str, reason: str = "remote_cancelled") -> TaskRecord:
         with self._lock:
@@ -416,6 +551,20 @@ class RemoteTaskQueue:
                 task.metadata["cancel_requested"] = True
                 return self.store.put(task, persist=True)
 
+    def fail_running(self, task_id: str, error: str) -> TaskRecord | None:
+        """Atomically fail only a task that is still RUNNING."""
+        with self._lock:
+            with self.store.process_lock():
+                self.store.load()
+                task = self.store.get(task_id)
+                if task is None or task.state != TASK_RUNNING:
+                    return None
+                task.state = TASK_FAILED
+                task.completed_at = time.time()
+                task.error = str(error or "")
+                task.metadata["delivery_state"] = "READY"
+                return self.store.put(task, persist=True)
+
     def fail(self, task_id: str, error: str) -> TaskRecord:
         with self._lock:
             with self.store.process_lock():
@@ -426,6 +575,7 @@ class RemoteTaskQueue:
                 task.state = TASK_FAILED
                 task.completed_at = time.time()
                 task.error = str(error or "")
+                task.metadata["delivery_state"] = "READY"
                 return self.store.put(task, persist=True)
 
     def record_result_delivery(
@@ -438,8 +588,10 @@ class RemoteTaskQueue:
                 task = self.store.get(task_id)
                 if task is None:
                     raise TaskStateError(f"unknown task: {task_id}")
+                state = "DELIVERED" if delivered else "READY"
+                task.metadata["delivery_state"] = state
                 task.metadata["result_delivery"] = {
-                    "state": "DELIVERED" if delivered else "FAILED",
+                    "state": state,
                     "attempted_at": time.time(),
                     "reply": str(reply or "")[:6000],
                     "error": str(error or "")[:2000],
@@ -469,12 +621,9 @@ class RemoteTaskQueue:
                 self.store.load()
                 now = time.time()
                 for task in self.store.list_by_state({TASK_RUNNING}):
-                    heartbeat = float(task.metadata.get("heartbeat_at", task.started_at or 0) or 0)
-                    if heartbeat and now - heartbeat <= float(lease_timeout_sec):
-                        continue
                     task.state = TASK_INTERRUPTED
                     task.completed_at = now
-                    task.error = "stale_worker_lease_requires_explicit_retry"
+                    task.error = "startup_reconciliation_requires_explicit_retry"
                     task.metadata["interrupted_at"] = now
                     changed.append(self.store.put(task, persist=False))
                 if changed:
@@ -551,8 +700,9 @@ def run_task_state_self_tests() -> dict[str, Any]:
 
 __all__ = [
     "ActionResultLedger", "TaskRecord", "TaskStateStore", "TaskStateError",
-    "RemoteTaskQueue", "TASK_QUEUED", "TASK_RUNNING", "TASK_COMPLETED",
-    "TASK_FAILED", "TASK_INTERRUPTED", "TASK_CANCELLED", "TASK_TERMINAL_STATES",
+    "RemoteTaskQueue", "TASK_QUEUED", "TASK_RUNNING", "TASK_PAUSING", "TASK_PAUSED",
+    "TASK_RESUMING", "TASK_COMPLETED", "TASK_FAILED", "TASK_INTERRUPTED", "TASK_CANCELLED",
+    "TASK_TERMINAL_STATES",
     "request_fingerprint", "remote_request_dedupe_key", "task_id_from_dedupe_key",
     "run_task_state_self_tests",
 ]

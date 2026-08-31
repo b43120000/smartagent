@@ -6,6 +6,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_pla
 from .self_repair_protocol import DEFAULT_REPAIR_URL, parse
 from .issue_recorder import redact_sensitive
 from .workspace import AGENT_PROJECT_ROOT
+from .webgpt_rate_governor import WebGPTRateGovernor
 
 DEFAULT_CDP=os.environ.get("SMARTAGENT_CHATGPT_CDP","http://127.0.0.1:1272")
 STATE_ROOT=AGENT_PROJECT_ROOT/".agents"/"self_repair"
@@ -117,8 +118,22 @@ def _wait_response(page,before,before_fp="",timeout_sec=300):
         page.wait_for_timeout(500)
     raise TimeoutError("meta_recovery_agent2_response_timeout")
 
+def _submit_with_rate_gate(page,rate_lease):
+    rate_lease.before_submit()
+    try:
+        page.locator('button[data-testid="send-button"]').click(timeout=20000)
+    finally:
+        rate_lease.record_submit()
+
 def dispatch_once(meta,cdp=DEFAULT_CDP,root=AGENT_PROJECT_ROOT):
     root=Path(root).resolve()
+    rate_lease=WebGPTRateGovernor(root).acquire(wait=True)
+    try:
+        return _dispatch_once_locked(meta,cdp,root,rate_lease)
+    finally:
+        rate_lease.release()
+
+def _dispatch_once_locked(meta,cdp,root,rate_lease):
     state_root=root/".agents"/"self_repair"
     plan_path=state_root/"meta_repair_plan.json"
     result_path=state_root/"meta_dispatch_result.json"
@@ -140,7 +155,7 @@ def dispatch_once(meta,cdp=DEFAULT_CDP,root=AGENT_PROJECT_ROOT):
         before_fp=_assistant_fp(assistants_before)
         page.locator("#prompt-textarea").fill(prompt)
         _dismiss_rate_limit_dialog(page)
-        page.locator('button[data-testid="send-button"]').click(timeout=20000)
+        _submit_with_rate_gate(page,rate_lease)
         response=_wait_response(page,before,before_fp)
         envelope,reason=parse(response)
         if not envelope:
@@ -171,7 +186,7 @@ def dispatch_once(meta,cdp=DEFAULT_CDP,root=AGENT_PROJECT_ROOT):
                 total+=len(encoded); source.append({"path":rel,"content":content})
             followup="[SELF_REPAIR_SOURCE_CONTEXT]\nissue_id: "+issue+"\nCurrent worktree source follows. Return only the final fenced self_repair_control SELF_REPAIR_PLAN with files matching modified_paths exactly.\n"+json.dumps(source,ensure_ascii=False)
             assistants_before=page.locator('[data-message-author-role="assistant"]'); before=assistants_before.count(); before_fp=_assistant_fp(assistants_before)
-            page.locator("#prompt-textarea").fill(followup); _dismiss_rate_limit_dialog(page); page.locator('button[data-testid="send-button"]').click(timeout=20000)
+            page.locator("#prompt-textarea").fill(followup); _dismiss_rate_limit_dialog(page); _submit_with_rate_gate(page,rate_lease)
             response=_wait_response(page,before,before_fp); envelope,reason=parse(response)
             if not envelope:
                 result.update(status="PROTOCOL_REJECTED",parser_reason=reason,response=response[:12000]); _atomic(result_path,result); return result

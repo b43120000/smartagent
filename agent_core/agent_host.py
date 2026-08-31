@@ -45,6 +45,10 @@ class IntegratedAgentHost:
         self._stopped = False
         self._external_supervisor_token = os.environ.get("SMARTAGENT_SUPERVISOR_TOKEN", "")
         self._cdp_endpoint = ""
+        self._foreground_page_handle = None
+        self._foreground_url = self.conversation_url
+        self._foreground_workspace = self.workspace
+        self._remote_bound = False
 
     def _write_state(self, status: str, **extra: Any) -> None:
         payload = {
@@ -74,6 +78,22 @@ class IntegratedAgentHost:
             return {"started": False, "reason": "empty_cdp_endpoint"}
         self._cdp_endpoint = endpoint
 
+        # The normal LocalAgent launcher publishes the authenticated CDP
+        # endpoint for a separately launched RemoteAgent, but must not create
+        # Agent0 or one of its browser pages itself.
+        if os.environ.get("SMARTAGENT_REMOTE_AUTOSTART", "1") == "0":
+            self._write_state(
+                "ready",
+                cdp_endpoint=endpoint,
+                remote_autostart=False,
+            )
+            return {
+                "started": False,
+                "published": True,
+                "reason": "remote_autostart_disabled",
+                "cdp": endpoint,
+            }
+
         if os.environ.get("SMARTAGENT_EXTERNAL_SUPERVISOR") == "1":
             token = os.environ.get("SMARTAGENT_SUPERVISOR_TOKEN", "")
             self._write_state("ready", cdp_endpoint=endpoint, supervisor_token=token)
@@ -91,19 +111,24 @@ class IntegratedAgentHost:
             "--parent-pid", str(os.getpid()),
             "--poll", "10.0",
         ]
-        creationflags = 0
-        if os.name == "nt":
-            # Stage 10 diagnostic mode: give Agent-0 its own visible status
-            # console so mobile ingress and queue activity are observable.
-            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        child_env = os.environ.copy()
+        child_env.setdefault("SMARTAGENT_REMOTE_CONSOLE", "1")
+        visible_console = os.name == "nt" and child_env.get("SMARTAGENT_REMOTE_CONSOLE") == "1"
+        creationflags = (
+            getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if visible_console
+            else getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt"
+            else 0
+        )
+        streams = {"stdin": subprocess.DEVNULL}
+        if not visible_console:
+            streams.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             self._proc = subprocess.Popen(
                 cmd,
                 cwd=str(script.parent.parent),
-                stdin=subprocess.DEVNULL,
-                stdout=None,
-                stderr=None,
+                **streams,
                 creationflags=creationflags,
+                env=child_env,
             )
         except Exception as exc:
             self._write_state("local_only", supervisor_error=f"{type(exc).__name__}: {exc}")
@@ -120,21 +145,70 @@ class IntegratedAgentHost:
         self._write_state("busy" if busy else "idle", supervisor_pid=getattr(self._proc, "pid", None))
 
     def activate_context(self, *, workspace: str, conversation_url: str) -> dict[str, Any]:
-        """Switch the LocalAgent-owned browser to one exact registered task origin."""
+        """Bind remote work to a background page without navigating foreground."""
         if self._scraper is None:
             return {"activated": False, "reason": "scraper_unavailable"}
         target_workspace = str(Path(workspace).resolve())
         target_url = normalize_chatgpt_url(conversation_url)
         if not target_url:
             return {"activated": False, "reason": "invalid_conversation_url"}
+        foreground = self._foreground_page_handle
+        if foreground is None:
+            foreground = getattr(self._scraper, "_page", None)
+            if foreground is None:
+                return {"activated": False, "reason": "foreground_page_unavailable"}
+            self._foreground_page_handle = foreground
+            self._foreground_url = normalize_chatgpt_url(
+                getattr(foreground, "url", "") or self.conversation_url
+            )
+            self._foreground_workspace = self.workspace
+
+        context = getattr(self._scraper, "_browser", None)
+        if context is None:
+            return {"activated": False, "reason": "browser_context_unavailable"}
+        background = None
         try:
-            self._scraper.navigate_to_conversation(target_url)
+            for candidate in list(getattr(context, "pages", []) or []):
+                if candidate is foreground:
+                    continue
+                if normalize_chatgpt_url(getattr(candidate, "url", "")) == target_url:
+                    background = candidate
+                    break
+            if background is None:
+                background = context.new_page()
+                background.goto(target_url, wait_until="domcontentloaded", timeout=30000)
         except Exception as exc:
             return {"activated": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+        self._scraper._page = background
+        try:
+            self._scraper.cfg["url"] = target_url
+        except Exception:
+            pass
         self.workspace = target_workspace
         self.conversation_url = target_url
+        self._remote_bound = True
         self._write_state("idle", supervisor_pid=getattr(self._proc, "pid", None))
         return {"activated": True, "workspace": target_workspace, "conversation_url": target_url}
+
+    def restore_foreground_context(self) -> dict[str, Any]:
+        """Restore the saved LocalAgent page handle without navigation or focus changes."""
+        if self._scraper is None or self._foreground_page_handle is None:
+            return {"restored": False, "reason": "foreground_context_unavailable"}
+        self._scraper._page = self._foreground_page_handle
+        try:
+            self._scraper.cfg["url"] = self._foreground_url
+        except Exception:
+            pass
+        self.workspace = self._foreground_workspace
+        self.conversation_url = self._foreground_url
+        self._remote_bound = False
+        self._write_state("idle", supervisor_pid=getattr(self._proc, "pid", None))
+        return {
+            "restored": True,
+            "workspace": self.workspace,
+            "conversation_url": self.conversation_url,
+        }
 
     def return_remote_result(self, task: Any, *, status: str, summary: str) -> dict[str, Any]:
         """Post one correlated result to the already-bound ChatGPT conversation."""
@@ -158,10 +232,22 @@ class IntegratedAgentHost:
             return {"delivered": False, "reason": "conversation_binding_mismatch"}
         payload = build_result_payload(task=task, status=status, summary=summary)
         prompt = build_result_prompt(payload)
+        rate_governor = getattr(self._scraper, "_rate_governor", None)
+        rate_lease = None
         try:
+            if rate_governor is not None:
+                rate_lease = rate_governor.acquire(wait=True)
+                self._scraper._rate_submit_lease = rate_lease
             reply = self._scraper.ask(prompt, new_conversation=False)
+            if rate_governor is not None:
+                rate_governor.record_success()
         except Exception as exc:
             return {"delivered": False, "reason": f"{type(exc).__name__}: {exc}"}
+        finally:
+            if rate_lease is not None:
+                if getattr(self._scraper, "_rate_submit_lease", None) is rate_lease:
+                    self._scraper._rate_submit_lease = None
+                rate_lease.release()
         valid, reason = validate_result_reply(reply, request_id=task.request_id)
         if not valid:
             return {"delivered": False, "reason": reason, "reply": str(reply or "")[:2000]}
@@ -191,6 +277,12 @@ class IntegratedAgentHost:
         target_scraper = scraper or self._scraper
         if target_scraper is None:
             return None
+        if self._foreground_page_handle is None:
+            self._foreground_page_handle = getattr(target_scraper, "_page", None)
+            self._foreground_url = normalize_chatgpt_url(
+                getattr(self._foreground_page_handle, "url", "") or self.conversation_url
+            )
+            self._foreground_workspace = self.workspace
 
         page = None
         context = getattr(target_scraper, "_browser", None)
@@ -213,10 +305,6 @@ class IntegratedAgentHost:
             except Exception:
                 return None
 
-        try:
-            page.bring_to_front()
-        except Exception:
-            pass
         target_scraper._page = page
         try:
             target_scraper.cfg["url"] = url
@@ -262,15 +350,19 @@ def run_agent_host_self_tests() -> dict[str, Any]:
     results: dict[str, bool] = {}
     with tempfile.TemporaryDirectory() as td:
         class Page:
-            def __init__(self, url): self.url=url; self.front=False
+            def __init__(self, url): self.url=url; self.front=False; self.goto_calls=[]
             def bring_to_front(self): self.front=True
+            def goto(self, url, **_kwargs): self.goto_calls.append(url); self.url=url
         class Context:
             def __init__(self, pages): self.pages=pages
+            def new_page(self):
+                page=Page("about:blank"); self.pages.append(page); return page
         class Scraper:
             def __init__(self, pages): self._browser=Context(pages); self._page=pages[0]; self.cfg={"url":pages[0].url}
         p1=Page("https://chatgpt.com/c/a"); p2=Page("https://chatgpt.com/c/b")
         s=Scraper([p1,p2])
         host=IntegratedAgentHost(workspace=td, conversation_url=p1.url)
+        host._scraper=s
         # Monkeypatch module state paths only for this self-test.
         global HANDOFF_STATE, HOST_STATE
         old_h, old_s = HANDOFF_STATE, HOST_STATE
@@ -278,8 +370,12 @@ def run_agent_host_self_tests() -> dict[str, Any]:
         try:
             _atomic_json(HANDOFF_STATE,{"state":"PENDING","task_id":"T1","conversation_url":p2.url,"workspace":td})
             got=host.consume_pending_handoff(s)
-            results["safe_boundary_rebinds_existing_page"] = bool(got and s._page is p2 and p2.front)
+            results["safe_boundary_rebinds_existing_page"] = bool(got and s._page is p2)
+            results["handoff_does_not_focus_foreground"] = not p1.front and not p2.front
             results["same_handoff_exactly_once"] = host.consume_pending_handoff(s) is None
+            restored=host.restore_foreground_context()
+            results["restore_uses_exact_foreground_handle"] = bool(restored.get("restored") and s._page is p1)
+            results["restore_never_navigates"] = not p1.goto_calls
             host.set_local_busy(True)
             data=json.loads(HOST_STATE.read_text(encoding="utf-8"))
             results["busy_state_persisted"] = data.get("status")=="busy"

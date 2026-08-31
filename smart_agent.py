@@ -93,7 +93,10 @@ _web_scraper_instance = None
 # the entire SmartAgent protocol body.
 WEB_PROTOCOL_SESSION_ACTIVE = False
 SMARTAGENT_PROTOCOL_NAME = "smart_agent"
-SMARTAGENT_PROTOCOL_VERSION = 5
+# v5 remains the default wire contract.  v6 staged execution is activated
+# only through SMARTAGENT_STAGED_PROTOCOL=on; shadow records admission facts.
+SMARTAGENT_PROTOCOL_VERSION = int(os.environ.get("SMARTAGENT_PROTOCOL_VERSION", "5") or 5)
+SMARTAGENT_STAGED_PROTOCOL = str(os.environ.get("SMARTAGENT_STAGED_PROTOCOL", "shadow")).strip().lower()
 
 # Strategy: 每個 tier 的 planner/executor 選擇
 TIER_STRATEGY = {
@@ -376,6 +379,12 @@ from agent_core.smartagent_protocol import (
     validate_tool_envelope, validate_ack_turn,
     run_tool_parser_self_tests, run_ack_protocol_self_tests,
 )
+from agent_core.stage_protocol import validate_stage_manifest, StageManifestError
+from agent_core.stage_executor import preflight_stage
+from agent_core.stage_result import classify_tool_result
+from agent_core.result_store import ResultStore
+from agent_core.attachment_cache import AttachmentCache
+from agent_core.routing import advisory_stage1_context
 
 # ─── Shared Progress Core ─────────────────────────────────────────────────────
 from agent_core.progress import (
@@ -433,6 +442,10 @@ class SmartAgent:
         self._action_result_ledger = ActionResultLedger()
         self._artifact_save_expected = False
         self._active_route_context: dict = {}
+        self._active_stage_manifest: dict | None = None
+        self._stage1_context: dict = {}
+        self._result_store = ResultStore(Path(__file__).resolve().parent / ".agents" / "results")
+        self._attachment_session_id = uuid.uuid4().hex
         self.status_publisher = StatusPublisher()
         self.browser_operator = BrowserOperator(self.operator_key, self.operator_model)
         self.issue_recorder = IssueRecorder()
@@ -713,6 +726,8 @@ class SmartAgent:
         )
         self.conversation_history.append({"role": "assistant", "content": message})
         self.save_project_history()
+        self.task_telemetry.event("task_stopped", marker=marker, iteration=iteration)
+        self.task_telemetry.save()
         return message
 
 
@@ -761,6 +776,7 @@ class SmartAgent:
             "local_nonce": expected.get("local_nonce", ""),
             "ack_result_id": expected.get("ack_result_id", ""),
             "ack_web_ack_id": expected.get("ack_web_ack_id", ""),
+            "protocol_version": SMARTAGENT_PROTOCOL_VERSION,
         }
         return "[SMARTAGENT_LOCAL_COMMIT] " + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -773,6 +789,10 @@ class SmartAgent:
             "才可在最後輸出 matching turn_commit。必須 ACK 本輪 Local Commit 的 run/turn/nonce/result/"
             "ack_web_ack_id，產生新的唯一 web_ack_id，且每個 action/final_response 帶唯一 action_id。"
         )
+        if SMARTAGENT_PROTOCOL_VERSION >= 6 and SMARTAGENT_STAGED_PROTOCOL in {"shadow", "on"}:
+            reminder += (" Protocol v6 staged mode is available: one complete stage may be declared in trailing turn_commit.stage; "
+                         "use SEQUENTIAL + stop_on_error=true, include every action_id once with explicit depends_on, and batch "
+                         "project_sync/apply_edit_plan/aggregate_verification rather than requesting files one at a time.")
         prepared[-1]["content"] = str(prepared[-1].get("content", "")) + "\n\n" + reminder + "\n" + self._local_commit_line(expected)
         return prepared
 
@@ -782,6 +802,8 @@ class SmartAgent:
         return hashlib.sha256(blob.encode("utf-8", errors="replace")).hexdigest()
 
     def _validate_planner_ack(self, tool_calls: list, expected: dict) -> tuple[list, list[dict]]:
+        self._active_stage_manifest = None
+        raw_commit = tool_calls[-1] if tool_calls and tool_calls[-1].get("tool") == "turn_commit" else {}
         actions, commit, diagnostics = validate_ack_turn(tool_calls, expected)
         nonce = str(expected.get("local_nonce", ""))
         if nonce and nonce in self._aborted_protocol_nonces:
@@ -812,6 +834,25 @@ class SmartAgent:
                 # the next Local Commit; a newly executed action will install a
                 # fresh RESULT_ID later in this iteration.
                 self._pending_result_ack_id = ""
+        stage = raw_commit.get("stage") if isinstance(raw_commit, dict) else None
+        if stage is not None and not diagnostics:
+            if SMARTAGENT_STAGED_PROTOCOL in {"off", "shadow"}:
+                # Compatibility modes must never reject or alter v5 actions.
+                try:
+                    candidate = validate_stage_manifest(stage, actions)
+                    self.task_telemetry.event("stage_shadow", would_pass=True, stage_id=candidate.get("stage_id", ""))
+                except StageManifestError as exc:
+                    self.task_telemetry.event("stage_shadow", would_pass=False, diagnostic=str(exc)[:240])
+            elif SMARTAGENT_PROTOCOL_VERSION < 6:
+                diagnostics.append(_diagnostic("[SMARTAGENT_STAGE_REJECTED]", "stage_requires_protocol_v6", tool="turn_commit", detail="SMARTAGENT_PROTOCOL_VERSION must be >= 6", suggestion="使用 v5 ACK 不帶 stage，或明確啟用 protocol v6。"))
+                actions = []
+            else:
+                try:
+                    self._active_stage_manifest = preflight_stage(stage, actions, workspace=str(self.workspace_root or ""))
+                    self.checkpoint_store.admit_stage(self.current_run_id, self._active_stage_manifest, actions)
+                except (StageManifestError, ValueError) as exc:
+                    diagnostics.append(_diagnostic("[SMARTAGENT_STAGE_REJECTED]", "stage_admission_failed", tool="turn_commit", detail=str(exc), suggestion="修正完整 stage manifest 後重送；本輪不會執行 action。"))
+                    actions = []
         return actions, diagnostics
 
     def set_workspace_root(self, path: str) -> dict:
@@ -971,7 +1012,7 @@ Executor: `{self.executor_model}`
         return f"[成功] 已保存 project session summary: {path}"
 
     def queue_attachments(self, paths: list) -> str:
-        """Queue timestamped copies for Web Planner attachment upload.
+        """Queue isolated copies for Web Planner attachment upload.
 
         The original files are never renamed or moved.  Every upload request
         creates a fresh copy under .agents/upload_cache so the web UI receives
@@ -985,6 +1026,10 @@ Executor: `{self.executor_model}`
         queued, errors = [], []
         cache_base = self.workspace_root if self.workspace_root else Path.cwd()
         cache_dir = Path(cache_base) / ".agents" / "upload_cache"
+        content_cache = AttachmentCache(Path(cache_base) / ".agents" / "attachment_content_cache")
+        # An Agent instance is one local conversation boundary unless a
+        # trusted caller supplies a stable conversation identifier.
+        conversation_id = str(getattr(self, "conversation_id", "") or "local")
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
@@ -1022,14 +1067,31 @@ Executor: `{self.executor_model}`
                 errors.append(f"不是檔案: {p}")
                 continue
 
+            try:
+                staged, cache_hit, digest = content_cache.stage_file(conversation_id, self._attachment_session_id, p)
+                self.task_telemetry.inc("attachment_cache_hit_count" if cache_hit else "attachment_cache_miss_count")
+                self.task_telemetry.event("attachment_cache", hit=cache_hit, sha256=digest, bytes=p.stat().st_size)
+            except Exception as e:
+                errors.append(f"附件快取失敗: {p}: {e}")
+                self.task_telemetry.event("attachment_staging_failed", error=type(e).__name__)
+                self.task_telemetry.save()
+                continue
+
             request_cache = cache_dir / uuid.uuid4().hex
             request_cache.mkdir(parents=True, exist_ok=False)
             upload_copy = request_cache / p.name
 
             try:
-                shutil.copy2(p, upload_copy)
+                # Do not reuse this path across requests: WebRuntime's tested
+                # transaction/readiness semantics rely on fresh UI inputs.
+                try:
+                    os.link(staged, upload_copy)
+                except OSError:
+                    shutil.copy2(staged, upload_copy)
             except Exception as e:
                 errors.append(f"複製失敗: {p} -> {upload_copy}: {e}")
+                self.task_telemetry.event("attachment_staging_failed", error=type(e).__name__)
+                self.task_telemetry.save()
                 continue
 
             full = str(upload_copy.resolve())
@@ -1171,6 +1233,15 @@ Executor: `{self.executor_model}`
         ]
 
         self._detect_workspace(user_input)
+        # Stage 1A remains local by default: it informs telemetry and local
+        # admission only. Sending workspace metadata to a web planner requires
+        # a separate explicit user-authorized sync action.
+        if SMARTAGENT_STAGED_PROTOCOL in {"shadow", "on"}:
+            self._stage1_context = advisory_stage1_context(user_input, self.workspace_root, include_snapshot=False)
+            self.task_telemetry.event("stage1_context", task_size=self._stage1_context.get("task_size"))
+            self.task_telemetry.inc("stage_count")
+        else:
+            self._stage1_context = {}
         workspace_note = ""
         if self.workspace_root:
             workspace_note = f"\n\n[SmartAgent Workspace Root]\n{self.workspace_root}\n[SmartAgent RUN_ID]\n{self.current_run_id}"
@@ -1227,6 +1298,10 @@ Executor: `{self.executor_model}`
                         else None
                     ),
                 )
+            except Exception as exc:
+                self.task_telemetry.event("planner_failed", iteration=iteration, error=type(exc).__name__)
+                self.task_telemetry.save()
+                raise
             finally:
                 # A failed upload/planner call must never leak into the next
                 # turn. Browser-side cleanup is owned by WebRuntime; this owns
@@ -1511,6 +1586,15 @@ Executor: `{self.executor_model}`
             # result/evidence exists, replacing the old pre-execution breaker.
             tool_results = []
             raw_results = []
+            active_stage = self._active_stage_manifest if (SMARTAGENT_PROTOCOL_VERSION >= 6 and SMARTAGENT_STAGED_PROTOCOL == "on") else None
+            stage_outcomes = {}
+            stage_details = {}
+            stage_dependencies = {
+                item["action_id"]: list(item.get("depends_on", []))
+                for item in (active_stage or {}).get("actions", [])
+            }
+            if active_stage:
+                self.task_telemetry.event("stage_admitted", stage_id=active_stage["stage_id"], seq=active_stage["seq"], task_size=active_stage["task_size"])
 
             for idx, call in enumerate(tool_calls, 1):
                 tool_name = str(call.get("tool", "") or "(unknown)")
@@ -1546,12 +1630,30 @@ Executor: `{self.executor_model}`
                         print(f"  [!] status callback failed: {e}", flush=True)
 
                 action_id = str(call.get("action_id", "") or "").strip()
+                if active_stage:
+                    unmet = [dep for dep in stage_dependencies.get(action_id, []) if stage_outcomes.get(dep) != "COMMITTED"]
+                    failed = any(status == "FAILED" for status in stage_outcomes.values())
+                    if unmet or (active_stage["stop_on_error"] and failed):
+                        skipped = {"status": "SKIPPED_DEPENDENCY", "depends_on": unmet or ["stage_fail_stop"]}
+                        stage_outcomes[action_id] = "SKIPPED_DEPENDENCY"
+                        stage_details[action_id] = skipped
+                        raw_results.append(skipped)
+                        tool_results.append(f"[{tool_name} 結果]\n" + json.dumps(skipped, ensure_ascii=False, separators=(",", ":")))
+                        continue
                 action_signature = self._action_signature(call)
                 checkpoint_action_id = action_id or f"ITER-{iteration}-TOOL-{idx}"
                 self.checkpoint_store.prepare_action(
                     self.current_run_id, iteration=iteration, action_id=checkpoint_action_id,
                     tool=tool_name, signature=action_signature,
                 )
+                resume_result = None
+                if active_stage:
+                    try:
+                        resume_policy, resume_result = self.checkpoint_store.stage_resume_policy(self.current_run_id, active_stage["stage_id"], call)
+                    except ValueError as exc:
+                        return self._controlled_stop("PROTOCOL_VIOLATION", iteration, tool_action_title, str(exc))
+                    if resume_policy == "RECONCILE_REQUIRED":
+                        return self._controlled_stop("RECONCILE_REQUIRED", iteration, tool_action_title, "stage action 曾 STARTED_UNCONFIRMED；為避免重複 mutation 不會自動重播。")
                 cached = self._action_result_ledger.get(action_id) if action_id else None
                 if cached and cached.get("signature") != action_signature:
                     return self._controlled_stop(
@@ -1566,7 +1668,9 @@ Executor: `{self.executor_model}`
                         message=f"執行本機工具：{tool_name}",
                         progress={"current": len(raw_results) + 1, "total": len(tool_calls), "item": tool_name},
                     )
-                    if cached:
+                    if resume_result is not None:
+                        result = resume_result
+                    elif cached:
                         result = cached.get("result", "")
                         self._log_protocol_replay(action_id, tool_name)
                     else:
@@ -1590,6 +1694,12 @@ Executor: `{self.executor_model}`
                             self.task_telemetry.event("build_end", duration_ms=round(elapsed*1000,3))
                     raw_results.append(result)
                     tool_results.append(f"[{tool_name} 結果]\n{result}")
+                    if active_stage:
+                        classified = classify_tool_result(tool_name, result)
+                        stage_outcomes[action_id] = classified["status"]
+                        stage_details[action_id] = {"status":classified["status"], "reason":classified["reason"], "evidence":classified["evidence"], "result":result}
+                        if classified["status"] == "FAILED":
+                            self.checkpoint_store.mark_committed(self.current_run_id, checkpoint_action_id, {"status":"FAILED","reason":classified["reason"],"result":result})
                     print(f"  [AGENT 完成] {tool_name} ({elapsed:.2f}s)", flush=True)
                     self._publish_status(
                         "TOOL_COMPLETED", actor="LOCAL_TOOL",
@@ -1618,7 +1728,16 @@ Executor: `{self.executor_model}`
                             )
                         except Exception as cb_e:
                             print(f"  [!] status callback failed: {cb_e}", flush=True)
-                    raise
+                    if not active_stage:
+                        self.task_telemetry.event("task_failed", iteration=iteration, tool=tool_name, error=type(e).__name__)
+                        self.task_telemetry.save()
+                        raise
+                    stage_outcomes[action_id] = "FAILED"
+                    failure = {"status": "FAILED", "error": f"{type(e).__name__}: {e}"}
+                    stage_details[action_id] = failure
+                    raw_results.append(failure)
+                    tool_results.append(f"[{tool_name} 結果]\n" + json.dumps(failure, ensure_ascii=False, separators=(",", ":")))
+                    continue
 
                 # ESC pressed while a long-running command/tool is active does
                 # not kill it; the buffered key is handled here after return.
@@ -1628,6 +1747,23 @@ Executor: `{self.executor_model}`
                     )
 
             tool_text = "\n\n".join(tool_results)
+            if active_stage:
+                stage_result = {
+                    "schema": "SMARTAGENT_STAGE_RESULT_V1", "stage_id": active_stage["stage_id"],
+                    "seq": active_stage["seq"], "task_size": active_stage["task_size"],
+                    "status": "PASS" if stage_outcomes and all(x == "COMMITTED" for x in stage_outcomes.values()) else "FAIL",
+                    "actions": stage_details,
+                }
+                try:
+                    stored = self._result_store.put(stage_result)
+                except Exception as exc:
+                    self.task_telemetry.event("result_store_failed", error=type(exc).__name__)
+                    self.task_telemetry.save()
+                    return self._controlled_stop("RESULT_STORE_FAILED", iteration, action_title, str(exc))
+                compact = self._result_store.compact(stage_result, stored)
+                self.task_telemetry.inc("stage_result_bytes", stored["result_bytes"])
+                self.task_telemetry.event("stage_result", stage_id=active_stage["stage_id"], status=stage_result["status"], result_bytes=stored["result_bytes"])
+                tool_text = "[SMARTAGENT_STAGE_COMPACT_RESULT]\n" + json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
             result_id = "RES-" + uuid.uuid4().hex[:12].upper()
             self._pending_result_ack_id = result_id
             self.conversation_history.append({"role": "assistant", "content": response_text})
@@ -1677,6 +1813,8 @@ Executor: `{self.executor_model}`
         )
         self.conversation_history.append({"role": "assistant", "content": final_msg})
         self.save_project_history()
+        self.task_telemetry.event("task_stopped", marker="EMERGENCY_STOP", iteration=self._emergency_cap)
+        self.task_telemetry.save()
         return final_msg
 
 
@@ -2340,11 +2478,280 @@ def _ensure_web_protocol_session(
     decision.action = BOOTSTRAP
     return bootstrap_once("session_attach_failed")
 
+def _remote_worker_cli() -> dict:
+    args = sys.argv[1:]
+    def value(flag: str) -> str:
+        try:
+            return args[args.index(flag) + 1]
+        except (ValueError, IndexError):
+            return ""
+    return {
+        "task_id": value("--remote-worker-task"),
+        "token": value("--remote-worker-token"),
+        "cdp": value("--remote-cdp"),
+    }
+
+
+def _enable_remote_worker_console(task_id: str) -> None:
+    if os.name != "nt" or os.environ.get("SMARTAGENT_REMOTE_WORKER_CONSOLE", "0") != "1":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.AllocConsole()
+        kernel32.SetConsoleOutputCP(65001)
+        kernel32.SetConsoleTitleW(f"SmartAgent Remote Agent1 Worker — {task_id}")
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+        sys.stderr = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+    except Exception:
+        pass
+
+
+def _remote_telegram_get_file_fast_result(request: str, workspace: str):
+    match = re.fullmatch(r"\s*/get\s+(.+?)\s*", str(request or ""), re.IGNORECASE)
+    if not match: return "", None
+    raw = match.group(1).strip().strip("`\"'")
+    if re.match(r"^[A-Za-z]:[\\/]", raw) or raw.startswith(("/", "\\")):
+        raise ValueError("/get 只允許 workspace-relative 路徑")
+    root = Path(workspace).resolve(); target = (root / raw).resolve()
+    try: relative = target.relative_to(root)
+    except ValueError as exc: raise ValueError("/get 路徑超出授權 workspace") from exc
+    if not target.is_file(): raise FileNotFoundError(f"/get 找不到檔案: {relative}")
+    kind = "photo" if target.suffix.lower() in {".jpg", ".jpeg", ".png"} else "document"
+    return f"準備傳送檔案：{relative.as_posix()}", {"path":str(target),"kind":kind,"name":target.name,"workspace":str(root)}
+
+
+def _remote_workspace_list_fast_result(request: str, workspace: str) -> str:
+    """List one workspace-contained directory without invoking the planner."""
+    text = str(request or "")
+    lowered = text.lower()
+    wants_list = (
+        "list" in lowered
+        or "列出" in text
+        or any(token in text for token in ("有哪些檔案", "有哪些資料夾", "檔案有哪些", "資料夾有哪些", "目錄內容"))
+    )
+    wants_directory = any(token in lowered for token in ("workspace", "directory", "folder")) or any(
+        token in text for token in ("路徑", "目錄", "檔案", "資料夾")
+    )
+    if not (wants_list and wants_directory):
+        return ""
+    root = Path(workspace).resolve()
+    if not root.is_dir():
+        raise RuntimeError(f"remote workspace 不存在: {root}")
+
+    requested_path = None
+    absolute_match = re.search(r"(?<![A-Za-z0-9_])([A-Za-z]:[\\/][^\r\n*?<>|]+)", text)
+    if absolute_match:
+        requested_path = Path(absolute_match.group(1).rstrip(" \t，。；;"))
+    else:
+        quoted_match = re.search(r'["“「『]([^"”」』]+)["”」』]', text)
+        if quoted_match:
+            candidate = Path(quoted_match.group(1).strip())
+            if candidate.is_absolute() or candidate.drive:
+                requested_path = candidate
+            else:
+                requested_path = root / candidate
+
+    target = (requested_path or root).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError("RemoteAgent 列舉目標超出授權 workspace")
+    if not target.is_dir():
+        raise ValueError(f"指定的 workspace 子資料夾不存在: {target}")
+    listing = tool_list_directory(str(target))
+    return f"已完成 {target} 第一層內容列舉：\n{listing}"
+
+
+_REMOTE_CONTROL_STOP_RE = re.compile(
+    r"^\[(STALLED|ABORTED|EMERGENCY_STOP|PROTOCOL_VIOLATION|"
+    r"RECONCILE_REQUIRED|RESULT_STORE_FAILED)\](?:\s|$)",
+    re.IGNORECASE,
+)
+
+
+def _remote_control_stop_reason(response: str) -> str:
+    """Return a failure reason when an agent control stop is not a real result."""
+    text = str(response or "").strip()
+    match = _REMOTE_CONTROL_STOP_RE.match(text)
+    if not match:
+        return ""
+    marker = match.group(1).upper()
+    first_line = text.splitlines()[0] if text else marker
+    return f"remote_agent_control_stop:{marker}: {first_line}"
+
+
+def _remote_create_file_fast_result(request: str, workspace: str) -> str:
+    """Create one explicitly named file inside the authorized workspace.
+
+    Existing files are verified but never overwritten. This narrow path keeps a
+    simple RemoteAgent request independent of planner Tool Envelope formatting.
+    """
+    text = str(request or "")
+    create_match = re.search(
+        r"(?:生成|建立|新增|創建|create|generate|make)\s*"
+        r"(?:一個\s*)?(?:檔案\s*|file\s*)?"
+        r"[`\"']?([A-Za-z0-9_./\\: -]+\.[A-Za-z0-9]{1,12})[`\"']?",
+        text,
+        re.IGNORECASE,
+    )
+    if not create_match:
+        return ""
+
+    root = Path(workspace).resolve()
+    if not root.is_dir():
+        raise RuntimeError(f"remote workspace 不存在: {root}")
+
+    relative_name = create_match.group(1).strip()
+    requested_path = Path(relative_name)
+    if not relative_name or requested_path.is_absolute() or requested_path.drive:
+        raise ValueError("RemoteAgent 建立檔案只接受 workspace 內的相對路徑")
+    target = (root / requested_path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError("RemoteAgent 建立檔案目標超出授權 workspace")
+    if not target.parent.is_dir():
+        raise ValueError(f"目標子資料夾不存在: {target.parent}")
+
+    created = False
+    try:
+        with target.open("x", encoding="utf-8", newline=""):
+            pass
+        created = True
+    except FileExistsError:
+        if not target.is_file():
+            raise RuntimeError(f"目標已存在但不是一般檔案: {target}")
+
+    if not target.is_file():
+        raise RuntimeError(f"檔案建立後驗證失敗: {target}")
+    action = "已建立並驗證" if created else "檔案已存在，已驗證且未覆寫"
+    return f"{action}：{target}"
+
+
 def main():
+    remote_worker = _remote_worker_cli()
+    remote_worker_mode = bool(remote_worker["task_id"])
+    adopted_remote_task = None
+    worker_startup_heartbeat_stop = None
+    worker_runtime_log = None
+    worker_status_publisher = None
+    if remote_worker_mode:
+        _enable_remote_worker_console(remote_worker["task_id"])
+        from agent_core.remote_runtime_log import RemoteRuntimeLog
+        worker_dir = (
+            Path(__file__).resolve().parent / ".agents" / "remote_workers"
+            / remote_worker["task_id"]
+        )
+        worker_runtime_log = RemoteRuntimeLog(
+            Path(__file__).resolve().parent / ".agents" / "remote_runtime.jsonl",
+            mirror_console=True,
+            mirror_paths=[worker_dir / "runtime.jsonl"],
+            snapshot_path=worker_dir / "lifecycle.json",
+        )
+        worker_status_publisher = StatusPublisher(worker_dir / "status.json")
+        worker_status_publisher.configure(task_id=remote_worker["task_id"], source="REMOTE_AGENT")
+        def _mirror_worker_status(snapshot):
+            worker_runtime_log.write(
+                "STATUS", component="worker_status",
+                stage=str(snapshot.get("stage", "") or ""),
+                state=str(snapshot.get("state", "") or ""),
+                task_id=str(snapshot.get("task_id", remote_worker["task_id"]) or ""),
+                request_id=str(snapshot.get("request_id", "") or ""),
+                actor=str(snapshot.get("actor", "") or ""),
+                message=str(snapshot.get("message", "") or ""),
+                detail=str(snapshot.get("detail", "") or "")[:1000],
+                error=str(snapshot.get("error", "") or "")[:2000],
+            )
+        worker_status_publisher.subscribe(_mirror_worker_status)
+        worker_status_publisher.publish(
+            "PROCESS_START", message="Agent1 worker 已啟動",
+            detail=(
+                f"pid={os.getpid()} browser_mode="
+                f"{'ISOLATED_CHROMIUM' if os.environ.get('SMARTAGENT_ISOLATED_BROWSER') == '1' else 'LEGACY_CDP'}"
+            ),
+        )
+        worker_runtime_log.write(
+            "CONNECT", component="remote_worker", stage="PROCESS_START",
+            task_id=remote_worker["task_id"], cdp=remote_worker["cdp"],
+            browser_mode=(
+                "ISOLATED_CHROMIUM"
+                if os.environ.get("SMARTAGENT_ISOLATED_BROWSER", "") == "1"
+                else "LEGACY_CDP"
+            ),
+        )
+        if remote_worker["cdp"]:
+            os.environ["SMARTAGENT_CHATGPT_CDP"] = remote_worker["cdp"]
+        if os.environ.get("SMARTAGENT_ISOLATED_BROWSER", "") != "1":
+            os.environ["SMARTAGENT_ATTACH_CDP"] = "1"
+        os.environ["SMARTAGENT_REMOTE_WORKER_TASK"] = remote_worker["task_id"]
     force_configuration = "--configure-startup" in sys.argv[1:]
     saved_startup = {} if force_configuration else _validated_saved_startup()
     try:
-        if saved_startup:
+        if remote_worker_mode:
+            from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+            worker_store = TaskStateStore(Path(__file__).resolve().parent / ".agents" / "remote_tasks.json")
+            worker_task = worker_store.get(remote_worker["task_id"])
+            if worker_task is None:
+                raise RuntimeError(f"remote worker task 不存在: {remote_worker['task_id']}")
+            if not saved_startup:
+                raise RuntimeError("remote worker 缺少已保存的模型設定")
+            # Adopt before network detection, Ollama checks, CDP attachment, or
+            # WebGPT protocol setup. Those startup stages can legitimately take
+            # longer than the dispatch lease and must not leave worker_pid=0.
+            startup_queue = RemoteTaskQueue(worker_store)
+            adopted_remote_task = startup_queue.adopt_dispatched(
+                remote_worker["task_id"], remote_worker["token"], worker_pid=os.getpid()
+            )
+            worker_runtime_log.write(
+                "TASK_STARTED", component="remote_worker", stage="ADOPTED",
+                task_id=adopted_remote_task.task_id,
+                request_id=adopted_remote_task.request_id,
+            )
+            worker_status_publisher.configure(
+                request_id=adopted_remote_task.request_id,
+                workspace=adopted_remote_task.workspace,
+                conversation_url=adopted_remote_task.conversation_url,
+            )
+            worker_status_publisher.publish(
+                "TASK_ADOPTED", message="已接手 RemoteAgent 任務",
+                detail=f"request_id={adopted_remote_task.request_id}",
+            )
+            worker_startup_heartbeat_stop = threading.Event()
+            def _worker_startup_heartbeat():
+                while not worker_startup_heartbeat_stop.wait(5.0):
+                    try:
+                        startup_queue.heartbeat(adopted_remote_task.task_id, worker_pid=os.getpid())
+                    except Exception as exc:
+                        worker_runtime_log.write(
+                            "ERROR", component="remote_worker", stage="HEARTBEAT_RETRY",
+                            task_id=adopted_remote_task.task_id,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+            threading.Thread(
+                target=_worker_startup_heartbeat,
+                name=f"remote-startup-lease-{adopted_remote_task.request_id}",
+                daemon=True,
+            ).start()
+            from agent_core.task_transport import resolve_task_execution_chatgpt_url
+            worker_execution_url = resolve_task_execution_chatgpt_url(
+                worker_task, registry=_conversation_registry()
+            )
+            worker_runtime_log.write(
+                "CONNECT", component="remote_worker", stage="EXECUTION_ROUTE",
+                task_id=adopted_remote_task.task_id,
+                source_conversation=adopted_remote_task.conversation_url,
+                execution_url=worker_execution_url,
+            )
+            startup_profile = {
+                "workspace": _normalize_workspace_path(worker_task.workspace),
+                # The source conversation remains Agent0's inbox/reply route.
+                # Agent1 starts a separate new chat (inside the same project
+                # when available), so its internal turns cannot loop to ingress.
+                "gpt_url": worker_execution_url,
+                "default_mode": False,
+            }
+        elif saved_startup:
             startup_profile = {
                 "workspace": saved_startup["workspace"],
                 "gpt_url": saved_startup["gpt_url"],
@@ -2359,10 +2766,11 @@ def main():
 
     selected_workspace = startup_profile["workspace"]
     selected_gpt_url = startup_profile["gpt_url"]
-    from agent_core.self_repair_protocol import DEFAULT_REPAIR_URL
-    _conversation_registry().upsert_binding(
-        selected_workspace, DEFAULT_REPAIR_URL, purpose="self_repair"
-    )
+    if not remote_worker_mode:
+        from agent_core.self_repair_protocol import DEFAULT_REPAIR_URL
+        _conversation_registry().upsert_binding(
+            selected_workspace, DEFAULT_REPAIR_URL, purpose="self_repair"
+        )
     print(f"  Workspace : {selected_workspace}")
     print(f"  GPT URL   : {selected_gpt_url}")
     startup_mode = "remembered" if saved_startup else (
@@ -2396,6 +2804,16 @@ def main():
         planner_key = saved_startup["planner_key"]
         executor_key = saved_startup["executor_key"]
         operator_key = saved_startup["operator_key"]
+        if remote_worker_mode and MODELS[planner_key].get("type") == "web":
+            # Request-scoped RemoteAgent/WebCopilot workers keep the same
+            # WebGPT decision authority as LocalAgent. Browser isolation is
+            # provided by the worker's existing request-scoped CDP page, not
+            # by substituting a local planner.
+            if worker_runtime_log is not None:
+                worker_runtime_log.write(
+                    "CONNECT", component="remote_worker", stage="BROWSER_ISOLATED",
+                    task_id=remote_worker["task_id"], planner=planner_key,
+                )
         print("\n[*] 已沿用 Agent0 / Agent1 / Agent2 共用的上次模型設定：")
         print(f"  大腦      : {MODELS[planner_key]['desc']} ({MODELS[planner_key]['model']})")
         print(f"  執行 Agent: {MODELS[executor_key]['desc']} ({MODELS[executor_key]['model']})")
@@ -2456,16 +2874,45 @@ def main():
         service = p_cfg["model"]
         print(f"\n[*] 正在啟動 {service} 網頁瀏覽器，請稍候...")
         from agent_core.web_runtime import get_manager
-        web_scraper = get_manager().get_or_create(service)
-        if service == "chatgpt":
+        if worker_runtime_log is not None:
+            worker_runtime_log.write(
+                "CONNECT", component="remote_worker", stage="BROWSER_START",
+                task_id=remote_worker["task_id"], service=service,
+            )
+        def browser_status_callback(stage, **kwargs):
+            if worker_status_publisher is not None:
+                return worker_status_publisher.publish(stage, **kwargs)
+            return None
+        web_scraper = get_manager().get_or_create(
+            service, status_callback=browser_status_callback if remote_worker_mode else None
+        )
+        if worker_runtime_log is not None:
+            worker_runtime_log.write(
+                "CONNECT", component="remote_worker", stage="BROWSER_READY",
+                task_id=remote_worker["task_id"], page_url=str(getattr(web_scraper._page,"url","") or ""),
+            )
+        if remote_worker_mode:
+            # A request-scoped worker owns exactly one CDP page.  Process exit
+            # closes that page through WebLLMScraper.close(), while the shared
+            # LocalAgent browser context and its foreground page remain alive.
+            atexit.register(get_manager().close_all)
+        if service == "chatgpt" and "/c/" in selected_gpt_url:
             try:
                 web_scraper.navigate_to_conversation(selected_gpt_url)
                 title = web_scraper.get_conversation_display_name()
-                if title:
+                if title and not remote_worker_mode:
                     _conversation_registry().set_display_name(selected_gpt_url, title)
                     print(f"[*] ChatGPT 對話: {title}")
-            except Exception:
-                pass
+            except Exception as exc:
+                if remote_worker_mode:
+                    worker_runtime_log.write(
+                        "ERROR", component="remote_worker", stage="NAVIGATION",
+                        task_id=remote_worker["task_id"], target_url=selected_gpt_url,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    raise RuntimeError(
+                        f"remote_worker_navigation_failed: {type(exc).__name__}: {exc}"
+                    ) from exc
         rendered_protocol = SYSTEM_PROMPT_TEMPLATE.format(
             tier_label=strategy["label"],
             planner_model=MODELS[strategy["planner"]]["model"],
@@ -2486,24 +2933,30 @@ def main():
             # after protocol readiness prevents bootstrap traffic from becoming
             # part of the initial receiver baseline.
             from agent_core.agent_host import IntegratedAgentHost
-            integrated_host = IntegratedAgentHost(
-                workspace=selected_workspace,
-                conversation_url=selected_gpt_url,
-            )
-            supervisor_result = integrated_host.start_hidden_supervisor(
-                get_manager().get_or_create(service)
-            )
-            atexit.register(integrated_host.stop)
-            if supervisor_result.get("started"):
-                print(
-                    "[*] RemoteAgent-0 狀態窗已啟動 "
-                    f"(PID={supervisor_result.get('pid')})"
+            if not remote_worker_mode:
+                integrated_host = IntegratedAgentHost(
+                    workspace=selected_workspace,
+                    conversation_url=selected_gpt_url,
                 )
-            else:
-                print(
-                    "[!] RemoteAgent-0 未啟動；LocalAgent 繼續運作。"
-                    f"原因={supervisor_result.get('reason', 'unknown')}"
+                supervisor_result = integrated_host.start_hidden_supervisor(
+                    get_manager().get_or_create(service)
                 )
+                atexit.register(integrated_host.stop)
+                if supervisor_result.get("started"):
+                    print(
+                        "[*] RemoteAgent-0 狀態窗已啟動 "
+                        f"(PID={supervisor_result.get('pid')})"
+                    )
+                elif supervisor_result.get("reason") == "remote_autostart_disabled":
+                    print(
+                        "[*] LocalAgent 已就緒；RemoteAgent-0 未啟動。"
+                        "需要遠端接收時請另開 launch_remote_agent.bat。"
+                    )
+                else:
+                    print(
+                        "[!] RemoteAgent-0 未啟動；LocalAgent 繼續運作。"
+                        f"原因={supervisor_result.get('reason', 'unknown')}"
+                    )
         else:
             # Stage 3 conversation registry is keyed by ChatGPT conversation URL.
             # Preserve legacy full-prompt behavior for Gemini until it gets its
@@ -2514,6 +2967,8 @@ def main():
     print_banner(tier, strategy)
 
     agent = SmartAgent(tier, strategy)
+    if remote_worker_mode:
+        agent.status_publisher = worker_status_publisher
     workspace_result = agent.set_workspace_root(selected_workspace)
     if not workspace_result.get("success"):
         print(f"\n[錯誤] 無法設定 Workspace Root: {workspace_result.get('error', 'unknown error')}")
@@ -2521,26 +2976,30 @@ def main():
     print(f"[*] Workspace Root 已設定: {workspace_result['workspace_root']}")
     agent.enable_console_pause()
     from agent_core.self_repair_coordinator import SelfRepairCoordinator
-    startup_repair_root = os.environ.get("SMARTAGENT_SELF_REPAIR_ROOT", "").strip()
-    startup_project_root = os.environ.get("SMARTAGENT_PROJECT_ROOT", "").strip()
-    startup_coordinator = SelfRepairCoordinator(startup_repair_root, project_root=startup_project_root or AGENT_PROJECT_ROOT) if startup_repair_root else SelfRepairCoordinator()
-    startup_recovery = startup_coordinator.recover_after_restart()
-    startup_meta = startup_coordinator.sync_meta_resume_state()
-    if startup_recovery.get("state") not in {"NO_RECOVERY", None}:
-        print(f"[*] Self-repair startup recovery: {startup_recovery.get('state')}")
-    if startup_meta.get("state"):
-        print(f"[*] Meta Recovery startup state: {startup_meta.get('state')}")
+    if not remote_worker_mode:
+        startup_repair_root = os.environ.get("SMARTAGENT_SELF_REPAIR_ROOT", "").strip()
+        startup_project_root = os.environ.get("SMARTAGENT_PROJECT_ROOT", "").strip()
+        startup_coordinator = SelfRepairCoordinator(startup_repair_root, project_root=startup_project_root or AGENT_PROJECT_ROOT) if startup_repair_root else SelfRepairCoordinator()
+        startup_recovery = startup_coordinator.recover_after_restart()
+        startup_meta = startup_coordinator.sync_meta_resume_state()
+        if startup_recovery.get("state") not in {"NO_RECOVERY", None}:
+            print(f"[*] Self-repair startup recovery: {startup_recovery.get('state')}")
+        if startup_meta.get("state"):
+            print(f"[*] Meta Recovery startup state: {startup_meta.get('state')}")
 
-    # Stage 8: console input is read on a daemon thread so the main Agent thread
-    # remains free to claim Remote tasks while the user is idle at the prompt.
-    # Both local and remote work still execute serially on this main thread.
+    # LocalAgent reads only its local console. Agent0 reserves remote tasks and
+    # launches one request-scoped Agent1 worker process/page per reservation;
+    # this main process never claims or executes RemoteAgent work.
     from agent_core.task_state import RemoteTaskQueue, TaskStateStore
     remote_queue = RemoteTaskQueue(
         TaskStateStore(Path(__file__).resolve().parent / ".agents" / "remote_tasks.json")
     )
+    from agent_core.remote_events import RemoteEventStore
+    remote_event_store = RemoteEventStore(Path(__file__).resolve().parent / ".agents" / "remote_events.json")
     startup_workspace = selected_workspace
     startup_gpt_url = selected_gpt_url
     from agent_core.routing import build_route_context, route_context_lines
+    from agent_core.task_transport import validate_task_transport
 
     def _registered_remote_bindings():
         return [
@@ -2549,8 +3008,18 @@ def main():
         ]
 
     def _activate_remote_context(task):
-        if _conversation_registry().find(task.workspace, task.conversation_url) is None:
-            raise RuntimeError("remote_task_origin_not_registered")
+        transport_context = validate_task_transport(
+            task, registry=_conversation_registry()
+        )
+        if remote_worker_mode:
+            workspace_switch = agent.set_workspace_root(task.workspace)
+            if not workspace_switch.get("success"):
+                raise RuntimeError(f"remote_workspace_switch_failed: {workspace_switch.get('error', 'unknown')}")
+            return transport_context
+        if not transport_context.is_webgpt:
+            raise RuntimeError(
+                f"remote_transport_requires_worker:{transport_context.transport}"
+            )
         if integrated_host is None:
             raise RuntimeError("remote_browser_host_unavailable")
         switched = integrated_host.activate_context(
@@ -2575,15 +3044,15 @@ def main():
             raise RuntimeError(
                 f"remote_workspace_switch_failed: {workspace_switch.get('error', 'unknown')}"
             )
+        return transport_context
 
     def _restore_startup_context():
+        if remote_worker_mode:
+            return
         agent.set_workspace_root(startup_workspace)
         if integrated_host is not None:
-            restored = integrated_host.activate_context(
-                workspace=startup_workspace,
-                conversation_url=startup_gpt_url,
-            )
-            if not restored.get("activated"):
+            restored = integrated_host.restore_foreground_context()
+            if not restored.get("restored"):
                 print(f"[!] 無法恢復原本對話: {restored.get('reason', 'unknown')}")
     console_events = thread_queue.Queue()
 
@@ -2595,33 +3064,44 @@ def main():
                 console_events.put(("error", exc))
                 return
 
-    threading.Thread(target=_console_reader, name="localagent-console", daemon=True).start()
+    if not remote_worker_mode:
+        threading.Thread(target=_console_reader, name="localagent-console", daemon=True).start()
 
+    remote_worker_consumed = False
     while True:
         remote_task = None
+        remote_transport_context = None
         try:
-            try:
-                event_kind, event_value = console_events.get(timeout=1.0)
-            except thread_queue.Empty:
-                remote_task = remote_queue.claim_next(
-                    allowed_bindings=_registered_remote_bindings(),
-                )
+            if remote_worker_mode:
+                if remote_worker_consumed:
+                    break
+                remote_task = adopted_remote_task
                 if remote_task is None:
-                    continue
+                    raise RuntimeError("remote worker startup adoption missing")
+                remote_worker_consumed = True
                 user_input = remote_task.request.strip()
+                if str(remote_task.metadata.get("transport", "")).upper() == "TELEGRAM":
+                    paths=[str(x.get("local_path","") or "") for x in list(remote_task.metadata.get("attachments") or []) if isinstance(x,dict) and str(x.get("local_path","") or "")]
+                    if paths: user_input += "\n\n[Telegram inbound attachments]\n" + "\n".join("- "+x for x in paths)
                 print(
-                    f"\n[RemoteAgent] 已領取 {remote_task.request_id} "
+                    f"\n[RemoteAgent Worker] 已領取 {remote_task.request_id} "
                     f"({remote_task.task_id})"
                 )
-                print(f"[RemoteAgent] 任務: {user_input}")
+                remote_event_store.emit("TASK_STARTED", remote_task, status="RUNNING", payload={})
+                print(f"[RemoteAgent Worker] 任務: {user_input}")
                 try:
-                    _activate_remote_context(remote_task)
+                    remote_transport_context = _activate_remote_context(remote_task)
                 except Exception as exc:
                     failed_task = remote_queue.fail(remote_task.task_id, f"{type(exc).__name__}: {exc}")
+                    remote_event_store.emit("TASK_FAILED", failed_task, status="FAILED", payload={"error": failed_task.error})
                     print(f"[RemoteAgent] 無法切換至來源對話: {exc}")
                     _restore_startup_context()
-                    continue
+                    break
             else:
+                try:
+                    event_kind, event_value = console_events.get(timeout=1.0)
+                except thread_queue.Empty:
+                    continue
                 if event_kind == "error":
                     if isinstance(event_value, EOFError):
                         print("\n[再見]")
@@ -2712,9 +3192,9 @@ def main():
             # Chat
             route_context = build_route_context(
                 request=user_input,
-                source="remote" if remote_task is not None else "local",
+                source=(remote_transport_context.route_source if remote_transport_context is not None else "local"),
                 conversation_url=(
-                    remote_task.conversation_url if remote_task is not None else ""
+                    remote_transport_context.chatgpt_url if remote_transport_context is not None else ""
                 ),
                 requested_mode=(
                     remote_task.metadata.get("route_context", {})
@@ -2735,7 +3215,7 @@ def main():
             agent.configure_status(
                 request_id=remote_task.request_id if remote_task is not None else "",
                 task_id=remote_task.task_id if remote_task is not None else "",
-                source="remote" if remote_task is not None else "local",
+                source=(remote_transport_context.route_source if remote_transport_context is not None else "local"),
                 mode=mode_context.get("selected_mode", "GENERAL_AGENT"),
                 carrier=carrier_context.get("selected_carrier", "LOCAL_CONSOLE"),
                 conversation_url=remote_task.conversation_url if remote_task is not None else startup_gpt_url,
@@ -2759,6 +3239,8 @@ def main():
                 remote_monitor_stop = threading.Event()
                 remote_cancel_seen = threading.Event()
                 if remote_task is not None:
+                    if worker_startup_heartbeat_stop is not None:
+                        worker_startup_heartbeat_stop.set()
                     def _remote_lease_monitor():
                         while not remote_monitor_stop.wait(5.0):
                             try:
@@ -2767,14 +3249,48 @@ def main():
                                     remote_cancel_seen.set()
                                     agent.cancel_current_web_request()
                                     return
-                            except Exception:
-                                return
+                            except Exception as exc:
+                                if worker_runtime_log is not None:
+                                    worker_runtime_log.write(
+                                        "ERROR", component="remote_worker",
+                                        stage="HEARTBEAT_RETRY",
+                                        task_id=remote_task.task_id,
+                                        error=f"{type(exc).__name__}: {exc}",
+                                    )
+                                continue
                     threading.Thread(
                         target=_remote_lease_monitor,
                         name=f"remote-lease-{remote_task.request_id}",
                         daemon=True,
                     ).start()
-                response = agent.chat(user_input)
+                deterministic_action = ""
+                deterministic_response = ""
+                remote_artifacts = []
+                if (
+                    remote_worker_mode
+                    and remote_task is not None
+                    and str(remote_task.metadata.get("transport", "")).upper() == "TELEGRAM"
+                ):
+                    deterministic_response, artifact = _remote_telegram_get_file_fast_result(
+                        remote_task.request.strip(), remote_task.workspace
+                    )
+                    if artifact is not None:
+                        remote_artifacts = [artifact]
+                        deterministic_action = "telegram_get_file"
+                if deterministic_response:
+                    agent._publish_status(
+                        "TOOL_COMPLETED", actor="LOCAL_TOOL",
+                        message=f"本機工具完成：{deterministic_action}",
+                    )
+                    if worker_runtime_log is not None:
+                        worker_runtime_log.write(
+                            "TASK_STARTED", component="remote_worker",
+                            stage="TELEGRAM_GET_FILE_COMPLETED",
+                            task_id=remote_task.task_id,
+                        )
+                    response = deterministic_response
+                else:
+                    response = agent.chat(user_input)
             except KeyboardInterrupt:
                 print(
                     "\n[*] Ctrl+C：正在中止目前 LocalAgent request；"
@@ -2803,18 +3319,11 @@ def main():
                     )
                 if remote_task is not None:
                     failed_task = remote_queue.fail(remote_task.task_id, "remote_task_interrupted_by_operator")
+                    remote_event_store.emit("TASK_FAILED", failed_task, status="FAILED", payload={"error":"任務已由 1 號機操作員中止。"})
                     print(f"[RemoteAgent] 任務已中止: {remote_task.request_id}")
-                    if integrated_host is not None:
-                        delivery = integrated_host.return_remote_result(
-                            failed_task, status="FAILED", summary="任務已由 1 號機操作員中止。"
-                        )
-                        remote_queue.record_result_delivery(
-                            remote_task.task_id,
-                            delivered=bool(delivery.get("delivered")),
-                            reply=str(delivery.get("reply", "") or ""),
-                            error=str(delivery.get("reason", "") or ""),
-                        )
                     _restore_startup_context()
+                if remote_worker_mode:
+                    break
                 continue
             except Exception as e:
                 agent._record_issue(e, actor="LOCAL_AGENT", stage="TASK_BOUNDARY")
@@ -2824,20 +3333,13 @@ def main():
                 )
                 if remote_task is not None:
                     failed_task = remote_queue.fail(remote_task.task_id, f"{type(e).__name__}: {e}")
+                    remote_event_store.emit("TASK_FAILED", failed_task, status="FAILED", payload={"error": failed_task.error})
                     print(f"\n[RemoteAgent] 任務失敗: {remote_task.request_id}")
-                    if integrated_host is not None:
-                        delivery = integrated_host.return_remote_result(
-                            failed_task, status="FAILED", summary=f"{type(e).__name__}: {e}"
-                        )
-                        remote_queue.record_result_delivery(
-                            remote_task.task_id,
-                            delivered=bool(delivery.get("delivered")),
-                            reply=str(delivery.get("reply", "") or ""),
-                            error=str(delivery.get("reason", "") or ""),
-                        )
                     _restore_startup_context()
                 print(f"\n[錯誤] {e}")
                 print("提示：輸入 /tier 3 切換到離線模式")
+                if remote_worker_mode:
+                    break
                 continue
             finally:
                 if 'remote_monitor_stop' in locals():
@@ -2855,65 +3357,58 @@ def main():
             print("-" * 64)
             print(response)
             print("-" * 64)
-            agent._publish_status("COMPLETED", state="COMPLETED", message="任務完成")
             if remote_task is not None:
                 if 'remote_cancel_seen' in locals() and remote_cancel_seen.is_set():
                     agent._publish_status(
                         "CANCELLED", state="CANCELLED", message="任務已取消"
                     )
                     cancelled_task = remote_queue.mark_cancelled(remote_task.task_id)
+                    remote_event_store.emit("TASK_INTERRUPTED", cancelled_task, status="CANCELLED", payload={"error":"任務已取消。"})
                     print(f"[RemoteAgent] 任務已由手機取消: {remote_task.request_id}")
-                    if integrated_host is not None:
-                        delivery = integrated_host.return_remote_result(
-                            cancelled_task, status="CANCELLED", summary="任務已取消。"
-                        )
-                        remote_queue.record_result_delivery(
-                            remote_task.task_id,
-                            delivered=bool(delivery.get("delivered")),
-                            reply=str(delivery.get("reply", "") or ""),
-                            error=str(delivery.get("reason", "") or ""),
-                        )
                     _restore_startup_context()
+                    if remote_worker_mode:
+                        break
                     continue
+                control_stop_reason = _remote_control_stop_reason(response)
+                if control_stop_reason:
+                    failed_task = remote_queue.fail(remote_task.task_id, control_stop_reason)
+                    remote_event_store.emit(
+                        "TASK_FAILED", failed_task, status="FAILED",
+                        payload={"error": control_stop_reason},
+                    )
+                    agent._publish_status(
+                        "FAILED", state="FAILED", message="任務未完成",
+                        error=control_stop_reason,
+                    )
+                    if worker_runtime_log is not None:
+                        worker_runtime_log.write(
+                            "ERROR", component="remote_worker",
+                            stage="CONTROL_STOP_REJECTED_AS_RESULT",
+                            task_id=remote_task.task_id,
+                            error=control_stop_reason,
+                        )
+                    print(f"[RemoteAgent] 任務未完成: {remote_task.request_id}")
+                    _restore_startup_context()
+                    if remote_worker_mode:
+                        break
+                    continue
+                agent._publish_status("COMPLETED", state="COMPLETED", message="任務完成")
                 completed_task = remote_queue.complete(
                     remote_task.task_id,
-                    result={
-                        "response": response,
-                        "worker_pid": os.getpid(),
-                        "elapsed_sec": round(elapsed, 3),
-                    },
+                    result={"response": response, "worker_pid": os.getpid(), "elapsed_sec": round(elapsed, 3)},
                 )
+                completed_payload={"summary":response}
+                if remote_artifacts:
+                    completed_payload["workspace"]=str(Path(remote_task.workspace).resolve())
+                    completed_payload["artifacts"]=remote_artifacts
+                remote_event_store.emit("TASK_COMPLETED", completed_task, status="COMPLETED", payload=completed_payload)
                 print(f"[RemoteAgent] 任務完成: {remote_task.request_id}")
-                if integrated_host is not None:
-                    agent._publish_status(
-                        "RETURNING_RESULT", message="回傳任務結果至來源對話"
-                    )
-                    print(f"[RemoteAgent] 正在回傳結果至手機對話: {remote_task.request_id}")
-                    delivery = integrated_host.return_remote_result(
-                        completed_task,
-                        status="COMPLETED",
-                        summary=response,
-                    )
-                    remote_queue.record_result_delivery(
-                        remote_task.task_id,
-                        delivered=bool(delivery.get("delivered")),
-                        reply=str(delivery.get("reply", "") or ""),
-                        error=str(delivery.get("reason", "") or ""),
-                    )
-                    if delivery.get("delivered"):
-                        print(f"[RemoteAgent] 手機結果已回傳: {remote_task.request_id}")
-                    else:
-                        print(
-                            f"[RemoteAgent] 手機結果回傳失敗: {remote_task.request_id} "
-                            f"原因={delivery.get('reason', 'unknown')}"
-                        )
-                    agent._publish_status(
-                        "COMPLETED" if delivery.get("delivered") else "FAILED",
-                        state="COMPLETED" if delivery.get("delivered") else "FAILED",
-                        message="任務完成" if delivery.get("delivered") else "結果回傳失敗",
-                        error="" if delivery.get("delivered") else str(delivery.get("reason", "unknown")),
-                    )
+                agent._publish_status("COMPLETED", state="COMPLETED", message="任務完成，等待回傳")
                 _restore_startup_context()
+                if remote_worker_mode:
+                    break
+            else:
+                agent._publish_status("COMPLETED", state="COMPLETED", message="任務完成")
 
         except KeyboardInterrupt:
             print("\n\n(Ctrl+C。輸入 /exit 退出)")
@@ -2922,4 +3417,43 @@ def main():
             break
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as exc:
+        worker = _remote_worker_cli()
+        if worker.get("task_id"):
+            try:
+                from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+                from agent_core.remote_events import RemoteEventStore
+                root = Path(__file__).resolve().parent
+                exit_queue = RemoteTaskQueue(TaskStateStore(root / ".agents" / "remote_tasks.json"))
+                failed = exit_queue.fail_running(worker["task_id"], f"{type(exc).__name__}: {exc}")
+                if failed is not None:
+                    RemoteEventStore(root / ".agents" / "remote_events.json").emit(
+                        "TASK_FAILED", failed, status="FAILED", payload={"error": failed.error}
+                    )
+            except Exception:
+                pass
+            try:
+                import traceback
+                from agent_core.remote_runtime_log import RemoteRuntimeLog
+                worker_dir = root / ".agents" / "remote_workers" / worker["task_id"]
+                RemoteRuntimeLog(
+                    root / ".agents" / "remote_runtime.jsonl",
+                    mirror_console=True,
+                    mirror_paths=[worker_dir / "runtime.jsonl"],
+                    snapshot_path=worker_dir / "lifecycle.json",
+                ).write(
+                    "ERROR", component="remote_worker", stage="UNHANDLED_EXIT",
+                    task_id=worker["task_id"],
+                    error=f"{type(exc).__name__}: {exc}",
+                    traceback=traceback.format_exc()[-4000:],
+                )
+                StatusPublisher(worker_dir / "status.json").publish(
+                    "FAILED", state="FAILED", message="Agent1 worker 啟動或執行失敗",
+                    error=f"{type(exc).__name__}: {exc}",
+                    detail=f"task_id={worker['task_id']} pid={os.getpid()}",
+                )
+            except Exception:
+                pass
+        raise

@@ -19,6 +19,9 @@ TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED"}
 
 STAGE_LABELS = {
     "IDLE": "等待任務", "ROUTING": "判定任務路由",
+    "PROCESS_START": "Agent1 worker 已啟動", "TASK_ADOPTED": "已接手 RemoteAgent 任務",
+    "CDP_CONNECTING": "準備 Agent1 瀏覽器", "PAGE_START_WAIT": "等待配置獨立網頁",
+    "PAGE_STARTING": "建立獨立網頁", "PAGE_READY": "獨立網頁已就緒",
     "LOCAL_PREPARING": "LocalAgent 準備任務中",
     "PREPARING_PROMPT": "準備傳送訊息", "PREPARING_ATTACHMENTS": "準備附件",
     "UPLOADING_ATTACHMENT": "上傳附件中", "ATTACHMENT_READY": "附件已就緒",

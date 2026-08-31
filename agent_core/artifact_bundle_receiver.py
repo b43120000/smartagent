@@ -43,10 +43,27 @@ class ArtifactBundleReceiver:
         *,
         execute_action: Callable[[dict], str],
         validate_action: Callable[[dict], tuple[bool, dict | None]],
+        preflight_actions: Callable[[list[dict]], None] | None = None,
         expected_sha256: str = "",
     ) -> str:
         manifest, actions, evidence = load_bundle(path, expected_sha256=expected_sha256)
         bundle_id = evidence["bundle_id"]
+        # Atomic admission: nested action schema rejection must never leave a
+        # partially executed artifact bundle behind.
+        for action in actions:
+            valid, diagnostic = validate_action(action)
+            if not valid:
+                return json.dumps({
+                    "status": "ARTIFACT_BUNDLE_FAILED", "bundle_id": bundle_id,
+                    "failed_action_id": action.get("action_id", ""),
+                    "reason": "SCHEMA_REJECTED_PRECHECK", "diagnostic": diagnostic or {},
+                    "executed": 0, "replayed": 0,
+                }, ensure_ascii=False, separators=(",", ":"))
+        if preflight_actions is not None:
+            try:
+                preflight_actions(actions)
+            except Exception as exc:
+                return json.dumps({"status":"ARTIFACT_BUNDLE_FAILED","bundle_id":bundle_id,"reason":"PREFLIGHT_REJECTED","diagnostic":str(exc)[:1000],"executed":0,"replayed":0},ensure_ascii=False,separators=(",",":"))
         state = self._load_state(bundle_id)
 
         old_hash = str(state.get("zip_sha256", "") or "")
@@ -86,22 +103,6 @@ class ArtifactBundleReceiver:
                     "result": committed[action_id].get("result", ""),
                 })
                 continue
-
-            valid, diagnostic = validate_action(action)
-            if not valid:
-                state["status"] = "FAILED"
-                state["failed_action_id"] = action_id
-                state["failure"] = {"kind": "SCHEMA_REJECTED", "diagnostic": diagnostic or {}}
-                self._save_state(bundle_id, state)
-                return json.dumps({
-                    "status": "ARTIFACT_BUNDLE_FAILED",
-                    "bundle_id": bundle_id,
-                    "failed_action_id": action_id,
-                    "reason": "SCHEMA_REJECTED",
-                    "diagnostic": diagnostic or {},
-                    "executed": executed,
-                    "replayed": replayed,
-                }, ensure_ascii=False, separators=(",", ":"))
 
             state["active_action"] = {
                 "index": index,

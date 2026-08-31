@@ -214,6 +214,11 @@ class SelfRepairCoordinator:
                     self_repair_resumed=True,
                     user_task_resumed=True,
                 )
+                # TASK_RESUMING is only a transient resume state. Once meta
+                # recovery is durably complete, close active_repair as well so
+                # HostSupervisor cannot mistake stale resume state for an active
+                # repair on later heartbeat/stage watchdog checks.
+                self.transition("COMPLETED")
             meta["updated_at"] = time.time()
             self._save_meta(meta)
         return meta
