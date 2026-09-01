@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from pathlib import Path
 
 from agent_core.webgpt_rate_governor import WebGPTRateGovernor, WebGPTRateLimited
@@ -12,7 +13,7 @@ from agent_core.webgpt_rate_governor import WebGPTRateGovernor, WebGPTRateLimite
 class WebAgentBrowserClient:
     """Send WebAgent prompts without routing through the Agent manager loop."""
 
-    def __init__(self, scraper, *, governor=None, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, scraper, *, governor=None, sleep=time.sleep, clock=time.monotonic, event_sink=None):
         self.scraper = scraper
         self.governor = governor or getattr(scraper, "_rate_governor", None)
         if self.governor is None:
@@ -20,13 +21,21 @@ class WebAgentBrowserClient:
             self.scraper._rate_governor = self.governor
         self._sleep = sleep
         self._clock = clock
+        self.event_sink = event_sink
+
+    def _emit(self, event: str, **fields) -> None:
+        if self.event_sink is not None:
+            self.event_sink(event, **fields)
 
     def _acquire_submit_lease(self, stage: str):
+        self._emit("submit_lease_wait_started", stage=stage)
         last_busy_notice = 0.0
         last_delay_notice = 0.0
         while True:
             try:
-                return self.governor.acquire(wait=False)
+                lease = self.governor.acquire(wait=False)
+                self._emit("submit_lease_acquired", stage=stage)
+                return lease
             except WebGPTRateLimited as exc:
                 now = self._clock()
                 if not last_delay_notice or now - last_delay_notice >= 10.0:
@@ -57,9 +66,21 @@ class WebAgentBrowserClient:
         protocol_expected: dict | None = None,
     ) -> str:
         print(f"[WebAgent] 準備發送{stage}。", flush=True)
+        self._emit("browser_send_started", stage=stage, attachment_paths=attachment_paths or [])
         lease = self._acquire_submit_lease(stage)
         self.scraper._rate_submit_lease = lease
         print(f"[WebAgent] 正在把{stage}寫入 ChatGPT 並按下 Send...", flush=True)
+        heartbeat_stop = threading.Event()
+        started_at = self._clock()
+
+        def heartbeat() -> None:
+            while not heartbeat_stop.wait(15.0):
+                elapsed = self._clock() - started_at
+                print(f"[WebAgent] {stage}處理中，已等待 {elapsed:.0f} 秒...", flush=True)
+                self._emit("browser_wait_heartbeat", stage=stage, elapsed_sec=round(elapsed, 1))
+
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
         try:
             response = self.scraper.ask(
                 str(prompt),
@@ -80,8 +101,13 @@ class WebAgentBrowserClient:
             if hasattr(self.scraper, "_rate_limited_until"):
                 self.scraper._rate_limited_until = 0.0
             print(f"[WebAgent] 已收到{stage}回應。", flush=True)
+            self._emit("browser_response_completed", stage=stage, response=response)
             return str(response)
+        except Exception as exc:
+            self._emit("browser_response_failed", stage=stage, error_type=type(exc).__name__, error=str(exc))
+            raise
         finally:
+            heartbeat_stop.set()
             if getattr(self.scraper, "_rate_submit_lease", None) is lease:
                 self.scraper._rate_submit_lease = None
             lease.release()

@@ -20,6 +20,7 @@ from .tool_context import WebAgentToolContext
 
 
 PlannerCall = Callable[[str, dict, list[str]], str]
+EventSink = Callable[[str], None]
 
 
 def extract_authorized_paths(request: str) -> list[str]:
@@ -55,17 +56,23 @@ class WebAgentProtocolLoop:
         *,
         tool_context: WebAgentToolContext | None = None,
         max_turns: int = 100,
+        event_sink: Callable[..., None] | None = None,
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.planner = planner
         self.tools = tool_context or WebAgentToolContext(self.workspace)
         self.max_turns = max(1, int(max_turns))
+        self.event_sink = event_sink
         self.run_id = ""
         self.turn_id = 0
         self.pending_result_ack_id = ""
         self.pending_web_ack_id = ""
         self.seen_web_ack_ids: set[str] = set()
         self.action_ledger: dict[str, dict] = {}
+
+    def _emit(self, event: str, **fields) -> None:
+        if self.event_sink is not None:
+            self.event_sink(event, **fields)
 
     def _new_commit(self) -> dict:
         self.turn_id += 1
@@ -80,9 +87,19 @@ class WebAgentProtocolLoop:
 
     @staticmethod
     def _with_commit(prompt: str, expected: dict) -> str:
+        trace = (
+            "[WEBAGENT_REQUEST_TRACE]\n"
+            f"request_id={expected['run_id']}\n"
+            f"round={expected['turn_id']}\n"
+            "attempt=1\n"
+            f"previous_ack_id={expected['ack_web_ack_id']}\n"
+            "[/WEBAGENT_REQUEST_TRACE]"
+        )
         return (
             str(prompt).rstrip()
-            + "\n\n[WEBAGENT_ACK_REQUIRED]\n"
+            + "\n\n"
+            + trace
+            + "\n[WEBAGENT_ACK_REQUIRED]\n"
             + "只輸出 smartagent_tool blocks；最後一個 block 必須是 matching turn_commit。\n"
             + local_commit_line(expected)
         )
@@ -102,6 +119,20 @@ class WebAgentProtocolLoop:
             self.seen_web_ack_ids.add(web_ack_id)
             self.pending_web_ack_id = web_ack_id
             self.pending_result_ack_id = ""
+            self._emit(
+                "ack_accepted",
+                request_id=expected["run_id"],
+                round=expected["turn_id"],
+                previous_ack_id=expected["ack_web_ack_id"],
+                ack_id=web_ack_id,
+            )
+        else:
+            self._emit(
+                "ack_rejected",
+                request_id=expected["run_id"],
+                round=expected["turn_id"],
+                diagnostics=diagnostics,
+            )
         return actions, diagnostics
 
     def _execute_action(self, action: dict) -> str:
@@ -128,6 +159,8 @@ class WebAgentProtocolLoop:
         self.action_ledger.clear()
         authorized = extract_authorized_paths(request)
         self.tools.begin_run(self.run_id, request, authorized)
+        self._emit("request_started", request_id=self.run_id, request=request, authorized_paths=authorized)
+        print(f"[WebAgent] Request ID: {self.run_id}", flush=True)
 
         prompt = (
             "[WEBAGENT_USER_REQUEST]\n"
@@ -138,12 +171,31 @@ class WebAgentProtocolLoop:
 
         for _ in range(self.max_turns):
             expected = self._new_commit()
+            print(
+                f"[WebAgent] {self.run_id} round={self.turn_id} attempt=1 "
+                f"previous_ack_id={self.pending_web_ack_id or '-'}",
+                flush=True,
+            )
+            self._emit(
+                "planner_round_started",
+                request_id=self.run_id,
+                round=self.turn_id,
+                attempt=1,
+                previous_ack_id=self.pending_web_ack_id,
+            )
             attachments = self.tools.take_pending_attachments()
             response = self.planner(self._with_commit(prompt, expected), expected, attachments)
+            self._emit(
+                "planner_response_received",
+                request_id=self.run_id,
+                round=self.turn_id,
+                response=response,
+            )
             report = analyze_tool_transport(response)
             diagnostics = list(report["diagnostics"])
             calls = list(report["calls"])
             if diagnostics:
+                self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
@@ -168,11 +220,39 @@ class WebAgentProtocolLoop:
                         "不可結束。請執行必要修正或明確 verification，PASS 後再 final_response。"
                     )
                     continue
-                return str(actions[0].get("content", ""))
+                content = str(actions[0].get("content", ""))
+                self._emit(
+                    "protocol_loop_completed",
+                    request_id=self.run_id,
+                    round=self.turn_id,
+                    ack_id=self.pending_web_ack_id,
+                    final_content=content,
+                )
+                return content
 
             results = []
             for action in actions:
+                self._emit(
+                    "tool_started",
+                    request_id=self.run_id,
+                    round=self.turn_id,
+                    action_id=action.get("action_id", ""),
+                    tool=action.get("tool", ""),
+                )
+                print(
+                    f"[WebAgent] {self.run_id} round={self.turn_id} 正在執行 "
+                    f"{action.get('tool', '')} ({action.get('action_id', '')})...",
+                    flush=True,
+                )
                 result = self._execute_action(action)
+                self._emit(
+                    "tool_completed",
+                    request_id=self.run_id,
+                    round=self.turn_id,
+                    action_id=action.get("action_id", ""),
+                    tool=action.get("tool", ""),
+                    result=result,
+                )
                 results.append({
                     "action_id": action.get("action_id", ""),
                     "tool": action.get("tool", ""),

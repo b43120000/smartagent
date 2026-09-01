@@ -53,6 +53,10 @@ def run() -> dict:
         assert len(turns) == 2
         assert turns[1]["expected"]["ack_result_id"].startswith("RES-")
         assert turns[1]["expected"]["ack_web_ack_id"] == "WEBACK-WA-1"
+        assert f"request_id={loop.run_id}" in turns[0]["prompt"]
+        assert "round=1" in turns[0]["prompt"]
+        assert "attempt=1" in turns[0]["prompt"]
+        assert "previous_ack_id=WEBACK-WA-1" in turns[1]["prompt"]
         assert "smart_agent" not in sys.modules
         assert "web_copilot" not in sys.modules
         return {

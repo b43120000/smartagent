@@ -252,14 +252,14 @@ class WebGPTRateGovernor:
             self._sleep(min(1.0, remaining))
 
     def acquire(self, *, wait: bool = True) -> WebGPTSubmitLease:
+        """Acquire cross-process submit ownership only.
+
+        The decisive spacing/cooldown gate is before_submit(), immediately
+        before the verified Send click, after composer/attachment preparation.
+        """
         lock = _ExclusiveFileLock(self.submit_lock_path)
         lock.acquire(wait=wait)
-        try:
-            self._wait_until_allowed(wait=wait)
-            return WebGPTSubmitLease(self, lock, self._clock())
-        except Exception:
-            lock.release()
-            raise
+        return WebGPTSubmitLease(self, lock, self._clock())
 
     def _record_request_start(self, submitted_at: float) -> None:
         def update(state):

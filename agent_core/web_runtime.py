@@ -58,6 +58,7 @@ PROFILE_DIR = Path(os.environ.get("APPDATA", Path.home())) / "WebLLMScraper"
 DEBUG_LOG_PATH = Path(__file__).resolve().parent.parent / ".agents" / "web_llm_scraper_debug.log"
 CHATGPT_CDP_PORT = 1272
 CHATGPT_CDP_ENDPOINT = f"http://127.0.0.1:{CHATGPT_CDP_PORT}"
+CANONICAL_PAGE_MARKER_PREFIX = "SMARTAGENT_CANONICAL_CONVERSATION:"
 REMOTE_PAGE_START_LOCK = Path(__file__).resolve().parent.parent / ".agents" / "remote_page_start.lock"
 
 
@@ -189,6 +190,9 @@ class WebLLMScraper:
         # window, then allow at most one same-turn ACK-only retransmission.
         self._protocol_recovery_quiet_sec = 30.0
         self._protocol_recovery_max_attempts = 1
+        # A failed recovery is reported after one short, quiet observation;
+        # there is no second hidden correction turn.
+        self._protocol_recovery_failure_quiet_sec = 5.0
         self._activity_observer_installed = False
         # Stage 3.1: scope artifact downloads to the most recent ask() request.
         self._last_artifact_scope: Optional[dict] = None
@@ -198,6 +202,9 @@ class WebLLMScraper:
         self._rate_limit_dialog_repeat_window_sec = 120.0
         self._rate_limit_dialog_streak = 0
         self._rate_governor = None
+        self._request_state = "READY_IDLE"
+        self._pending_submit_context = None
+        self._submit_click_attempted = False
 
     def set_status_callback(self, callback) -> None:
         self._status_callback = callback
@@ -442,6 +449,11 @@ class WebLLMScraper:
                         target_id=self._conversation_id_from_url(self.cfg.get("url",""))
                         matches=[page for page in list(self._browser.pages) if self._conversation_id_from_url(str(getattr(page,"url","") or ""))==target_id] if target_id else []
                         if matches:
+                            matches.sort(
+                                key=lambda page: not self._page_has_canonical_marker(
+                                    page, target_id
+                                )
+                            )
                             self._page=matches[0]
                             self._owns_attached_page=False
                             for duplicate in matches[1:]:
@@ -450,7 +462,7 @@ class WebLLMScraper:
                         else:
                             self._page = self._browser.new_page()
                             self._owns_attached_page=True
-                            self._page.evaluate("value => { window.name = value; }",f"SMARTAGENT_REMOTE_WORKER:{marker}")
+                            self._mark_page_canonical(self._page, target_id)
                         self._log_stage(
                             "page_starting",
                             f"attempt={startup_attempt + 1} pages={len(self._browser.pages)} marker={marker} isolated={isolated_worker}",
@@ -459,11 +471,16 @@ class WebLLMScraper:
                             "PAGE_STARTING", message="建立獨立網頁",
                             progress={"current": startup_attempt + 1, "total": startup_attempts},
                         )
-                    self._page.goto(
-                        self.cfg["url"],
-                        wait_until="commit" if attach_cdp else "domcontentloaded",
-                        timeout=30000,
+                    target_id = self._conversation_id_from_url(self.cfg.get("url", ""))
+                    current_id = self._conversation_id_from_url(
+                        str(getattr(self._page, "url", "") or "")
                     )
+                    if not target_id or current_id != target_id:
+                        self._page.goto(
+                            self.cfg["url"],
+                            wait_until="commit" if attach_cdp else "domcontentloaded",
+                            timeout=30000,
+                        )
                     time.sleep(2)
                     if isolated_page:
                         page_url = str(getattr(self._page, "url", "") or "")
@@ -476,18 +493,26 @@ class WebLLMScraper:
                             )
                         self._log_stage("page_ready", f"url={page_url}")
                         self._emit_status("PAGE_READY", message="獨立網頁已就緒", detail=page_url)
+                    if self.service == "chatgpt" and target_id:
+                        self._mark_page_canonical(self._page, target_id)
                     break
                 except Exception as exc:
                     self._log_stage(
                         "cdp_startup_retry" if startup_attempt + 1 < startup_attempts else "page_start_failed",
                         f"attempt={startup_attempt + 1} error={type(exc).__name__}: {exc}",
                     )
-                    if isolated_page and self._page is not None:
+                    if (
+                        isolated_page
+                        and self._page is not None
+                        and self._owns_attached_page
+                    ):
                         try:
                             self._page.close(run_before_unload=False)
                         except Exception:
                             pass
+                    if isolated_page:
                         self._page = None
+                        self._owns_attached_page = False
                     if isolated_page and startup_attempt + 1 < startup_attempts:
                         time.sleep(1.5 * (startup_attempt + 1))
                         continue
@@ -579,6 +604,28 @@ class WebLLMScraper:
     def _conversation_id_from_url(conversation_url: str) -> str:
         match = re.search(r"/c/([0-9a-zA-Z-]{3,})", str(conversation_url or ""))
         return match.group(1) if match else ""
+
+    @staticmethod
+    def _page_has_canonical_marker(page, conversation_id: str) -> bool:
+        if not conversation_id:
+            return False
+        try:
+            marker = str(page.evaluate("() => window.name") or "")
+        except Exception:
+            return False
+        return marker == CANONICAL_PAGE_MARKER_PREFIX + conversation_id
+
+    @staticmethod
+    def _mark_page_canonical(page, conversation_id: str) -> None:
+        if page is None or not conversation_id:
+            return
+        try:
+            page.evaluate(
+                "value => { window.name = value; }",
+                CANONICAL_PAGE_MARKER_PREFIX + conversation_id,
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _project_url_for_conversation(conversation_url: str) -> str:
@@ -910,6 +957,9 @@ class WebLLMScraper:
         self._log_stage(stage, json.dumps(state, ensure_ascii=False, sort_keys=True))
         return state
 
+    def _set_request_state(self, state: str, detail: str = "") -> None:
+        self._request_state = str(state or "READY_IDLE")
+        self._log_stage("request_state", f"state={self._request_state}" + (f" detail={detail}" if detail else ""))
 
     @staticmethod
     def _normalize_composer_text(value: str) -> str:
@@ -1126,8 +1176,10 @@ class WebLLMScraper:
             safe_to_retry=False,
         )
 
-    def _submit_verified_prompt(self, send_locator) -> None:
-        """Cross the submit boundary exactly once for the verified prompt."""
+    def _submit_verified_prompt(
+        self, send_locator, *, prompt: str = "", attachment_paths: list | None = None
+    ) -> None:
+        """Cross the submit boundary exactly once after final UI validation."""
         self._log_stage("submit_begin", "mode=send_button")
         rate_lease = (
             getattr(self, "_rate_submit_lease", None)
@@ -1135,15 +1187,44 @@ class WebLLMScraper:
         )
         if rate_lease is not None:
             rate_lease.before_submit()
+            self._log_stage("global_send_interval_ready")
+
+        attachments = list(attachment_paths or [])
+        if self.service == "chatgpt" and attachments:
+            if not self._wait_for_attachment_ui(attachments, timeout_sec=600.0, no_progress_timeout_sec=30.0, stable_ready_sec=1.5):
+                raise WebScraperStageError(
+                    "[WEB_ATTACHMENT_PRECLICK_CHANGED] 全域 Send 等待後附件未保持穩定 READY；禁止送出。 " + str(getattr(self, "_last_attachment_wait_reason", "unknown")),
+                    stage="attachment_preclick_revalidate", safe_to_retry=False,
+                )
+            self._log_stage("attachment_set_ready", f"count={len(attachments)} phase=pre_click_stable")
+
+        if prompt:
+            send_locator = self._wait_for_send_ready(prompt, timeout_sec=5.0)
+            self._log_stage("final_send_ready")
+
+        click_completed = False
+        self._submit_click_attempted = False
         try:
+            self._log_stage("send_click", "mode=send_button")
+            self._submit_click_attempted = True
+            self._set_request_state("SUBMIT_ATTEMPTED")
             if self.service == "chatgpt":
-                # Dispatch a real DOM click on the currently resolved send button.
-                # This avoids Enter being consumed by a still-reconciling editor.
-                send_locator.evaluate("el => el.click()")
+                try:
+                    self._page.evaluate("() => { window.__webAgentAutomationSubmit = true; }")
+                except Exception:
+                    pass
+                try:
+                    send_locator.click(timeout=5000)
+                finally:
+                    try:
+                        self._page.evaluate("() => { window.__webAgentAutomationSubmit = false; }")
+                    except Exception:
+                        pass
             elif self.cfg.get("send_by_enter"):
                 self._page.keyboard.press("Enter")
             else:
-                send_locator.evaluate("el => el.click()")
+                send_locator.click(timeout=5000)
+            click_completed = True
         except Exception as exc:
             raise WebScraperStageError(
                 f"[WEB_SUBMIT_ERROR] 發送動作失敗或結果不確定: {type(exc).__name__}；為避免 duplicate 不自動重送。",
@@ -1151,10 +1232,9 @@ class WebLLMScraper:
                 safe_to_retry=False,
             ) from exc
         finally:
-            # A click exception is delivery-ambiguous. Record the attempt so a
-            # following request still respects the >10 second safety interval.
-            if rate_lease is not None:
+            if rate_lease is not None and click_completed:
                 rate_lease.record_submit()
+        self._set_request_state("WAIT_USER_TURN_ACK")
         self._log_stage("submit_returned")
 
     def _reconcile_submit_delivery(self, snapshot: dict, prompt: str, timeout_sec: float = 3.0) -> str:
@@ -1179,6 +1259,55 @@ class WebLLMScraper:
         if self._composer_matches_prompt(prompt) and not self._is_generation_active():
             return "not_sent"
         return "ambiguous"
+
+    def _reset_pre_submit_to_ready_idle(self, attachment_paths: list | None = None) -> bool:
+        if self._is_generation_active():
+            self._set_request_state("RECOVERY_REQUIRED", "generation_active")
+            return False
+        try:
+            if attachment_paths:
+                self._clear_composer_attachments()
+                time.sleep(0.1)
+            self._focus_composer_dom()
+            self._clear_composer_keyboard()
+        except Exception as exc:
+            self._set_request_state("RECOVERY_REQUIRED", f"cleanup_exception={type(exc).__name__}")
+            return False
+        if self._normalize_composer_text(self._read_composer_text()):
+            self._set_request_state("RECOVERY_REQUIRED", "composer_not_empty_after_cleanup")
+            return False
+        self._pending_submit_context = None
+        self._submit_click_attempted = False
+        self._set_request_state("READY_IDLE", "cleanup_complete")
+        return True
+
+    def _recover_not_sent_to_ready_idle(self, prompt: str, attachment_paths: list | None = None) -> bool:
+        if self._is_generation_active() or not self._composer_matches_prompt(prompt):
+            self._set_request_state("RECOVERY_REQUIRED", "not_sent_cleanup_guard_failed")
+            return False
+        return self._reset_pre_submit_to_ready_idle(attachment_paths)
+
+    def _reconcile_pending_submit_before_request(self) -> None:
+        if getattr(self, "_request_state", "READY_IDLE") != "RECOVERY_REQUIRED":
+            return
+        context = getattr(self, "_pending_submit_context", None)
+        if not isinstance(context, dict):
+            raise WebScraperStageError("[WEB_RECOVERY_REQUIRED] 缺少前一輪 submit context；禁止新 request。", stage="recovery_required", safe_to_retry=False)
+        snapshot=context.get("snapshot") or {}
+        prompt=str(context.get("prompt") or "")
+        attachments=list(context.get("attachments") or [])
+        delivery=self._reconcile_submit_delivery(snapshot,prompt,timeout_sec=5.0)
+        self._log_stage("pending_submit_reconcile",f"classification={delivery}")
+        if delivery == "not_sent" and self._recover_not_sent_to_ready_idle(prompt,attachments):
+            return
+        if delivery == "sent":
+            self._pending_submit_context=None
+            self._submit_click_attempted=False
+            self._wait_for_idle_before_submit()
+            self._set_request_state("READY_IDLE","prior_submit_confirmed_sent")
+            return
+        self._set_request_state("RECOVERY_REQUIRED",f"classification={delivery}")
+        raise WebScraperStageError("[WEB_RECOVERY_REQUIRED] 前一輪 submit 仍無法安全判定；禁止新 request。",stage="recovery_required",safe_to_retry=False)
 
     def _visible_element(self, selector: str):
         """Return the first visible element for a selector, else None."""
@@ -1947,9 +2076,58 @@ class WebLLMScraper:
         }
         for commit in reversed(cls._protocol_commit_candidates(text)):
             web_ack_id = str(commit.get("web_ack_id", "") or "").strip()
-            if web_ack_id and all(commit.get(key) == value for key, value in wanted.items()):
+            fresh_web_ack = bool(web_ack_id and web_ack_id != wanted["ack_web_ack_id"])
+            if fresh_web_ack and all(commit.get(key) == value for key, value in wanted.items()):
                 return commit
         return None
+
+    @classmethod
+    def _protocol_commit_diagnostic(cls, text: str, expected: dict | None) -> dict:
+        """Explain why the latest rendered turn_commit is not acceptable."""
+        candidates = cls._protocol_commit_candidates(text)
+        if not expected:
+            return {"kind": "not_expected", "candidate_count": len(candidates)}
+        if not candidates:
+            return {"kind": "missing", "candidate_count": 0}
+        wanted = {
+            "run_id": str(expected.get("run_id", "")),
+            "turn_id": int(expected.get("turn_id", 0)),
+            "ack_local_nonce": str(expected.get("local_nonce", "")),
+            "ack_result_id": str(expected.get("ack_result_id", "")),
+            "ack_web_ack_id": str(expected.get("ack_web_ack_id", "")),
+        }
+        observed = candidates[-1]
+        mismatches = {
+            key: {"expected": value, "observed": observed.get(key)}
+            for key, value in wanted.items()
+            if observed.get(key) != value
+        }
+        web_ack_id = str(observed.get("web_ack_id", "") or "").strip()
+        if not web_ack_id:
+            mismatches["web_ack_id"] = {"expected": "non-empty-new-id", "observed": observed.get("web_ack_id")}
+        elif web_ack_id == wanted["ack_web_ack_id"]:
+            mismatches["web_ack_id"] = {"expected": "fresh-id", "observed": web_ack_id}
+        tool_markers = len(re.findall(r'"tool"\s*:', str(text or "")))
+        ack_only = bool(
+            len(candidates) == 1
+            and tool_markers == 1
+            and observed.get("action_count") == 0
+        )
+        return {
+            "kind": "mismatch" if mismatches else "matching",
+            "candidate_count": len(candidates),
+            "ack_only": ack_only,
+            "mismatches": mismatches,
+            "observed": {
+                "run_id": observed.get("run_id"),
+                "turn_id": observed.get("turn_id"),
+                "ack_local_nonce": observed.get("ack_local_nonce"),
+                "ack_result_id": observed.get("ack_result_id"),
+                "ack_web_ack_id": observed.get("ack_web_ack_id"),
+                "web_ack_id": observed.get("web_ack_id"),
+                "action_count": observed.get("action_count"),
+            },
+        }
 
     @classmethod
     def run_ui_first_ack_self_tests(cls) -> dict:
@@ -1980,7 +2158,7 @@ class WebLLMScraper:
 
     @staticmethod
     def _protocol_recovery_prompt(expected: dict) -> str:
-        """Build one same-turn ACK retransmission for media/tool completion.
+        """Build the one allowed same-turn protocol retransmission.
 
         This is not a new logical SmartAgent turn.  It reuses the outstanding
         Local Commit identity so strict WebACK -> LocalACK alternation is not
@@ -1997,9 +2175,13 @@ class WebLLMScraper:
         }
         return (
             "[SMARTAGENT_PROTOCOL_RECOVERY_RETRANSMIT]\n"
-            "The previous image/file/tool work for this SAME logical turn is already complete.\n"
-            "Do NOT regenerate the image/file, do NOT repeat the user's request, and do NOT start a new turn.\n"
-            "Only emit the missing SmartAgent control envelope(s) for the already-completed result. "
+            f"[WEBAGENT_REQUEST_TRACE] request_id={local_commit['run_id']} "
+            f"round={local_commit['turn_id']} attempt=2 "
+            f"previous_ack_id={local_commit['ack_web_ack_id']} [/WEBAGENT_REQUEST_TRACE]\n"
+            "This is the only protocol repair attempt for the SAME request and round.\n"
+            "No local action from the rejected response was executed. Do NOT regenerate any image/file, "
+            "do NOT repeat completed WebGPT-side work, and do NOT start a new logical turn.\n"
+            "Re-emit the same complete SmartAgent decision as valid control envelope(s). "
             "If that completed result is a newly generated image/file the user asked to save locally, emit "
             "download_artifact for THIS fresh result before turn_commit. Never reference or reuse an artifact "
             "from an earlier assistant turn. Then finish with the matching turn_commit. Reuse the exact "
@@ -2045,11 +2227,12 @@ class WebLLMScraper:
         return ready, detail
 
     def _send_protocol_recovery_probe(self, expected: dict) -> dict:
-        """Send exactly one ACK-only retransmission after the quiet-period gate."""
+        """Send exactly one bounded same-turn protocol repair."""
         prompt = self._protocol_recovery_prompt(expected)
+        stage_prefix = "protocol_recovery"
         prompt_sha = hashlib.sha256(prompt.encode("utf-8", errors="replace")).hexdigest()[:12]
         self._log_stage(
-            "protocol_recovery_probe_begin",
+            stage_prefix + "_probe_begin",
             f"turn_id={expected.get('turn_id', '')} prompt_sha={prompt_sha}",
         )
 
@@ -2067,10 +2250,10 @@ class WebLLMScraper:
         send_locator = self._wait_for_send_ready(prompt)
         snapshot = self._snapshot_turn_state()
         try:
-            self._submit_verified_prompt(send_locator)
+            self._submit_verified_prompt(send_locator, prompt=prompt)
         except WebScraperStageError as submit_exc:
             delivery = self._reconcile_submit_delivery(snapshot, prompt, timeout_sec=3.0)
-            self._log_stage("protocol_recovery_submit_reconcile", f"classification={delivery}")
+            self._log_stage(stage_prefix + "_submit_reconcile", f"classification={delivery}")
             if delivery == "sent":
                 pass
             elif delivery == "not_sent":
@@ -2084,7 +2267,7 @@ class WebLLMScraper:
                 raise
         self._wait_for_user_sent(snapshot)
         self._log_stage(
-            "protocol_recovery_probe_sent",
+            stage_prefix + "_probe_sent",
             f"turn_id={expected.get('turn_id', '')} same_logical_turn=true",
         )
         return snapshot
@@ -2107,6 +2290,10 @@ class WebLLMScraper:
             "preserves_nonce": '"local_nonce":"nonce-4"' in prompt,
             "preserves_result_ack": '"ack_result_id":"RES-3"' in prompt,
             "preserves_web_ack": '"ack_web_ack_id":"WEBACK-3"' in prompt,
+            "visible_request_id": "request_id=SA-RECOVERY" in prompt,
+            "visible_round": "round=4" in prompt,
+            "single_repair_attempt": "attempt=2" in prompt,
+            "no_second_correction_layer": "STALE_ACK_CORRECTION" not in prompt,
         }
         results["all_passed"] = all(results.values())
         return results
@@ -2318,19 +2505,25 @@ class WebLLMScraper:
                             stable_text = ""
                             stable_since = None
 
-                            # Passive-first recovery: only media/tool turns are
-                            # eligible, and only after a long quiet window.  The
-                            # recovery is a retransmission of the SAME outstanding
-                            # Local Commit (same turn_id/nonce), not a new logical
-                            # ACK step, and is attempted at most once.
-                            # Recovery is allowed by either observed fresh media/UI
-                            # OR explicit task intent that this turn must generate
-                            # and save an artifact.  The latter prevents selector
-                            # misses from deadlocking forever.  Actual download is
-                            # still strict-scoped and will fail rather than reuse
-                            # stale content.
+                            diagnostic = self._protocol_commit_diagnostic(text, protocol_expected)
+                            if diagnostic.get("kind") == "mismatch":
+                                self._log_stage(
+                                    "protocol_commit_mismatch",
+                                    json.dumps(diagnostic, ensure_ascii=False, sort_keys=True),
+                                )
+
+                            # Passive-first recovery is attempted at most once
+                            # after a long quiet window. A non-empty assistant
+                            # response with no commit is eligible even when no
+                            # media/tool UI was observed: no local action can have
+                            # executed before the commit gate, so asking ChatGPT to
+                            # retransmit the SAME decision and outstanding Local
+                            # Commit is safe and cannot duplicate local work.
+                            # Media/artifact evidence remains useful when the text
+                            # envelope itself is empty or selectors missed it.
                             recovery_eligible = bool(
-                                saw_recovery_eligible_activity
+                                text
+                                or saw_recovery_eligible_activity
                                 or fresh_artifact_seen
                                 or artifact_save_expected
                             )
@@ -2374,7 +2567,7 @@ class WebLLMScraper:
                                 else:
                                     current_stage = "protocol_recovery_wait_ready"
                                     detail = (
-                                        f"media/tool turn missing commit; quiet={protocol_wait:.1f}s but composer/UI "
+                                        f"assistant response missing commit; quiet={protocol_wait:.1f}s but composer/UI "
                                         "is not safe for the one allowed recovery probe; state="
                                         + json.dumps(recovery_state, ensure_ascii=False, sort_keys=True)
                                     )
@@ -2387,7 +2580,22 @@ class WebLLMScraper:
                                     f"recovery_media_seen={saw_recovery_eligible_activity} "
                                     f"fresh_artifact_seen={fresh_artifact_seen} "
                                     f"artifact_save_expected={artifact_save_expected} "
-                                    f"recovery_attempts={protocol_recovery_attempts}"
+                                    f"recovery_attempts={protocol_recovery_attempts} "
+                                    f"commit_state={diagnostic.get('kind', 'missing')}"
+                                )
+
+                            if (
+                                protocol_recovery_attempts >= self._protocol_recovery_max_attempts
+                                and protocol_wait >= self._protocol_recovery_failure_quiet_sec
+                            ):
+                                raise WebScraperStageError(
+                                    "[WEB_PROTOCOL_ACK_RECOVERY_FAILED] 同一 request/round 的唯一 ACK 修正"
+                                    "仍未取得 matching turn_commit；不執行任何 action，也不再自動送出。 "
+                                    f"request_id={protocol_expected.get('run_id', '')} "
+                                    f"round={protocol_expected.get('turn_id', '')} "
+                                    f"attempt=2 commit_state={diagnostic.get('kind', 'missing')}",
+                                    stage="protocol_ack_recovery_failed",
+                                    safe_to_retry=False,
                                 )
 
                             if protocol_wait >= self._protocol_commit_timeout_sec:
@@ -2614,21 +2822,8 @@ class WebLLMScraper:
         raise RuntimeError(f"無法觸發附件選擇器: {Path(path).name}")
 
     def _upload_one_attachment(self, path: str) -> None:
-        """Upload one attachment, allowing Agent 2 one bounded non-visual recovery."""
-        try:
-            self._upload_one_attachment_once(path)
-            return
-        except Exception as exc:
-            action = self._request_agent2_action(
-                task_phase="ATTACHMENT_UPLOAD", observed_state="FILE_CHOOSER_TIMEOUT",
-                error_code="FILE_CHOOSER_TIMEOUT", detail=f"{type(exc).__name__}: {exc}",
-                retry_budget=1,
-            )
-            if action in {"PRESS_ESCAPE", "DISMISS_DIALOG"}:
-                self._apply_agent2_ui_action(action)
-            if action not in {"RETRY_ONCE", "PRESS_ESCAPE", "DISMISS_DIALOG"}:
-                raise
-            self._upload_one_attachment_once(path)
+        """Select one attachment exactly once; never auto-reselect it."""
+        self._upload_one_attachment_once(path)
 
     def _attachment_ui_snapshot(self, paths: list[str]) -> dict:
         """Read observable attachment state without deciding how long to wait."""
@@ -2641,34 +2836,103 @@ class WebLLMScraper:
 
         # Only the active composer is authoritative.  Whole-page text can
         # contain filenames from earlier turns and caused false READY states.
-        composer_state = {"text": "", "busy": [], "chips": [], "alerts": []}
+        composer_state = {"text": "", "busy": [], "chips": [], "chip_records": [], "alerts": []}
         try:
-            composer_state = self._page.evaluate("""() => {
+            composer_state = self._page.evaluate(r"""() => {
                 const send = document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="傳送"]');
                 const composer = send?.closest('form') || send?.closest('[data-testid*="composer"]') ||
                     document.querySelector('form[data-type="unified-composer"], [data-testid="composer"]');
                 const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                 const alerts = [...document.querySelectorAll('[role="alert"], [data-sonner-toast], [data-testid*="toast"], [class*="toast"]')]
                     .filter(visible).map(el => (el.innerText || el.textContent || '').trim()).filter(Boolean);
-                if (!composer) return {text: '', busy: [], chips: [], alerts};
-                const busy = [...composer.querySelectorAll('[role="progressbar"], [aria-busy="true"], [data-state="loading"], [class*="uploading"], [class*="processing"]')]
-                    .filter(visible).map(el => el.getAttribute('aria-valuenow') || el.getAttribute('data-state') || el.textContent?.trim().slice(0,120) || el.tagName);
-                const chips = [...composer.querySelectorAll('[data-testid*="attachment"], [class*="attachment"], [data-testid="file-thumbnail"], [data-testid="composer-file"], [data-file-name]')]
-                    .filter(visible).map(el => {
+                if (!composer) return {text: '', busy: [], chips: [], chip_records: [], alerts};
+                const busySelector = [
+                    '[role="progressbar"]', '[aria-busy="true"]',
+                    '[data-state="loading"]', '[data-state="uploading"]',
+                    '[data-state="processing"]', '[data-state="pending"]',
+                    '[class*="uploading"]', '[class*="processing"]',
+                    '[class*="spinner"]', '[class*="animate-spin"]',
+                    '[class*="loading"]', '[class*="progress"]'
+                ].join(',');
+                const chipElements = [...composer.querySelectorAll('[data-testid*="attachment"], [class*="attachment"], [data-testid="file-thumbnail"], [data-testid="composer-file"], [data-file-name]')]
+                    .filter(visible);
+                const progressPercent = node => {
+                    const value = Number(node.getAttribute('aria-valuenow') ?? node.value);
+                    const maximum = Number(node.getAttribute('aria-valuemax') ?? node.max ?? 100);
+                    return Number.isFinite(value) && Number.isFinite(maximum) && maximum > 0
+                        ? Math.round((value / maximum) * 100) : null;
+                };
+                const activelyBusy = node => visible(node) && !(
+                    node.getAttribute('role') === 'progressbar' && progressPercent(node) >= 100
+                );
+                const isRemoveControl = node => !!node.closest(
+                    'button[aria-label*="Remove"], button[aria-label*="Delete"], '
+                    + 'button[aria-label*="移除"], button[aria-label*="刪除"], button[data-testid*="remove"]'
+                );
+                const isUploadRing = node => {
+                    if (!visible(node) || isRemoveControl(node)) return false;
+                    if (node.getAttribute('role') === 'progressbar' && progressPercent(node) >= 100) return false;
+                    const style = getComputedStyle(node);
+                    const animated = style.animationName && style.animationName !== 'none'
+                        && style.animationPlayState !== 'paused';
+                    const semantics = [
+                        node.getAttribute('role'), node.getAttribute('aria-label'),
+                        node.getAttribute('data-state'), node.className?.baseVal || node.className || ''
+                    ].filter(Boolean).join(' ').toLowerCase();
+                    const semanticBusy = /(progress|upload|loading|processing|pending|spinner|animate-spin)/.test(semantics);
+                    const svgAnimation = !!node.querySelector?.('animate, animateTransform');
+                    const tag = String(node.tagName || '').toLowerCase();
+                    const strokeDash = String(style.strokeDasharray || '').toLowerCase();
+                    const svgProgressRing = (tag === 'circle' || tag === 'svg') && (
+                        semanticBusy || animated || svgAnimation
+                        || (strokeDash && strokeDash !== 'none' && strokeDash !== '0px')
+                    );
+                    const conicRing = String(style.backgroundImage || '').includes('conic-gradient');
+                    return activelyBusy(node) && (semanticBusy || animated || svgAnimation || svgProgressRing || conicRing);
+                };
+                const indicatorSelector = busySelector + ', svg, circle, [style*="conic-gradient"]';
+                const uploadRings = [...composer.querySelectorAll(indicatorSelector)].filter(isUploadRing);
+                const busy = uploadRings.map(el =>
+                    el.getAttribute('aria-valuenow') || el.getAttribute('data-state')
+                    || el.getAttribute('aria-label') || el.tagName
+                );
+                const chipRecords = chipElements.map(el => {
                         const child = el.querySelector('[data-file-name], [aria-label], [title]');
-                        return [
+                        const descriptor = [
                             el.textContent, el.getAttribute('aria-label'), el.getAttribute('title'),
                             el.getAttribute('data-file-name'), child?.getAttribute('data-file-name'),
                             child?.getAttribute('aria-label'), child?.getAttribute('title')
                         ].filter(Boolean).join(' ').trim();
-                    }).filter(Boolean);
-                return {text: composer.innerText || '', busy, chips, alerts};
+                        const localRings = [...el.querySelectorAll(indicatorSelector)].filter(isUploadRing);
+                        const progressValues = [el, ...el.querySelectorAll('[aria-valuenow], progress')]
+                            .map(node => {
+                                return progressPercent(node);
+                            }).filter(value => value !== null);
+                        const stateText = [
+                            el.getAttribute('data-state'), el.getAttribute('aria-label'),
+                            el.className?.baseVal || el.className || ''
+                        ].filter(Boolean).join(' ').toLowerCase();
+                        const explicitComplete = progressValues.some(value => value >= 100) ||
+                            /(^|[\s_-])(complete|completed|success|ready|uploaded)([\s_-]|$)/.test(stateText);
+                        return {
+                            descriptor,
+                            processing: localRings.length > 0,
+                            explicit_complete: explicitComplete,
+                            progress: progressValues,
+                        };
+                    }).filter(record => record.descriptor);
+                const chips = chipRecords.map(record => record.descriptor);
+                return {
+                    text: composer.innerText || '', busy, upload_ring_count: uploadRings.length,
+                    chips, chip_records: chipRecords, alerts
+                };
             }""") or composer_state
         except Exception:
             pass
         composer_text = str(composer_state.get("text", ""))
         busy_details = list(composer_state.get("busy", []) or [])
         attachment_chips = list(composer_state.get("chips", []) or [])
+        chip_records = list(composer_state.get("chip_records", []) or [])
         alert_text = "\n".join(str(value) for value in (composer_state.get("alerts", []) or []))
         expected_names = [Path(path).name for path in paths]
         attachment_text = "\n".join(str(value) for value in attachment_chips)
@@ -2676,6 +2940,21 @@ class WebLLMScraper:
             name for name in expected_names
             if name and (name in composer_text or name in attachment_text)
         ]
+        attachment_states = {}
+        for name in expected_names:
+            records = [
+                record for record in chip_records
+                if name and name in str((record or {}).get("descriptor", ""))
+            ]
+            attachment_states[name] = {
+                "seen": bool(name and (name in composer_text or records)),
+                "processing": any(bool((record or {}).get("processing")) for record in records),
+                "explicit_complete": any(bool((record or {}).get("explicit_complete")) for record in records),
+                "progress": [
+                    value for record in records
+                    for value in list((record or {}).get("progress", []) or [])
+                ],
+            }
 
         error_text = ""
         error_terms = (
@@ -2689,19 +2968,40 @@ class WebLLMScraper:
             if term in lowered_body:
                 error_text = term
                 break
-        if not error_text and attachment_chips:
-            chip_text = "\n".join(str(value) for value in attachment_chips)
-            if len(attachment_chips) != len(expected_names) or any(
-                chip_text.count(name) != expected_names.count(name) for name in set(expected_names)
-            ):
-                error_text = (
+        set_mismatch = ""
+        unexpected_attachment_chips = []
+        if attachment_chips:
+            expected_counts = {name: expected_names.count(name) for name in set(expected_names)}
+            observed_counts = {
+                name: sum(1 for value in attachment_chips if name in str(value))
+                for name in expected_counts
+            }
+            if len(attachment_chips) != len(expected_names) or observed_counts != expected_counts:
+                set_mismatch = (
                     f"attachment_set_mismatch:expected={len(expected_names)},"
-                    f"chips={len(attachment_chips)}"
+                    f"chips={len(attachment_chips)},counts={observed_counts}"
                 )
+            # ChatGPT commonly exposes the same logical attachment through
+            # nested DOM nodes, so raw chip count is not a readiness signal.
+            # Only a chip that matches none of the requested filenames is an
+            # actual unexpected attachment and must keep the send gate closed.
+            unexpected_attachment_chips = [
+                str(value) for value in attachment_chips
+                if not any(name and name in str(value) for name in expected_names)
+            ]
+
+        upload_ring_count = int(
+            composer_state.get("upload_ring_count", len(busy_details)) or 0
+        )
 
         if error_text:
             state = "REJECTED"
-        elif send_ready and not busy_details and len(visible_names) == len(expected_names):
+        elif (
+            send_ready
+            and upload_ring_count == 0
+            and len(visible_names) == len(expected_names)
+            and not unexpected_attachment_chips
+        ):
             state = "READY"
         elif visible_names or busy_details:
             state = "PROCESSING"
@@ -2712,7 +3012,11 @@ class WebLLMScraper:
             "send_ready": send_ready,
             "visible_names": visible_names,
             "attachment_chips": attachment_chips,
+            "attachment_states": attachment_states,
             "busy_details": busy_details,
+            "upload_ring_count": upload_ring_count,
+            "set_mismatch": set_mismatch,
+            "unexpected_attachment_chips": unexpected_attachment_chips,
             "alert_text": alert_text,
             "error": error_text,
         }
@@ -2745,17 +3049,19 @@ class WebLLMScraper:
     def _wait_for_attachment_ui(
         self,
         paths: list[str],
-        timeout_sec: float = 120.0,
+        timeout_sec: float = 600.0,
         no_progress_timeout_sec: float = 30.0,
+        stable_ready_sec: float = 2.0,
     ) -> bool:
-        """Wait by UI state/progress, bounded by stall and hard safety limits."""
+        """Wait passively for upload rings to disappear, bounded only by hard timeout."""
         if not paths:
             return True
         started = time.monotonic()
         hard_deadline = started + max(1.0, float(timeout_sec))
-        last_progress_at = started
         last_signature = None
         last_snapshot = {"state": "SELECTED"}
+        ready_since = None
+        stable_required = max(0.0, float(stable_ready_sec))
         self._last_attachment_wait_reason = ""
 
         while time.monotonic() < hard_deadline:
@@ -2763,34 +3069,46 @@ class WebLLMScraper:
                 snapshot = self._attachment_ui_snapshot(paths)
                 last_snapshot = snapshot
                 state = str(snapshot.get("state", "SELECTED"))
+                attachment_states = dict(snapshot.get("attachment_states", {}) or {})
                 signature = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
                 now = time.monotonic()
                 if signature != last_signature:
                     last_signature = signature
-                    last_progress_at = now
                     self._log_stage(
                         "attachment_state",
                         f"state={state} files={len(paths)} "
                         f"visible={len(snapshot.get('visible_names', []))} "
-                        f"busy={len(snapshot.get('busy_details', []))} "
+                        f"upload_rings={int(snapshot.get('upload_ring_count', 0) or 0)} "
+                        f"chips={len(snapshot.get('attachment_chips', []))} "
+                        f"unexpected_chips={len(snapshot.get('unexpected_attachment_chips', []))} "
                         f"send_ready={bool(snapshot.get('send_ready'))}",
                     )
                 if state == "READY":
-                    return True
+                    if ready_since is None:
+                        ready_since = now
+                        self._log_stage(
+                            "attachment_ready_settling",
+                            f"files={len(paths)} mode=upload_ring_absent "
+                            f"stable_required_sec={stable_required:.2f}",
+                        )
+                    if now - ready_since >= stable_required:
+                        self._log_stage(
+                            "attachment_stable_ready",
+                            f"files={len(paths)} mode=upload_ring_absent "
+                            f"stable_sec={now-ready_since:.2f}",
+                        )
+                        return True
+                else:
+                    ready_since = None
                 if state == "REJECTED":
                     self._last_attachment_wait_reason = (
                         f"attachment_rejected: {snapshot.get('error', 'unknown')}"
                     )
                     return False
-                if now - last_progress_at >= max(1.0, float(no_progress_timeout_sec)):
-                    self._last_attachment_wait_reason = (
-                        f"attachment_stalled: state={state}; "
-                        f"no_progress_sec={now - last_progress_at:.1f}"
-                    )
-                    return False
             except Exception as exc:
                 # A transient DOM repaint is not itself an upload failure.  It
                 # becomes a stall only if no observable state returns.
+                ready_since = None
                 last_snapshot = {"state": "INSPECTION_RETRY", "error": type(exc).__name__}
             time.sleep(0.25)
 
@@ -2801,7 +3119,7 @@ class WebLLMScraper:
         return False
 
     def _upload_attachments(self, paths: list[str]) -> None:
-        """Upload arbitrary local files.  Failure is fatal: never send a prompt without them."""
+        """Upload each file once and wait passively; never clear/reselect on timeout."""
         if not paths:
             return
 
@@ -2810,63 +3128,31 @@ class WebLLMScraper:
             "PREPARING_ATTACHMENTS", message="準備附件",
             progress={"current": 0, "total": len(paths)},
         )
-        for transaction_attempt in (1, 2):
-            uploaded = []
-            try:
-                for index, path in enumerate(paths, 1):
-                    self._emit_status(
-                        "UPLOADING_ATTACHMENT", message="上傳附件中",
-                        progress={"current": index, "total": len(paths), "item": Path(path).name},
-                    )
-                    self._upload_one_attachment(path)
-                    uploaded.append(path)
-                    if not self._wait_for_attachment_ui(
-                        uploaded, timeout_sec=120.0, no_progress_timeout_sec=30.0
-                    ):
-                        raise RuntimeError(
-                            f"附件未就緒: {Path(path).name}; "
-                            f"{getattr(self, '_last_attachment_wait_reason', 'unknown')}; "
-                            "stage=attachment_ready"
-                        )
-                # Final aggregate barrier catches set_input_files replacement,
-                # duplicate/missing chips, and stale composer residue.
-                if not self._wait_for_attachment_ui(paths, timeout_sec=120.0, no_progress_timeout_sec=30.0):
-                    raise RuntimeError(
-                        "附件集合未完整就緒；禁止送出 prompt: "
-                        + getattr(self, "_last_attachment_wait_reason", "unknown")
-                    )
-                break
-            except Exception as exc:
-                reason = str(exc)
-                retryable = "attachment_stalled" in reason or "attachment_hard_timeout" in reason
-                self._clear_composer_attachments()
-                failed_name = Path(uploaded[-1]).name if uploaded else "(none)"
-                if transaction_attempt == 1 and retryable:
-                    observed_state = (
-                        "ATTACHMENT_DISAPPEARED" if "state=SELECTED" in reason
-                        else "ATTACHMENT_STALLED"
-                    )
-                    action = self._request_agent2_action(
-                        task_phase="ATTACHMENT_UPLOAD", observed_state=observed_state,
-                        error_code=observed_state, detail=reason, retry_budget=1,
-                        primary_method="DOM",
-                    )
-                    if action == "SAFE_STOP" or action == "INSPECT_ONLY":
-                        raise RuntimeError(
-                            f"Agent 2 未授權附件 retry: action={action}"
-                        ) from exc
-                    self._log_stage(
-                        "attachment_transaction_retry",
-                        f"reason={getattr(self, '_last_attachment_wait_reason', reason)}",
-                    )
-                    # A prior artifact download may have left a preview/modal
-                    # above the composer. Close it before selecting the file
-                    # again, then start a completely new aggregate transaction.
-                    if action in {"PRESS_ESCAPE", "DISMISS_DIALOG"}:
-                        self._apply_agent2_ui_action(action)
-                    time.sleep(0.5)
-                    continue
-                raise RuntimeError(f"附件上傳交易失敗: last={failed_name}: {exc}") from exc
+        uploaded = []
+        for index, path in enumerate(paths, 1):
+            self._emit_status(
+                "UPLOADING_ATTACHMENT", message="上傳附件中",
+                progress={"current": index, "total": len(paths), "item": Path(path).name},
+            )
+            self._upload_one_attachment(path)
+            uploaded.append(path)
+            if not self._wait_for_attachment_ui(
+                uploaded, timeout_sec=600.0, no_progress_timeout_sec=30.0, stable_ready_sec=1.0
+            ):
+                raise RuntimeError(
+                    f"附件未就緒: {Path(path).name}; "
+                    f"{getattr(self, '_last_attachment_wait_reason', 'unknown')}; "
+                    "stage=attachment_ready; no_auto_retry=true"
+                )
+        # Final aggregate barrier catches replacement, duplicate, missing, or
+        # still-uploading chips without mutating the composer.
+        if not self._wait_for_attachment_ui(
+            paths, timeout_sec=600.0, no_progress_timeout_sec=30.0, stable_ready_sec=2.0
+        ):
+            raise RuntimeError(
+                "附件集合未完整就緒；禁止送出 prompt，且不自動重傳: "
+                + getattr(self, "_last_attachment_wait_reason", "unknown")
+            )
 
         print("  [WebScraper] 附件上傳就緒。")
         self._emit_status(
@@ -2908,9 +3194,12 @@ class WebLLMScraper:
         # cancel must never poison the next user request.
         self._cancel_requested.clear()
         self._last_artifact_scope = None
+        self._reconcile_pending_submit_before_request()
+        self._set_request_state("READY_IDLE", "request_begin")
 
         submit_attempted = False
         composer_claimed = False
+        attachments = []
         stage = "prepare"
         prompt_sha = hashlib.sha256(prompt.encode("utf-8", errors="replace")).hexdigest()[:12]
         _debug_log(
@@ -2940,6 +3229,7 @@ class WebLLMScraper:
             # Composer gate.  For ChatGPT this uses a live Locator + DOM focus +
             # keyboard.insert_text(), avoiding ElementHandle.fill() entirely.
             stage = "composer"
+            self._set_request_state("PREPARING_COMPOSER")
             mutated = self._write_prompt_to_composer(prompt)
             # Even if the exact prompt was already present from a prior partial
             # attempt, this call now owns that draft and must not blind-retry it.
@@ -2950,11 +3240,15 @@ class WebLLMScraper:
             )
 
             stage = "attachments"
+            self._set_request_state("UPLOADING_ATTACHMENTS")
             self._upload_attachments(attachments)
+            if attachments:
+                self._set_request_state("ATTACHMENT_STABLE_READY")
 
             # Attachments can transiently disable Send; re-check both composer
             # integrity and send readiness after all requested files settle.
             stage = "send_ready"
+            self._set_request_state("READY_TO_SUBMIT")
             send_locator = self._wait_for_send_ready(prompt)
 
             # Snapshot immediately before the one allowed submit. Anything
@@ -2968,28 +3262,50 @@ class WebLLMScraper:
             )
 
             stage = "submit"
-            submit_attempted = True
+            self._pending_submit_context = {"snapshot": snapshot, "prompt": prompt, "attachments": list(attachments)}
             try:
-                self._submit_verified_prompt(send_locator)
+                self._submit_verified_prompt(
+                    send_locator, prompt=prompt, attachment_paths=attachments
+                )
+                submit_attempted = bool(getattr(self, "_submit_click_attempted", False))
             except WebScraperStageError as submit_exc:
+                submit_attempted = bool(getattr(self, "_submit_click_attempted", False))
                 delivery = self._reconcile_submit_delivery(snapshot, prompt, timeout_sec=3.0)
                 self._log_stage("submit_reconcile", f"classification={delivery}")
                 if delivery == "sent":
                     pass
                 elif delivery == "not_sent":
+                    recovered = self._recover_not_sent_to_ready_idle(prompt, attachments)
                     raise WebScraperStageError(
-                        "[WEB_SUBMIT_NOT_SENT] click 發生錯誤，且 reconciliation 確認 prompt 仍完整留在 composer、"
-                        "沒有新 user turn / generation；本輪未宣稱已送出，也不自動重按。",
+                        "[WEB_SUBMIT_NOT_SENT] reconciliation 確認未送出；" + ("已回復 READY_IDLE。" if recovered else "cleanup 未完成。"),
                         stage="submit_not_sent", safe_to_retry=False,
                     ) from submit_exc
                 else:
+                    self._set_request_state("RECOVERY_REQUIRED", "submit_ambiguous")
                     raise submit_exc
             self._log_composer_state("composer_immediate_post_submit")
 
             # Delivery acknowledgement gate: no assistant content is eligible
             # until a genuinely new user turn is observed.
             stage = "user_sent"
-            self._wait_for_user_sent(snapshot)
+            try:
+                self._wait_for_user_sent(snapshot)
+            except WebScraperStageError as user_exc:
+                delivery = self._reconcile_submit_delivery(snapshot, prompt, timeout_sec=3.0)
+                self._log_stage("user_sent_reconcile", f"classification={delivery}")
+                if delivery == "sent":
+                    pass
+                elif delivery == "not_sent":
+                    recovered = self._recover_not_sent_to_ready_idle(prompt, attachments)
+                    raise WebScraperStageError(
+                        "[WEB_SEND_NOT_SENT_RECOVERED] user-turn ACK timeout，但確認未送出；" + ("已回復 READY_IDLE。" if recovered else "cleanup 未完成。"),
+                        stage="user_sent_not_sent", safe_to_retry=False,
+                    ) from user_exc
+                else:
+                    self._set_request_state("RECOVERY_REQUIRED", "user_sent_ambiguous")
+                    raise
+            self._pending_submit_context = None
+            self._set_request_state("GENERATING")
 
             print(f"  [WebScraper] 等待 {self.service} 回應...", flush=True)
             stage = "generation"
@@ -3006,6 +3322,10 @@ class WebLLMScraper:
                 "artifact_signatures_before": list(snapshot.get("artifact_signatures_before") or []),
                 "captured_at": time.time(),
             }
+            self._set_request_state("COMPLETE")
+            self._pending_submit_context = None
+            self._submit_click_attempted = False
+            self._set_request_state("READY_IDLE", "request_complete")
             print("  [WebScraper] 回應完成", flush=True)
             return response
 
@@ -3027,6 +3347,8 @@ class WebLLMScraper:
                 )
             raise
         except WebScraperStageError as exc:
+            if composer_claimed and not submit_attempted and getattr(self, "_request_state", "") != "READY_IDLE":
+                self._reset_pre_submit_to_ready_idle(attachments)
             # Once this prompt has occupied the composer, fail closed unless the
             # error itself is from an earlier stage. This prevents restart from
             # duplicating or racing a partially-staged request.
@@ -3179,6 +3501,34 @@ class WebLLMScraper:
         self._pw = None
         self._activity_observer_installed = False
         print(f"[WebScraper] 瀏覽器已關閉（登入狀態已儲存）")
+
+    def close_conversation_page(self, target_url: str) -> bool:
+        """Explicitly close only pages matching one canonical conversation ID."""
+        target_id = self._conversation_id_from_url(target_url)
+        if not target_id or self._browser is None:
+            return False
+        closed = False
+        for page in list(self._browser.pages):
+            page_id = self._conversation_id_from_url(
+                str(getattr(page, "url", "") or "")
+            )
+            if page_id != target_id:
+                continue
+            try:
+                page.close(run_before_unload=False)
+                closed = True
+            except Exception:
+                continue
+        if (
+            self._page is not None
+            and self._conversation_id_from_url(
+                str(getattr(self._page, "url", "") or "")
+            )
+            == target_id
+        ):
+            self._page = None
+            self._owns_attached_page = False
+        return closed
 
     def __enter__(self):
         self.start()
