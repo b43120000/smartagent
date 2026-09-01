@@ -77,6 +77,19 @@ WebAgent Direct is separated from LocalAgent and RemoteAgent orchestration:
 WebAgent owns its run IDs, turns, nonces, results, ACK chain, action ledger, and
 final response loop. It does not create a LocalAgent worker or RemoteAgent task.
 
+Each request exposes a request ID, round number, current attempt, and previous
+ACK ID in the conversation. A missing or invalid ACK permits at most one repair
+of the same request and round; WebAgent never turns ACK recovery into a new
+local task or repeats an uncommitted local action.
+
+Attachment submission is conservative. WebAgent waits while an upload ring is
+visible, requires the ring-free state to remain stable, and revalidates all
+requested filenames immediately before Send. It does not treat the Remove
+button as completion, does not interrupt an unchanged upload after 30 seconds,
+and does not automatically remove or re-upload a timed-out attachment. Explicit
+ChatGPT upload errors stop the turn; the passive wait has a 600-second hard
+limit.
+
 ### RemoteAgent
 
 RemoteAgent provides remote ingress and result delivery, including:
@@ -184,7 +197,8 @@ Then:
 1. Paste a ChatGPT conversation URL containing `/c/...`.
 2. Press Enter.
 3. Wait while the browser opens and the protocol is sent.
-4. Do not submit a task until CMD displays `READY`.
+4. Prefer waiting until CMD displays `READY`. A request entered during protocol
+   startup is queued and processed after readiness instead of being lost.
 5. Type the request directly in the ChatGPT conversation.
 
 Example:
@@ -201,6 +215,9 @@ Notes:
 - Do not run multiple automated controllers against the same conversation.
 - Press `Ctrl+C` in CMD to stop the controller. The browser login profile is
   preserved.
+- CMD prints a heartbeat while a browser turn is running. Detailed structured
+  diagnostics are written to `WebAgent\state\webagent_runtime.jsonl`; this
+  runtime file is ignored by Git.
 
 ## Using RemoteAgent
 
@@ -237,6 +254,13 @@ Run the offline WebAgent startup/session test:
 
 ```powershell
 python -m WebAgent.tests.validate_startup_protocol_flow
+```
+
+Verify that human input is queued during startup and automated bootstrap sends
+are not captured as user requests:
+
+```powershell
+python -m WebAgent.tests.validate_startup_input_queue
 ```
 
 Run the offline `list_directory` protocol integration test:

@@ -26,6 +26,8 @@ REQUIRED = (
     "WebAgent/controller.py",
     "WebAgent/browser_client.py",
     "WebAgent/protocol_loop.py",
+    "WebAgent/runtime_log.py",
+    "WebAgent/tests/validate_startup_input_queue.py",
     "install_smart_agent.bat",
     "install_smart_agent/install.ps1",
     "install_smart_agent/check_environment.ps1",
