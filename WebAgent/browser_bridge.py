@@ -10,8 +10,10 @@ CHATGPT_HOME = "https://chatgpt.com/"
 
 BRIDGE_SCRIPT = r"""
 () => {
-  if (window.__webAgentDirectBridgeInstalled) return true;
+  const bridgeVersion = 2;
+  if (window.__webAgentDirectBridgeVersion === bridgeVersion) return true;
   window.__webAgentDirectBridgeInstalled = true;
+  window.__webAgentDirectBridgeVersion = bridgeVersion;
   window.__webAgentDirectQueue = window.__webAgentDirectQueue || [];
   const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
   const composer = () => {
@@ -34,6 +36,7 @@ BRIDGE_SCRIPT = r"""
     el.dispatchEvent(new Event('change', {bubbles:true}));
   };
   const capture = event => {
+    if (window.__webAgentAutomationSubmit) return false;
     if (!event.isTrusted) return false;
     const box = composer(), text = textOf(box);
     if (!box || !text) return false;
@@ -156,14 +159,27 @@ class BrowserInputBridge:
     def __init__(self, page):
         self.page = page
 
-    def install(self) -> None:
+    def install(self, *, reset_legacy: bool = False) -> None:
+        if reset_legacy:
+            state = self.page.evaluate("""() => ({
+              installed: !!window.__webAgentDirectBridgeInstalled,
+              version: Number(window.__webAgentDirectBridgeVersion || 0)
+            })""")
+            if state.get("installed") and int(state.get("version") or 0) < 2:
+                # Version 1 used anonymous event handlers and cannot be removed
+                # safely. A one-time startup reload clears them before v2 is
+                # installed; the persistent browser/session remains intact.
+                self.page.reload(wait_until="domcontentloaded", timeout=60000)
         self.page.context.add_init_script(f"({BRIDGE_SCRIPT})()")
         if not self.page.evaluate(BRIDGE_SCRIPT):
             raise RuntimeError("無法安裝 WebAgent composer bridge")
 
     def installed(self) -> bool:
         try:
-            return bool(self.page.evaluate("() => !!window.__webAgentDirectBridgeInstalled"))
+            return bool(self.page.evaluate(
+                "() => !!window.__webAgentDirectBridgeInstalled && "
+                "Number(window.__webAgentDirectBridgeVersion || 0) === 2"
+            ))
         except Exception:
             return False
 

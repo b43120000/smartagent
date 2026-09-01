@@ -57,6 +57,11 @@ When local work remains, emit one or more supported action blocks followed by:
 Copy run_id, turn_id, local_nonce as ack_local_nonce, ack_result_id, and
 ack_web_ack_id exactly from the current local commit.  Generate a new unique
 web_ack_id every turn.  Never reuse an action_id or web_ack_id.
+For visibility and traceability, format web_ack_id as
+`WEBACK-{run_id}-R{turn_id}-{fresh_suffix}`.  The request trace shown above is
+part of the user-visible conversation: request_id identifies one user request,
+round counts its WebGPT/local round trips, attempt is normally 1 (or 2 for the
+single same-round ACK repair), and previous_ack_id must equal ack_web_ack_id.
 
 After a tool result, acknowledge its RESULT_ID in the next turn_commit.  Decide
 the next action from that result.  When the task is complete, emit only:
