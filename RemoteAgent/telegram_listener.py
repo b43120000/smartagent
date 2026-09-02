@@ -15,12 +15,13 @@ import time
 from pathlib import Path
 
 from agent_core.agent_gateway import AgentIngressGateway
-from agent_core.remote_events import RemoteEventStore
+from agent_core.remote_events import DeliveryManager, RemoteEventStore
 from agent_core.remote_runtime_log import RemoteRuntimeLog
 from agent_core.task_state import RemoteTaskQueue, TaskStateStore, TASK_QUEUED
 from agent_core.transport_sessions import TransportSessionRouter
 from agent_core.workspace import AGENT_PROJECT_ROOT
 from RemoteAgent.telegram_pairing import TelegramPairingStore
+from RemoteAgent.telegram_delivery import TelegramDeliveryAdapter
 from RemoteAgent.telegram_transport import (
     TelegramBotClient,
     TelegramOffsetStore,
@@ -49,6 +50,7 @@ class TelegramIngressListener:
         )
         self.receiver: TelegramReceiver | None = None
         self.queue: RemoteTaskQueue | None = None
+        self.delivery: DeliveryManager | None = None
         self.state_path = self.base / "telegram_listener_state.json"
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
@@ -74,9 +76,29 @@ class TelegramIngressListener:
             if self.config.pairing_enabled
             else None
         )
+        resolved_client = client or TelegramBotClient(self.config)
+        accepted_delivery = DeliveryManager(
+            event_store,
+            {"TELEGRAM": TelegramDeliveryAdapter(resolved_client)},
+        )
+        self.delivery = accepted_delivery
+
+        def deliver_accepted(task) -> None:
+            event = event_store.emit("TASK_ACCEPTED", task, status="QUEUED", payload={})
+            result = accepted_delivery.deliver(event)
+            self.runtime_log.write(
+                "DELIVERY",
+                component="telegram_listener",
+                stage="TASK_ACCEPTED_IMMEDIATE",
+                task_id=task.task_id,
+                request_id=task.request_id,
+                delivered=bool(result.get("delivered")),
+                reason=str(result.get("reason", "") or ""),
+            )
+
         self.receiver = TelegramReceiver(
             config=self.config,
-            client=client or TelegramBotClient(self.config),
+            client=resolved_client,
             offset_store=TelegramOffsetStore(
                 self.base / "remote_telegram_state.json"
             ),
@@ -84,6 +106,7 @@ class TelegramIngressListener:
             runtime_log=self.runtime_log,
             pairing_store=pairing_store,
             control_handler=control_handler,
+            accepted_handler=deliver_accepted,
         )
 
     @property
@@ -123,6 +146,16 @@ class TelegramIngressListener:
         def heartbeat() -> None:
             while not self._heartbeat_stop.wait(5.0):
                 self._write_state("RUNNING")
+                if self.delivery is not None:
+                    try:
+                        self.delivery.retry_ready(transports={"TELEGRAM"})
+                    except Exception as exc:
+                        self.runtime_log.write(
+                            "ERROR",
+                            component="telegram_listener",
+                            stage="DELIVERY_RETRY",
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
 
         self._heartbeat_thread = threading.Thread(
             target=heartbeat,

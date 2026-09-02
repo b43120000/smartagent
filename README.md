@@ -99,6 +99,18 @@ RemoteAgent provides remote ingress and result delivery, including:
 - Durable task state, claim, heartbeat, retry, pause, cancellation, and result
   delivery.
 - Independent receiver lifecycle through `launch_remote_agent.bat`.
+- Canonical conversation-page reuse so sequential requests do not open a
+  second tab for the same ChatGPT conversation.
+- Cross-process queue refresh so work accepted after Agent 0 startup is
+  dispatched without restarting the receiver.
+
+For an offline transport simulation that still exercises the production task
+queue, worker, WebGPT protocol, and result path, keep RemoteAgent running and
+use:
+
+```text
+send_remoteagent_test.bat --request "list the workspace files"
+```
 
 Remote transport and automated recovery features are advanced functionality and
 remain under active development.

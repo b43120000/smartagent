@@ -13,7 +13,7 @@ from RemoteAgent.remote_ingress import is_internal_agent_turn
 
 
 class RemoteWorkerLauncher:
-    """Dispatch queued RemoteAgent tasks to isolated one-shot Agent1 workers."""
+    """Dispatch one-shot Agent1 processes through one serialized shared CDP page."""
 
     def __init__(
         self,
@@ -22,7 +22,7 @@ class RemoteWorkerLauncher:
         root: Path,
         cdp: str,
         allowed_bindings,
-        max_workers: int = 3,
+        max_workers: int = 1,
         python: str = sys.executable,
         popen=subprocess.Popen,
         runtime_log: RemoteRuntimeLog | None = None,
@@ -47,9 +47,14 @@ class RemoteWorkerLauncher:
             self.runtime_log.write(event, component="worker_launcher", **detail)
 
     def _spawn(self, task, token: str):
+        transport = str((getattr(task, "metadata", {}) or {}).get("transport", "")).upper()
+        worker_entry = (
+            [self.python, "-m", "RemoteAgent.telegram_webagent_worker"]
+            if transport in {"TELEGRAM", "LOCAL_TEST"}
+            else [self.python, str(self.root / "smart_agent.py")]
+        )
         cmd = [
-            self.python,
-            str(self.root / "smart_agent.py"),
+            *worker_entry,
             "--remote-worker-task", str(task.task_id),
             "--remote-worker-token", str(token),
             "--remote-cdp", self.cdp,
@@ -159,6 +164,11 @@ class RemoteWorkerLauncher:
                 "task_id": task.task_id, "request_id": task.request_id,
                 "launcher_pid": getattr(process, "pid", None),
                 "browser_mode": "SHARED_CDP",
+                "worker_mode": (
+                    "TELEGRAM_WEBAGENT_DIRECT"
+                    if str((getattr(task, "metadata", {}) or {}).get("transport", "")).upper() in {"TELEGRAM", "LOCAL_TEST"}
+                    else "SMART_AGENT_LEGACY"
+                ),
             }
             launched.append(row)
             self._processes[task.task_id] = process

@@ -57,12 +57,14 @@ class WebAgentProtocolLoop:
         tool_context: WebAgentToolContext | None = None,
         max_turns: int = 100,
         event_sink: Callable[..., None] | None = None,
+        display_name: str = "WebAgent",
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.planner = planner
         self.tools = tool_context or WebAgentToolContext(self.workspace)
         self.max_turns = max(1, int(max_turns))
         self.event_sink = event_sink
+        self.display_name = str(display_name or "WebAgent")
         self.run_id = ""
         self.turn_id = 0
         self.pending_result_ack_id = ""
@@ -147,11 +149,20 @@ class WebAgentProtocolLoop:
         self.action_ledger[action_id] = {"signature": signature, "result": result}
         return str(result)
 
-    def run(self, request: str) -> str:
+    def run(
+        self,
+        request: str,
+        *,
+        request_id: str = "",
+        initial_attachments: list[str] | None = None,
+        source_tag: str = "",
+    ) -> str:
         request = str(request or "").strip()
         if not request:
             raise ValueError("WebAgent request 不可為空")
-        self.run_id = "WA-" + uuid.uuid4().hex[:12].upper()
+        self.run_id = str(request_id or "").strip() or (
+            "WA-" + uuid.uuid4().hex[:12].upper()
+        )
         self.turn_id = 0
         self.pending_result_ack_id = ""
         self.pending_web_ack_id = ""
@@ -159,11 +170,20 @@ class WebAgentProtocolLoop:
         self.action_ledger.clear()
         authorized = extract_authorized_paths(request)
         self.tools.begin_run(self.run_id, request, authorized)
+        if initial_attachments:
+            queued = self.tools.queue_attachments(list(initial_attachments))
+            if "[WEBAGENT_ATTACHMENT_ERROR]" in queued:
+                raise RuntimeError(queued)
         self._emit("request_started", request_id=self.run_id, request=request, authorized_paths=authorized)
-        print(f"[WebAgent] Request ID: {self.run_id}", flush=True)
+        print(f"[{self.display_name}] Request ID: {self.run_id}", flush=True)
 
+        source = str(source_tag or "").strip().upper()
+        source_block = (
+            f"[WEBAGENT_REQUEST_SOURCE]\n{source}\n[/WEBAGENT_REQUEST_SOURCE]\n"
+            if source else ""
+        )
         prompt = (
-            "[WEBAGENT_USER_REQUEST]\n"
+            source_block + "[WEBAGENT_USER_REQUEST]\n"
             + request
             + "\n[/WEBAGENT_USER_REQUEST]\n"
             + f"[WEBAGENT_WORKSPACE]\n{self.workspace}\n[/WEBAGENT_WORKSPACE]"
@@ -172,7 +192,7 @@ class WebAgentProtocolLoop:
         for _ in range(self.max_turns):
             expected = self._new_commit()
             print(
-                f"[WebAgent] {self.run_id} round={self.turn_id} attempt=1 "
+                f"[{self.display_name}] {self.run_id} round={self.turn_id} attempt=1 "
                 f"previous_ack_id={self.pending_web_ack_id or '-'}",
                 flush=True,
             )
@@ -240,7 +260,7 @@ class WebAgentProtocolLoop:
                     tool=action.get("tool", ""),
                 )
                 print(
-                    f"[WebAgent] {self.run_id} round={self.turn_id} 正在執行 "
+                    f"[{self.display_name}] {self.run_id} round={self.turn_id} 正在執行 "
                     f"{action.get('tool', '')} ({action.get('action_id', '')})...",
                     flush=True,
                 )

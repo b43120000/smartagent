@@ -19,7 +19,7 @@ class TelegramDeliveryAdapter:
         status = str(event.get("status", ""))
         payload = dict(event.get("payload") or {})
         if event_type == "TASK_ACCEPTED":
-            return f"🟡 已接受\nevent_id: {event_id}\nrequest_id: {request_id}\ntask_id: {task_id}"
+            return f"🟡 已接受（等待執行）\nevent_id: {event_id}\nrequest_id: {request_id}\ntask_id: {task_id}"
         if event_type == "TASK_STARTED":
             return f"🔵 執行中\nevent_id: {event_id}\nrequest_id: {request_id}\ntask_id: {task_id}"
         if event_type == "TASK_COMPLETED":
@@ -50,6 +50,9 @@ class TelegramDeliveryAdapter:
                 raw = Path(str(row.get("path") or "")); target = (raw if raw.is_absolute() else workspace / raw).resolve(); target.relative_to(workspace)
                 if not target.is_file(): raise FileNotFoundError(str(target))
                 prepared.append((target, str(row.get("kind") or "document").lower(), str(row.get("caption") or "")))
+            # Every lifecycle event must stay attached to the Telegram message
+            # that created this task.  reply_to_message_id describes what the
+            # user message itself replied to and is not our delivery anchor.
             reply_to = int((route or {}).get("message_id", 0) or 0) or None
             result = self.client.send_message(chat_id, self.render(event), reply_to_message_id=reply_to)
             replies = [str(result.get("message_id", ""))]
@@ -59,3 +62,17 @@ class TelegramDeliveryAdapter:
             return {"delivered": True, "reply": ",".join(x for x in replies if x), "artifact_count": len(prepared)}
         except Exception as exc:
             return {"delivered": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+    def reconcile_event(self, route: dict, event: dict) -> dict:
+        """Prefer an event-id-visible duplicate over permanently losing status.
+
+        Telegram's Bot API does not expose a reliable sent-message lookup for a
+        crashed sender.  Every rendered status includes a stable event_id, so a
+        stale uncertain delivery is safe to retry with visible deduplication.
+        """
+        del route, event
+        return {
+            "delivered": False,
+            "retry_allowed": True,
+            "reason": "telegram_delivery_outcome_unknown_retry_by_event_id",
+        }

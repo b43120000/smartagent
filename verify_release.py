@@ -23,6 +23,10 @@ REQUIRED = (
     "agent_core/web_runtime.py",
     "agent_core/webgpt_rate_governor.py",
     "RemoteAgent/remote_runtime.py",
+    "RemoteAgent/telegram_webagent_worker.py",
+    "RemoteAgent/local_telegram_sender.py",
+    "RemoteAgent/local_test_delivery.py",
+    "agent_core/json_state_io.py",
     "WebAgent/controller.py",
     "WebAgent/browser_client.py",
     "WebAgent/protocol_loop.py",
@@ -33,6 +37,7 @@ REQUIRED = (
     "install_smart_agent/check_environment.ps1",
     "launch_smart_agent.bat",
     "launch_remote_agent.bat",
+    "send_remoteagent_test.bat",
     "launch_webcopilot_chatgpt.bat",
 )
 

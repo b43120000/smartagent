@@ -272,6 +272,7 @@ class TelegramReceiver:
         runtime_log=None,
         pairing_store: TelegramPairingStore | None = None,
         control_handler=None,
+        accepted_handler=None,
     ):
         config.validate()
         self.config = config
@@ -281,6 +282,7 @@ class TelegramReceiver:
         self.runtime_log = runtime_log
         self.pairing_store = pairing_store
         self.control_handler = control_handler
+        self.accepted_handler = accepted_handler
         self.adapter = TelegramUpdateAdapter(config, pairing_store=pairing_store)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -362,7 +364,15 @@ class TelegramReceiver:
             if message.attachments:
                 try: message=self._stage_attachments(message,update_id=update_id)
                 except Exception as exc:
-                    self._log("ERROR",stage="ATTACHMENT_DOWNLOAD",update_id=update_id,error=f"{type(exc).__name__}: {exc}"); self.offset_store.commit(update_id); continue
+                    error=f"{type(exc).__name__}: {exc}"
+                    self._log("ERROR",stage="ATTACHMENT_DOWNLOAD",update_id=update_id,error=error)
+                    self.offset_store.commit(update_id)
+                    self.client.send_message(
+                        int(message.reply_context["chat_id"]),
+                        f"🔴 執行失敗\n附件下載失敗，請重新傳送。\n{error[:500]}",
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                    continue
             self._log(
                 "REQUEST_DETECTED",
                 update_id=update_id,
@@ -379,6 +389,18 @@ class TelegramReceiver:
                 )
             if result.task is not None:
                 accepted.append(result.task)
+                if bool(getattr(result, "created", True)) and self.accepted_handler is not None:
+                    try:
+                        self.accepted_handler(result.task)
+                    except Exception as exc:
+                        self._log(
+                            "ERROR",
+                            stage="ACCEPTED_DELIVERY",
+                            update_id=update_id,
+                            task_id=str(getattr(result.task, "task_id", "") or ""),
+                            request_id=str(getattr(result.task, "request_id", "") or ""),
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
         return accepted
 
     def run(self) -> None:

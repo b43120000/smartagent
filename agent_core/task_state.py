@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .process_file_lock import exclusive_process_lock
+from .json_state_io import read_json_retry, write_json_atomic
 
 TASK_QUEUED = "QUEUED"
 TASK_RUNNING = "RUNNING"
@@ -120,7 +121,7 @@ class TaskStateStore:
                 self.loaded = True
                 return self.records
             try:
-                payload = json.loads(self.path.read_text(encoding="utf-8"))
+                payload = read_json_retry(self.path)
             except Exception as exc:
                 raise TaskStateError(
                     f"task state unreadable; refusing empty-store fallback: {self.path}: {type(exc).__name__}: {exc}"
@@ -163,9 +164,7 @@ class TaskStateStore:
                     for task_id, record in self.records.items()
                 },
             }
-            tmp = self.path.with_name(self.path.name + ".tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self.path)
+            write_json_atomic(self.path, payload)
 
     def get(self, task_id: str) -> TaskRecord | None:
         self.ensure_loaded()
@@ -578,6 +577,47 @@ class RemoteTaskQueue:
                 task.metadata["delivery_state"] = "READY"
                 return self.store.put(task, persist=True)
 
+    def abandon_incomplete(
+        self,
+        *,
+        transports: Iterable[str],
+        reason: str,
+        created_before: float | None = None,
+    ) -> list[TaskRecord]:
+        """Terminalize work left by an unclean transport supervisor exit.
+
+        This is intentionally different from retry recovery: RemoteAgent's
+        desktop launcher promises that closing the receiver does not replay an
+        old mobile request on the next launch.  Other transports sharing the
+        task store are excluded explicitly.
+        """
+        allowed = {str(value or "").upper() for value in transports}
+        cutoff = float(created_before) if created_before is not None else None
+        changed: list[TaskRecord] = []
+        now = time.time()
+        with self._lock:
+            with self.store.process_lock():
+                self.store.load()
+                for task in self.store.list_by_state({TASK_QUEUED, TASK_RUNNING}):
+                    transport = str((task.metadata or {}).get("transport", "") or "").upper()
+                    if transport not in allowed:
+                        continue
+                    if cutoff is not None and float(task.created_at or 0.0) >= cutoff:
+                        continue
+                    was_running = task.state == TASK_RUNNING
+                    task.state = TASK_INTERRUPTED if was_running else TASK_FAILED
+                    task.completed_at = now
+                    task.error = str(reason or "remote_supervisor_unclean_shutdown")
+                    task.metadata["delivery_state"] = "READY"
+                    task.metadata["abandoned_at"] = now
+                    task.metadata["abandoned_from_state"] = (
+                        TASK_RUNNING if was_running else TASK_QUEUED
+                    )
+                    changed.append(self.store.put(task, persist=False))
+                if changed:
+                    self.store.save()
+        return changed
+
     def record_result_delivery(
         self, task_id: str, *, delivered: bool, reply: str = "", error: str = ""
     ) -> TaskRecord:
@@ -609,21 +649,21 @@ class RemoteTaskQueue:
             return self.store.put(task, persist=True)
 
     def reconcile_on_start(self, *, lease_timeout_sec: float = DEFAULT_LEASE_TIMEOUT_SEC) -> list[TaskRecord]:
-        """Fail-safe restart reconciliation for orphaned RUNNING tasks.
-
-        Stage 7 has no worker supervision yet, so a persisted RUNNING state must
-        never be auto-claimed/replayed after Supervisor restart. Mark it
-        INTERRUPTED and leave explicit recovery to later worker/supervision stages.
-        """
+        """Interrupt only stale RUNNING leases and preserve live workers."""
         changed: list[TaskRecord] = []
         with self._lock:
             with self.store.process_lock():
                 self.store.load()
                 now = time.time()
                 for task in self.store.list_by_state({TASK_RUNNING}):
+                    heartbeat = float(task.metadata.get("heartbeat_at", 0.0) or 0.0)
+                    if heartbeat and now - heartbeat <= max(
+                        1.0, float(lease_timeout_sec)
+                    ):
+                        continue
                     task.state = TASK_INTERRUPTED
                     task.completed_at = now
-                    task.error = "startup_reconciliation_requires_explicit_retry"
+                    task.error = "remote_worker_heartbeat_timeout"
                     task.metadata["interrupted_at"] = now
                     changed.append(self.store.put(task, persist=False))
                 if changed:

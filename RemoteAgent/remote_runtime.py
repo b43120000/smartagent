@@ -22,12 +22,14 @@ from RemoteAgent.telegram_transport import (
     TelegramReceiverConfig,
 )
 from RemoteAgent.telegram_pairing import TelegramPairingStore
+from RemoteAgent.local_test_delivery import LocalTestDeliveryAdapter
 from RemoteAgent.transport_ingress import TransportIngressAdapter
 from agent_core.remote_events import RemoteEventStore,DeliveryManager
 from agent_core.remote_runtime_log import RemoteRuntimeLog
 from agent_core.webgpt_rate_governor import WebGPTRateGovernor
 from agent_core.transport_sessions import TransportSessionRouter
 from agent_core.agent_gateway import AgentIngressGateway
+from WebAgent.browser_bridge import execution_page_lease
 
 def _enable_runtime_console()->bool:
     """Allocate a console owned by the real runtime process for development."""
@@ -234,6 +236,11 @@ class RemoteAgentRuntime:
                 if cls._conversation_identity(str(getattr(page,'url','') or ''))==identity
             ]
             if matches:
+                marker="SMARTAGENT_CANONICAL_CONVERSATION:"+identity
+                def canonical_rank(page):
+                    try: return 0 if str(page.evaluate("() => window.name") or "")==marker else 1
+                    except Exception: return 1
+                matches.sort(key=canonical_rank)
                 canonical=matches[0]
                 for duplicate in matches[1:]:
                     try: duplicate.close()
@@ -253,7 +260,11 @@ class RemoteAgentRuntime:
                 return page,False
 
         page=ctx.new_page()
-        page.evaluate("marker => { window.name = marker; }",cls.PAGE_OWNER_MARKER)
+        marker=(
+            "SMARTAGENT_CANONICAL_CONVERSATION:"+preferred[0]
+            if preferred else cls.PAGE_OWNER_MARKER
+        )
+        page.evaluate("marker => { window.name = marker; }",marker)
         return page,True
 
     @staticmethod
@@ -331,6 +342,11 @@ class RemoteAgentRuntime:
                 error=f"{type(exc).__name__}: {exc}",
             )
     def _allowed_worker_bindings(self):
+        # Ingress and Agent0 are separate processes.  Always refresh before
+        # deriving request-scoped LOCAL_TEST bindings; otherwise a request
+        # accepted after Agent0 startup is filtered out until restart.
+        with self.queue.store.process_lock():
+            self.queue.store.load()
         bindings=[
             (row['workspace'],row['gpt_url'])
             for row in self.registry.list_remote_conversations(enabled_only=True)
@@ -342,6 +358,12 @@ class RemoteAgentRuntime:
         )
         if self.telegram_receiver is not None:
             bindings.extend(self.telegram_receiver.allowed_bindings())
+        # The local Telegram simulation uses a request-scoped conversation key
+        # and a filesystem reply sink.  It is authorized only after the local
+        # sender has durably created the task inside this project.
+        for task in self.queue.queued() + self.queue.running():
+            if str((task.reply_route or {}).get('transport','')).upper() == 'LOCAL_TEST':
+                bindings.append((task.workspace,task.conversation_url))
         return list(dict.fromkeys(bindings))
     def _start_telegram_ingress(self)->bool:
         if self.telegram_receiver is None:
@@ -419,7 +441,9 @@ class RemoteAgentRuntime:
             if foreground_url: foreground_urls.append(foreground_url)
         except Exception:
             pass
-        # One dedicated reconciliation page: never navigate LocalAgent's foreground page.
+        # Acquire the canonical linked conversation page. The /c/<id> identity
+        # wins over process/interface ownership, so an existing LocalAgent or
+        # WebCopilot page is reused and duplicates are collapsed.
         self.runtime_log.write("CONNECT",component="runtime",stage="PAGE_ACQUIRE",page_count=len(ctx.pages),preferred_count=len(enabled),excluded_foreground_count=len(foreground_urls))
         page,created=self._get_or_create_background_page(
             ctx,
@@ -496,7 +520,7 @@ class RemoteAgentRuntime:
             return False
     def connect(self):
         self.runtime_log.write("CONNECT",component="runtime",stage="ATTEMPT",cdp=self.cdp)
-        delivery_adapters={}
+        delivery_adapters={'LOCAL_TEST':LocalTestDeliveryAdapter(ROOT)}
         self._configure_telegram(delivery_adapters)
         enabled=self._collapse_enabled_aliases(
             self.registry.list_remote_conversations(enabled_only=True)
@@ -643,6 +667,11 @@ class RemoteAgentRuntime:
             self.runtime_log.write("ERROR",component="runtime",stage="WORKER_DISPATCH",error=f"{type(exc).__name__}: {exc}")
     def tick(self):
         self._attach_local_browser_when_ready()
+        # The Telegram listener/local sender persists tasks out of process.
+        # Refresh once per tick so page ownership and dispatch decisions see
+        # requests accepted since this runtime was started.
+        with self.queue.store.process_lock():
+            self.queue.store.load()
         self._write_state(
             "RUNNING",
             telegram_enabled=bool(self.telegram_receiver),
@@ -652,25 +681,42 @@ class RemoteAgentRuntime:
         enabled=self._collapse_enabled_aliases(
             self.registry.list_remote_conversations(enabled_only=True),current
         )
+        # A queued request already owns the execution conversation.  Do not let
+        # Agent0's observer/scheduler navigate that page between ingress and
+        # worker dispatch; doing so made the direct worker open a second tab and
+        # could strand the request in ChatGPT navigation.
+        execution_busy=bool(self.queue.queued() or self.queue.running())
         current_identity=self._conversation_identity(current)
         active=next((r for r in enabled if self._conversation_identity(r['gpt_url'])==current_identity),None)
-        if active:
-            try: self._poll_record(active,navigate=False)
-            except Exception as exc:
-                if self._closed_page_error(exc) and self._recover_webgpt_page(enabled,reason='ACTIVE_POLL'):
-                    pass
-                else:
-                    self.runtime_log.write("ERROR",component="runtime",stage="ACTIVE_POLL",conversation_url=active['gpt_url'],error=f"{type(exc).__name__}: {exc}")
-        for item in self.scheduler.due() if self.adapter is not None else []:
-            rec=self.registry.find(item.workspace,item.gpt_url)
-            if not rec: continue
-            self.scheduler.mark_started(item)
-            failures=int((rec.get('remote_schedule') or {}).get('failure_count',0) or 0)
+        if not execution_busy and self.adapter is not None:
             try:
-                self._poll_record(rec,navigate=True); self.scheduler.mark_success(item)
-            except Exception as exc:
-                self.scheduler.mark_failure(item,failures+1)
-                self.runtime_log.write("ERROR",component="runtime",stage="SCHEDULED_POLL",conversation_url=rec['gpt_url'],error=f"{type(exc).__name__}: {exc}",failure_count=failures+1)
+                with execution_page_lease(timeout_sec=0.1,label="RemoteAgent observer page"):
+                    # Recheck after acquiring the cross-process lease. A task
+                    # may have arrived while Agent0 was waiting for a Worker.
+                    if not (self.queue.queued() or self.queue.running()):
+                        if active:
+                            try: self._poll_record(active,navigate=False)
+                            except Exception as exc:
+                                if self._closed_page_error(exc) and self._recover_webgpt_page(enabled,reason='ACTIVE_POLL'):
+                                    pass
+                                else:
+                                    self.runtime_log.write("ERROR",component="runtime",stage="ACTIVE_POLL",conversation_url=active['gpt_url'],error=f"{type(exc).__name__}: {exc}")
+                        for item in self.scheduler.due():
+                            rec=self.registry.find(item.workspace,item.gpt_url)
+                            if not rec: continue
+                            self.scheduler.mark_started(item)
+                            failures=int((rec.get('remote_schedule') or {}).get('failure_count',0) or 0)
+                            try:
+                                self._poll_record(rec,navigate=True); self.scheduler.mark_success(item)
+                            except Exception as exc:
+                                self.scheduler.mark_failure(item,failures+1)
+                                self.runtime_log.write("ERROR",component="runtime",stage="SCHEDULED_POLL",conversation_url=rec['gpt_url'],error=f"{type(exc).__name__}: {exc}",failure_count=failures+1)
+            except RuntimeError as exc:
+                if "lock timeout" not in str(exc):
+                    raise
+                self.runtime_log.write(
+                    "POLL",component="runtime",stage="EXECUTION_PAGE_LEASE_BUSY"
+                )
         self._dispatch_workers()
         self._retry_delivery()
     def run(self):

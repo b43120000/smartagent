@@ -6,6 +6,7 @@ from dataclasses import asdict,dataclass
 from pathlib import Path
 from typing import Any
 from .process_file_lock import exclusive_process_lock
+from .json_state_io import read_json_retry, write_json_atomic
 
 EVENT_TYPES={"TASK_ACCEPTED","TASK_STARTED","TASK_COMPLETED","TASK_FAILED","TASK_INTERRUPTED"}
 READY="READY"; DELIVERING="DELIVERING"; DELIVERED="DELIVERED"
@@ -71,11 +72,10 @@ class RemoteEventStore:
             yield
     def load(self):
         if not self.path.exists(): self.events={}; return
-        raw=json.loads(self.path.read_text(encoding='utf-8')); rows=raw.get('events',{}) if isinstance(raw,dict) else {}
+        raw=read_json_retry(self.path); rows=raw.get('events',{}) if isinstance(raw,dict) else {}
         self.events={k:RemoteEvent(**v) for k,v in rows.items() if isinstance(v,dict)}
     def save(self):
-        self.path.parent.mkdir(parents=True,exist_ok=True); tmp=self.path.with_name(self.path.name+'.tmp')
-        tmp.write_text(json.dumps({'version':1,'events':{k:asdict(v) for k,v in self.events.items()}},ensure_ascii=False,indent=2),encoding='utf-8'); tmp.replace(self.path)
+        write_json_atomic(self.path,{'version':1,'events':{k:asdict(v) for k,v in self.events.items()}})
     def emit(self,event_type:str,task:Any,*,status:str,payload:dict|None=None)->RemoteEvent:
         if event_type not in EVENT_TYPES: raise ValueError(event_type)
         with self._lock,self.process_lock():
@@ -124,9 +124,11 @@ class DeliveryManager:
         if result.get('delivered'): self.store.mark_delivered(event.event_id)
         else: self.store.mark_failed_attempt(event.event_id,str(result.get('reason','delivery_failed')),self.owner_token)
         return result
-    def reconcile_delivering(self):
+    def reconcile_delivering(self,transports:set[str]|None=None):
         outcomes=[]
         for event in self.store.delivering():
+            transport=str(event.reply_route.get('transport','')).upper()
+            if transports is not None and transport not in transports: continue
             age=max(0.0,time.time()-float(event.delivery_started_at or 0.0))
             if age<DELIVERY_RECONCILE_MIN_AGE_SEC:
                 outcomes.append((event.event_id,{'delivered':False,'reason':'delivery_claim_fresh','uncertain':True})); continue
@@ -141,9 +143,19 @@ class DeliveryManager:
                 self.store.mark_delivered(event.event_id)
             elif result.get('definitive_not_delivered'):
                 self.store.mark_failed_attempt(event.event_id,'reconciled_not_delivered')
+            elif result.get('retry_allowed'):
+                self.store.mark_failed_attempt(
+                    event.event_id,
+                    str(result.get('reason','delivery_outcome_unknown_retry_allowed')),
+                )
             outcomes.append((event.event_id,result))
         return outcomes
-    def retry_ready(self):
-        outcomes=self.reconcile_delivering()
-        outcomes.extend((e.event_id,self.deliver(e)) for e in list(self.store.ready()))
+    def retry_ready(self,transports:set[str]|None=None):
+        allowed={str(value).upper() for value in transports} if transports is not None else None
+        outcomes=self.reconcile_delivering(allowed)
+        outcomes.extend(
+            (e.event_id,self.deliver(e))
+            for e in list(self.store.ready())
+            if allowed is None or str(e.reply_route.get('transport','')).upper() in allowed
+        )
         return outcomes
