@@ -241,6 +241,41 @@ class HostSupervisor:
         self._remote_close_requested.set()
         return "RemoteAgent 已收到關閉任務指令；目前遠端工作階段將關閉。"
 
+    def _reconcile_unclean_remote_shutdown(self, *, started_at: float) -> list[Any]:
+        """Do not replay Telegram work left by a forcibly closed launcher."""
+        previous = _load(self.remote_supervisor_state)
+        previous_pid = int(previous.get("pid", 0) or 0)
+        if (
+            str(previous.get("status", "")).upper() != "RUNNING"
+            or previous_pid <= 0
+            or previous_pid == os.getpid()
+            or self._process_alive(previous_pid)
+        ):
+            return []
+
+        from .remote_events import RemoteEventStore
+        from .task_state import RemoteTaskQueue, TaskStateStore, TASK_INTERRUPTED
+
+        queue = RemoteTaskQueue(TaskStateStore(self.root / ".agents" / "remote_tasks.json"))
+        changed = queue.abandon_incomplete(
+            transports={"TELEGRAM", "LOCAL_TEST"},
+            reason="remote_supervisor_unclean_shutdown",
+            created_before=started_at,
+        )
+        events = RemoteEventStore(self.root / ".agents" / "remote_events.json")
+        for task in changed:
+            event_type = "TASK_INTERRUPTED" if task.state == TASK_INTERRUPTED else "TASK_FAILED"
+            events.emit(event_type, task, status=task.state, payload={"error": task.error})
+        if changed:
+            self.remote_runtime_log.write(
+                "ERROR",
+                component="host_supervisor",
+                stage="UNCLEAN_SHUTDOWN_TASKS_ABANDONED",
+                previous_pid=previous_pid,
+                task_ids=[task.task_id for task in changed],
+            )
+        return changed
+
     def _remote_binding(self) -> dict:
         from .conversation_registry import ConversationRegistry
         target = str(os.environ.get("SMARTAGENT_TELEGRAM_WORKSPACE", "") or "").strip()
@@ -300,19 +335,32 @@ class HostSupervisor:
         print(f"[RemoteAgent-0] SESSION_READY {url}", flush=True)
         return dict(self._remote_browser_state)
 
-    def _close_remote_session(self) -> None:
-        self.remote_runtime_log.write("CONNECT",component="host_supervisor",stage="CLOSING_SESSION")
+    def _close_remote_session(self, *, reason: str = "") -> None:
+        self.remote_runtime_log.write(
+            "CONNECT", component="host_supervisor", stage="CLOSING_SESSION",
+            reason=str(reason or "UNSPECIFIED"),
+        )
         if self.agent0 is not None and self.agent0.poll() is None:
             self._terminate_agent0_tree(self.agent0)
             try: self.agent0.wait(timeout=2)
             except Exception: pass
         self.agent0 = None
         scraper = self._remote_browser_scraper
+        conversation_url = str(
+            self._remote_browser_state.get("conversation_url", "") or ""
+        )
         self._remote_browser_scraper = None
         self._remote_browser_state = {}
         if scraper is not None:
-            try: scraper.close()
-            except Exception: pass
+            try:
+                if conversation_url:
+                    scraper.close_conversation_page(conversation_url)
+            except Exception:
+                pass
+            try:
+                scraper.close()
+            except Exception:
+                pass
         print("[RemoteAgent-0] STOPPED remote session; WAITING_SIGNAL",flush=True)
 
     def pending_remote_task_count(self) -> int:
@@ -330,9 +378,23 @@ class HostSupervisor:
                 TASK_QUEUED,
                 TASK_RUNNING,
             )
+            from .remote_events import DELIVERED, RemoteEventStore
             store=RemoteTaskQueue(TaskStateStore(self.root / ".agents" / "remote_tasks.json")).store
             with store.process_lock():
-                store.load(); return len(store.list_by_state({TASK_QUEUED, TASK_RUNNING}))
+                store.load()
+                tasks=store.list_by_state({TASK_QUEUED, TASK_RUNNING})
+            event_store=RemoteEventStore(self.root / ".agents" / "remote_events.json")
+            accepted_delivered={
+                event.task_id
+                for event in event_store.events.values()
+                if event.event_type=="TASK_ACCEPTED" and event.delivery_state==DELIVERED
+            }
+            return sum(
+                1 for task in tasks
+                if task.state==TASK_RUNNING
+                or str((task.metadata or {}).get("transport", "")).upper() not in {"TELEGRAM","LOCAL_TEST"}
+                or task.task_id in accepted_delivered
+            )
         except Exception as exc:
             self.remote_runtime_log.write("ERROR",component="host_supervisor",stage="PENDING_TASK_COUNT",error=f"{type(exc).__name__}: {exc}")
             return 0
@@ -950,57 +1012,84 @@ class HostSupervisor:
 
     def run_remote_only(self, *, auto_start_local: bool = False) -> int:
         """Own Telegram ingress and the RemoteAgent browser lifecycle independently."""
+        started_at = time.time()
         self.power_guard.acquire()
+        self._reconcile_unclean_remote_shutdown(started_at=started_at)
         self.start_telegram_listener()
         _atomic(self.remote_supervisor_state,{"status":"RUNNING","pid":os.getpid(),"heartbeat_at":time.time()})
         heartbeat_at=0.0
         waiting_logged=False
+        task_cycle_active=False
+        shutdown_reason="SUPERVISOR_EXIT"
         try:
             while True:
-                now=time.time()
-                if now-heartbeat_at>=5.0:
-                    _atomic(self.remote_supervisor_state,{"status":"RUNNING","pid":os.getpid(),"heartbeat_at":now})
-                    heartbeat_at=now
-                if self._remote_close_requested.is_set():
-                    self._remote_close_requested.clear()
-                    self._close_remote_session()
-                    waiting_logged=False
-                pending=self.pending_remote_task_count()
-                if pending<=0:
-                    if self.agent0 is not None:
-                        self.supervise_agent0()
-                    if not waiting_logged:
-                        print("[RemoteAgent-0] WAITING_SIGNAL",flush=True)
-                        waiting_logged=True
-                    time.sleep(0.25)
-                    continue
-                waiting_logged=False
                 try:
-                    state=self._ensure_remote_browser_host()
+                    now=time.time()
+                    if now-heartbeat_at>=5.0:
+                        _atomic(self.remote_supervisor_state,{"status":"RUNNING","pid":os.getpid(),"heartbeat_at":now})
+                        heartbeat_at=now
+                    if self._remote_close_requested.is_set():
+                        self._remote_close_requested.clear()
+                        self._close_remote_session(reason="USER_REQUEST")
+                        waiting_logged=False
+                        task_cycle_active=False
+                    pending=self.pending_remote_task_count()
+                    if pending<=0:
+                        if self.agent0 is not None:
+                            self.supervise_agent0()
+                        if task_cycle_active and self._remote_browser_state:
+                            self.remote_runtime_log.write(
+                                "CONNECT", component="host_supervisor",
+                                stage="SESSION_RETAINED",
+                                conversation_url=str(self._remote_browser_state.get("conversation_url", "") or ""),
+                            )
+                            task_cycle_active=False
+                        if not waiting_logged:
+                            print("[RemoteAgent-0] WAITING_SIGNAL",flush=True)
+                            waiting_logged=True
+                        time.sleep(0.25)
+                        continue
+                    waiting_logged=False
+                    task_cycle_active=True
+                    try:
+                        state=self._ensure_remote_browser_host()
+                    except Exception as exc:
+                        self.remote_runtime_log.write("ERROR",component="host_supervisor",stage="REMOTE_BROWSER_START",error=f"{type(exc).__name__}: {exc}")
+                        print(f"[RemoteAgent-0] ERROR remote browser: {exc}",flush=True)
+                        time.sleep(1.0)
+                        continue
+                    endpoint=str(state.get("cdp_endpoint","") or "")
+                    changed=bool(self._agent0_state.get("cdp_endpoint") and str(self._agent0_state.get("cdp_endpoint"))!=endpoint)
+                    if changed and self.agent0 is not None and self.agent0.poll() is None:
+                        self._terminate_agent0_tree(self.agent0)
+                        try: self.agent0.wait(timeout=2)
+                        except Exception: pass
+                        self.agent0=None
+                    if self.agent0 is None or self.agent0.poll() is not None:
+                        state=dict(state); state["startup_mode"]="TASK_DEMAND"
+                        self.start_agent0(state,new_console=False)
+                    self.supervise_agent0()
+                    time.sleep(0.25)
+                except KeyboardInterrupt:
+                    raise
                 except Exception as exc:
-                    self.remote_runtime_log.write("ERROR",component="host_supervisor",stage="REMOTE_BROWSER_START",error=f"{type(exc).__name__}: {exc}")
-                    print(f"[RemoteAgent-0] ERROR remote browser: {exc}",flush=True)
+                    # One transient store/CDP/supervision failure must not tear
+                    # down the persistent browser and Telegram receiver.
+                    self.remote_runtime_log.write(
+                        "ERROR", component="host_supervisor",
+                        stage="REMOTE_LOOP_RECOVERED",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    print(f"[RemoteAgent-0] transient error; receiver remains active: {exc}",flush=True)
                     time.sleep(1.0)
-                    continue
-                endpoint=str(state.get("cdp_endpoint","") or "")
-                changed=bool(self._agent0_state.get("cdp_endpoint") and str(self._agent0_state.get("cdp_endpoint"))!=endpoint)
-                if changed and self.agent0 is not None and self.agent0.poll() is None:
-                    self._terminate_agent0_tree(self.agent0)
-                    try: self.agent0.wait(timeout=2)
-                    except Exception: pass
-                    self.agent0=None
-                if self.agent0 is None or self.agent0.poll() is not None:
-                    state=dict(state); state["startup_mode"]="TASK_DEMAND"
-                    self.start_agent0(state,new_console=False)
-                self.supervise_agent0()
-                time.sleep(0.25)
         except KeyboardInterrupt:
+            shutdown_reason="USER_INTERRUPT"
             print("\n[RemoteAgent-0] STOPPED",flush=True)
             return 0
         finally:
             _atomic(self.remote_supervisor_state,{"status":"STOPPED","pid":os.getpid(),"heartbeat_at":time.time()})
             self.stop_telegram_listener()
-            self._close_remote_session()
+            self._close_remote_session(reason=shutdown_reason)
             self.power_guard.release()
 
 

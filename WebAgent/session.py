@@ -18,6 +18,7 @@ def ensure_webagent_session(
     gpt_url: str,
     state_dir: str | Path,
     send_prompt: Callable[..., str],
+    display_name: str = "WebAgent",
 ) -> dict:
     state_root = Path(state_dir)
     state_root.mkdir(parents=True, exist_ok=True)
@@ -36,7 +37,7 @@ def ensure_webagent_session(
     decision = session.decide(stored)
     def bootstrap(reason: str) -> dict:
         print(
-            f"[WebAgent] Session mode: BOOTSTRAP ({reason})；即將注入 WebAgent/smartagent_tool 協議。",
+            f"[{display_name}] Session mode: BOOTSTRAP ({reason})；即將注入 WebAgent/smartagent_tool 協議。",
             flush=True,
         )
         response = send_prompt(
@@ -53,14 +54,14 @@ def ensure_webagent_session(
             raise RuntimeError("WebGPT 未回傳 matching WEBAGENT protocol readiness")
         state = session.armed_state(session_id=decision.session_id)
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
-        print("[WebAgent] 協議初始化成功，ChatGPT 已回傳 matching readiness。", flush=True)
+        print(f"[{display_name}] 協議初始化成功，ChatGPT 已回傳 matching readiness。", flush=True)
         return {"mode": BOOTSTRAP, "reason": reason, "state": state}
 
     if decision.action == BOOTSTRAP:
         return bootstrap(decision.reason)
 
     print(
-        "[WebAgent] Session mode: SESSION_ATTACH；正在確認此對話保留既有 WebAgent 協議。",
+        f"[{display_name}] Session mode: SESSION_ATTACH；正在確認此對話保留既有 WebAgent 協議。",
         flush=True,
     )
     response = send_prompt(
@@ -70,7 +71,7 @@ def ensure_webagent_session(
     if session.parse_session_ready(response, session_id=decision.session_id):
         state = session.armed_state(session_id=decision.session_id)
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
-        print("[WebAgent] 協議附著成功。", flush=True)
+        print(f"[{display_name}] 協議附著成功。", flush=True)
         return {"mode": decision.action, "reason": decision.reason, "state": state}
     decision.action = BOOTSTRAP
     return bootstrap("session_attach_failed")

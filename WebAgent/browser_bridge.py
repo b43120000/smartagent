@@ -3,10 +3,15 @@
 """ChatGPT browser attachment and trusted-human composer bridge."""
 from __future__ import annotations
 
+from contextlib import contextmanager
+import os
 import re
+import time
 import urllib.request
+from pathlib import Path
 
 CHATGPT_HOME = "https://chatgpt.com/"
+EXECUTION_PAGE_LOCK = Path(__file__).resolve().parents[1] / ".agents" / "remote_execution_page.lock"
 
 BRIDGE_SCRIPT = r"""
 () => {
@@ -92,6 +97,25 @@ def select_chatgpt_page(context):
     return max(candidates, key=_page_score) if candidates else context.new_page()
 
 
+@contextmanager
+def execution_page_lease(
+    *,
+    timeout_sec: float = 120.0,
+    label: str = "RemoteAgent execution page",
+    marker_path: str | Path = EXECUTION_PAGE_LOCK,
+):
+    """Serialize Agent0 navigation and request-scoped Worker page ownership."""
+    from agent_core.process_file_lock import exclusive_process_lock
+
+    with exclusive_process_lock(
+        marker_path,
+        timeout_sec=timeout_sec,
+        label=label,
+        legacy_kind="remote-execution-page-lease-v1",
+    ):
+        yield
+
+
 def normalize_conversation_url(url: str) -> str:
     value = str(url or "").strip().strip('"').rstrip("/")
     if not value.startswith("https://chatgpt.com/") or not conversation_id(value):
@@ -99,19 +123,68 @@ def normalize_conversation_url(url: str) -> str:
     return value
 
 
+def _conversation_ready(page, target: str, *, timeout_ms: int = 60000) -> None:
+    """Navigate without depending on ChatGPT project redirects completing load."""
+    target_id = conversation_id(target)
+    current_id = conversation_id(str(getattr(page, "url", "") or ""))
+    if current_id != target_id:
+        try:
+            page.evaluate("target => { window.location.assign(target); }", target)
+        except Exception:
+            # The execution context can be destroyed immediately after assign.
+            # URL/composer readiness below is the source of truth.
+            pass
+    deadline = time.monotonic() + max(1.0, float(timeout_ms) / 1000.0)
+    while time.monotonic() < deadline:
+        if page.is_closed():
+            raise RuntimeError("remote_execution_page_closed_during_navigation")
+        current = str(getattr(page, "url", "") or "")
+        if conversation_id(current) == target_id:
+            try:
+                composer = page.locator("#prompt-textarea")
+                if composer.count() and composer.first.is_visible():
+                    return
+            except Exception:
+                pass
+        page.wait_for_timeout(200)
+    raise RuntimeError(
+        f"remote_execution_conversation_not_ready: target={target_id} "
+        f"current={conversation_id(str(getattr(page, 'url', '') or ''))}"
+    )
+
+
 def open_target_conversation(context, target_url: str):
     target = normalize_conversation_url(target_url)
     target_id = conversation_id(target)
-    page = None
-    for candidate in list(getattr(context, "pages", []) or []):
-        if not candidate.is_closed() and conversation_id(str(getattr(candidate, "url", "") or "")) == target_id:
-            page = candidate
-            break
+    pages = [
+        candidate for candidate in list(getattr(context, "pages", []) or [])
+        if not candidate.is_closed()
+    ]
+    matching = [
+        candidate for candidate in pages
+        if conversation_id(str(getattr(candidate, "url", "") or "")) == target_id
+    ]
+    page = matching[0] if matching else None
+    # Conversation identity is unique inside the RemoteAgent profile. Collapse
+    # historical duplicates before a second worker can trigger another request.
+    for duplicate in matching[1:]:
+        try:
+            duplicate.close()
+        except Exception:
+            pass
     if page is None:
-        page = context.new_page()
-        page.goto(target, wait_until="domcontentloaded", timeout=60000)
-    elif str(getattr(page, "url", "") or "").rstrip("/") != target:
-        page.goto(target, wait_until="domcontentloaded", timeout=60000)
+        # Reuse the one canonical ChatGPT execution page even when Agent0's idle
+        # scheduler last left it on another linked conversation. Creating a new
+        # page is reserved for an actually empty browser context.
+        chatgpt_pages = [
+            candidate for candidate in pages
+            if str(getattr(candidate, "url", "") or "").startswith("https://chatgpt.com/")
+        ]
+        page = select_chatgpt_page(context) if chatgpt_pages else context.new_page()
+        _conversation_ready(page, target)
+    # /c/<id> is the stable conversation identity.  Project slugs, query
+    # strings and redirects are only URL aliases; reloading an already-matching
+    # page can interrupt an in-flight composer or get stuck in ChatGPT routing.
     try:
         page.bring_to_front()
     except Exception:

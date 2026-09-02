@@ -7,8 +7,6 @@ never starts/stops processes; HostSupervisor/AgentHost remain runtime owners.
 """
 from __future__ import annotations
 
-import json
-import os
 import threading
 import time
 import uuid
@@ -16,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .json_state_io import read_json_retry, write_json_atomic
 from .task_ledger import PRIORITY_NORMAL, TaskLedger
 from .task_state import (
     TASK_COMPLETED,
@@ -65,7 +64,7 @@ class SessionStore:
                 self.loaded = True
                 return self.records
             try:
-                payload = json.loads(self.path.read_text(encoding="utf-8"))
+                payload = read_json_retry(self.path)
             except Exception as exc:
                 raise TaskStateError(f"session state unreadable: {self.path}: {exc}") from exc
             items = payload.get("sessions", {}) if isinstance(payload, dict) else None
@@ -97,9 +96,7 @@ class SessionStore:
                     for sid, record in self.records.items()
                 },
             }
-            tmp = self.path.with_name(self.path.name + f".{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self.path)
+            write_json_atomic(self.path, payload)
 
     def put(self, record: SessionRecord) -> SessionRecord:
         self.ensure_loaded()

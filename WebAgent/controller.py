@@ -128,6 +128,9 @@ def self_test() -> int:
     reused_context = FakeContext([reused])
     assert open_target_conversation(reused_context, reused.url) is reused
     assert reused.front and reused_context.created == 0
+    alias = "https://chatgpt.com/g/project-name/c/abc-123?model=x"
+    assert open_target_conversation(reused_context, alias) is reused
+    assert reused.navigated == [] and reused_context.created == 0
     new_context = FakeContext([])
     created = open_target_conversation(new_context, "https://chatgpt.com/c/new-456")
     assert created.url == "https://chatgpt.com/c/new-456" and new_context.created == 1

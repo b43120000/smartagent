@@ -13,7 +13,7 @@ from agent_core.webgpt_rate_governor import WebGPTRateGovernor, WebGPTRateLimite
 class WebAgentBrowserClient:
     """Send WebAgent prompts without routing through the Agent manager loop."""
 
-    def __init__(self, scraper, *, governor=None, sleep=time.sleep, clock=time.monotonic, event_sink=None):
+    def __init__(self, scraper, *, governor=None, sleep=time.sleep, clock=time.monotonic, event_sink=None, display_name="WebAgent"):
         self.scraper = scraper
         self.governor = governor or getattr(scraper, "_rate_governor", None)
         if self.governor is None:
@@ -22,6 +22,7 @@ class WebAgentBrowserClient:
         self._sleep = sleep
         self._clock = clock
         self.event_sink = event_sink
+        self.display_name = str(display_name or "WebAgent")
 
     def _emit(self, event: str, **fields) -> None:
         if self.event_sink is not None:
@@ -40,7 +41,7 @@ class WebAgentBrowserClient:
                 now = self._clock()
                 if not last_delay_notice or now - last_delay_notice >= 10.0:
                     print(
-                        f"[WebAgent] {stage}尚未送出：ChatGPT 安全間隔剩餘約 "
+                        f"[{self.display_name}] {stage}尚未送出：ChatGPT 安全間隔剩餘約 "
                         f"{max(1, int(exc.remaining_sec))} 秒。",
                         flush=True,
                     )
@@ -50,7 +51,7 @@ class WebAgentBrowserClient:
                 now = self._clock()
                 if not last_busy_notice or now - last_busy_notice >= 15.0:
                     print(
-                        f"[WebAgent] {stage}尚未送出：另一個 ChatGPT 自動化請求正在使用共用送出鎖；"
+                        f"[{self.display_name}] {stage}尚未送出：另一個 ChatGPT 自動化請求正在使用共用送出鎖；"
                         "這不會啟動 LocalAgent/Agent1，WebAgent 會繼續等待。",
                         flush=True,
                     )
@@ -65,18 +66,18 @@ class WebAgentBrowserClient:
         attachment_paths: list[str] | None = None,
         protocol_expected: dict | None = None,
     ) -> str:
-        print(f"[WebAgent] 準備發送{stage}。", flush=True)
+        print(f"[{self.display_name}] 準備發送{stage}。", flush=True)
         self._emit("browser_send_started", stage=stage, attachment_paths=attachment_paths or [])
         lease = self._acquire_submit_lease(stage)
         self.scraper._rate_submit_lease = lease
-        print(f"[WebAgent] 正在把{stage}寫入 ChatGPT 並按下 Send...", flush=True)
+        print(f"[{self.display_name}] 正在把{stage}寫入 ChatGPT 並按下 Send...", flush=True)
         heartbeat_stop = threading.Event()
         started_at = self._clock()
 
         def heartbeat() -> None:
             while not heartbeat_stop.wait(15.0):
                 elapsed = self._clock() - started_at
-                print(f"[WebAgent] {stage}處理中，已等待 {elapsed:.0f} 秒...", flush=True)
+                print(f"[{self.display_name}] {stage}處理中，已等待 {elapsed:.0f} 秒...", flush=True)
                 self._emit("browser_wait_heartbeat", stage=stage, elapsed_sec=round(elapsed, 1))
 
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
@@ -92,7 +93,7 @@ class WebAgentBrowserClient:
                 self.governor.record_success()
             except Exception as exc:
                 print(
-                    f"[WebAgent][WARN] 回應已完成，但限流狀態更新失敗："
+                    f"[{self.display_name}][WARN] 回應已完成，但限流狀態更新失敗："
                     f"{type(exc).__name__}: {exc}",
                     flush=True,
                 )
@@ -100,7 +101,7 @@ class WebAgentBrowserClient:
                 self.scraper._rate_limit_dialog_streak = 0
             if hasattr(self.scraper, "_rate_limited_until"):
                 self.scraper._rate_limited_until = 0.0
-            print(f"[WebAgent] 已收到{stage}回應。", flush=True)
+            print(f"[{self.display_name}] 已收到{stage}回應。", flush=True)
             self._emit("browser_response_completed", stage=stage, response=response)
             return str(response)
         except Exception as exc:
