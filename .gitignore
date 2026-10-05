@@ -1,8 +1,14 @@
 .venv/
+localdata/
 .agents/
+source/.agents/
+source/localdata/
 __pycache__/
 *.py[cod]
+.pytest_cache/
 WebAgent/state/
+config/debug_config.json
 install_smart_agent/environment_report.txt
 install_smart_agent/install_report.txt
 install_smart_agent/install-state.json
+

@@ -1,328 +1,193 @@
 # SmartAgent
 
-SmartAgent is a Windows-first local automation agent that uses the ChatGPT web
-interface for planning and decision-making. It validates structured
-`smartagent_tool` messages, performs approved operations on the local computer,
-returns the real tool results to ChatGPT, and continues until a final natural
-language response is produced.
+SmartAgent 讓 ChatGPT 網頁對話窗具備本機 Agent 能力。
 
-The public package provides three entry points:
+你可以直接用自然語言交代工作；ChatGPT 負責理解、規劃與回覆，SmartAgent runtime 則在 Windows 電腦上執行經過檢查的檔案、命令、專案與瀏覽器操作，再把真實結果送回同一個 ChatGPT 對話。
 
-| Interface | Best for | Launcher |
-| --- | --- | --- |
-| LocalAgent | Starting tasks from a local CMD window | `launch_smart_agent.bat` |
-| WebAgent Direct | Typing requests directly in a selected ChatGPT conversation | `launch_webcopilot_chatgpt.bat` |
-| RemoteAgent | Receiving work through a remote conversation or Telegram | `launch_remote_agent.bat` |
+目前主要支援 **ChatGPT 網頁版**。Gemini、Claude 與自動 UI 校準仍屬開發中功能，不建議當成主要使用入口。
 
 > [!WARNING]
-> SmartAgent can execute commands and modify files. Use it only on computers,
-> workspaces, and ChatGPT conversations that you trust. Review the requested
-> paths and operations before allowing local execution.
+> SmartAgent 可以讀寫檔案並執行命令。只應授權你信任的 Workspace、ChatGPT 對話與 Telegram Bot。帳號登入、密碼、2FA 與 CAPTCHA 必須由使用者手動完成。
 
-## Features
+## 也可以直接交給 ChatGPT 或 Codex 帶你安裝
 
-### ChatGPT planning with local execution
-
-ChatGPT interprets the request, plans the work, and selects tools. The local
-runtime validates the protocol and performs the actual operation. Supported
-capabilities include:
-
-- Listing, searching, reading, creating, and updating files and directories.
-- Running bounded commands and returning stdout, stderr, and exit status.
-- Uploading local files to the active ChatGPT conversation.
-- Downloading fresh files, images, and other artifacts produced by ChatGPT.
-- Handling large text through chunked transfer operations.
-- Project scanning, source bundles, delta bundles, and verification workflows.
-
-### Validated `smartagent_tool` protocol
-
-Tool messages are never treated as commands without validation. The protocol
-includes:
-
-- Run and turn identifiers.
-- A fresh local nonce for every turn.
-- Alternating Web ACK and Local ACK verification.
-- Unique action identifiers for exactly-once execution.
-- Result identifiers that must be acknowledged by the following turn.
-- Strict `final_response` and `turn_commit` ordering.
-- Rejection of malformed JSON, unknown tools, replayed acknowledgements, and
-  unsupported inline scripts.
-
-### Persistent ChatGPT browser runtime
-
-- Uses Playwright Chromium with a persistent login profile.
-- Can reuse an existing CDP browser session.
-- Selects conversations by conversation ID.
-- Observes generation, attachment, and UI-idle state before accepting results.
-- Uses a shared send lock and rate governor to reduce duplicate or overly
-  frequent ChatGPT submissions.
-
-### LocalAgent
-
-LocalAgent is the CMD-oriented workflow. It supports workspace/conversation
-binding, interactive startup configuration, multi-turn planning, local tool
-execution, checkpoints, task status, project synchronization, and validation.
-
-### WebAgent Direct
-
-WebAgent Direct is separated from LocalAgent and RemoteAgent orchestration:
-
-1. Paste a normal `https://chatgpt.com/c/...` conversation URL into CMD.
-2. WebAgent opens or reuses that exact conversation tab.
-3. It bootstraps or attaches the WebAgent protocol.
-4. After CMD displays `READY`, type requests directly in the ChatGPT composer.
-5. WebAgent executes approved local tools and returns results to the same
-   conversation.
-
-WebAgent owns its run IDs, turns, nonces, results, ACK chain, action ledger, and
-final response loop. It does not create a LocalAgent worker or RemoteAgent task.
-
-Each request exposes a request ID, round number, current attempt, and previous
-ACK ID in the conversation. A missing or invalid ACK permits at most one repair
-of the same request and round; WebAgent never turns ACK recovery into a new
-local task or repeats an uncommitted local action.
-
-Attachment submission is conservative. WebAgent waits while an upload ring is
-visible, requires the ring-free state to remain stable, and revalidates all
-requested filenames immediately before Send. It does not treat the Remove
-button as completion, does not interrupt an unchanged upload after 30 seconds,
-and does not automatically remove or re-upload a timed-out attachment. Explicit
-ChatGPT upload errors stop the turn; the passive wait has a 600-second hard
-limit.
-
-### RemoteAgent
-
-RemoteAgent provides remote ingress and result delivery, including:
-
-- Telegram bot configuration and QR pairing.
-- Conversation/workspace route binding.
-- Durable task state, claim, heartbeat, retry, pause, cancellation, and result
-  delivery.
-- Independent receiver lifecycle through `launch_remote_agent.bat`.
-- Canonical conversation-page reuse so sequential requests do not open a
-  second tab for the same ChatGPT conversation.
-- Cross-process queue refresh so work accepted after Agent 0 startup is
-  dispatched without restarting the receiver.
-
-For an offline transport simulation that still exercises the production task
-queue, worker, WebGPT protocol, and result path, keep RemoteAgent running and
-use:
+如果你不熟悉安裝流程，可以把這個 repository 提供給 ChatGPT 或 Codex，然後直接詢問：
 
 ```text
-send_remoteagent_test.bat --request "list the workspace files"
+請先讀取 AGENTS.md 與 skills/smartagent-onboarding/SKILL.md，
+再依照我的 Windows 環境，一步一步帶我安裝、設定並啟動 SmartAgent。
+每一步先說明會做什麼；遇到錯誤時不要猜測，請根據實際輸出排查。
 ```
 
-Remote transport and automated recovery features are advanced functionality and
-remain under active development.
+- `README.md` 是給使用者閱讀的操作說明。
+- [`skills/smartagent-onboarding/SKILL.md`](skills/smartagent-onboarding/SKILL.md) 是給 AI 閱讀的安裝、設定、啟動、排錯與刪除契約。
+- [`AGENTS.md`](AGENTS.md) 會提醒 Codex 優先讀取這份 skill。
 
-## System requirements
+ChatGPT 若無法直接操作你的電腦，仍可依 skill 逐步指導；請把每一步的實際輸出貼回去。Codex 若具備本機執行權限，也必須先說明並遵守安全邊界，不能自行跳過 UAC、ACL 或路徑檢查。
 
-- 64-bit Windows 10 or Windows 11.
-- Python 3.11 or newer, 64-bit.
-- Internet access.
-- A ChatGPT account that can use the web interface.
-- A desktop environment capable of running Playwright Chromium.
-- Optional: Ollama for local or Ollama Cloud model workflows.
-- Optional: a Telegram Bot Token for Telegram RemoteAgent ingress.
+## 主要能力
 
-Login, password, 2FA, and CAPTCHA steps must always be completed manually by the
-user. SmartAgent does not automate account authentication.
+- 從 ChatGPT 網頁對話接收自然語言工作。
+- 列出、搜尋、讀取及修改已授權 Workspace 內的檔案。
+- 執行有範圍限制的命令並回傳 exit code、stdout 與 stderr。
+- 追蹤多輪任務的 Progress、Runtime evidence 與完成狀態。
+- 下載本輪新產生的檔案或圖片，或把必要檔案交付給 ChatGPT。
+- 透過 Telegram RemoteAgent 遠端送出工作與查看狀態。
+- 使用 `smartagent_tool` v9 協議驗證 action、結果與回合提交，避免直接執行未驗證的自然語言。
 
-## Download and installation
+## 系統需求
 
-Clone the repository:
+- 64 位元 Windows 10 或 Windows 11。
+- 網路連線與可使用 ChatGPT 網頁版的帳號。
+- 可安裝 Python、Playwright Chromium 與專案相依套件的環境。
+- 建議先使用獨立測試 Workspace 與獨立 ChatGPT 對話。
+
+## 下載
+
+可從 GitHub 下載 ZIP 並解壓縮到一般使用者可寫入的資料夾，或使用：
 
 ```powershell
 git clone https://github.com/b43120000/smartagent.git
 cd smartagent
 ```
 
-Alternatively, download the repository ZIP from GitHub and extract it to a
-writable local directory.
+不要從其他電腦複製 `.venv`、`localdata`、`.agents`、瀏覽器 profile、Token 或暫存檔。
 
-Run:
+## 安裝
 
-```text
-install_smart_agent.bat
-```
+1. 在 SmartAgent 根目錄雙擊：
 
-The installer first performs a read-only environment check and reports each
-item as `PASS`, `MISSING`, `BROKEN`, or `SKIPPED`. If every required item passes,
-no installation is performed. If repair is required, review the list and press
-Enter to continue.
+   ```text
+   install_smart_agent.bat
+   ```
 
-The installer can:
+2. 等待安裝程式建立本機 `.venv`、安裝 Python 套件與 Playwright Chromium。
+3. 安裝完成後，預設為 **ACL OFF**：保留軟體層的命令與路徑安全檢查，但不啟用 restricted executor 的 NTFS 防竄改保護。
+4. 若只想檢查環境、不進行安裝，可執行：
 
-1. Locate or install a compatible 64-bit Python runtime.
-2. Create the project-local `.venv`.
-3. Install the locked Python dependencies.
-4. Install or repair Playwright Chromium.
-5. Install and start Ollama when it is enabled.
-6. Run post-install verification.
+   ```text
+   install_smart_agent.bat -ValidateOnly
+   ```
 
-Check the environment without installing anything:
+安裝失敗時先查看視窗中的第一個錯誤，以及 `localdata\logs` 下的安裝紀錄；不要直接複製別台電腦的 `.venv` 來補。
 
-```text
-install_smart_agent.bat -ValidateOnly
-```
+## 使用設定
 
-Install for WebGPT-only use without requiring Ollama:
-
-```text
-install_smart_agent.bat -SkipOllama
-```
-
-## Using LocalAgent
-
-Configure a workspace and ChatGPT conversation:
+安裝完成後雙擊：
 
 ```text
 Edit_workspace.bat
 ```
 
-Then start LocalAgent:
+依選單完成以下設定：
 
-```text
-launch_smart_agent.bat
-```
+1. 加入允許寫入的 Workspace。
+2. 視需要加入 Read-only 路徑。
+3. 設定 Local 或 Remote Workspace。
+4. 貼上要使用的 ChatGPT 一般對話 URL。
+5. 若要使用 Telegram，再依引導設定及配對 Bot。
 
-Enter a natural language request in CMD, for example:
+ChatGPT URL 應是可正常開啟的對話頁面。第一次啟動瀏覽器時，請自行完成登入；SmartAgent 不會代填帳號、密碼、2FA 或 CAPTCHA。
 
-```text
-List the Python files in this workspace and summarize their purpose.
-```
+## 啟動與使用
 
-The release launcher resolves `.venv`, `smart_agent.py`, `agent_core`,
-`RemoteAgent`, and runtime state relative to the downloaded repository. It does
-not depend on a parent development checkout.
+### 主要方式：ChatGPT 網頁 Agent
 
-## Using WebAgent Direct
-
-Start:
+雙擊：
 
 ```text
 launch_webcopilot_chatgpt.bat
 ```
 
-Then:
+接著：
 
-1. Paste a ChatGPT conversation URL containing `/c/...`.
-2. Press Enter.
-3. Wait while the browser opens and the protocol is sent.
-4. Prefer waiting until CMD displays `READY`. A request entered during protocol
-   startup is queued and processed after readiness instead of being lost.
-5. Type the request directly in the ChatGPT conversation.
+1. 貼上已設定或要使用的 ChatGPT 對話 URL。
+2. 等待瀏覽器開啟並完成 protocol readiness。
+3. 在 ChatGPT 對話窗輸入自然語言需求。
+4. 保持啟動視窗開啟；SmartAgent 會執行核准的 action，並把結果送回同一個對話。
 
-Example:
+範例：
 
 ```text
-webcopilot list the files under C:\path\to\project
+列出 C:\project\demo 下面有哪些檔案，只讀取，不要修改或刪除。
 ```
-
-Notes:
-
-- Shared `/share/...` links are not supported; use a normal conversation URL.
-- Do not switch that browser tab to another conversation while the controller
-  is running.
-- Do not run multiple automated controllers against the same conversation.
-- Press `Ctrl+C` in CMD to stop the controller. The browser login profile is
-  preserved.
-- CMD prints a heartbeat while a browser turn is running. Detailed structured
-  diagnostics are written to `WebAgent\state\webagent_runtime.jsonl`; this
-  runtime file is ignored by Git.
-
-## Using RemoteAgent
-
-Configure RemoteAgent workspace and transport settings:
 
 ```text
-Edit_Remoteworkspace.bat
+在 C:\project\demo 執行測試，回報 exit code 與主要失敗原因，不要修改 source code。
 ```
 
-Pair Telegram when required:
+### Telegram RemoteAgent
 
-```text
-launch_remote_agent.bat telegram-pair
-```
-
-Start the receiver:
+先透過 `Edit_workspace.bat` 完成 Telegram 設定，再雙擊：
 
 ```text
 launch_remote_agent.bat
 ```
 
-Keep the CMD window open after it displays `WAITING_SIGNAL`.
+看到接收器進入等待狀態後，保持視窗開啟即可從 Telegram 發送工作。
 
-## Release verification
+### 停止
 
-Verify that the downloaded tree is complete and does not import code from a
-parent checkout:
-
-```powershell
-python verify_release.py
-```
-
-Run the offline WebAgent startup/session test:
-
-```powershell
-python -m WebAgent.tests.validate_startup_protocol_flow
-```
-
-Verify that human input is queued during startup and automated bootstrap sends
-are not captured as user requests:
-
-```powershell
-python -m WebAgent.tests.validate_startup_input_queue
-```
-
-Run the offline `list_directory` protocol integration test:
-
-```powershell
-python -m WebAgent.tests.validate_standalone_loop
-```
-
-These deterministic checks do not replace a live ChatGPT, browser, Telegram, or
-network test.
-
-## Repository structure
+一般情況可在啟動視窗按 `Ctrl+C`。若仍有背景程序，再執行：
 
 ```text
-agent_core/                 Shared protocol, browser, tool, task, and recovery code
-RemoteAgent/                Remote transports, receiver, scheduling, and workers
-WebAgent/                   Standalone WebAgent Direct controller and protocol loop
-install_smart_agent/        Environment checker, installer, and requirements
-install_smart_agent.bat     Main installation entry point
-launch_smart_agent.bat      LocalAgent launcher
-launch_remote_agent.bat     RemoteAgent launcher
-launch_webcopilot_chatgpt.bat
-                             WebAgent Direct launcher
-verify_release.py           Standalone release-boundary verification
+force_stop_all_agents.bat
 ```
 
-## Security and privacy
+## 刪除 SmartAgent
 
-- Do not commit `.agents`, `.venv`, browser profiles, logs, tokens, cookies,
-  workspace paths, or personal conversation URLs.
-- Keep the repository in a writable directory owned by the current user.
-- Treat `run_command`, file writes, and artifact downloads as real local side
-  effects.
-- Use a dedicated workspace and conversation when evaluating the project.
-- Review remote requests before enabling unattended RemoteAgent workflows.
+刪除下載資料夾前，先撤銷執行環境與 ACL 狀態：
 
-## Known limitations
+1. 關閉所有 SmartAgent、瀏覽器自動化與 Telegram Agent 視窗。
+2. 執行 `force_stop_all_agents.bat`。
+3. 若曾開啟 ACL 保護，執行 `ACLstatus.bat off`。
+4. 執行 `reinstall_smart_agent.bat`。
+5. 接受 Windows UAC，依畫面輸入 `RESET`。這會撤銷 restricted executor、排程、相關 ACL 與本機 runtime；不會刪除使用者 Workspace 或瀏覽器登入 profile。
+6. 流程成功後關閉命令視窗，再刪除整個 SmartAgent 資料夾。
 
-- ChatGPT web DOM changes can require browser selector updates.
-- ChatGPT consumer accounts can be rate-limited.
-- Conversation history is not a transactional message queue.
-- Browser, account, Telegram, and network behavior cannot be fully validated by
-  offline tests.
-- Remote transport, self-repair, and meta-recovery components are still under
-  active development.
+如果 Windows 仍顯示檔案使用中，先重新開機再刪除；不要使用不明來源的強制解鎖工具。若同一台電腦還有其他 SmartAgent 安裝，不要手動刪除 `%ProgramData%\SmartAgent`，以免破壞其他安裝。
 
-## Project status
+## 更新
 
-SmartAgent is under active development. Start with LocalAgent or WebAgent Direct
-in a dedicated test workspace before enabling remote or unattended workflows.
+下載新的完整 release，在新版資料夾執行：
 
-No open-source license is included yet. Until a license is added, copyright law
-reserves reuse and redistribution rights to the repository owner.
+```text
+update.bat "C:\path\to\installed\SmartAgent"
+```
+
+更新只允許目標安裝處於 ACL OFF，並保留目標自己的 `.venv`、`localdata`、瀏覽器 profile 與本機設定。
+
+## Repository 結構
+
+```text
+source/                         SmartAgent runtime、WebAgent、RemoteAgent 與共用模組
+install_smart_agent/            安裝、ACL、更新與驗證腳本
+config/                         protocol 與 release manifests
+defaultworkspace/               預設 Workspace 目錄
+skills/smartagent-onboarding/   給 ChatGPT/Codex 使用的安裝與操作 skill
+install_smart_agent.bat         安裝入口
+Edit_workspace.bat              Workspace、ChatGPT 與 Telegram 設定
+launch_webcopilot_chatgpt.bat   ChatGPT 網頁 Agent 主要入口
+launch_remote_agent.bat         Telegram RemoteAgent 入口
+force_stop_all_agents.bat       停止背景 Agent
+reinstall_smart_agent.bat       撤銷安裝狀態，供重裝或手動刪除前使用
+legacy/                         保留但不再作為主要入口的舊版
+```
+
+## 安全與隱私
+
+- 不要提交 `.venv`、`localdata`、`.agents`、cookies、Token、個人 ChatGPT URL 或 Workspace 絕對路徑。
+- Writable / Read-only 清單是實際的本機權限邊界；只加入必要路徑。
+- 不要同時讓多個自動控制器操作同一個 ChatGPT 對話。
+- ChatGPT UI 或 DOM 改版可能需要重新適配 selector。
+- 執行命令、寫檔與下載 artifact 都是真實的本機副作用。
+
+## 舊版
+
+原本的 GitHub 版本保留在 [`legacy/2026-09-02/`](legacy/2026-09-02/)，但不再作為安裝與使用入口。
+
+## 開發狀態
+
+SmartAgent 仍在開發中。建議先在測試 Workspace 驗證，再用於重要專案或長時間 unattended 任務。
+
+目前 repository 尚未附開源授權；除非另有書面授權，著作權依法保留給 repository 所有者。

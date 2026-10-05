@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""WebAgent-owned ChatGPT prompt sender with shared rate-limit safety."""
+from __future__ import annotations
+
+import time
+import threading
+from pathlib import Path
+
+from agent_core.webgpt_rate_governor import WebGPTRateGovernor, WebGPTRateLimited
+from agent_core.payload_budget import ensure_webgpt_prompt_budget
+
+
+class WebAgentBrowserClient:
+    """Send WebAgent prompts without routing through the Agent manager loop."""
+
+    def __init__(self, scraper, *, governor=None, sleep=time.sleep, clock=time.monotonic, event_sink=None, display_name="WebAgent"):
+        self.scraper = scraper
+        self.governor = governor or getattr(scraper, "_rate_governor", None)
+        if self.governor is None:
+            self.governor = WebGPTRateGovernor(Path(__file__).resolve().parents[1])
+            self.scraper._rate_governor = self.governor
+        self._sleep = sleep
+        self._clock = clock
+        self.event_sink = event_sink
+        self.display_name = str(display_name or "WebAgent")
+
+    def _emit(self, event: str, **fields) -> None:
+        if self.event_sink is not None:
+            self.event_sink(event, **fields)
+
+    def _assert_expected_page(self, stage: str) -> None:
+        """Fail closed if another controller changed the shared browser page."""
+        expected = str(getattr(self.scraper, "_expected_execution_url", "") or "")
+        page = getattr(self.scraper, "_page", None)
+        actual = str(getattr(page, "url", "") or "") if page is not None else ""
+        if not expected or not actual:
+            return
+        from agent_core.conversation_identity import conversation_id
+        if conversation_id(actual) != conversation_id(expected):
+            self._emit("browser_page_mismatch", stage=stage, expected_url=expected, actual_url=actual)
+            raise RuntimeError(
+                f"remote_execution_page_changed: expected={expected}; actual={actual}; stage={stage}"
+            )
+
+    def _acquire_submit_lease(self, stage: str):
+        self._emit("submit_lease_wait_started", stage=stage)
+        last_busy_notice = 0.0
+        last_delay_notice = 0.0
+        while True:
+            try:
+                page = getattr(self.scraper, "_page", None)
+                key = ""
+                if page is not None:
+                    from agent_core.conversation_identity import conversation_id
+                    key = conversation_id(str(getattr(page, "url", "") or ""))
+                lease = self.governor.acquire(wait=False, conversation_key=key)
+                self._emit("submit_lease_acquired", stage=stage)
+                return lease
+            except WebGPTRateLimited as exc:
+                now = self._clock()
+                if not last_delay_notice or now - last_delay_notice >= 10.0:
+                    print(
+                        f"[{self.display_name}] {stage}尚未送出：ChatGPT 安全間隔剩餘約 "
+                        f"{max(1, int(exc.remaining_sec))} 秒。",
+                        flush=True,
+                    )
+                    last_delay_notice = now
+                self._sleep(min(1.0, max(0.1, exc.remaining_sec)))
+            except TimeoutError:
+                now = self._clock()
+                if not last_busy_notice or now - last_busy_notice >= 15.0:
+                    print(
+                        f"[{self.display_name}] {stage}尚未送出：另一個 ChatGPT 自動化請求正在使用共用送出鎖；"
+                        "這不會啟動 LocalAgent/Agent1，WebAgent 會繼續等待。",
+                        flush=True,
+                    )
+                    last_busy_notice = now
+                self._sleep(0.5)
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        stage: str,
+        attachment_paths: list[str] | None = None,
+        protocol_expected: dict | None = None,
+    ) -> str:
+        ensure_webgpt_prompt_budget(prompt)
+        self._assert_expected_page("before_submit_lease")
+        print(f"[{self.display_name}] 準備發送{stage}。", flush=True)
+        self._emit("browser_send_started", stage=stage, attachment_paths=attachment_paths or [])
+        lease = self._acquire_submit_lease(stage)
+        self.scraper._rate_submit_lease = lease
+        print(f"[{self.display_name}] 正在把{stage}寫入 ChatGPT 並按下 Send...", flush=True)
+        heartbeat_stop = threading.Event()
+        started_at = self._clock()
+
+        def heartbeat() -> None:
+            while not heartbeat_stop.wait(15.0):
+                elapsed = self._clock() - started_at
+                web_stage = str(getattr(self.scraper, "_last_web_stage", "unknown") or "unknown")
+                request_state = str(getattr(self.scraper, "_request_state", "unknown") or "unknown")
+                print(
+                    f"[{self.display_name}] {stage}處理中，已等待 {elapsed:.0f} 秒... "
+                    f"(web_stage={web_stage}, request_state={request_state})",
+                    flush=True,
+                )
+                self._emit(
+                    "browser_wait_heartbeat", stage=stage, elapsed_sec=round(elapsed, 1),
+                    web_stage=web_stage, request_state=request_state,
+                )
+
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
+        try:
+            self._assert_expected_page("before_scraper_ask")
+            response = self.scraper.ask(
+                str(prompt),
+                new_conversation=False,
+                attachment_paths=attachment_paths or None,
+                protocol_expected=protocol_expected,
+            )
+            try:
+                self.governor.record_success()
+            except Exception as exc:
+                print(
+                    f"[{self.display_name}][WARN] 回應已完成，但限流狀態更新失敗："
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+            if hasattr(self.scraper, "_rate_limit_dialog_streak"):
+                self.scraper._rate_limit_dialog_streak = 0
+            if hasattr(self.scraper, "_rate_limited_until"):
+                self.scraper._rate_limited_until = 0.0
+            print(f"[{self.display_name}] 已收到{stage}回應。", flush=True)
+            self._emit("browser_response_completed", stage=stage, response=response)
+            return str(response)
+        except Exception as exc:
+            self._emit("browser_response_failed", stage=stage, error_type=type(exc).__name__, error=str(exc))
+            raise
+        finally:
+            heartbeat_stop.set()
+            if getattr(self.scraper, "_rate_submit_lease", None) is lease:
+                self.scraper._rate_submit_lease = None
+            lease.release()

@@ -1,0 +1,8 @@
+.venv/
+.agents/
+__pycache__/
+*.py[cod]
+WebAgent/state/
+install_smart_agent/environment_report.txt
+install_smart_agent/install_report.txt
+install_smart_agent/install-state.json
