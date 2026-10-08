@@ -21,6 +21,7 @@ from agent_core.task_progress import (
     read_progress,
     record_model_progress,
     set_runtime_state,
+    validate_model_progress,
 )
 
 
@@ -69,6 +70,60 @@ def run() -> dict:
             "in_progress": ["仍有修改或驗證步驟尚未完成"],
             "interrupted": ["Runtime 無法繼續執行或取得證據"],
         }
+        uniquely_bound = validate_model_progress({
+            "base_evaluation": "測試唯一條件綁定",
+            "current_step": 1,
+            "total_steps": 2,
+            "steps": [
+                {"step": 1, "desc": "分析", "status": "IN_PROGRESS"},
+                {"step": 2, "desc": "回報", "status": "PENDING"},
+            ],
+            "current_focus": "分析中",
+            "next_action": "完成分析",
+            "completion_contract": completion_contract,
+            "decision": "CONTINUE",
+            "outcome": "PENDING",
+            "matched_condition": "Required work remains.",
+            "evidence_refs": ["REQUEST_ACCEPTED"],
+            "decision_reason": "尚未完成",
+        })
+        assert uniquely_bound["matched_condition"] == "仍有修改或驗證步驟尚未完成"
+
+        ambiguous_contract = {
+            **completion_contract,
+            "in_progress": [
+                "仍有修改或驗證步驟尚未完成",
+                "等待外部工具結果",
+            ],
+        }
+        try:
+            validate_model_progress({
+                "base_evaluation": "測試多條件拒絕",
+                "current_step": 1,
+                "total_steps": 2,
+                "steps": [
+                    {"step": 1, "desc": "分析", "status": "IN_PROGRESS"},
+                    {"step": 2, "desc": "回報", "status": "PENDING"},
+                ],
+                "current_focus": "分析中",
+                "next_action": "完成分析",
+                "completion_contract": ambiguous_contract,
+                "decision": "CONTINUE",
+                "outcome": "PENDING",
+                "matched_condition": "Required work remains.",
+                "evidence_refs": ["REQUEST_ACCEPTED"],
+                "decision_reason": "尚未完成",
+            })
+        except TaskProgressError as exc:
+            assert exc.field == "matched_condition"
+            assert exc.repair_context == {
+                "condition_class": "in_progress",
+                "actual_condition": "Required work remains.",
+                "allowed_conditions": ambiguous_contract["in_progress"],
+            }
+        else:
+            raise AssertionError("ambiguous matched_condition must remain fail-closed")
+
         ledger = record_model_progress(
             task_id,
             {
@@ -220,6 +275,8 @@ def run() -> dict:
             "telegram_software_status": True,
             "interruption_preserved": True,
             "completion_cleanup_primitive": True,
+            "unique_condition_runtime_binding": True,
+            "ambiguous_condition_fail_closed": True,
         }
 
 

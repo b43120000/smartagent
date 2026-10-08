@@ -16,6 +16,7 @@ from agent_core.protocol_v9 import parse_v9_tool_transport
 from agent_core.task_progress import initialize_progress
 from agent_core.task_progress import record_model_progress
 from agent_core.task_state import RemoteTaskQueue, TaskStateStore, TASK_INTERRUPTED
+from agent_core.tools import _evaluate_verification_step
 
 
 def fence_text(text: str) -> str:
@@ -115,6 +116,131 @@ def validate_execution_and_verification_are_separate() -> None:
     )
     assert contradicted["execution_status"] == "SUCCEEDED"
     assert contradicted["verification_status"] == "FAIL"
+
+
+def validate_regex_verification_and_invalid_spec_are_distinct() -> None:
+    matched = _evaluate_verification_step({
+        "action": "run_command",
+        "command": "Write-Output 0123456789abcdef0123456789abcdef01234567",
+        "expect_exit_code": 0,
+        "expect_regex": r"^[0-9a-f]{40}\r?$",
+    })
+    assert matched["spec_valid"] is True
+    assert matched["passed"] is True
+    invalid = _evaluate_verification_step({
+        "action": "run_command",
+        "command": "Write-Output ok",
+        "expect_regex": "[",
+    })
+    assert invalid["spec_valid"] is False
+    assert invalid["passed"] is False
+    assert "invalid expect_regex" in invalid["error"]
+
+
+def validate_scoped_verification_supersedes_prior_failure() -> None:
+    with tempfile.TemporaryDirectory(prefix="verification-supersession-") as temp:
+        loop = configured_loop(Path(temp))
+        original = {
+            "tool": "run_command",
+            "action_id": "A-COMMIT",
+            "condition_id": "checkpoint exists",
+        }
+        loop._record_action_result_evidence(original, {
+            "tool": "run_command",
+            "execution_status": "SUCCEEDED",
+            "verification_status": "FAIL",
+        })
+        first_id = loop.action_result_ledger["A-COMMIT"]["effective_verification_id"]
+        assert loop._effective_verification_status(["A-COMMIT"], matched_condition="checkpoint exists") == "FAIL"
+
+        repair = {
+            "tool": "run_command",
+            "action_id": "A-VERIFY-HEAD",
+            "verifies_action_id": "A-COMMIT",
+            "condition_id": "checkpoint exists",
+        }
+        loop.turn_id = 2
+        loop._record_action_result_evidence(repair, {
+            "tool": "run_command",
+            "execution_status": "SUCCEEDED",
+            "verification_status": "PASS",
+        })
+        target = loop.action_result_ledger["A-COMMIT"]
+        assert target["effective_verification_status"] == "PASS"
+        assert target["effective_verification_id"] != first_id
+        assert target["verification_history"][-1]["supersedes_verification_id"] == first_id
+        assert loop._effective_verification_status(["A-COMMIT"], matched_condition="checkpoint exists") == "PASS"
+
+
+def validate_unrelated_pass_does_not_override_referenced_failure() -> None:
+    with tempfile.TemporaryDirectory(prefix="verification-isolation-") as temp:
+        loop = configured_loop(Path(temp))
+        loop._record_action_result_evidence({
+            "tool": "run_command", "action_id": "A-FAILED", "condition_id": "checkpoint exists",
+        }, {
+            "tool": "run_command", "execution_status": "SUCCEEDED", "verification_status": "FAIL",
+        })
+        loop._record_action_result_evidence({
+            "tool": "run_command", "action_id": "A-UNRELATED", "condition_id": "other condition",
+        }, {
+            "tool": "run_command", "execution_status": "SUCCEEDED", "verification_status": "PASS",
+        })
+        assert loop._effective_verification_status(
+            ["A-FAILED", "A-UNRELATED"], matched_condition="checkpoint exists",
+        ) == "FAIL"
+
+
+def validate_action_scoped_pass_overrides_legacy_global_failure() -> None:
+    with tempfile.TemporaryDirectory(prefix="verification-terminal-scope-") as temp:
+        loop = configured_loop(Path(temp))
+        loop.tools.last_verification_status = "FAIL"
+        loop._record_action_result_evidence({
+            "tool": "run_command",
+            "action_id": "A-COMMIT",
+            "condition_id": "requested checkpoint exists and verification passes",
+        }, {
+            "tool": "run_command",
+            "execution_status": "SUCCEEDED",
+            "verification_status": "PASS",
+        })
+        calls = [
+            progress("P-DONE", decision="COMPLETE", outcome="SUCCESS"),
+            {"tool": "final_response", "action_id": "A-FINAL", "content": "done"},
+            {"tool": "turn_commit", "action_count": 2},
+        ]
+        accepted, diagnostics = loop._accept_ack(calls, {"ack_web_ack_id": ""})
+        assert diagnostics == []
+        assert accepted[0]["decision"] == "COMPLETE"
+
+
+def validate_final_step_may_continue_only_with_action() -> None:
+    with tempfile.TemporaryDirectory(prefix="verification-final-step-") as temp:
+        loop = configured_loop(Path(temp))
+        payload = progress("P-VERIFY")
+        payload.update({
+            "current_step": 1,
+            "steps": [{"step": 1, "desc": "repair verification", "status": "IN_PROGRESS"}],
+            "next_action": "run corrective verification",
+        })
+        calls = [
+            payload,
+            {
+                "tool": "run_command",
+                "action_id": "A-VERIFY",
+                "command": "Write-Output ok",
+                "success_criteria": "command is observable",
+                "verify": [{"action": "run_command", "command": "Write-Output ok", "expect_regex": "^ok\\r?$"}],
+            },
+            {"tool": "turn_commit", "action_count": 2},
+        ]
+        accepted, diagnostics = loop._accept_ack(calls, {"ack_web_ack_id": ""})
+        assert diagnostics == []
+        assert accepted[1]["action_id"] == "A-VERIFY"
+
+        progress_only = [payload, {"tool": "turn_commit", "action_count": 1}]
+        accepted, diagnostics = loop._accept_ack(progress_only, {"ack_web_ack_id": ""})
+        assert accepted == []
+        assert diagnostics[0]["reason"] == "final_step_continue_requires_action"
 
 
 def validate_terminal_candidate_survives_verification_gap() -> None:
@@ -240,6 +366,11 @@ if __name__ == "__main__":
     validate_multiple_json_objects_in_one_fence()
     validate_run_command_contract_is_required_before_execution()
     validate_execution_and_verification_are_separate()
+    validate_regex_verification_and_invalid_spec_are_distinct()
+    validate_scoped_verification_supersedes_prior_failure()
+    validate_unrelated_pass_does_not_override_referenced_failure()
+    validate_action_scoped_pass_overrides_legacy_global_failure()
+    validate_final_step_may_continue_only_with_action()
     validate_terminal_candidate_survives_verification_gap()
     validate_protocol_only_interruption_preserves_evidence()
     validate_unambiguous_terminal_continue_is_normalized()

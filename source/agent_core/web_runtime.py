@@ -56,7 +56,11 @@ except ImportError:  # standalone execution compatibility
 
 try:
     from .smartagent_protocol import classify_protocol_recovery
-    from .protocol_v9 import parse_v9_tool_transport as parse_v8_tool_transport
+    from .protocol_v9 import (
+        SINGLE_FENCE_TRANSPORT_CONTRACT,
+        parse_v9_tool_transport as parse_v8_tool_transport,
+        parse_v9_tool_transport_detailed,
+    )
     from .narrative_bridge import NarrativeBridgeError, NarrativeDecisionBridge
     from .recovery_protocol import (
         build_action_replay_prompt,
@@ -65,7 +69,11 @@ try:
     )
 except ImportError:  # standalone execution compatibility
     from smartagent_protocol import classify_protocol_recovery
-    from protocol_v9 import parse_v9_tool_transport as parse_v8_tool_transport
+    from protocol_v9 import (
+        SINGLE_FENCE_TRANSPORT_CONTRACT,
+        parse_v9_tool_transport as parse_v8_tool_transport,
+        parse_v9_tool_transport_detailed,
+    )
     from narrative_bridge import NarrativeBridgeError, NarrativeDecisionBridge
     from recovery_protocol import (
         build_action_replay_prompt,
@@ -2545,11 +2553,19 @@ class WebLLMScraper:
             if isinstance(call, dict) and call.get("tool") == "turn_commit"
         ]
 
+    @staticmethod
+    def _protocol_action_id_seed(expected: dict | None) -> str:
+        value = dict(expected or {})
+        return f"{value.get('run_id', '')}:{value.get('turn_id', '')}"
+
     @classmethod
     def _matching_protocol_commit(cls, text: str, expected: dict | None):
         if not expected:
             return None
-        calls, diagnostics = parse_v8_tool_transport(str(text or ""))
+        calls, diagnostics = parse_v8_tool_transport(
+            str(text or ""),
+            action_id_seed=cls._protocol_action_id_seed(expected),
+        )
         if diagnostics or not calls:
             return None
         commit = calls[-1]
@@ -2558,7 +2574,12 @@ class WebLLMScraper:
     @classmethod
     def _protocol_commit_diagnostic(cls, text: str, expected: dict | None) -> dict:
         """Explain why the complete rendered response is not acceptable."""
-        calls, diagnostics = parse_v8_tool_transport(str(text or ""))
+        parse_result = parse_v9_tool_transport_detailed(
+            str(text or ""),
+            action_id_seed=cls._protocol_action_id_seed(expected),
+        )
+        calls = parse_result.calls
+        diagnostics = parse_result.diagnostics
         candidates = [
             call for call in calls
             if isinstance(call, dict) and call.get("tool") == "turn_commit"
@@ -2572,7 +2593,9 @@ class WebLLMScraper:
             "candidate_count": len(candidates),
             "ack_only": bool(commit and len(calls) == 1),
             "diagnostics": list(diagnostics),
-            "normalizations": [],
+            "normalizations": list(parse_result.normalizations),
+            "transport_kind": parse_result.transport_kind,
+            "block_map": list(parse_result.block_map),
             "response_sha256": hashlib.sha256(str(text or "").encode("utf-8")).hexdigest(),
             "observed": {
                 "tool": observed.get("tool"),
@@ -2580,6 +2603,82 @@ class WebLLMScraper:
                 "action_count": observed.get("action_count"),
             },
         }
+
+    def _protocol_response_source(self, snapshot: dict, assistant_turn, text: str) -> dict:
+        """Return redacted identity used to prove a recovery read is fresh.
+
+        Response text alone is not a sufficient recovery boundary: a provider
+        can remount the rejected assistant node after the repair prompt is sent.
+        Keep both the request-scope identity and the provider's durable turn
+        identity so the second validation cannot silently consume that old node.
+        """
+        scope = snapshot.get("_web_ui_scope") if isinstance(snapshot, dict) else None
+        durable_id = ""
+        if assistant_turn is not None:
+            try:
+                durable_id = str(
+                    self._web_ui_adapter().durable_turn_id(assistant_turn) or ""
+                )
+            except Exception:
+                durable_id = ""
+        assistant_fp = self._element_fingerprint(assistant_turn) if assistant_turn is not None else ""
+        return {
+            "scope_id": str(getattr(scope, "scope_id", "") or ""),
+            "assistant_id_sha256": (
+                hashlib.sha256(durable_id.encode("utf-8", errors="replace")).hexdigest()
+                if durable_id else ""
+            ),
+            "assistant_fingerprint": str(assistant_fp or ""),
+            "response_sha256": hashlib.sha256(
+                str(text or "").encode("utf-8", errors="replace")
+            ).hexdigest(),
+        }
+
+    @staticmethod
+    def _classify_protocol_recovery_readback(
+        rejected_source: dict | None,
+        current_source: dict | None,
+    ) -> dict:
+        """Classify whether a repair response is distinct from the rejection.
+
+        A byte-identical response is deliberately treated as stale readback.
+        This is conservative: the model may have repeated itself exactly, but
+        executing that response is no safer than rereading the old DOM turn.
+        """
+        rejected = dict(rejected_source or {})
+        current = dict(current_source or {})
+        if not rejected:
+            return {"fresh": True, "reason": "no_rejected_baseline"}
+
+        rejected_sha = str(rejected.get("response_sha256", "") or "")
+        current_sha = str(current.get("response_sha256", "") or "")
+        if rejected_sha and current_sha == rejected_sha:
+            return {"fresh": False, "reason": "response_sha_unchanged"}
+
+        rejected_scope = str(rejected.get("scope_id", "") or "")
+        current_scope = str(current.get("scope_id", "") or "")
+        if rejected_scope and current_scope == rejected_scope:
+            return {"fresh": False, "reason": "request_scope_unchanged"}
+
+        rejected_turn = str(rejected.get("assistant_id_sha256", "") or "")
+        current_turn = str(current.get("assistant_id_sha256", "") or "")
+        if rejected_turn and current_turn:
+            if current_turn == rejected_turn:
+                return {"fresh": False, "reason": "assistant_identity_unchanged"}
+            # A changed provider-owned durable turn identity, request scope,
+            # and response body is conclusive freshness evidence.  Do not let
+            # a weaker DOM fingerprint override those three independent facts.
+            return {"fresh": True, "reason": "fresh_recovery_response"}
+
+        rejected_fp = str(rejected.get("assistant_fingerprint", "") or "")
+        current_fp = str(current.get("assistant_fingerprint", "") or "")
+        empty_fingerprint = hashlib.sha256(b"").hexdigest()
+        rejected_fp_valid = rejected_fp not in {"", empty_fingerprint}
+        current_fp_valid = current_fp not in {"", empty_fingerprint}
+        if rejected_fp_valid and current_fp_valid and current_fp == rejected_fp:
+            return {"fresh": False, "reason": "assistant_fingerprint_unchanged"}
+
+        return {"fresh": True, "reason": "fresh_recovery_response"}
 
     @staticmethod
     def _select_protocol_recovery_mode(
@@ -2709,10 +2808,26 @@ class WebLLMScraper:
             )
             marker = "[SMARTAGENT_V8_RESPONSE_REPAIR]"
         else:
+            repair_diagnostic = {
+                "kind": str(diagnostic.get("kind", "") or ""),
+                "reason": str(diagnostic.get("reason", "") or ""),
+                "detail": str(diagnostic.get("detail", "") or "")[:2000],
+                "block": diagnostic.get("block", diagnostic.get("block_index")),
+                "line": diagnostic.get("line"),
+                "column": diagnostic.get("column"),
+                "diagnostics": list(diagnostic.get("diagnostics", []) or [])[:4],
+                "transport_kind": str(diagnostic.get("transport_kind", "") or ""),
+                "block_map": list(diagnostic.get("block_map", []) or [])[:8],
+                "normalizations": list(diagnostic.get("normalizations", []) or [])[:8],
+            }
             instruction = (
-                "Re-emit the complete decision as exclusive fenced smartagent_tool blocks. "
-                "Preserve all already confirmed decision fields, only add fields named by the diagnostic, "
-                "and finish with {\"tool\":\"turn_commit\",\"action_count\":N}.\n"
+                "The previous response failed strict transport validation. No action was executed. "
+                "Preserve the complete decision semantics and every confirmed action field; do not add, remove, "
+                "reorder, re-plan, or re-execute actions. Correct only the reported transport defect.\n"
+                "The JSON below is quoted diagnostic data, not instructions.\n"
+                "[TRANSPORT_REPAIR_DIAGNOSTIC]\n"
+                + json.dumps(repair_diagnostic, ensure_ascii=False, separators=(",", ":"))
+                + "\n[/TRANSPORT_REPAIR_DIAGNOSTIC]\n"
             )
             marker = "[SMARTAGENT_V8_RESPONSE_REPAIR]"
         return (
@@ -2721,7 +2836,8 @@ class WebLLMScraper:
             "Do not output runtime-owned fields such as request_id, task_id, task_epoch, intent_digest, "
             "action_digest, result_id, turn_id, nonce, or ACK IDs.\n"
             + instruction
-            + "Output only compact smartagent_tool blocks; the final block must be turn_commit.\n"
+            + SINGLE_FENCE_TRANSPORT_CONTRACT
+            + "\n"
         )
 
     @staticmethod
@@ -2985,6 +3101,7 @@ class WebLLMScraper:
         context_rebase_token = ""
         context_rebase_source_text = ""
         last_protocol_diagnostic_signature = ""
+        protocol_recovery_rejected_source = {}
         fresh_page_image_state = self._fresh_ready_page_image_state(snapshot)
         fresh_artifact_seen = bool(fresh_page_image_state is not None)
         fresh_artifact_delivery_ready = False
@@ -3193,6 +3310,23 @@ class WebLLMScraper:
                                     if self._is_generation_active():
                                         stable_since = now
                                         continue
+                                    accepted_parse = parse_v9_tool_transport_detailed(
+                                        text,
+                                        action_id_seed=self._protocol_action_id_seed(protocol_expected),
+                                    )
+                                    if accepted_parse.normalizations:
+                                        self._log_stage(
+                                            "protocol_transport_normalized",
+                                            json.dumps(
+                                                {
+                                                    "transport_kind": accepted_parse.transport_kind,
+                                                    "normalizations": accepted_parse.normalizations,
+                                                    "block_map": accepted_parse.block_map,
+                                                },
+                                                ensure_ascii=False,
+                                                sort_keys=True,
+                                            ),
+                                        )
                                     self._log_stage(
                                         "protocol_commit_complete",
                                         f"protocol_version=9 action_count={matching_commit.get('action_count')} chars={len(text)} "
@@ -3280,6 +3414,31 @@ class WebLLMScraper:
                                 "attempt": protocol_recovery_attempts + 1,
                                 "response_bytes": response_bytes,
                             }
+                            response_source = self._protocol_response_source(
+                                snapshot,
+                                assistant_turn,
+                                text,
+                            )
+                            diagnostic["response_source"] = response_source
+                            if protocol_recovery_attempts > 0:
+                                readback = self._classify_protocol_recovery_readback(
+                                    protocol_recovery_rejected_source,
+                                    response_source,
+                                )
+                                diagnostic["recovery_readback"] = readback
+                                if not bool(readback.get("fresh")):
+                                    diagnostic["original_kind"] = diagnostic.get("kind", "missing")
+                                    diagnostic["kind"] = "stale_recovery_readback"
+                                    self._log_stage(
+                                        "protocol_recovery_stale_readback",
+                                        "reason={} rejected_sha={} current_sha={} rejected_scope={} current_scope={}".format(
+                                            readback.get("reason", "unknown"),
+                                            str(protocol_recovery_rejected_source.get("response_sha256", ""))[:16],
+                                            str(response_source.get("response_sha256", ""))[:16],
+                                            str(protocol_recovery_rejected_source.get("scope_id", "")),
+                                            str(response_source.get("scope_id", "")),
+                                        ),
+                                    )
                             recovery_classification = classify_protocol_recovery(diagnostic)
                             classified_mode = self._select_protocol_recovery_mode(
                                 text,
@@ -3472,6 +3631,7 @@ class WebLLMScraper:
                                     protocol_recovery_mode_used = str(
                                         diagnostic.get("recovery_mode", "format_repair")
                                     )
+                                    protocol_recovery_rejected_source = dict(response_source)
                                     self._protocol_recovery_source_bytes = response_bytes
                                     self._log_stage(
                                         "protocol_recovery_armed",
@@ -3557,10 +3717,15 @@ class WebLLMScraper:
                                                 safe_to_retry=False,
                                             ) from exc
                                     else:
+                                        recovery_diagnostic = (
+                                            diagnostic
+                                            if protocol_recovery_mode_used == "format_repair"
+                                            else recovery_classification.get("diagnostic", {})
+                                        )
                                         recovery_snapshot = self._send_protocol_recovery_probe(
                                             recovery_expected,
                                             recovery_mode=protocol_recovery_mode_used,
-                                            diagnostic=recovery_classification.get("diagnostic", {}),
+                                            diagnostic=recovery_diagnostic,
                                             source_text=text,
                                         )
 
@@ -3614,6 +3779,18 @@ class WebLLMScraper:
                                 failure_diagnostic = dict(failure_classification.get("diagnostic", {}) or {})
                                 failure_reason = str(failure_diagnostic.get("reason", "") or "unknown")
                                 failure_tool = str(failure_diagnostic.get("tool", "") or "(unknown)")
+                                if diagnostic.get("kind") == "stale_recovery_readback":
+                                    readback = dict(diagnostic.get("recovery_readback", {}) or {})
+                                    raise WebScraperStageError(
+                                        "[WEB_PROTOCOL_RECOVERY_STALE_READBACK] ACK 修正已送出，但回讀內容"
+                                        "未能證明是新的 assistant 回覆；不執行任何 action，也不再自動送出。 "
+                                        f"request_id={protocol_expected.get('run_id', '')} "
+                                        f"round={protocol_expected.get('turn_id', '')} "
+                                        f"attempt=2 reason={readback.get('reason', 'unknown')} "
+                                        "action_executed=false",
+                                        stage="protocol_recovery_stale_readback",
+                                        safe_to_retry=False,
+                                    )
                                 if protocol_recovery_mode_used == "action_replan":
                                     raise WebScraperStageError(
                                         "[WEB_TOOL_ENVELOPE_REPLAN_FAILED] action policy/schema 重新規劃後仍未取得"
@@ -3863,6 +4040,34 @@ class WebLLMScraper:
         """Select one attachment exactly once; never auto-reselect it."""
         self._upload_one_attachment_once(path)
 
+    @staticmethod
+    def _attachment_descriptor_matches_name(name: str, descriptor: object) -> bool:
+        """Match the exact filename or browser duplicate form `stem(N).ext`."""
+        expected = str(name or "")
+        text = str(descriptor or "")
+        if not expected:
+            return False
+        if expected in text:
+            return True
+        path = Path(expected)
+        suffix = path.suffix
+        if not suffix:
+            return False
+        prefix = path.stem + "("
+        closing = ")" + suffix
+        cursor = 0
+        while True:
+            start = text.find(prefix, cursor)
+            if start < 0:
+                return False
+            digits_start = start + len(prefix)
+            end = text.find(closing, digits_start)
+            if end >= digits_start:
+                duplicate_index = text[digits_start:end]
+                if duplicate_index and duplicate_index.isdigit():
+                    return True
+            cursor = start + 1
+
     def _attachment_ui_snapshot(self, paths: list[str]) -> dict:
         """Read observable attachment state without deciding how long to wait."""
         btn = self._send_control()
@@ -3887,14 +4092,14 @@ class WebLLMScraper:
         attachment_text = "\n".join(str(value) for value in attachment_chips)
         visible_names = [
             name for name in expected_names
-            if name and (name in composer_text or name in attachment_text)
+            if name and (self._attachment_descriptor_matches_name(name, composer_text) or self._attachment_descriptor_matches_name(name, attachment_text))
         ]
         attachment_states = {}
         for name in expected_names:
             records = [
                 record for record in chip_records
-                if name and name in str((record or {}).get("descriptor", ""))
-                and sum(other in str((record or {}).get("descriptor", "")) for other in expected_names) == 1
+                if name and self._attachment_descriptor_matches_name(name, (record or {}).get("descriptor", ""))
+                and sum(self._attachment_descriptor_matches_name(other, (record or {}).get("descriptor", "")) for other in expected_names) == 1
             ]
             attachment_states[name] = {
                 "seen": bool(records),
@@ -3927,7 +4132,7 @@ class WebLLMScraper:
         if attachment_chips:
             expected_counts = {name: expected_names.count(name) for name in set(expected_names)}
             observed_counts = {
-                name: sum(1 for value in attachment_chips if name in str(value))
+                name: sum(1 for value in attachment_chips if self._attachment_descriptor_matches_name(name, value))
                 for name in expected_counts
             }
             if len(attachment_chips) != len(expected_names) or observed_counts != expected_counts:
@@ -3948,7 +4153,7 @@ class WebLLMScraper:
                 for record in chip_records
                 if bool((record or {}).get("removable"))
                 and not any(
-                    name and name in str((record or {}).get("descriptor", ""))
+                    name and self._attachment_descriptor_matches_name(name, (record or {}).get("descriptor", ""))
                     for name in expected_names
                 )
             ]

@@ -3,6 +3,7 @@
 """Shared deterministic tool execution and verification primitives."""
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -13,6 +14,7 @@ from .chunked_write import ChunkedWriteError, ChunkedWriteManager
 from .project_sync import inspect_project_scope, compare_project_snapshot, load_project_snapshot
 from .project_bundle import dependency_evidence, build_source_bundles, delta_records, build_project_delta
 from .project_sync_message import build_atomic_project_sync
+from .project_ledger import inspect_project_ledger, query_project_history
 from .project_access import (
     ProjectAccessError,
     build_project_capsule,
@@ -25,6 +27,7 @@ from .semantic_map import inspect_semantic_map, update_semantic_map, update_sema
 from .task_plan import freeze_task_plan, freeze_task_plan_file, execute_frozen_task_plan
 from .bounded_process import run_bounded_process
 from .command_security import (CommandSecurityError, build_command_approval_manifest, inspect_command, require_command_allowed)
+from .capability_recovery import build_evidence_to_action_route, render_evidence_to_action_guidance
 from .path_security import PathSecurityError, is_within
 from .safe_file_operations import SafeFileOperationError, build_delete_manifest, execute_delete_manifest
 from .security_approval import SecurityApprovalError, SecurityApprovalLedger
@@ -178,6 +181,7 @@ def _evaluate_verification_step(
             "label": "invalid_verification_step",
             "action": "invalid",
             "passed": False,
+            "spec_valid": False,
             "error": f"verification step must be dict/object; got {type(step).__name__}: {step!r}",
         }
     action = step.get("action", "run_command")
@@ -185,11 +189,15 @@ def _evaluate_verification_step(
     delay_sec = float(step.get("delay_sec", 0) or 0)
     if delay_sec > 0:
         time.sleep(delay_sec)
-    evidence = {"label": label, "action": action, "passed": False}
+    evidence = {"label": label, "action": action, "passed": False, "spec_valid": True}
 
     if action == "run_command":
+        command = step.get("command", "")
+        if not isinstance(command, str) or not command.strip():
+            evidence.update({"spec_valid": False, "error": "run_command verification requires a non-empty command"})
+            return evidence
         result = _run_powershell_capture(
-            step.get("command", ""), int(step.get("timeout", default_timeout)), capture_root,
+            command, int(step.get("timeout", default_timeout)), capture_root,
             cwd=security_context.workspace_root if security_context else None,
         )
         evidence["result"] = result
@@ -203,6 +211,17 @@ def _evaluate_verification_step(
             forbidden = step.get("expect_not_contains")
             forbidden = forbidden if isinstance(forbidden, list) else [forbidden]
             passed = passed and all(str(x) not in combined for x in forbidden)
+        if step.get("expect_regex") is not None:
+            patterns = step.get("expect_regex")
+            patterns = patterns if isinstance(patterns, list) else [patterns]
+            try:
+                passed = passed and all(
+                    re.search(str(pattern), combined, flags=re.MULTILINE) is not None
+                    for pattern in patterns
+                )
+            except re.error as exc:
+                evidence.update({"spec_valid": False, "error": f"invalid expect_regex: {exc}"})
+                return evidence
         evidence["passed"] = bool(passed)
         return evidence
 
@@ -233,6 +252,7 @@ def _evaluate_verification_step(
             evidence["error"] = str(e)
         return evidence
 
+    evidence["spec_valid"] = False
     evidence["error"] = f"未知 verification action: {action}"
     return evidence
 
@@ -301,15 +321,20 @@ def tool_run_command(
     if success_criteria:
         lines.append("success_criteria: " + success_criteria)
     all_passed = True
+    all_specs_valid = True
     for idx, step in enumerate(checks, 1):
         ev = _evaluate_verification_step(
             step, default_timeout=timeout, capture_root=capture_root,
             security_context=security_context,
         )
+        all_specs_valid = all_specs_valid and bool(ev.get("spec_valid", True))
         all_passed = all_passed and bool(ev.get("passed"))
         lines.append(f"verify[{idx}]: " + json.dumps(ev, ensure_ascii=False, default=str))
-    lines.append("VERIFICATION_STATUS: " + ("PASS" if all_passed else "FAIL"))
-    if not all_passed:
+    verification_status = "SPEC_INVALID" if not all_specs_valid else ("PASS" if all_passed else "FAIL")
+    lines.append("VERIFICATION_STATUS: " + verification_status)
+    if verification_status == "SPEC_INVALID":
+        lines.append("驗證規格無效：請 Planner 修正 verify schema/matcher 後，以 verifies_action_id 綁定原 action 重新驗證。")
+    elif not all_passed:
         lines.append("驗證失敗：請 Planner 讀取上述 evidence，定位問題、修正，再重新執行與驗證。")
     return "\n".join(lines)
 
@@ -575,6 +600,41 @@ def _project_sync_workspace(tool_call: dict, agent) -> str:
 
     return str(target)
 
+
+def _project_query_workspace(tool_call: dict, agent) -> str:
+    """Resolve the exact read-only root for ``query_project``.
+
+    Unlike ``project_sync``, query operations use ``path`` only inside each
+    ``queries[]`` item.  Treating a top-level path as a legacy root alias makes
+    a file selector ambiguous with the project root, so fail closed here even
+    when an internal caller bypasses the protocol envelope validator.
+    """
+    misplaced = sorted(
+        field for field in ("operation", "path", "symbol")
+        if field in tool_call
+    )
+    if misplaced:
+        raise ValueError(
+            "query_project_top_level_query_fields_forbidden:"
+            + ",".join(misplaced)
+        )
+
+    project_value = str(tool_call.get("project_root", "") or "").strip()
+    if not project_value:
+        raise ValueError("query_project_project_root_required")
+    target = Path(
+        _project_workspace({"workspace": project_value}, agent, write=False)
+    ).resolve()
+
+    workspace_value = str(tool_call.get("workspace", "") or "").strip()
+    if workspace_value:
+        boundary = Path(
+            _project_workspace({"workspace": workspace_value}, agent, write=False)
+        ).resolve()
+        if not is_within(target, boundary):
+            raise ValueError("query_project_root_conflict:target_outside_workspace")
+    return str(target)
+
 def _execution_approval_manifest(tool_call: dict, agent, security_context: SecurityContext) -> dict | None:
     command = str(tool_call.get("command", "") or "")
     admission = inspect_command(command, workspace=security_context.workspace_root)
@@ -653,6 +713,8 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         if agent:
             if "VERIFICATION_STATUS: PASS" in result:
                 agent.last_verification_status = "PASS"
+            elif "VERIFICATION_STATUS: SPEC_INVALID" in result:
+                agent.last_verification_status = "SPEC_INVALID"
             elif "VERIFICATION_STATUS: FAIL" in result:
                 agent.last_verification_status = "FAIL"
             else:
@@ -668,6 +730,14 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         # inspect a file, never paste the file contents back as text. Queue
         # the real file for upload to the SAME web conversation instead.
         if agent and models.get(agent.planner_key, {}).get("provider") == "web_scraper":
+            evidence_route = build_evidence_to_action_route(
+                [tool_call], getattr(agent, "_authorized_local_paths", ()) or (),
+            )
+            if evidence_route.get("active"):
+                return (
+                    "[WEBAGENT_EVIDENCE_ROUTE_REQUIRED]\n"
+                    + render_evidence_to_action_guidance(evidence_route)
+                )
             queued = agent.queue_attachments([str(authorized_path)])
             return "[Web Planner 模式：read_file 已自動改道為 upload_file，不展開檔案文字]\n" + queued
         return tool_read_file(str(authorized_path), security_context=security_context)
@@ -726,7 +796,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         return json.dumps(inspect_project_scope(workspace),ensure_ascii=False,separators=(",",":"))
     elif tool == "inspect_semantic_map":
         workspace=_project_workspace(tool_call,agent)
-        return json.dumps(inspect_semantic_map(workspace),ensure_ascii=False,separators=(",",":"))
+        return json.dumps(inspect_semantic_map(workspace,tool_call.get("paths")),ensure_ascii=False,separators=(",",":"))
     elif tool == "update_semantic_map":
         workspace=_project_workspace(tool_call,agent,write=True)
         return json.dumps(update_semantic_map(workspace,tool_call.get("patch",{})),ensure_ascii=False,separators=(",",":"))
@@ -779,7 +849,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 result["status"]="READY" if result["sync_status"]=="PROJECT_SYNC_READY" else "INCOMPLETE"
         return json.dumps(result,ensure_ascii=False,separators=(",",":"))
     elif tool == "query_project":
-        workspace=_project_sync_workspace(tool_call,agent)
+        workspace=_project_query_workspace(tool_call,agent)
         try:
             result=query_project_with_runtime_index(
                 workspace,
@@ -800,6 +870,25 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 "recovery_action":"NONE",
             }
         return json.dumps(result,ensure_ascii=False,separators=(",",":"))
+    elif tool == "inspect_project_ledger":
+        workspace=_project_workspace(tool_call,agent)
+        return json.dumps(
+            inspect_project_ledger(workspace,limit=int(tool_call.get("limit",20))),
+            ensure_ascii=False,separators=(",",":"),
+        )
+    elif tool == "query_project_history":
+        workspace=_project_workspace(tool_call,agent)
+        return json.dumps(
+            query_project_history(
+                workspace,
+                event_types=tool_call.get("event_types",[]),
+                snapshot_id=str(tool_call.get("snapshot_id","") or ""),
+                path_contains=str(tool_call.get("path_contains","") or ""),
+                since=tool_call.get("since"),
+                limit=int(tool_call.get("limit",50)),
+            ),
+            ensure_ascii=False,separators=(",",":"),
+        )
     elif tool == "validate_edit_plan":
         workspace=_project_workspace(tool_call,agent)
         return json.dumps(validate_edit_plan(workspace,tool_call.get("plan",{})),ensure_ascii=False,separators=(",",":"))

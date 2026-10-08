@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-from .smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
+from .smartagent_protocol import (
+    PROJECT_EVIDENCE_ACTION_CONTRACT,
+    TOOL_ENVELOPE_SCHEMAS,
+)
 
 
 DETERMINISTIC_LOCAL = "DETERMINISTIC_LOCAL"
@@ -30,7 +33,8 @@ _CATEGORY_MEMBERS = {
         "inspect_project_scope", "compare_project_snapshot",
         "inspect_semantic_map", "update_semantic_map", "update_semantic_map_file",
         "extract_project_dependencies", "build_project_bundle",
-        "build_project_delta", "query_project", "validate_edit_plan", "apply_edit_plan",
+        "build_project_delta", "query_project", "inspect_project_ledger",
+        "query_project_history", "validate_edit_plan", "apply_edit_plan",
         "propose_task_plan", "propose_task_plan_file", "execute_frozen_plan",
         "save_session_summary",
     },
@@ -66,6 +70,8 @@ _TOOL_PURPOSES = MappingProxyType({
     "inspect_directory": "Inspect bounded directory metadata when a plain listing is insufficient.",
     "inspect_project_scope": "Inspect a declared project scope; not a substitute for list_directory.",
     "query_project": "Query a Runtime-held project index or snapshot without uploading the project.",
+    "inspect_project_ledger": "Inspect compact project sync and semantic-history provenance without uploading files.",
+    "query_project_history": "Query bounded Project Ledger events by type, snapshot, path, or time.",
     "project_sync": "Create or refresh Runtime project context using the smallest selected strategy.",
     "run_command": "Run an explicitly selected command inside the authorized workspace.",
 })
@@ -134,6 +140,10 @@ def render_protocol_tool_section(interface: str) -> str:
         lines.append(
             f"- {tool} [{tool_category(tool)}] required={required}; optional={optional}"
         )
+    if str(interface or "").strip().lower().replace("-", "_") in {
+        "web_direct", "webdirect", "remote",
+    }:
+        lines.extend(["", PROJECT_EVIDENCE_ACTION_CONTRACT])
     return "\n".join(lines)
 
 

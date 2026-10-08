@@ -64,5 +64,5 @@ if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] Force stop completed with errors. exit_code=%STOP_EXIT%
 )
 
-if not defined NO_PAUSE pause
-endlocal & exit /b %STOP_EXIT%
+rem if not defined NO_PAUSE pause
+rem endlocal & exit /b %STOP_EXIT%

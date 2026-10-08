@@ -8,6 +8,7 @@ It turns Telegram updates into durable remote tasks; the supervisor starts the
 full Agent0 runtime only after a queued task exists.
 """
 
+import hashlib
 import json
 import os
 import threading
@@ -55,6 +56,16 @@ class TelegramIngressListener:
         self.queue: RemoteTaskQueue | None = None
         self.delivery: DeliveryManager | None = None
         self.state_path = telegram_listener_state_path(self.root)
+        self.offset_path = telegram_offset_path(self.root)
+        resolved_root = str(self.root.resolve())
+        configured_instance = os.environ.get("SMARTAGENT_INSTANCE_ID", "").strip()
+        root_fingerprint = hashlib.sha256(resolved_root.lower().encode("utf-8")).hexdigest()[:8]
+        self.instance_id = configured_instance or f"{self.root.resolve().name}-{root_fingerprint}"
+        token = str(self.config.bot_token or "")
+        self.token_fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12] if token else ""
+        self.bot_id = ""
+        self.bot_username = ""
+        self._resolved_client: TelegramBotClient | None = None
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
 
@@ -80,6 +91,7 @@ class TelegramIngressListener:
             else None
         )
         resolved_client = client or TelegramBotClient(self.config)
+        self._resolved_client = resolved_client
         accepted_delivery = DeliveryManager(
             event_store,
             {"TELEGRAM": TelegramDeliveryAdapter(resolved_client)},
@@ -102,9 +114,7 @@ class TelegramIngressListener:
         self.receiver = TelegramReceiver(
             config=self.config,
             client=resolved_client,
-            offset_store=TelegramOffsetStore(
-                telegram_offset_path(self.root)
-            ),
+            offset_store=TelegramOffsetStore(self.offset_path),
             ingress=ingress,
             runtime_log=self.runtime_log,
             pairing_store=pairing_store,
@@ -116,6 +126,36 @@ class TelegramIngressListener:
     @property
     def enabled(self) -> bool:
         return self.receiver is not None
+
+    def _refresh_bot_identity(self) -> None:
+        client = self._resolved_client
+        if client is None:
+            return
+        try:
+            info = client.get_me()
+            self.bot_id = str(info.get("id", "") or "")
+            self.bot_username = str(info.get("username", "") or "")
+        except Exception as exc:
+            self.runtime_log.write(
+                "ERROR",
+                component="telegram_listener",
+                stage="BOT_IDENTITY_PROBE",
+                instance_id=self.instance_id,
+                install_root=str(self.root.resolve()),
+                token_fingerprint=self.token_fingerprint,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    def _diagnostic_fields(self) -> dict:
+        return {
+            "instance_id": self.instance_id,
+            "install_root": str(self.root.resolve()),
+            "bot_id": self.bot_id,
+            "bot_username": self.bot_username,
+            "token_fingerprint": self.token_fingerprint,
+            "offset_path": str(self.offset_path.resolve()),
+            "listener_state_path": str(self.state_path.resolve()),
+        }
 
     def _write_state(self, status: str) -> None:
         receiver = self.receiver
@@ -140,6 +180,7 @@ class TelegramIngressListener:
             "version": 1,
             "status": effective_status,
             "pid": os.getpid(),
+            **self._diagnostic_fields(),
             "heartbeat_at": now,
             "receiver_thread_alive": receiver_alive,
             "poll_started_at": poll_started,
@@ -196,6 +237,13 @@ class TelegramIngressListener:
         # The runtime prepare step already discarded durable local work. Do
         # the transport-side equivalent before polling so Telegram backlog
         # cannot recreate those old requests after startup.
+        self._refresh_bot_identity()
+        self.runtime_log.write(
+            "CONNECT",
+            component="telegram_listener",
+            stage="PHASE1_RECEIVER_IDENTITY",
+            **self._diagnostic_fields(),
+        )
         self.receiver.discard_pending_updates_for_clean_start()
         self.receiver.start()
         self.receiver.announce_remote_feature_keyboard()

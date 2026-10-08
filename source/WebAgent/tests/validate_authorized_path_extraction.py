@@ -42,11 +42,11 @@ def run() -> dict:
         r"讀取 C:\workspace with spaces\plan.md 接著檢查結果"
     ) == [r"C:\workspace with spaces\plan.md"]
     assert extract_authorized_paths(
-        r"列出E:\workspace\SmartAgent下的檔案有多少"
-    ) == [r"E:\workspace\SmartAgent"]
+        r"列出D:\workspace\SmartAgentv2下的檔案有多少"
+    ) == [r"D:\workspace\SmartAgentv2"]
     assert extract_authorized_paths(
-        r"你先看C:\Users\Example\Desktop\picture裡面有多少檔案"
-    ) == [r"C:\Users\Example\Desktop\picture"]
+        r"你先看C:\Users\ExampleUser\Desktop\picture裡面有多少檔案"
+    ) == [r"C:\Users\ExampleUser\Desktop\picture"]
 
     # The parser must not hide a real ADS suffix from the security layer.
     ads_path = r"C:\workspace\file.txt:secret"

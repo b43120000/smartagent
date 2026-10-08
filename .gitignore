@@ -6,6 +6,12 @@ source/localdata/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.bak
+*.log
+*.tmp
+.update_*/
+.webagent_patch_progress.py
+.webagent_verify_progress.py
 WebAgent/state/
 config/debug_config.json
 install_smart_agent/environment_report.txt

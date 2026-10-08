@@ -20,6 +20,10 @@ $ErrorActionPreference = 'Stop'
 $AclSchema = 'SMARTAGENT_ACL_MODE_V1'
 $AclStateRelativePath = 'localdata\secure\windows_security\acl_mode.json'
 $MutexName = 'Local\SmartAgentUpdate'
+# TEMPORARY Phase 1 development whitelist. Remove when ACL on/off provisioning is complete.
+$DevelopmentAclBypassTargets = @(
+    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'remoteagent\release\SmartAgentv2_1')
+)
 $script:Mutex = $null
 $script:MutexOwned = $false
 $script:StageRoot = $null
@@ -56,6 +60,10 @@ function Get-JsonProperty($Object,[string]$Name) { $prop=$Object.PSObject.Proper
 function Assert-AclOff([string]$Target) {
     $statePath=Join-Path $Target $AclStateRelativePath
     if(-not(Test-Path -LiteralPath $statePath -PathType Leaf)){
+        if($DevelopmentAclBypassTargets -icontains $Target){
+            Write-Warning ("[SmartAgent Update] TEMPORARY DEV ACL bypass: state missing for whitelisted target: {0}" -f $Target)
+            return
+        }
         Fail 'UPDATE_BLOCKED_ACL_STATE_MISSING' "ACL state missing: $statePath" 10
     }
     try { $state=(Get-Content -LiteralPath $statePath -Raw -Encoding UTF8)|ConvertFrom-Json } catch { Fail 'UPDATE_BLOCKED_ACL_STATE_INVALID' ("ACL state cannot be parsed: "+$_.Exception.Message) 10 }

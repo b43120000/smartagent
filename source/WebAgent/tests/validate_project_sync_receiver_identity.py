@@ -38,11 +38,11 @@ def expect_error(actual: str, expected: str, marker: str) -> None:
 
 def run() -> dict:
     project_url = (
-        "https://chatgpt.com/g/g-p-6a818bab5be0819188aa5bfab333f9aa-"
-        "localagentspace/c/6ab7ed8b-eb34-83ee-bb95-11a4fe966f1b"
+        "https://chatgpt.com/g/g-p-11111111111111111111111111111111-"
+        "example/c/11111111-2222-3333-4444-555555555555"
     )
     canonical = browser_receiver_identity(FakeScraper(project_url, project_url))
-    assert canonical == "https://chatgpt.com/c/6ab7ed8b-eb34-83ee-bb95-11a4fe966f1b"
+    assert canonical == "https://chatgpt.com/c/11111111-2222-3333-4444-555555555555"
 
     expect_error(
         project_url,

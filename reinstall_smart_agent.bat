@@ -22,7 +22,7 @@ echo.
 
 set "SMARTAGENT_REINSTALL_SCRIPT=%~dp0install_smart_agent\reinstall.ps1"
 set "SMARTAGENT_REINSTALL_ROOT=%~dp0."
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$quote=[char]34; $scriptPath=$quote+$env:SMARTAGENT_REINSTALL_SCRIPT+$quote; $rootPath=$quote+$env:SMARTAGENT_REINSTALL_ROOT+$quote; $p=Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,'-SourceRoot',$rootPath) -WorkingDirectory $env:SMARTAGENT_REINSTALL_ROOT -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$env:SMARTAGENT_REINSTALL_SCRIPT,'-SourceRoot',$env:SMARTAGENT_REINSTALL_ROOT) -WorkingDirectory $env:SMARTAGENT_REINSTALL_ROOT -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
 set "RESET_EXIT=%ERRORLEVEL%"
 if not "%RESET_EXIT%"=="0" (
     echo.

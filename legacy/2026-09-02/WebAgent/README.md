@@ -31,7 +31,7 @@ only root-level file is `launch_webcopilot_chatgpt.bat`.
 
 Example:
 
-`webcopilot list 出這裡有哪些檔案 C:\Users\user\Desktop\picture`
+`webcopilot list 出這裡有哪些檔案 C:\Users\ExampleUser\Desktop\picture`
 
 Every request displays its request ID and round/ACK chain. ACK repair is limited
 to one retransmission of the same logical round. Attachment upload waits are

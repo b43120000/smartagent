@@ -8,7 +8,7 @@ from typing import Any
 PROTOCOL="self_repair"; VERSION=1; FENCE="self_repair_control"
 REQUEST="SELF_REPAIR_REQUEST"; PLAN="SELF_REPAIR_PLAN"; FINAL="SELF_REPAIR_FINAL"
 TYPES={REQUEST,PLAN,FINAL}; MAX_BYTES=64*1024
-DEFAULT_REPAIR_URL="https://chatgpt.com/g/g-p-6a818bab5be0819188aa5bfab333f9aa-localagentspace/c/6a88b348-0a74-83e8-8b33-c55fb67df906"
+DEFAULT_REPAIR_URL="https://chatgpt.com/c/configure-your-repair-conversation"
 ALLOWED_PREFIXES=("agent_core/","tests/")
 FORBIDDEN=("launch_smart_agent.bat","install_smart_agent",".agents/",".git/","remoteagent/")
 

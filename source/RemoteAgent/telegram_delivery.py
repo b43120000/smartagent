@@ -103,7 +103,14 @@ class TelegramDeliveryAdapter:
                 f"event_id: {event_id}\nrequest_id: {request_id}\ntask_id: {task_id}"
             )
         if event_type == "TASK_COMPLETED":
-            return f"🟢 已完成\n{str(payload.get('summary', ''))}\nevent_id: {event_id}\nrequest_id: {request_id}"
+            summary = str(payload.get("summary", "") or "")
+            plan_id = str(payload.get("plan_id", "") or "").strip().upper()
+            if plan_id and plan_id not in summary.upper():
+                summary = (
+                    summary.rstrip()
+                    + f"\n\nplan_id: {plan_id}\n後續可直接回覆：執行 {plan_id}"
+                ).lstrip()
+            return f"🟢 已完成\n{summary}\nevent_id: {event_id}\nrequest_id: {request_id}"
         if event_type == "TASK_FAILED":
             return f"🔴 執行失敗\n{str(payload.get('error', ''))}\nevent_id: {event_id}\nrequest_id: {request_id}"
         if event_type == "TASK_INTERRUPTED":

@@ -19,6 +19,19 @@ from .protocol_v8 import parse_v8_tool_transport
 PROTOCOL_FAMILY = "SMARTAGENT_V9"
 PROTOCOL_VERSION = 9
 
+SINGLE_FENCE_TRANSPORT_MARKER = "SMARTAGENT_SINGLE_FENCE_TRANSPORT_V1"
+SINGLE_FENCE_TRANSPORT_CONTRACT = (
+    f"[{SINGLE_FENCE_TRANSPORT_MARKER}]\n"
+    "Use exactly one opening ```smartagent_tool fence and exactly one closing ``` fence "
+    "for the entire reply. Put every complete JSON object on its own line inside that one fence. "
+    "Do not open a separate fence for each object. Do not place any JSON or natural language "
+    "outside the fence. The object order is: exactly one report_progress, then the currently "
+    "decidable action object(s) or one final_response, then exactly one final "
+    "{\"tool\":\"turn_commit\",\"action_count\":N} object inside the same fence. "
+    "N counts every preceding JSON object and never counts turn_commit itself.\n"
+    f"[/{SINGLE_FENCE_TRANSPORT_MARKER}]"
+)
+
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     value: dict[str, Any] = {}
@@ -65,7 +78,7 @@ def _decision_blocks(value: Any) -> list[dict[str, Any]] | None:
     return [dict(item) for item in value]
 
 
-def _canonicalize_json_transport(source: str) -> str | None:
+def _canonicalize_json_transport(source: str, *, action_id_seed: str = "") -> str | None:
     candidates = _json_candidates(source)
     if len(candidates) != 1:
         return None
@@ -81,8 +94,14 @@ def _canonicalize_json_transport(source: str) -> str | None:
     blocks = [block for block in blocks if block.get("tool") != "turn_commit"]
     if not blocks:
         return None
-    digest = hashlib.sha256(source.encode("utf-8", errors="replace")).hexdigest()[:12]
+    digest = hashlib.sha256(
+        (str(action_id_seed or "") + "\0" + source).encode("utf-8", errors="replace")
+    ).hexdigest()[:12]
     for index, block in enumerate(blocks, 1):
+        # Raw/generic JSON is a compatibility fallback, not canonical model
+        # authority. Preserve the existing contract: Runtime owns every
+        # correlation ID on this path. Canonical fenced/DOM v9 transport only
+        # fills an actually missing action_id in the primary parser above.
         block["action_id"] = f"V9-RUNTIME-{digest}-{index}"
     blocks.append({"tool": "turn_commit", "action_count": len(blocks)})
     return "\n".join(
@@ -93,24 +112,58 @@ def _canonicalize_json_transport(source: str) -> str | None:
     )
 
 
-def parse_v9_tool_transport(text: str):
-    """Parse strict v8-compatible blocks, then one unambiguous JSON fallback."""
-    calls, diagnostics = parse_v8_tool_transport(text)
-    if not diagnostics:
-        return calls, diagnostics
-    source = str(text or "").strip()
-    canonical = _canonicalize_json_transport(source) if source else None
+def parse_v9_tool_transport_detailed(
+    text: str,
+    *,
+    action_id_seed: str = "",
+) -> _v8.TransportParseResult:
+    """Parse v9 transport while preserving v8 normalization diagnostics."""
+    source_text = str(text or "")
+    digest = hashlib.sha256(
+        (str(action_id_seed or "") + "\0" + source_text).encode("utf-8", errors="replace")
+    ).hexdigest()[:12]
+
+    def runtime_action_id(action: dict[str, Any], index: int) -> str:
+        tool = re.sub(r"[^A-Za-z0-9]+", "-", str(action.get("tool", "ACTION"))).strip("-")
+        return f"V9-RUNTIME-{digest}-{index}-{tool or 'ACTION'}"
+
+    result = _v8.parse_v8_tool_transport_detailed(
+        text,
+        missing_action_id_factory=runtime_action_id,
+    )
+    if not result.diagnostics:
+        return result
+    source = source_text.strip()
+    canonical = _canonicalize_json_transport(
+        source,
+        action_id_seed=action_id_seed,
+    ) if source else None
     if canonical is None:
-        return calls, diagnostics
-    recovered, recovered_diagnostics = parse_v8_tool_transport(canonical)
-    if recovered_diagnostics:
-        return [], recovered_diagnostics
-    return recovered, []
+        return result
+    recovered = _v8.parse_v8_tool_transport_detailed(canonical)
+    if recovered.diagnostics:
+        return recovered
+    return _v8.TransportParseResult(
+        calls=recovered.calls,
+        diagnostics=[],
+        normalizations=["V9_EXCLUSIVE_JSON_CANONICALIZED", *recovered.normalizations],
+        transport_kind="v9_json_fallback",
+        block_map=recovered.block_map,
+    )
+
+
+def parse_v9_tool_transport(text: str, *, action_id_seed: str = ""):
+    """Compatibility wrapper for v9 transport parsing."""
+    result = parse_v9_tool_transport_detailed(text, action_id_seed=action_id_seed)
+    return result.calls, result.diagnostics
 
 
 __all__ = [
     *[name for name in _v8.__all__ if name not in {"PROTOCOL_FAMILY", "PROTOCOL_VERSION"}],
     "PROTOCOL_FAMILY",
     "PROTOCOL_VERSION",
+    "SINGLE_FENCE_TRANSPORT_CONTRACT",
+    "SINGLE_FENCE_TRANSPORT_MARKER",
     "parse_v9_tool_transport",
+    "parse_v9_tool_transport_detailed",
 ]

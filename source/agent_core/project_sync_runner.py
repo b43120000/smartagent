@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from .attachment_staging import stage_attachments
+from .project_ledger import append_project_event
 from .project_sync_protocol import (
     ProjectSyncAckIncompleteError, ProjectSyncProtocol, ProjectSyncProtocolError,
     build_ack_repair_prompt,
@@ -146,14 +147,53 @@ def run_project_sync_transaction(
     when its diagnosis is unusable), with an independent bounded retry budget.
     """
     binding = {"interface_name": interface_name, "conversation_id": conversation_id, "session_id": session_id}
+    sync_id = str(plan["sync_id"])
+    snapshot_id = str(plan["snapshot_id"])
+
+    def record_ledger(event_type: str, result: str, *, event_key: str, **details: object) -> None:
+        append_project_event(
+            workspace,
+            event_type,
+            snapshot_id=snapshot_id,
+            operation_result=result,
+            actor="runtime",
+            source="project_sync_runner.run_project_sync_transaction",
+            request_id=request_id,
+            sync_id=sync_id,
+            details={
+                "interface_name": interface_name,
+                "conversation_id": conversation_id,
+                **details,
+            },
+            event_key=event_key,
+        )
+
+    record_ledger(
+        "sync_transport_started",
+        "STARTED",
+        event_key=f"sync_transport_started:{sync_id}",
+        batch_count=int(plan.get("batch_count", 0) or 0),
+    )
     protocol = ProjectSyncProtocol(workspace, plan, receiver_binding=binding, request_id=request_id)
     if protocol.state.get("status") == "PROJECT_SYNC_READY" and int(plan.get("batch_count", 0)) == 0:
+        record_ledger(
+            "sync_no_changes",
+            "PROJECT_SYNC_READY",
+            event_key=f"sync_no_changes:{sync_id}",
+        )
         if event_sink is not None:
             event_sink("project_sync_no_changes", sync_id=plan["sync_id"], snapshot_id=plan["snapshot_id"], request_id=request_id)
     while protocol.state.get("status") != "PROJECT_SYNC_READY":
         notification = protocol.next_notification(); payload = notification["payload"]
         batch_index, batch_count = int(payload["batch_index"]), int(payload["batch_count"])
         print(f"[Project Sync/{interface_name}] batch {batch_index}/{batch_count}", flush=True)
+        record_ledger(
+            "sync_batch_started",
+            "STARTED",
+            event_key=f"sync_batch_started:{sync_id}:{batch_index}",
+            batch_index=batch_index,
+            batch_count=batch_count,
+        )
         if event_sink is not None: event_sink("project_sync_batch_started", sync_id=plan["sync_id"], batch_index=batch_index, batch_count=batch_count, request_id=request_id)
         all_indexes = list(payload["bundle_indexes"])
         all_paths = list(notification["attachments"])
@@ -206,21 +246,55 @@ def run_project_sync_transaction(
                 reply = send_to_webgpt(prompt, [item.staged_path for item in selected_staged])
             except Exception as exc:
                 protocol.record_ack_attempt(batch_index, logical_attempt, "", validation_error=f"project_sync_transport_failed:{type(exc).__name__}", repair_kind=current_kind, send_attempt_id=send_attempt_id)
+                record_ledger(
+                    "sync_failed",
+                    f"project_sync_transport_failed:{type(exc).__name__}",
+                    event_key=f"sync_failed:{sync_id}:{batch_index}:{send_attempt_id}:transport",
+                    batch_index=batch_index,
+                    attempt=logical_attempt,
+                    recovery_kind=current_kind,
+                )
                 raise
             parsed = None
             try:
                 parsed = parse_project_sync_ack(reply)
                 state = protocol.accept_ack(parsed, send_attempt_id=send_attempt_id)
                 protocol.record_ack_attempt(batch_index, logical_attempt, reply, accepted=True, repair_kind=current_kind, send_attempt_id=send_attempt_id)
-                if current_kind != "initial" and event_sink is not None: event_sink("project_sync_ack_recovery_succeeded", sync_id=plan["sync_id"], batch_index=batch_index, attempt=logical_attempt, recovery_kind=current_kind, request_id=request_id)
+                if current_kind != "initial":
+                    record_ledger(
+                        "sync_recovery_succeeded",
+                        "ACK_ACCEPTED",
+                        event_key=f"sync_recovery_succeeded:{sync_id}:{batch_index}:{send_attempt_id}",
+                        batch_index=batch_index,
+                        attempt=logical_attempt,
+                        recovery_kind=current_kind,
+                    )
+                    if event_sink is not None: event_sink("project_sync_ack_recovery_succeeded", sync_id=plan["sync_id"], batch_index=batch_index, attempt=logical_attempt, recovery_kind=current_kind, request_id=request_id)
                 break
             except ProjectSyncAckIncompleteError as exc:
                 details = exc.details; protocol.record_ack_attempt(batch_index, logical_attempt, reply, validation_error=str(exc), repair_kind="incomplete", send_attempt_id=send_attempt_id, recovery_details=details)
                 if incomplete_reuploads >= MAX_INCOMPLETE_REUPLOADS:
+                    record_ledger(
+                        "sync_recovery_failed",
+                        str(exc),
+                        event_key=f"sync_recovery_failed:{sync_id}:{batch_index}:{send_attempt_id}:incomplete",
+                        batch_index=batch_index,
+                        attempt=logical_attempt,
+                        recovery_kind="incomplete",
+                    )
                     if event_sink is not None: event_sink("project_sync_ack_recovery_failed", sync_id=plan["sync_id"], batch_index=batch_index, attempt=logical_attempt, validation_error=str(exc), recovery_kind="incomplete", request_id=request_id)
                     raise
                 targets = list(details["target_bundle_indexes"]); protocol.record_recovery(batch_index, send_attempt_id, targets, details)
                 incomplete_reuploads += 1; logical_attempt += 1; current_kind = "selective_reupload"
+                record_ledger(
+                    "sync_recovery_started",
+                    str(details["reason"]),
+                    event_key=f"sync_recovery_started:{sync_id}:{batch_index}:{send_attempt_id}:reupload",
+                    batch_index=batch_index,
+                    attempt=logical_attempt,
+                    recovery_kind=current_kind,
+                    bundle_indexes=targets,
+                )
                 if event_sink is not None: event_sink("project_sync_attachment_reupload_started", sync_id=plan["sync_id"], batch_index=batch_index, attempt=logical_attempt, bundle_indexes=targets, reason=details["reason"], request_id=request_id)
                 notification = protocol.reupload_notification(targets, str(details["reason"]))
                 current_prompt = str(notification["prompt"]); selected_indexes = list(notification["payload"]["reupload_bundle_indexes"]); send_attempt_id = str(notification["payload"]["send_attempt_id"])
@@ -229,18 +303,55 @@ def run_project_sync_transaction(
                 error_code = str(exc); protocol.record_ack_attempt(batch_index, logical_attempt, reply, validation_error=error_code, repair_kind="schema", send_attempt_id=send_attempt_id)
                 if error_code in {"project_sync_ack_receiver_binding_mismatch", "project_sync_ack_send_attempt_mismatch"}:
                     # A reply from another conversation or another send is stale, never repairable.
+                    record_ledger(
+                        "sync_failed",
+                        error_code,
+                        event_key=f"sync_failed:{sync_id}:{batch_index}:{send_attempt_id}:binding",
+                        batch_index=batch_index,
+                        attempt=logical_attempt,
+                    )
                     raise
                 if schema_repairs >= MAX_SCHEMA_REPAIRS:
+                    record_ledger(
+                        "sync_recovery_failed",
+                        error_code,
+                        event_key=f"sync_recovery_failed:{sync_id}:{batch_index}:{send_attempt_id}:schema",
+                        batch_index=batch_index,
+                        attempt=logical_attempt,
+                        recovery_kind="schema_repair",
+                    )
                     if event_sink is not None: event_sink("project_sync_ack_repair_failed", sync_id=plan["sync_id"], batch_index=batch_index, attempt=logical_attempt, validation_error=error_code, request_id=request_id)
                     raise
                 schema_repairs += 1; logical_attempt += 1; current_kind = "schema_repair"
+                record_ledger(
+                    "sync_recovery_started",
+                    error_code,
+                    event_key=f"sync_recovery_started:{sync_id}:{batch_index}:{send_attempt_id}:schema",
+                    batch_index=batch_index,
+                    attempt=logical_attempt,
+                    recovery_kind=current_kind,
+                )
                 if event_sink is not None: event_sink("project_sync_ack_repair_started", sync_id=plan["sync_id"], batch_index=batch_index, attempt=logical_attempt, validation_error=error_code, request_id=request_id)
                 send_attempt_id = protocol.new_send_attempt_id()
                 current_prompt = build_ack_repair_prompt(plan, batch_index, payload.get("previous_batch_ack", ""), error_code, receiver_binding=binding, send_attempt_id=send_attempt_id)
                 selected_indexes = []
                 continue
+        record_ledger(
+            "sync_batch_acknowledged",
+            "ACK_ACCEPTED",
+            event_key=f"sync_batch_acknowledged:{sync_id}:{batch_index}",
+            batch_index=batch_index,
+            batch_count=batch_count,
+        )
         if event_sink is not None: event_sink("project_sync_batch_acknowledged", sync_id=plan["sync_id"], batch_index=batch_index, batch_count=batch_count, request_id=request_id)
     ready = protocol.require_ready()
+    record_ledger(
+        "sync_completed",
+        "PROJECT_SYNC_READY",
+        event_key=f"sync_completed:{sync_id}",
+        batch_count=int(plan.get("batch_count", 0) or 0),
+        acknowledged_batches=list(ready["acknowledged_batches"]),
+    )
     return {"schema": "PROJECT_SYNC_RUNTIME_RESULT_V1", "status": "PROJECT_SYNC_READY", "sync_id": plan["sync_id"], "snapshot_id": plan["snapshot_id"], "batch_count": plan["batch_count"], "acknowledged_batches": ready["acknowledged_batches"]}
 
 

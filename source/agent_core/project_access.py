@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 from .project_artifact_policy import SOURCE_CODE, TEXT_DATA_CONFIG
+from .project_ledger import append_project_event, changed_files_between
 from .project_sync import (
     inspect_project_scope,
     load_current_project_snapshot,
@@ -111,6 +112,7 @@ def _important_records(snapshot: Mapping[str, object], limit: int = 80) -> list[
 def build_project_capsule(workspace: str | Path) -> dict:
     """Build a local index and return only a compact model-facing capsule."""
     root = Path(workspace).expanduser().resolve()
+    parent_snapshot = load_current_project_snapshot(root)
     snapshot = inspect_project_scope(root)
     snapshot_path = save_project_snapshot(snapshot)
     records = list(snapshot.get("files", []) or [])
@@ -147,6 +149,17 @@ def build_project_capsule(workspace: str | Path) -> dict:
                 "list_tree", "search_text", "read_range", "read_symbol",
                 "find_references", "get_build_configuration", "get_file_metadata",
             ],
+            "queries_must_be_objects": True,
+            "operation_selection": {
+                "unknown_path_keyword_only": "search_text",
+                "known_symbol": "read_symbol",
+                "known_workspace_relative_path": "read_range",
+            },
+            "pagination": "continue read_range on the same path from next_cursor until truncated=false",
+            "source_edit_prerequisite": (
+                "obtain snapshot-bound read_range/read_symbol evidence and file_sha256 "
+                "before validate_edit_plan/apply_edit_plan"
+            ),
         },
         "transport": "INLINE_QUERY_ONLY",
         "attachments_uploaded": 0,
@@ -161,6 +174,24 @@ def build_project_capsule(workspace: str | Path) -> dict:
         "capsule_path": str(state / "capsules" / f"{snapshot['snapshot_id']}.json"),
         "updated_at": time.time(),
     })
+    append_project_event(
+        root,
+        "sync_completed",
+        snapshot_id=str(snapshot["snapshot_id"]),
+        parent_snapshot_id=str((parent_snapshot or {}).get("snapshot_id", "") or ""),
+        changed_files=changed_files_between(parent_snapshot, snapshot),
+        operation_result="PROJECT_SYNC_READY",
+        actor="runtime",
+        source="project_access.build_project_capsule",
+        notes="INDEX_ONLY runtime index refreshed without uploading source bundles.",
+        details={
+            "strategy": "INDEX_ONLY",
+            "project_handle": capsule["project_handle"],
+            "file_count": capsule["file_count"],
+            "attachments_uploaded": 0,
+        },
+        event_key=f"sync_completed:INDEX_ONLY:{snapshot['snapshot_id']}",
+    )
     return capsule
 
 

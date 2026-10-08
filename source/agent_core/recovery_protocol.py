@@ -13,6 +13,8 @@ import json
 import re
 from typing import Any, Mapping
 
+from .protocol_v9 import SINGLE_FENCE_TRANSPORT_CONTRACT
+
 
 INITIALIZATION_CAPABILITY_MODE = "INITIALIZATION_CAPABILITY_MODE"
 ACTION_EXECUTION_MODE = "ACTION_EXECUTION_MODE"
@@ -82,9 +84,10 @@ def build_action_replay_prompt(expected: Mapping[str, Any]) -> str:
         "[ACTION_REPLAY_CONTEXT]\n"
         + json.dumps(replay_context, ensure_ascii=False, separators=(",", ":"))
         + "\n[/ACTION_REPLAY_CONTEXT]\n"
-        "Return only normal compact v9 smartagent_tool blocks. Emit exactly one report_progress, "
-        "then all currently decidable action blocks or one final_response, and finish with exactly "
-        "one {\"tool\":\"turn_commit\",\"action_count\":N}.\n"
+        "Return only normal compact v9 smartagent_tool objects. Emit exactly one report_progress, "
+        "then all currently decidable action objects or one final_response.\n"
+        + SINGLE_FENCE_TRANSPORT_CONTRACT
+        + "\n"
         f"[/{ACTION_REPLAY_MARKER}]"
     )
 

@@ -268,12 +268,20 @@ class BaseWebUIAdapter:
     def element_fingerprint(self, element) -> str:
         if element is None:
             return ""
+        if isinstance(element, TurnRef):
+            element = element.element
+        if element is None:
+            return ""
         parts = []
         for name in ("data-message-id", "data-testid", "id"):
             value = _safe_attr(element, name)
             if value:
                 parts.append(f"{name}={value}")
-        parts.append(_safe_text(element))
+        text = _safe_text(element)
+        if text:
+            parts.append(text)
+        if not parts:
+            return ""
         return hashlib.sha256("\n".join(parts).encode("utf-8", errors="replace")).hexdigest()
 
     def disconnect_signature_visible(self) -> bool:

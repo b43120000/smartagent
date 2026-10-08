@@ -338,4 +338,5 @@ class WebAgentToolContext:
                 f"[SMARTAGENT_BOOTSTRAP_TOOL_REJECTED] tool={tool}; "
                 "allowed_tools=read_file(manifest only),run_command(fixed installer commands only)"
             )
-        return execute_tool(action, agent=self, models=self._models_registry)
+        from agent_core.action_dispatcher import dispatch_action
+        return dispatch_action(action, agent=self, models=self._models_registry)

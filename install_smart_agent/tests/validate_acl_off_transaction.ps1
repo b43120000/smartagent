@@ -117,7 +117,7 @@ $scopeProfile = [pscustomobject]@{
     controller_state_root = (Join-Path $scopeSecurityRoot 'controller_state')
     executor_code_root = (Join-Path $scopeSecurityRoot 'executor_code')
     skill_roots = @((Join-Path $scopeSecurityRoot 'skills'))
-    authorized_workspace_roots = @('E:\workspace')
+    authorized_workspace_roots = @('E:\AuthorizedWorkspace')
     read_only_roots = @('C:\Users\Public')
     denied_write_roots = @('C:\Windows\Temp','C:\Users\SmartAgentExecutor')
     root_create_denied = @('C:\','E:\')
@@ -134,7 +134,7 @@ if ($unboundScopeRoots.Count -ne 2 -or
     -not ($unboundScopeRoots -contains $scopeProfile.runtime_root)) {
     throw "acl_off_unbound_owned_roots_unexpected:$($unboundScopeRoots -join ';')"
 }
-foreach ($external in @('E:\workspace','C:\Users\Public','C:\Windows\Temp','C:\Users\SmartAgentExecutor','C:\','E:\')) {
+foreach ($external in @('E:\AuthorizedWorkspace','C:\Users\Public','C:\Windows\Temp','C:\Users\SmartAgentExecutor','C:\','E:\')) {
     if ($scopeRoots -contains $external) {
         throw "acl_off_external_root_included:$external"
     }

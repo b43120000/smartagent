@@ -10,6 +10,7 @@ from typing import Any
 
 from .transport_message import NormalizedInboundMessage
 from .transport_sessions import TransportSessionRouter
+from .plan_ledger import PlanLedger, PlanLedgerError, parse_execute_plan_command
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,30 @@ class AgentIngressGateway:
                 response=f"已建立新對話 {session.session_id}。",
             )
 
+        source_plan_id = parse_execute_plan_command(text)
+        source_plan = None
+        original_text = text
+        if source_plan_id:
+            plan_ledger = PlanLedger.from_task_store(self.task_queue.store.path)
+            try:
+                source_plan = plan_ledger.load(source_plan_id)
+                plan_ledger.ensure_workspace(source_plan, root)
+            except PlanLedgerError as exc:
+                reason = str(exc)
+                messages = {
+                    "plan_not_found": f"找不到規劃 {source_plan_id}。請確認 plan_id 是否完整。",
+                    "plan_workspace_mismatch": (
+                        f"規劃 {source_plan_id} 屬於其他 Workspace，為避免越權，不會執行。"
+                    ),
+                }
+                return IngressResult(
+                    task=None,
+                    created=False,
+                    session_id=session.session_id,
+                    response=messages.get(reason, f"無法載入規劃 {source_plan_id}：{reason}"),
+                )
+            text = plan_ledger.execution_request(source_plan)
+
         route = {
             "transport": message.transport.upper(),
             "endpoint": message.endpoint,
@@ -103,6 +128,10 @@ class AgentIngressGateway:
             "ingress_metadata": dict(message.metadata or {}),
             "origin_turn_index": message.metadata.get("origin_turn_index"),
             "origin_role": str(message.metadata.get("origin_role", "") or ""),
+            "source_plan_id": source_plan_id,
+            "source_plan_request_id": str((source_plan or {}).get("request_id", "") or ""),
+            "source_plan_task_id": str((source_plan or {}).get("task_id", "") or ""),
+            "source_user_command": original_text,
         }
         task, created = self.task_queue.enqueue_remote_request(
             request,

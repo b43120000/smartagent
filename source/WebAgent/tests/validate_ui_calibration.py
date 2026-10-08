@@ -9,6 +9,7 @@ import tempfile
 from agent_core.ui_calibration import (
     PLAN_SCHEMA,
     CalibrationError,
+    _progress_percent,
     _start_scraper,
     parse_planner_response,
 )
@@ -53,6 +54,10 @@ def run() -> dict:
     ownership_probe._bind_playwright(shared_playwright)
     assert ownership_probe._pw is shared_playwright
     assert ownership_probe._owns_playwright is False
+
+    assert _progress_percent(4, 10) == 40
+    assert _progress_percent(0, 8) == 0
+    assert _progress_percent(8, 8) == 100
 
     import agent_core.web_runtime as web_runtime_module
 
@@ -167,6 +172,7 @@ def run() -> dict:
         assert rolled_back and rolled_back["name"] == accepted["name"]
 
     result = {
+        "component_progress_percent": True,
         "strict_planner_schema": True,
         "shared_playwright_driver": True,
         "unsafe_selector_rejected": True,

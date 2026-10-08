@@ -21,6 +21,7 @@ from agent_core.remote_runtime_log import RemoteRuntimeLog
 from agent_core.task_state import RemoteTaskQueue, TaskStateStore
 from agent_core.paths import (install_root, remote_events_path, remote_execution_page_lock_path, remote_control_output_root, remote_runtime_log_path, remote_skill_context_root, remote_tasks_path, remote_webagent_state_root, remote_workers_root)
 from agent_core.task_transport import resolve_task_execution_chatgpt_url
+from agent_core.plan_ledger import PlanLedger, publish_completed_plan
 from RemoteAgent.telegram_artifacts import prepare_telegram_completion
 
 
@@ -486,12 +487,29 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 remaining_owners=int(handoff["remaining_owners"]),
             )
         elapsed = round(time.time() - started_at, 3)
+        progress_snapshot = read_progress(task.task_id, root=root)
+        final_content, plan_id = publish_completed_plan(
+            ledger=PlanLedger.from_task_store(remote_tasks_path(root)),
+            task=task,
+            final_summary=final_content,
+            progress=progress_snapshot,
+        )
+        if plan_id:
+            runtime_log.write(
+                "STATUS",
+                component="telegram_webagent_worker",
+                stage="PLAN_PUBLISHED",
+                task_id=task.task_id,
+                request_id=task.request_id,
+                plan_id=plan_id,
+            )
         terminal_payload = prepare_telegram_completion(
             request=task.request,
             summary=final_content,
             workspace=task.workspace,
             artifacts=loop.tools.take_outbound_artifacts(),
         )
+        terminal_payload["plan_id"] = plan_id
         final_content = terminal_payload["summary"]
         if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
             raise RemoteTaskCancelled("telegram_interrupt_requested")
@@ -517,6 +535,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "execution_state": loop.execution_state,
                 "protocol_state": loop.protocol_state,
                 "terminal_candidate": dict(loop.terminal_candidate),
+                "plan_id": plan_id,
+                "source_plan_id": str((task.metadata or {}).get("source_plan_id", "") or ""),
             },
         )
         events.emit(

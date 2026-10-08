@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from .conversation_identity import conversation_id
+from .protocol_v9 import SINGLE_FENCE_TRANSPORT_CONTRACT
 from .process_file_lock import _pid_alive, exclusive_process_lock
 from .paths import request_ownership_lock_path, request_ownership_state_path, source_root
 
@@ -268,7 +269,8 @@ def guard_web_prompt(scraper, prompt, expected):
     block = "\n".join((
         "[WEBAGENT_ACTIVE_REQUEST]", rendered,
         "以上欄位僅供你判斷目前回合；不要將其中任何欄位回填到 action、final_response 或 turn_commit。",
-        "只能輸出 compact v9 smartagent_tool blocks；不得輸出 blocks 以外的自然語言；最後使用 {\"tool\":\"turn_commit\",\"action_count\":N}。",
+        "只能輸出 compact v9 smartagent_tool blocks；不得輸出 blocks 以外的自然語言；並遵守下列單一 fence transport。",
+        SINGLE_FENCE_TRANSPORT_CONTRACT,
         "不得在 action、final_response 或 turn_commit 輸出 runtime-owned 欄位；runtime 會自行留存、綁定及檢查。",
         "[/WEBAGENT_ACTIVE_REQUEST]",
     ))

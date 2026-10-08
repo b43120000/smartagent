@@ -5,7 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from .project_sync import inspect_project_scope
+from .project_ledger import append_project_event
+from .project_sync import inspect_project_scope, is_ignored_project_path
 
 SEMANTIC_MAP_SCHEMA = "PROJECT_SEMANTIC_MAP_V1"
 _SOURCE_LANGUAGES = {
@@ -42,17 +43,30 @@ def _load(workspace: str | Path) -> dict:
         return {}
 
 
-def _targets(snapshot: dict) -> dict[str, dict]:
+def _targets(snapshot: dict, required_paths: object = None) -> dict[str, dict]:
     build = set(snapshot.get("build_files", []))
+    required = None
+    if required_paths is not None:
+        if not isinstance(required_paths, (list, tuple, set)):
+            raise ValueError("semantic_map_invalid_required_paths")
+        required = {
+            str(path).replace("\\", "/").lstrip("/")
+            for path in required_paths if str(path).strip()
+        }
     return {
         str(row["path"]): row
         for row in snapshot.get("files", [])
-        if row.get("language") in _SOURCE_LANGUAGES or row.get("path") in build
+        if not is_ignored_project_path(str(row.get("path", "")))
+        and (row.get("language") in _SOURCE_LANGUAGES or row.get("path") in build)
+        and (required is None or str(row.get("path", "")) in required)
     }
 
 
-def semantic_target_paths(workspace: str | Path, snapshot: dict | None = None) -> set[str]:
-    return set(_targets(snapshot or inspect_project_scope(workspace)))
+def semantic_target_paths(
+    workspace: str | Path, snapshot: dict | None = None,
+    required_paths: object = None,
+) -> set[str]:
+    return set(_targets(snapshot or inspect_project_scope(workspace), required_paths))
 
 
 def _revision(value: dict) -> str:
@@ -60,9 +74,9 @@ def _revision(value: dict) -> str:
     return hashlib.sha256(json.dumps(basis, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def inspect_semantic_map(workspace: str | Path) -> dict:
+def inspect_semantic_map(workspace: str | Path, required_paths: object = None) -> dict:
     snapshot = inspect_project_scope(workspace)
-    targets = _targets(snapshot)
+    targets = _targets(snapshot, required_paths)
     current = _load(workspace)
     records = {
         str(row.get("path", "")): row
@@ -74,7 +88,12 @@ def inspect_semantic_map(workspace: str | Path) -> dict:
         path for path, source in targets.items()
         if path in records and records[path].get("source_sha256") != source.get("sha256")
     )
-    deleted = sorted(path for path in records if path not in targets)
+    # A plan-scoped inspection asks whether its own inputs are covered.  Extra
+    # records from other plans are valid shared knowledge, not deletions.
+    deleted = (
+        [] if required_paths is not None
+        else sorted(path for path in records if path not in targets)
+    )
     valid = bool(current) and current.get("schema") == SEMANTIC_MAP_SCHEMA
     status = "MISSING" if not valid else ("FRESH" if not missing and not stale and not deleted else "STALE")
     return {
@@ -87,6 +106,8 @@ def inspect_semantic_map(workspace: str | Path) -> dict:
         "needs_analysis_count": len(set(missing + stale)),
         "needs_analysis": sorted(set(missing + stale)),
         "deleted_paths": deleted,
+        "scope": "PLAN" if required_paths is not None else "PROJECT",
+        "required_paths": sorted(targets),
         "json_path": str(semantic_map_path(workspace)),
         "markdown_path": str(semantic_map_markdown_path(workspace)),
     }
@@ -96,6 +117,11 @@ def _string_list(value: object, field: str, *, maximum: int = 64) -> list[str]:
     if not isinstance(value, list) or len(value) > maximum or not all(isinstance(item, str) and len(item) <= 4000 for item in value):
         raise ValueError(f"semantic_map_invalid_{field}")
     return [item.strip() for item in value if item.strip()]
+
+
+def _placeholder(value: object) -> bool:
+    text = str(value or "").strip()
+    return len(text) >= 2 and text.startswith("<") and text.endswith(">")
 
 
 def _render_markdown(value: dict) -> str:
@@ -152,7 +178,7 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
             if str(item.get("source_sha256", "")) != targets[path].get("sha256"):
                 raise ValueError(f"semantic_map_source_hash_mismatch:{path}")
             responsibility = str(item.get("responsibility", "")).strip()
-            if not responsibility or len(responsibility) > 16000:
+            if not responsibility or len(responsibility) > 16000 or _placeholder(responsibility):
                 raise ValueError(f"semantic_map_missing_responsibility:{path}")
             records[path] = {
                 "path": path,
@@ -164,10 +190,13 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
                 "invariants": _string_list(item.get("invariants", []), "invariants"),
                 "tests": _string_list(item.get("tests", []), "tests"),
             }
+        project_summary = str(patch.get("project_summary", old.get("project_summary", ""))).strip()[:65536]
+        if _placeholder(project_summary):
+            raise ValueError("semantic_map_placeholder_project_summary")
         value = {
             "schema": SEMANTIC_MAP_SCHEMA,
             "snapshot_id": snapshot["snapshot_id"],
-            "project_summary": str(patch.get("project_summary", old.get("project_summary", ""))).strip()[:65536],
+            "project_summary": project_summary,
             "flows": _string_list(patch.get("flows", old.get("flows", [])), "flows", maximum=128),
             "files": [records[path] for path in sorted(records)],
         }
@@ -180,7 +209,32 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
     except ValueError as exc:
         return {"status": "INVALID", "reason": str(exc)}
     status = inspect_semantic_map(workspace)
-    return {**status, "status": "UPDATED" if status["status"] == "FRESH" else "PARTIAL", "updated_file_count": len(supplied)}
+    result_status = "UPDATED" if status["status"] == "FRESH" else "PARTIAL"
+    ledger_event = append_project_event(
+        workspace,
+        "semantic_map_updated",
+        snapshot_id=str(snapshot["snapshot_id"]),
+        changed_files=[str(item.get("path", "")) for item in supplied if isinstance(item, dict)],
+        semantic_map_revision=str(status.get("semantic_map_revision", "") or ""),
+        operation_result=result_status,
+        actor="runtime",
+        source="semantic_map.update_semantic_map",
+        notes="Snapshot-bound semantic map revision published.",
+        details={
+            "updated_file_count": len(supplied),
+            "coverage": status.get("coverage", {}),
+        },
+        event_key=(
+            f"semantic_map_updated:{snapshot['snapshot_id']}:"
+            f"{status.get('semantic_map_revision', '')}"
+        ),
+    )
+    return {
+        **status,
+        "status": result_status,
+        "updated_file_count": len(supplied),
+        "ledger_event_id": ledger_event["event_id"],
+    }
 
 
 def update_semantic_map_file(workspace: str | Path, path: str, expected_sha256: str = "") -> dict:

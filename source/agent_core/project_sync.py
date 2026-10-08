@@ -28,6 +28,25 @@ def is_generated_runtime_path(path:str|Path)->bool:
   for index in range(len(parts)-1)
  )
 
+def is_ignored_project_path(path:str|Path)->bool:
+ """Return True for paths excluded from both inventory and Git-state identity."""
+ parts=[part.casefold() for part in Path(path).parts]
+ if any(part in IGNORED_DIRS for part in parts): return True
+ if any(part.startswith('.update_') for part in parts): return True
+ return is_generated_runtime_path(path)
+
+def _stable_git_status(root:Path)->list[str]:
+ """Keep snapshot identity stable when Runtime writes its own ignored state."""
+ stable=[]
+ for line in _git(root,'status','--porcelain','--untracked-files=all').splitlines():
+  raw=line[3:].strip() if len(line)>=4 else ''
+  # Rename/copy porcelain rows use ``old -> new``; either ignored endpoint
+  # is Runtime/generated state and must not invalidate a source snapshot.
+  candidates=[item.strip().strip('"') for item in raw.split(' -> ') if item.strip()]
+  if candidates and any(is_ignored_project_path(item) for item in candidates): continue
+  stable.append(line)
+ return sorted(stable)
+
 def _sha256_file(path:Path)->str:
  h=hashlib.sha256()
  with path.open('rb') as f:
@@ -47,14 +66,14 @@ def _records(root:Path)->tuple[list[dict],int,Counter,list[str]]:
   for d in sorted(dirnames):
    p=base/d
    rel_dir=p.relative_to(root)
-   if d in IGNORED_DIRS or is_reparse_path(p) or is_generated_runtime_path(rel_dir): continue
+   if is_ignored_project_path(rel_dir) or is_reparse_path(p): continue
    safe_dirs.append(d)
   dirnames[:]=safe_dirs;dirs+=len(dirnames)
   for name in sorted(filenames):
    p=base/name
    if is_reparse_path(p): continue
    rel=p.relative_to(root).as_posix()
-   if is_generated_runtime_path(rel): continue
+   if is_ignored_project_path(rel): continue
    try: stat=p.stat()
    except OSError: continue
    ext=p.suffix.lower() or '[no_extension]';exts[ext]+=1
@@ -71,7 +90,7 @@ def inspect_project_scope(workspace:str|Path)->dict:
  started=time.perf_counter();root=Path(workspace).expanduser().resolve()
  if not root.is_dir(): raise ValueError(f'workspace_not_directory: {root}')
  records,dirs,exts,build=_records(root)
- git_head=_git(root,'rev-parse','HEAD');git_status_lines=sorted(_git(root,'status','--porcelain').splitlines())
+ git_head=_git(root,'rev-parse','HEAD');git_status_lines=_stable_git_status(root)
  manifest_basis={'schema_version':SNAPSHOT_SCHEMA_VERSION,'files':[{k:r[k] for k in ('path','size_bytes','sha256')} for r in records],'git_head':git_head,'git_status':git_status_lines}
  manifest_hash=hashlib.sha256(json.dumps(manifest_basis,sort_keys=True,separators=(',',':')).encode()).hexdigest()
  snapshot_id=hashlib.sha256((f'{SNAPSHOT_SCHEMA_VERSION}\n{manifest_hash}\n{git_head}\n'+'\n'.join(git_status_lines)).encode()).hexdigest()

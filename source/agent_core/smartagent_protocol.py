@@ -25,7 +25,9 @@ protocol_version and ACK metadata. Do not emit them.
 Rules:
 - Do not execute or claim an action without a valid compact turn_commit.
 - final_response is the only terminal action and cannot share a round with another action.
-- FIELD_REPAIR adds only the requested missing decision field and preserves all existing fields.
+- FIELD_REPAIR is only for a missing field when every existing field is schema-valid.
+- An unexpected or misplaced field requires ACTION_REPLAN with a fresh action_id
+  and a complete canonical action; never preserve an invalid field.
 - ACTION_REPLAN uses a fresh action_id when the original decision is rejected.
 - If result or process state is unknown, stop and request reconcile; never replay a mutation blindly.
 - Attachments must be stable before submission; never reuse an attachment from another request.
@@ -38,6 +40,24 @@ import re
 
 from .command_security import inspect_command
 from .payload_budget import PROTOCOL_RESPONSE_MAX_BYTES, utf8_size
+from .protocol_v9 import SINGLE_FENCE_TRANSPORT_CONTRACT
+
+
+PROJECT_EVIDENCE_ACTION_CONTRACT = """
+[SMARTAGENT_PROJECT_EVIDENCE_ACTION_CONTRACT]
+Project source access must use explicit structured query_project operations; every queries[] item is a JSON object with an operation. Natural-language string shorthand is forbidden for Web Planner actions.
+Operation selection is deterministic:
+- Unknown path, known keyword/name only -> search_text.
+- Known symbol -> read_symbol, with path when known.
+- Known workspace-relative file path -> read_range; do not use search_text to ask for that file's content.
+- When read_range returns truncated=true and next_cursor, continue the same path from next_cursor until truncated=false.
+Before modifying an existing source/text file, obtain snapshot-bound read_range/read_symbol evidence and file_sha256. Do not use run_command, read_file, or attachments as a shortcut for project source evidence.
+Edit-plan requirements:
+- exact_replace requires path, base_sha256, modification_intent, mode="exact_replace", exact old, and new.
+- whole_file is only for bounded small files and requires path, base_sha256, modification_intent, mode="whole_file", and complete content.
+- Evidence must be complete before validate_edit_plan/apply_edit_plan. If Runtime supplies a prerequisite route, emit that exact structured action before retrying apply_edit_plan.
+[/SMARTAGENT_PROJECT_EVIDENCE_ACTION_CONTRACT]
+""".strip()
 
 class DuplicateJSONKeyError(ValueError):
     """Raised when one JSON object contains the same key more than once."""
@@ -97,6 +117,8 @@ TOOL_ENVELOPE_SCHEMAS = {
             "result_transport": str,
             "full_result_required": bool,
             "result_purpose": str,
+            "verifies_action_id": str,
+            "condition_id": str,
         },
     },
     "read_file": {
@@ -152,7 +174,7 @@ TOOL_ENVELOPE_SCHEMAS = {
     },
     "inspect_semantic_map": {
         "required": {},
-        "optional": {"workspace": str},
+        "optional": {"workspace": str, "paths": list},
     },
     "update_semantic_map": {
         "required": {"patch": dict},
@@ -185,6 +207,21 @@ TOOL_ENVELOPE_SCHEMAS = {
     "query_project": {
         "required": {"project_root": str, "queries": list},
         "optional": {"workspace": str, "snapshot_id": str, "project_handle": str, "max_bytes": int},
+    },
+    "inspect_project_ledger": {
+        "required": {},
+        "optional": {"workspace": str, "limit": int},
+    },
+    "query_project_history": {
+        "required": {},
+        "optional": {
+            "workspace": str,
+            "event_types": list,
+            "snapshot_id": str,
+            "path_contains": str,
+            "since": (int, float),
+            "limit": int,
+        },
     },
     "validate_edit_plan": {
         "required": {"plan": dict},
@@ -274,6 +311,12 @@ TOOL_ENVELOPE_SCHEMAS = {
             "base_evaluation": str,
             "steps": list,
             "next_action": str,
+            "completion_contract": dict,
+            "decision": str,
+            "outcome": str,
+            "matched_condition": str,
+            "evidence_refs": list,
+            "decision_reason": str,
         },
     },
     "final_response": {
@@ -647,21 +690,38 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
             block_index=block_index,
         )
 
-    if tool == "inspect_project_scope":
-        allowed_fields = {"tool", "action_id", *schema["required"], *schema["optional"]}
-        unexpected_fields = sorted(str(field) for field in set(call) - allowed_fields)
-        if unexpected_fields:
-            return False, _diagnostic(
-                "[TOOL_ENVELOPE_REJECTED]",
-                "unexpected_field",
-                tool=tool,
-                detail=f"fields={','.join(unexpected_fields)}",
-                suggestion=(
-                    "inspect_project_scope 只接受 workspace；若需求只是列出目錄第一層，"
-                    "請改用 list_directory 並把目標放在 path。"
-                ),
-                block_index=block_index,
+    allowed_fields = {"tool", "action_id", *schema["required"], *schema["optional"]}
+    unexpected_fields = sorted(str(field) for field in set(call) - allowed_fields)
+    if unexpected_fields:
+        if tool == "inspect_project_scope":
+            suggestion = (
+                "inspect_project_scope 只接受 workspace；若需求只是列出目錄第一層，"
+                "請改用 list_directory 並把目標放在 path。"
             )
+        elif tool == "query_project":
+            suggestion = (
+                "這不是 FIELD_REPAIR。使用新的 action_id 重建 canonical query_project；"
+                "operation/path/symbol 等查詢欄位只能放在 queries[] 的物件內。"
+            )
+        elif tool in {"validate_edit_plan", "apply_edit_plan"}:
+            suggestion = (
+                "這不是 FIELD_REPAIR。使用新的 action_id 重建 canonical action；最外層只放 "
+                "tool、action_id、可選 workspace 與 plan。base_snapshot_id、files_to_modify、"
+                "verification_commands、expected_observable_result、rollback_condition 全部放在 plan 內。"
+            )
+        else:
+            suggestion = (
+                "這不是 FIELD_REPAIR。使用新的 action_id，僅依目前 tool schema 的"
+                " required/optional 欄位重建完整 canonical action。"
+            )
+        return False, _diagnostic(
+            "[TOOL_ENVELOPE_REJECTED]",
+            "unexpected_field",
+            tool=tool,
+            detail=f"fields={','.join(unexpected_fields)}",
+            suggestion=suggestion,
+            block_index=block_index,
+        )
 
     for field, expected_type in schema["required"].items():
         if field not in call:
@@ -697,6 +757,28 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                     f"actual={type(call[field]).__name__}"
                 ),
                 suggestion=f"重送同一個 {tool} 決策並修正欄位 '{field}' 的 JSON type。",
+                block_index=block_index,
+            )
+
+    if tool == "query_project":
+        queries = list(call.get("queries") or [])
+        invalid_indexes = [
+            index
+            for index, query in enumerate(queries, 1)
+            if not isinstance(query, dict)
+            or not isinstance(query.get("operation"), str)
+            or not str(query.get("operation", "") or "").strip()
+        ]
+        if not queries or invalid_indexes:
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]",
+                "query_project_structured_queries_required",
+                tool=tool,
+                detail=(
+                    "queries[] must contain explicit operation objects; invalid_indexes="
+                    + json.dumps(invalid_indexes, separators=(",", ":"))
+                ),
+                suggestion=PROJECT_EVIDENCE_ACTION_CONTRACT,
                 block_index=block_index,
             )
 
@@ -1772,7 +1854,8 @@ SYSTEM_PROMPT_TEMPLATE = """
 
 【可用工具格式】：
 
-1. 執行指令＋驗證：{{"tool": "run_command", "command": "PowerShell指令", "timeout": 30, "result_transport":"SUMMARY_ONLY", "success_criteria": "什麼條件代表這次動作真的生效", "verify": [{{"action":"run_command","command":"驗證指令","expect_exit_code":0,"expect_contains":"可選關鍵字"}}, {{"action":"file_exists","path":"檔案路徑","expect":true}}, {{"action":"file_contains","path":"檔案路徑","text":"應存在內容","expect":true}}]}}
+1. 執行指令＋驗證：{{"tool": "run_command", "command": "PowerShell指令", "timeout": 30, "result_transport":"SUMMARY_ONLY", "success_criteria": "什麼條件代表這次動作真的生效", "verify": [{{"action":"run_command","command":"驗證指令","expect_exit_code":0,"expect_contains":"可選關鍵字","expect_regex":"可選正規表示式"}}, {{"action":"file_exists","path":"檔案路徑","expect":true}}, {{"action":"file_contains","path":"檔案路徑","text":"應存在內容","expect":true}}]}}
+   run_command 的 executor 固定是 Windows PowerShell 5.1。不得直接使用 CMD 的 `cd /d`、裸露 `&&` 或 `||`；Git 請優先使用 `git -C 'E:\\path\\to\\repo' ...`，一般目錄切換使用 `Set-Location -LiteralPath 'E:\\path'`，多指令以 `;` 分隔。verify 必須是 object 或 object list，不得填自然語言字串。
 2. 讀取檔案（僅 Local/Cloud Planner 使用；Web Planner 禁止使用）：{{"tool": "read_file", "path": "絕對路徑"}}
 3. 寫入小型檔案（content 最多 4096 字元）：{{"tool": "write_file", "path": "絕對路徑", "content": "完整檔案內容"}}
 3a. 刪除明確目標：{{"tool":"delete_path","action_id":"A-DELETE-唯一值","path":"workspace 內單一絕對路徑","recursive":true,"reason":"刪除原因"}}。此工具只會建立固定 manifest 並要求人類確認；不得改用 run_command 繞過確認。
@@ -1819,11 +1902,11 @@ SYSTEM_PROMPT_TEMPLATE = """
 - 只要需求是統計、摘要或比較一個或多個目錄，優先用單一 inspect_directory action 一次取得結構化證據；不要使用 ask_executor，也不要拆成多個 list_directory 或 run_command 回合。此工具只能讀取使用者在本輪明確提供的絕對路徑或目前 Workspace Root。
 - 你看不到某檔案，不代表檔案不存在；禁止要求使用者自行補檔。
 - 若 trace 時遇到 import/include、其他 module、config、resource、圖片、PDF、Word、PPT 或其他相依檔案，先使用 list_directory / find_file 找到它。
-- 【Web Planner 強制附件優先】只要你需要查看、理解、分析任何完整本機檔案，不論是 source code、txt/log、圖片、PDF、Word、PowerPoint、Excel 或其他格式，一律使用 upload_file / upload_files，把真實檔案附加到目前同一個網頁對話。
+- 【Web Planner evidence 路由】專案內的 source code、文字設定與 log 優先使用 query_project 的 search_text/read_symbol/read_range，保留在 Runtime-held INDEX_ONLY context，不上傳附件。圖片、PDF、Word、PowerPoint、Excel 等必須由網頁模型直接查看的非 source artifact，才使用 upload_file / upload_files。
 - upload_file / upload_files 只把檔案送進目前 WebGPT 網頁，絕不代表已傳給 Telegram。來源為 REMOTEAGENT_TELEGRAM 且使用者要求把本機檔案傳回 Telegram 時，必須使用 return_artifact；software 會驗證路徑、大小與 SHA-256，再由 Telegram transport 實際送出。
 - return_artifact 的工具結果若為 TELEGRAM_ARTIFACT_REJECTED，禁止宣告已上傳；依 software 回傳的原因如實 final_response。即使工具結果為 QUEUED，也只能說「已準備回傳」，不得在 Telegram delivery 真正執行前說「已上傳」。
-- Web Planner 不得使用 read_file 取得完整檔案內容，也不得要求 Agent 把完整檔案轉成文字貼回對話。
-- 若你只知道檔名或相依模組名稱，先使用 find_file 找到實際路徑，再使用 upload_file。
+- Web Planner 不得使用 read_file 取得專案 source/text implementation。已知檔案或 symbol 時必須使用 query_project.read_range/read_symbol；Runtime 會在精確 project_root 建立或重用 INDEX_ONLY，且不會上傳附件。
+- 若你只知道檔名或相依模組名稱，先使用 find_file 或 query_project.search_text 找到實際路徑；source/text 接著使用 query_project.read_symbol/read_range，非 source artifact 才使用 upload_file。
 - read_file 僅保留給非 Web Planner 模式或本地執行流程的內部需求。
 - 【Web Planner 單檔修改最高優先】若使用者要求修改已存在、可上傳、且能以單一檔案合理完成的內容，第一選擇必須是 web_edit_file：Web AI 修改完整附件 → 下載完整 artifact → Local 僅做 staging/replace/hash/verify，不再交給 Local AI 重做。
 - web_edit_file 回傳 [WEB_DIRECT_EDIT_SUCCESS] 後，不要再讓 Local Executor 重做同一修改；下一步只做必要驗證。
@@ -1842,6 +1925,8 @@ SYSTEM_PROMPT_TEMPLATE = """
 - Local Agent 只機械式執行 command + verify，不自行發明「這樣算成功嗎」。
 - VERIFICATION_STATUS=PASS 才能把該 action 視為驗證通過。
 - VERIFICATION_STATUS=FAIL 時，必須根據 stdout/stderr/verification evidence 找出問題，必要時 upload/find 相關檔案、修正後重新 run_command + verify。
+- 若只是補驗證而不是重做原操作，新的 run_command 必須用 verifies_action_id 指向原 action_id；Runtime 會保留歷史，並以同一 action 最新的有效驗證結果判斷終態。condition_id 可填 completion_contract 中對應的精確條件。
+- Git SHA 等結構化輸出應使用 expect_regex（例如 ^[0-9a-f]{{40}}$），不要用 expect_contains:"HEAD" 檢查 rev-parse 的 SHA 輸出。
 - VERIFICATION_STATUS=UNVERIFIED 時，不得直接向使用者宣告成功；你必須補做可驗證的 action。
 - verify 可使用 action=run_command / file_exists / file_contains；每個 verify step 可加 delay_sec 等待啟動完成。若 UI 功能無法靠上述檢查完全證明，至少驗證 process/server/endpoint/log 等可觀察條件，並明確指出仍需人工 UI 確認的部分。
 
@@ -1854,7 +1939,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 【雙引擎架構原則】：
 - Web Planner 是唯一決策者；Local Executor 不做下一步決策。
 - 如果只是簡單的檔案操作或查詢，請使用對應工具完成。
-- **Web Planner 極度重要**：如果用戶要求「畫流程圖」、「修改大量程式碼」、「深度分析原始碼」或任何需要查看完整檔案的工作，先使用 upload_file / upload_files 將必要檔案附加到目前網頁對話，由你直接閱讀附件並決定下一步；不要先 read_file 把原始內容貼成文字。
+- **Web Planner 極度重要**：如果用戶要求「畫流程圖」、「修改大量程式碼」、「深度分析原始碼」或需要 implementation body，先使用 query_project 的 search_text/read_symbol/read_range 取得最小且可驗證的 source evidence。只有 bounded query_project 明確無法提供必要內容，或使用者明確要求附件時，才使用 upload_file / upload_files；不得把 read_file 當作 source 附件捷徑。
 - 只有當你已經決定把某個封閉、明確的局部工作委託給 Local Executor 時才使用 ask_executor；Local Executor 不得取代你做下一步決策。
 
 【範例】：
@@ -1881,19 +1966,21 @@ SYSTEM_PROMPT_TEMPLATE = """
 # callers because this v8 contract is the module's exported value.
 SYSTEM_PROMPT_TEMPLATE = """
 SmartAgent Tool Protocol v8 only.
-You are the decision planner. Use only exclusive fenced smartagent_tool blocks.
-Every action/final_response needs a unique action_id. The final block is
-{{\"tool\":\"turn_commit\",\"action_count\":N}}.
+You are the decision planner. Use only the canonical single-fence
+smartagent_tool transport appended below. Every action/final_response needs a
+unique action_id.
 
 Model-owned fields are tool, action_id, and tool-specific decision fields.
 Runtime-owned fields must not be emitted: request_id, task_id, task_epoch,
 intent_digest, action_digest, result_id, result_digest, attachment_id, turn_id,
 nonce, protocol_version, and ACK metadata.
 
-Preserve confirmed action fields during FIELD_REPAIR. Use a fresh action_id for
-ACTION_REPLAN. If result/process state is unknown, reconcile and never replay
+Preserve confirmed action fields during FIELD_REPAIR only when all existing
+fields are schema-valid. Unexpected or misplaced fields require ACTION_REPLAN:
+use a fresh action_id and rebuild the complete canonical action. If
+result/process state is unknown, reconcile and never replay
 a mutation blindly. Attachments must be stable and request-scoped before
 submission. Large content must use file/artifact tools instead of inline JSON.
 
 Available tools and required fields are defined by the current v8 tool schema.
-"""
+""" + "\n" + PROJECT_EVIDENCE_ACTION_CONTRACT + "\n" + SINGLE_FENCE_TRANSPORT_CONTRACT

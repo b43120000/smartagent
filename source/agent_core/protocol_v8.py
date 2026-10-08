@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 PROTOCOL_NAME = "smartagent"
@@ -85,6 +85,22 @@ class ProtocolV8Error(ValueError):
         self.detail = str(detail)
         message = self.code if not self.detail else f"{self.code}:{self.detail}"
         super().__init__(message)
+
+
+@dataclass
+class TransportParseResult:
+    """Detailed, non-authoritative observations from one transport parse.
+
+    ``calls`` is populated only after the complete transport, action schemas,
+    and trailing commit all validate. ``block_map`` and ``normalizations`` are
+    diagnostic metadata and never grant execution authority on their own.
+    """
+
+    calls: list[dict[str, Any]]
+    diagnostics: list[dict[str, str]]
+    normalizations: list[str]
+    transport_kind: str
+    block_map: list[dict[str, Any]]
 
 
 def _jsonable(value: Any) -> Any:
@@ -261,59 +277,116 @@ def _extract_dom_tool_payloads(source: str) -> tuple[list[str], bool]:
     return payloads, not bool(prefix)
 
 
-def parse_v8_tool_transport(text: str) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Parse compact v8 fenced or browser-rendered transport."""
+def _reject_transport_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ProtocolV8Error("DUPLICATE_JSON_KEY", key)
+        value[key] = item
+    return value
+
+
+def _strip_terminal_fence_residue(value: str) -> tuple[str, bool]:
+    """Remove one standalone terminal Markdown fence from rendered DOM text."""
+    match = re.search(r"(?:^|\r?\n)[ \t]*```[ \t]*\Z", str(value or ""))
+    if not match:
+        return str(value or ""), False
+    return str(value or "")[:match.start()].rstrip(), True
+
+
+def _exact_bare_commit(value: str) -> dict[str, Any] | None:
+    """Return one exact trailing commit object; never recover an action."""
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    decoder = json.JSONDecoder(object_pairs_hook=_reject_transport_duplicate_keys)
+    try:
+        decoded, end = decoder.raw_decode(candidate)
+    except (json.JSONDecodeError, ProtocolV8Error):
+        return None
+    if candidate[end:].strip() or not isinstance(decoded, dict):
+        return None
+    return decoded if decoded.get("tool") == "turn_commit" else None
+
+
+def parse_v8_tool_transport_detailed(
+    text: str,
+    *,
+    missing_action_id_factory: Callable[[dict[str, Any], int], str] | None = None,
+) -> TransportParseResult:
+    """Parse compact v8 transport and report bounded lossless normalizations."""
     source = str(text or "").strip()
+    normalizations: list[str] = []
+    block_map: list[dict[str, Any]] = []
+
+    def failed(reason: str, detail: str, *, kind: str) -> TransportParseResult:
+        return TransportParseResult([], [{"reason": reason, "detail": detail}], normalizations, kind, block_map)
+
     if not source:
-        return [], [{"reason": "empty_response", "detail": "response is empty"}]
+        return failed("empty_response", "response is empty", kind="empty")
+
     opening = re.compile(r"```smartagent_tool(?:[ \t]+[^\r\n`]*)?[ \t]*\r?\n", re.IGNORECASE)
     closing = re.compile(r"\r?\n?[ \t]*```")
     payloads: list[str] = []
     spans: list[tuple[int, int]] = []
     cursor = 0
+    transport_kind = "fenced"
     while cursor < len(source):
         match = opening.search(source, cursor)
         if not match:
             break
         end = closing.search(source, match.end())
         if not end:
-            return [], [{"reason": "malformed_transport", "detail": "unclosed smartagent_tool fence"}]
+            return failed("malformed_transport", "unclosed smartagent_tool fence", kind=transport_kind)
         payloads.append(source[match.end():end.start()].strip())
         spans.append((match.start(), end.end()))
         cursor = end.end()
+
     if payloads:
         previous = 0
         for start, end in spans:
             if source[previous:start].strip():
-                return [], [{"reason": "transport_not_exclusive", "detail": "content outside v8 blocks"}]
+                return failed("transport_not_exclusive", "content outside v8 blocks", kind=transport_kind)
             previous = end
-        if source[previous:].strip():
-            return [], [{"reason": "transport_not_exclusive", "detail": "content outside v8 blocks"}]
+        suffix = source[previous:].strip()
+        if suffix:
+            suffix, fence_removed = _strip_terminal_fence_residue(suffix)
+            if fence_removed:
+                normalizations.append("TERMINAL_FENCE_RESIDUE_REMOVED")
+            bare_commit = _exact_bare_commit(suffix)
+            if bare_commit is None:
+                if not suffix and fence_removed:
+                    pass
+                else:
+                    return failed("transport_not_exclusive", "content outside v8 blocks", kind=transport_kind)
+            else:
+                payloads.append(suffix)
+                normalizations.append("TRAILING_BARE_TURN_COMMIT_ADOPTED")
     else:
+        transport_kind = "dom_rendered"
         payloads, dom_exclusive = _extract_dom_tool_payloads(source)
         if not payloads:
-            return [], [{"reason": "missing_smartagent_tool_envelope", "detail": "no v8 fenced or DOM block"}]
+            return failed(
+                "missing_smartagent_tool_envelope",
+                "no v8 fenced or DOM block",
+                kind=transport_kind,
+            )
         if not dom_exclusive:
-            return [], [{"reason": "transport_not_exclusive", "detail": "content outside DOM v8 blocks"}]
+            return failed("transport_not_exclusive", "content outside DOM v8 blocks", kind=transport_kind)
+        payloads[-1], fence_removed = _strip_terminal_fence_residue(payloads[-1])
+        if fence_removed:
+            normalizations.append("TERMINAL_FENCE_RESIDUE_REMOVED")
 
-    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        value: dict[str, Any] = {}
-        for key, item in pairs:
-            if key in value:
-                raise ProtocolV8Error("DUPLICATE_JSON_KEY", key)
-            value[key] = item
-        return value
-
-    # Models occasionally render two otherwise valid JSON objects inside one
-    # smartagent_tool fence.  Treat a fence as a strict JSON sequence rather
-    # than making the entire logical result unusable.  raw_decode still rejects
-    # prose, malformed escapes, duplicate keys, arrays, and every schema error
-    # below; this is transport normalization only and grants no action authority.
-    decoder = json.JSONDecoder(object_pairs_hook=reject_duplicate_keys)
+    # Models occasionally render multiple otherwise valid JSON objects inside
+    # one block. Treat a block as a strict JSON sequence. raw_decode still
+    # rejects prose, malformed escapes, duplicate keys, arrays, and schema
+    # errors; normalizing transport never grants action authority.
+    decoder = json.JSONDecoder(object_pairs_hook=_reject_transport_duplicate_keys)
     calls: list[dict[str, Any]] = []
     for index, payload in enumerate(payloads, 1):
         cursor = 0
         decoded_count = 0
+        tools: list[str] = []
         while cursor < len(payload):
             whitespace = re.match(r"\s*", payload[cursor:])
             cursor += len(whitespace.group(0)) if whitespace else 0
@@ -324,20 +397,40 @@ def parse_v8_tool_transport(text: str) -> tuple[list[dict[str, Any]], list[dict[
             except (json.JSONDecodeError, ProtocolV8Error) as exc:
                 code = exc.code if isinstance(exc, ProtocolV8Error) else "JSON_DECODE_ERROR"
                 detail = exc.detail if isinstance(exc, ProtocolV8Error) else str(exc)
-                return [], [{"reason": code, "detail": f"block={index};{detail}"}]
+                block_map.append({"block": index, "object_count": decoded_count, "tools": tools})
+                return failed(code, f"block={index};{detail}", kind=transport_kind)
             if not isinstance(decoded, dict):
-                return [], [{
-                    "reason": "ENVELOPE_NOT_OBJECT",
-                    "detail": f"block={index};object={decoded_count + 1}",
-                }]
+                block_map.append({"block": index, "object_count": decoded_count, "tools": tools})
+                return failed(
+                    "ENVELOPE_NOT_OBJECT",
+                    f"block={index};object={decoded_count + 1}",
+                    kind=transport_kind,
+                )
             calls.append(decoded)
+            tools.append(str(decoded.get("tool", "")))
             decoded_count += 1
             cursor = end
+        block_map.append({"block": index, "object_count": decoded_count, "tools": tools})
         if decoded_count == 0:
-            return [], [{"reason": "EMPTY_TOOL_BLOCK", "detail": f"block={index}"}]
+            return failed("EMPTY_TOOL_BLOCK", f"block={index}", kind=transport_kind)
+        if transport_kind == "dom_rendered" and decoded_count > 1:
+            normalizations.append("DOM_JSON_SEQUENCE_ACCEPTED")
+
     if not calls or calls[-1].get("tool") != "turn_commit":
-        return [], [{"reason": "missing_turn_commit", "detail": "last block is not turn_commit"}]
+        return failed("missing_turn_commit", "last block is not turn_commit", kind=transport_kind)
     for index, action in enumerate(calls[:-1], 1):
+        if "action_id" not in action and missing_action_id_factory is not None:
+            generated_action_id = str(missing_action_id_factory(action, index) or "").strip()
+            if not generated_action_id:
+                return failed(
+                    "MISSING_OR_INVALID_FIELD",
+                    f"action_index={index};tool={action.get('tool', '(missing)')};action_id",
+                    kind=transport_kind,
+                )
+            action["action_id"] = generated_action_id
+            normalizations.append(
+                f"RUNTIME_ACTION_ID_ASSIGNED:index={index};tool={action.get('tool', '')}"
+            )
         try:
             # Keep the raw action available for runtime FIELD_REPAIR. The
             # admission layer performs the full tool-specific required-field
@@ -347,12 +440,28 @@ def parse_v8_tool_transport(text: str) -> tuple[list[dict[str, Any]], list[dict[
                 allow_missing_fields=TOOL_REQUIRED_FIELDS.get(str(action.get("tool", "")), set()),
             )
         except ProtocolV8Error as exc:
-            return [], [{"reason": exc.code, "detail": f"block={index};{exc.detail}"}]
+            # ``index`` is the action ordinal in the decoded transport, not the
+            # Markdown/DOM block number.  Name it explicitly so recovery logs
+            # identify the malformed tool instead of misleading operators with
+            # messages such as ``block=1;action_id`` when one DOM block contains
+            # several JSON objects.
+            tool = str(action.get("tool", "") or "(missing)")
+            return failed(
+                exc.code,
+                f"action_index={index};tool={tool};{exc.detail}",
+                kind=transport_kind,
+            )
     try:
         validate_model_commit(calls[-1], len(calls) - 1)
     except ProtocolV8Error as exc:
-        return [], [{"reason": exc.code, "detail": exc.detail}]
-    return calls, []
+        return failed(exc.code, exc.detail, kind=transport_kind)
+    return TransportParseResult(calls, [], normalizations, transport_kind, block_map)
+
+
+def parse_v8_tool_transport(text: str) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Compatibility wrapper for compact v8 fenced or rendered transport."""
+    result = parse_v8_tool_transport_detailed(text)
+    return result.calls, result.diagnostics
 
 
 def build_result(
@@ -429,8 +538,10 @@ __all__ = [
     "ATTACHMENT_NOT_STABLE", "ATTACHMENT_STATES", "MODEL_ACTION_FIELDS",
     "MODEL_COMMIT_FIELDS", "PROTOCOL_FAMILY", "PROTOCOL_NAME", "PROTOCOL_VERSION",
     "RECONCILE_REQUIRED", "REPAIR_FIELD", "REPLAN_ACTION", "ProtocolV8Error",
+    "TransportParseResult",
     "RUNTIME_OWNED_FIELDS", "TOOL_REQUIRED_FIELDS", "PROJECT_SYNC_STRATEGIES", "V8RequestContext", "action_digest", "admit_action",
-    "build_result", "canonical_json", "next_attachment_state", "parse_v8_tool_transport", "session_identity",
+    "build_result", "canonical_json", "next_attachment_state", "parse_v8_tool_transport",
+    "parse_v8_tool_transport_detailed", "session_identity",
     "sha256_digest", "validate_field_repair", "validate_model_action",
     "validate_model_commit", "validate_result_ack", "validate_session_identity",
 ]

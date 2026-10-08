@@ -20,13 +20,23 @@ from agent_core.routing import (
     SYNC_FULL_BUNDLE, SYNC_INDEX_ONLY, lazy_context_sync_prompt,
     select_context_sync,
 )
-from agent_core.smartagent_protocol import parse_tool_calls, validate_tool_envelope
+from agent_core.smartagent_protocol import (
+    PROJECT_EVIDENCE_ACTION_CONTRACT,
+    SYSTEM_PROMPT_TEMPLATE,
+    parse_tool_calls,
+    validate_tool_envelope,
+)
 from agent_core.tools import execute_tool
+from WebAgent.protocol import render_initial_planner_toolkit
 
 
 class FakeAgent:
     def __init__(self, workspace_root: Path):
         self.workspace_root = workspace_root
+        self.planner_key = "webagent_direct"
+        self._models_registry = {
+            self.planner_key: {"provider": "web_scraper", "model": "chatgpt"},
+        }
         self._authorized_local_paths = []
         self.current_request_id = "REQUEST-PROJECT-ACCESS"
         self.current_task_id = "TASK-PROJECT-ACCESS"
@@ -35,8 +45,16 @@ class FakeAgent:
     def run_project_sync_transaction(self, *_args, **_kwargs):
         raise AssertionError("INDEX_ONLY must never invoke attachment transport")
 
+    def queue_attachments(self, *_args, **_kwargs):
+        raise AssertionError("project source read must route to query_project, not attachments")
+
 
 def run() -> None:
+    toolkit = render_initial_planner_toolkit()
+    assert PROJECT_EVIDENCE_ACTION_CONTRACT in toolkit
+    assert PROJECT_EVIDENCE_ACTION_CONTRACT in SYSTEM_PROMPT_TEMPLATE
+    assert "Known workspace-relative file path -> read_range" in toolkit
+
     with tempfile.TemporaryDirectory(prefix="smartagent-project-access-") as temp:
         container = Path(temp).resolve()
         project = container / "sample"
@@ -87,6 +105,39 @@ def run() -> None:
         })
         assert valid is False
         assert diagnostic["reason"] == "project_sync_strategy_invalid"
+
+        malformed_query = {
+            "tool": "query_project",
+            "action_id": "MISPLACED-QUERY-FIELDS",
+            "project_root": str(project),
+            "queries": ["hdrcore_value"],
+            "operation": "read_symbol",
+            "path": "src/main.cpp",
+            "symbol": "hdrcore_value",
+        }
+        valid, diagnostic = validate_tool_envelope(malformed_query)
+        assert valid is False
+        assert diagnostic["reason"] == "unexpected_field"
+        assert "operation" in diagnostic["detail"]
+        assert "queries[]" in diagnostic["suggestion"]
+        try:
+            execute_tool(malformed_query, agent=agent)
+        except ValueError as exc:
+            assert str(exc).startswith(
+                "query_project_top_level_query_fields_forbidden:"
+            )
+        else:
+            raise AssertionError("execution guard must reject misplaced query fields")
+
+        valid, diagnostic = validate_tool_envelope({
+            "tool": "query_project",
+            "action_id": "NARRATIVE-QUERY-SHORTHAND",
+            "project_root": str(project),
+            "queries": ["read src/main.cpp content"],
+        })
+        assert valid is False
+        assert diagnostic["reason"] == "query_project_structured_queries_required"
+        assert "Known workspace-relative file path -> read_range" in diagnostic["suggestion"]
 
         policy = json.loads(
             lazy_context_sync_prompt("inspect one file", project)
@@ -178,7 +229,26 @@ def run() -> None:
         assert capsule["attachments_uploaded"] == 0
         assert capsule["transport"] == "INLINE_QUERY_ONLY"
         assert capsule["file_count"] == 4
+        assert capsule["query_contract"]["queries_must_be_objects"] is True
+        assert capsule["query_contract"]["operation_selection"][
+            "known_workspace_relative_path"
+        ] == "read_range"
+        assert "next_cursor" in capsule["query_contract"]["pagination"]
         assert (project / ".agents" / "project_access" / "current.json").is_file()
+
+        # Web Planner read_file is attachment-backed.  Once an exact project
+        # root is authorized, source evidence must be routed back to bounded
+        # query_project operations rather than consuming an attachment slot.
+        agent._authorized_local_paths = [str(project)]
+        routed = execute_tool({
+            "tool": "read_file",
+            "path": str(main),
+        }, agent=agent, models=agent._models_registry)
+        assert routed.startswith("[WEBAGENT_EVIDENCE_ROUTE_REQUIRED]")
+        assert '"tool":"query_project"' in routed
+        assert '"operation":"read_range"' in routed
+        assert '"path":"src/main.cpp"' in routed
+        assert '"project_root":' in routed and project.name in routed
 
         result = json.loads(execute_tool({
             "tool": "query_project",

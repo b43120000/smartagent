@@ -8,11 +8,16 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping
 
-from agent_core.smartagent_protocol import format_tool_parse_diagnostics
+from agent_core.smartagent_protocol import (
+    PROJECT_EVIDENCE_ACTION_CONTRACT,
+    format_tool_parse_diagnostics,
+    validate_tool_envelope,
+)
 from agent_core.protocol_v9 import (
     ProtocolV8Error,
+    SINGLE_FENCE_TRANSPORT_CONTRACT,
     V8RequestContext,
     action_digest as v8_action_digest,
     admit_action as v8_admit_action,
@@ -22,6 +27,12 @@ from agent_core.protocol_v9 import (
 )
 from agent_core.result_exchange import prepare_tool_result
 from agent_core.narrative_bridge import NarrativeDecisionBridge
+from agent_core.capability_recovery import (
+    build_evidence_to_action_route,
+    build_result_evidence_to_action_route,
+    render_evidence_to_action_guidance,
+    render_result_evidence_to_action_guidance,
+)
 from agent_core.recovery_protocol import ACTION_EXECUTION_MODE
 from agent_core.payload_budget import ROUND_INLINE_MAX_BYTES, utf8_size
 from agent_core.routing import lazy_context_sync_prompt
@@ -37,7 +48,7 @@ from agent_core.task_progress import (
     validate_model_progress,
 )
 
-from .protocol import SUPPORTED_ACTION_TOOLS
+from .protocol import SUPPORTED_ACTION_TOOLS, render_initial_planner_toolkit
 from .tool_context import WebAgentToolContext
 
 
@@ -178,6 +189,7 @@ class WebAgentProtocolLoop:
         self.image_delivery_plan: dict = {}
         self.authorized_paths: list[str] = []
         self.pending_verification_requirement: dict = {}
+        self.pending_result_recovery: dict = {}
         self.execution_state = "NOT_STARTED"
         self.protocol_state = "IDLE"
         self.terminal_candidate: dict = {}
@@ -315,9 +327,9 @@ class WebAgentProtocolLoop:
             + "\n"
             + trace
             + "\n[WEBAGENT_ACK_REQUIRED]\n"
-            + "只能輸出 compact v9 smartagent_tool blocks，不得輸出 blocks 以外的自然語言；"
-            + "每輪恰好一個 report_progress，最後一個 block 必須是 "
-            + "{\"tool\":\"turn_commit\",\"action_count\":N}。\n"
+            + "只能輸出 compact v9 smartagent_tool transport，不得輸出 blocks 以外的自然語言。\n"
+            + SINGLE_FENCE_TRANSPORT_CONTRACT
+            + "\n"
             + "若已輸出 final_response 且 outcome 為 SUCCESS/FAILED/PARTIAL，"
             + "decision 必須是 COMPLETE，不得填 CONTINUE。\n"
             + local_commit_line(expected)
@@ -336,10 +348,18 @@ class WebAgentProtocolLoop:
                 "tool": str(item.get("tool", "") or ""),
                 "execution_status": str(item.get("execution_status", "UNKNOWN") or "UNKNOWN"),
                 "verification_status": str(item.get("verification_status", "UNKNOWN") or "UNKNOWN"),
+                "effective_verification_status": str(
+                    item.get("effective_verification_status", item.get("verification_status", "UNKNOWN"))
+                    or "UNKNOWN"
+                ),
+                "effective_verification_id": str(item.get("effective_verification_id", "") or ""),
+                "verifies_action_id": str(item.get("verifies_action_id", "") or ""),
+                "condition_id": str(item.get("condition_id", "") or ""),
             })
         payload = {
             "available_refs": sorted(self._runtime_evidence_refs()),
-            "verification_status": self.tools.last_verification_status,
+            "verification_status": self._effective_verification_status(),
+            "legacy_last_verification_status": self.tools.last_verification_status,
             "execution_state": self.execution_state,
             "protocol_state": self.protocol_state,
             "action_evidence": evidence[-16:],
@@ -382,11 +402,87 @@ class WebAgentProtocolLoop:
         return missing
 
     @staticmethod
+    def _run_command_verification_detail(action: dict) -> str:
+        """Describe a malformed verification contract without calling it missing."""
+        issues: list[str] = []
+        if not str(action.get("success_criteria", "") or "").strip():
+            issues.append("missing=success_criteria")
+        verify = action.get("verify")
+        if verify is None or verify == []:
+            issues.append("missing=verify")
+        else:
+            checks = list(verify) if isinstance(verify, list) else ([verify] if isinstance(verify, dict) else [])
+            if not checks:
+                issues.append(f"invalid=verify:expected_object_or_list_of_objects;actual={type(verify).__name__}")
+            else:
+                for index, item in enumerate(checks):
+                    if not isinstance(item, dict) or not item:
+                        issues.append(
+                            f"invalid=verify[{index}]:expected_non_empty_object;actual={type(item).__name__}"
+                        )
+        return ";".join(issues)
+
+    @staticmethod
+    def _contains_unquoted_shell_operator(command: str, operator: str) -> bool:
+        quote = ""
+        escaped = False
+        index = 0
+        while index < len(command):
+            char = command[index]
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if char == "`":
+                escaped = True
+                index += 1
+                continue
+            if quote:
+                if char == quote:
+                    quote = ""
+                index += 1
+                continue
+            if char in {"'", '"'}:
+                quote = char
+                index += 1
+                continue
+            if command.startswith(operator, index):
+                return True
+            index += 1
+        return False
+
+    @classmethod
+    def _run_command_shell_mismatch_detail(cls, action: dict) -> str:
+        """Reject unambiguous CMD syntax before the PowerShell executor runs it."""
+        command = str(action.get("command", "") or "").strip()
+        if not command or re.match(r"(?i)^cmd(?:\.exe)?\s+/(?:c|k)\b", command):
+            return ""
+        detected: list[str] = []
+        if re.search(r"(?i)(?:^|[;&|]\s*)cd\s+/d(?:\s|$)", command):
+            detected.append("cmd_cd_d")
+        if cls._contains_unquoted_shell_operator(command, "&&"):
+            detected.append("cmd_and_operator")
+        if cls._contains_unquoted_shell_operator(command, "||"):
+            detected.append("cmd_or_operator")
+        if not detected:
+            return ""
+        return json.dumps(
+            {
+                "executor": "Windows PowerShell 5.1",
+                "detected": detected,
+                "command": command,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
     def _classify_action_evidence(action: dict, result: str) -> dict:
         """Separate execution facts from postcondition verification facts."""
         text = str(result or "")
         verification_match = re.search(
-            r"(?m)^VERIFICATION_STATUS:\s*(PASS|FAIL|UNVERIFIED)\s*$", text,
+            r"(?m)^VERIFICATION_STATUS:\s*(PASS|FAIL|UNVERIFIED|SPEC_INVALID)\s*$", text,
         )
         verification = verification_match.group(1) if verification_match else "UNKNOWN"
         execution = "SUCCEEDED"
@@ -396,7 +492,8 @@ class WebAgentProtocolLoop:
             execution = "SUCCEEDED" if raw_exit == "0" else "FAILED"
         elif any(marker in text for marker in (
             "[SECURITY_COMMAND_REJECTED]", "[TOOL_SCOPE_REJECTED]",
-            "[WEBAGENT_TOOL_REJECTED]", "[PROTOCOL_ERROR]",
+            "[WEBAGENT_TOOL_REJECTED]", "[WEBAGENT_EVIDENCE_ROUTE_REQUIRED]",
+            "[PROTOCOL_ERROR]",
         )):
             execution = "FAILED"
         return {
@@ -404,6 +501,81 @@ class WebAgentProtocolLoop:
             "execution_status": execution,
             "verification_status": verification,
         }
+
+    @staticmethod
+    def _entry_verification_status(item: dict) -> str:
+        return str(
+            item.get("effective_verification_status", item.get("verification_status", "UNKNOWN"))
+            or "UNKNOWN"
+        ).upper()
+
+    def _effective_verification_status(
+        self,
+        evidence_refs: list[str] | set[str] | tuple[str, ...] | None = None,
+        *,
+        matched_condition: str = "",
+    ) -> str:
+        """Resolve terminal verification from request-scoped action evidence.
+
+        A compatibility fallback to ``last_verification_status`` is used only
+        when no referenced action evidence exists.  Once action evidence is
+        available, an unrelated later PASS cannot erase a referenced FAIL.
+        """
+        refs = [str(item) for item in list(evidence_refs or [])]
+        if refs:
+            entries = [self.action_result_ledger[item] for item in refs if item in self.action_result_ledger]
+        else:
+            entries = list(self.action_result_ledger.values())
+        condition = str(matched_condition or "").strip()
+        if condition:
+            scoped = [item for item in entries if str(item.get("condition_id", "") or "").strip() == condition]
+            if scoped:
+                entries = scoped
+        statuses = [self._entry_verification_status(item) for item in entries]
+        statuses = [item for item in statuses if item in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}]
+        if not statuses:
+            return str(self.tools.last_verification_status or "UNKNOWN").upper()
+        if "FAIL" in statuses:
+            return "FAIL"
+        if "SPEC_INVALID" in statuses:
+            return "SPEC_INVALID"
+        if "UNVERIFIED" in statuses:
+            return "UNVERIFIED"
+        return "PASS"
+
+    def _record_action_result_evidence(self, action: dict, ledger_entry: dict) -> dict:
+        """Append verification history and apply an explicit scoped supersession."""
+        action_id = str(action.get("action_id", "") or "")
+        verifies_action_id = str(action.get("verifies_action_id", "") or "").strip()
+        target = self.action_result_ledger.get(verifies_action_id) if verifies_action_id else None
+        condition_id = str(action.get("condition_id", "") or "").strip()
+        if not condition_id and target is not None:
+            condition_id = str(target.get("condition_id", "") or "").strip()
+        status = str(ledger_entry.get("verification_status", "UNKNOWN") or "UNKNOWN").upper()
+        ledger_entry["condition_id"] = condition_id
+        ledger_entry["verifies_action_id"] = verifies_action_id
+        ledger_entry["effective_verification_status"] = status
+        ledger_entry.setdefault("verification_history", [])
+        if status in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}:
+            verification_id = "VER-" + uuid.uuid4().hex[:12].upper()
+            prior_id = str(target.get("effective_verification_id", "") or "") if target else ""
+            record = {
+                "verification_id": verification_id,
+                "action_id": action_id,
+                "status": status,
+                "round": self.turn_id,
+                "condition_id": condition_id,
+                "supersedes_verification_id": prior_id,
+            }
+            ledger_entry["verification_id"] = verification_id
+            ledger_entry["effective_verification_id"] = verification_id
+            ledger_entry["verification_history"].append(dict(record))
+            if target is not None:
+                target.setdefault("verification_history", []).append(dict(record))
+                target["effective_verification_id"] = verification_id
+                target["effective_verification_status"] = status
+        self.action_result_ledger[action_id] = ledger_entry
+        return ledger_entry
 
     def _verification_requirement_diagnostic(
         self,
@@ -416,10 +588,13 @@ class WebAgentProtocolLoop:
         if not requirement:
             requirement = {
                 "missing_condition": condition or "取得支持 terminal SUCCESS 的 request-scoped PASS evidence",
-                "current_verification_status": str(self.tools.last_verification_status or "UNKNOWN").upper(),
+                "current_verification_status": self._effective_verification_status(
+                    normalized_progress.get("evidence_refs") or [],
+                    matched_condition=condition,
+                ),
                 "required_action": "run_command",
                 "required_fields": ["command", "success_criteria", "verify"],
-                "supported_verify_actions": ["run_command", "file_exists", "file_contains"],
+                "supported_verify_actions": ["run_command", "file_exists", "file_contains", "expect_regex"],
                 "evidence_refs": list(normalized_progress.get("evidence_refs") or []),
             }
             self.pending_verification_requirement = dict(requirement)
@@ -431,9 +606,145 @@ class WebAgentProtocolLoop:
             "suggestion": (
                 "下一輪必須使用 decision=CONTINUE，並輸出至少一個 run_command action；"
                 "該 action 必須同時包含 command、描述精確成功條件的 success_criteria，以及非空 verify。"
-                "verify 可用 run_command/file_exists/file_contains。Runtime 執行後會回傳 PASS 或 FAIL；"
+                "補驗證時用 verifies_action_id 指向原 action。verify 可用 "
+                "run_command/file_exists/file_contains，並可用 expect_regex 驗證結構化輸出。"
+                "Runtime 執行後會回傳 PASS、FAIL 或 SPEC_INVALID；"
                 "在取得新狀態前不得只回 report_progress，也不得再次宣告 SUCCESS。"
             ),
+        }
+
+    @staticmethod
+    def _normalize_report_progress_envelope(action: dict) -> tuple[dict, dict | None]:
+        """Accept one unambiguous legacy/narrative ``progress`` wrapper.
+
+        The canonical wire shape keeps Progress fields beside ``tool`` and
+        ``action_id``.  Some otherwise valid model replies wrap those fields in
+        ``progress``.  Runtime may flatten that shape only when no outer value
+        conflicts with the nested value; ambiguity remains fail-closed.
+        """
+        normalized = dict(action or {})
+        # runtime_state is displayed to the model as read-only context.  Models
+        # sometimes echo it back; strip it instead of rejecting an otherwise
+        # valid progress decision because only Runtime may mutate this field.
+        normalized.pop("runtime_state", None)
+        if "progress" not in normalized:
+            return normalized, None
+        nested = normalized.get("progress")
+        if not isinstance(nested, dict):
+            return {}, {
+                "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+                "reason": "progress_wrapper_invalid",
+                "detail": "progress must be an object when the compatibility wrapper is used",
+                "suggestion": "移除 progress wrapper，將 Progress 欄位直接放在 report_progress 最外層。",
+            }
+        nested = dict(nested)
+        nested.pop("runtime_state", None)
+        conflicts = sorted(
+            key for key, value in nested.items()
+            if key in normalized and key != "progress" and normalized.get(key) != value
+        )
+        if conflicts:
+            return {}, {
+                "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+                "reason": "progress_wrapper_conflict",
+                "detail": "conflicting_fields=" + ",".join(conflicts),
+                "suggestion": (
+                    "外層與 progress wrapper 欄位衝突；不得猜測。移除 wrapper，並在 report_progress "
+                    "最外層為每個欄位只保留一個值。"
+                ),
+            }
+        normalized.pop("progress", None)
+        for key, value in nested.items():
+            normalized.setdefault(key, value)
+        return normalized, None
+
+    @staticmethod
+    def _progress_capability_guidance(progress: dict) -> str:
+        """Return bounded tool guidance when the model incorrectly waits for tools."""
+        haystack = "\n".join(
+            str(progress.get(key, "") or "")
+            for key in (
+                "base_evaluation", "current_focus", "next_action", "decision_reason",
+            )
+        ).casefold()
+        blocked_markers = (
+            "沒有提供可執行", "沒有可用", "尚無可執行", "等待可用", "等待修改 action",
+            "取得檔案修改", "取得支援檔案修改", "無法取得修改", "no available tool",
+            "tool is unavailable", "waiting for a tool", "waiting for edit",
+        )
+        if not any(marker.casefold() in haystack for marker in blocked_markers):
+            return ""
+        available = [
+            name for name in (
+                "write_file", "begin_file_write", "write_file_chunk", "commit_file_write",
+                "web_edit_file", "run_command", "read_file", "query_project", "project_sync",
+            )
+            if name in SUPPORTED_ACTION_TOOLS
+        ]
+        return (
+            "[SMARTAGENT_CAPABILITY_GUIDANCE] Runtime 已提供以下可執行 action："
+            + ", ".join(available)
+            + "。不得再以『缺少修改/命令能力』等待；請依檔案大小與任務需求選擇 action。"
+        ) if available else ""
+
+    @staticmethod
+    def _declared_next_tools(next_action: object) -> list[str]:
+        """Extract explicit canonical tool names from Progress.next_action.
+
+        This is intentionally lexical rather than inferential.  Runtime may
+        enforce an exact tool name the model wrote, but it must not translate
+        arbitrary prose into new execution authority.
+        """
+        text = str(next_action or "")
+        if not text:
+            return []
+        declared = []
+        for tool in sorted(SUPPORTED_ACTION_TOOLS, key=len, reverse=True):
+            if tool in {"report_progress", "final_response"}:
+                continue
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(tool)}(?![A-Za-z0-9_])"
+            if re.search(pattern, text, flags=re.IGNORECASE):
+                declared.append(tool)
+        return sorted(set(declared))
+
+    @classmethod
+    def _progress_action_consistency_diagnostic(
+        cls, normalized_progress: Mapping[str, Any], operational: list[dict],
+    ) -> dict | None:
+        """Require explicitly declared next tools to be emitted in this turn.
+
+        The gate checks action presence only.  Tool execution and result
+        verification remain owned by the later Runtime lifecycle.
+        """
+        if str(normalized_progress.get("decision", "") or "").upper() != "CONTINUE":
+            return None
+        declared = cls._declared_next_tools(normalized_progress.get("next_action", ""))
+        if not declared:
+            return None
+        actual = sorted({
+            str(action.get("tool", "") or "")
+            for action in operational
+            if str(action.get("tool", "") or "") not in {"", "report_progress", "final_response"}
+        })
+        if any(tool in actual for tool in declared):
+            return None
+        reason = "declared_next_action_missing" if not actual else "declared_next_action_mismatch"
+        return {
+            "marker": "[WEBAGENT_PROGRESS_ACTION_REJECTED]",
+            "reason": reason,
+            "detail": (
+                "decision=CONTINUE;declared_next_tools="
+                + json.dumps(declared, ensure_ascii=False, separators=(",", ":"))
+                + ";actual_operational_tools="
+                + json.dumps(actual, ensure_ascii=False, separators=(",", ":"))
+            ),
+            "suggestion": (
+                "Progress.next_action 已明確宣告工具；同一輪必須輸出其中一個完整 canonical action。"
+                "若 prerequisite 尚不足，請先把 next_action 改成真正要執行的 prerequisite tool 並輸出該 action。"
+                "這一層只驗證 action 是否送出，不代表 action 已成功，也不得提前宣告結果。"
+            ),
+            "declared_next_tools": declared,
+            "actual_operational_tools": actual,
         }
 
     @staticmethod
@@ -446,11 +757,26 @@ class WebAgentProtocolLoop:
                 continue
             tool = str(call.get("tool", "") or "")
             if tool == "report_progress":
+                nested = call.get("progress")
+                progress = nested if isinstance(nested, dict) else call
                 semantic_calls.append({
                     "tool": tool,
-                    "decision": str(call.get("decision", "") or "").upper(),
-                    "outcome": str(call.get("outcome", "") or "").upper(),
-                    "evidence_refs": sorted(str(item) for item in list(call.get("evidence_refs") or [])),
+                    "progress_shape": "nested" if isinstance(nested, dict) else "flat",
+                    "current_step": progress.get("current_step"),
+                    "total_steps": progress.get("total_steps"),
+                    "decision": str(progress.get("decision", "") or "").upper(),
+                    "outcome": str(progress.get("outcome", "") or "").upper(),
+                    "matched_condition": str(progress.get("matched_condition", "") or ""),
+                    "completion_contract": progress.get("completion_contract", {}),
+                    "evidence_refs": sorted(str(item) for item in list(progress.get("evidence_refs") or [])),
+                    "steps": [
+                        {
+                            "step": item.get("step"),
+                            "status": str(item.get("status", "") or "").upper(),
+                        }
+                        for item in list(progress.get("steps") or [])
+                        if isinstance(item, dict)
+                    ],
                 })
             elif tool == "final_response":
                 # User-facing wording is not progress.  Excluding it lets the
@@ -467,7 +793,13 @@ class WebAgentProtocolLoop:
         return json.dumps(
             {
                 "diagnostics": [
-                    {"reason": item.get("reason", "")}
+                    {
+                        "reason": item.get("reason", ""),
+                        "detail": item.get("detail", ""),
+                        "condition_class": item.get("condition_class", ""),
+                        "actual_condition": item.get("actual_condition", ""),
+                        "allowed_conditions": list(item.get("allowed_conditions", []) or []),
+                    }
                     for item in diagnostics
                 ],
                 "answer": answer,
@@ -495,14 +827,17 @@ class WebAgentProtocolLoop:
         current = list(normalized_progress.get("evidence_refs") or [])
         if any(item in self.action_result_ledger for item in current):
             return False
-        verification = str(self.tools.last_verification_status or "").upper()
+        latest = result_refs[-1]
+        verification = self._effective_verification_status(
+            [latest],
+            matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
+        )
         if (
             normalized_progress.get("decision") == "COMPLETE"
             and normalized_progress.get("outcome") == "SUCCESS"
-            and verification in {"FAIL", "UNVERIFIED"}
+            and verification in {"FAIL", "UNVERIFIED", "SPEC_INVALID"}
         ):
             return False
-        latest = result_refs[-1]
         current.append(latest)
         progress_action["evidence_refs"] = current
         normalized_progress["evidence_refs"] = current
@@ -589,7 +924,11 @@ class WebAgentProtocolLoop:
                 for item in evidence
             ):
                 return False
-            if str(self.tools.last_verification_status or "").upper() == "FAIL":
+            verification = self._effective_verification_status(
+                result_refs,
+                matched_condition=matched,
+            )
+            if verification in {"FAIL", "SPEC_INVALID", "UNVERIFIED"}:
                 return False
 
         progress_action["decision"] = "COMPLETE"
@@ -636,20 +975,138 @@ class WebAgentProtocolLoop:
                 "detail": f"expected=1;actual={len(progress_actions)}",
                 "suggestion": "每輪必須輸出且只輸出一個 report_progress。",
             }]
+        normalized_progress_action, wrapper_diagnostic = self._normalize_report_progress_envelope(
+            progress_actions[0]
+        )
+        if wrapper_diagnostic:
+            return [], [wrapper_diagnostic]
+        progress_index = actions.index(progress_actions[0])
+        actions[progress_index] = normalized_progress_action
+        progress_actions = [normalized_progress_action]
         operational = [action for action in actions if action.get("tool") != "report_progress"]
+        for action in operational:
+            if str(action.get("tool", "") or "") != "query_project":
+                continue
+            queries = list(action.get("queries") or [])
+            invalid_indexes = [
+                index
+                for index, query in enumerate(queries, 1)
+                if not isinstance(query, Mapping)
+                or not str(query.get("operation", "") or "").strip()
+            ]
+            if invalid_indexes:
+                return [], [{
+                    "marker": "[WEBAGENT_QUERY_PROJECT_REJECTED]",
+                    "reason": "query_project_structured_queries_required",
+                    "detail": (
+                        "queries[] must contain explicit operation objects; invalid_indexes="
+                        + json.dumps(invalid_indexes, separators=(",", ":"))
+                    ),
+                    "suggestion": PROJECT_EVIDENCE_ACTION_CONTRACT,
+                }]
+        pending_edit_recovery = dict(self.pending_result_recovery or {})
+        if (
+            pending_edit_recovery.get("active")
+            and pending_edit_recovery.get("blocked_tool") == "apply_edit_plan"
+            and not pending_edit_recovery.get("prerequisite_satisfied")
+        ):
+            if any(
+                str(action.get("tool", "") or "") == "apply_edit_plan"
+                for action in operational
+            ):
+                return [], [{
+                    "marker": "[WEBAGENT_EDIT_PLAN_PREREQUISITE_REQUIRED]",
+                    "reason": "edit_plan_prerequisite_unsatisfied",
+                    "detail": (
+                        "apply_edit_plan is blocked until structured read_range evidence is complete; "
+                        "missing_paths="
+                        + json.dumps(
+                            pending_edit_recovery.get("missing_content_paths", []),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    ),
+                    "suggestion": render_result_evidence_to_action_guidance(
+                        pending_edit_recovery
+                    ),
+                }]
+            submitted_queries = [
+                action for action in operational
+                if str(action.get("tool", "") or "") == "query_project"
+            ]
+            expected_queries = [
+                action for action in list(pending_edit_recovery.get("next_actions") or [])
+                if isinstance(action, dict)
+                and str(action.get("tool", "") or "") == "query_project"
+            ]
+            if submitted_queries and expected_queries:
+                def query_signature(action: dict) -> tuple:
+                    return tuple(
+                        (
+                            str(query.get("operation", "") or "").lower(),
+                            str(query.get("path", "") or "").replace("\\", "/").lstrip("/"),
+                            int(query.get("start_line", 1) or 1),
+                            int(query.get("end_line", 240) or 240),
+                        )
+                        for query in list(action.get("queries") or [])
+                        if isinstance(query, dict)
+                    )
+                allowed = {query_signature(action) for action in expected_queries}
+                if not any(query_signature(action) in allowed for action in submitted_queries):
+                    return [], [{
+                        "marker": "[WEBAGENT_EDIT_PLAN_PREREQUISITE_REQUIRED]",
+                        "reason": "edit_plan_prerequisite_action_mismatch",
+                        "detail": "query_project must use the exact Runtime-issued read_range path and range",
+                        "suggestion": render_result_evidence_to_action_guidance(
+                            pending_edit_recovery
+                        ),
+                    }]
         if getattr(self.tools, "_bootstrap_install_root", None) is None:
+            evidence_route = build_evidence_to_action_route(
+                operational, self.authorized_paths,
+            )
+            if evidence_route.get("active"):
+                return [], [{
+                    "marker": "[WEBAGENT_EVIDENCE_ROUTE_REQUIRED]",
+                    "reason": "web_planner_project_read_requires_query_project",
+                    "detail": (
+                        "read_file would upload project source instead of returning bounded "
+                        "Runtime evidence; routed_files="
+                        + json.dumps(
+                            evidence_route.get("routed_files", []),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    ),
+                    "suggestion": render_evidence_to_action_guidance(evidence_route),
+                }]
             for action in operational:
                 if str(action.get("tool", "") or "") != "run_command":
                     continue
-                missing = self._run_command_verification_fields(action)
-                if missing:
+                verification_detail = self._run_command_verification_detail(action)
+                if verification_detail:
                     return [], [{
                         "marker": "[WEBAGENT_VERIFICATION_REQUIRED]",
                         "reason": "run_command_verification_contract_required",
-                        "detail": "missing=" + ",".join(missing),
+                        "detail": verification_detail,
                         "suggestion": (
-                            "保留同一 command 與決策，先補上精確 success_criteria 及非空 verify；"
+                            "保留同一 command 與決策。verify 必須是 non-empty object 或 object list，"
+                            "不得使用自然語言字串。可直接使用："
+                            '"verify":[{"action":"run_command","command":"驗證用 PowerShell 指令",'
+                            '"expect_exit_code":0,"expect_contains":"可選關鍵字"}]。'
                             "Runtime 必須在執行前取得完成條件，避免工具成功後才追討證據。"
+                        ),
+                    }]
+                shell_detail = self._run_command_shell_mismatch_detail(action)
+                if shell_detail:
+                    return [], [{
+                        "marker": "[WEBAGENT_SHELL_MISMATCH]",
+                        "reason": "run_command_shell_syntax_mismatch",
+                        "detail": shell_detail,
+                        "suggestion": (
+                            "run_command 固定由 Windows PowerShell 5.1 執行。不得使用 CMD 的 cd /d、"
+                            "裸露 && 或 ||。Git 請改用 git -C 'E:\\path\\to\\repo' <args>；"
+                            "一般目錄切換請使用 Set-Location -LiteralPath 'E:\\path'，多指令以 ; 分隔。"
                         ),
                     }]
         if any(action.get("tool") == "final_response" for action in operational) and (
@@ -667,14 +1124,35 @@ class WebAgentProtocolLoop:
         try:
             normalized_progress = validate_model_progress(progress_actions[0], self.progress_ledger)
         except TaskProgressError as exc:
-            return [], [{
+            diagnostic = {
                 "marker": "[WEBAGENT_PROGRESS_REJECTED]",
                 "reason": "invalid_progress_payload",
                 "detail": str(exc),
                 "suggestion": "保留決策，只修正 report_progress 的階段、Base、steps 或文字欄位。",
-            }]
+            }
+            repair_context = dict(getattr(exc, "repair_context", {}) or {})
+            if repair_context:
+                diagnostic.update(repair_context)
+            return [], [diagnostic]
         decision = normalized_progress["decision"]
         outcome = normalized_progress["outcome"]
+        action_consistency = self._progress_action_consistency_diagnostic(
+            normalized_progress, operational,
+        )
+        if action_consistency:
+            return [], [action_consistency]
+        if decision == "CONTINUE" and float(normalized_progress["current_step"]) >= float(normalized_progress["total_steps"]):
+            evidence_actions = [
+                item for item in operational
+                if item.get("tool") not in {"final_response", "report_progress"}
+            ]
+            if not evidence_actions:
+                return [], [{
+                    "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+                    "reason": "final_step_continue_requires_action",
+                    "detail": "current_step=total_steps may continue only while an evidence-producing final-step action is present",
+                    "suggestion": "保留最後一步 IN_PROGRESS，並在同輪輸出補驗證或修正 action；否則改為 COMPLETE。",
+                }]
         evidence_refs = set(normalized_progress["evidence_refs"])
         unknown_refs = sorted(evidence_refs - self._runtime_evidence_refs())
         if unknown_refs:
@@ -696,6 +1174,15 @@ class WebAgentProtocolLoop:
                 "detail": "terminal decision must reference at least one completed action result",
                 "suggestion": "從 [RUNTIME_EVIDENCE] 引用支持終止判斷的 action_id。",
             }]
+        for action in operational:
+            verifies_action_id = str(action.get("verifies_action_id", "") or "").strip()
+            if verifies_action_id and verifies_action_id not in self.action_result_ledger:
+                return [], [{
+                    "marker": "[WEBAGENT_VERIFICATION_LINK_REJECTED]",
+                    "reason": "verifies_action_id_unknown",
+                    "detail": f"verifies_action_id={verifies_action_id}",
+                    "suggestion": "verifies_action_id 必須引用 [RUNTIME_EVIDENCE] 中同一 request 已完成的 action_id。",
+                }]
         if decision == "COMPLETE" and (
             len(operational) != 1 or operational[0].get("tool") != "final_response"
         ):
@@ -712,7 +1199,11 @@ class WebAgentProtocolLoop:
                 "marker": "[WEBAGENT_PROGRESS_REJECTED]",
                 "reason": "continue_decision_forbids_final_response",
                 "detail": "decision=CONTINUE cannot terminate the task",
-                "suggestion": "仍需執行就輸出明確 action；已完成則改為 decision=COMPLETE。",
+                "suggestion": (
+                    "二選一：若仍需執行，移除 final_response 並輸出至少一個明確 action；"
+                    "若任務已完成，將 current_step 設為 total_steps、所有 steps[].status 設為 "
+                    "COMPLETED，並使用 decision=COMPLETE 與 SUCCESS/FAILED/PARTIAL outcome。"
+                ),
             }]
         if decision == "INTERRUPT" and (
             len(operational) > 1
@@ -724,12 +1215,15 @@ class WebAgentProtocolLoop:
                 "detail": "decision=INTERRUPT may only include an explanatory final_response",
                 "suggestion": "中斷時不要再要求本機 action；可附一個 final_response 說明原因。",
             }]
-        verification_status = str(self.tools.last_verification_status or "").upper()
+        verification_status = self._effective_verification_status(
+            evidence_refs,
+            matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
+        )
         if verification_status in {"PASS", "FAIL"}:
             self.pending_verification_requirement = {}
         if (
             self.pending_verification_requirement
-            and verification_status == "UNVERIFIED"
+            and verification_status in {"UNVERIFIED", "SPEC_INVALID"}
             and decision == "CONTINUE"
             and not self._has_structured_verification_action(operational)
         ):
@@ -737,7 +1231,7 @@ class WebAgentProtocolLoop:
                 normalized_progress,
                 reason="verification_evidence_action_required",
             )]
-        if decision == "COMPLETE" and outcome == "SUCCESS" and verification_status == "UNVERIFIED":
+        if decision == "COMPLETE" and outcome == "SUCCESS" and verification_status in {"UNVERIFIED", "SPEC_INVALID"}:
             final_action = next(
                 (item for item in operational if item.get("tool") == "final_response"),
                 {},
@@ -748,17 +1242,17 @@ class WebAgentProtocolLoop:
                 "content": str(final_action.get("content", "") or ""),
                 "matched_condition": str(normalized_progress.get("matched_condition", "") or ""),
                 "evidence_refs": list(normalized_progress.get("evidence_refs") or []),
-                "verification_status": "UNVERIFIED",
+                "verification_status": verification_status,
             }
             self.pending_verification_requirement = {
                 "missing_condition": (
                     str(normalized_progress.get("matched_condition", "") or "").strip()
                     or "取得支持 terminal SUCCESS 的 request-scoped PASS evidence"
                 ),
-                "current_verification_status": "UNVERIFIED",
+                "current_verification_status": verification_status,
                 "required_action": "run_command",
                 "required_fields": ["command", "success_criteria", "verify"],
-                "supported_verify_actions": ["run_command", "file_exists", "file_contains"],
+                "supported_verify_actions": ["run_command", "file_exists", "file_contains", "expect_regex"],
                 "evidence_refs": list(normalized_progress.get("evidence_refs") or []),
             }
             return [], [self._verification_requirement_diagnostic(
@@ -770,7 +1264,7 @@ class WebAgentProtocolLoop:
                 "marker": "[WEBAGENT_PROGRESS_REJECTED]",
                 "reason": "success_contradicts_runtime_verification",
                 "detail": f"model_outcome=SUCCESS;verification={verification_status}",
-                "suggestion": "依目前 FAIL evidence 回覆 FAILED/PARTIAL，或執行修正 action 後再用結構化 verify 重新驗證。",
+                "suggestion": "依目前 FAIL evidence 回覆 FAILED/PARTIAL，或以 verifies_action_id 綁定原 action，執行修正驗證後再判斷。",
             }]
         context = V8RequestContext(
             self.run_id,
@@ -788,6 +1282,25 @@ class WebAgentProtocolLoop:
                     "reason": "unsupported_tool",
                     "detail": f"action_index={index};tool={tool_name}",
                     "suggestion": "只使用 protocol.py 宣告的 supported action tool。",
+                })
+                continue
+            envelope_valid, envelope_diagnostic = validate_tool_envelope(
+                action,
+                block_index=index,
+            )
+            if not envelope_valid:
+                diagnostic = dict(envelope_diagnostic or {})
+                diagnostics.append({
+                    "marker": diagnostic.get("marker", "[WEBAGENT_V8_REJECTED]"),
+                    "reason": diagnostic.get("reason", "invalid_tool_envelope"),
+                    "detail": (
+                        f"action_index={index};action_id={action.get('action_id', '')};"
+                        f"{diagnostic.get('detail', '')}"
+                    ),
+                    "suggestion": diagnostic.get(
+                        "suggestion",
+                        "依 canonical tool schema 重建 action。",
+                    ),
                 })
                 continue
             try:
@@ -835,17 +1348,104 @@ class WebAgentProtocolLoop:
                 raise RuntimeError(f"action_id payload mismatch: {action_id}")
             return str(cached["result"])
         raw_result = self.tools.execute(action)
+        project_root_candidates = [
+            str(item).strip() for item in self.authorized_paths if str(item).strip()
+        ]
+        for entry in self.action_ledger.values():
+            previous_action = entry.get("action")
+            if not isinstance(previous_action, dict):
+                continue
+            for field in ("project_root", "workspace"):
+                candidate = str(previous_action.get(field, "") or "").strip()
+                if candidate:
+                    project_root_candidates.append(candidate)
+        project_root_hint = max(
+            project_root_candidates,
+            key=lambda item: len(Path(item).parts),
+            default="",
+        )
+        recovery_context = build_result_evidence_to_action_route(
+            action,
+            raw_result,
+            project_root_hint=project_root_hint,
+            prior_context=self.pending_result_recovery,
+        )
+        if recovery_context.get("active"):
+            self.pending_result_recovery = dict(recovery_context)
+        elif str(action.get("tool", "") or "") in {
+            "validate_edit_plan", "apply_edit_plan",
+            "propose_task_plan", "propose_task_plan_file",
+        }:
+            self.pending_result_recovery = {}
         result = prepare_tool_result(action, raw_result, self.tools)
         evidence = self._classify_action_evidence(action, result)
         self.action_ledger[action_id] = {
             "signature": signature,
             "result": result,
+            "action": dict(action),
+            "recovery_context": recovery_context,
             **evidence,
         }
         self.execution_state = evidence["execution_status"]
         return str(result)
 
+    def _result_recovery_guidance(self, actions: list[dict]) -> str:
+        guidance: list[str] = []
+        rendered_contexts: set[str] = set()
+        for action in actions:
+            entry = self.action_ledger.get(
+                str(action.get("action_id", "") or ""), {}
+            )
+            rendered = render_result_evidence_to_action_guidance(
+                entry.get("recovery_context") if isinstance(entry, dict) else None
+            )
+            if rendered:
+                guidance.append(rendered)
+                rendered_contexts.add(rendered)
+        pending = render_result_evidence_to_action_guidance(
+            self.pending_result_recovery
+        )
+        if pending and pending not in rendered_contexts:
+            guidance.append(pending)
+        return "\n".join(guidance)
+
     def run(
+        self,
+        request: str,
+        *,
+        request_id: str = "",
+        initial_attachments: list[str] | None = None,
+        source_tag: str = "",
+        task_id: str = "",
+        task_epoch: str = "",
+        skill_context: dict | None = None,
+    ) -> str:
+        """Run one request and always release its browser ownership on failure."""
+        try:
+            return self._run_impl(
+                request,
+                request_id=request_id,
+                initial_attachments=initial_attachments,
+                source_tag=source_tag,
+                task_id=task_id,
+                task_epoch=task_epoch,
+                skill_context=skill_context,
+            )
+        except BaseException:
+            from agent_core.request_ownership import release_active_request
+
+            try:
+                release_active_request(str(request_id or self.run_id or ""))
+            except Exception as release_error:
+                # Cleanup must never replace the original protocol failure.
+                self._emit(
+                    "request_ownership_release_failed",
+                    request_id=str(request_id or self.run_id or ""),
+                    error=f"{type(release_error).__name__}: {release_error}",
+                )
+            raise
+
+    def _run_impl(
         self,
         request: str,
         *,
@@ -879,6 +1479,7 @@ class WebAgentProtocolLoop:
         self.protocol_state = "ACTIVE"
         self.terminal_candidate = {}
         last_no_action_decision_signature: str | None = None
+        last_dead_end_recovery_signature: str | None = None
         last_rejected_exchange_signature: str | None = None
         self.pending_result_ack_id = ""
         self.pending_web_ack_id = ""
@@ -889,6 +1490,7 @@ class WebAgentProtocolLoop:
         self.action_result_ledger.clear()
         self.v8_admitted_actions.clear()
         self.active_stage_manifest = None
+        self.pending_result_recovery = {}
         self.tools.current_task_id = self.task_id
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
@@ -949,6 +1551,7 @@ class WebAgentProtocolLoop:
             + "\n[/WEBAGENT_USER_REQUEST]\n"
             + f"[WEBAGENT_WORKSPACE]\n{self.workspace}\n[/WEBAGENT_WORKSPACE]"
         )
+        prompt += "\n" + render_initial_planner_toolkit()
         if self.image_delivery_plan:
             prompt += (
                 "\n[WEBAGENT_IMAGE_DELIVERY_PLAN]\n"
@@ -1013,7 +1616,11 @@ class WebAgentProtocolLoop:
                 round=self.turn_id,
                 response=response,
             )
-            calls, v8_parse_diagnostics = parse_v9_tool_transport(response)
+            action_id_seed = f"{expected.get('run_id', '')}:{expected.get('turn_id', '')}"
+            calls, v8_parse_diagnostics = parse_v9_tool_transport(
+                response,
+                action_id_seed=action_id_seed,
+            )
             diagnostics = [
                 {
                     "marker": "[WEBAGENT_V8_PARSE_ERROR]",
@@ -1041,6 +1648,9 @@ class WebAgentProtocolLoop:
                     + format_tool_parse_diagnostics(diagnostics)
                     + "\n修正 transport/schema 後重送同一決策；不得假設 action 已執行。"
                 )
+                pending_recovery = self._result_recovery_guidance([])
+                if pending_recovery:
+                    prompt += "\n" + pending_recovery
                 continue
 
             actions, ack_diagnostics = self._accept_ack(calls, expected)
@@ -1063,9 +1673,64 @@ class WebAgentProtocolLoop:
                     )
                 last_rejected_exchange_signature = rejection_signature
                 repair_note = ""
+                if any(item.get("reason") == "unexpected_field" for item in ack_diagnostics):
+                    repair_note = (
+                        "\n這不是 FIELD_REPAIR，而是 ACTION_REPLAN：原 action 含有未定義或放錯層級的欄位。"
+                        "請使用新的 action_id，依 tool 的 canonical schema 重建完整 action；"
+                        "不得保留 diagnostic 指出的欄位。query_project 的 operation/path/symbol "
+                        "只能放在 queries[] 物件內。"
+                    )
                 if any(item.get("reason") == "MISSING_OR_INVALID_FIELD" for item in ack_diagnostics):
                     repair_note = (
                         "\n這是 FIELD_REPAIR：保留原 tool、action_id 與所有已提供欄位，只補 diagnostic 指定欄位。"
+                    )
+                progress_details = "\n".join(
+                    str(item.get("detail", "") or "")
+                    for item in ack_diagnostics
+                    if item.get("reason") == "invalid_progress_payload"
+                )
+                if progress_details:
+                    repair_note += (
+                        "\n這是 PROGRESS_REPAIR：steps[].status 合法值只有 PENDING、IN_PROGRESS、COMPLETED。"
+                        "若 decision=COMPLETE，current_step 必須等於 total_steps，而且所有 steps[].status "
+                        "都必須是 COMPLETED。不得使用 COMPLETE 作為 step status。"
+                        "Progress 欄位的 canonical 位置是 report_progress 最外層；不要再包一層 progress。"
+                    )
+                condition_repairs = [
+                    item for item in ack_diagnostics
+                    if item.get("reason") == "invalid_progress_payload"
+                    and item.get("condition_class")
+                ]
+                for item in condition_repairs:
+                    repair_note += (
+                        "\n這是 MATCHED_CONDITION_REPAIR：目前值="
+                        + json.dumps(str(item.get("actual_condition", "") or ""), ensure_ascii=False)
+                        + "；condition_class="
+                        + json.dumps(str(item.get("condition_class", "") or ""), ensure_ascii=False)
+                        + "；matched_condition 必須完全等於下列其中一個合法原文："
+                        + json.dumps(list(item.get("allowed_conditions", []) or []), ensure_ascii=False)
+                        + "。不得改寫、翻譯或摘要該字串。"
+                    )
+                if any(
+                    item.get("reason") == "continue_decision_forbids_final_response"
+                    for item in ack_diagnostics
+                ):
+                    repair_note += (
+                        "\n這是 TERMINAL_DECISION_REPAIR，必須二選一："
+                        "(A) 尚未完成：保留 CONTINUE/PENDING、移除 final_response，並輸出至少一個明確 action；"
+                        "(B) 已完成：current_step=total_steps、所有 steps[].status=COMPLETED，"
+                        "decision=COMPLETE、outcome=SUCCESS/FAILED/PARTIAL，並保留 final_response。"
+                    )
+                if any(
+                    item.get("reason") in {
+                        "declared_next_action_missing", "declared_next_action_mismatch",
+                    }
+                    for item in ack_diagnostics
+                ):
+                    repair_note += (
+                        "\n這是 PROGRESS_TO_ACTION_REPAIR：只修正 action emission。"
+                        "next_action 宣告的 canonical tool 必須在同一輪以完整 action 出現；"
+                        "不得聲稱它已執行或預測其結果。"
                     )
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
@@ -1073,6 +1738,9 @@ class WebAgentProtocolLoop:
                     + "\n修正 compact v9 response 後重送同一決策；不得重做尚未執行的 action。"
                     + repair_note
                 )
+                pending_recovery = self._result_recovery_guidance([])
+                if pending_recovery:
+                    prompt += "\n" + pending_recovery
                 continue
             last_rejected_exchange_signature = None
 
@@ -1142,7 +1810,10 @@ class WebAgentProtocolLoop:
                         + format_prompt_context(self.progress_ledger)
                     )
                     continue
-                verification_status = str(self.tools.last_verification_status or "").upper()
+                verification_status = self._effective_verification_status(
+                    getattr(self.progress_ledger, "evidence_refs", []) or [],
+                    matched_condition=str(getattr(self.progress_ledger, "matched_condition", "") or ""),
+                )
                 self.terminal_outcome = self.progress_ledger.outcome
                 self.protocol_state = "CLOSED"
                 content = str(actions[0].get("content", ""))
@@ -1167,6 +1838,70 @@ class WebAgentProtocolLoop:
                 return content
 
             if not actions:
+                pending_recovery = dict(self.pending_result_recovery or {})
+                recovery_actions = [
+                    item for item in list(pending_recovery.get("next_actions") or [])
+                    if isinstance(item, dict) and str(item.get("tool", "") or "")
+                ]
+                if pending_recovery.get("active") and not pending_recovery.get(
+                    "prerequisite_satisfied"
+                ):
+                    recovery_signature = json.dumps(
+                        {
+                            "reason": pending_recovery.get("reason", ""),
+                            "next_actions": recovery_actions,
+                            "terminal_if_no_action": pending_recovery.get("terminal_if_no_action", ""),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    if recovery_actions and recovery_signature != last_dead_end_recovery_signature:
+                        last_dead_end_recovery_signature = recovery_signature
+                        last_no_action_decision_signature = None
+                        prompt = (
+                            "[WEBAGENT_DEAD_END_RECOVERY_REQUIRED]\n"
+                            "目前 Progress 宣告 CONTINUE，但沒有 operational action。Runtime 已有可執行的"
+                            " prerequisite route；下一輪必須輸出 route.next_actions 中的一個完整 canonical "
+                            "action，不得只回 Progress 或『等待』。\n"
+                            + self._result_recovery_guidance([])
+                            + "\n"
+                            + format_prompt_context(self.progress_ledger)
+                            + "\n[/WEBAGENT_DEAD_END_RECOVERY_REQUIRED]"
+                        )
+                        self._emit(
+                            "dead_end_recovery_requested",
+                            request_id=self.run_id,
+                            round=self.turn_id,
+                            recovery_reason=pending_recovery.get("reason", ""),
+                            available_actions=[item.get("tool", "") for item in recovery_actions],
+                        )
+                        continue
+                    reason = (
+                        "semantic_stagnation:recovery_action_not_emitted"
+                        if recovery_actions
+                        else "semantic_stagnation:recovery_route_has_no_action"
+                    )
+                    detail = str(
+                        pending_recovery.get("terminal_if_no_action", "")
+                        or pending_recovery.get("reason", "")
+                        or "pending prerequisite has no executable route"
+                    )
+                    set_runtime_state(
+                        self.task_id, "PAUSED", reason=f"{reason}:{detail}", root=self.progress_root
+                    )
+                    self._emit(
+                        "protocol_loop_paused",
+                        request_id=self.run_id,
+                        round=self.turn_id,
+                        reason=reason,
+                        detail=detail,
+                        recovery_context=pending_recovery,
+                    )
+                    raise RuntimeError(
+                        "WebAgent 未執行 Runtime 指定的 prerequisite action；Runtime 已暫停。detail="
+                        + detail
+                    )
                 decision_signature = json.dumps(
                     {
                         "current_step": self.progress_ledger.current_step,
@@ -1182,6 +1917,9 @@ class WebAgentProtocolLoop:
                         "outcome": self.progress_ledger.outcome,
                         "matched_condition": self.progress_ledger.matched_condition,
                         "evidence_refs": self.progress_ledger.evidence_refs,
+                        "declared_next_tools": self._declared_next_tools(
+                            self.progress_ledger.next_action
+                        ),
                         "operational_tools": [],
                     },
                     ensure_ascii=False,
@@ -1206,14 +1944,19 @@ class WebAgentProtocolLoop:
                 last_no_action_decision_signature = decision_signature
             else:
                 last_no_action_decision_signature = None
+                last_dead_end_recovery_signature = None
 
+            capability_guidance = self._progress_capability_guidance(progress_action)
+            progress_result = (
+                "[TASK_PROGRESS_RECORDED] "
+                f"step={self.progress_ledger.current_step}/{self.progress_ledger.total_steps}"
+            )
+            if capability_guidance:
+                progress_result += "\n" + capability_guidance
             results = [{
                 "action_id": progress_action.get("action_id", ""),
                 "tool": "report_progress",
-                "result": (
-                    "[TASK_PROGRESS_RECORDED] "
-                    f"step={self.progress_ledger.current_step}/{self.progress_ledger.total_steps}"
-                ),
+                "result": progress_result,
             }]
             def execute_with_events(action: dict) -> str:
                 self._check_cancelled()
@@ -1280,13 +2023,16 @@ class WebAgentProtocolLoop:
                         admitted, action_result_id, "COMMITTED", result,
                     )
                     ledger_entry.update(action_evidence)
-                    self.action_result_ledger[str(action.get("action_id", ""))] = ledger_entry
+                    ledger_entry = self._record_action_result_evidence(action, ledger_entry)
                     self._emit(
                         "action_evidence_recorded",
                         request_id=self.run_id,
                         round=self.turn_id,
                         action_id=action.get("action_id", ""),
                         **action_evidence,
+                        effective_verification_status=ledger_entry.get("effective_verification_status", "UNKNOWN"),
+                        effective_verification_id=ledger_entry.get("effective_verification_id", ""),
+                        verifies_action_id=ledger_entry.get("verifies_action_id", ""),
                     )
                 self._emit(
                     "tool_completed",
@@ -1333,4 +2079,7 @@ class WebAgentProtocolLoop:
                 + "根據結果與已接受的 Progress 決定下一步；下一輪 turn_commit 必須 ACK 此 RESULT_ID。\n"
                 + format_prompt_context(self.progress_ledger)
             )
+            recovery_guidance = self._result_recovery_guidance(actions)
+            if recovery_guidance:
+                prompt += "\n" + recovery_guidance
         raise RuntimeError(f"WebAgent 超過最大 protocol turns: {self.max_turns}")

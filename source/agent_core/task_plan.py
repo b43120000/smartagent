@@ -84,11 +84,6 @@ def validate_task_plan(workspace: str | Path, plan: dict) -> dict:
     snapshot = inspect_project_scope(root)
     if plan.get("base_snapshot_id") != snapshot["snapshot_id"]:
         return {"status": "PLAN_BASE_MISMATCH", "current_snapshot_id": snapshot["snapshot_id"]}
-    semantic = inspect_semantic_map(root)
-    if semantic["status"] != "FRESH":
-        return {"status": "SEMANTIC_MAP_NOT_FRESH", "semantic_map_status": semantic}
-    if plan.get("semantic_map_revision") != semantic["semantic_map_revision"]:
-        return {"status": "SEMANTIC_MAP_REVISION_MISMATCH", "current_semantic_map_revision": semantic["semantic_map_revision"]}
     try:
         request_scope = _normalized_request_scope(plan.get("request_scope"))
         goal = str(plan.get("goal", "")).strip()
@@ -128,6 +123,28 @@ def validate_task_plan(workspace: str | Path, plan: dict) -> dict:
         edit_check = validate_edit_plan(root, edit_plan)
         if edit_check.get("status") != "VALID":
             return {"status": "INVALID_EDIT_PLAN", "edit_plan_validation": edit_check}
+        semantic_required_paths = sorted(set(reads) | {
+            str(row.get("path", "") or "")
+            for row in edit_check.get("files_to_modify", [])
+            if str(row.get("path", "") or "")
+        })
+        semantic_required_paths = sorted(
+            semantic_target_paths(root, snapshot, semantic_required_paths)
+        )
+        if semantic_required_paths:
+            semantic = inspect_semantic_map(root, semantic_required_paths)
+            if semantic["status"] != "FRESH":
+                return {
+                    "status": "SEMANTIC_MAP_NOT_FRESH",
+                    "semantic_map_status": semantic,
+                    "required_semantic_paths": semantic_required_paths,
+                }
+            if plan.get("semantic_map_revision") != semantic["semantic_map_revision"]:
+                return {
+                    "status": "SEMANTIC_MAP_REVISION_MISMATCH",
+                    "current_semantic_map_revision": semantic["semantic_map_revision"],
+                    "required_semantic_paths": semantic_required_paths,
+                }
         source_targets = semantic_target_paths(root, snapshot)
         required_post = {row["path"] for row in edit_check["files_to_modify"] if row["path"] in source_targets or Path(row["path"]).name == "CMakeLists.txt" or Path(row["path"]).suffix.lower() in {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".java", ".kt", ".kts", ".py", ".js", ".ts", ".rs", ".go", ".cmake", ".gradle"}}
         if not required_post <= post_paths:

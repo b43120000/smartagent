@@ -80,6 +80,37 @@ def _compact_project_sync_result(text: str, workspace: Path) -> str:
     )
 
 
+def _actionable_json_summary(tool_call: dict, text: str) -> str:
+    """Keep decision-critical fields inline when the full JSON stays local."""
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    keys = (
+        "schema", "status", "reason", "missing_fields", "current_snapshot_id",
+        "base_snapshot_id", "plan_id", "plan_sha256", "semantic_map_revision",
+        "applied", "rolled_back", "error",
+    )
+    summary = {key: payload[key] for key in keys if key in payload}
+    for nested_key in ("validation", "edit_plan_validation", "semantic_map_status"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            summary[nested_key] = {
+                key: nested[key]
+                for key in (
+                    "status", "reason", "missing_fields", "current_snapshot_id",
+                    "base_snapshot_id", "semantic_map_revision", "needs_analysis_count",
+                )
+                if key in nested
+            }
+    if not summary:
+        return ""
+    summary["tool"] = str(tool_call.get("tool", "") or "")
+    return json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _safe_id(value: object, fallback: str) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip("-.")
     return text[:80] or fallback
@@ -188,9 +219,15 @@ def prepare_tool_result(tool_call: dict, result: object, agent, *, force_attachm
             f"改用 LOCAL_REF ({reason})。",
             flush=True,
         )
+        actionable_summary = _actionable_json_summary(tool_call, text)
+        summary_line = (
+            "actionable_summary=" + actionable_summary + "\n"
+            if actionable_summary else ""
+        )
         return (
             "[SMARTAGENT_RESULT_LOCAL_REF]\n"
             + common + f"\nreason={reason}\n"
+            + summary_line
             + "完整結果已安全保存在本地且未上傳；請依 preview 決策，必要時縮小查詢範圍。\n"
             + "preview:\n" + bounded_preview(text) + status_line
             + "\n[/SMARTAGENT_RESULT_LOCAL_REF]"
@@ -203,9 +240,15 @@ def prepare_tool_result(tool_call: dict, result: object, agent, *, force_attachm
             f"[PayloadGuard] JSON 附件建立/排程失敗，改用 LOCAL_REF：{str(exc)[:160]}",
             flush=True,
         )
+        actionable_summary = _actionable_json_summary(tool_call, text)
+        summary_line = (
+            "actionable_summary=" + actionable_summary + "\n"
+            if actionable_summary else ""
+        )
         return (
             "[SMARTAGENT_RESULT_LOCAL_REF]\n"
             + common + "\nreason=ATTACHMENT_TOO_LARGE\n"
+            + summary_line
             + "JSON 封裝後超過附件安全上限；完整結果保留本地，請分頁或縮小範圍。\n"
             + "preview:\n" + bounded_preview(text) + status_line
             + "\n[/SMARTAGENT_RESULT_LOCAL_REF]"

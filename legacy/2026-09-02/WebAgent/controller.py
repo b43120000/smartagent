@@ -97,7 +97,7 @@ def self_test() -> int:
 
     assert conversation_id("https://chatgpt.com/c/abc-123") == "abc-123"
     assert normalize_conversation_url(' "https://chatgpt.com/c/abc-123/" ') == "https://chatgpt.com/c/abc-123"
-    assert extract_authorized_paths(r"list C:\Users\user\Desktop\picture") == [r"C:\Users\user\Desktop\picture"]
+    assert extract_authorized_paths(r"list C:\Users\ExampleUser\Desktop\picture") == [r"C:\Users\ExampleUser\Desktop\picture"]
     final_prompt = build_final_render_prompt(
         "done", request_id="WA-TEST", round_count=2, ack_id="WEBACK-2"
     )

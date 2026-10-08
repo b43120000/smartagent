@@ -32,5 +32,9 @@ def validate_edit_plan(workspace:str|Path,plan:dict)->dict:
   expected=item.get('base_sha256','')
   if expected and target.is_file() and _sha(target)!=expected:return {'status':'BASE_HASH_MISMATCH','path':rel}
   if not isinstance(item.get('modification_intent',''),str):return {'status':'INVALID_PLAN','reason':'INVALID_MODIFICATION_INTENT','path':rel}
+  mode=str(item.get('mode','whole_file'))
+  if mode=='whole_file' and not isinstance(item.get('content'),str):return {'status':'INVALID_PLAN','reason':'MISSING_CONTENT','path':rel,'error':f'MISSING_CONTENT:{rel}'}
+  if mode=='exact_replace' and (not isinstance(item.get('old'),str) or not isinstance(item.get('new'),str)):return {'status':'INVALID_PLAN','reason':'INVALID_REPLACEMENT','path':rel,'error':f'INVALID_REPLACEMENT:{rel}'}
+  if mode not in {'whole_file','exact_replace'}:return {'status':'INVALID_PLAN','reason':'UNSUPPORTED_MODE','path':rel,'error':f'UNSUPPORTED_MODE:{mode}'}
   normalized.append({**item,'path':rel,'create':create})
  return {'status':'VALID','base_snapshot_id':base,'current_snapshot_id':current['snapshot_id'],'files_to_modify':normalized,'verification_commands':plan.get('verification_commands',[]),'expected_observable_result':plan.get('expected_observable_result'),'rollback_condition':plan.get('rollback_condition')}

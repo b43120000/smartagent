@@ -25,7 +25,16 @@ MAX_GOAL_TEXT = 32768
 
 
 class TaskProgressError(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        field: str = "",
+        repair_context: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.field = str(field or "")
+        self.repair_context = dict(repair_context or {})
 
 
 @dataclass
@@ -137,6 +146,12 @@ def _validate_steps(steps: Any, total_steps: float | int) -> list[dict[str, Any]
         if float(number) <= previous or float(number) > float(total_steps):
             raise TaskProgressError("steps must be ascending and within total_steps")
         status = str(item.get("status", "PENDING") or "PENDING").upper()
+        # The protocol-level terminal decision is named COMPLETE, while a
+        # completed plan step is named COMPLETED.  Models frequently reuse the
+        # decision enum in steps[].status, so accept that single unambiguous
+        # alias at the Runtime boundary and persist only the canonical value.
+        if status == "COMPLETE":
+            status = "COMPLETED"
         if status not in STEP_STATES:
             raise TaskProgressError(f"invalid step status: {status}")
         normalized.append({
@@ -321,7 +336,13 @@ def validate_model_progress(
     if decision == "CONTINUE" and outcome != "PENDING":
         raise TaskProgressError("CONTINUE requires outcome=PENDING")
     if decision == "CONTINUE" and float(current) >= float(total):
-        raise TaskProgressError("CONTINUE requires current_step < total_steps")
+        final_step_active = any(
+            str(item.get("status", "")).upper() == "IN_PROGRESS" for item in steps
+        )
+        if not final_step_active:
+            raise TaskProgressError(
+                "CONTINUE at current_step=total_steps requires an IN_PROGRESS final step"
+            )
     if decision == "COMPLETE":
         if float(current) < float(total):
             raise TaskProgressError("COMPLETE requires current_step=total_steps")
@@ -333,13 +354,26 @@ def validate_model_progress(
         raise TaskProgressError("INTERRUPT requires FAILED or UNKNOWN outcome")
     if decision == "CONTINUE" and not next_action:
         raise TaskProgressError("CONTINUE requires next_action")
-    matched_condition = _short_text(
-        payload.get("matched_condition"), "matched_condition", required=True
-    )
     condition_class = _condition_class_for_decision(decision, outcome)
-    if matched_condition not in completion_contract[condition_class]:
+    matched_condition = _short_text(
+        payload.get("matched_condition"), "matched_condition", required=False
+    )
+    allowed_conditions = list(completion_contract[condition_class])
+    if matched_condition not in allowed_conditions and len(allowed_conditions) == 1:
+        # matched_condition is a pointer into the already-declared contract,
+        # not independent evidence.  When its class has exactly one target,
+        # binding that target is deterministic and preserves fail-closed
+        # decision/evidence validation elsewhere in the protocol loop.
+        matched_condition = allowed_conditions[0]
+    elif matched_condition not in allowed_conditions:
         raise TaskProgressError(
-            f"matched_condition is not declared in completion_contract.{condition_class}"
+            f"matched_condition is not declared in completion_contract.{condition_class}",
+            field="matched_condition",
+            repair_context={
+                "condition_class": condition_class,
+                "actual_condition": matched_condition,
+                "allowed_conditions": allowed_conditions,
+            },
         )
     evidence_refs = _validate_evidence_refs(payload.get("evidence_refs"))
     decision_reason = _short_text(
@@ -472,6 +506,7 @@ def format_prompt_context(ledger: TaskProgressLedger | Mapping[str, Any]) -> str
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         + "\n[/CURRENT_TASK_PROGRESS]\n"
         + "以上是 runtime 已接受的進度。請以原始目標、Base、最新工具結果與此進度決定下一步；"
+        "runtime_state 僅供讀取且由 Runtime 持有，禁止在 report_progress 回填；"
         "本輪仍須先輸出一個 report_progress。若新 evidence 未被 completion_contract 覆蓋，"
         "先擴充對應條件且不得刪除既有條件，再回傳 decision/outcome/matched_condition/evidence_refs。"
     )
