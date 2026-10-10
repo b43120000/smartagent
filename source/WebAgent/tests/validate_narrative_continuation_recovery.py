@@ -104,6 +104,9 @@ def run() -> dict:
             return "\n".join((_fence(progress), _fence(final), _fence(commit)))
 
         loop = WebAgentProtocolLoop(temp, planner, progress_root=temp)
+        # This scenario verifies recovery-context propagation. Runtime
+        # evidence gating is exercised by the dedicated completion tests.
+        loop._terminal_evidence_verdict = lambda _refs, **_kwargs: "PASS"
         result = loop.run("盤點 selector，先規劃不修改", request_id="RR-CONTEXT", task_id="TASK-CONTEXT")
         assert result == "規劃完成"
         context = seen[0].get("narrative_recovery_context", {})

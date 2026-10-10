@@ -16,7 +16,7 @@ from agent_core.protocol_v9 import parse_v9_tool_transport
 from agent_core.task_progress import initialize_progress
 from agent_core.task_progress import record_model_progress
 from agent_core.task_state import RemoteTaskQueue, TaskStateStore, TASK_INTERRUPTED
-from agent_core.tools import _evaluate_verification_step
+from agent_core.tools import _evaluate_verification_step, tool_run_command
 
 
 def fence_text(text: str) -> str:
@@ -102,14 +102,18 @@ def validate_run_command_contract_is_required_before_execution() -> None:
 
 
 def validate_execution_and_verification_are_separate() -> None:
-    action = {"tool": "run_command", "action_id": "A"}
+    action = {"tool": "run_command", "action_id": "A", "operation": "GENERAL"}
     observed = WebAgentProtocolLoop._classify_action_evidence(
         action, "[COMMAND_RESULT]\nexit_code: 0\nVERIFICATION_STATUS: UNVERIFIED",
     )
     assert observed == {
         "tool": "run_command",
+        "operation": "GENERAL",
         "execution_status": "SUCCEEDED",
         "verification_status": "UNVERIFIED",
+        "expectation_status": "",
+        "evidence_state": "UNVERIFIED",
+        "terminal_eligible": False,
     }
     contradicted = WebAgentProtocolLoop._classify_action_evidence(
         action, "[COMMAND_RESULT]\nexit_code: 0\nVERIFICATION_STATUS: FAIL",
@@ -188,6 +192,160 @@ def validate_unrelated_pass_does_not_override_referenced_failure() -> None:
         assert loop._effective_verification_status(
             ["A-FAILED", "A-UNRELATED"], matched_condition="checkpoint exists",
         ) == "FAIL"
+        assert loop._terminal_evidence_verdict(
+            ["A-FAILED", "A-UNRELATED"], matched_condition="checkpoint exists",
+        ) == "FAIL"
+
+
+def validate_referenced_verifier_history_uses_latest_effective_result() -> None:
+    with tempfile.TemporaryDirectory(prefix="verification-history-terminal-") as temp:
+        loop = configured_loop(Path(temp))
+        condition = "mutated file contains expected content"
+        original = {
+            "tool": "run_command", "operation": "MUTATE",
+            "action_id": "A-MUTATE", "condition_id": condition,
+        }
+        loop._record_action_result_evidence(original, {
+            "tool": "run_command", "operation": "MUTATE",
+            "execution_status": "SUCCEEDED", "verification_status": "PASS",
+            "terminal_eligible": True,
+        })
+        wrong = {
+            "tool": "run_command", "operation": "VERIFY",
+            "action_id": "A-VERIFY-WRONG", "verifies_action_id": "A-MUTATE",
+            "condition_id": condition,
+        }
+        loop.turn_id = 2
+        loop._record_action_result_evidence(wrong, {
+            "tool": "run_command", "operation": "VERIFY",
+            "execution_status": "SUCCEEDED", "verification_status": "FAIL",
+            "terminal_eligible": True,
+        })
+        correct = {
+            "tool": "run_command", "operation": "VERIFY",
+            "action_id": "A-VERIFY-CORRECT", "verifies_action_id": "A-MUTATE",
+            "condition_id": condition,
+        }
+        loop.turn_id = 3
+        loop._record_action_result_evidence(correct, {
+            "tool": "run_command", "operation": "VERIFY",
+            "execution_status": "SUCCEEDED", "verification_status": "PASS",
+            "terminal_eligible": True,
+        })
+
+        refs = ["A-MUTATE", "A-VERIFY-WRONG", "A-VERIFY-CORRECT"]
+        target = loop.action_result_ledger["A-MUTATE"]
+        assert target["effective_verification_status"] == "PASS"
+        assert len(target["verification_history"]) == 3
+        assert loop.action_result_ledger["A-VERIFY-WRONG"]["verification_status"] == "FAIL"
+        assert loop._effective_verification_status(refs, matched_condition=condition) == "PASS"
+        assert loop._terminal_evidence_verdict(refs, matched_condition=condition) == "PASS"
+
+        terminal = progress("P-MUTATE-DONE", decision="COMPLETE", outcome="SUCCESS")
+        terminal["completion_contract"]["success"] = [condition]
+        terminal["matched_condition"] = condition
+        terminal["evidence_refs"] = refs
+        accepted, diagnostics = loop._accept_ack([
+            terminal,
+            {"tool": "final_response", "action_id": "A-FINAL", "content": "done"},
+            {"tool": "turn_commit", "action_count": 2},
+        ], {"ack_web_ack_id": ""})
+        assert diagnostics == []
+        assert accepted[0]["decision"] == "COMPLETE"
+
+
+def validate_expected_build_failure_supports_task_success() -> None:
+    with tempfile.TemporaryDirectory(prefix="expected-build-failure-") as temp:
+        root = Path(temp)
+        loop = configured_loop(root)
+        condition = "BUILD failure is recorded without being misreported as success"
+        action = {
+            "tool": "run_command", "operation": "BUILD",
+            "action_id": "A-EXPECTED-BUILD-FAILURE",
+            "command": "exit 7", "condition_id": condition,
+            "success_criteria": condition,
+            "expected_failure": {"exit_codes": [7]},
+            "verify": [{"action": "run_command", "command": "exit 0"}],
+        }
+        result = tool_run_command(
+            action["command"], action["operation"],
+            success_criteria=action["success_criteria"],
+            verify=action["verify"], expected_failure=action["expected_failure"],
+            condition_id=condition, capture_root=root / "capture",
+        )
+        assert "exit_code: 7" in result
+        assert "VERIFICATION_STATUS: FAIL" in result
+        assert "EXPECTATION_STATUS: PASS" in result
+
+        evidence = loop._classify_action_evidence(action, result)
+        assert evidence["execution_status"] == "FAILED"
+        assert evidence["verification_status"] == "FAIL"
+        assert evidence["expectation_status"] == "PASS"
+        assert evidence["evidence_state"] == "SUFFICIENT"
+        assert evidence["terminal_eligible"] is True
+        loop._record_action_result_evidence(action, evidence)
+        ledger = loop.action_result_ledger[action["action_id"]]
+        assert ledger["verification_status"] == "FAIL"
+        assert ledger["expectation_status"] == "PASS"
+        assert ledger["effective_verification_status"] == "PASS"
+
+        terminal = progress("P-NEGATIVE-DONE", decision="COMPLETE", outcome="SUCCESS")
+        terminal["completion_contract"]["success"] = [condition]
+        terminal["matched_condition"] = condition
+        terminal["evidence_refs"] = [action["action_id"]]
+        accepted, diagnostics = loop._accept_ack([
+            terminal,
+            {"tool": "final_response", "action_id": "A-FINAL", "content": "negative test passed"},
+            {"tool": "turn_commit", "action_count": 2},
+        ], {"ack_web_ack_id": ""})
+        assert diagnostics == []
+        assert accepted[0]["outcome"] == "SUCCESS"
+
+
+def validate_expected_failure_mismatch_still_blocks_success() -> None:
+    with tempfile.TemporaryDirectory(prefix="expected-failure-mismatch-") as temp:
+        loop = configured_loop(Path(temp))
+        action = {
+            "tool": "run_command", "operation": "BUILD",
+            "action_id": "A-WRONG-EXPECTED-FAILURE",
+            "expected_failure": {"exit_codes": [9]},
+        }
+        result = tool_run_command(
+            "exit 7", "BUILD", expected_failure=action["expected_failure"],
+            capture_root=Path(temp) / "capture",
+        )
+        evidence = loop._classify_action_evidence(action, result)
+        assert evidence["execution_status"] == "FAILED"
+        assert evidence["verification_status"] == "FAIL"
+        assert evidence["expectation_status"] == "FAIL"
+        loop._record_action_result_evidence(action, evidence)
+        assert loop._terminal_evidence_verdict([action["action_id"]]) == "FAIL"
+
+
+def validate_expected_failure_must_bind_to_success_contract() -> None:
+    with tempfile.TemporaryDirectory(prefix="expected-failure-binding-") as temp:
+        loop = configured_loop(Path(temp))
+        initial = progress("P-NEGATIVE")
+        action = {
+            "tool": "run_command", "operation": "BUILD",
+            "action_id": "A-NEGATIVE", "command": "exit 7",
+            "success_criteria": "unrelated condition",
+            "expected_failure": {"exit_codes": [7]},
+            "verify": [{"action": "run_command", "command": "exit 0"}],
+        }
+        accepted, diagnostics = loop._accept_ack([
+            initial, action, {"tool": "turn_commit", "action_count": 2},
+        ], {"ack_web_ack_id": ""})
+        assert accepted == []
+        assert diagnostics[0]["reason"] == "expected_failure_not_bound_to_success_contract"
+
+        condition = initial["completion_contract"]["success"][0]
+        action["success_criteria"] = condition
+        accepted, diagnostics = loop._accept_ack([
+            initial, action, {"tool": "turn_commit", "action_count": 2},
+        ], {"ack_web_ack_id": ""})
+        assert diagnostics == []
+        assert accepted[1]["action_id"] == "A-NEGATIVE"
 
 
 def validate_action_scoped_pass_overrides_legacy_global_failure() -> None:
@@ -213,6 +371,60 @@ def validate_action_scoped_pass_overrides_legacy_global_failure() -> None:
         assert accepted[0]["decision"] == "COMPLETE"
 
 
+def validate_condition_verifier_supersedes_nonterminal_general_evidence() -> None:
+    with tempfile.TemporaryDirectory(prefix="condition-ledger-terminal-") as temp:
+        loop = configured_loop(Path(temp))
+        condition = "requested checkpoint exists and verification passes"
+        general = {
+            "tool": "run_command", "operation": "GENERAL",
+            "action_id": "A-GENERAL",
+        }
+        loop._record_action_result_evidence(general, {
+            "tool": "run_command", "operation": "GENERAL",
+            "execution_status": "SUCCEEDED", "verification_status": "PASS",
+            "terminal_eligible": False,
+        })
+        terminal = progress("P-EARLY", decision="COMPLETE", outcome="SUCCESS")
+        terminal["evidence_refs"] = ["A-GENERAL"]
+        calls = [
+            terminal,
+            {"tool": "final_response", "action_id": "A-EARLY-FINAL", "content": "done"},
+            {"tool": "turn_commit", "action_count": 2},
+        ]
+        accepted, diagnostics = loop._accept_ack(calls, {"ack_web_ack_id": ""})
+        assert accepted == []
+        assert diagnostics[0]["reason"] == "terminal_success_verification_missing"
+        canonical_id = loop._canonical_condition_id(condition)
+        assert loop.pending_verification_requirement["condition_id"] == canonical_id
+
+        verifier = {
+            "tool": "run_command", "operation": "VERIFY",
+            "action_id": "A-VERIFY", "condition_id": "model-readable-alias",
+        }
+        loop._record_action_result_evidence(verifier, {
+            "tool": "run_command", "operation": "VERIFY",
+            "execution_status": "SUCCEEDED", "verification_status": "PASS",
+            "terminal_eligible": True,
+        })
+        assert loop.action_result_ledger["A-VERIFY"]["condition_id"] == canonical_id
+        assert loop.condition_result_ledger[canonical_id]["action_id"] == "A-VERIFY"
+        assert loop._terminal_evidence_verdict(
+            ["A-GENERAL", "A-VERIFY"], matched_condition=condition,
+        ) == "PASS"
+
+        terminal = progress("P-DONE", decision="COMPLETE", outcome="SUCCESS")
+        terminal["evidence_refs"] = ["A-GENERAL", "A-VERIFY"]
+        calls = [
+            terminal,
+            {"tool": "final_response", "action_id": "A-FINAL", "content": "done"},
+            {"tool": "turn_commit", "action_count": 2},
+        ]
+        accepted, diagnostics = loop._accept_ack(calls, {"ack_web_ack_id": ""})
+        assert diagnostics == []
+        assert accepted[0]["decision"] == "COMPLETE"
+        assert loop.pending_verification_requirement == {}
+
+
 def validate_final_step_may_continue_only_with_action() -> None:
     with tempfile.TemporaryDirectory(prefix="verification-final-step-") as temp:
         loop = configured_loop(Path(temp))
@@ -226,6 +438,7 @@ def validate_final_step_may_continue_only_with_action() -> None:
             payload,
             {
                 "tool": "run_command",
+                "operation": "TEST",
                 "action_id": "A-VERIFY",
                 "command": "Write-Output ok",
                 "success_criteria": "command is observable",
@@ -316,6 +529,7 @@ def validate_unambiguous_terminal_continue_is_normalized() -> None:
             "tool": "list_directory",
             "execution_status": "SUCCEEDED",
             "verification_status": "UNKNOWN",
+            "evidence_state": "AVAILABLE",
         }
 
         terminal = progress("P-DONE", decision="CONTINUE", outcome="SUCCESS")
@@ -369,7 +583,12 @@ if __name__ == "__main__":
     validate_regex_verification_and_invalid_spec_are_distinct()
     validate_scoped_verification_supersedes_prior_failure()
     validate_unrelated_pass_does_not_override_referenced_failure()
+    validate_referenced_verifier_history_uses_latest_effective_result()
+    validate_expected_build_failure_supports_task_success()
+    validate_expected_failure_mismatch_still_blocks_success()
+    validate_expected_failure_must_bind_to_success_contract()
     validate_action_scoped_pass_overrides_legacy_global_failure()
+    validate_condition_verifier_supersedes_nonterminal_general_evidence()
     validate_final_step_may_continue_only_with_action()
     validate_terminal_candidate_survives_verification_gap()
     validate_protocol_only_interruption_preserves_evidence()

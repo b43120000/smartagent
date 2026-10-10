@@ -3,15 +3,22 @@
 """WebAgent Direct Protocol v9 identity and model-facing contract."""
 from __future__ import annotations
 
+import json
+
 from agent_core.tool_capabilities import get_allowed_tools, render_protocol_tool_section
 from agent_core.recovery_protocol import INITIALIZATION_CAPABILITY_MODE
 from agent_core.protocol_v9 import SINGLE_FENCE_TRANSPORT_CONTRACT
+from agent_core.task_plan import task_plan_schema_contract
 
 WEBAGENT_PROTOCOL_NAME = "web_agent_direct"
 WEBAGENT_PROTOCOL_VERSION = 9
 
 SUPPORTED_ACTION_TOOLS = get_allowed_tools("web_direct")
 _SHARED_TOOL_SECTION = render_protocol_tool_section("web_direct")
+_TASK_PLAN_SCHEMA_CONTRACT = json.dumps(
+    task_plan_schema_contract(), ensure_ascii=False, sort_keys=True,
+    separators=(",", ":"),
+)
 
 
 def render_initial_planner_toolkit() -> str:
@@ -32,6 +39,13 @@ def render_initial_planner_toolkit() -> str:
         "5. 工具包沒有的能力不得捏造；若完成目標確實缺少能力，才把具體缺口列入 interrupted 條件。\n"
         "6. 專案 source evidence 必須在第一份 Progress 中規劃精確 query_project operation；已知 path 使用 "
         "read_range、已知 symbol 使用 read_symbol、只有未知 path 的關鍵字探索才使用 search_text。\n"
+        "7. propose_task_plan 只能提交下方 Runtime 發布的 canonical schema。若 Runtime 回傳 "
+        "PLAN_SCHEMA_INVALID，禁止再次 propose_task_plan；只能執行 Runtime 指定的 repair_task_plan。\n"
+        "8. run_command 必須填 operation，值只能是 INSPECT、MUTATE、BUILD、TEST、VERIFY、GIT_INSPECT、"
+        "GIT_MUTATE、PROCESS、TRANSFER、GENERAL；Runtime 會驗證 operation 與 command。GENERAL 只作低頻"
+        "逃生口且不能支持任務成功。run_command 必須原子化：一個 action 只做一個主要操作或副作用；不要用變數、分號或 "
+        "control flow 串接相依工作。verify[] 只做同一 action 的唯讀 postcondition 檢查。\n"
+        "task_plan_schema_contract=" + _TASK_PLAN_SCHEMA_CONTRACT + "\n"
         + _SHARED_TOOL_SECTION
         + "\n[/SMARTAGENT_INITIAL_PLANNER_TOOLKIT]"
     )
@@ -84,11 +98,19 @@ Every progress reply must classify the latest Runtime evidence with:
 - decision: CONTINUE, COMPLETE, or INTERRUPT
 - outcome: PENDING for CONTINUE; SUCCESS, FAILED, or PARTIAL for COMPLETE;
   FAILED or UNKNOWN for INTERRUPT
-- matched_condition: one exact condition from the corresponding contract list
+- matched_condition: human-readable explanation of the selected contract clause
+- matched_condition_id: when [CURRENT_TASK_PROGRESS] supplies
+  completion_condition_ids, use the stable ID for the selected clause. Runtime
+  matches the ID and treats matched_condition text as display-only, so a safe
+  paraphrase does not create a new condition or invalidate the action round
 - evidence_refs: only references listed in [RUNTIME_EVIDENCE]
 - decision_reason: a concise evidence-based explanation
 - steps[].status: only PENDING, IN_PROGRESS, or COMPLETED. COMPLETE is the
   terminal decision name, not the canonical step status
+
+runtime_state_ref, next_phase, selected_action, execution_status, and
+verification_status are Runtime-owned. Do not copy, infer, or emit them;
+Runtime binds them from the current state and the actual canonical actions.
 
 When completed action-result references are available, COMPLETE or INTERRUPT
 should cite the supporting action_id. Correlation is Runtime-owned: if the
@@ -104,11 +126,49 @@ INTERRUPTED. Repeating the same decision without new Runtime evidence or an
 action is a stalled exchange and Runtime will pause it with the reason
 semantic_stagnation instead of continuing an unbounded model conversation.
 
+Runtime publishes one complete [ACTION_LOOP_RUNTIME_STATE] on every action
+round. Treat its execution_status, verification_status, evidence_state,
+required_transition, allowed_next_actions, blocked_actions, missing_evidence,
+prerequisite_actions, action_states, and response_contract as authoritative.
+Do not ask for Runtime-owned fields one at a time and do not copy them back.
+Reply only with the semantic decision fields above plus the selected canonical
+action. Runtime always binds state identity, action identity, phase, execution,
+and verification locally instead of starting a repair conversation.
+
+Transition rules are strict:
+- PREREQUISITE_REQUIRED: emit one of prerequisite_actions; do not replan or
+  repeat a blocked action before prerequisite evidence exists.
+- REPLAN_REQUIRED: change the plan or choose a materially different precise
+  evidence action; never repeat a blocked semantic action signature.
+- VERIFY_REQUIRED: emit an allowed evidence-producing verification action.
+- TERMINAL: emit a terminal Progress plus final_response.
+- CONTINUE_PLAN: continue the accepted finite plan with one or more complete,
+  safe actions. Do not remain in discovery after Runtime evidence supports a
+  PLAN or EXECUTE transition.
+
+Command actions are atomic. One run_command may perform only one primary
+operation or side effect. Do not combine assignments, shell control flow, or
+dependent operations into one command merely to reduce rounds. Split staging,
+build, deploy, commit, and similar dependent operations into later actions
+driven by the preceding Runtime evidence. verify[] is read-only postcondition
+evidence for that same action; it must not repeat the operation or perform the
+next step.
+
+Every run_command must declare exactly one operation: INSPECT, MUTATE, BUILD,
+TEST, VERIFY, GIT_INSPECT, GIT_MUTATE, PROCESS, TRANSFER, or GENERAL. Runtime
+uses operation to choose the Action state and result schema, and rejects clear
+command/operation contradictions. VERIFY requires verifies_action_id. GENERAL
+is only a low-frequency escape hatch and its result can never by itself support
+terminal task SUCCESS.
+
 On every later reply, report the newly assessed stage before deciding the next
 action. Runtime persists the accepted ledger and sends it back in
 [CURRENT_TASK_PROGRESS]. Use that state, the original goal, Base, and latest
 tool results to choose the next action. report_progress never completes the
 task by itself; COMPLETE also requires final_response.
+If Runtime asks for MATCHED_CONDITION_REPAIR, return the selected
+matched_condition_id from the supplied candidates. Do not repeat, replace, or
+renumber any action that Runtime says it has preserved during Progress repair.
 
 The first progress block has this shape (later updates may omit steps,
 base_evaluation, and completion_contract while their accepted values remain):
@@ -127,7 +187,7 @@ action; wait for the controller's result.
 Tool results are authoritative. Decide the next action from the returned
 result. Large results may be represented by a local result reference or JSON
 attachment; consume and verify the reference before committing the next turn.
-Every normal run_command must include a non-empty success_criteria and verify
+Every normal run_command must include operation, a non-empty success_criteria and verify
 plan in the same action before execution. Do not postpone these fields until a
 later round. Runtime records command execution and postcondition verification
 as separate facts, so an executed command is never confused with a verified
@@ -173,11 +233,27 @@ performs an implicit pre-request workspace scan.
 For source-code modification tasks, explicitly assess whether the current
 project Base is loaded and fresh. When necessary source ground truth is absent
 or stale, use project_sync with the smallest sufficient strategy before edits.
+Project identity is Git-first when a repository is available and falls back to
+an incremental filesystem snapshot otherwise. Use inspect_project_working_set
+with the exact task-plan paths before expanding context. Only the current task
+working set is a prerequisite for local work; unrelated missing semantic-map
+entries never block a bounded task. INDEX_ONLY may maintain repository inventory,
+but source content remains lazy and is read only through exact query_project
+operations. DELTA/FULL_BUNDLE remain exceptional attachment transports.
 
 Do not expose hidden chain-of-thought. Return only executable decisions,
 verification conditions, and concise user-facing final_response content.
 """).strip()
 WEBAGENT_PROTOCOL_BODY += "\n\n" + SINGLE_FENCE_TRANSPORT_CONTRACT
+WEBAGENT_PROTOCOL_BODY += (
+    "\n\n[SMARTAGENT_TASK_PLAN_SCHEMA_CONTRACT]\n"
+    + _TASK_PLAN_SCHEMA_CONTRACT
+    + "\npropose_task_plan accepts only the canonical schema above. "
+      "When Runtime activates PLAN_REPAIR_REQUIRED, do not submit "
+      "propose_task_plan again; emit exactly one repair_task_plan action from "
+      "the Runtime route. PLAN_FROZEN is the only success signal.\n"
+      "[/SMARTAGENT_TASK_PLAN_SCHEMA_CONTRACT]"
+)
 
 
 __all__ = [

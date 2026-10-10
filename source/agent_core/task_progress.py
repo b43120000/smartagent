@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import time
@@ -15,6 +16,7 @@ RUNTIME_STATES = {"PROCESSING", "COMPLETED", "INTERRUPTED", "PAUSED"}
 STEP_STATES = {"PENDING", "IN_PROGRESS", "COMPLETED"}
 PROGRESS_DECISIONS = {"CONTINUE", "COMPLETE", "INTERRUPT"}
 PROGRESS_OUTCOMES = {"PENDING", "SUCCESS", "FAILED", "PARTIAL", "UNKNOWN"}
+ACTION_LOOP_PHASES = {"DISCOVERY", "PLAN", "EXECUTE", "VERIFY", "TERMINAL"}
 COMPLETION_CONTRACT_KEYS = ("success", "failure", "in_progress", "interrupted")
 MAX_STEPS = 64
 MAX_CONDITIONS_PER_CLASS = 16
@@ -53,8 +55,12 @@ class TaskProgressLedger:
     decision: str = "CONTINUE"
     outcome: str = "PENDING"
     matched_condition: str = ""
+    matched_condition_id: str = ""
     evidence_refs: list[str] = field(default_factory=list)
     decision_reason: str = ""
+    runtime_state_ref: str = ""
+    next_phase: str = ""
+    selected_action: str = ""
     round_id: int = 0
     interruption_reason: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
@@ -85,8 +91,12 @@ class TaskProgressLedger:
             decision=str(data.get("decision", "CONTINUE") or "CONTINUE"),
             outcome=str(data.get("outcome", "PENDING") or "PENDING"),
             matched_condition=str(data.get("matched_condition", "") or ""),
+            matched_condition_id=str(data.get("matched_condition_id", "") or ""),
             evidence_refs=[str(item) for item in list(data.get("evidence_refs") or [])],
             decision_reason=str(data.get("decision_reason", "") or ""),
+            runtime_state_ref=str(data.get("runtime_state_ref", "") or ""),
+            next_phase=str(data.get("next_phase", "") or ""),
+            selected_action=str(data.get("selected_action", "") or ""),
             round_id=int(data.get("round_id", 0) or 0),
             interruption_reason=str(data.get("interruption_reason", "") or ""),
             history=list(data.get("history") or []),
@@ -175,6 +185,32 @@ def _validate_condition_list(value: Any, field_name: str) -> list[str]:
             raise TaskProgressError(f"{field_name} contains duplicate conditions")
         normalized.append(condition)
     return normalized
+
+
+def condition_id_for(condition_class: str, condition: str) -> str:
+    """Return the stable Runtime-owned identity for one accepted condition."""
+    normalized_class = str(condition_class or "").strip().lower()
+    normalized_condition = str(condition or "").strip()
+    if normalized_class not in COMPLETION_CONTRACT_KEYS or not normalized_condition:
+        return ""
+    digest = hashlib.sha256(
+        (normalized_class + "\0" + normalized_condition).encode("utf-8", errors="replace")
+    ).hexdigest()[:16].upper()
+    return "COND-" + normalized_class.upper() + "-" + digest
+
+
+def completion_condition_choices(
+    completion_contract: Mapping[str, Any], condition_class: str,
+) -> list[dict[str, str]]:
+    normalized_class = str(condition_class or "").strip().lower()
+    return [
+        {
+            "condition_id": condition_id_for(normalized_class, str(condition)),
+            "condition_text": str(condition),
+        }
+        for condition in list(completion_contract.get(normalized_class) or [])
+        if str(condition).strip()
+    ]
 
 
 def _validate_completion_contract(
@@ -359,7 +395,33 @@ def validate_model_progress(
         payload.get("matched_condition"), "matched_condition", required=False
     )
     allowed_conditions = list(completion_contract[condition_class])
-    if matched_condition not in allowed_conditions and len(allowed_conditions) == 1:
+    condition_choices = completion_condition_choices(completion_contract, condition_class)
+    condition_by_id = {
+        item["condition_id"]: item["condition_text"] for item in condition_choices
+    }
+    matched_condition_id = _short_text(
+        payload.get("matched_condition_id"),
+        "matched_condition_id",
+        required=False,
+        max_length=128,
+    )
+    if matched_condition_id:
+        canonical_condition = condition_by_id.get(matched_condition_id)
+        if canonical_condition is None:
+            raise TaskProgressError(
+                f"matched_condition_id is not declared in completion_contract.{condition_class}",
+                field="matched_condition_id",
+                repair_context={
+                    "condition_class": condition_class,
+                    "actual_condition": matched_condition,
+                    "actual_condition_id": matched_condition_id,
+                    "condition_choices": condition_choices,
+                },
+            )
+        # The stable ID is authoritative.  Natural language remains display-only
+        # and may be paraphrased without changing the selected contract clause.
+        matched_condition = canonical_condition
+    elif matched_condition not in allowed_conditions and len(allowed_conditions) == 1:
         # matched_condition is a pointer into the already-declared contract,
         # not independent evidence.  When its class has exactly one target,
         # binding that target is deterministic and preserves fail-closed
@@ -373,19 +435,35 @@ def validate_model_progress(
                 "condition_class": condition_class,
                 "actual_condition": matched_condition,
                 "allowed_conditions": allowed_conditions,
+                "condition_choices": condition_choices,
             },
         )
+    matched_condition_id = condition_id_for(condition_class, matched_condition)
     evidence_refs = _validate_evidence_refs(payload.get("evidence_refs"))
     decision_reason = _short_text(
         payload.get("decision_reason"), "decision_reason", required=True
+    )
+    runtime_state_ref = _short_text(
+        payload.get("runtime_state_ref", ""), "runtime_state_ref", max_length=256
+    )
+    next_phase = str(payload.get("next_phase", "") or "").strip().upper()
+    if next_phase and next_phase not in ACTION_LOOP_PHASES:
+        raise TaskProgressError(f"invalid next_phase: {next_phase}")
+    selected_action = _short_text(
+        payload.get("selected_action", ""), "selected_action", max_length=256
     )
     return {
         "total_steps": total, "current_step": current, "steps": steps,
         "base_evaluation": base, "current_focus": focus, "next_action": next_action,
         "completion_contract": completion_contract,
         "decision": decision, "outcome": outcome,
-        "matched_condition": matched_condition, "evidence_refs": evidence_refs,
+        "matched_condition": matched_condition,
+        "matched_condition_id": matched_condition_id,
+        "evidence_refs": evidence_refs,
         "decision_reason": decision_reason,
+        "runtime_state_ref": runtime_state_ref,
+        "next_phase": next_phase,
+        "selected_action": selected_action,
     }
 
 
@@ -405,15 +483,24 @@ def record_model_progress(
     decision = normalized["decision"]
     outcome = normalized["outcome"]
     matched_condition = normalized["matched_condition"]
+    matched_condition_id = normalized["matched_condition_id"]
     evidence_refs = normalized["evidence_refs"]
     decision_reason = normalized["decision_reason"]
+    runtime_state_ref = normalized["runtime_state_ref"]
+    next_phase = normalized["next_phase"]
+    selected_action = normalized["selected_action"]
     now = time.time()
     history = list(ledger.history)
     history.append({
         "round_id": int(round_id), "current_step": current, "total_steps": total,
         "current_focus": focus, "next_action": next_action, "updated_at": now,
         "decision": decision, "outcome": outcome,
-        "matched_condition": matched_condition, "evidence_refs": evidence_refs,
+        "matched_condition": matched_condition,
+        "matched_condition_id": matched_condition_id,
+        "evidence_refs": evidence_refs,
+        "runtime_state_ref": runtime_state_ref,
+        "next_phase": next_phase,
+        "selected_action": selected_action,
     })
     updated = TaskProgressLedger(
         task_id=ledger.task_id, request_id=ledger.request_id, goal=ledger.goal,
@@ -421,8 +508,12 @@ def record_model_progress(
         total_steps=total, current_step=current, steps=steps,
         current_focus=focus, next_action=next_action, round_id=int(round_id),
         completion_contract=completion_contract, decision=decision, outcome=outcome,
-        matched_condition=matched_condition, evidence_refs=evidence_refs,
+        matched_condition=matched_condition,
+        matched_condition_id=matched_condition_id,
+        evidence_refs=evidence_refs,
         decision_reason=decision_reason,
+        runtime_state_ref=runtime_state_ref, next_phase=next_phase,
+        selected_action=selected_action,
         history=history[-MAX_HISTORY:], created_at=ledger.created_at, updated_at=now,
     )
     _atomic_write(get_ledger_path(task_id, root), updated.to_dict())
@@ -481,6 +572,8 @@ def format_telegram_status_view(ledger: TaskProgressLedger | Mapping[str, Any]) 
         lines.append(f"執行結果：{ledger.outcome}")
     if ledger.matched_condition:
         lines.append(f"符合條件：{ledger.matched_condition}")
+    if ledger.matched_condition_id:
+        lines.append(f"條件 ID：{ledger.matched_condition_id}")
     if ledger.interruption_reason:
         lines.append(f"中斷原因：{ledger.interruption_reason}")
     lines.append("更新時間：" + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ledger.updated_at)))
@@ -496,10 +589,18 @@ def format_prompt_context(ledger: TaskProgressLedger | Mapping[str, Any]) -> str
         "steps": ledger.steps, "current_focus": ledger.current_focus,
         "next_action": ledger.next_action, "runtime_state": ledger.runtime_state,
         "completion_contract": ledger.completion_contract,
+        "completion_condition_ids": {
+            key: completion_condition_choices(ledger.completion_contract, key)
+            for key in COMPLETION_CONTRACT_KEYS
+        },
         "decision": ledger.decision, "outcome": ledger.outcome,
         "matched_condition": ledger.matched_condition,
+        "matched_condition_id": ledger.matched_condition_id,
         "evidence_refs": ledger.evidence_refs,
         "decision_reason": ledger.decision_reason,
+        "runtime_state_ref": ledger.runtime_state_ref,
+        "next_phase": ledger.next_phase,
+        "selected_action": ledger.selected_action,
     }
     return (
         "[CURRENT_TASK_PROGRESS]\n"
@@ -509,13 +610,16 @@ def format_prompt_context(ledger: TaskProgressLedger | Mapping[str, Any]) -> str
         "runtime_state 僅供讀取且由 Runtime 持有，禁止在 report_progress 回填；"
         "本輪仍須先輸出一個 report_progress。若新 evidence 未被 completion_contract 覆蓋，"
         "先擴充對應條件且不得刪除既有條件，再回傳 decision/outcome/matched_condition/evidence_refs。"
+        "若回覆文字不是合法條件原文，請從 completion_condition_ids 選擇唯一的 "
+        "matched_condition_id；condition_id 決定身分，文字只供顯示。"
     )
 
 
 __all__ = [
     "COMPLETION_CONTRACT_KEYS", "PROGRESS_DECISIONS", "PROGRESS_OUTCOMES",
     "PROGRESS_SCHEMA", "TaskProgressError", "TaskProgressLedger", "delete_progress",
-    "format_prompt_context", "format_telegram_status_view", "get_ledger_path",
+    "completion_condition_choices", "condition_id_for", "format_prompt_context",
+    "format_telegram_status_view", "get_ledger_path",
     "initialize_progress", "read_progress", "record_model_progress", "set_runtime_state",
     "validate_model_progress",
 ]

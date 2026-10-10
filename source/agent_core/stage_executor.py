@@ -5,7 +5,7 @@ from .stage_protocol import validate_stage_manifest
 from .stage_result import classify_tool_result
 
 V6_READ_ONLY_TOOLS={"read_file","list_directory","inspect_directory","inspect_project_scope","compare_project_snapshot","extract_project_dependencies","find_file","inspect_semantic_map","query_project"}
-V6_ALLOWED_TOOLS=V6_READ_ONLY_TOOLS|{"project_sync","update_semantic_map","update_semantic_map_file","apply_edit_plan","aggregate_verification","propose_task_plan","propose_task_plan_file","execute_frozen_plan"}
+V6_ALLOWED_TOOLS=V6_READ_ONLY_TOOLS|{"project_sync","update_semantic_map","update_semantic_map_file","apply_edit_plan","aggregate_verification","propose_task_plan","repair_task_plan","propose_task_plan_file","execute_frozen_plan"}
 
 def preflight_stage(manifest: dict, actions: list[dict], *, workspace: str = "") -> dict:
     """Fail closed before action one; mutation resumption is not yet durable."""
@@ -23,7 +23,7 @@ def preflight_stage(manifest: dict, actions: list[dict], *, workspace: str = "")
         tool=str(action.get("tool", ""))
         if tool=="project_sync" and manifest["kind"]!="CONTEXT_SYNC": raise ValueError("stage_project_sync_requires_context_sync")
         if tool in {"update_semantic_map","update_semantic_map_file"} and manifest["kind"]!="CONTEXT_SYNC": raise ValueError("stage_semantic_map_requires_context_sync")
-        if tool in {"propose_task_plan","propose_task_plan_file"} and manifest["kind"]!="EXECUTE_VERIFY": raise ValueError("stage_plan_freeze_requires_execute_verify")
+        if tool in {"propose_task_plan","repair_task_plan","propose_task_plan_file"} and manifest["kind"]!="EXECUTE_VERIFY": raise ValueError("stage_plan_freeze_requires_execute_verify")
         if tool=="execute_frozen_plan" and manifest["kind"] not in {"EXECUTE_VERIFY","REPAIR"}: raise ValueError("stage_frozen_plan_requires_execute_or_repair")
         if tool=="aggregate_verification":
             if manifest["kind"] not in {"EXECUTE_VERIFY","REPAIR"}: raise ValueError("stage_aggregate_requires_execute_or_repair")

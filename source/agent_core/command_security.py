@@ -26,8 +26,28 @@ class CommandSecurityError(ValueError):
         super().__init__(f"{code}:{detail}" if detail else code)
 
 
+_DISK_FORMAT_COMMAND = re.compile(
+    r'''(?ix)
+    (?:
+        ^
+        |[;&|]\s*
+        |\bcmd(?:\.exe)?\s+/[ck]\s+
+        |\b(?:powershell|pwsh)(?:\.exe)?\b[^\r\n;&|]{0,160}?\s-(?:command|c)\s+
+        |\bstart-process\b\s+(?:-filepath\s+)?
+        |\bstart(?:\.exe)?\b\s+(?:""\s+)?
+    )
+    \s*["']?
+    (?:(?:[a-z]:[\\/]|\\\\)[^"'\r\n]*[\\/])?
+    format(?:\.com)?["']?
+    (?=\s|$)
+    ''',
+)
+
+
 _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("disk_format_forbidden", re.compile(r"(?i)(?:^|[;&|]\s*|\bcmd(?:\.exe)?\s+/[ck]\s+).*\bformat(?:\.com)?\b")),
+    # Match the actual command/executable token, not an argument such as
+    # ``git log --format=%s`` or a filename containing the word "format".
+    ("disk_format_forbidden", _DISK_FORMAT_COMMAND),
     ("diskpart_forbidden", re.compile(r"(?i)\bdiskpart(?:\.exe)?\b")),
     ("disk_management_forbidden", re.compile(r"(?i)\b(?:clear-disk|remove-partition|initialize-disk|set-disk)\b")),
     ("raw_device_forbidden", re.compile(r"(?i)(?:\\\\[.?]\\(?:physicaldrive|harddisk|globalroot)|\\device\\harddisk)")),

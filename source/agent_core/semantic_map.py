@@ -43,23 +43,49 @@ def _load(workspace: str | Path) -> dict:
         return {}
 
 
+def _normalized_required_paths(snapshot: dict, required_paths: object) -> set[str] | None:
+    if required_paths is None:
+        return None
+    if not isinstance(required_paths, (list, tuple, set)):
+        raise ValueError("semantic_map_invalid_required_paths")
+    root = Path(str(snapshot.get("workspace_root", "") or ".")).expanduser().resolve()
+    normalized: set[str] = set()
+    for raw in required_paths:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        candidate = Path(text).expanduser()
+        if candidate.is_absolute():
+            try:
+                text = candidate.resolve().relative_to(root).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"semantic_map_path_outside_workspace:{text}") from exc
+        else:
+            parts = Path(text.replace("\\", "/")).parts
+            if ".." in parts:
+                raise ValueError(f"semantic_map_path_outside_workspace:{text}")
+            text = Path(*parts).as_posix().lstrip("/")
+        if text:
+            normalized.add(text)
+    return normalized
+
+
 def _targets(snapshot: dict, required_paths: object = None) -> dict[str, dict]:
     build = set(snapshot.get("build_files", []))
-    required = None
-    if required_paths is not None:
-        if not isinstance(required_paths, (list, tuple, set)):
-            raise ValueError("semantic_map_invalid_required_paths")
-        required = {
-            str(path).replace("\\", "/").lstrip("/")
-            for path in required_paths if str(path).strip()
-        }
-    return {
+    required = _normalized_required_paths(snapshot, required_paths)
+    targets = {
         str(row["path"]): row
         for row in snapshot.get("files", [])
         if not is_ignored_project_path(str(row.get("path", "")))
         and (row.get("language") in _SOURCE_LANGUAGES or row.get("path") in build)
         and (required is None or str(row.get("path", "")) in required)
     }
+    if required and not targets:
+        raise ValueError(
+            "semantic_map_scope_mismatch:no_requested_path_resolved:"
+            + ",".join(sorted(required))
+        )
+    return targets
 
 
 def semantic_target_paths(
@@ -160,7 +186,11 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
     supplied = patch.get("files", [])
     if not isinstance(supplied, list):
         return {"status": "INVALID", "reason": "FILES_NOT_LIST"}
-    targets = _targets(snapshot)
+    required_paths = patch.get("required_paths")
+    try:
+        targets = _targets(snapshot, required_paths)
+    except ValueError as exc:
+        return {"status": "INVALID", "reason": str(exc)}
     old = _load(workspace)
     records = {
         str(row.get("path", "")): dict(row)
@@ -208,7 +238,7 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
         tmp.replace(md)
     except ValueError as exc:
         return {"status": "INVALID", "reason": str(exc)}
-    status = inspect_semantic_map(workspace)
+    status = inspect_semantic_map(workspace, required_paths)
     result_status = "UPDATED" if status["status"] == "FRESH" else "PARTIAL"
     ledger_event = append_project_event(
         workspace,

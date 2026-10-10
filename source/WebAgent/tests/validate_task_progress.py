@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from agent_core.remote_control_dispatcher import RemoteControlDispatcher
 from agent_core.task_progress import (
     TaskProgressError,
+    completion_condition_choices,
     delete_progress,
     format_telegram_status_view,
     get_ledger_path,
@@ -120,6 +121,9 @@ def run() -> dict:
                 "condition_class": "in_progress",
                 "actual_condition": "Required work remains.",
                 "allowed_conditions": ambiguous_contract["in_progress"],
+                "condition_choices": completion_condition_choices(
+                    ambiguous_contract, "in_progress",
+                ),
             }
         else:
             raise AssertionError("ambiguous matched_condition must remain fail-closed")

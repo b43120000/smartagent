@@ -129,6 +129,9 @@ def build_project_capsule(workspace: str | Path) -> dict:
         "git_head": snapshot.get("git_head", ""),
         "git_dirty": bool(snapshot.get("git_dirty")),
         "git_status": list(snapshot.get("git_status", []) or [])[:80],
+        "inventory_mode": str(snapshot.get("inventory_mode", "FILESYSTEM_INCREMENTAL")),
+        "reused_hash_count": int(snapshot.get("reused_hash_count", 0) or 0),
+        "hashed_file_count": int(snapshot.get("hashed_file_count", 0) or 0),
         "file_count": int(snapshot.get("file_count", 0) or 0),
         "directory_count": int(snapshot.get("directory_count", 0) or 0),
         "total_bytes": int(snapshot.get("total_bytes", 0) or 0),
@@ -160,6 +163,10 @@ def build_project_capsule(workspace: str | Path) -> dict:
                 "obtain snapshot-bound read_range/read_symbol evidence and file_sha256 "
                 "before validate_edit_plan/apply_edit_plan"
             ),
+            "working_set_contract": {
+                "tool": "inspect_project_working_set",
+                "rule": "bind only files_to_read and files_to_modify from the accepted task plan",
+            },
         },
         "transport": "INLINE_QUERY_ONLY",
         "attachments_uploaded": 0,

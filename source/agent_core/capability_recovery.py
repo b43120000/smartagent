@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .path_security import is_within
 from .project_artifact_policy import SOURCE_CODE, TEXT_DATA_CONFIG, classify_project_file
 from .tool_capabilities import describe_tools, get_allowed_tools
+from .task_plan import TASK_PLAN_SCHEMA, canonicalize_task_plan, task_plan_schema_contract
 
 
 _LOCAL_ACCESS_REFUSAL_PATTERNS = (
@@ -139,7 +141,8 @@ def _result_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
         "schema", "status", "reason", "missing_fields", "current_snapshot_id",
         "snapshot_id", "base_snapshot_id", "plan_id", "plan_sha256",
         "semantic_map_revision", "scope", "required_paths", "needs_analysis_count",
-        "applied", "rolled_back", "error",
+        "applied", "rolled_back", "error", "submitted_schema", "expected_schema",
+        "required_action", "diagnostics", "schema_contract", "canonical_repairs",
     )
     summary = {key: payload[key] for key in keys if key in payload}
     for nested_key in ("validation", "edit_plan_validation", "semantic_map_status"):
@@ -475,9 +478,69 @@ def build_result_evidence_to_action_route(
             "terminal_if_no_action": "PAUSED: missing edit-plan source content produced no usable read_range evidence",
         }
 
-    if tool in {"propose_task_plan", "propose_task_plan_file"}:
+    if tool in {"propose_task_plan", "repair_task_plan", "propose_task_plan_file"}:
         if status == "PLAN_FROZEN":
             return {"active": False}
+        if status == "INVALID_PLAN":
+            submitted_plan = action.get("plan")
+            canonical_plan, canonical_repairs = canonicalize_task_plan(submitted_plan)
+            diagnostics = list(payload.get("diagnostics") or [])
+            diagnostic_basis = {
+                "reason": payload.get("reason", ""),
+                "submitted_schema": payload.get("submitted_schema", ""),
+                "expected_schema": payload.get("expected_schema", TASK_PLAN_SCHEMA),
+                "diagnostics": diagnostics,
+            }
+            diagnostic_signature = hashlib.sha256(
+                json.dumps(
+                    diagnostic_basis, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            previous_signature = str(prior.get("diagnostic_signature", "") or "")
+            same_diagnostic_count = (
+                int(prior.get("same_diagnostic_count", 0) or 0) + 1
+                if previous_signature == diagnostic_signature else 1
+            )
+            repair_action: dict[str, Any] = {
+                "tool": "repair_task_plan",
+                "action_id": "<fresh action_id>",
+                "plan": canonical_plan,
+            }
+            if workspace:
+                repair_action["workspace"] = workspace
+            stalled = tool == "repair_task_plan" and same_diagnostic_count >= 2
+            return {
+                "active": True,
+                "reason": (
+                    "task_plan_repair_stalled" if stalled
+                    else "task_plan_schema_repair_required"
+                ),
+                "runtime_state": "BLOCKED_ON_PREREQUISITE",
+                "blocking_reason": "PLAN_SCHEMA_INVALID",
+                "observed": _result_summary(payload),
+                "expected_schema": payload.get("expected_schema", TASK_PLAN_SCHEMA),
+                "schema_contract": payload.get("schema_contract") or task_plan_schema_contract(),
+                "canonical_repairs": canonical_repairs,
+                "diagnostic_signature": diagnostic_signature,
+                "same_diagnostic_count": same_diagnostic_count,
+                "blocked_tool": "propose_task_plan",
+                "required_action": "repair_task_plan",
+                "forbidden_actions": ["propose_task_plan", "propose_task_plan_file"],
+                "prerequisite_satisfied": False,
+                "next_actions": [] if stalled else [repair_action],
+                "resume_action": repair_action,
+                "terminal_if_no_action": (
+                    "PLAN_REPAIR_STALLED: identical task-plan validation diagnostic repeated"
+                    if stalled else ""
+                ),
+                "pause_immediately": stalled,
+                "rules": [
+                    "Do not resubmit propose_task_plan while the plan-repair latch is active.",
+                    "Emit exactly one repair_task_plan using the Runtime-supplied canonical plan.",
+                    "Only PLAN_FROZEN satisfies this prerequisite and releases the latch.",
+                ],
+            }
         next_actions = []
         semantic = payload.get("semantic_map_status")
         semantic_paths = list(payload.get("required_semantic_paths") or [])
@@ -503,6 +566,8 @@ def build_result_evidence_to_action_route(
         return {
             "active": bool(status and status != "PLAN_FROZEN"),
             "reason": "task_plan_requires_prerequisite_evidence",
+            "runtime_state": "BLOCKED_ON_PREREQUISITE",
+            "blocking_reason": status or "TASK_PLAN_PREREQUISITE_REQUIRED",
             "observed": _result_summary(payload),
             "next_actions": next_actions,
             "semantic_map_paths": semantic_paths,
@@ -617,6 +682,7 @@ def build_result_evidence_to_action_route(
             "workspace": workspace or "<exact project root>",
             "patch": {
                 "base_snapshot_id": str(prior.get("semantic_map_snapshot_id", "") or ""),
+                "required_paths": list(prior.get("semantic_map_paths") or []),
                 "project_summary": "<preserve existing summary or provide a factual bounded summary>",
                 "flows": [],
                 "files": files,

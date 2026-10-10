@@ -799,7 +799,7 @@ class SmartAgent:
                 # fresh RESULT_ID later in this iteration.
                 self._pending_result_ack_id = ""
         stage = raw_commit.get("stage") if isinstance(raw_commit, dict) else None
-        v7_mutations = {"update_semantic_map", "update_semantic_map_file", "propose_task_plan", "propose_task_plan_file", "execute_frozen_plan", "apply_edit_plan", "aggregate_verification"}
+        v7_mutations = {"update_semantic_map", "update_semantic_map_file", "propose_task_plan", "repair_task_plan", "propose_task_plan_file", "execute_frozen_plan", "apply_edit_plan", "aggregate_verification"}
         if not diagnostics and SMARTAGENT_PROTOCOL_VERSION >= 7 and SMARTAGENT_STAGED_PROTOCOL == "on":
             if any(str(action.get("tool", "")) == "apply_edit_plan" for action in actions):
                 diagnostics.append(_diagnostic("[SMARTAGENT_STAGE_REJECTED]", "v7_requires_frozen_plan", tool="apply_edit_plan", detail="direct apply_edit_plan is disabled in v7 on mode", suggestion="先凍結 TASK_PLAN_V1，再使用 execute_frozen_plan。"))
@@ -3008,7 +3008,7 @@ def main():
                     agent.save_history(fname)
                 elif cmd == "/run":
                     if arg:
-                        print(tool_run_command(arg))
+                        print(tool_run_command(arg, "GENERAL"))
                     else:
                         print("用法: /run <指令>")
                 elif cmd == "/file":

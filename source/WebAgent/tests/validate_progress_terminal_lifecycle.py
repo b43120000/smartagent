@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from WebAgent.protocol_loop import WebAgentProtocolLoop
-from agent_core.task_progress import read_progress
+from agent_core.task_progress import condition_id_for, read_progress, record_model_progress
 
 
 def fence(payload: dict) -> str:
@@ -54,11 +54,37 @@ def response(*blocks: dict) -> str:
 def validate_failed_verification_can_complete() -> None:
     with tempfile.TemporaryDirectory(prefix="progress-terminal-failed-") as temp:
         root = Path(temp)
+        turns = 0
 
         def planner(_prompt: str, _expected: dict, _attachments: list[str]) -> str:
-            loop.tools.last_verification_status = "FAIL"
+            nonlocal turns
+            turns += 1
+            if turns == 1:
+                return response(
+                    {
+                        "tool": "report_progress", "action_id": "P-RUN",
+                        "base_evaluation": "需要執行編譯驗證",
+                        "total_steps": 1, "current_step": 0.5,
+                        "steps": [{"step": 1, "desc": "執行並回報編譯", "status": "IN_PROGRESS"}],
+                        "current_focus": "執行編譯驗證", "next_action": "run_command",
+                        "completion_contract": completed_progress("P-TEMPLATE")["completion_contract"],
+                        "decision": "CONTINUE", "outcome": "PENDING",
+                        "matched_condition": "編譯程序仍在執行",
+                        "evidence_refs": ["REQUEST_ACCEPTED"],
+                        "decision_reason": "尚未取得實際編譯結果",
+                    },
+                    {
+                        "tool": "run_command", "action_id": "A-BUILD",
+                        "operation": "BUILD",
+                        "command": "exit 1",
+                        "success_criteria": "command exits with zero",
+                        "verify": [{"action": "run_command", "command": "exit 1", "expect_exit_code": 0}],
+                    },
+                )
+            terminal = completed_progress("P-COMPLETE")
+            terminal["evidence_refs"] = ["A-BUILD"]
             return response(
-                completed_progress("P-COMPLETE"),
+                terminal,
                 {
                     "tool": "final_response",
                     "action_id": "A-FINAL",
@@ -67,6 +93,9 @@ def validate_failed_verification_can_complete() -> None:
             )
 
         loop = WebAgentProtocolLoop(root, planner, progress_root=root)
+        loop._execute_action = lambda _action: (
+            "[COMMAND_RESULT]\nexit_code: 1\nVERIFICATION_STATUS: FAIL"
+        )
         result = loop.run("只驗證編譯並回報結果")
         assert result == "驗證工作完成；編譯失敗，exit code=1。"
         assert loop.terminal_outcome == "FAILED"
@@ -94,7 +123,9 @@ def validate_repeated_completed_progress_is_paused() -> None:
         assert "[WEBAGENT_ACK_REJECTED]" in prompts[1]
         ledger = read_progress(loop.task_id, root=root)
         assert ledger is not None and ledger.runtime_state == "PAUSED"
-        assert ledger.interruption_reason == "semantic_stagnation:repeated_progress_contract_rejection"
+        assert ledger.interruption_reason.startswith(
+            "semantic_stagnation:repeated_progress_contract_rejection:"
+        )
 
 
 def validate_model_interrupt_is_persisted() -> None:
@@ -139,11 +170,32 @@ def validate_success_cannot_contradict_failed_runtime() -> None:
 
         def planner(prompt: str, _expected: dict, _attachments: list[str]) -> str:
             prompts.append(prompt)
-            loop.tools.last_verification_status = "FAIL"
+            if len(prompts) == 1:
+                return response(
+                    {
+                        "tool": "report_progress", "action_id": "P-FAIL-RUN",
+                        "base_evaluation": "需要執行編譯驗證", "total_steps": 1,
+                        "current_step": 0.5,
+                        "steps": [{"step": 1, "desc": "執行並回報編譯", "status": "IN_PROGRESS"}],
+                        "current_focus": "執行編譯驗證", "next_action": "run_command",
+                        "completion_contract": completed_progress("P-TEMPLATE")["completion_contract"],
+                        "decision": "CONTINUE", "outcome": "PENDING",
+                        "matched_condition": "編譯程序仍在執行",
+                        "evidence_refs": ["REQUEST_ACCEPTED"],
+                        "decision_reason": "尚未取得實際編譯結果",
+                    },
+                    {
+                        "tool": "run_command", "action_id": "A-FAILED-BUILD",
+                        "operation": "BUILD",
+                        "command": "exit 1", "success_criteria": "command exits with zero",
+                        "verify": [{"action": "run_command", "command": "exit 1", "expect_exit_code": 0}],
+                    },
+                )
             progress = completed_progress(f"P-SUCCESS-{len(prompts)}")
             progress.update({
                 "outcome": "SUCCESS",
                 "matched_condition": "編譯結束且 exit code=0，APK 已產生",
+                "evidence_refs": ["A-FAILED-BUILD"],
                 "decision_reason": "錯誤宣告成功",
             })
             return response(
@@ -152,14 +204,17 @@ def validate_success_cannot_contradict_failed_runtime() -> None:
             )
 
         loop = WebAgentProtocolLoop(root, planner, progress_root=root, max_turns=20)
+        loop._execute_action = lambda _action: (
+            "[COMMAND_RESULT]\nexit_code: 1\nVERIFICATION_STATUS: FAIL"
+        )
         try:
             loop.run("只驗證編譯並回報結果")
         except RuntimeError as exc:
             assert "不符合完成契約" in str(exc)
         else:
             raise AssertionError("SUCCESS must not override failed Runtime verification")
-        assert len(prompts) == 2
-        assert "success_contradicts_runtime_verification" in prompts[1]
+        assert len(prompts) == 3
+        assert "success_contradicts_runtime_verification" in prompts[2]
 
 
 def validate_unverified_success_requests_and_obtains_evidence() -> None:
@@ -192,7 +247,7 @@ def validate_unverified_success_requests_and_obtains_evidence() -> None:
                 assert "WEBAGENT_VERIFICATION_REQUIRED" in prompt
                 assert '"missing_condition":"checkpoint commit 已建立且 HEAD 可解析"' in prompt
                 assert '"required_action":"run_command"' in prompt
-                assert '"required_fields":["command","success_criteria","verify"]' in prompt
+                assert '"required_fields":["operation","command","success_criteria","verify"]' in prompt
                 progress = completed_progress("P-VERIFY")
                 progress.update({
                     "current_step": 0.5,
@@ -207,6 +262,8 @@ def validate_unverified_success_requests_and_obtains_evidence() -> None:
                 return response(progress, {
                     "tool": "run_command",
                     "action_id": "A-VERIFY-HEAD",
+                    "operation": "VERIFY",
+                    "condition_id": "checkpoint commit 已建立且 HEAD 可解析",
                     "command": "git rev-parse --verify HEAD",
                     "success_criteria": "HEAD resolves to an existing commit",
                     "verify": [{
@@ -278,7 +335,6 @@ def validate_changed_repair_is_not_a_stall() -> None:
         def planner(_prompt: str, _expected: dict, _attachments: list[str]) -> str:
             nonlocal calls
             calls += 1
-            loop.tools.last_verification_status = "FAIL"
             progress = completed_progress(f"P-REPAIR-{calls}")
             if calls == 1:
                 progress.update({
@@ -296,6 +352,9 @@ def validate_changed_repair_is_not_a_stall() -> None:
             )
 
         loop = WebAgentProtocolLoop(root, planner, progress_root=root, max_turns=20)
+        # This unit isolates changed semantic repair behavior.  Action-scoped
+        # evidence routing is covered separately.
+        loop._terminal_evidence_verdict = lambda _refs, **_kwargs: "FAIL"
         result = loop.run("只驗證編譯並回報結果")
         assert result == "驗證完成；編譯失敗。"
         assert calls == 2
@@ -311,7 +370,15 @@ def validate_runtime_binds_latest_terminal_evidence() -> None:
         loop.task_epoch = "EPOCH-EVIDENCE-BIND"
         loop.intent_digest = "a" * 64
         loop.turn_id = 2
-        loop.action_result_ledger["A-LIST-COMPLETED"] = {"status": "COMPLETED"}
+        # Terminal FAILED may only bind to concrete Runtime failure evidence;
+        # a generic COMPLETED marker is intentionally insufficient.
+        loop.action_result_ledger["A-LIST-COMPLETED"] = {
+            "tool": "run_command",
+            "execution_status": "FAILED",
+            "verification_status": "FAIL",
+            "effective_verification_status": "FAIL",
+            "evidence_state": "AVAILABLE",
+        }
         progress = completed_progress("P-BIND")
         final = {
             "tool": "final_response",
@@ -341,6 +408,9 @@ def validate_complete_step_alias_is_canonicalized() -> None:
             )
 
         loop = WebAgentProtocolLoop(root, planner, progress_root=root)
+        # This case only verifies status-alias normalization; terminal
+        # evidence semantics are covered by the action-scoped cases above.
+        loop._terminal_evidence_verdict = lambda _refs, **_kwargs: "FAIL"
         assert loop.run("只驗證並回報結果") == "驗證完成。"
         ledger = read_progress(loop.task_id, root=root)
         assert ledger is not None
@@ -367,6 +437,9 @@ def validate_terminal_progress_repair_is_explicit() -> None:
             )
 
         loop = WebAgentProtocolLoop(root, planner, progress_root=root)
+        # This case isolates terminal Progress repair prompting rather than
+        # Runtime evidence classification.
+        loop._terminal_evidence_verdict = lambda _refs, **_kwargs: "FAIL"
         assert loop.run("只驗證並回報結果") == "驗證完成。"
         assert len(prompts) == 2
         assert "steps[].status 合法值只有 PENDING、IN_PROGRESS、COMPLETED" in prompts[1]
@@ -690,6 +763,7 @@ def validate_verify_string_list_reports_precise_schema_error() -> None:
             {
                 "tool": "run_command",
                 "action_id": "A-VERIFY-SCHEMA",
+                "operation": "GIT_INSPECT",
                 "command": "git -C 'E:\\repo' status --short",
                 "success_criteria": "git status exits successfully",
                 "verify": ["exit_code == 0", "stdout contains repository state"],
@@ -714,6 +788,7 @@ def validate_cmd_syntax_is_rejected_before_execution() -> None:
             {
                 "tool": "run_command",
                 "action_id": "A-SHELL-MISMATCH",
+                "operation": "GIT_INSPECT",
                 "command": "cd /d E:\\repo && git status --short",
                 "success_criteria": "git status exits successfully",
                 "verify": [{
@@ -867,6 +942,103 @@ def validate_declared_next_action_must_be_emitted() -> None:
         assert loop.action_ledger == {}
 
 
+def validate_condition_id_repairs_progress_without_losing_action() -> None:
+    with tempfile.TemporaryDirectory(prefix="progress-condition-id-") as temp:
+        root = Path(temp)
+        loop = WebAgentProtocolLoop(root, lambda *_args: "", progress_root=root)
+        loop.run_id = "REQ-CONDITION-ID"
+        loop.task_id = "TASK-CONDITION-ID"
+        loop.task_epoch = "EPOCH-CONDITION-ID"
+        loop.intent_digest = "0" * 64
+        contract = {
+            "success": ["分析完成"],
+            "failure": ["指定目錄無法讀取"],
+            "in_progress": [
+                "尚未取得指定 working set 證據",
+                "尚未確認 not_existing_file.py 狀態",
+            ],
+            "interrupted": ["Runtime 無法存取指定 working set"],
+        }
+
+        def progress(action_id: str, matched: str, *, condition_id: str = "") -> dict:
+            payload = {
+                "tool": "report_progress", "action_id": action_id,
+                "base_evaluation": "需要確認指定檔案是否存在",
+                "total_steps": 2, "current_step": 1,
+                "steps": [
+                    {"step": 1, "desc": "確認檔案", "status": "IN_PROGRESS"},
+                    {"step": 2, "desc": "分析關係", "status": "PENDING"},
+                ],
+                "current_focus": "確認指定檔案",
+                "next_action": "list_directory",
+                "completion_contract": contract,
+                "decision": "CONTINUE", "outcome": "PENDING",
+                "matched_condition": matched,
+                "evidence_refs": ["REQUEST_ACCEPTED"],
+                "decision_reason": "尚缺檔案存在性證據",
+            }
+            if condition_id:
+                payload["matched_condition_id"] = condition_id
+            return payload
+
+        loop.progress_ledger = record_model_progress(
+            loop.task_id,
+            progress("P-BASE", "尚未取得指定 working set 證據"),
+            request_id=loop.run_id,
+            goal="分析兩個指定檔案",
+            round_id=1,
+            root=root,
+        )
+        directory_action = {
+            "tool": "list_directory", "action_id": "A-LIST-PRESERVED",
+            "path": str(root),
+        }
+        rejected, diagnostics = loop._accept_ack(
+            [
+                progress("P-MISMATCH", "尚未取得 not_existing_file.py 存在性證據"),
+                directory_action,
+                {"tool": "turn_commit", "action_count": 2},
+            ],
+            {"ack_web_ack_id": ""},
+        )
+        assert rejected == []
+        assert diagnostics[0]["reason"] == "invalid_progress_payload"
+        assert diagnostics[0]["preserved_action_ids"] == ["A-LIST-PRESERVED"]
+        choices = diagnostics[0]["condition_choices"]
+        target_id = condition_id_for(
+            "in_progress", "尚未確認 not_existing_file.py 狀態",
+        )
+        assert target_id in {item["condition_id"] for item in choices}
+
+        repaired_calls = loop._restore_progress_repair_actions([
+            progress(
+                "P-REPAIRED",
+                "尚未取得 not_existing_file.py 存在性證據",
+                condition_id=target_id,
+            ),
+            {"tool": "turn_commit", "action_count": 1},
+        ])
+        assert repaired_calls[-1]["action_count"] == 2
+        accepted, diagnostics = loop._accept_ack(
+            repaired_calls, {"ack_web_ack_id": ""},
+        )
+        assert diagnostics == []
+        assert [item["tool"] for item in accepted] == [
+            "report_progress", "list_directory",
+        ]
+        repaired_ledger = record_model_progress(
+            loop.task_id,
+            accepted[0],
+            request_id=loop.run_id,
+            goal="分析兩個指定檔案",
+            round_id=2,
+            root=root,
+        )
+        assert repaired_ledger.matched_condition == "尚未確認 not_existing_file.py 狀態"
+        assert repaired_ledger.matched_condition_id == target_id
+        assert loop.pending_progress_repair_actions == []
+
+
 if __name__ == "__main__":
     validate_failed_verification_can_complete()
     validate_repeated_completed_progress_is_paused()
@@ -890,4 +1062,5 @@ if __name__ == "__main__":
     validate_quoted_shell_operator_is_not_a_false_positive()
     validate_project_source_read_is_routed_before_attachment_execution()
     validate_declared_next_action_must_be_emitted()
+    validate_condition_id_repairs_progress_without_losing_action()
     print("WEBAGENT_PROGRESS_TERMINAL_LIFECYCLE_OK")

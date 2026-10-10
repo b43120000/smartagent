@@ -3,6 +3,7 @@
 """Independent WebAgent protocol/result/ACK loop."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -41,12 +42,21 @@ from agent_core.stage_executor import execute_stage, preflight_stage
 from agent_core.stage_protocol import StageManifestError, validate_stage_manifest
 from agent_core.task_progress import (
     TaskProgressError,
+    completion_condition_choices,
     format_prompt_context,
     initialize_progress,
     record_model_progress,
     set_runtime_state,
     validate_model_progress,
 )
+from agent_core.action_loop_state import (
+    build_action_loop_state,
+    classify_evidence_state,
+    phase_for_action,
+    render_action_loop_state,
+    semantic_action_signature,
+)
+from agent_core.command_operation import operation_terminal_eligible
 
 from .protocol import SUPPORTED_ACTION_TOOLS, render_initial_planner_toolkit
 from .tool_context import WebAgentToolContext
@@ -184,7 +194,9 @@ class WebAgentProtocolLoop:
         self.sent_attachment_paths: list[str] = []
         self.action_ledger: dict[str, dict] = {}
         self.action_result_ledger: dict[str, dict] = {}
+        self.condition_result_ledger: dict[str, dict] = {}
         self.v8_admitted_actions: dict[str, dict] = {}
+        self.pending_progress_repair_actions: list[dict] = []
         self.active_stage_manifest: dict | None = None
         self.image_delivery_plan: dict = {}
         self.authorized_paths: list[str] = []
@@ -193,6 +205,7 @@ class WebAgentProtocolLoop:
         self.execution_state = "NOT_STARTED"
         self.protocol_state = "IDLE"
         self.terminal_candidate: dict = {}
+        self.action_loop_state = build_action_loop_state()
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None:
@@ -292,6 +305,9 @@ class WebAgentProtocolLoop:
             "decision": str(getattr(ledger, "decision", "CONTINUE") or "CONTINUE"),
             "outcome": str(getattr(ledger, "outcome", "PENDING") or "PENDING"),
             "matched_condition": str(getattr(ledger, "matched_condition", "") or ""),
+            "matched_condition_id": str(
+                getattr(ledger, "matched_condition_id", "") or ""
+            ),
             "evidence_refs": list(getattr(ledger, "evidence_refs", []) or []),
             "decision_reason": str(getattr(ledger, "decision_reason", "") or ""),
         }
@@ -353,6 +369,7 @@ class WebAgentProtocolLoop:
                     or "UNKNOWN"
                 ),
                 "effective_verification_id": str(item.get("effective_verification_id", "") or ""),
+                "expectation_status": str(item.get("expectation_status", "") or ""),
                 "verifies_action_id": str(item.get("verifies_action_id", "") or ""),
                 "condition_id": str(item.get("condition_id", "") or ""),
             })
@@ -363,18 +380,195 @@ class WebAgentProtocolLoop:
             "execution_state": self.execution_state,
             "protocol_state": self.protocol_state,
             "action_evidence": evidence[-16:],
+            "condition_evidence": list(self.condition_result_ledger.values())[-16:],
         }
         return (
             "[RUNTIME_EVIDENCE]\n"
             + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             + "\n[/RUNTIME_EVIDENCE]"
+            + "\n"
+            + render_action_loop_state(self.action_loop_state)
         )
+
+    def _progress_state_payload(self) -> dict:
+        ledger = self.progress_ledger
+        if ledger is None:
+            return {}
+        return {
+            "decision": str(getattr(ledger, "decision", "CONTINUE") or "CONTINUE"),
+            "outcome": str(getattr(ledger, "outcome", "PENDING") or "PENDING"),
+            "current_step": getattr(ledger, "current_step", 0),
+            "total_steps": getattr(ledger, "total_steps", 0),
+            "next_action": str(getattr(ledger, "next_action", "") or ""),
+        }
+
+    def _refresh_action_loop_state(self) -> dict:
+        action: dict | None = None
+        result = ""
+        execution_status = "UNKNOWN"
+        verification_status = "UNKNOWN"
+        expectation_status = ""
+        action_records: list[dict] = []
+        if self.action_ledger:
+            action_id = next(reversed(self.action_ledger))
+            entry = dict(self.action_ledger.get(action_id) or {})
+            action = dict(entry.get("action") or {})
+            result = str(entry.get("result", "") or "")
+            execution_status = str(entry.get("execution_status", "UNKNOWN") or "UNKNOWN")
+            evidence = dict(self.action_result_ledger.get(action_id) or {})
+            verification_status = str(
+                evidence.get(
+                    "effective_verification_status",
+                    evidence.get("verification_status", entry.get("verification_status", "UNKNOWN")),
+                )
+                or "UNKNOWN"
+            )
+            expectation_status = str(evidence.get("expectation_status", "") or "")
+            for recorded_id, recorded_entry_value in self.action_ledger.items():
+                recorded_entry = dict(recorded_entry_value or {})
+                recorded_action = dict(recorded_entry.get("action") or {})
+                recorded_evidence = dict(self.action_result_ledger.get(recorded_id) or {})
+                action_records.append({
+                    "action": recorded_action,
+                    "result": str(recorded_entry.get("result", "") or ""),
+                    "execution_status": str(
+                        recorded_entry.get("execution_status", "UNKNOWN") or "UNKNOWN"
+                    ),
+                    "verification_status": str(
+                        recorded_evidence.get(
+                            "effective_verification_status",
+                            recorded_evidence.get(
+                                "verification_status",
+                                recorded_entry.get("verification_status", "UNKNOWN"),
+                            ),
+                        )
+                        or "UNKNOWN"
+                    ),
+                    "expectation_status": str(
+                        recorded_evidence.get(
+                            "expectation_status", recorded_entry.get("expectation_status", "")
+                        ) or ""
+                    ),
+                })
+        self.action_loop_state = build_action_loop_state(
+            transport_state=self.protocol_state,
+            progress=self._progress_state_payload(),
+            action=action,
+            result=result,
+            execution_status=execution_status,
+            verification_status=verification_status,
+            expectation_status=expectation_status,
+            pending_recovery=self.pending_result_recovery,
+            pending_verification=self.pending_verification_requirement,
+            action_records=action_records,
+        )
+        return dict(self.action_loop_state)
+
+    @staticmethod
+    def _selected_action_label(actions: list[dict]) -> str:
+        tools = [str(item.get("tool", "") or "") for item in actions]
+        if not tools:
+            return "none"
+        if len(tools) == 1:
+            return tools[0]
+        return "batch:" + ",".join(tools)
+
+    @staticmethod
+    def _selected_next_phase(actions: list[dict], current_phase: str) -> str:
+        phases = [phase_for_action(item) for item in actions]
+        for candidate in ("TERMINAL", "VERIFY", "EXECUTE", "PLAN", "DISCOVERY"):
+            if candidate in phases:
+                return candidate
+        return str(current_phase or "DISCOVERY")
+
+    def _normalize_action_loop_decision(
+        self, progress: dict, operational: list[dict],
+    ) -> dict | None:
+        """Bind unambiguous state fields and reject only semantic conflicts."""
+        state = dict(self.action_loop_state or {})
+        state_id = str(state.get("state_id", "") or "")
+        # These fields describe Runtime facts already present in the same turn.
+        # Never ask the model to echo them and never reject a valid action because
+        # the model copied an old or semantically different value.
+        progress["runtime_state_ref"] = state_id
+
+        actual_action = self._selected_action_label(operational)
+        progress["selected_action"] = actual_action
+
+        actual_phase = self._selected_next_phase(
+            operational, str(state.get("phase", "DISCOVERY") or "DISCOVERY"),
+        )
+        progress["next_phase"] = actual_phase
+
+        transition = str(state.get("required_transition", "CONTINUE_PLAN") or "CONTINUE_PLAN")
+        allowed = {str(item) for item in list(state.get("allowed_next_actions") or []) if str(item)}
+        actual_tools = [str(item.get("tool", "") or "") for item in operational]
+        if transition in {"PREREQUISITE_REQUIRED", "VERIFY_REQUIRED", "REPLAN_REQUIRED"}:
+            # Progress-only replies are admitted here so the existing bounded
+            # dead-end/verification recovery can issue one complete prompt and
+            # then pause.  Do not turn a missing action into repeated field-level
+            # ACK repair.  When an action is present it must follow the state.
+            if actual_tools and any(tool not in allowed for tool in actual_tools):
+                return {
+                    "marker": "[ACTION_LOOP_STATE_REJECTED]",
+                    "reason": "required_transition_action_missing",
+                    "detail": json.dumps({
+                        "required_transition": transition,
+                        "allowed_next_actions": sorted(allowed),
+                        "actual_tools": actual_tools,
+                    }, ensure_ascii=False, separators=(",", ":")),
+                    "suggestion": "依 Runtime 狀態一次輸出一個允許的 prerequisite/verification action。",
+                }
+        blocked_tools = {
+            str(item) for item in list(state.get("blocked_actions") or []) if str(item)
+        }
+        if blocked_tools and any(tool in blocked_tools for tool in actual_tools):
+            return {
+                "marker": "[ACTION_LOOP_STATE_REJECTED]",
+                "reason": "blocked_action_selected",
+                "detail": "blocked=" + json.dumps(
+                    sorted(blocked_tools), ensure_ascii=False, separators=(",", ":"),
+                ) + ";actual=" + json.dumps(actual_tools, separators=(",", ":")),
+                "suggestion": "先執行 Runtime 提供的 prerequisite action；在證據到齊前不得重送 blocked action。",
+            }
+        if transition == "TERMINAL" and actual_tools != ["final_response"]:
+            return {
+                "marker": "[ACTION_LOOP_STATE_REJECTED]",
+                "reason": "terminal_transition_requires_final_response",
+                "detail": "actual_tools=" + json.dumps(actual_tools, separators=(",", ":")),
+                "suggestion": "TERMINAL 狀態只輸出 terminal Progress 與 final_response。",
+            }
+        blocked_signatures = {
+            str(item) for item in list(state.get("blocked_action_signatures") or []) if str(item)
+        }
+        repeated = [
+            item for item in operational
+            if semantic_action_signature(item) in blocked_signatures
+        ]
+        if repeated:
+            return {
+                "marker": "[ACTION_LOOP_STATE_REJECTED]",
+                "reason": "blocked_semantic_action_repeated",
+                "detail": "tools=" + json.dumps(
+                    [str(item.get("tool", "") or "") for item in repeated], separators=(",", ":"),
+                ),
+                "suggestion": "前一 action 未增加 evidence；改變計畫或使用 materially different 的精確 action。",
+            }
+        return None
 
     @staticmethod
     def _has_structured_verification_action(actions: list[dict]) -> bool:
         """Return whether this round can produce a new PASS/FAIL state."""
         for action in actions:
-            if str(action.get("tool", "") or "") != "run_command":
+            tool = str(action.get("tool", "") or "")
+            if tool == "aggregate_verification":
+                commands = action.get("commands")
+                if isinstance(commands, list) and commands and all(
+                    isinstance(item, str) and item.strip() for item in commands
+                ):
+                    return True
+                continue
+            if tool != "run_command":
                 continue
             criteria = str(action.get("success_criteria", "") or "").strip()
             verify = action.get("verify")
@@ -481,11 +675,29 @@ class WebAgentProtocolLoop:
     def _classify_action_evidence(action: dict, result: str) -> dict:
         """Separate execution facts from postcondition verification facts."""
         text = str(result or "")
+        tool = str(action.get("tool", "") or "")
         verification_match = re.search(
             r"(?m)^VERIFICATION_STATUS:\s*(PASS|FAIL|UNVERIFIED|SPEC_INVALID)\s*$", text,
         )
         verification = verification_match.group(1) if verification_match else "UNKNOWN"
-        execution = "SUCCEEDED"
+        expectation_match = re.search(
+            r"(?m)^EXPECTATION_STATUS:\s*(PASS|FAIL|SPEC_INVALID)\s*$", text,
+        )
+        expectation = expectation_match.group(1) if expectation_match else ""
+        try:
+            structured = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            structured = {}
+        structured_status = (
+            str(structured.get("status", "") or "").upper()
+            if isinstance(structured, dict) else ""
+        )
+        if tool in {"aggregate_verification", "execute_frozen_plan"}:
+            if structured_status == "PASS":
+                verification = "PASS"
+            elif structured_status in {"FAIL", "FAILED", "ROLLED_BACK", "ERROR"}:
+                verification = "FAIL"
+        execution = "UNKNOWN" if not text.strip() else "SUCCEEDED"
         exit_match = re.search(r"(?m)^exit_code:\s*([^\r\n]+)", text)
         if exit_match:
             raw_exit = exit_match.group(1).strip()
@@ -496,18 +708,96 @@ class WebAgentProtocolLoop:
             "[PROTOCOL_ERROR]",
         )):
             execution = "FAILED"
+        elif tool == "query_project":
+            query_payload = structured if isinstance(structured, dict) else {}
+            if str(query_payload.get("status", "") or "").upper() in {"REJECTED", "ERROR", "FAILED"}:
+                execution = "FAILED"
+        elif structured_status in {"REJECTED", "ERROR", "FAILED"} and tool not in {
+            "aggregate_verification", "execute_frozen_plan",
+        }:
+            execution = "FAILED"
+        evidence_state, _missing = classify_evidence_state(
+            action, text, execution, verification, expectation,
+        )
+        operation = str(action.get("operation", "") or "").upper()
+        terminal_eligible = True
+        if tool == "run_command":
+            try:
+                terminal_eligible = (
+                    expectation == "PASS"
+                    if expectation
+                    else operation_terminal_eligible(operation, verification)
+                )
+            except ValueError:
+                terminal_eligible = False
         return {
-            "tool": str(action.get("tool", "") or ""),
+            "tool": tool,
+            "operation": operation,
             "execution_status": execution,
             "verification_status": verification,
+            "expectation_status": expectation,
+            "evidence_state": evidence_state,
+            "terminal_eligible": terminal_eligible,
         }
 
     @staticmethod
     def _entry_verification_status(item: dict) -> str:
+        expectation = str(
+            item.get("effective_expectation_status", item.get("expectation_status", "")) or ""
+        ).upper()
+        if expectation in {"PASS", "FAIL", "SPEC_INVALID"}:
+            return expectation
         return str(
             item.get("effective_verification_status", item.get("verification_status", "UNKNOWN"))
             or "UNKNOWN"
         ).upper()
+
+    @staticmethod
+    def _canonical_condition_id(condition: object) -> str:
+        text = str(condition or "").strip()
+        if not text:
+            return ""
+        return "COND-" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:20].upper()
+
+    def _resolve_effective_evidence_entries(
+        self,
+        evidence_refs: list[str] | set[str] | tuple[str, ...] | None,
+    ) -> list[tuple[str, dict]]:
+        """Collapse verifier history onto the action's current effective result.
+
+        Explicit evidence refs commonly include both an action and every VERIFY
+        action used to test it.  A superseded verifier remains useful audit
+        history, but it must not independently poison the terminal verdict once
+        the target action points at a newer effective verification.
+
+        A verifier is collapsed only when its verification record is present in
+        the target's history.  Broken or unrelated verifier references therefore
+        retain their own execution/result state and cannot be hidden by a prior
+        target PASS.
+        """
+        resolved: dict[str, dict] = {}
+        for ref in [str(item) for item in list(evidence_refs or [])]:
+            entry = self.action_result_ledger.get(ref)
+            if entry is None:
+                continue
+            effective_ref = ref
+            effective_entry = entry
+            target_id = str(entry.get("verifies_action_id", "") or "").strip()
+            target = self.action_result_ledger.get(target_id) if target_id else None
+            verification_id = str(
+                entry.get("verification_id", entry.get("effective_verification_id", "")) or ""
+            ).strip()
+            if target is not None and verification_id:
+                target_history_ids = {
+                    str(item.get("verification_id", "") or "").strip()
+                    for item in list(target.get("verification_history") or [])
+                    if isinstance(item, dict)
+                }
+                if verification_id in target_history_ids:
+                    effective_ref = target_id
+                    effective_entry = target
+            resolved[effective_ref] = effective_entry
+        return list(resolved.items())
 
     def _effective_verification_status(
         self,
@@ -523,12 +813,32 @@ class WebAgentProtocolLoop:
         """
         refs = [str(item) for item in list(evidence_refs or [])]
         if refs:
-            entries = [self.action_result_ledger[item] for item in refs if item in self.action_result_ledger]
+            entries = [item for _action_id, item in self._resolve_effective_evidence_entries(refs)]
         else:
-            entries = list(self.action_result_ledger.values())
+            # A verifier copies its newest status onto the target action.  Do
+            # not count the verifier entry again during the request-wide
+            # summary or an obsolete verifier FAIL can poison a later PASS.
+            entries = [
+                item for item in self.action_result_ledger.values()
+                if not str(item.get("verifies_action_id", "") or "").strip()
+            ]
+            if not entries and self.action_result_ledger:
+                entries = [next(reversed(self.action_result_ledger.values()))]
         condition = str(matched_condition or "").strip()
+        canonical_condition_id = self._canonical_condition_id(condition)
+        condition_entry = self.condition_result_ledger.get(canonical_condition_id)
+        if condition_entry and (
+            not refs or str(condition_entry.get("action_id", "") or "") in refs
+        ):
+            status = self._entry_verification_status(condition_entry)
+            if status in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}:
+                return status
         if condition:
-            scoped = [item for item in entries if str(item.get("condition_id", "") or "").strip() == condition]
+            scoped = [
+                item for item in entries
+                if str(item.get("condition_id", "") or "").strip()
+                in {condition, canonical_condition_id}
+            ]
             if scoped:
                 entries = scoped
         statuses = [self._entry_verification_status(item) for item in entries]
@@ -543,6 +853,53 @@ class WebAgentProtocolLoop:
             return "UNVERIFIED"
         return "PASS"
 
+    def _terminal_evidence_verdict(
+        self, evidence_refs: list[str] | set[str] | tuple[str, ...] | None,
+        *,
+        matched_condition: str = "",
+    ) -> str:
+        """Return PASS/FAIL/UNVERIFIED from action-scoped Runtime evidence."""
+        refs = [str(item) for item in list(evidence_refs or [])]
+        canonical_condition_id = self._canonical_condition_id(matched_condition)
+        condition_entry = self.condition_result_ledger.get(canonical_condition_id)
+        if condition_entry and str(condition_entry.get("action_id", "") or "") in refs:
+            status = self._entry_verification_status(condition_entry)
+            if status in {"PASS", "FAIL", "SPEC_INVALID"}:
+                return "FAIL" if status in {"FAIL", "SPEC_INVALID"} else "PASS"
+        entries = self._resolve_effective_evidence_entries(refs)
+        if not entries:
+            return "UNVERIFIED"
+        passed = False
+        unresolved = False
+        for action_id, entry in entries:
+            execution = str(entry.get("execution_status", "UNKNOWN") or "UNKNOWN").upper()
+            verification = self._entry_verification_status(entry)
+            expectation = str(entry.get("expectation_status", "") or "").upper()
+            if expectation in {"FAIL", "SPEC_INVALID"}:
+                return "FAIL"
+            if execution == "FAILED" and expectation != "PASS":
+                return "FAIL"
+            if verification in {"FAIL", "SPEC_INVALID"}:
+                return "FAIL"
+            if not bool(entry.get("terminal_eligible", True)):
+                unresolved = True
+                continue
+            if verification == "PASS":
+                passed = True
+                continue
+            action = dict((self.action_ledger.get(action_id) or {}).get("action") or {})
+            role = phase_for_action(action) if action else "DISCOVERY"
+            evidence_state = str(entry.get("evidence_state", "") or "").upper()
+            if role in {"DISCOVERY", "PLAN"} and execution == "SUCCEEDED" and evidence_state in {
+                "AVAILABLE", "SUFFICIENT",
+            }:
+                passed = True
+            else:
+                unresolved = True
+        if passed and not unresolved:
+            return "PASS"
+        return "UNVERIFIED"
+
     def _record_action_result_evidence(self, action: dict, ledger_entry: dict) -> dict:
         """Append verification history and apply an explicit scoped supersession."""
         action_id = str(action.get("action_id", "") or "")
@@ -551,10 +908,25 @@ class WebAgentProtocolLoop:
         condition_id = str(action.get("condition_id", "") or "").strip()
         if not condition_id and target is not None:
             condition_id = str(target.get("condition_id", "") or "").strip()
-        status = str(ledger_entry.get("verification_status", "UNKNOWN") or "UNKNOWN").upper()
+        pending_condition_id = str(
+            (self.pending_verification_requirement or {}).get("condition_id", "") or ""
+        ).strip()
+        if (
+            str(action.get("operation", "") or "").upper() == "VERIFY"
+            and target is None
+            and pending_condition_id
+        ):
+            ledger_entry["model_condition_id"] = condition_id
+            condition_id = pending_condition_id
+        observed_status = str(
+            ledger_entry.get("verification_status", "UNKNOWN") or "UNKNOWN"
+        ).upper()
+        expectation_status = str(ledger_entry.get("expectation_status", "") or "").upper()
+        status = expectation_status if expectation_status in {"PASS", "FAIL", "SPEC_INVALID"} else observed_status
         ledger_entry["condition_id"] = condition_id
         ledger_entry["verifies_action_id"] = verifies_action_id
         ledger_entry["effective_verification_status"] = status
+        ledger_entry["effective_expectation_status"] = expectation_status
         ledger_entry.setdefault("verification_history", [])
         if status in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}:
             verification_id = "VER-" + uuid.uuid4().hex[:12].upper()
@@ -563,6 +935,8 @@ class WebAgentProtocolLoop:
                 "verification_id": verification_id,
                 "action_id": action_id,
                 "status": status,
+                "observed_verification_status": observed_status,
+                "expectation_status": expectation_status,
                 "round": self.turn_id,
                 "condition_id": condition_id,
                 "supersedes_verification_id": prior_id,
@@ -575,6 +949,22 @@ class WebAgentProtocolLoop:
                 target["effective_verification_id"] = verification_id
                 target["effective_verification_status"] = status
         self.action_result_ledger[action_id] = ledger_entry
+        if condition_id:
+            self.condition_result_ledger[condition_id] = {
+                "condition_id": condition_id,
+                "action_id": action_id,
+                "status": status,
+                "verification_status": status,
+                "observed_verification_status": observed_status,
+                "expectation_status": expectation_status,
+                "effective_verification_status": status,
+                "execution_status": str(
+                    ledger_entry.get("execution_status", "UNKNOWN") or "UNKNOWN"
+                ).upper(),
+                "terminal_eligible": bool(ledger_entry.get("terminal_eligible", True)),
+                "verification_id": str(ledger_entry.get("verification_id", "") or ""),
+                "round": self.turn_id,
+            }
         return ledger_entry
 
     def _verification_requirement_diagnostic(
@@ -586,15 +976,18 @@ class WebAgentProtocolLoop:
         condition = str(normalized_progress.get("matched_condition", "") or "").strip()
         requirement = dict(self.pending_verification_requirement or {})
         if not requirement:
+            condition_id = self._canonical_condition_id(condition)
             requirement = {
                 "missing_condition": condition or "取得支持 terminal SUCCESS 的 request-scoped PASS evidence",
+                "condition_id": condition_id,
                 "current_verification_status": self._effective_verification_status(
                     normalized_progress.get("evidence_refs") or [],
                     matched_condition=condition,
                 ),
                 "required_action": "run_command",
-                "required_fields": ["command", "success_criteria", "verify"],
-                "supported_verify_actions": ["run_command", "file_exists", "file_contains", "expect_regex"],
+                "required_fields": ["operation", "command", "success_criteria", "verify"],
+                "supported_verify_actions": ["run_command", "aggregate_verification"],
+                "supported_verify_checks": ["file_exists", "file_contains", "expect_regex"],
                 "evidence_refs": list(normalized_progress.get("evidence_refs") or []),
             }
             self.pending_verification_requirement = dict(requirement)
@@ -604,17 +997,21 @@ class WebAgentProtocolLoop:
             "reason": reason,
             "detail": detail,
             "suggestion": (
-                "下一輪必須使用 decision=CONTINUE，並輸出至少一個 run_command action；"
-                "該 action 必須同時包含 command、描述精確成功條件的 success_criteria，以及非空 verify。"
-                "補驗證時用 verifies_action_id 指向原 action。verify 可用 "
-                "run_command/file_exists/file_contains，並可用 expect_regex 驗證結構化輸出。"
+                "下一輪必須使用 decision=CONTINUE，並輸出一個 Runtime 列出的 canonical verification action。"
+                "使用 run_command 時必須同時包含 operation、command、描述精確成功條件的 success_criteria，以及非空 verify；"
+                "補驗證的 operation 固定為 VERIFY；若有原 action，使用 verifies_action_id；"
+                "若是直接驗證 completion condition，condition_id 必須使用 detail 中 Runtime 指定的值。"
+                "使用 aggregate_verification 時必須提供非空 commands。補驗證時用 verifies_action_id 指向原 action。"
+                "run_command.verify 可用 run_command/file_exists/file_contains，並可用 expect_regex 驗證結構化輸出。"
                 "Runtime 執行後會回傳 PASS、FAIL 或 SPEC_INVALID；"
                 "在取得新狀態前不得只回 report_progress，也不得再次宣告 SUCCESS。"
             ),
         }
 
     @staticmethod
-    def _normalize_report_progress_envelope(action: dict) -> tuple[dict, dict | None]:
+    def _normalize_report_progress_envelope(
+        action: dict, existing: object | None = None,
+    ) -> tuple[dict, dict | None]:
         """Accept one unambiguous legacy/narrative ``progress`` wrapper.
 
         The canonical wire shape keeps Progress fields beside ``tool`` and
@@ -630,6 +1027,26 @@ class WebAgentProtocolLoop:
         if "progress" not in normalized:
             return normalized, None
         nested = normalized.get("progress")
+        if isinstance(nested, str) and nested.strip() and existing is not None:
+            # A narrative ``progress`` value contains no new semantic decision.
+            # Preserve the last accepted ledger and use the text only as the
+            # current observation; this is deterministic format normalization,
+            # not a model decision invented by Runtime.
+            observation = nested.strip()
+            normalized.pop("progress", None)
+            normalized.setdefault("base_evaluation", str(getattr(existing, "base_evaluation", "") or observation))
+            normalized.setdefault("total_steps", getattr(existing, "total_steps", 0))
+            normalized.setdefault("current_step", getattr(existing, "current_step", 0))
+            normalized.setdefault("steps", list(getattr(existing, "steps", []) or []))
+            normalized.setdefault("current_focus", observation)
+            normalized.setdefault("next_action", str(getattr(existing, "next_action", "") or ""))
+            normalized.setdefault("completion_contract", dict(getattr(existing, "completion_contract", {}) or {}))
+            normalized.setdefault("decision", str(getattr(existing, "decision", "CONTINUE") or "CONTINUE"))
+            normalized.setdefault("outcome", str(getattr(existing, "outcome", "PENDING") or "PENDING"))
+            normalized.setdefault("matched_condition", str(getattr(existing, "matched_condition", "") or ""))
+            normalized.setdefault("evidence_refs", list(getattr(existing, "evidence_refs", []) or []))
+            normalized.setdefault("decision_reason", observation)
+            return normalized, None
         if not isinstance(nested, dict):
             return {}, {
                 "marker": "[WEBAGENT_PROGRESS_REJECTED]",
@@ -767,6 +1184,9 @@ class WebAgentProtocolLoop:
                     "decision": str(progress.get("decision", "") or "").upper(),
                     "outcome": str(progress.get("outcome", "") or "").upper(),
                     "matched_condition": str(progress.get("matched_condition", "") or ""),
+                    "matched_condition_id": str(
+                        progress.get("matched_condition_id", "") or ""
+                    ),
                     "completion_contract": progress.get("completion_contract", {}),
                     "evidence_refs": sorted(str(item) for item in list(progress.get("evidence_refs") or [])),
                     "steps": [
@@ -917,6 +1337,9 @@ class WebAgentProtocolLoop:
         result_refs = evidence_refs & set(self.action_result_ledger)
         if not result_refs:
             return False
+        terminal_verdict = self._terminal_evidence_verdict(
+            result_refs, matched_condition=matched,
+        )
         if outcome == "SUCCESS":
             evidence = [self.action_result_ledger[item] for item in result_refs]
             if not any(
@@ -924,12 +1347,10 @@ class WebAgentProtocolLoop:
                 for item in evidence
             ):
                 return False
-            verification = self._effective_verification_status(
-                result_refs,
-                matched_condition=matched,
-            )
-            if verification in {"FAIL", "SPEC_INVALID", "UNVERIFIED"}:
+            if terminal_verdict != "PASS":
                 return False
+        elif outcome == "FAILED" and terminal_verdict != "FAIL":
+            return False
 
         progress_action["decision"] = "COMPLETE"
         self._emit(
@@ -947,6 +1368,84 @@ class WebAgentProtocolLoop:
 
     def _accept_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
         return self._accept_v8_ack(calls, expected)
+
+    def _preserve_progress_repair_actions(
+        self, operational: list[dict], expected: dict,
+    ) -> list[str]:
+        """Hold schema-valid non-terminal actions while Progress is repaired.
+
+        The actions are not admitted or executed here.  They are replayed into
+        the same logical decision only after a repaired Progress payload passes
+        every normal admission and state-machine gate.
+        """
+        candidates = [
+            dict(action) for action in operational
+            if str(action.get("tool", "") or "") != "final_response"
+        ]
+        if not candidates or len(candidates) != len(operational):
+            self.pending_progress_repair_actions = []
+            return []
+        try:
+            context = V8RequestContext(
+                self.run_id,
+                getattr(self, "task_id", "") or self.run_id,
+                getattr(self, "task_epoch", "") or self.run_id,
+                getattr(self, "intent_digest", ""),
+            )
+        except ProtocolV8Error:
+            self.pending_progress_repair_actions = []
+            return []
+        seen: set[str] = set()
+        for index, action in enumerate(candidates, 1):
+            tool_name = str(action.get("tool", "") or "")
+            if tool_name not in SUPPORTED_ACTION_TOOLS:
+                self.pending_progress_repair_actions = []
+                return []
+            envelope_valid, _ = validate_tool_envelope(action, block_index=index)
+            if not envelope_valid:
+                self.pending_progress_repair_actions = []
+                return []
+            try:
+                record = v8_admit_action(action, context)
+            except ProtocolV8Error:
+                self.pending_progress_repair_actions = []
+                return []
+            action_id = str(record.get("action_id", "") or "")
+            if not action_id or action_id in seen:
+                self.pending_progress_repair_actions = []
+                return []
+            seen.add(action_id)
+        self.pending_progress_repair_actions = candidates
+        action_ids = [str(action.get("action_id", "") or "") for action in candidates]
+        self._emit(
+            "progress_repair_actions_preserved",
+            request_id=self.run_id,
+            round=self.turn_id,
+            action_ids=action_ids,
+        )
+        return action_ids
+
+    def _restore_progress_repair_actions(self, calls: list[dict]) -> list[dict]:
+        pending = [dict(action) for action in self.pending_progress_repair_actions]
+        if not pending or not calls or calls[-1].get("tool") != "turn_commit":
+            return calls
+        submitted = [
+            action for action in calls[:-1]
+            if action.get("tool") != "report_progress"
+        ]
+        if submitted:
+            return calls
+        restored = [*calls[:-1], *pending]
+        commit = dict(calls[-1])
+        commit["action_count"] = len(restored)
+        restored.append(commit)
+        self._emit(
+            "progress_repair_actions_restored",
+            request_id=self.run_id,
+            round=self.turn_id,
+            action_ids=[str(action.get("action_id", "") or "") for action in pending],
+        )
+        return restored
 
     def _accept_v8_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
         self.active_stage_manifest = None
@@ -976,7 +1475,7 @@ class WebAgentProtocolLoop:
                 "suggestion": "每輪必須輸出且只輸出一個 report_progress。",
             }]
         normalized_progress_action, wrapper_diagnostic = self._normalize_report_progress_envelope(
-            progress_actions[0]
+            progress_actions[0], self.progress_ledger
         )
         if wrapper_diagnostic:
             return [], [wrapper_diagnostic]
@@ -1061,6 +1560,75 @@ class WebAgentProtocolLoop:
                             pending_edit_recovery
                         ),
                     }]
+        pending_plan_recovery = dict(self.pending_result_recovery or {})
+        repair_actions = [
+            action for action in operational
+            if str(action.get("tool", "") or "") == "repair_task_plan"
+        ]
+        plan_repair_active = (
+            pending_plan_recovery.get("active")
+            and str(pending_plan_recovery.get("reason", "")).startswith("task_plan_")
+            and str(pending_plan_recovery.get("required_action", "") or "")
+            == "repair_task_plan"
+            and not pending_plan_recovery.get("prerequisite_satisfied")
+        )
+        if repair_actions and not plan_repair_active:
+            return [], [{
+                "marker": "[WEBAGENT_TASK_PLAN_REPAIR_REJECTED]",
+                "reason": "task_plan_repair_without_runtime_latch",
+                "detail": "repair_task_plan is allowed only while Runtime PLAN_REPAIR_REQUIRED is active",
+                "suggestion": "Use propose_task_plan for a new canonical TASK_PLAN_V1 plan.",
+            }]
+        if (
+            plan_repair_active
+        ):
+            operational_tools = [str(action.get("tool", "") or "") for action in operational]
+            forbidden = set(pending_plan_recovery.get("forbidden_actions") or [])
+            attempted_forbidden = sorted(forbidden.intersection(operational_tools))
+            if attempted_forbidden:
+                return [], [{
+                    "marker": "[WEBAGENT_TASK_PLAN_REPAIR_REQUIRED]",
+                    "reason": "task_plan_repair_latch_active",
+                    "detail": (
+                        "task-plan repair prerequisite is active; forbidden_tools="
+                        + json.dumps(attempted_forbidden, separators=(",", ":"))
+                    ),
+                    "suggestion": render_result_evidence_to_action_guidance(
+                        pending_plan_recovery
+                    ),
+                }]
+            expected_tool = str(pending_plan_recovery.get("required_action", "") or "")
+            if expected_tool and operational_tools != [expected_tool]:
+                return [], [{
+                    "marker": "[WEBAGENT_TASK_PLAN_REPAIR_REQUIRED]",
+                    "reason": "task_plan_repair_action_required",
+                    "detail": (
+                        f"expected exactly one {expected_tool}; actual="
+                        + json.dumps(operational_tools, separators=(",", ":"))
+                    ),
+                    "suggestion": render_result_evidence_to_action_guidance(
+                        pending_plan_recovery
+                    ),
+                }]
+            expected_actions = [
+                action for action in list(pending_plan_recovery.get("next_actions") or [])
+                if isinstance(action, dict)
+                and str(action.get("tool", "") or "") == expected_tool
+            ]
+            if expected_actions:
+                expected_action = dict(expected_actions[0])
+                submitted_action = dict(operational[0])
+                expected_action.pop("action_id", None)
+                submitted_action.pop("action_id", None)
+                if submitted_action != expected_action:
+                    return [], [{
+                        "marker": "[WEBAGENT_TASK_PLAN_REPAIR_REQUIRED]",
+                        "reason": "task_plan_repair_payload_mismatch",
+                        "detail": "repair_task_plan must preserve the exact Runtime-issued canonical plan",
+                        "suggestion": render_result_evidence_to_action_guidance(
+                            pending_plan_recovery
+                        ),
+                    }]
         if getattr(self.tools, "_bootstrap_install_root", None) is None:
             evidence_route = build_evidence_to_action_route(
                 operational, self.authorized_paths,
@@ -1090,7 +1658,7 @@ class WebAgentProtocolLoop:
                         "reason": "run_command_verification_contract_required",
                         "detail": verification_detail,
                         "suggestion": (
-                            "保留同一 command 與決策。verify 必須是 non-empty object 或 object list，"
+                            "保留同一 operation、command 與決策。verify 必須是 non-empty object 或 object list，"
                             "不得使用自然語言字串。可直接使用："
                             '"verify":[{"action":"run_command","command":"驗證用 PowerShell 指令",'
                             '"expect_exit_code":0,"expect_contains":"可選關鍵字"}]。'
@@ -1121,9 +1689,17 @@ class WebAgentProtocolLoop:
         self._normalize_unambiguous_terminal_decision(
             progress_actions[0], operational,
         )
+        state_diagnostic = self._normalize_action_loop_decision(
+            progress_actions[0], operational,
+        )
+        if state_diagnostic:
+            return [], [state_diagnostic]
         try:
             normalized_progress = validate_model_progress(progress_actions[0], self.progress_ledger)
         except TaskProgressError as exc:
+            preserved_action_ids = self._preserve_progress_repair_actions(
+                operational, expected,
+            )
             diagnostic = {
                 "marker": "[WEBAGENT_PROGRESS_REJECTED]",
                 "reason": "invalid_progress_payload",
@@ -1133,9 +1709,47 @@ class WebAgentProtocolLoop:
             repair_context = dict(getattr(exc, "repair_context", {}) or {})
             if repair_context:
                 diagnostic.update(repair_context)
+            if preserved_action_ids:
+                diagnostic["preserved_action_ids"] = preserved_action_ids
             return [], [diagnostic]
         decision = normalized_progress["decision"]
         outcome = normalized_progress["outcome"]
+        success_conditions = list(
+            dict(normalized_progress.get("completion_contract") or {}).get("success") or []
+        )
+        success_condition_ids = {
+            item["condition_id"]
+            for item in completion_condition_choices(
+                normalized_progress.get("completion_contract") or {}, "success",
+            )
+        }
+        allowed_expected_failure_conditions = {
+            str(item).strip() for item in success_conditions if str(item).strip()
+        } | success_condition_ids
+        for action in operational:
+            if action.get("expected_failure") is None:
+                continue
+            declared_condition = str(action.get("condition_id", "") or "").strip()
+            success_criteria = str(action.get("success_criteria", "") or "").strip()
+            if (
+                declared_condition not in allowed_expected_failure_conditions
+                and success_criteria not in allowed_expected_failure_conditions
+            ):
+                return [], [{
+                    "marker": "[WEBAGENT_EXPECTED_FAILURE_REJECTED]",
+                    "reason": "expected_failure_not_bound_to_success_contract",
+                    "detail": json.dumps({
+                        "action_id": str(action.get("action_id", "") or ""),
+                        "condition_id": declared_condition,
+                        "success_criteria": success_criteria,
+                        "allowed_success_conditions": success_conditions,
+                        "allowed_success_condition_ids": sorted(success_condition_ids),
+                    }, ensure_ascii=False, separators=(",", ":")),
+                    "suggestion": (
+                        "expected_failure 必須在執行前綁定 completion_contract.success 中的精確條件文字，"
+                        "或其 Runtime condition_id；不得用事後新增或不相干條件包裝一般失敗。"
+                    ),
+                }]
         action_consistency = self._progress_action_consistency_diagnostic(
             normalized_progress, operational,
         )
@@ -1219,7 +1833,11 @@ class WebAgentProtocolLoop:
             evidence_refs,
             matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
         )
-        if verification_status in {"PASS", "FAIL"}:
+        terminal_evidence_verdict = self._terminal_evidence_verdict(
+            evidence_refs,
+            matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
+        )
+        if terminal_evidence_verdict in {"PASS", "FAIL"}:
             self.pending_verification_requirement = {}
         if (
             self.pending_verification_requirement
@@ -1231,7 +1849,7 @@ class WebAgentProtocolLoop:
                 normalized_progress,
                 reason="verification_evidence_action_required",
             )]
-        if decision == "COMPLETE" and outcome == "SUCCESS" and verification_status in {"UNVERIFIED", "SPEC_INVALID"}:
+        if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED":
             final_action = next(
                 (item for item in operational if item.get("tool") == "final_response"),
                 {},
@@ -1249,22 +1867,34 @@ class WebAgentProtocolLoop:
                     str(normalized_progress.get("matched_condition", "") or "").strip()
                     or "取得支持 terminal SUCCESS 的 request-scoped PASS evidence"
                 ),
-                "current_verification_status": verification_status,
+                "condition_id": self._canonical_condition_id(
+                    str(normalized_progress.get("matched_condition", "") or "").strip()
+                    or "取得支持 terminal SUCCESS 的 request-scoped PASS evidence"
+                ),
+                "current_verification_status": terminal_evidence_verdict,
                 "required_action": "run_command",
-                "required_fields": ["command", "success_criteria", "verify"],
-                "supported_verify_actions": ["run_command", "file_exists", "file_contains", "expect_regex"],
+                "required_fields": ["operation", "command", "success_criteria", "verify"],
+                "supported_verify_actions": ["run_command", "aggregate_verification"],
+                "supported_verify_checks": ["file_exists", "file_contains", "expect_regex"],
                 "evidence_refs": list(normalized_progress.get("evidence_refs") or []),
             }
             return [], [self._verification_requirement_diagnostic(
                 normalized_progress,
                 reason="terminal_success_verification_missing",
             )]
-        if decision == "COMPLETE" and outcome == "SUCCESS" and verification_status == "FAIL":
+        if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "FAIL":
             return [], [{
                 "marker": "[WEBAGENT_PROGRESS_REJECTED]",
                 "reason": "success_contradicts_runtime_verification",
-                "detail": f"model_outcome=SUCCESS;verification={verification_status}",
+                "detail": f"model_outcome=SUCCESS;verification={terminal_evidence_verdict}",
                 "suggestion": "依目前 FAIL evidence 回覆 FAILED/PARTIAL，或以 verifies_action_id 綁定原 action，執行修正驗證後再判斷。",
+            }]
+        if decision == "COMPLETE" and outcome == "FAILED" and terminal_evidence_verdict != "FAIL":
+            return [], [{
+                "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+                "reason": "failure_not_supported_by_runtime_evidence",
+                "detail": f"model_outcome=FAILED;runtime_evidence={terminal_evidence_verdict}",
+                "suggestion": "FAILED 必須引用 execution_status=FAILED 或 verification_status=FAIL 的 action evidence；否則繼續取得客觀結果。",
             }]
         context = V8RequestContext(
             self.run_id,
@@ -1328,6 +1958,7 @@ class WebAgentProtocolLoop:
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
         self.protocol_state = "ACCEPTED"
+        self.pending_progress_repair_actions = []
         self.pending_result_ack_id = ""
         self.pending_web_ack_id = "WEBACK-V8-" + uuid.uuid4().hex[:16].upper()
         self.seen_web_ack_ids.add(self.pending_web_ack_id)
@@ -1372,11 +2003,34 @@ class WebAgentProtocolLoop:
         )
         if recovery_context.get("active"):
             self.pending_result_recovery = dict(recovery_context)
+            if str(recovery_context.get("reason", "")).startswith("task_plan_"):
+                self._emit(
+                    "task_plan_repair_latch_updated",
+                    request_id=self.run_id,
+                    round=self.turn_id,
+                    state=recovery_context.get("runtime_state", "BLOCKED_ON_PREREQUISITE"),
+                    reason=recovery_context.get("reason", ""),
+                    blocking_reason=recovery_context.get("blocking_reason", ""),
+                    required_action=recovery_context.get("required_action", ""),
+                    forbidden_actions=recovery_context.get("forbidden_actions", []),
+                    diagnostic_signature=recovery_context.get("diagnostic_signature", ""),
+                    same_diagnostic_count=recovery_context.get("same_diagnostic_count", 0),
+                )
         elif str(action.get("tool", "") or "") in {
             "validate_edit_plan", "apply_edit_plan",
-            "propose_task_plan", "propose_task_plan_file",
+            "propose_task_plan", "repair_task_plan", "propose_task_plan_file",
         }:
+            had_task_plan_latch = str(
+                self.pending_result_recovery.get("reason", "")
+            ).startswith("task_plan_")
             self.pending_result_recovery = {}
+            if had_task_plan_latch:
+                self._emit(
+                    "task_plan_repair_latch_released",
+                    request_id=self.run_id,
+                    round=self.turn_id,
+                    state="PLAN_FROZEN",
+                )
         result = prepare_tool_result(action, raw_result, self.tools)
         evidence = self._classify_action_evidence(action, result)
         self.action_ledger[action_id] = {
@@ -1467,6 +2121,10 @@ class WebAgentProtocolLoop:
         self.task_epoch = str(task_epoch or self.run_id)
         self.intent_digest = digest_intent(request)
         self.task_request = request
+        self.protocol_state = "ACTIVE"
+        self.action_loop_state = build_action_loop_state(
+            transport_state=self.protocol_state,
+        )
         self.progress_ledger = initialize_progress(
             self.task_id,
             request_id=self.run_id,
@@ -1476,7 +2134,6 @@ class WebAgentProtocolLoop:
         self.turn_id = 0
         self.terminal_outcome = "UNKNOWN"
         self.execution_state = "NOT_STARTED"
-        self.protocol_state = "ACTIVE"
         self.terminal_candidate = {}
         last_no_action_decision_signature: str | None = None
         last_dead_end_recovery_signature: str | None = None
@@ -1488,7 +2145,9 @@ class WebAgentProtocolLoop:
         self.sent_attachment_paths.clear()
         self.action_ledger.clear()
         self.action_result_ledger.clear()
+        self.condition_result_ledger.clear()
         self.v8_admitted_actions.clear()
+        self.pending_progress_repair_actions.clear()
         self.active_stage_manifest = None
         self.pending_result_recovery = {}
         self.tools.current_task_id = self.task_id
@@ -1653,9 +2312,26 @@ class WebAgentProtocolLoop:
                     prompt += "\n" + pending_recovery
                 continue
 
+            calls = self._restore_progress_repair_actions(calls)
             actions, ack_diagnostics = self._accept_ack(calls, expected)
             if ack_diagnostics:
                 self.protocol_state = "REJECTED"
+                if self.pending_progress_repair_actions and not any(
+                    item.get("reason") == "invalid_progress_payload"
+                    for item in ack_diagnostics
+                ):
+                    invalidated_ids = [
+                        str(action.get("action_id", "") or "")
+                        for action in self.pending_progress_repair_actions
+                    ]
+                    self.pending_progress_repair_actions = []
+                    self._emit(
+                        "progress_repair_actions_invalidated",
+                        request_id=self.run_id,
+                        round=self.turn_id,
+                        action_ids=invalidated_ids,
+                        reason="non_progress_admission_rejection",
+                    )
                 self._emit(
                     "protocol_rejected",
                     request_id=self.run_id,
@@ -1666,10 +2342,25 @@ class WebAgentProtocolLoop:
                     calls, ack_diagnostics, response,
                 )
                 if rejection_signature == last_rejected_exchange_signature:
-                    reason = "semantic_stagnation:repeated_progress_contract_rejection"
+                    diagnostic = dict(ack_diagnostics[0] if ack_diagnostics else {})
+                    diagnostic_reason = str(diagnostic.get("reason", "unknown") or "unknown")
+                    diagnostic_detail = str(diagnostic.get("detail", "") or "")
+                    reason = (
+                        "semantic_stagnation:repeated_progress_contract_rejection:"
+                        + diagnostic_reason
+                    )
                     set_runtime_state(self.task_id, "PAUSED", reason=reason, root=self.progress_root)
+                    self._emit(
+                        "protocol_loop_paused",
+                        request_id=self.run_id,
+                        round=self.turn_id,
+                        reason=reason,
+                        diagnostic_reason=diagnostic_reason,
+                        diagnostic_detail=diagnostic_detail,
+                    )
                     raise RuntimeError(
-                        "WebAgent 連續回傳相同且不符合完成契約的決策，Runtime 已暫停重複問答"
+                        "WebAgent 連續回傳相同且不符合完成契約（Action Loop）的決策，Runtime 已暫停重複問答；"
+                        f"reason={diagnostic_reason}; detail={diagnostic_detail}"
                     )
                 last_rejected_exchange_signature = rejection_signature
                 repair_note = ""
@@ -1702,14 +2393,28 @@ class WebAgentProtocolLoop:
                     and item.get("condition_class")
                 ]
                 for item in condition_repairs:
+                    condition_choices = list(item.get("condition_choices", []) or [])
                     repair_note += (
                         "\n這是 MATCHED_CONDITION_REPAIR：目前值="
                         + json.dumps(str(item.get("actual_condition", "") or ""), ensure_ascii=False)
                         + "；condition_class="
                         + json.dumps(str(item.get("condition_class", "") or ""), ensure_ascii=False)
-                        + "；matched_condition 必須完全等於下列其中一個合法原文："
-                        + json.dumps(list(item.get("allowed_conditions", []) or []), ensure_ascii=False)
-                        + "。不得改寫、翻譯或摘要該字串。"
+                        + "；請從下列候選選擇唯一的 condition_id，並回填 matched_condition_id："
+                        + json.dumps(condition_choices, ensure_ascii=False)
+                        + "。condition_id 是契約身分；matched_condition 文字可保留原說法。"
+                    )
+                preserved_action_ids = sorted({
+                    str(action_id)
+                    for item in ack_diagnostics
+                    for action_id in list(item.get("preserved_action_ids", []) or [])
+                    if str(action_id)
+                })
+                if preserved_action_ids:
+                    repair_note += (
+                        "\nRuntime 已暫存同輪合法 action："
+                        + json.dumps(preserved_action_ids, ensure_ascii=False)
+                        + "。本次只修正 report_progress，不要重送或改寫 action；"
+                        "Progress 通過後 Runtime 會把原 action 接回同一邏輯回合。"
                     )
                 if any(
                     item.get("reason") == "continue_decision_forbids_final_response"
@@ -2024,6 +2729,10 @@ class WebAgentProtocolLoop:
                     )
                     ledger_entry.update(action_evidence)
                     ledger_entry = self._record_action_result_evidence(action, ledger_entry)
+                    if str(
+                        ledger_entry.get("effective_verification_status", "UNKNOWN") or "UNKNOWN"
+                    ).upper() in {"PASS", "FAIL"}:
+                        self.pending_verification_requirement = {}
                     self._emit(
                         "action_evidence_recorded",
                         request_id=self.run_id,
@@ -2061,6 +2770,44 @@ class WebAgentProtocolLoop:
                     "tool": action.get("tool", ""),
                     "result": result,
                     })
+            state = self._refresh_action_loop_state()
+            self._emit(
+                "action_loop_state_updated",
+                request_id=self.run_id,
+                round=self.turn_id,
+                state_id=state.get("state_id", ""),
+                phase=state.get("phase", ""),
+                execution_status=state.get("execution_status", ""),
+                verification_status=state.get("verification_status", ""),
+                evidence_state=state.get("evidence_state", ""),
+                required_transition=state.get("required_transition", ""),
+                allowed_next_actions=state.get("allowed_next_actions", []),
+                blocked_actions=state.get("blocked_actions", []),
+                missing_evidence=state.get("missing_evidence", []),
+            )
+            terminal_recovery = dict(self.pending_result_recovery or {})
+            if terminal_recovery.get("pause_immediately"):
+                detail = str(
+                    terminal_recovery.get("terminal_if_no_action", "")
+                    or terminal_recovery.get("reason", "")
+                )
+                reason = "semantic_stagnation:task_plan_repair_stalled"
+                set_runtime_state(
+                    self.task_id, "PAUSED", reason=f"{reason}:{detail}",
+                    root=self.progress_root,
+                )
+                self._emit(
+                    "protocol_loop_paused",
+                    request_id=self.run_id,
+                    round=self.turn_id,
+                    reason=reason,
+                    detail=detail,
+                    recovery_context=terminal_recovery,
+                )
+                raise RuntimeError(
+                    "WebAgent task plan 修復仍回傳相同 validator 診斷；Runtime 已暫停。detail="
+                    + detail
+                )
             result_id = "RES-" + uuid.uuid4().hex[:12].upper()
             self.pending_result_ack_id = result_id
             serialized_results = json.dumps(results, ensure_ascii=False, separators=(",", ":"))

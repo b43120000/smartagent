@@ -39,6 +39,7 @@ import json
 import re
 
 from .command_security import inspect_command
+from .command_operation import operation_mismatch_detail
 from .payload_budget import PROTOCOL_RESPONSE_MAX_BYTES, utf8_size
 from .protocol_v9 import SINGLE_FENCE_TRANSPORT_CONTRACT
 
@@ -109,7 +110,7 @@ INLINE_EXECUTOR_SPECS = (
 
 TOOL_ENVELOPE_SCHEMAS = {
     "run_command": {
-        "required": {"command": str},
+        "required": {"command": str, "operation": str},
         "optional": {
             "timeout": int,
             "verify": (list, dict),
@@ -119,6 +120,7 @@ TOOL_ENVELOPE_SCHEMAS = {
             "result_purpose": str,
             "verifies_action_id": str,
             "condition_id": str,
+            "expected_failure": dict,
         },
     },
     "read_file": {
@@ -170,6 +172,10 @@ TOOL_ENVELOPE_SCHEMAS = {
     },
     "inspect_project_scope": {
         "required": {},
+        "optional": {"workspace": str},
+    },
+    "inspect_project_working_set": {
+        "required": {"paths": list},
         "optional": {"workspace": str},
     },
     "inspect_semantic_map": {
@@ -233,9 +239,18 @@ TOOL_ENVELOPE_SCHEMAS = {
     },
     "aggregate_verification": {
         "required": {"commands": list},
-        "optional": {"workspace": str, "timeout": int},
+        "optional": {
+            "workspace": str,
+            "timeout": int,
+            "verifies_action_id": str,
+            "condition_id": str,
+        },
     },
     "propose_task_plan": {
+        "required": {"plan": dict},
+        "optional": {"workspace": str},
+    },
+    "repair_task_plan": {
         "required": {"plan": dict},
         "optional": {"workspace": str},
     },
@@ -315,8 +330,12 @@ TOOL_ENVELOPE_SCHEMAS = {
             "decision": str,
             "outcome": str,
             "matched_condition": str,
+            "matched_condition_id": str,
             "evidence_refs": list,
             "decision_reason": str,
+            "runtime_state_ref": str,
+            "next_phase": str,
+            "selected_action": str,
         },
     },
     "final_response": {
@@ -629,8 +648,9 @@ def _validate_run_command_complexity(command: str, *, block_index: int | None = 
                 f"signals={signal_text}; chars={len(command)}; inline_chars={len(inline_code)}"
             ),
             suggestion=(
-                "Tool Envelope 只承載 control-plane command；source/script/payload 請改走附件、"
-                "artifact 或既有檔案，再用短命令執行。"
+                "一個 run_command 只承載一個主要操作；移除變數、if/foreach 與多命令串接，"
+                "把有先後相依的操作拆成後續 action。只有 source/script/payload 才改走附件、"
+                "artifact 或既有檔案。"
             ),
             block_index=block_index,
         )
@@ -854,6 +874,105 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 suggestion="不要用 run_command 執行破壞性操作；改用 runtime 提供的 typed operation。",
                 block_index=block_index,
             )
+
+        try:
+            mismatch = operation_mismatch_detail(call)
+        except ValueError as exc:
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]",
+                "run_command_operation_invalid",
+                tool=tool,
+                detail=str(exc),
+                suggestion=(
+                    "run_command.operation 必須是 INSPECT、MUTATE、BUILD、TEST、VERIFY、"
+                    "GIT_INSPECT、GIT_MUTATE、PROCESS、TRANSFER 或 GENERAL。"
+                ),
+                block_index=block_index,
+            )
+        if mismatch:
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]",
+                "run_command_operation_mismatch",
+                tool=tool,
+                detail=mismatch,
+                suggestion="修正 operation 或 command；不得用錯誤 operation 推進 Runtime 狀態。",
+                block_index=block_index,
+            )
+
+        expected_failure = call.get("expected_failure")
+        if expected_failure is not None:
+            operation = str(call.get("operation", "") or "").strip().upper()
+            if operation not in {"BUILD", "TEST", "INSPECT", "GIT_INSPECT", "VERIFY"}:
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]",
+                    "run_command_expected_failure_operation_forbidden",
+                    tool=tool,
+                    detail=f"operation={operation or 'missing'}",
+                    suggestion=(
+                        "expected_failure 只允許 BUILD、TEST、INSPECT、GIT_INSPECT、VERIFY；"
+                        "不得把 MUTATE、GIT_MUTATE、PROCESS、TRANSFER 或 GENERAL 的失敗包裝成成功。"
+                    ),
+                    block_index=block_index,
+                )
+            if not isinstance(expected_failure, dict) or not expected_failure:
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]",
+                    "run_command_expected_failure_invalid",
+                    tool=tool,
+                    detail="expected_failure must be a non-empty object",
+                    suggestion=(
+                        '例如 "expected_failure":{"exit_codes":[1],'
+                        '"stderr_regex":"not a directory"}。'
+                    ),
+                    block_index=block_index,
+                )
+            exit_codes = expected_failure.get("exit_codes")
+            stderr_regex = expected_failure.get("stderr_regex")
+            output_contains = expected_failure.get("output_contains")
+            if exit_codes is not None and (
+                not isinstance(exit_codes, list)
+                or not exit_codes
+                or any(not isinstance(item, int) or item == 0 for item in exit_codes)
+            ):
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]",
+                    "run_command_expected_failure_invalid",
+                    tool=tool,
+                    detail="expected_failure.exit_codes must be a non-empty list of non-zero integers",
+                    suggestion="列出預期的非零 exit code，例如 [1]。",
+                    block_index=block_index,
+                )
+            if stderr_regex is not None:
+                if not isinstance(stderr_regex, str) or not stderr_regex.strip():
+                    return False, _diagnostic(
+                        "[TOOL_ENVELOPE_REJECTED]", "run_command_expected_failure_invalid",
+                        tool=tool, detail="expected_failure.stderr_regex must be a non-empty string",
+                        suggestion="提供可驗證預期錯誤的 stderr regex。", block_index=block_index,
+                    )
+                try:
+                    re.compile(stderr_regex)
+                except re.error as exc:
+                    return False, _diagnostic(
+                        "[TOOL_ENVELOPE_REJECTED]", "run_command_expected_failure_invalid",
+                        tool=tool, detail=f"invalid expected_failure.stderr_regex: {exc}",
+                        suggestion="修正 stderr regex。", block_index=block_index,
+                    )
+            if output_contains is not None:
+                values = output_contains if isinstance(output_contains, list) else [output_contains]
+                if not values or any(not isinstance(item, str) or not item for item in values):
+                    return False, _diagnostic(
+                        "[TOOL_ENVELOPE_REJECTED]", "run_command_expected_failure_invalid",
+                        tool=tool,
+                        detail="expected_failure.output_contains must be a non-empty string or list[str]",
+                        suggestion="提供預期出現在 stdout/stderr 的關鍵字。", block_index=block_index,
+                    )
+            if exit_codes is None and stderr_regex is None and output_contains is None:
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]", "run_command_expected_failure_invalid",
+                    tool=tool, detail="expected_failure has no matcher",
+                    suggestion="至少提供 exit_codes、stderr_regex 或 output_contains。",
+                    block_index=block_index,
+                )
 
         verify = call.get("verify")
         verify_steps = [verify] if isinstance(verify, dict) else (verify if isinstance(verify, list) else [])
@@ -1612,6 +1731,14 @@ def run_tool_parser_self_tests() -> dict:
     all_passed = True
 
     for name, spec in cases.items():
+        # Parser fixtures predate typed command operations.  Keep their focus
+        # on transport/complexity by supplying the now-required neutral escape
+        # operation; dedicated operation tests cover semantic mismatches.
+        spec["text"] = re.sub(
+            r'("tool"\s*:\s*"run_command"\s*,)',
+            r'\1"operation":"GENERAL",',
+            spec["text"],
+        )
         report = analyze_tool_transport(spec["text"])
         diagnostics = report["diagnostics"]
         reasons = [d.get("reason") for d in diagnostics]
@@ -1854,7 +1981,8 @@ SYSTEM_PROMPT_TEMPLATE = """
 
 【可用工具格式】：
 
-1. 執行指令＋驗證：{{"tool": "run_command", "command": "PowerShell指令", "timeout": 30, "result_transport":"SUMMARY_ONLY", "success_criteria": "什麼條件代表這次動作真的生效", "verify": [{{"action":"run_command","command":"驗證指令","expect_exit_code":0,"expect_contains":"可選關鍵字","expect_regex":"可選正規表示式"}}, {{"action":"file_exists","path":"檔案路徑","expect":true}}, {{"action":"file_contains","path":"檔案路徑","text":"應存在內容","expect":true}}]}}
+1. 執行指令＋驗證：{{"tool": "run_command", "operation":"BUILD", "command": "PowerShell指令", "timeout": 30, "result_transport":"SUMMARY_ONLY", "success_criteria": "什麼條件代表這次動作真的生效", "verify": [{{"action":"run_command","command":"驗證指令","expect_exit_code":0,"expect_contains":"可選關鍵字","expect_regex":"可選正規表示式"}}, {{"action":"file_exists","path":"檔案路徑","expect":true}}, {{"action":"file_contains","path":"檔案路徑","text":"應存在內容","expect":true}}]}}
+   operation 必填且只能是 INSPECT、MUTATE、BUILD、TEST、VERIFY、GIT_INSPECT、GIT_MUTATE、PROCESS、TRANSFER、GENERAL。VERIFY 必須帶 verifies_action_id。GENERAL 只作低頻逃生口，不能單獨支持任務 SUCCESS。
    run_command 的 executor 固定是 Windows PowerShell 5.1。不得直接使用 CMD 的 `cd /d`、裸露 `&&` 或 `||`；Git 請優先使用 `git -C 'E:\\path\\to\\repo' ...`，一般目錄切換使用 `Set-Location -LiteralPath 'E:\\path'`，多指令以 `;` 分隔。verify 必須是 object 或 object list，不得填自然語言字串。
 2. 讀取檔案（僅 Local/Cloud Planner 使用；Web Planner 禁止使用）：{{"tool": "read_file", "path": "絕對路徑"}}
 3. 寫入小型檔案（content 最多 4096 字元）：{{"tool": "write_file", "path": "絕對路徑", "content": "完整檔案內容"}}
@@ -1886,7 +2014,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 12f. Staged protocol（Local Commit protocol_version>=6 且明確啟用時）：turn_commit 可加 `stage`，例如 {{"stage_id":"S-2","seq":2,"kind":"EXECUTE_VERIFY","task_size":"MEDIUM","execution":"SEQUENTIAL","result_policy":"COMPACT","stop_on_error":true,"actions":[{{"action_id":"A-APPLY","depends_on":[]}},{{"action_id":"A-VERIFY","depends_on":["A-APPLY"]}}]}}。action_id 是通用識別值，不代表 v7 可直接呼叫 apply_edit_plan；所有 action_id 必須與本輪 envelopes 完全相同，目前只接受 SEQUENTIAL。
 12g. v7 語意地圖狀態：{{"tool":"inspect_semantic_map"}}。MISSING/STALE 時先 project_sync，再產生 snapshot-bound 語意描述。
 12h. 小型語意更新：{{"tool":"update_semantic_map","patch":{{"base_snapshot_id":"...","project_summary":"...","flows":[],"files":[]}}}}。大型更新先產生 JSON artifact、download_artifact 到 workspace 內，再用 {{"tool":"update_semantic_map_file","path":"workspace 內的 JSON","expected_sha256":"可省略"}}。
-12i. v7 小型完整計畫凍結：{{"tool":"propose_task_plan","plan":{{"schema":"TASK_PLAN_V1","base_snapshot_id":"...","semantic_map_revision":"...","goal":"...","affected_flows":[],"files_to_read":[],"edit_plan":{{}},"verification_commands":[],"acceptance_criteria":[],"rollback_condition":"...","post_change_semantic":[{{"path":"source path","responsibility":"修改後職責","public_symbols":[],"dependencies":[],"flows":[],"invariants":[],"tests":[]}}]}}}}。所有受修改 source 必須有 post_change_semantic，驗證成功後 software 會與新 source hash 一起提交；提交失敗則 rollback。
+12i. v7 小型完整計畫凍結：{{"tool":"propose_task_plan","plan":{{"schema":"TASK_PLAN_V1","base_snapshot_id":"...","semantic_map_revision":"...","goal":"...","affected_flows":[],"files_to_read":[],"edit_plan":{{}},"verification_commands":[],"acceptance_criteria":[],"rollback_condition":"...","post_change_semantic":[{{"path":"source path","responsibility":"修改後職責","public_symbols":[],"dependencies":[],"flows":[],"invariants":[],"tests":[]}}]}}}}。TASK_PLAN_V1 是唯一 canonical schema。若 Runtime 回傳 PLAN_SCHEMA_INVALID/PLAN_REPAIR_REQUIRED，不得再次 propose_task_plan；必須依 Runtime route 恰好呼叫一次 repair_task_plan。只有 PLAN_FROZEN 可解除 repair latch。所有受修改 source 必須有 post_change_semantic，驗證成功後 software 會與新 source hash 一起提交；提交失敗則 rollback。
 12j. 大型計畫禁止塞入 control envelope：先產生 JSON artifact、download_artifact 到 workspace 內，再用 {{"tool":"propose_task_plan_file","path":"workspace 內的 JSON","expected_sha256":"可省略"}}。收到 PLAN_FROZEN 後只用 {{"tool":"execute_frozen_plan","plan_id":"PLAN-...","timeout":120}} 一次套用與驗證；驗證失敗 software 會 rollback 並回 REPAIR_REQUIRED。
 12k. Protocol v7 禁止要求或輸出 hidden chain-of-thought；只交付可稽核的結構化計畫、依賴、驗收條件與證據。當 staged mode=on，所有 v7 mutation 必須有完整 turn_commit.stage，且不得直接 apply_edit_plan。
 13. 完成並回覆使用者：{{"tool":"final_response","action_id":"A-唯一值","content":"顯示在 CMD 的最終回覆"}}
@@ -1921,10 +2049,14 @@ SYSTEM_PROMPT_TEMPLATE = """
 
 
 【run_command 完成條件 / 驗證契約】：
+- 一個 run_command action 只允許一個主要操作或副作用。不要用變數、分號、&&、if/foreach 或其他 control flow，把 staging、build、deploy、commit 等相依操作串成一段 shell script；請依 Runtime evidence 拆成後續 action。
+- verify[] 只做對應原 action 的唯讀 postcondition 檢查，不得重做原操作、產生新的副作用或混入下一個工作步驟。
+- 簡單且彼此無相依性的只讀查詢可優先使用既有 typed tool 或 aggregate_verification；不得為了減少回合而犧牲 action/evidence 的一對一關係。
 - run_command 不是「執行成功就等於任務完成」。只要 command 是啟動程式、編譯、測試、修改後執行、部署或任何會影響狀態的 action，你必須同一個 JSON 裡提供 success_criteria 與 verify actions。
 - Local Agent 只機械式執行 command + verify，不自行發明「這樣算成功嗎」。
 - VERIFICATION_STATUS=PASS 才能把該 action 視為驗證通過。
 - VERIFICATION_STATUS=FAIL 時，必須根據 stdout/stderr/verification evidence 找出問題，必要時 upload/find 相關檔案、修正後重新 run_command + verify。
+- 若任務本身是負向測試，預期 command 必須失敗，請在原 action 明確加入 expected_failure，例如 {{"exit_codes":[1],"stderr_regex":"not a directory"}}，並以 condition_id 或 success_criteria 精確綁定本輪 completion_contract.success 的條件文字／ID。Runtime 仍保存 execution_status=FAILED、verification_status=FAIL，另產生 expectation_status=PASS/FAIL 供任務終局判定；不得在一般失敗後才補填 expected_failure，也不得用它掩蓋副作用操作失敗。
 - 若只是補驗證而不是重做原操作，新的 run_command 必須用 verifies_action_id 指向原 action_id；Runtime 會保留歷史，並以同一 action 最新的有效驗證結果判斷終態。condition_id 可填 completion_contract 中對應的精確條件。
 - Git SHA 等結構化輸出應使用 expect_regex（例如 ^[0-9a-f]{{40}}$），不要用 expect_contains:"HEAD" 檢查 rev-parse 的 SHA 輸出。
 - VERIFICATION_STATUS=UNVERIFIED 時，不得直接向使用者宣告成功；你必須補做可驗證的 action。

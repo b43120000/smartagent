@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 from .chunked_write import ChunkedWriteError, ChunkedWriteManager
-from .project_sync import inspect_project_scope, compare_project_snapshot, load_project_snapshot
+from .project_sync import inspect_project_scope, inspect_project_working_set, compare_project_snapshot, load_project_snapshot
 from .project_bundle import dependency_evidence, build_source_bundles, delta_records, build_project_delta
 from .project_sync_message import build_atomic_project_sync
 from .project_ledger import inspect_project_ledger, query_project_history
@@ -24,7 +24,12 @@ from .edit_plan_contract import validate_edit_plan
 from .batch_apply import apply_edit_plan
 from .aggregated_verification import run_aggregated_verification
 from .semantic_map import inspect_semantic_map, update_semantic_map, update_semantic_map_file
-from .task_plan import freeze_task_plan, freeze_task_plan_file, execute_frozen_task_plan
+from .task_plan import (
+    execute_frozen_task_plan,
+    freeze_task_plan,
+    freeze_task_plan_file,
+    repair_task_plan,
+)
 from .bounded_process import run_bounded_process
 from .command_security import (CommandSecurityError, build_command_approval_manifest, inspect_command, require_command_allowed)
 from .capability_recovery import build_evidence_to_action_route, render_evidence_to_action_guidance
@@ -259,10 +264,14 @@ def _evaluate_verification_step(
 
 def tool_run_command(
     command: str,
+    operation: str,
     timeout: int = 30,
     verify: list = None,
     success_criteria: str = "",
     capture_root: str | Path | None = None,
+    verifies_action_id: str = "",
+    condition_id: str = "",
+    expected_failure: dict | None = None,
     *,
     security_context: SecurityContext | None = None,
     approval_manifest: dict | None = None,
@@ -272,6 +281,12 @@ def tool_run_command(
     The local runtime never invents success criteria.  It only executes the
     checks supplied by the Planner and reports PASS/FAIL evidence back.
     """
+    from .command_operation import (
+        COMMAND_RESULT_SCHEMA, build_operation_result, normalize_command_operation,
+        operation_terminal_eligible, operation_result_contract,
+        result_schema_for_operation,
+    )
+    operation = normalize_command_operation(operation)
     telemetry = None
     if security_context and security_context.interface_name == "remote":
         telemetry = {"root": security_context.workspace_root, "task_id": security_context.task_id, "request_id": security_context.request_id}
@@ -282,6 +297,10 @@ def tool_run_command(
     )
     lines = [
         "[COMMAND_RESULT]",
+        f"result_schema: {COMMAND_RESULT_SCHEMA}",
+        f"operation_result_schema: {result_schema_for_operation(operation)}",
+        "required_result_fields: " + ",".join(operation_result_contract(operation)),
+        f"operation: {operation}",
         f"command: {command}",
         f"exit_code: {main.get('exit_code')}",
     ]
@@ -298,8 +317,70 @@ def tool_run_command(
     if main.get("error"):
         lines.append("error: " + main["error"])
 
+    if expected_failure is not None:
+        spec_valid = isinstance(expected_failure, dict) and bool(expected_failure)
+        expectation_evidence = {
+            "expected_failure": dict(expected_failure or {}),
+            "actual_exit_code": main.get("exit_code"),
+            "timed_out": bool(main.get("timed_out")),
+            "checks": [],
+        }
+        expectation_passed = spec_valid and not main.get("timed_out") and main.get("exit_code") not in (0, None)
+        exit_codes = (expected_failure or {}).get("exit_codes")
+        if exit_codes is not None:
+            matched = main.get("exit_code") in exit_codes if isinstance(exit_codes, list) else False
+            expectation_evidence["checks"].append({"field": "exit_code", "passed": matched})
+            expectation_passed = expectation_passed and matched
+        stderr_regex = (expected_failure or {}).get("stderr_regex")
+        if stderr_regex is not None:
+            try:
+                matched = re.search(str(stderr_regex), str(main.get("stderr", "")), re.MULTILINE) is not None
+            except re.error as exc:
+                matched = False
+                spec_valid = False
+                expectation_evidence["error"] = f"invalid stderr_regex: {exc}"
+            expectation_evidence["checks"].append({"field": "stderr_regex", "passed": matched})
+            expectation_passed = expectation_passed and matched
+        output_contains = (expected_failure or {}).get("output_contains")
+        if output_contains is not None:
+            values = output_contains if isinstance(output_contains, list) else [output_contains]
+            combined = str(main.get("stdout", "")) + "\n" + str(main.get("stderr", ""))
+            matched = bool(values) and all(str(item) in combined for item in values)
+            expectation_evidence["checks"].append({"field": "output_contains", "passed": matched})
+            expectation_passed = expectation_passed and matched
+        expectation_status = (
+            "SPEC_INVALID" if not spec_valid else ("PASS" if expectation_passed else "FAIL")
+        )
+        execution_status = "FAILED" if main.get("timed_out") or main.get("exit_code") not in (0,) else "SUCCEEDED"
+        verification_status = "FAIL" if execution_status == "FAILED" else "UNVERIFIED"
+        lines.append("VERIFICATION_STATUS: " + verification_status)
+        lines.append("EXPECTATION_STATUS: " + expectation_status)
+        lines.append("TERMINAL_ELIGIBLE: " + str(expectation_status == "PASS").lower())
+        operation_result = build_operation_result(
+            operation, command=command, execution_status=execution_status,
+            verification_status=verification_status, stdout=main.get("stdout", ""),
+            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            condition_id=condition_id, expectation_status=expectation_status,
+            expected_failure=expected_failure, expectation_evidence=expectation_evidence,
+        )
+        lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
+        if expectation_status == "PASS":
+            lines.append("預期失敗已被客觀結果證明；原始 FAILED/FAIL 狀態保留，任務契約 assertion 為 PASS。")
+        else:
+            lines.append("預期失敗契約未符合；不得以負向測試成功結案。")
+        return "\n".join(lines)
+
     if main.get("timed_out") or main.get("exit_code") not in (0,):
-        lines.append("VERIFICATION_STATUS: FAIL")
+        verification_status = "FAIL"
+        lines.append("VERIFICATION_STATUS: " + verification_status)
+        lines.append("TERMINAL_ELIGIBLE: " + str(operation_terminal_eligible(operation, "FAIL")).lower())
+        operation_result = build_operation_result(
+            operation, command=command, execution_status="FAILED",
+            verification_status=verification_status, stdout=main.get("stdout", ""),
+            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            condition_id=condition_id,
+        )
+        lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
         lines.append("原因: 主指令本身未成功完成；請 Planner 根據 stderr/error 修正後再執行。")
         return "\n".join(lines)
 
@@ -313,7 +394,16 @@ def tool_run_command(
         checks = [verify]
 
     if not checks:
-        lines.append("VERIFICATION_STATUS: UNVERIFIED")
+        verification_status = "UNVERIFIED"
+        lines.append("VERIFICATION_STATUS: " + verification_status)
+        lines.append("TERMINAL_ELIGIBLE: " + str(operation_terminal_eligible(operation, "UNVERIFIED")).lower())
+        operation_result = build_operation_result(
+            operation, command=command, execution_status="SUCCEEDED",
+            verification_status=verification_status, stdout=main.get("stdout", ""),
+            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            condition_id=condition_id,
+        )
+        lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
         lines.append("原因: Planner 沒有提供 post-run verification actions；不得僅憑指令 exit_code 宣告改動成功。")
         return "\n".join(lines)
 
@@ -322,6 +412,7 @@ def tool_run_command(
         lines.append("success_criteria: " + success_criteria)
     all_passed = True
     all_specs_valid = True
+    verification_evidence = []
     for idx, step in enumerate(checks, 1):
         ev = _evaluate_verification_step(
             step, default_timeout=timeout, capture_root=capture_root,
@@ -329,9 +420,19 @@ def tool_run_command(
         )
         all_specs_valid = all_specs_valid and bool(ev.get("spec_valid", True))
         all_passed = all_passed and bool(ev.get("passed"))
+        verification_evidence.append(ev)
         lines.append(f"verify[{idx}]: " + json.dumps(ev, ensure_ascii=False, default=str))
     verification_status = "SPEC_INVALID" if not all_specs_valid else ("PASS" if all_passed else "FAIL")
     lines.append("VERIFICATION_STATUS: " + verification_status)
+    lines.append("TERMINAL_ELIGIBLE: " + str(operation_terminal_eligible(operation, verification_status)).lower())
+    operation_result = build_operation_result(
+        operation, command=command, execution_status="SUCCEEDED",
+        verification_status=verification_status, stdout=main.get("stdout", ""),
+        stdout_ref=main.get("stdout_ref", ""), verification_evidence=verification_evidence,
+        verifies_action_id=verifies_action_id,
+        condition_id=condition_id,
+    )
+    lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
     if verification_status == "SPEC_INVALID":
         lines.append("驗證規格無效：請 Planner 修正 verify schema/matcher 後，以 verifies_action_id 綁定原 action 重新驗證。")
     elif not all_passed:
@@ -704,10 +805,14 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             return f"[SECURITY_COMMAND_REJECTED] {exc}\nVERIFICATION_STATUS: FAIL"
         result = tool_run_command(
             tool_call.get("command", ""),
+            tool_call.get("operation", ""),
             timeout=int(tool_call.get("timeout", 30)),
             verify=tool_call.get("verify") or [],
             success_criteria=tool_call.get("success_criteria", ""),
             capture_root=workspace / ".agents" / "results" / "command_capture",
+            verifies_action_id=tool_call.get("verifies_action_id", ""),
+            condition_id=tool_call.get("condition_id", ""),
+            expected_failure=tool_call.get("expected_failure"),
             security_context=security_context, approval_manifest=approval_manifest,
         )
         if agent:
@@ -794,6 +899,9 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     elif tool == "inspect_project_scope":
         workspace=scope["resolved_paths"][0]
         return json.dumps(inspect_project_scope(workspace),ensure_ascii=False,separators=(",",":"))
+    elif tool == "inspect_project_working_set":
+        workspace=_project_workspace(tool_call,agent)
+        return json.dumps(inspect_project_working_set(workspace,tool_call.get("paths",[])),ensure_ascii=False,separators=(",",":"))
     elif tool == "inspect_semantic_map":
         workspace=_project_workspace(tool_call,agent)
         return json.dumps(inspect_semantic_map(workspace,tool_call.get("paths")),ensure_ascii=False,separators=(",",":"))
@@ -902,6 +1010,10 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         workspace=_project_workspace(tool_call,agent,write=True)
         request_scope={field:tool_call.get(field) for field in ("request_id","task_id","task_epoch","intent_digest","request_phase","continuation_seq")} if tool_call.get("task_epoch") else None
         return json.dumps(freeze_task_plan(workspace,tool_call.get("plan",{}),request_scope=request_scope),ensure_ascii=False,separators=(",",":"))
+    elif tool == "repair_task_plan":
+        workspace=_project_workspace(tool_call,agent,write=True)
+        request_scope={field:tool_call.get(field) for field in ("request_id","task_id","task_epoch","intent_digest","request_phase","continuation_seq")} if tool_call.get("task_epoch") else None
+        return json.dumps(repair_task_plan(workspace,tool_call.get("plan",{}),request_scope=request_scope),ensure_ascii=False,separators=(",",":"))
     elif tool == "propose_task_plan_file":
         workspace=_project_workspace(tool_call,agent,write=True)
         request_scope={field:tool_call.get(field) for field in ("request_id","task_id","task_epoch","intent_digest","request_phase","continuation_seq")} if tool_call.get("task_epoch") else None

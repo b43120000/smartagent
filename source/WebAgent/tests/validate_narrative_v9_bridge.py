@@ -59,16 +59,22 @@ def run() -> dict:
         assert persisted_draft["tool"] == "run_command"
         assert persisted_draft["pending_slot"] == "field:command"
         action.accept_reply("Get-ChildItem -LiteralPath C:/workspace")
+        assert action.draft.pending_slot == "field:operation"
+        action.accept_reply("INSPECT")
         assert action.ready
         persisted_draft = json.loads(action.path.read_text(encoding="utf-8"))
         assert persisted_draft["decision_kind"] == "ACTION"
         assert persisted_draft["tool"] == "run_command"
-        assert persisted_draft["fields"] == {"command": "Get-ChildItem -LiteralPath C:/workspace"}
+        assert persisted_draft["fields"] == {
+            "command": "Get-ChildItem -LiteralPath C:/workspace",
+            "operation": "INSPECT",
+        }
         canonical = action.canonical_response()
         calls, errors = parse_v9_tool_transport(canonical)
         assert not errors
         assert calls[1]["tool"] == "run_command"
         assert calls[1]["command"] == "Get-ChildItem -LiteralPath C:/workspace"
+        assert calls[1]["operation"] == "INSPECT"
         assert calls[0]["action_id"].startswith("V9-PROGRESS-")
         assert calls[1]["action_id"].startswith("V9-ACTION-")
         assert calls[-1] == {"tool": "turn_commit", "action_count": 2}
@@ -132,6 +138,7 @@ def run() -> dict:
         extended.accept_reply("ACTION")
         extended.accept_reply("RUN_COMMAND")
         extended.accept_reply("Write-Output verify")
+        extended.accept_reply("INSPECT")
         extended_calls, extended_errors = parse_v9_tool_transport(
             extended.canonical_response()
         )
@@ -168,6 +175,75 @@ def run() -> dict:
         directory.accept_reply(r"C:\workspace")
         assert directory.ready
         assert directory.draft.fields == {"path": r"C:\workspace"}
+
+        query_expected = expected(root, round_id=15)
+        query_expected["narrative_recovery_context"]["authorized_paths"] = [
+            r"C:\workspace\source\command_operation.py",
+            r"C:\workspace\source\not_existing_file.py",
+        ]
+        query = NarrativeDecisionBridge.create(
+            expected=query_expected,
+            source_text=(
+                "Use query_project read_range for the two authorized files; "
+                "one may not exist."
+            ),
+            root=root,
+        )
+        query.accept_reply("ACTION")
+        query.accept_reply("QUERY_PROJECT")
+        query.accept_reply(r"C:\workspace")
+        assert query.ready
+        assert query.draft.runtime_derived_fields == ["queries"]
+        assert query.draft.fields["queries"] == [
+            {
+                "operation": "read_range",
+                "path": "source/command_operation.py",
+                "start_line": 1,
+                "end_line": 240,
+            },
+            {
+                "operation": "read_range",
+                "path": "source/not_existing_file.py",
+                "start_line": 1,
+                "end_line": 240,
+            },
+        ]
+        query_calls, query_errors = parse_v9_tool_transport(query.canonical_response())
+        assert not query_errors
+        assert query_calls[1]["tool"] == "query_project"
+        assert query_calls[1]["queries"] == query.draft.fields["queries"]
+
+        fenced_query = NarrativeDecisionBridge.create(
+            expected=expected(root, round_id=16),
+            source_text="Use a structured project query.",
+            root=root,
+        )
+        fenced_query.accept_reply("ACTION")
+        fenced_query.accept_reply("QUERY_PROJECT")
+        fenced_query.accept_reply(r"C:\workspace")
+        assert fenced_query.draft.pending_slot == "field:queries"
+        fenced_query.accept_reply(
+            "```json\n"
+            '[{"operation":"read_range","path":"source/file.py",'
+            '"start_line":1,"end_line":80}]'
+            "\n```"
+        )
+        assert fenced_query.ready
+
+        out_of_scope_expected = expected(root, round_id=17)
+        out_of_scope_expected["narrative_recovery_context"]["authorized_paths"] = [
+            r"D:\other\file.py",
+        ]
+        out_of_scope = NarrativeDecisionBridge.create(
+            expected=out_of_scope_expected,
+            source_text="Use a structured project query.",
+            root=root,
+        )
+        out_of_scope.accept_reply("ACTION")
+        out_of_scope.accept_reply("QUERY_PROJECT")
+        out_of_scope.accept_reply(r"C:\workspace")
+        assert out_of_scope.draft.pending_slot == "field:queries"
+        assert "queries" not in out_of_scope.draft.fields
 
         bounded = NarrativeDecisionBridge.create(
             expected=expected(root, round_id=9), source_text="unclear", root=root,
@@ -275,6 +351,9 @@ def run() -> dict:
         "natural_final_response": True,
         "terminal_outcome_collected_explicitly": True,
         "false_local_access_refusal_gets_runtime_capabilities": True,
+        "authorized_working_set_derives_bounded_queries": True,
+        "fenced_single_json_slot_value": True,
+        "out_of_scope_query_is_not_derived": True,
         "bounded_failure": True,
         "persistent_audit_record": True,
         "collecting_full_envelope_draft_migrated": True,

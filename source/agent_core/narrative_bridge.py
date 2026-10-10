@@ -95,6 +95,26 @@ def _single_value(text: str) -> str:
     return value
 
 
+def _single_json_value(text: str) -> Any:
+    """Decode one isolated JSON value without accepting prose as authority."""
+    raw = str(text or "").strip()
+    wrapped = re.fullmatch(r"\[V9_VALUE\]\s*\r?\n([\s\S]*?)\r?\n\[/V9_VALUE\]", raw)
+    if wrapped:
+        raw = wrapped.group(1).strip()
+    else:
+        fenced = re.fullmatch(
+            r"```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```",
+            raw,
+            re.IGNORECASE,
+        )
+        if fenced:
+            raw = fenced.group(1).strip()
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _field_schema_type(tool: str, field_name: str) -> type | tuple[type, ...] | None:
     from .smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
 
@@ -117,12 +137,14 @@ class NarrativeDecisionDraft:
     source_text: str
     goal: str
     progress: dict[str, Any]
+    authorized_paths: list[str] = field(default_factory=list)
     capability_recovery: dict[str, Any] = field(default_factory=dict)
     state: str = "COLLECTING"
     decision_kind: str = ""
     terminal_outcome: str = ""
     tool: str = ""
     fields: dict[str, Any] = field(default_factory=dict)
+    runtime_derived_fields: list[str] = field(default_factory=list)
     pending_slot: str = "decision_kind"
     slot_attempts: dict[str, int] = field(default_factory=dict)
     total_attempts: int = 0
@@ -229,6 +251,10 @@ class NarrativeDecisionBridge:
             source_text=text,
             goal=str(context.get("goal", "") or "")[:MAX_SOURCE_CHARS],
             progress=dict(context.get("progress", {}) or {}),
+            authorized_paths=[
+                str(item) for item in list(context.get("authorized_paths") or [])
+                if str(item).strip()
+            ],
             capability_recovery=(
                 dict(context.get("capability_recovery", {}) or {})
                 or build_capability_recovery_context(
@@ -242,6 +268,39 @@ class NarrativeDecisionBridge:
     def _save(self) -> None:
         self.draft.updated_at = time.time()
         _atomic_write(self.path, self.draft.to_dict())
+
+    def _derive_bounded_query_project_fields(self) -> None:
+        """Translate Runtime-authorized exact paths into bounded read queries."""
+        if self.draft.tool != "query_project" or "queries" in self.draft.fields:
+            return
+        project_root = str(self.draft.fields.get("project_root", "") or "").strip()
+        authorized = list(self.draft.authorized_paths or [])
+        if not project_root or not authorized or len(authorized) > 8:
+            return
+        try:
+            root = Path(project_root).resolve(strict=False)
+            relative_paths: list[str] = []
+            for raw_path in authorized:
+                candidate = Path(str(raw_path or "")).resolve(strict=False)
+                relative = candidate.relative_to(root)
+                if not relative.parts:
+                    return
+                relative_paths.append(relative.as_posix())
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return
+        if not relative_paths:
+            return
+        self.draft.fields["queries"] = [
+            {
+                "operation": "read_range",
+                "path": relative,
+                "start_line": 1,
+                "end_line": 240,
+            }
+            for relative in relative_paths
+        ]
+        if "queries" not in self.draft.runtime_derived_fields:
+            self.draft.runtime_derived_fields.append("queries")
 
     def mark_superseded(self) -> None:
         self.draft.state = "SUPERSEDED_BY_STRUCTURED_RESPONSE"
@@ -385,6 +444,7 @@ class NarrativeDecisionBridge:
             if value:
                 self.draft.tool = value.lower()
                 accepted = True
+                self._derive_bounded_query_project_fields()
                 fields = NARRATIVE_TOOL_FIELDS[self.draft.tool]
                 self.draft.pending_slot = f"field:{fields[0]}" if fields else ""
                 if not fields:
@@ -397,20 +457,14 @@ class NarrativeDecisionBridge:
             elif expected_type is str:
                 value = _single_value(text)
             elif expected_type is not None:
-                raw = str(text or "").strip()
-                wrapped = re.fullmatch(r"\[V9_VALUE\]\s*\r?\n([\s\S]*?)\r?\n\[/V9_VALUE\]", raw)
-                if wrapped:
-                    raw = wrapped.group(1).strip()
-                try:
-                    value = json.loads(raw)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    value = None
+                value = _single_json_value(text)
                 if value is not None and not _matches_field_type(value, expected_type):
                     value = None
             else:
                 self._fail(f"unknown narrative field: {self.draft.tool}.{field_name}")
             if value is not None and value != "":
                 self.draft.fields[field_name] = value
+                self._derive_bounded_query_project_fields()
                 accepted = True
                 required = NARRATIVE_TOOL_FIELDS[self.draft.tool]
                 remaining = [name for name in required if name not in self.draft.fields]

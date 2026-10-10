@@ -20,7 +20,7 @@ def classify_tool_result(tool: str, result: Any) -> dict:
     if any(marker in text for marker in FAIL_MARKERS): status="FAILED"; reason="failure_marker"
     if isinstance(parsed,dict):
         observed=str(parsed.get("status", "") or "").upper()
-        strict_success={"apply_edit_plan":"APPLIED","aggregate_verification":"PASS","project_sync":"READY","update_semantic_map":"UPDATED","update_semantic_map_file":"UPDATED","propose_task_plan":"PLAN_FROZEN","propose_task_plan_file":"PLAN_FROZEN","execute_frozen_plan":"PASS"}
+        strict_success={"apply_edit_plan":"APPLIED","aggregate_verification":"PASS","project_sync":"READY","update_semantic_map":"UPDATED","update_semantic_map_file":"UPDATED","propose_task_plan":"PLAN_FROZEN","repair_task_plan":"PLAN_FROZEN","propose_task_plan_file":"PLAN_FROZEN","execute_frozen_plan":"PASS"}
         if tool in strict_success and observed != strict_success[tool]:
             status="FAILED"; reason=f"status:{observed or 'missing'}"
         if observed in FAIL_STATUSES or observed.endswith("_FAILED"):

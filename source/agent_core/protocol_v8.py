@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from .command_operation import operation_mismatch_detail
+
 
 PROTOCOL_NAME = "smartagent"
 PROTOCOL_FAMILY = "SMARTAGENT_V8"
@@ -22,7 +24,7 @@ PROTOCOL_VERSION = 8
 MODEL_ACTION_FIELDS = {"tool", "action_id"}
 MODEL_COMMIT_FIELDS = {"tool", "action_count"}
 TOOL_REQUIRED_FIELDS = {
-    "run_command": {"command"}, "read_file": {"path"},
+    "run_command": {"command", "operation"}, "read_file": {"path"},
     "write_file": {"path", "content"},
     "delete_path": {"path", "recursive", "reason"},
     "begin_file_write": {"write_id", "path", "encoding", "overwrite"},
@@ -35,6 +37,7 @@ TOOL_REQUIRED_FIELDS = {
     "query_project": {"project_root", "queries"},
     "validate_edit_plan": {"plan"}, "apply_edit_plan": {"plan"},
     "aggregate_verification": {"commands"}, "propose_task_plan": {"plan"},
+    "repair_task_plan": {"plan"},
     "propose_task_plan_file": {"path"}, "execute_frozen_plan": {"plan_id"},
     "web_search": {"query"}, "find_file": {"name"}, "upload_file": {"path"},
     "upload_files": {"paths"}, "return_artifact": {"path"},
@@ -206,6 +209,13 @@ def validate_model_action(
     result = dict(action)
     result["tool"] = tool
     result["action_id"] = action_id
+    if tool == "run_command" and "operation" in result:
+        try:
+            mismatch = operation_mismatch_detail(result)
+        except ValueError as exc:
+            raise ProtocolV8Error("RUN_COMMAND_OPERATION_INVALID", str(exc)) from exc
+        if mismatch:
+            raise ProtocolV8Error("RUN_COMMAND_OPERATION_MISMATCH", mismatch)
     if tool == "project_sync" and "strategy" in result:
         strategy = str(result.get("strategy", "") or "").strip().upper()
         if strategy not in PROJECT_SYNC_STRATEGIES:
