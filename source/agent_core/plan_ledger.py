@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -14,6 +15,7 @@ from .process_file_lock import exclusive_process_lock
 
 
 PLAN_SCHEMA = "SMARTAGENT_EXECUTION_PLAN_V1"
+PLAN_STATES = {"READY", "EXECUTING", "COMPLETED", "FAILED", "INTERRUPTED", "CANCELLED"}
 PLAN_ID_PATTERN = re.compile(r"PLAN-[A-F0-9]{20}", re.IGNORECASE)
 EXECUTE_PLAN_PATTERN = re.compile(
     r"^\s*(?:請\s*)?(?:開始\s*)?(?:執行|實作|套用)\s*(?:規劃\s*)?"
@@ -107,6 +109,7 @@ class PlanLedger:
         progress: Mapping[str, Any] | None = None,
         conversation_url: str = "",
         session_id: str = "",
+        authorized_paths: list[str] | None = None,
     ) -> dict[str, Any]:
         if not is_planning_request(original_request):
             raise PlanLedgerError("request_is_not_a_planning_task")
@@ -125,6 +128,13 @@ class PlanLedger:
             "progress": dict(progress or {}),
             "conversation_url": str(conversation_url or ""),
             "session_id": str(session_id or ""),
+            "authorized_paths": list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in (authorized_paths or [])
+                    if str(item).strip()
+                )
+            ),
             "created_at": now,
             "updated_at": now,
         }
@@ -152,10 +162,37 @@ class PlanLedger:
             raise PlanLedgerError("plan_record_invalid")
         if str(payload.get("plan_id", "")).upper() != target.stem.upper():
             raise PlanLedgerError("plan_identity_mismatch")
+        if str(payload.get("state", "") or "").upper() not in PLAN_STATES:
+            raise PlanLedgerError("plan_state_invalid")
         required = ("task_id", "request_id", "workspace", "original_request", "final_summary")
         if any(not str(payload.get(field, "") or "").strip() for field in required):
             raise PlanLedgerError("plan_record_incomplete")
         return dict(payload)
+
+    def authorize_execution(
+        self,
+        plan_id: str,
+        *,
+        execution_request_id: str,
+        source_message_id: str,
+    ) -> str:
+        """Issue a one-time ledger-backed authorization for one ingress turn."""
+        nonce = secrets.token_hex(24)
+        target = self.path_for(plan_id)
+        with exclusive_process_lock(self.lock_path, timeout_sec=10.0):
+            record = self.load(plan_id)
+            if str(record.get("state", "") or "").upper() != "READY":
+                raise PlanLedgerError("plan_not_ready")
+            pending = dict(record.get("pending_executions") or {})
+            pending[nonce] = {
+                "execution_request_id": str(execution_request_id or ""),
+                "source_message_id": str(source_message_id or ""),
+                "authorized_at": time.time(),
+            }
+            record["pending_executions"] = pending
+            record["updated_at"] = time.time()
+            write_json_atomic(target, record)
+        return nonce
 
     @staticmethod
     def ensure_workspace(record: Mapping[str, Any], workspace: str | Path) -> None:
@@ -193,6 +230,207 @@ class PlanLedger:
             "[/SMARTAGENT_EXECUTE_SAVED_PLAN]"
         )
 
+    @classmethod
+    def execution_request_sha256(cls, record: Mapping[str, Any]) -> str:
+        """Bind a queued execution task to the exact ledger-derived envelope."""
+        request = cls.execution_request(record)
+        return hashlib.sha256(request.encode("utf-8", errors="replace")).hexdigest()
+
+    def _validate_execution_task_record(
+        self, task: Any, record: Mapping[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        """Revalidate a saved-plan task at the worker trust boundary.
+
+        Ingress metadata is provenance, not authority by itself.  The worker
+        must reload the durable plan and prove that the queued request is the
+        exact envelope produced from that record before bypassing the generic
+        internal-turn rejection rule.
+        """
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        if str(metadata.get("request_kind", "") or "") != "EXECUTE_SAVED_PLAN":
+            raise PlanLedgerError("plan_execution_kind_invalid")
+        if metadata.get("plan_execution_authorized") is not True:
+            raise PlanLedgerError("plan_execution_not_authorized")
+        if str(metadata.get("ingress_schema", "") or "") != "AGENT_INGRESS_V1":
+            raise PlanLedgerError("plan_execution_ingress_invalid")
+
+        plan_id = str(metadata.get("source_plan_id", "") or "").strip().upper()
+        if not PLAN_ID_PATTERN.fullmatch(plan_id):
+            raise PlanLedgerError("plan_execution_id_invalid")
+        self.ensure_workspace(record, str(getattr(task, "workspace", "") or ""))
+
+        if str(metadata.get("source_plan_request_id", "") or "") != str(
+            record.get("request_id", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_request_identity_mismatch")
+        if str(metadata.get("source_plan_task_id", "") or "") != str(
+            record.get("task_id", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_task_identity_mismatch")
+
+        expected_request = self.execution_request(record)
+        actual_request = str(getattr(task, "request", "") or "")
+        if actual_request != expected_request:
+            raise PlanLedgerError("plan_execution_envelope_mismatch")
+        expected_sha256 = hashlib.sha256(
+            expected_request.encode("utf-8", errors="replace")
+        ).hexdigest()
+        if str(metadata.get("plan_execution_request_sha256", "") or "").lower() != expected_sha256:
+            raise PlanLedgerError("plan_execution_digest_mismatch")
+        nonce = str(metadata.get("plan_execution_nonce", "") or "").strip()
+        authorization = dict((record.get("pending_executions") or {}).get(nonce) or {})
+        if not nonce or not authorization:
+            raise PlanLedgerError("plan_execution_authorization_missing")
+        if str(authorization.get("execution_request_id", "") or "") != str(
+            getattr(task, "request_id", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_authorization_mismatch")
+        if str(authorization.get("source_message_id", "") or "") != str(
+            metadata.get("source_message_id", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_source_message_mismatch")
+        return nonce, dict(record)
+
+    def validate_execution_task(self, task: Any) -> dict[str, Any]:
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        plan_id = str(metadata.get("source_plan_id", "") or "").strip().upper()
+        record = self.load(plan_id)
+        if str(record.get("state", "") or "").upper() != "READY":
+            raise PlanLedgerError("plan_not_ready")
+        _, validated = self._validate_execution_task_record(task, record)
+        return validated
+
+    def claimed_execution_record(self, task: Any) -> dict[str, Any]:
+        """Return the ledger-authoritative record for an already claimed task."""
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        plan_id = str(metadata.get("source_plan_id", "") or "").strip().upper()
+        record = self.load(plan_id)
+        if str(record.get("state", "") or "").upper() != "EXECUTING":
+            raise PlanLedgerError("plan_execution_not_active")
+        self._validate_claimed_execution_task(task, record)
+        return dict(record)
+
+    def claim_execution_task(self, task: Any) -> dict[str, Any]:
+        """Atomically consume authorization and claim one PLAN execution."""
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        plan_id = str(metadata.get("source_plan_id", "") or "").strip().upper()
+        target = self.path_for(plan_id)
+        with exclusive_process_lock(self.lock_path, timeout_sec=10.0):
+            record = self.load(plan_id)
+            state = str(record.get("state", "") or "").upper()
+            task_id = str(getattr(task, "task_id", "") or "")
+            request_id = str(getattr(task, "request_id", "") or "")
+            if state == "EXECUTING":
+                self._validate_claimed_execution_task(task, record)
+                return record
+            if state != "READY":
+                raise PlanLedgerError("plan_not_ready")
+            nonce, record = self._validate_execution_task_record(task, record)
+            pending = dict(record.get("pending_executions") or {})
+            pending.pop(nonce, None)
+            record.update(
+                {
+                    "state": "EXECUTING",
+                    "pending_executions": pending,
+                    "execution_task_id": task_id,
+                    "execution_request_id": request_id,
+                    "execution_nonce": nonce,
+                    "execution_envelope_sha256": self.execution_request_sha256(record),
+                    "execution_source_message_id": str(
+                        metadata.get("source_message_id", "") or ""
+                    ),
+                    "execution_started_at": time.time(),
+                    "updated_at": time.time(),
+                }
+            )
+            write_json_atomic(target, record)
+        return record
+
+    def _validate_claimed_execution_task(
+        self, task: Any, record: Mapping[str, Any]
+    ) -> None:
+        """Revalidate immutable claim fields when the same task is redispatched."""
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        task_id = str(getattr(task, "task_id", "") or "")
+        request_id = str(getattr(task, "request_id", "") or "")
+        if (
+            str(record.get("execution_task_id", "") or "") != task_id
+            or str(record.get("execution_request_id", "") or "") != request_id
+        ):
+            raise PlanLedgerError("plan_execution_already_claimed")
+        if str(metadata.get("request_kind", "") or "") != "EXECUTE_SAVED_PLAN":
+            raise PlanLedgerError("plan_execution_kind_invalid")
+        if metadata.get("plan_execution_authorized") is not True:
+            raise PlanLedgerError("plan_execution_not_authorized")
+        if str(metadata.get("ingress_schema", "") or "") != "AGENT_INGRESS_V1":
+            raise PlanLedgerError("plan_execution_ingress_invalid")
+        if str(metadata.get("source_plan_id", "") or "").upper() != str(
+            record.get("plan_id", "") or ""
+        ).upper():
+            raise PlanLedgerError("plan_execution_id_invalid")
+        self.ensure_workspace(record, str(getattr(task, "workspace", "") or ""))
+        if str(metadata.get("source_plan_request_id", "") or "") != str(
+            record.get("request_id", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_request_identity_mismatch")
+        if str(metadata.get("source_plan_task_id", "") or "") != str(
+            record.get("task_id", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_task_identity_mismatch")
+        if str(metadata.get("plan_execution_nonce", "") or "") != str(
+            record.get("execution_nonce", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_authorization_mismatch")
+        if str(metadata.get("source_message_id", "") or "") != str(
+            record.get("execution_source_message_id", "") or ""
+        ):
+            raise PlanLedgerError("plan_execution_source_message_mismatch")
+        actual_sha256 = hashlib.sha256(
+            str(getattr(task, "request", "") or "").encode("utf-8", errors="replace")
+        ).hexdigest()
+        claimed_sha256 = str(record.get("execution_envelope_sha256", "") or "").lower()
+        if not claimed_sha256 or actual_sha256 != claimed_sha256:
+            raise PlanLedgerError("plan_execution_envelope_mismatch")
+        if str(metadata.get("plan_execution_request_sha256", "") or "").lower() != claimed_sha256:
+            raise PlanLedgerError("plan_execution_digest_mismatch")
+
+    def finish_execution_task(
+        self, task: Any, *, state: str, detail: str = ""
+    ) -> dict[str, Any]:
+        """Persist the terminal state only for the task that owns the claim."""
+        target_state = str(state or "").upper()
+        if target_state not in {"COMPLETED", "FAILED", "INTERRUPTED", "CANCELLED"}:
+            raise PlanLedgerError("plan_terminal_state_invalid")
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        plan_id = str(metadata.get("source_plan_id", "") or "").strip().upper()
+        if not plan_id:
+            return {}
+        target = self.path_for(plan_id)
+        with exclusive_process_lock(self.lock_path, timeout_sec=10.0):
+            record = self.load(plan_id)
+            task_id = str(getattr(task, "task_id", "") or "")
+            request_id = str(getattr(task, "request_id", "") or "")
+            if (
+                str(record.get("execution_task_id", "") or "") != task_id
+                or str(record.get("execution_request_id", "") or "") != request_id
+            ):
+                raise PlanLedgerError("plan_execution_owner_mismatch")
+            current = str(record.get("state", "") or "").upper()
+            if current == target_state:
+                return record
+            if current != "EXECUTING":
+                raise PlanLedgerError("plan_execution_not_active")
+            record.update(
+                {
+                    "state": target_state,
+                    "execution_finished_at": time.time(),
+                    "execution_detail": str(detail or ""),
+                    "updated_at": time.time(),
+                }
+            )
+            write_json_atomic(target, record)
+        return record
+
 
 def publish_completed_plan(
     *,
@@ -200,6 +438,7 @@ def publish_completed_plan(
     task: Any,
     final_summary: str,
     progress: Any | None,
+    authorized_paths: list[str] | None = None,
 ) -> tuple[str, str]:
     request = str(getattr(task, "request", "") or "")
     if not is_planning_request(request):
@@ -220,6 +459,7 @@ def publish_completed_plan(
         progress=progress_payload,
         conversation_url=str(getattr(task, "conversation_url", "") or ""),
         session_id=str(getattr(task, "session_id", "") or ""),
+        authorized_paths=authorized_paths,
     )
     plan_id = str(record["plan_id"])
     rendered = str(final_summary or "").rstrip()
@@ -229,6 +469,7 @@ def publish_completed_plan(
 
 __all__ = [
     "PLAN_SCHEMA",
+    "PLAN_STATES",
     "PlanLedger",
     "PlanLedgerError",
     "is_planning_request",

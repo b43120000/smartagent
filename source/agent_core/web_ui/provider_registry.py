@@ -31,6 +31,14 @@ class ProviderSpec:
 
 _SPECS = (
     ProviderSpec(
+        name="m365",
+        hosts=("m365.cloud.microsoft",),
+        aliases=("microsoft_365", "m365_copilot"),
+        adapter_module=".providers.m365",
+        adapter_class="M365UIAdapter",
+        attachments=False,
+    ),
+    ProviderSpec(
         name="chatgpt",
         hosts=("chatgpt.com", "chat.openai.com"),
         aliases=("chat_gpt",),

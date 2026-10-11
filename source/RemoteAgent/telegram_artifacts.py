@@ -12,6 +12,24 @@ TELEGRAM_BOT_DOCUMENT_LIMIT_BYTES = 50 * 1024 * 1024
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png"})
 
 
+def _explicit_plan_only_request(request: str) -> bool:
+    """Return True only for an explicit planning-without-execution request."""
+    text = str(request or "")
+    planning_only = re.search(
+        r"(?:只|僅)\s*(?:做|提供)?\s*(?:規劃|計畫)|plan\s*only",
+        text,
+        re.IGNORECASE,
+    )
+    no_execution = re.search(
+        r"(?:不|不要|無須|无需)\s*(?:實作|實做|執行|建立|產生|生成|修改|寫入)"
+        r"|do\s+not\s+(?:execute|implement|create|generate)"
+        r"|no\s+implementation",
+        text,
+        re.IGNORECASE,
+    )
+    return bool(planning_only and no_execution)
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -22,6 +40,8 @@ def _sha256(path: Path) -> str:
 
 def _telegram_file_request(request: str) -> bool:
     text = str(request or "")
+    if _explicit_plan_only_request(text):
+        return False
     destination = re.search(r"telegram|bot|機器人", text, re.IGNORECASE)
     transfer = re.search(r"上傳|傳送|發送|回傳|送到|send|upload", text, re.IGNORECASE)
     return bool(destination and transfer)
@@ -33,6 +53,7 @@ def prepare_telegram_completion(
     summary: str,
     workspace: str | Path,
     artifacts: list[dict] | tuple[dict, ...],
+    expect_artifact: bool | None = None,
 ) -> dict:
     """Return a truthful TASK_COMPLETED payload and verified artifacts.
 
@@ -94,7 +115,12 @@ def prepare_telegram_completion(
         lines.append(f"已準備由 Telegram Bot 回傳：{names}。")
     for row in rejected:
         lines.append(f"檔案未上傳到 Telegram：{row['name']}；{row['reason']}。")
-    if not accepted and not rejected and _telegram_file_request(request):
+    artifact_required = (
+        _telegram_file_request(request)
+        if expect_artifact is None
+        else bool(expect_artifact)
+    )
+    if not accepted and not rejected and artifact_required:
         lines.append("檔案未上傳到 Telegram：此次流程未產生 Telegram outbound artifact。")
 
     return {

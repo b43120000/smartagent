@@ -154,12 +154,15 @@ class TelegramDeliveryAdapter:
         try:
             payload = dict(event.get("payload") or {})
             if str(event.get("event_type", "")) == "TASK_COMPLETED":
-                payload = prepare_telegram_completion(
+                prepared_payload = prepare_telegram_completion(
                     request="",
                     summary=str(payload.get("summary", "")),
                     workspace=str(payload.get("workspace") or "."),
                     artifacts=list(payload.get("artifacts") or []),
                 )
+                # Revalidation owns artifact fields only.  Preserve plan_id
+                # and every other completion field published by the worker.
+                payload.update(prepared_payload)
                 event = dict(event)
                 event["payload"] = payload
             artifacts = list(payload.get("artifacts") or [])

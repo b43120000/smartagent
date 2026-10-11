@@ -43,3 +43,4 @@ if "%ADAPTER_EXIT%"=="0" (
 )
 pause
 endlocal & exit /b %ADAPTER_EXIT%
+

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from agent_core.write_budget import render_write_budget
 
 from agent_core.tool_capabilities import get_allowed_tools, render_protocol_tool_section
 from agent_core.recovery_protocol import INITIALIZATION_CAPABILITY_MODE
@@ -46,8 +47,27 @@ def render_initial_planner_toolkit() -> str:
         "逃生口且不能支持任務成功。run_command 必須原子化：一個 action 只做一個主要操作或副作用；不要用變數、分號或 "
         "control flow 串接相依工作。verify[] 只做同一 action 的唯讀 postcondition 檢查。\n"
         "task_plan_schema_contract=" + _TASK_PLAN_SCHEMA_CONTRACT + "\n"
-        + _SHARED_TOOL_SECTION
+        + _SHARED_TOOL_SECTION + "\n" + render_write_budget()
         + "\n[/SMARTAGENT_INITIAL_PLANNER_TOOLKIT]"
+    )
+
+
+def render_action_response_constraints() -> str:
+    """Render the compact constraints that must remain visible every round."""
+    return (
+        "[SMARTAGENT_ACTION_RESPONSE_CONSTRAINTS]\n"
+        "每輪輸出前先套用以下硬性限制：\n"
+        "1. completion_contract 只使用 success、failure、in_progress、interrupted 四類；"
+        "steps[].status 只使用 PENDING、IN_PROGRESS、COMPLETED。\n"
+        "2. 每個 action 只能包含該 tool canonical schema 宣告的欄位，不得自行增加結果、用途或狀態欄位。\n"
+        "3. 寫入操作依下方統一預算規劃分塊與跨輪接續；不得先送 oversized write_file。\n"
+        "4. run_command 必須是單一主要操作且 operation 與 command 一致；需要變數、control flow、"
+        "長 inline script 或多段相依命令時，先以檔案工具建立 script，再用後續 run_command 執行。\n"
+        "5. Runtime 若回覆 preserved_action_ids 與 repair_action_indexes，代表那些合法 action 尚未執行但已暫存。"
+        "只輸出一個 report_progress 與失敗位置的修正版 action；若唯一失敗 action 必須改成 canonical "
+        "sequence（例如 chunked write），可輸出完整 replacement sequence。不要重送 preserved action。"
+        "Runtime 會依原順序合併、重新驗證整批，全部通過後才原子執行。\n"
+        "[/SMARTAGENT_ACTION_RESPONSE_CONSTRAINTS]\n" + render_write_budget()
     )
 
 WEBAGENT_PROTOCOL_BODY = (
@@ -244,7 +264,7 @@ operations. DELTA/FULL_BUNDLE remain exceptional attachment transports.
 Do not expose hidden chain-of-thought. Return only executable decisions,
 verification conditions, and concise user-facing final_response content.
 """).strip()
-WEBAGENT_PROTOCOL_BODY += "\n\n" + SINGLE_FENCE_TRANSPORT_CONTRACT
+WEBAGENT_PROTOCOL_BODY += "\n\n" + SINGLE_FENCE_TRANSPORT_CONTRACT + "\n" + render_write_budget()
 WEBAGENT_PROTOCOL_BODY += (
     "\n\n[SMARTAGENT_TASK_PLAN_SCHEMA_CONTRACT]\n"
     + _TASK_PLAN_SCHEMA_CONTRACT
@@ -258,5 +278,6 @@ WEBAGENT_PROTOCOL_BODY += (
 
 __all__ = [
     "SUPPORTED_ACTION_TOOLS", "WEBAGENT_PROTOCOL_BODY", "WEBAGENT_PROTOCOL_NAME",
-    "WEBAGENT_PROTOCOL_VERSION", "render_initial_planner_toolkit",
+    "WEBAGENT_PROTOCOL_VERSION", "render_action_response_constraints",
+    "render_initial_planner_toolkit",
 ]

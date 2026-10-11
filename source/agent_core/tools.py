@@ -853,7 +853,10 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         )
     elif tool in {"begin_file_write", "write_file_chunk", "commit_file_write", "abort_file_write"}:
         if not agent:
-            return "[CHUNKED_WRITE_FAILED] Agent 實例遺失"
+            return '[CHUNKED_WRITE_FAILED] ' + json.dumps({
+                "status": "FAILED", "execution_status": "FAILED",
+                "error_code": "agent_instance_missing", "data": {},
+            })
         manager = getattr(agent, "_chunked_write_manager", None)
         if manager is None:
             workspace = Path(getattr(agent, "workspace_root", None) or Path.cwd()).resolve()
@@ -876,7 +879,9 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 result = manager.abort(tool_call)
             return "[CHUNKED_WRITE_SUCCESS] " + json.dumps(result, ensure_ascii=False, sort_keys=True)
         except ChunkedWriteError as exc:
-            return f"[CHUNKED_WRITE_FAILED] {exc}"
+            return "[CHUNKED_WRITE_FAILED] " + json.dumps(
+                manager.failure_result(tool_call, exc), ensure_ascii=False, sort_keys=True,
+            )
     elif tool == "list_directory":
         return tool_list_directory(
             scope["resolved_paths"][0], security_context=security_context

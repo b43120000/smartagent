@@ -248,6 +248,18 @@ def build_action_loop_state(
         phase = "TERMINAL"
         transition = "TERMINAL"
         allowed = ["final_response"]
+    elif (
+        recovery.get("active")
+        and recovery.get("reason") == "edit_plan_requires_canonical_replan"
+        and recovery.get("prerequisite_satisfied")
+    ):
+        # Source acquisition is complete, not plan validation. Keep mutations
+        # blocked while reopening the non-mutating validator entry point.
+        phase = "PLAN"
+        transition = "REPLAN_REQUIRED"
+        allowed = ["validate_edit_plan", "query_project", "project_sync"]
+        missing = list(recovery.get("missing_fields") or []) or ["corrected edit plan must be validated"]
+        evidence_state = "AVAILABLE"
     elif recovery.get("active") and not recovery.get("prerequisite_satisfied"):
         transition = "PREREQUISITE_REQUIRED"
         allowed = [

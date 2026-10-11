@@ -308,7 +308,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         from WebAgent.browser_client import WebAgentBrowserClient
         from agent_core.remote_control_plane import RemoteControlPlane, execute_page_control
         from WebAgent.controller import live_planner
-        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from WebAgent.protocol_loop import WebAgentProtocolLoop, extract_authorized_paths
         from WebAgent.session import ensure_webagent_session
         from WebAgent.tool_context import WebAgentToolContext
 
@@ -449,6 +449,19 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             )
             from agent_core.project_sync_receiver import browser_receiver_identity
             loop.tools.configure_project_sync_receiver(lambda: browser_receiver_identity(scraper))
+            trusted_authorized_paths = None
+            if str((task.metadata or {}).get("request_kind", "") or "") == "EXECUTE_SAVED_PLAN":
+                plan_record = PlanLedger.from_task_store(
+                    remote_tasks_path(root)
+                ).claimed_execution_record(task)
+                if "authorized_paths" in plan_record:
+                    trusted_authorized_paths = list(plan_record.get("authorized_paths") or [])
+                else:
+                    # Legacy plans did not persist structured scope.  Recover
+                    # only from the original user request, never plan/progress prose.
+                    trusted_authorized_paths = extract_authorized_paths(
+                        str(plan_record.get("original_request", "") or "")
+                    )
             final_content = loop.run(
                 task.request,
                 request_id=task.request_id,
@@ -461,6 +474,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     if source_transport == "TELEGRAM"
                     else "REMOTEAGENT_TELEGRAM_SIMULATION"
                 ),
+                trusted_authorized_paths=trusted_authorized_paths,
             )
             if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
                 raise RemoteTaskCancelled("telegram_interrupt_requested")
@@ -493,6 +507,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             task=task,
             final_summary=final_content,
             progress=progress_snapshot,
+            authorized_paths=loop.authorized_paths,
         )
         if plan_id:
             runtime_log.write(
@@ -508,6 +523,11 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             summary=final_content,
             workspace=task.workspace,
             artifacts=loop.tools.take_outbound_artifacts(),
+            # A published plan describes future execution.  Missing artifacts
+            # are therefore expected even when the plan mentions a later
+            # Telegram delivery step.  Real artifacts are still validated and
+            # delivered when present.
+            expect_artifact=False if plan_id else None,
         )
         terminal_payload["plan_id"] = plan_id
         final_content = terminal_payload["summary"]

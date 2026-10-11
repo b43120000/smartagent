@@ -1,4 +1,4 @@
-﻿"""Planner-assisted, locally validated Web UI selector calibration.
+"""Planner-assisted, locally validated Web UI selector calibration.
 
 The planner only proposes inert CSS selector data.  This controller owns all
 browser access, validation, persistence and rollback boundaries.
@@ -825,3 +825,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+

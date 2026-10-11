@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 
 param(
 
@@ -22,7 +22,7 @@ $AclStateRelativePath = 'localdata\secure\windows_security\acl_mode.json'
 $MutexName = 'Local\SmartAgentUpdate'
 # TEMPORARY Phase 1 development whitelist. Remove when ACL on/off provisioning is complete.
 $DevelopmentAclBypassTargets = @(
-    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'remoteagent\release\SmartAgentv2_1')
+    'C:\Users\example\Desktop\remoteagent\release\SmartAgentv2_1'
 )
 $script:Mutex = $null
 $script:MutexOwned = $false

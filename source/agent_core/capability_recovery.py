@@ -367,9 +367,19 @@ def build_result_evidence_to_action_route(
                     "Keep workspace, snapshot_id, path, and file_sha256 bound to Runtime evidence.",
                 ],
             }
+        canonical_action["tool"] = "validate_edit_plan"
         return {
             "active": True,
             "reason": "edit_plan_requires_canonical_replan",
+            "forbidden_actions": ["apply_edit_plan"],
+            "prerequisite_satisfied": not bool(next_actions),
+            "runtime_state": "BLOCKED_ON_PREREQUISITE" if next_actions else "PLAN_VALIDATION_REQUIRED",
+            "missing_fields": list(validation.get("missing_fields") or []),
+            "validator_diagnostic": {
+                "status": validation_status,
+                "reason": validation.get("reason", ""),
+                "path": validation.get("path", ""),
+            },
             "observed": _result_summary(payload),
             "required_plan_fields": [
                 "base_snapshot_id", "files_to_modify", "verification_commands",
@@ -383,6 +393,41 @@ def build_result_evidence_to_action_route(
                 "Keep workspace bound to the exact project root used by project_sync/query_project.",
             ],
         }
+
+    if prior.get("reason") == "edit_plan_requires_canonical_replan" and tool in {"query_project", "project_sync"}:
+        if status != "READY":
+            return prior
+        updated = dict(prior)
+        canonical = dict(updated.get("canonical_action") or {})
+        plan = dict(canonical.get("plan") or {})
+        snapshot = payload.get("snapshot_id")
+        if snapshot:
+            plan["base_snapshot_id"] = snapshot
+            updated["missing_fields"] = [field for field in updated.get("missing_fields", []) if field != "base_snapshot_id"]
+        canonical["plan"] = plan
+        updated["canonical_action"] = canonical
+        remaining = list(updated.get("next_actions") or [])
+        if snapshot:
+            remaining = [item for item in remaining if item.get("tool") != "project_sync"]
+        source_ready = tool == "query_project" and any(
+            isinstance(row, Mapping)
+            and row.get("operation") == "read_range"
+            and row.get("status") == "OK"
+            and row.get("file_sha256")
+            and row.get("content")
+            and not row.get("next_cursor")
+            for row in payload.get("results", [])
+        )
+        if source_ready:
+            remaining = [item for item in remaining if item.get("tool") != "query_project"]
+        updated["next_actions"] = remaining
+        updated["prerequisite_satisfied"] = not bool(remaining)
+        updated["runtime_state"] = "BLOCKED_ON_PREREQUISITE" if remaining else "PLAN_VALIDATION_REQUIRED"
+        rules = list(updated.get("rules") or [])
+        if not any("Existing source evidence" in rule for rule in rules):
+            rules.append("Existing source evidence must be reused. Submit the complete corrected plan to validate_edit_plan next; read only explicitly missing ranges.")
+        updated["rules"] = rules
+        return updated
 
     if tool == "query_project" and str(prior.get("reason", "")).startswith(
         "edit_plan_"

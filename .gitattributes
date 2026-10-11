@@ -1,0 +1,2 @@
+# Preserve release bytes: protocol/update manifests hash the exact file bytes.
+* -text

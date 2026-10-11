@@ -57,8 +57,13 @@ from agent_core.action_loop_state import (
     semantic_action_signature,
 )
 from agent_core.command_operation import operation_terminal_eligible
+from agent_core.write_budget import validate_round_write_budget, write_budget_contract
 
-from .protocol import SUPPORTED_ACTION_TOOLS, render_initial_planner_toolkit
+from .protocol import (
+    SUPPORTED_ACTION_TOOLS,
+    render_action_response_constraints,
+    render_initial_planner_toolkit,
+)
 from .tool_context import WebAgentToolContext
 
 
@@ -71,6 +76,7 @@ _PATH_SENTENCE_BOUNDARY_RE = re.compile(r"[，；。]|[,;](?=\s|$)|[\r\n]")
 _PATH_PROSE_BOUNDARY_RE = re.compile(
     r"\s+(?=(?:然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後|再(?:去|執行|看|讀|修改|處理)))"
 )
+_PATH_TASK_SUFFIX_RE = re.compile(r"\s+(?:第一層內容|建立\s+[^\\/\s]+\.[A-Za-z0-9]{1,10})$")
 _PATH_ATTACHED_PROSE_BOUNDARY_RE = re.compile(
     r"(?=(?:下(?:的|面)|裡面|里面|內(?:有|的)|有多少|有幾個|共有|的檔案))"
 )
@@ -78,6 +84,10 @@ _PATH_QUOTE_PAIRS = {
     '"': '"', "'": "'", "`": "`",
     "「": "」", "『": "』",
 }
+_SAVED_PLAN_OPEN = "[SMARTAGENT_EXECUTE_SAVED_PLAN]"
+_SAVED_PLAN_CLOSE = "[/SMARTAGENT_EXECUTE_SAVED_PLAN]"
+_ORIGINAL_REQUEST_OPEN = "[ORIGINAL_PLANNING_REQUEST]"
+_ORIGINAL_REQUEST_CLOSE = "[/ORIGINAL_PLANNING_REQUEST]"
 
 
 def _hard_authorized_path_end(text: str, content_start: int) -> int:
@@ -123,6 +133,22 @@ def _authorized_path_end(text: str, start: int, content_start: int) -> int:
     next_path = _WINDOWS_PATH_START_RE.search(text, content_start)
     if next_path and next_path.start() < end:
         end = next_path.start()
+    # Only recognize terminal task phrases, not words inside path components.
+    # Preserve an actual full path with spaces; quoted paths returned above.
+    span = text[start:end].rstrip()
+    task_suffix = _PATH_TASK_SUFFIX_RE.search(span)
+    # "在 <directory> 建立 <basename>" is an instruction. In "建立
+    # <new filename>", the same words can be part of a not-yet-existing name.
+    if task_suffix and task_suffix.group().lstrip().startswith("建立"):
+        if not re.search(r"在\s*$", text[:start]):
+            task_suffix = None
+    if task_suffix:
+        try:
+            full_path_exists = Path(span).exists()
+        except (OSError, ValueError):
+            full_path_exists = False
+        if not full_path_exists:
+            end = start + task_suffix.start()
     return end
 
 
@@ -147,6 +173,40 @@ def extract_authorized_paths(request: str) -> list[str]:
         if candidate and candidate not in paths:
             paths.append(candidate)
     return paths
+
+
+def resolve_authorized_paths(
+    request: str,
+    *,
+    trusted_authorized_paths: list[str] | None = None,
+) -> list[str]:
+    """Resolve request scope without treating saved-plan prose as authority.
+
+    New saved plans carry a ledger-backed path list. The tagged source fallback
+    exists for older plan records only; accepted-plan and progress text must
+    never expand filesystem authority.
+    """
+    if trusted_authorized_paths is not None:
+        return list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in trusted_authorized_paths
+                if str(item).strip()
+            )
+        )
+
+    text = str(request or "")
+    if _SAVED_PLAN_OPEN not in text and _SAVED_PLAN_CLOSE not in text:
+        return extract_authorized_paths(text)
+    if text.count(_SAVED_PLAN_OPEN) != 1 or text.count(_SAVED_PLAN_CLOSE) != 1:
+        raise ValueError("saved_plan_authorization_source_invalid")
+    if text.count(_ORIGINAL_REQUEST_OPEN) != 1 or text.count(_ORIGINAL_REQUEST_CLOSE) != 1:
+        raise ValueError("saved_plan_authorization_source_invalid")
+    start = text.find(_ORIGINAL_REQUEST_OPEN) + len(_ORIGINAL_REQUEST_OPEN)
+    end = text.find(_ORIGINAL_REQUEST_CLOSE, start)
+    if end < start:
+        raise ValueError("saved_plan_authorization_source_invalid")
+    return extract_authorized_paths(text[start:end])
 
 
 def local_commit_line(expected: dict) -> str:
@@ -197,6 +257,7 @@ class WebAgentProtocolLoop:
         self.condition_result_ledger: dict[str, dict] = {}
         self.v8_admitted_actions: dict[str, dict] = {}
         self.pending_progress_repair_actions: list[dict] = []
+        self.pending_action_repair: dict = {}
         self.active_stage_manifest: dict | None = None
         self.image_delivery_plan: dict = {}
         self.authorized_paths: list[str] = []
@@ -322,9 +383,17 @@ class WebAgentProtocolLoop:
         return {
             "goal": str(getattr(self, "task_request", "") or "")[:16000],
             "progress": progress,
-            "latest_runtime_context": latest_context[-16000:],
+            "latest_runtime_context": latest_context[-16000:] + "\n" + self._write_continuation_context(),
             "authorized_paths": list(self.authorized_paths),
         }
+
+    def _write_continuation_context(self) -> str:
+        manager = getattr(self.tools, "_chunked_write_manager", None)
+        sessions = manager.open_sessions(request_id=self.run_id, run_id=self.run_id) if manager else []
+        return "[RUNTIME_WRITE_CONTINUATION]\n" + json.dumps({
+            "budget": write_budget_contract(), "open_transactions": sessions,
+            "rule": "Continue only remaining content; OPEN is not a completed file. Do not replay accepted chunks.",
+        }, ensure_ascii=False, sort_keys=True) + "\n[/RUNTIME_WRITE_CONTINUATION]"
 
     def _with_commit(self, prompt: str, expected: dict) -> str:
         trace = (
@@ -340,6 +409,9 @@ class WebAgentProtocolLoop:
             + str(prompt).rstrip()
             + "\n\n"
             + self._runtime_evidence_context()
+            + "\n"
+            + render_action_response_constraints()
+            + "\n" + self._write_continuation_context()
             + "\n"
             + trace
             + "\n[WEBAGENT_ACK_REQUIRED]\n"
@@ -684,8 +756,13 @@ class WebAgentProtocolLoop:
             r"(?m)^EXPECTATION_STATUS:\s*(PASS|FAIL|SPEC_INVALID)\s*$", text,
         )
         expectation = expectation_match.group(1) if expectation_match else ""
+        structured_text = text
+        for marker in ("[CHUNKED_WRITE_SUCCESS]", "[CHUNKED_WRITE_FAILED]"):
+            if text.startswith(marker):
+                structured_text = text[len(marker):].strip()
+                break
         try:
-            structured = json.loads(text)
+            structured = json.loads(structured_text)
         except (TypeError, ValueError, json.JSONDecodeError):
             structured = {}
         structured_status = (
@@ -708,6 +785,10 @@ class WebAgentProtocolLoop:
             "[PROTOCOL_ERROR]",
         )):
             execution = "FAILED"
+        elif text.startswith("[CHUNKED_WRITE_FAILED]") or re.search(
+            r"(?m)^\[WEBAGENT_ATTACHMENT_ERROR\]", text,
+        ):
+            execution = "FAILED"
         elif tool == "query_project":
             query_payload = structured if isinstance(structured, dict) else {}
             if str(query_payload.get("status", "") or "").upper() in {"REJECTED", "ERROR", "FAILED"}:
@@ -716,11 +797,13 @@ class WebAgentProtocolLoop:
             "aggregate_verification", "execute_frozen_plan",
         }:
             execution = "FAILED"
+        if isinstance(structured, dict) and structured.get("execution_status") == "FAILED":
+            execution = "FAILED"
         evidence_state, _missing = classify_evidence_state(
             action, text, execution, verification, expectation,
         )
         operation = str(action.get("operation", "") or "").upper()
-        terminal_eligible = True
+        terminal_eligible = execution == "SUCCEEDED"
         if tool == "run_command":
             try:
                 terminal_eligible = (
@@ -1447,6 +1530,139 @@ class WebAgentProtocolLoop:
         )
         return restored
 
+    def _preserve_action_repair_batch(
+        self,
+        actions: list[dict],
+        invalid_action_indexes: set[int],
+    ) -> dict:
+        """Hold valid operational actions while invalid siblings are repaired.
+
+        Nothing stored here is admitted or executable authority.  The complete
+        reconstructed batch still passes through every normal progress,
+        state-machine, envelope, and v8 admission check before execution.
+        """
+        slots: list[dict | None] = []
+        invalid_slots: list[int] = []
+        preserved_ids: list[str] = []
+        for action_index, action in enumerate(actions, 1):
+            tool_name = str(action.get("tool", "") or "")
+            if tool_name == "report_progress":
+                continue
+            # Terminal replies are deliberately never mixed into action-batch
+            # repair.  Their exclusivity and evidence gates must be evaluated
+            # from one fresh, complete response.
+            if tool_name == "final_response":
+                self.pending_action_repair = {}
+                return {}
+            slot_index = len(slots) + 1
+            if action_index in invalid_action_indexes:
+                slots.append(None)
+                invalid_slots.append(slot_index)
+                continue
+            slots.append(dict(action))
+            preserved_ids.append(str(action.get("action_id", "") or ""))
+
+        if not preserved_ids or not invalid_slots:
+            self.pending_action_repair = {}
+            return {}
+        state = {
+            "source_round": self.turn_id,
+            "slots": slots,
+            "invalid_slots": invalid_slots,
+            "preserved_action_ids": preserved_ids,
+        }
+        self.pending_action_repair = state
+        self._emit(
+            "action_repair_batch_preserved",
+            request_id=self.run_id,
+            round=self.turn_id,
+            preserved_action_ids=preserved_ids,
+            repair_action_indexes=invalid_slots,
+        )
+        return state
+
+    def _restore_action_repair_batch(
+        self, calls: list[dict],
+    ) -> tuple[list[dict], dict | None]:
+        pending = dict(self.pending_action_repair or {})
+        slots = list(pending.get("slots") or [])
+        invalid_slots = [int(item) for item in list(pending.get("invalid_slots") or [])]
+        if not slots or not invalid_slots:
+            return calls, None
+        if not calls or calls[-1].get("tool") != "turn_commit":
+            return calls, None
+
+        progress_actions = [
+            dict(action) for action in calls[:-1]
+            if action.get("tool") == "report_progress"
+        ]
+        submitted = [
+            dict(action) for action in calls[:-1]
+            if action.get("tool") != "report_progress"
+        ]
+        preserved_ids = set(pending.get("preserved_action_ids") or [])
+        submitted_ids = {
+            str(action.get("action_id", "") or "") for action in submitted
+        }
+        # A full retransmission remains safe and compatible.  Distinguish it by
+        # the presence of at least one preserved action_id; this avoids
+        # confusing a multi-action replacement sequence with a full batch.
+        if len(submitted) == len(slots) and preserved_ids.intersection(submitted_ids):
+            self._emit(
+                "action_repair_full_batch_resubmitted",
+                request_id=self.run_id,
+                round=self.turn_id,
+                action_count=len(submitted),
+            )
+            return calls, None
+        replacement_count_valid = (
+            bool(submitted)
+            if len(invalid_slots) == 1
+            else len(submitted) == len(invalid_slots)
+        )
+        if len(progress_actions) != 1 or not replacement_count_valid:
+            return calls, {
+                "marker": "[WEBAGENT_ACTION_REPAIR_REJECTED]",
+                "reason": "action_repair_count_mismatch",
+                "detail": (
+                    f"expected_progress=1;actual_progress={len(progress_actions)};"
+                    f"expected_repaired_actions="
+                    f"{'one_or_more' if len(invalid_slots) == 1 else len(invalid_slots)};"
+                    f"actual_repaired_actions={len(submitted)}"
+                ),
+                "suggestion": (
+                    "只輸出一個 report_progress，並依 repair_action_indexes 順序輸出完整修正版 action。"
+                    "若只有一個失敗位置，可用多個 action 組成 canonical replacement sequence；"
+                    "不要重送 preserved action。"
+                ),
+                "repair_scope": "ACTION_BATCH",
+                "preserved_action_ids": list(pending.get("preserved_action_ids") or []),
+                "repair_action_indexes": invalid_slots,
+            }
+
+        repaired_iter = iter(submitted)
+        merged: list[dict] = []
+        for slot in slots:
+            if slot is not None:
+                merged.append(dict(slot))
+                continue
+            if len(invalid_slots) == 1:
+                merged.extend(dict(action) for action in repaired_iter)
+            else:
+                merged.append(dict(next(repaired_iter)))
+        restored = [progress_actions[0], *merged]
+        commit = dict(calls[-1])
+        commit["action_count"] = len(restored)
+        restored.append(commit)
+        self._emit(
+            "action_repair_batch_restored",
+            request_id=self.run_id,
+            round=self.turn_id,
+            preserved_action_ids=list(pending.get("preserved_action_ids") or []),
+            repair_action_indexes=invalid_slots,
+        )
+        return restored, None
+
     def _accept_v8_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
         self.active_stage_manifest = None
         if not calls or calls[-1].get("tool") != "turn_commit":
@@ -1474,6 +1690,11 @@ class WebAgentProtocolLoop:
                 "detail": f"expected=1;actual={len(progress_actions)}",
                 "suggestion": "每輪必須輸出且只輸出一個 report_progress。",
             }]
+        budget_diagnostic = validate_round_write_budget(actions)
+        if budget_diagnostic:
+            self._emit("write_budget_rejected", request_id=self.run_id, round=self.turn_id,
+                       diagnostic=budget_diagnostic)
+            return [], [budget_diagnostic]
         normalized_progress_action, wrapper_diagnostic = self._normalize_report_progress_envelope(
             progress_actions[0], self.progress_ledger
         )
@@ -1904,9 +2125,11 @@ class WebAgentProtocolLoop:
         )
         admitted: dict[str, dict] = {}
         diagnostics: list[dict] = []
+        invalid_action_indexes: set[int] = set()
         for index, action in enumerate(actions, 1):
             tool_name = str(action.get("tool", "") or "")
             if tool_name not in {"final_response", "report_progress"} and tool_name not in SUPPORTED_ACTION_TOOLS:
+                invalid_action_indexes.add(index)
                 diagnostics.append({
                     "marker": "[WEBAGENT_V8_REJECTED]",
                     "reason": "unsupported_tool",
@@ -1919,6 +2142,7 @@ class WebAgentProtocolLoop:
                 block_index=index,
             )
             if not envelope_valid:
+                invalid_action_indexes.add(index)
                 diagnostic = dict(envelope_diagnostic or {})
                 diagnostics.append({
                     "marker": diagnostic.get("marker", "[WEBAGENT_V8_REJECTED]"),
@@ -1936,6 +2160,7 @@ class WebAgentProtocolLoop:
             try:
                 record = v8_admit_action(action, context)
             except ProtocolV8Error as exc:
+                invalid_action_indexes.add(index)
                 diagnostics.append({
                     "marker": "[WEBAGENT_V8_REJECTED]",
                     "reason": exc.code,
@@ -1945,6 +2170,7 @@ class WebAgentProtocolLoop:
                 continue
             action_id = record["action_id"]
             if action_id in admitted:
+                invalid_action_indexes.add(index)
                 diagnostics.append({
                     "marker": "[WEBAGENT_V8_REJECTED]",
                     "reason": "duplicate_action_id",
@@ -1954,11 +2180,27 @@ class WebAgentProtocolLoop:
             else:
                 admitted[action_id] = record
         if diagnostics:
+            repair_state = self._preserve_action_repair_batch(
+                actions, invalid_action_indexes,
+            )
+            if repair_state:
+                for diagnostic in diagnostics:
+                    diagnostic["repair_scope"] = "ACTION_BATCH"
+                    diagnostic["preserved_action_ids"] = list(
+                        repair_state.get("preserved_action_ids") or []
+                    )
+                    diagnostic["repair_action_indexes"] = list(
+                        repair_state.get("invalid_slots") or []
+                    )
+                    diagnostic["repair_expected_count"] = len(
+                        repair_state.get("invalid_slots") or []
+                    )
             return [], diagnostics
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
         self.protocol_state = "ACCEPTED"
         self.pending_progress_repair_actions = []
+        self.pending_action_repair = {}
         self.pending_result_ack_id = ""
         self.pending_web_ack_id = "WEBACK-V8-" + uuid.uuid4().hex[:16].upper()
         self.seen_web_ack_ids.add(self.pending_web_ack_id)
@@ -2073,6 +2315,7 @@ class WebAgentProtocolLoop:
         task_id: str = "",
         task_epoch: str = "",
         skill_context: dict | None = None,
+        trusted_authorized_paths: list[str] | None = None,
     ) -> str:
         """Run one request and always release its browser ownership on failure."""
         try:
@@ -2084,6 +2327,7 @@ class WebAgentProtocolLoop:
                 task_id=task_id,
                 task_epoch=task_epoch,
                 skill_context=skill_context,
+                trusted_authorized_paths=trusted_authorized_paths,
             )
         except BaseException:
             from agent_core.request_ownership import release_active_request
@@ -2109,6 +2353,7 @@ class WebAgentProtocolLoop:
         task_id: str = "",
         task_epoch: str = "",
         skill_context: dict | None = None,
+        trusted_authorized_paths: list[str] | None = None,
     ) -> str:
         request = str(request or "").strip()
         if not request:
@@ -2148,12 +2393,18 @@ class WebAgentProtocolLoop:
         self.condition_result_ledger.clear()
         self.v8_admitted_actions.clear()
         self.pending_progress_repair_actions.clear()
+        self.pending_action_repair = {}
         self.active_stage_manifest = None
         self.pending_result_recovery = {}
         self.tools.current_task_id = self.task_id
+        from agent_core.blocker_recovery import BlockerRecovery
+        self._blocker_recovery = BlockerRecovery()
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
-        authorized = extract_authorized_paths(request)
+        authorized = resolve_authorized_paths(
+            request,
+            trusted_authorized_paths=trusted_authorized_paths,
+        )
         self.authorized_paths = list(authorized)
         self.tools.begin_run(self.run_id, request, authorized)
         self.image_delivery_plan = plan_image_delivery(
@@ -2313,9 +2564,28 @@ class WebAgentProtocolLoop:
                 continue
 
             calls = self._restore_progress_repair_actions(calls)
-            actions, ack_diagnostics = self._accept_ack(calls, expected)
+            calls, action_repair_diagnostic = self._restore_action_repair_batch(calls)
+            if action_repair_diagnostic:
+                actions, ack_diagnostics = [], [action_repair_diagnostic]
+            else:
+                actions, ack_diagnostics = self._accept_ack(calls, expected)
             if ack_diagnostics:
                 self.protocol_state = "REJECTED"
+                if self.pending_action_repair and not any(
+                    item.get("repair_scope") == "ACTION_BATCH"
+                    for item in ack_diagnostics
+                ):
+                    invalidated_ids = list(
+                        self.pending_action_repair.get("preserved_action_ids") or []
+                    )
+                    self.pending_action_repair = {}
+                    self._emit(
+                        "action_repair_batch_invalidated",
+                        request_id=self.run_id,
+                        round=self.turn_id,
+                        action_ids=invalidated_ids,
+                        reason="non_action_batch_rejection",
+                    )
                 if self.pending_progress_repair_actions and not any(
                     item.get("reason") == "invalid_progress_payload"
                     for item in ack_diagnostics
@@ -2409,7 +2679,29 @@ class WebAgentProtocolLoop:
                     for action_id in list(item.get("preserved_action_ids", []) or [])
                     if str(action_id)
                 })
-                if preserved_action_ids:
+                action_batch_repairs = [
+                    item for item in ack_diagnostics
+                    if item.get("repair_scope") == "ACTION_BATCH"
+                ]
+                if action_batch_repairs:
+                    repair_indexes = sorted({
+                        int(index)
+                        for item in action_batch_repairs
+                        for index in list(item.get("repair_action_indexes", []) or [])
+                    })
+                    repair_note += (
+                        "\n這是 ACTION_BATCH_REPAIR。Runtime 已暫存同輪合法 action："
+                        + json.dumps(preserved_action_ids, ensure_ascii=False)
+                        + "；只輸出一個 report_progress，並依下列原始 action 位置順序輸出"
+                        "完整修正版 action："
+                        + json.dumps(repair_indexes, separators=(",", ":"))
+                        + "。若只有一個失敗位置且 canonical 修正需要多個 action（例如 "
+                        "begin_file_write → write_file_chunk × N → commit_file_write），"
+                        "可輸出完整 replacement sequence"
+                        + "。不要重送 preserved action。Runtime 會依原順序合併並重新驗證整批；"
+                        "合併完成前不會執行任何 action。"
+                    )
+                elif preserved_action_ids:
                     repair_note += (
                         "\nRuntime 已暫存同輪合法 action："
                         + json.dumps(preserved_action_ids, ensure_ascii=False)
@@ -2786,6 +3078,22 @@ class WebAgentProtocolLoop:
                 missing_evidence=state.get("missing_evidence", []),
             )
             terminal_recovery = dict(self.pending_result_recovery or {})
+            from agent_core.blocker_recovery import BlockerRecovery
+            if not hasattr(self, "_blocker_recovery"):
+                self._blocker_recovery = BlockerRecovery()
+            blocker_state = self._blocker_recovery.observe(terminal_recovery, results)
+            if blocker_state != "inactive":
+                self._emit("blocker_recovery_updated", request_id=self.run_id,
+                           round=self.turn_id, state=blocker_state,
+                           missing_fields=terminal_recovery.get("missing_fields", []))
+            if blocker_state == "stalled":
+                detail = "invalid_edit_plan:no_new_source_evidence_or_resolved_fields"
+                set_runtime_state(self.task_id, "PAUSED", reason=detail, root=self.progress_root)
+                self._emit("protocol_loop_paused", request_id=self.run_id,
+                           round=self.turn_id, reason=detail, recovery_context=terminal_recovery)
+                from agent_core.request_ownership import release_active_request
+                release_active_request(self.run_id)
+                raise RuntimeError("WebAgent 計畫補救未解除相同阻塞；Runtime 已暫停。detail=" + detail)
             if terminal_recovery.get("pause_immediately"):
                 detail = str(
                     terminal_recovery.get("terminal_if_no_action", "")
@@ -2829,4 +3137,6 @@ class WebAgentProtocolLoop:
             recovery_guidance = self._result_recovery_guidance(actions)
             if recovery_guidance:
                 prompt += "\n" + recovery_guidance
+            if blocker_state == "repair_required":
+                prompt += self._blocker_recovery.guidance(terminal_recovery)
         raise RuntimeError(f"WebAgent 超過最大 protocol turns: {self.max_turns}")

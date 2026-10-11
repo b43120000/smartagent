@@ -1039,6 +1039,90 @@ def validate_condition_id_repairs_progress_without_losing_action() -> None:
         assert loop.pending_progress_repair_actions == []
 
 
+def validate_action_batch_repair_preserves_valid_siblings() -> None:
+    with tempfile.TemporaryDirectory(prefix="action-batch-repair-") as temp:
+        root = Path(temp)
+        loop = WebAgentProtocolLoop(root, lambda *_args: "", progress_root=root)
+        loop.run_id = "REQ-ACTION-BATCH"
+        loop.task_id = "TASK-ACTION-BATCH"
+        loop.task_epoch = "EPOCH-ACTION-BATCH"
+        loop.intent_digest = "1" * 64
+
+        def progress(action_id: str) -> dict:
+            return {
+                "tool": "report_progress", "action_id": action_id,
+                "base_evaluation": "需要列出目錄並寫入短檔案",
+                "total_steps": 2, "current_step": 1,
+                "steps": [
+                    {"step": 1, "desc": "列出目錄與建立檔案", "status": "IN_PROGRESS"},
+                    {"step": 2, "desc": "驗證結果", "status": "PENDING"},
+                ],
+                "current_focus": "執行兩個獨立 action",
+                "next_action": "list_directory 與 write_file",
+                "completion_contract": {
+                    "success": ["目錄已列出且檔案已建立並驗證"],
+                    "failure": ["目錄無法讀取或檔案寫入失敗"],
+                    "in_progress": ["仍在執行目錄列舉或檔案寫入"],
+                    "interrupted": ["Runtime 無法繼續執行 action"],
+                },
+                "decision": "CONTINUE", "outcome": "PENDING",
+                "matched_condition": "仍在執行目錄列舉或檔案寫入",
+                "evidence_refs": ["REQUEST_ACCEPTED"],
+                "decision_reason": "尚未取得兩個 action 的 Runtime evidence",
+            }
+
+        valid_action = {
+            "tool": "list_directory", "action_id": "A-LIST-KEEP",
+            "path": str(root),
+        }
+        invalid_action = {
+            "tool": "write_file", "action_id": "A-WRITE-BAD",
+            "path": str(root / "probe.txt"), "content": "ok",
+            "result_purpose": "schema 不允許的欄位",
+        }
+        rejected, diagnostics = loop._accept_ack(
+            [
+                progress("P-BAD"), valid_action, invalid_action,
+                {"tool": "turn_commit", "action_count": 3},
+            ],
+            {"ack_web_ack_id": ""},
+        )
+        assert rejected == []
+        assert diagnostics[0]["reason"] == "unexpected_field"
+        assert diagnostics[0]["repair_scope"] == "ACTION_BATCH"
+        assert diagnostics[0]["preserved_action_ids"] == ["A-LIST-KEEP"]
+        assert diagnostics[0]["repair_action_indexes"] == [2]
+        assert loop.v8_admitted_actions == {}
+        assert loop.action_ledger == {}
+
+        repaired_calls, repair_diagnostic = loop._restore_action_repair_batch([
+            progress("P-REPAIRED"),
+            {
+                "tool": "write_file", "action_id": "A-WRITE-FIXED",
+                "path": str(root / "probe.txt"), "content": "ok",
+            },
+            {"tool": "turn_commit", "action_count": 2},
+        ])
+        assert repair_diagnostic is None
+        assert [item["tool"] for item in repaired_calls[:-1]] == [
+            "report_progress", "list_directory", "write_file",
+        ]
+        assert repaired_calls[-1]["action_count"] == 3
+        accepted, diagnostics = loop._accept_ack(
+            repaired_calls, {"ack_web_ack_id": ""},
+        )
+        assert diagnostics == []
+        assert [item["action_id"] for item in accepted] == [
+            "P-REPAIRED", "A-LIST-KEEP", "A-WRITE-FIXED",
+        ]
+        assert loop.pending_action_repair == {}
+
+        prompt = loop._with_commit("next", loop._new_commit())
+        assert "[SMARTAGENT_ACTION_RESPONSE_CONSTRAINTS]" in prompt
+        assert '"write_file_max_chars":4096' in prompt
+        assert '"extra_limits_enabled":false' in prompt
+
+
 if __name__ == "__main__":
     validate_failed_verification_can_complete()
     validate_repeated_completed_progress_is_paused()
@@ -1063,4 +1147,5 @@ if __name__ == "__main__":
     validate_project_source_read_is_routed_before_attachment_execution()
     validate_declared_next_action_must_be_emitted()
     validate_condition_id_repairs_progress_without_losing_action()
+    validate_action_batch_repair_preserves_valid_siblings()
     print("WEBAGENT_PROGRESS_TERMINAL_LIFECYCLE_OK")

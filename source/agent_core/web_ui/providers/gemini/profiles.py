@@ -26,6 +26,8 @@ GEMINI_WEB_2026_PROFILE = GeminiUIProfile(
     ),
     send_selector=(
         "button.send-button, "
+        "gem-icon-button > button[aria-label='傳送訊息'], "
+        "button[aria-label='傳送訊息'], "
         "button[aria-label*='Send message' i], "
         "button[data-test-id='send-button'], "
         "button[data-testid='send-button']"

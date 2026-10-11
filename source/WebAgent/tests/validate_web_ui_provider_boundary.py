@@ -36,7 +36,7 @@ def run() -> dict:
     assert issubclass(GeminiUIAdapter, BaseWebUIAdapter)
     assert not issubclass(GeminiUIAdapter, ChatGPTUIAdapter)
     assert not issubclass(ClaudeUIAdapter, ChatGPTUIAdapter)
-    assert registered_providers() == ("chatgpt", "claude", "gemini")
+    assert registered_providers() == ("chatgpt", "claude", "gemini", "m365")
     assert provider_from_url("https://chatgpt.com/c/abc") == "chatgpt"
     assert provider_from_url("https://gemini.google.com/app/abc") == "gemini"
     assert provider_from_url("https://claude.ai/chat/abc") == "claude"

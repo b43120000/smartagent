@@ -38,7 +38,7 @@ def run() -> dict:
     assert web_model_key_for_url(CLAUDE_URL) == "web_claude"
     assert endpoint_for_url(CLAUDE_URL) == "claude.ai"
 
-    assert registered_providers() == ("chatgpt", "claude", "gemini")
+    assert registered_providers() == ("chatgpt", "claude", "gemini", "m365")
     adapter = create_web_ui(provider="claude", page=Page())
     assert isinstance(adapter, ClaudeUIAdapter)
     assert isinstance(adapter, WebUIProviderAdapter)

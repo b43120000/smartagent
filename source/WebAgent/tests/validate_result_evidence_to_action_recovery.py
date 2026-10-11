@@ -63,7 +63,7 @@ class FakeAgent:
 
 
 def run() -> None:
-    root = r"D:\workspace\SmartAgentv2"
+    root = r"E:\card\release\SmartAgentv2"
     action = {
         "tool": "apply_edit_plan",
         "action_id": "APPLY-INVALID",
@@ -357,7 +357,7 @@ def run() -> None:
         assert recorded["canonical_action"]["workspace"] == root
         injected = loop._result_recovery_guidance([action])
         assert "WEBAGENT_RESULT_EVIDENCE_TO_ACTION" in injected
-        assert '"workspace":"D:\\\\workspace\\\\SmartAgentv2"' in injected
+        assert '"workspace":"E:\\\\card\\\\release\\\\SmartAgentv2"' in injected
         assert "WEBAGENT_RESULT_EVIDENCE_TO_ACTION" in loop._result_recovery_guidance([])
         loop.tools.execute = lambda _action: json.dumps({
             "status": "APPLIED", "applied": ["source/agent_core/task_plan.py"],

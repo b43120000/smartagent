@@ -31,7 +31,7 @@ def _cid(u: str) -> str:
     value = normalize_web_conversation_url(u)
     provider = conversation_provider(value)
     identity = conversation_id(value)
-    prefix = {"chatgpt": "c", "gemini": "g", "claude": "a"}.get(provider, "u")
+    prefix = {"chatgpt": "c", "gemini": "g", "claude": "a", "m365": "m"}.get(provider, "u")
     return f"{prefix}:{identity}" if identity else "u:" + value
 
 def _same_url(a: str,b: str) -> bool:

@@ -267,6 +267,31 @@ class RemoteTaskQueue:
         self._lock = threading.RLock()
         self.store.ensure_loaded()
 
+    def _finish_source_plan(self, task: TaskRecord, state: str) -> None:
+        if not str((task.metadata or {}).get("source_plan_id", "") or ""):
+            return
+        from .plan_ledger import PlanLedger, PlanLedgerError
+
+        try:
+            PlanLedger.from_task_store(self.store.path).finish_execution_task(
+                task,
+                state=state,
+                detail=str(task.error or ""),
+            )
+        except (PlanLedgerError, OSError, RuntimeError) as exc:
+            # A terminal task remains authoritative. Preserve reconciliation
+            # evidence instead of masking the task result with a ledger error.
+            try:
+                with self._lock:
+                    with self.store.process_lock():
+                        self.store.load()
+                        current = self.store.get(task.task_id)
+                        if current is not None:
+                            current.metadata["plan_ledger_terminal_error"] = str(exc)
+                            self.store.put(current, persist=True)
+            except (OSError, RuntimeError, TaskStateError):
+                pass
+
     def enqueue_remote_request(
         self,
         message: dict[str, Any],
@@ -423,6 +448,8 @@ class RemoteTaskQueue:
                     changed.append(self.store.put(task, persist=False))
                 if changed:
                     self.store.save()
+        for task in changed:
+            self._finish_source_plan(task, "INTERRUPTED")
         return changed
 
     def claim_next(
@@ -487,7 +514,9 @@ class RemoteTaskQueue:
                 if result is not None:
                     task.result_ledger["final"] = result
                 task.metadata["delivery_state"] = "READY"
-                return self.store.put(task, persist=True)
+                saved = self.store.put(task, persist=True)
+        self._finish_source_plan(saved, "COMPLETED")
+        return saved
 
     def heartbeat(self, task_id: str, *, worker_pid: int | None = None) -> TaskRecord:
         with self._lock:
@@ -550,6 +579,8 @@ class RemoteTaskQueue:
         attempts = int(task.metadata.get("attempt", 0) or 0)
         if task.state not in {TASK_INTERRUPTED, TASK_FAILED}:
             raise TaskStateError(f"task is not retryable: {task.state}")
+        if str((task.metadata or {}).get("source_plan_id", "") or ""):
+            raise TaskStateError("saved_plan_retry_requires_new_plan")
         if attempts >= DEFAULT_MAX_ATTEMPTS:
             raise TaskStateError(f"max attempts reached: {attempts}")
         task.state = TASK_QUEUED
@@ -597,7 +628,9 @@ class RemoteTaskQueue:
                 task.error = reason
                 task.metadata["cancel_requested"] = True
                 task.metadata["delivery_state"] = "DELIVERED"
-                return self.store.put(task, persist=True)
+                saved = self.store.put(task, persist=True)
+        self._finish_source_plan(saved, "CANCELLED")
+        return saved
 
     def fail_running(self, task_id: str, error: str) -> TaskRecord | None:
         """Atomically fail only a task that is still RUNNING."""
@@ -611,7 +644,9 @@ class RemoteTaskQueue:
                 task.completed_at = time.time()
                 task.error = str(error or "")
                 task.metadata["delivery_state"] = "READY"
-                return self.store.put(task, persist=True)
+                saved = self.store.put(task, persist=True)
+        self._finish_source_plan(saved, "FAILED")
+        return saved
 
     def interrupt_running(
         self, task_id: str, error: str, *, result: Any = None,
@@ -635,7 +670,9 @@ class RemoteTaskQueue:
                 if result is not None:
                     task.result_ledger["interrupted"] = result
                 task.metadata["delivery_state"] = "READY"
-                return self.store.put(task, persist=True)
+                saved = self.store.put(task, persist=True)
+        self._finish_source_plan(saved, "INTERRUPTED")
+        return saved
 
     def fail(self, task_id: str, error: str) -> TaskRecord:
         with self._lock:
@@ -648,7 +685,9 @@ class RemoteTaskQueue:
                 task.completed_at = time.time()
                 task.error = str(error or "")
                 task.metadata["delivery_state"] = "READY"
-                return self.store.put(task, persist=True)
+                saved = self.store.put(task, persist=True)
+        self._finish_source_plan(saved, "FAILED")
+        return saved
 
     def abandon_incomplete(
         self,
@@ -694,6 +733,11 @@ class RemoteTaskQueue:
                     changed.append(self.store.put(task, persist=False))
                 if changed:
                     self.store.save()
+        for task in changed:
+            self._finish_source_plan(
+                task,
+                "INTERRUPTED" if task.state == TASK_INTERRUPTED else "FAILED",
+            )
         return changed
 
     def record_result_delivery(
@@ -746,6 +790,8 @@ class RemoteTaskQueue:
                     changed.append(self.store.put(task, persist=False))
                 if changed:
                     self.store.save()
+        for task in changed:
+            self._finish_source_plan(task, "INTERRUPTED")
         return changed
 
     def summary(self) -> dict[str, int]:

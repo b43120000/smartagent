@@ -117,6 +117,8 @@ PROFILE_DIR = browser_profile_root()
 DEBUG_LOG_PATH = web_llm_debug_log_path()
 CHATGPT_CDP_PORT = 1272
 CHATGPT_CDP_ENDPOINT = f"http://127.0.0.1:{CHATGPT_CDP_PORT}"
+M365_CDP_PORT = 1275
+M365_CDP_ENDPOINT = f"http://127.0.0.1:{M365_CDP_PORT}"
 CANONICAL_PAGE_MARKER_PREFIX = "SMARTAGENT_CANONICAL_CONVERSATION:"
 REMOTE_PAGE_START_LOCK = remote_page_start_lock_path()
 DEBUG_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "debug_config.json"
@@ -149,6 +151,12 @@ def _debug_log(message: str) -> None:
 
 
 SERVICE_CONFIG = {
+    "m365": {
+        "url": "https://m365.cloud.microsoft/chat",
+        "new_chat_url": "https://m365.cloud.microsoft/chat",
+        "send_by_enter": True,
+        "profile_subdir": "m365",
+    },
     "chatgpt": {
         "url":          "https://chatgpt.com/",
         "new_chat_url": "https://chatgpt.com/",
@@ -654,11 +662,11 @@ class WebLLMScraper:
             self.service == "chatgpt"
             and os.environ.get("SMARTAGENT_ISOLATED_BROWSER", "") == "1"
         )
-        if self.service == "chatgpt" and not isolated_worker:
+        if self.service in {"chatgpt", "m365"} and not isolated_worker:
             # Stage 7: expose the authenticated Chromium context on localhost so
             # RemoteAgent-0 can attach without a second browser/profile.
             browser_args.extend([
-                f"--remote-debugging-port={CHATGPT_CDP_PORT}",
+                f"--remote-debugging-port={M365_CDP_PORT if self.service == 'm365' else CHATGPT_CDP_PORT}",
                 "--remote-debugging-address=127.0.0.1",
             ])
         if self.headless:
@@ -671,7 +679,7 @@ class WebLLMScraper:
             viewport = None
 
         attach_cdp = (
-            self.service == "chatgpt"
+            self.service in {"chatgpt", "m365"}
             and not isolated_worker
             and os.environ.get("SMARTAGENT_ATTACH_CDP", "") == "1"
         )
@@ -701,7 +709,9 @@ class WebLLMScraper:
                 **({"viewport": viewport} if self.headless else {"no_viewport": True}),
             )
         elif attach_cdp:
-            endpoint = os.environ.get("SMARTAGENT_CHATGPT_CDP", CHATGPT_CDP_ENDPOINT)
+            # The worker's --remote-cdp is still conveyed through this legacy
+            # variable. It must default to this provider's endpoint, never ChatGPT.
+            endpoint = os.environ.get("SMARTAGENT_CHATGPT_CDP", M365_CDP_ENDPOINT if self.service == "m365" else CHATGPT_CDP_ENDPOINT)
             self._log_stage("cdp_connecting", f"endpoint={endpoint}")
             self._emit_status("CDP_CONNECTING", message="連線共用瀏覽器", detail=endpoint)
             self._cdp_browser = self._pw.chromium.connect_over_cdp(endpoint)
@@ -1015,13 +1025,14 @@ class WebLLMScraper:
 
     def get_cdp_endpoint(self, timeout_sec: float = 8.0) -> str:
         """Return the verified localhost CDP endpoint for this ChatGPT runtime."""
-        if self.service != "chatgpt":
+        if self.service not in {"chatgpt", "m365"}:
             raise RuntimeError("CDP endpoint is only enabled for the ChatGPT runtime")
         if self._browser is None:
             raise RuntimeError("ChatGPT browser is not running")
 
         deadline = time.monotonic() + max(0.1, float(timeout_sec))
-        version_url = CHATGPT_CDP_ENDPOINT + "/json/version"
+        endpoint = M365_CDP_ENDPOINT if self.service == "m365" else CHATGPT_CDP_ENDPOINT
+        version_url = endpoint + "/json/version"
         last_error: Exception | None = None
         while time.monotonic() < deadline:
             try:
@@ -1029,12 +1040,12 @@ class WebLLMScraper:
                     payload = json.loads(response.read().decode("utf-8"))
                 websocket_url = str(payload.get("webSocketDebuggerUrl") or "")
                 if websocket_url.startswith("ws://127.0.0.1:"):
-                    return CHATGPT_CDP_ENDPOINT
+                    return endpoint
             except Exception as exc:
                 last_error = exc
             time.sleep(0.2)
         raise RuntimeError(
-            f"ChatGPT CDP endpoint unavailable at {CHATGPT_CDP_ENDPOINT}: {last_error}"
+            f"{self.service} CDP endpoint unavailable at {endpoint}: {last_error}"
         )
 
 

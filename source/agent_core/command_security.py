@@ -128,14 +128,19 @@ def inspect_command(command: str, *, workspace: str | Path | None = None) -> Com
     if workspace is not None:
         outside = _outside_execution_target(value, workspace)
         if outside is not None:
-            try:
-                from .workspace_access import software_only_mode_enabled
-                if software_only_mode_enabled():
-                    return CommandAdmission(True, "acl_off_external_executable", str(outside))
-            except Exception:
-                pass
-            trusted = False
             authorized_workspace = False
+            try:
+                from .workspace_access import access_snapshot
+
+                authorized_workspace = any(
+                    is_within(outside, root)
+                    for root in access_snapshot().get("writable_workspaces", ())
+                )
+            except Exception:
+                authorized_workspace = False
+            if authorized_workspace:
+                return CommandAdmission(True, "authorized_workspace_executable", str(outside))
+            trusted = False
             try:
                 from .windows_security import (
                     authorized_workspace_roots,

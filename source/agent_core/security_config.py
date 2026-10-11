@@ -15,6 +15,7 @@ from .paths import workspace_runtime_root
 class SecurityConfig:
     workspace_root: Path
     runtime_write_root: Path
+    write_roots: tuple[Path, ...] = ()
     read_roots: tuple[Path, ...] = ()
     mode: str = "enforce"
     restricted_executor_required: bool = False
@@ -25,6 +26,7 @@ class SecurityConfig:
         workspace_root: str | os.PathLike[str],
         *,
         runtime_write_root: str | os.PathLike[str] | None = None,
+        write_roots: Iterable[str | os.PathLike[str]] = (),
         read_roots: Iterable[str | os.PathLike[str]] = (),
         mode: str = "enforce",
         restricted_executor_required: bool = False,
@@ -42,11 +44,17 @@ class SecurityConfig:
                 canonicalize_path(root, require_absolute=True) for root in read_roots
             )
         )
+        normalized_writes = tuple(
+            dict.fromkeys(
+                canonicalize_path(root, require_absolute=True) for root in write_roots
+            )
+        )
         if not is_within(runtime, workspace):
             raise ValueError(f"runtime_write_root_outside_workspace:{runtime}")
         return cls(
             workspace_root=workspace,
             runtime_write_root=runtime,
+            write_roots=normalized_writes,
             read_roots=normalized_reads,
             mode=normalized_mode,
             restricted_executor_required=bool(restricted_executor_required),

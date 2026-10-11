@@ -33,7 +33,7 @@ def run() -> dict:
     action = {
         "tool": "list_directory",
         "action_id": "A-LIST",
-        "path": r"D:\workspace\SmartAgentv2",
+        "path": r"E:\card\release\SmartAgentv2",
     }
     commit = {"tool": "turn_commit", "action_count": 2}
 

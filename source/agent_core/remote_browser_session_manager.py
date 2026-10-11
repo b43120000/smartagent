@@ -74,7 +74,8 @@ class RemoteBrowserSessionManager:
         workspace = str(binding["workspace"])
         from .web_runtime import WebLLMScraper
 
-        scraper = WebLLMScraper("chatgpt")
+        from .web_provider_routing import provider_for_url
+        scraper = WebLLMScraper(provider_for_url(url))
         scraper._conversation_owner_interface = "remote"
         scraper.cfg = dict(scraper.cfg)
         scraper.cfg["url"] = url
@@ -82,7 +83,7 @@ class RemoteBrowserSessionManager:
         previous_cdp = os.environ.get("SMARTAGENT_CHATGPT_CDP")
         shared = host.live_local_agent_state()
         try:
-            if shared:
+            if shared and scraper.service == "chatgpt":
                 os.environ["SMARTAGENT_ATTACH_CDP"] = "1"
                 os.environ["SMARTAGENT_CHATGPT_CDP"] = str(
                     shared["cdp_endpoint"]

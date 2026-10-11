@@ -16,10 +16,8 @@ RELEASE_SEQUENCE = 2026100704
 EXCLUDED_DIRS = {
     ".git", ".venv", "localdata", ".agents", "__pycache__", ".pytest_cache",
 }
-EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".lnk", ".bak", ".log", ".tmp"}
+EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".lnk"}
 EXCLUDED_FILES = {
-    ".webagent_patch_progress.py",
-    ".webagent_verify_progress.py",
     "config/debug_config.json",
     "config/update_manifest.json",
 }

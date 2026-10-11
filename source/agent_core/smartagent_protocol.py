@@ -85,7 +85,7 @@ TOOL_FENCE = "smartagent_tool"
 TOOL_ENVELOPE_MAX_BYTES = 8 * 1024
 FINAL_RESPONSE_MAX_BYTES = 64 * 1024
 RUN_COMMAND_MAX_CHARS = 1200
-WRITE_FILE_CONTENT_MAX_CHARS = 4096
+from .write_budget import WRITE_FILE_CONTENT_MAX_CHARS, CHUNK_CONTENT_MAX_CHARS, render_write_budget, write_budget_limits_enabled
 INLINE_SCRIPT_SOFT_CHARS = 220
 INLINE_SCRIPT_HARD_CHARS = 420
 INLINE_SCRIPT_RISK_THRESHOLD = 4
@@ -1014,8 +1014,20 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                     "download_artifact。不得重送相同 oversized write_file。"
                 ),
                 block_index=block_index,
+                repair_mode="CHUNKED_WRITE",
+                required_tools=[
+                    "begin_file_write", "write_file_chunk", "commit_file_write",
+                ],
+                max_content_chars=WRITE_FILE_CONTENT_MAX_CHARS,
             )
 
+    if write_budget_limits_enabled() and tool == "write_file_chunk" and len(call.get("content", "")) > CHUNK_CONTENT_MAX_CHARS:
+        return False, _diagnostic(
+            "[TOOL_ENVELOPE_REJECTED]", "chunk_content_too_large", tool=tool,
+            detail=f"chars={len(call['content'])} limit={CHUNK_CONTENT_MAX_CHARS}",
+            suggestion=render_write_budget(), block_index=block_index,
+            max_content_chars=CHUNK_CONTENT_MAX_CHARS,
+        )
     return True, None
 
 
@@ -2042,7 +2054,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 - web_edit_file 不可用/失敗後，優先採 deterministic 的 file/command/patch 類操作；只有 deterministic 路徑確實不可行時，才可使用 ask_executor。
 - 【WebGPT 生成檔案/圖片下載】若使用者要求 WebGPT 生成圖片、文件或其他可下載 artifact 並保存到本機，先完成實際 media/file generation；UI 完全 idle 後使用 download_artifact。不得要求 Local AI 重新生成，也不要用 run_command 猜瀏覽器 cache 路徑。
 - download_artifact 只下載最近 WebGPT assistant turn/preview 中已存在的 artifact；output_path 可為完整檔名或目錄。成功後再 final_response。
-- 【大型新檔路由】content <= 4096 字元才可用 write_file；超過時必須 begin_file_write → sequential write_file_chunk → commit_file_write。不得提高限制或重送 oversized write_file。你只需依序提供每段 content；LocalAgent 會由實際 UTF-8 bytes 自動計算 chunk_index、offset、size、分段 SHA-256、完整 size/SHA-256，不得自行猜測這些機械欄位。每段 content 建議不超過 3000 字元。
+- 【大型新檔路由】寫入內容與每輪總量必須遵守 SMARTAGENT_WRITE_BUDGET；大型內容使用 begin_file_write → sequential write_file_chunk → commit_file_write，跨輪接續。不得提高限制或重送 oversized write_file。你只需依序提供每段 content；LocalAgent 會由實際 UTF-8 bytes 自動計算 chunk_index、offset、size、分段 SHA-256、完整 size/SHA-256，不得自行猜測這些機械欄位。
 - ask_executor 是 Local AI semantic fallback，不是正常修改路徑；必須帶 allow_local_ai_fallback=true 與目前 RUN_ID，否則 SmartAgent 拒絕執行。
 - 多檔案跨模組重構、需要同步修改多個 source/config/resource 時，可直接使用既有 JSON/Agent 流程，不強制 web_edit_file。
 - 只有工具確認 Workspace 中不存在所需資料後，才可以向使用者說明缺少資料。
@@ -2115,4 +2127,4 @@ a mutation blindly. Attachments must be stable and request-scoped before
 submission. Large content must use file/artifact tools instead of inline JSON.
 
 Available tools and required fields are defined by the current v8 tool schema.
-""" + "\n" + PROJECT_EVIDENCE_ACTION_CONTRACT + "\n" + SINGLE_FENCE_TRANSPORT_CONTRACT
+""" + "\n" + PROJECT_EVIDENCE_ACTION_CONTRACT + "\n" + SINGLE_FENCE_TRANSPORT_CONTRACT + "\n" + render_write_budget()

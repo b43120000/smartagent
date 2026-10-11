@@ -10,6 +10,7 @@ from typing import Any
 
 from agent_core.remote_runtime_log import RemoteRuntimeLog
 from agent_core.paths import install_root
+from agent_core.plan_ledger import PlanLedger, PlanLedgerError
 from RemoteAgent.remote_ingress import is_internal_agent_turn
 from RemoteAgent.remote_feature_catalog import canonical_remote_control
 
@@ -47,6 +48,28 @@ class RemoteWorkerLauncher:
     def _log(self, event: str, **detail) -> None:
         if self.runtime_log is not None:
             self.runtime_log.write(event, component="worker_launcher", **detail)
+
+    def _validate_saved_plan_execution(self, task) -> str:
+        metadata = dict(getattr(task, "metadata", {}) or {})
+        plan_id = str(metadata.get("source_plan_id", "") or "").strip().upper()
+        if not plan_id:
+            return ""
+        ledger = PlanLedger.from_task_store(self.queue.store.path)
+        record = ledger.claim_execution_task(task)
+        return str(record.get("plan_id", "") or "").upper()
+
+    def _reject_task(self, task, error: str, *, stage: str, **detail) -> None:
+        failed = self.queue.fail(task.task_id, error)
+        if self.event_store is not None:
+            self.event_store.emit(
+                "TASK_FAILED", failed, status="FAILED",
+                payload={"error": failed.error},
+            )
+        self._log(
+            "ERROR", stage=stage,
+            task_id=task.task_id, request_id=task.request_id,
+            **detail,
+        )
 
     def _spawn(self, task, token: str):
         transport = str((getattr(task, "metadata", {}) or {}).get("transport", "")).upper()
@@ -152,18 +175,32 @@ class RemoteWorkerLauncher:
                     task_id=task.task_id, request_id=task.request_id,
                 )
                 continue
-            if is_internal_agent_turn(str(getattr(task, "request", "") or "")):
-                failed = self.queue.fail(task.task_id, "internal_agent_turn_rejected")
-                if self.event_store is not None:
-                    self.event_store.emit(
-                        "TASK_FAILED", failed, status="FAILED",
-                        payload={"error": failed.error},
-                    )
-                self._log(
-                    "ERROR", stage="INTERNAL_TASK_REJECTED",
-                    task_id=task.task_id, request_id=task.request_id,
+            internal_turn = is_internal_agent_turn(
+                str(getattr(task, "request", "") or "")
+            )
+            try:
+                saved_plan_id = self._validate_saved_plan_execution(task)
+            except PlanLedgerError as exc:
+                self._reject_task(
+                    task,
+                    f"saved_plan_execution_rejected:{exc}",
+                    stage="SAVED_PLAN_TASK_REJECTED",
+                    plan_error=str(exc),
                 )
                 continue
+            if internal_turn and not saved_plan_id:
+                self._reject_task(
+                    task,
+                    "internal_agent_turn_rejected",
+                    stage="INTERNAL_TASK_REJECTED",
+                )
+                continue
+            if saved_plan_id:
+                self._log(
+                    "STATUS", stage="SAVED_PLAN_TASK_VALIDATED",
+                    task_id=task.task_id, request_id=task.request_id,
+                    plan_id=saved_plan_id,
+                )
             try:
                 process = self._spawn(task, token)
             except Exception as exc:

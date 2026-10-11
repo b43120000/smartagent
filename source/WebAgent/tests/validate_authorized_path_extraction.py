@@ -6,12 +6,42 @@ from pathlib import Path
 
 from agent_core.path_security import PathSecurityError, authorize_path, canonicalize_path
 from agent_core.security_context import SecurityContext
-from WebAgent.protocol_loop import extract_authorized_paths
+from WebAgent.protocol_loop import extract_authorized_paths, resolve_authorized_paths
 
 
 def run() -> dict:
     root = Path(__file__).resolve().parents[3]
     plan = root / "doc" / "gemini_web_ui_end_to_end_plan.md"
+
+    saved_plan = (
+        "[SMARTAGENT_EXECUTE_SAVED_PLAN]\n"
+        "[ORIGINAL_PLANNING_REQUEST]\n路徑在這\nE:\\card\n只規劃不修改\n"
+        "[/ORIGINAL_PLANNING_REQUEST]\n"
+        "[ACCEPTED_PLAN]\n未來建立 E:\\outside\\generated\n[/ACCEPTED_PLAN]\n"
+        "[PLAN_PROGRESS_SNAPSHOT]\n"
+        '{"desc":"E:\\\\card\\\\grayscale_16step 資料夾", "status":"IN_PROGRESS"}\n'
+        "[/PLAN_PROGRESS_SNAPSHOT]\n"
+        "[/SMARTAGENT_EXECUTE_SAVED_PLAN]"
+    )
+    assert resolve_authorized_paths(saved_plan) == [r"E:\card"]
+    assert resolve_authorized_paths(
+        saved_plan, trusted_authorized_paths=[r"E:\card"]
+    ) == [r"E:\card"]
+    future_output = authorize_path(
+        r"E:\card\grayscale_16step\gray16.png",
+        [r"E:\card"],
+        require_absolute=True,
+    )
+    assert str(future_output) == r"E:\card\grayscale_16step\gray16.png"
+    try:
+        resolve_authorized_paths(
+            "[SMARTAGENT_EXECUTE_SAVED_PLAN]\nmissing original request\n"
+            "[/SMARTAGENT_EXECUTE_SAVED_PLAN]"
+        )
+    except ValueError as exc:
+        assert str(exc) == "saved_plan_authorization_source_invalid"
+    else:
+        raise AssertionError("malformed saved-plan scope must fail closed")
 
     # Exact failure shape: two explicit paths separated by Chinese prose on
     # one logical request line must not be merged into one ADS-like value.
@@ -26,6 +56,24 @@ def run() -> dict:
     assert authorize_path(extracted[1], [root], require_absolute=True) == root.resolve()
 
     assert extract_authorized_paths(r"list C:\workspace\picture") == [r"C:\workspace\picture"]
+    assert extract_authorized_paths(
+        "列出 E:\\card\\runtime_it 第一層內容\n在 E:\\card\\runtime_it 建立 batch_large_probe.txt"
+    ) == [r"E:\card\runtime_it"]
+    assert extract_authorized_paths(
+        r'列出 "E:\card\runtime_it 第一層內容"'
+    ) == [r"E:\card\runtime_it 第一層內容"]
+    assert extract_authorized_paths(
+        r"列出 E:\card\runtime_it 第一層內容\nested"
+    ) == [r"E:\card\runtime_it 第一層內容\nested"]
+    assert extract_authorized_paths(
+        r"列出 E:\card\Team 建立 專案\src"
+    ) == [r"E:\card\Team 建立 專案\src"]
+    assert extract_authorized_paths(
+        r"列出 E:\card\Team 建立 專案"
+    ) == [r"E:\card\Team 建立 專案"]
+    assert extract_authorized_paths(
+        r"建立 E:\card\Team 建立 report.txt"
+    ) == [r"E:\card\Team 建立 report.txt"]
     assert extract_authorized_paths(
         r'讀取 "C:\workspace with spaces\plan, v1.md"，再處理 C:\workspace\source'
     ) == [r"C:\workspace with spaces\plan, v1.md", r"C:\workspace\source"]
@@ -42,11 +90,11 @@ def run() -> dict:
         r"讀取 C:\workspace with spaces\plan.md 接著檢查結果"
     ) == [r"C:\workspace with spaces\plan.md"]
     assert extract_authorized_paths(
-        r"列出D:\workspace\SmartAgentv2下的檔案有多少"
-    ) == [r"D:\workspace\SmartAgentv2"]
+        r"列出E:\card\release\SmartAgentv2下的檔案有多少"
+    ) == [r"E:\card\release\SmartAgentv2"]
     assert extract_authorized_paths(
-        r"你先看C:\Users\ExampleUser\Desktop\picture裡面有多少檔案"
-    ) == [r"C:\Users\ExampleUser\Desktop\picture"]
+        r"你先看C:\Users\example\Desktop\picture裡面有多少檔案"
+    ) == [r"C:\Users\example\Desktop\picture"]
 
     # The parser must not hide a real ADS suffix from the security layer.
     ads_path = r"C:\workspace\file.txt:secret"
@@ -85,6 +133,8 @@ def run() -> dict:
         "attached_chinese_prose_boundary": True,
         "ads_guard_preserved": True,
         "disguised_ads_guard_preserved": True,
+        "saved_plan_scope_isolated": True,
+        "authorized_root_allows_future_children": True,
     }
     print("AUTHORIZED_PATH_EXTRACTION_OK")
     print(result)

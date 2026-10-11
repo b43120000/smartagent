@@ -71,6 +71,7 @@ MODELS = {
     "web_chatgpt": {"provider": "web_scraper", "model": "chatgpt", "tier": 1, "type": "web", "desc": "Web ChatGPT"},
     "web_gemini": {"provider": "web_scraper", "model": "gemini", "tier": 1, "type": "web", "desc": "Web Gemini"},
     "web_claude": {"provider": "web_scraper", "model": "claude", "tier": 1, "type": "web", "desc": "Web Claude"},
+    "web_m365": {"provider": "web_scraper", "model": "m365", "tier": 1, "type": "web", "desc": "Web Microsoft 365 Copilot"},
 }
 
 # Web scraper mode flag

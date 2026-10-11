@@ -18,7 +18,7 @@ def browser_receiver_identity(scraper) -> str:
     from .conversation_identity import conversation_id, conversation_provider, same_conversation
 
     provider = conversation_provider(raw_url)
-    if provider != "chatgpt":
+    if provider not in {"chatgpt", "m365"}:
         raise ProjectSyncProtocolError(
             f"project_sync_receiver_provider_not_implemented:{provider or 'unknown'}"
         )
@@ -30,7 +30,7 @@ def browser_receiver_identity(scraper) -> str:
     cid = conversation_id(raw_url)
     if not cid:
         raise ProjectSyncProtocolError("project_sync_receiver_identity_unavailable")
-    path = "/c/" + cid
+    path = ("/chat/conversation/" if provider == "m365" else "/c/") + cid
     return url.scheme.lower() + "://" + url.netloc.lower() + path
 
 

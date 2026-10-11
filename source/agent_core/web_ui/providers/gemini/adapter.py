@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 
 from ...base_adapter import BaseWebUIAdapter
 from ...contracts import CompatibilityReport, RequestScope, TurnRef, text_digest
@@ -10,6 +11,8 @@ from .bridge import BRIDGE_SCRIPT, BRIDGE_VERSION
 from .compatibility import probe_profile
 from .composer import read_composer_snapshot, validate_composer_prompt
 from .profiles import GeminiUIProfile, active_profile, profile_by_name
+
+_LOG = logging.getLogger(__name__)
 
 
 class GeminiUIAdapter(BaseWebUIAdapter):
@@ -42,6 +45,37 @@ class GeminiUIAdapter(BaseWebUIAdapter):
         else:
             self.profile = active_profile()
         self._compatibility_report: CompatibilityReport | None = None
+        self._last_send_diagnostic = None
+
+    def send_control(self):
+        """Use only this provider's active profile; diagnose missing controls once.
+
+        An idle composer may have no send button. Do not invalidate the cached
+        profile or bypass the runtime's visible/enabled readiness gate for that.
+        """
+        profile = self._active_profile()
+        locator = self.page.locator(profile.send_selector)
+        count = int(locator.count())
+        visible = []
+        for index in range(count):
+            candidate = locator.nth(index)
+            try:
+                if candidate.is_visible():
+                    visible.append(candidate)
+            except Exception:
+                continue
+        diagnostic = (profile.name, profile.send_selector, count, len(visible))
+        if diagnostic != self._last_send_diagnostic:
+            self._last_send_diagnostic = diagnostic
+            if not visible:
+                _LOG.warning(
+                    "GEMINI_SEND_CONTROL_UNAVAILABLE profile=%s selector=%s "
+                    "matched_count=%d visible_count=%d",
+                    *diagnostic,
+                )
+        # Preserve the base contract: Runtime separately checks visibility and
+        # enabled state. Never substitute Enter or another provider's selector.
+        return visible[-1] if visible else (locator.last if count else None)
 
     def probe_compatibility(self, *, force: bool = False) -> CompatibilityReport:
         if self._compatibility_report is not None and not force:

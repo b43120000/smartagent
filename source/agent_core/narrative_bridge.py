@@ -348,6 +348,7 @@ class NarrativeDecisionBridge:
         raise NarrativeBridgeError(self.draft.failure_reason)
 
     def next_prompt(self) -> str:
+        from .write_budget import render_write_budget
         slot = self.draft.pending_slot
         quoted = {
             "conversion_id": self.draft.conversion_id,
@@ -364,6 +365,7 @@ class NarrativeDecisionBridge:
             + json.dumps(quoted, ensure_ascii=False, separators=(",", ":"))
             + "\n[/V9_QUOTED_CONTEXT]\n"
             + render_capability_recovery_guidance(self.draft.capability_recovery)
+            + "\n" + render_write_budget()
         )
         retry = ""
         if self.draft.validation_errors:

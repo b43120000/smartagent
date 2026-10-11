@@ -38,11 +38,11 @@ def expect_error(actual: str, expected: str, marker: str) -> None:
 
 def run() -> dict:
     project_url = (
-        "https://chatgpt.com/g/g-p-11111111111111111111111111111111-"
-        "example/c/11111111-2222-3333-4444-555555555555"
+        "https://chatgpt.com/c/example-conversation"
+        "localagentspace/c/6ab7ed8b-eb34-83ee-bb95-11a4fe966f1b"
     )
     canonical = browser_receiver_identity(FakeScraper(project_url, project_url))
-    assert canonical == "https://chatgpt.com/c/11111111-2222-3333-4444-555555555555"
+    assert canonical == "https://chatgpt.com/c/example-conversation"
 
     expect_error(
         project_url,
@@ -56,7 +56,7 @@ def run() -> dict:
         "project_sync_receiver_provider_not_implemented:claude",
     )
     expect_error(
-        "https://gemini.google.com/u/1/app/4d7689a3b59b9885",
+        "https://gemini.google.com/u/1/app/0000000000000002",
         "",
         "project_sync_receiver_provider_not_implemented:gemini",
     )

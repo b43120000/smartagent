@@ -10,6 +10,7 @@ from .web_ui.factory import WebUIProviderError, provider_from_url
 _CHATGPT_RE = re.compile(r"/c/([^/?#]+)", re.IGNORECASE)
 _CLAUDE_RE = re.compile(r"/chat/([^/?#]+)", re.IGNORECASE)
 _GEMINI_RE = re.compile(r"/app/([^/?#]+)", re.IGNORECASE)
+_M365_RE = re.compile(r"/chat/conversation/([^/?#]+)", re.IGNORECASE)
 
 
 def conversation_provider(url: str) -> str:
@@ -26,6 +27,7 @@ def conversation_id(url: str) -> str:
         "chatgpt": _CHATGPT_RE,
         "claude": _CLAUDE_RE,
         "gemini": _GEMINI_RE,
+        "m365": _M365_RE,
     }.get(provider)
     if matcher is None:
         return ""

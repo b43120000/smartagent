@@ -38,7 +38,7 @@ def validate_format_is_classified_by_executable_position() -> None:
         "Get-Date -Format o",
         "Get-ChildItem | Format-Table -AutoSize",
         r".\gradlew.bat clean assembleDebug --no-daemon",
-        r"cmake --build C:\SmartAgentWorkspace\build --config Debug",
+        r"cmake --build E:\card\build --config Debug",
     )
     for command in allowed:
         result = inspect_command(command)

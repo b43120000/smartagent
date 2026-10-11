@@ -4,12 +4,14 @@ from __future__ import annotations
 from .web_ui.factory import normalize_web_conversation_url, provider_from_url
 
 WEB_MODEL_KEYS = {
+    "m365": "web_m365",
     "chatgpt": "web_chatgpt",
     "gemini": "web_gemini",
     "claude": "web_claude",
 }
 
 PROVIDER_ENDPOINTS = {
+    "m365": "m365.cloud.microsoft",
     "chatgpt": "chatgpt.com",
     "gemini": "gemini.google.com",
     "claude": "claude.ai",

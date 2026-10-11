@@ -76,12 +76,18 @@ class AgentIngressGateway:
 
         source_plan_id = parse_execute_plan_command(text)
         source_plan = None
+        plan_execution_nonce = ""
         original_text = text
         if source_plan_id:
             plan_ledger = PlanLedger.from_task_store(self.task_queue.store.path)
             try:
                 source_plan = plan_ledger.load(source_plan_id)
                 plan_ledger.ensure_workspace(source_plan, root)
+                plan_execution_nonce = plan_ledger.authorize_execution(
+                    source_plan_id,
+                    execution_request_id=self._request_id(message),
+                    source_message_id=message.source_message_id,
+                )
             except PlanLedgerError as exc:
                 reason = str(exc)
                 messages = {
@@ -132,6 +138,12 @@ class AgentIngressGateway:
             "source_plan_request_id": str((source_plan or {}).get("request_id", "") or ""),
             "source_plan_task_id": str((source_plan or {}).get("task_id", "") or ""),
             "source_user_command": original_text,
+            "request_kind": "EXECUTE_SAVED_PLAN" if source_plan_id else "USER_REQUEST",
+            "plan_execution_authorized": bool(source_plan_id and source_plan),
+            "plan_execution_request_sha256": (
+                PlanLedger.execution_request_sha256(source_plan) if source_plan else ""
+            ),
+            "plan_execution_nonce": plan_execution_nonce,
         }
         task, created = self.task_queue.enqueue_remote_request(
             request,

@@ -14,7 +14,7 @@ $AclStateRelativePath = 'localdata\secure\windows_security\acl_mode.json'
 $UpdateManifestRelativePath = 'config\update_manifest.json'
 $MutexName = 'Local\SmartAgentManifestUpdate'
 $DevelopmentAclBypassTargets = @(
-    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'remoteagent\release\SmartAgentv2_1')
+    'C:\Users\example\Desktop\remoteagent\release\SmartAgentv2_1'
 )
 $PreservedDirectoryNames = @(
     '.git', '.venv', '.agents', '__pycache__', '.pytest_cache', 'localdata'

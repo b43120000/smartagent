@@ -14,10 +14,13 @@ from typing import Any, Callable
 
 from .artifact_transfer import validate_artifact_content
 from .path_security import PathSecurityError, authorize_path
+from .write_budget import CHUNK_CONTENT_MAX_CHARS, write_budget_limits_enabled
 
 
 class ChunkedWriteError(RuntimeError):
-    pass
+    def __init__(self, code: str, *, detail: dict | None = None) -> None:
+        super().__init__(code)
+        self.detail = dict(detail or {})
 
 
 _PROCESS_LOCK = threading.RLock()
@@ -192,6 +195,7 @@ class ChunkedWriteManager:
                 "expected_destination_sha256": expected_destination,
                 "destination_existed": existed, "destination_hash_at_begin": destination_hash,
                 "chunk_count": chunk_count, "received_chunks": [], "next_offset": 0,
+                "write_budget_version": 1 if write_budget_limits_enabled() else None,
                 "streaming_mode": streaming_mode,
                 "state": "OPEN", "created_at": now, "updated_at": now,
                 "lease_owner": f"pid:{os.getpid()}",
@@ -206,6 +210,10 @@ class ChunkedWriteManager:
         content = payload.get("content")
         if not isinstance(content, str):
             raise ChunkedWriteError("chunk_content_must_be_string")
+        if write_budget_limits_enabled() and len(content) > CHUNK_CONTENT_MAX_CHARS:
+            raise ChunkedWriteError("chunk_content_too_large", detail={
+                "actual_chars": len(content), "max_content_chars": CHUNK_CONTENT_MAX_CHARS,
+            })
         if encoding == "utf-8":
             return content.encode("utf-8")
         if encoding == "base64":
@@ -220,16 +228,24 @@ class ChunkedWriteManager:
             manifest = self._load_manifest(str(payload.get("write_id", "")))
             if manifest.get("state") != "OPEN":
                 raise ChunkedWriteError(f"session_not_open:{manifest.get('state')}")
+            self._allow_legacy_rechunk(manifest)
             index = payload.get("chunk_index", len(manifest["received_chunks"]))
             offset = payload.get("offset", manifest["next_offset"])
             if type(index) is not int or type(offset) is not int or index < 0 or offset < 0:
                 raise ChunkedWriteError("invalid_chunk_index_or_offset")
             if index != len(manifest["received_chunks"]):
-                raise ChunkedWriteError("chunk_out_of_order_or_duplicate_index")
+                raise ChunkedWriteError("chunk_out_of_order_or_duplicate_index", detail={
+                    "expected_chunk_index": len(manifest["received_chunks"]),
+                    "received_chunk_index": index, "expected_offset": manifest["next_offset"],
+                })
             if offset < manifest["next_offset"]:
-                raise ChunkedWriteError("chunk_overlap")
+                raise ChunkedWriteError("chunk_overlap", detail={
+                    "expected_offset": manifest["next_offset"], "received_offset": offset,
+                })
             if offset > manifest["next_offset"]:
-                raise ChunkedWriteError("chunk_gap")
+                raise ChunkedWriteError("chunk_gap", detail={
+                    "expected_offset": manifest["next_offset"], "received_offset": offset,
+                })
             if manifest["chunk_count"] is not None and index >= manifest["chunk_count"]:
                 raise ChunkedWriteError("chunk_count_overflow")
             data = self._decode_chunk(payload)
@@ -252,14 +268,74 @@ class ChunkedWriteManager:
             manifest["next_offset"] = offset + len(data)
             self._save_manifest(manifest)
             self._fault("chunk_manifest_committed", manifest)
-            return self._public(manifest, operation="write_file_chunk", chunk_index=index)
+            return self._public(manifest, operation="write_file_chunk", chunk_index=index,
+                                accepted_bytes=len(data), accepted_offset=offset)
         return self._action(payload, "write_file_chunk", perform)
+
+    @staticmethod
+    def _allow_legacy_rechunk(manifest: dict) -> None:
+        """Legacy segmentation may change; complete size/hash expectations may not."""
+        if not write_budget_limits_enabled():
+            return
+        if manifest.get("write_budget_version") is not None:
+            return
+        if (manifest.get("chunk_count") is not None
+                and manifest.get("expected_size") is not None
+                and manifest.get("expected_sha256")):
+            manifest["legacy_declared_chunk_count"] = manifest["chunk_count"]
+            manifest["chunk_count"] = None
+            manifest["chunk_count_policy"] = "LEGACY_RECHUNK_SIZE_HASH_GUARDED"
+        manifest["write_budget_version"] = 1
+
+    def failure_result(self, payload: dict, error: ChunkedWriteError) -> dict:
+        """Report resumable transaction facts without changing staging or the ledger."""
+        result = {
+            "status": "FAILED", "execution_status": "FAILED", "error_code": str(error),
+            "detail": error.detail, "write_id": str(payload.get("write_id", "")),
+            "operation": str(payload.get("tool", "")), "data": {},
+        }
+        with _PROCESS_LOCK:
+            try:
+                manifest = self._load_manifest(result["write_id"])
+            except (ChunkedWriteError, OSError, ValueError):
+                return result
+            result["data"] = {
+                key: value for key, value in self._public(manifest).items()
+                if key in {"state", "next_offset", "received_chunks", "received_bytes",
+                           "remaining_bytes", "expected_size"}
+            }
+        return result
+
+    def open_sessions(self, *, request_id: str, run_id: str) -> list[dict]:
+        """Only expose unfinished transactions belonging to this active request/run."""
+        sessions = []
+        if not request_id and not run_id:
+            return sessions
+        with _PROCESS_LOCK:
+            for path in self.manifest_dir.glob("*.json"):
+                try:
+                    manifest = json.loads(path.read_text(encoding="utf-8"))
+                    if manifest.get("state") != "OPEN":
+                        continue
+                    if request_id and manifest.get("request_id") != request_id:
+                        continue
+                    if run_id and manifest.get("run_id") != run_id:
+                        continue
+                    public = self._public(manifest)
+                    sessions.append({key: public[key] for key in (
+                        "write_id", "destination_path", "state", "next_offset",
+                        "received_chunks", "received_bytes", "remaining_bytes", "expected_size",
+                    )})
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        return sorted(sessions, key=lambda item: item["write_id"])
 
     def commit(self, payload: dict) -> dict:
         def perform() -> dict:
             manifest = self._load_manifest(str(payload.get("write_id", "")))
             if manifest.get("state") != "OPEN":
                 raise ChunkedWriteError(f"session_not_open:{manifest.get('state')}")
+            self._allow_legacy_rechunk(manifest)
             supplied_size = payload.get("expected_size")
             supplied_hash = str(payload.get("expected_sha256", "") or "").lower()
             if supplied_size is not None and manifest["expected_size"] is not None and supplied_size != manifest["expected_size"]:
@@ -330,12 +406,17 @@ class ChunkedWriteManager:
 
     def _public(self, manifest: dict, **extra: Any) -> dict:
         result = {
-            "status": "success", "write_id": manifest["write_id"],
+            "status": "success", "execution_status": "SUCCEEDED", "write_id": manifest["write_id"],
             "state": manifest["state"], "destination_path": manifest["destination_path"],
             "next_offset": manifest["next_offset"],
             "received_chunks": len(manifest["received_chunks"]),
             "expected_size": manifest["expected_size"],
             "expected_sha256": manifest["expected_sha256"],
+            "received_bytes": manifest["next_offset"],
+            "remaining_bytes": (
+                max(0, manifest["expected_size"] - manifest["next_offset"])
+                if manifest["expected_size"] is not None else None
+            ),
         }
         if manifest.get("output_sha256"):
             result["output_sha256"] = manifest["output_sha256"]
