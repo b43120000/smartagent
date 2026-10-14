@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import hashlib,json,os,subprocess,time
+import stat as stat_module
 from collections import Counter
 from pathlib import Path
 from .project_artifact_policy import classify_project_file
@@ -11,6 +12,12 @@ IGNORED_DIRS={'.git','.agents','.venv','venv','env','build','out','dist','__pyca
 LOCALDATA_SYNC_EXCLUDED_DIRS={'runtime','cache','logs','temp','secure','bindings','persistent','metadata'}
 BUILD_NAMES={'CMakeLists.txt','build.gradle','build.gradle.kts','settings.gradle','settings.gradle.kts','Android.mk','Android.bp'}
 LANGUAGE_BY_EXT={'.c':'c','.h':'c-cpp-header','.cc':'cpp','.cpp':'cpp','.cxx':'cpp','.hpp':'cpp-header','.java':'java','.kt':'kotlin','.kts':'kotlin','.py':'python','.js':'javascript','.ts':'typescript','.rs':'rust','.go':'go','.cmake':'cmake','.gradle':'gradle','.xml':'xml','.json':'json','.md':'markdown'}
+
+class ProjectInventoryError(ValueError):
+ """A failed read cannot publish a complete project snapshot."""
+ def __init__(self,reason:str,path:str|Path,*,scan_started:bool):
+  self.reason=reason;self.path=str(path);self.scan_started=scan_started
+  super().__init__(f'project_inventory_incomplete:{reason}:{self.path}')
 
 def is_generated_runtime_path(path:str|Path)->bool:
  """Return True for agent-owned state that must never enter source sync.
@@ -89,12 +96,14 @@ def _load_incremental_baseline(root:Path)->dict[str,dict]:
   return {str(row.get('path','')):row for row in snapshot.get('files',[]) if isinstance(row,dict)}
  except Exception:return {}
 
-def _records(root:Path)->tuple[list[dict],int,Counter,list[str],dict]:
+def _records(root:Path,*,verify_cached_content:bool=False)->tuple[list[dict],int,Counter,list[str],dict]:
  records=[];dirs=0;exts=Counter();build=[]
  previous=_load_incremental_baseline(root);git_blobs=_git_index_blobs(root);dirty=_git_dirty_paths(root)
  git_mode=bool(git_blobs or _git(root,'rev-parse','--show-toplevel'))
  reused=0;hashed=0
- for current,dirnames,filenames in os.walk(root,followlinks=False):
+ def onerror(exc):
+  raise ProjectInventoryError('directory_unreadable',getattr(exc,'filename',None) or root,scan_started=True) from exc
+ for current,dirnames,filenames in os.walk(root,followlinks=False,onerror=onerror):
   base=Path(current);safe_dirs=[]
   for d in sorted(dirnames):
    p=base/d
@@ -108,7 +117,8 @@ def _records(root:Path)->tuple[list[dict],int,Counter,list[str],dict]:
    rel=p.relative_to(root).as_posix()
    if is_ignored_project_path(rel): continue
    try: stat=p.stat()
-   except OSError: continue
+   except OSError as exc:
+    raise ProjectInventoryError('file_metadata_unreadable',p,scan_started=True) from exc
    ext=p.suffix.lower() or '[no_extension]';exts[ext]+=1
    if name in BUILD_NAMES or p.suffix.lower() in {'.sln','.vcxproj'}: build.append(rel)
    language='cmake' if name=='CMakeLists.txt' else LANGUAGE_BY_EXT.get(p.suffix.lower(),ext)
@@ -118,19 +128,24 @@ def _records(root:Path)->tuple[list[dict],int,Counter,list[str],dict]:
    can_reuse_git=bool(blob and rel not in dirty and prior.get('git_blob')==blob and prior.get('sha256'))
    can_reuse_fs=bool(not git_mode and prior.get('size_bytes')==int(stat.st_size) and prior.get('mtime_ns')==int(stat.st_mtime_ns) and prior.get('sha256'))
    try:
-    if can_reuse_git or can_reuse_fs:
+    if (can_reuse_git or can_reuse_fs) and not verify_cached_content:
      digest=str(prior['sha256']);reused+=1
     else:
      digest=_sha256_file(p);hashed+=1
-   except OSError as exc: raise ValueError(f'project_file_unreadable:{rel}') from exc
-   records.append({'path':rel,'extension':ext,'language':language,'size_bytes':int(stat.st_size),'mtime_ns':int(stat.st_mtime_ns),'sha256':digest,'git_blob':blob,'content_identity':('git:'+blob) if blob and rel not in dirty else ('sha256:'+digest),'identity_source':'GIT_BLOB' if blob and rel not in dirty else 'FILESYSTEM_SHA256','artifact_class':artifact['classification'],'sync_mode':artifact['sync_mode'],'max_single_file_bytes':artifact['max_single_file_bytes'],'oversize_behavior':artifact['oversize_behavior'],'artifact_priority':artifact['priority']})
+   except OSError as exc:
+    raise ProjectInventoryError('file_content_unreadable',p,scan_started=True) from exc
+   git_identity=bool(blob and rel not in dirty and not verify_cached_content)
+   records.append({'path':rel,'extension':ext,'language':language,'size_bytes':int(stat.st_size),'mtime_ns':int(stat.st_mtime_ns),'sha256':digest,'git_blob':blob,'content_identity':('git:'+blob) if git_identity else ('sha256:'+digest),'identity_source':'GIT_BLOB' if git_identity else 'FILESYSTEM_SHA256','artifact_class':artifact['classification'],'sync_mode':artifact['sync_mode'],'max_single_file_bytes':artifact['max_single_file_bytes'],'oversize_behavior':artifact['oversize_behavior'],'artifact_priority':artifact['priority']})
  records.sort(key=lambda x:x['path'])
  return records,dirs,exts,sorted(build),{'mode':'GIT_FIRST_HYBRID' if git_mode else 'FILESYSTEM_INCREMENTAL','reused_hash_count':reused,'hashed_file_count':hashed,'dirty_path_count':len(dirty)}
 
-def inspect_project_scope(workspace:str|Path)->dict:
+def inspect_project_scope(workspace:str|Path,*,verify_cached_content:bool=False)->dict:
  started=time.perf_counter();root=Path(workspace).expanduser().resolve()
- if not root.is_dir(): raise ValueError(f'workspace_not_directory: {root}')
- records,dirs,exts,build,inventory=_records(root)
+ try:metadata=root.stat()
+ except OSError as exc:
+  raise ProjectInventoryError('root_metadata_unreadable',root,scan_started=False) from exc
+ if not stat_module.S_ISDIR(metadata.st_mode): raise ValueError(f'workspace_not_directory: {root}')
+ records,dirs,exts,build,inventory=_records(root,verify_cached_content=verify_cached_content)
  git_head=_git(root,'rev-parse','HEAD');git_status_lines=_stable_git_status(root)
  manifest_basis={'schema_version':SNAPSHOT_SCHEMA_VERSION,'files':[{'path':r['path'],'size_bytes':r['size_bytes'],'content_identity':r['content_identity']} for r in records],'git_head':git_head,'git_status':git_status_lines}
  manifest_hash=hashlib.sha256(json.dumps(manifest_basis,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -142,9 +157,11 @@ def inspect_project_working_set(workspace:str|Path,paths:object)->dict:
  root=Path(workspace).expanduser().resolve()
  if not root.is_dir():raise ValueError(f'workspace_not_directory: {root}')
  if not isinstance(paths,(list,tuple,set)) or not paths: raise ValueError('project_working_set_paths_invalid')
+ if not all(isinstance(raw,str) and raw.strip() and raw==raw.strip() for raw in paths):
+  raise ValueError('project_working_set_paths_invalid')
  requested=[]
  for raw in paths:
-  text=str(raw or '').strip()
+  text=raw
   if not text: continue
   candidate=Path(text).expanduser()
   if candidate.is_absolute():
@@ -155,7 +172,7 @@ def inspect_project_working_set(workspace:str|Path,paths:object)->dict:
    if '..' in parts:raise ValueError(f'project_working_set_path_outside_workspace:{text}')
    text=Path(*parts).as_posix().lstrip('/')
   if text and text not in requested:requested.append(text)
- previous=_load_incremental_baseline(root);git_blobs=_git_index_blobs(root);dirty=_git_dirty_paths(root)
+ git_blobs=_git_index_blobs(root);dirty=_git_dirty_paths(root)
  git_head=_git(root,'rev-parse','HEAD');git_mode=bool(git_blobs or _git(root,'rev-parse','--show-toplevel'))
  selected=[];missing=[];reused=0;hashed=0
  for rel in requested:
@@ -163,15 +180,14 @@ def inspect_project_working_set(workspace:str|Path,paths:object)->dict:
   try:p.relative_to(root)
   except ValueError as exc:raise ValueError(f'project_working_set_path_outside_workspace:{rel}') from exc
   if not p.is_file() or is_reparse_path(p) or is_ignored_project_path(rel):missing.append(rel);continue
-  stat=p.stat();blob=git_blobs.get(rel,'');prior=previous.get(rel,{})
-  can_reuse_git=bool(blob and rel not in dirty and prior.get('git_blob')==blob and prior.get('sha256'))
-  can_reuse_fs=bool(not git_mode and prior.get('size_bytes')==int(stat.st_size) and prior.get('mtime_ns')==int(stat.st_mtime_ns) and prior.get('sha256'))
-  if can_reuse_git or can_reuse_fs:digest=str(prior['sha256']);reused+=1
-  else:digest=_sha256_file(p);hashed+=1
+  stat=p.stat();blob=git_blobs.get(rel,'')
+  # Working sets are small and task-scoped. A metadata match is only a cache
+  # hint, never current byte evidence (tools may preserve size and timestamp).
+  digest=_sha256_file(p);hashed+=1
   ext=p.suffix.lower() or '[no_extension]';name=p.name
   language='cmake' if name=='CMakeLists.txt' else LANGUAGE_BY_EXT.get(p.suffix.lower(),ext)
   artifact=classify_project_file(p)
-  selected.append({'path':rel,'extension':ext,'language':language,'size_bytes':int(stat.st_size),'mtime_ns':int(stat.st_mtime_ns),'sha256':digest,'git_blob':blob,'content_identity':('git:'+blob) if blob and rel not in dirty else ('sha256:'+digest),'identity_source':'GIT_BLOB' if blob and rel not in dirty else 'FILESYSTEM_SHA256','artifact_class':artifact['classification'],'sync_mode':artifact['sync_mode'],'max_single_file_bytes':artifact['max_single_file_bytes'],'oversize_behavior':artifact['oversize_behavior'],'artifact_priority':artifact['priority']})
+  selected.append({'path':rel,'extension':ext,'language':language,'size_bytes':int(stat.st_size),'mtime_ns':int(stat.st_mtime_ns),'sha256':digest,'git_blob':blob,'content_identity':'sha256:'+digest,'identity_source':'FILESYSTEM_SHA256','artifact_class':artifact['classification'],'sync_mode':artifact['sync_mode'],'max_single_file_bytes':artifact['max_single_file_bytes'],'oversize_behavior':artifact['oversize_behavior'],'artifact_priority':artifact['priority']})
  basis={'schema_version':SNAPSHOT_SCHEMA_VERSION,'working_set':requested,'files':[{'path':row['path'],'content_identity':row['content_identity']} for row in selected],'git_head':git_head}
  snapshot_id=hashlib.sha256(json.dumps(basis,sort_keys=True,separators=(',',':')).encode()).hexdigest()
  return {'schema':'PROJECT_WORKING_SET_V1','status':'READY' if not missing else 'INCOMPLETE','workspace_root':str(root),'snapshot_id':snapshot_id,'inventory_mode':'GIT_FIRST_HYBRID' if git_mode else 'FILESYSTEM_INCREMENTAL','git_head':git_head,'git_dirty':any(path in dirty for path in requested),'requested_paths':requested,'missing_paths':sorted(missing),'file_count':len(selected),'reused_hash_count':reused,'hashed_file_count':hashed,'files':selected,'attachments_uploaded':0,'scope':'TASK_WORKING_SET'}

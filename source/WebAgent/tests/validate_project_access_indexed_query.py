@@ -14,6 +14,7 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 from agent_core.project_access import HARD_QUERY_MAX_BYTES
+from agent_core.tool_result_contract import decode_result
 from agent_core.protocol_v9 import parse_v9_tool_transport
 from agent_core.protocol_v8 import ProtocolV8Error, validate_model_action
 from agent_core.routing import (
@@ -120,14 +121,10 @@ def run() -> None:
         assert diagnostic["reason"] == "unexpected_field"
         assert "operation" in diagnostic["detail"]
         assert "queries[]" in diagnostic["suggestion"]
-        try:
-            execute_tool(malformed_query, agent=agent)
-        except ValueError as exc:
-            assert str(exc).startswith(
-                "query_project_top_level_query_fields_forbidden:"
-            )
-        else:
-            raise AssertionError("execution guard must reject misplaced query fields")
+        rejected = decode_result(execute_tool(malformed_query, agent=agent))
+        assert rejected['status'] == 'REJECTED' and not rejected['executed']
+        assert 'query_project_top_level_query_fields_forbidden:' in rejected['detail']
+        assert rejected['data']['possible_partial_execution'] is False
 
         valid, diagnostic = validate_tool_envelope({
             "tool": "query_project",
@@ -163,9 +160,16 @@ def run() -> None:
             "```",
         ))
         calls, diagnostics = parse_v9_tool_transport(invalid_transport)
-        assert calls == []
-        assert diagnostics[0]["reason"] == "PROJECT_SYNC_STRATEGY_INVALID"
-        assert "DIRECT is an access mode" in diagnostics[0]["detail"]
+        # Syntax/commit are transport responsibilities; the invalid strategy
+        # remains available for per-action admission without cancelling siblings.
+        assert calls and not diagnostics
+        try:
+            validate_model_action(calls[0])
+        except ProtocolV8Error as exc:
+            assert exc.code == 'PROJECT_SYNC_STRATEGY_INVALID'
+            assert 'DIRECT is an access mode' in exc.detail
+        else:
+            raise AssertionError('DIRECT became an executable sync strategy')
 
         admitted = validate_model_action({
             "tool": "query_project",
@@ -244,7 +248,9 @@ def run() -> None:
             "tool": "read_file",
             "path": str(main),
         }, agent=agent, models=agent._models_registry)
-        assert routed.startswith("[WEBAGENT_EVIDENCE_ROUTE_REQUIRED]")
+        route_result = decode_result(routed)
+        assert route_result['status'] == 'REJECTED' and not route_result['executed']
+        assert route_result['reason'] == 'EVIDENCE_ROUTE_REQUIRED'
         assert '"tool":"query_project"' in routed
         assert '"operation":"read_range"' in routed
         assert '"path":"src/main.cpp"' in routed

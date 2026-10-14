@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import stat
 import time
 import urllib.parse
 import urllib.request
@@ -11,7 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 from .chunked_write import ChunkedWriteError, ChunkedWriteManager
-from .project_sync import inspect_project_scope, inspect_project_working_set, compare_project_snapshot, load_project_snapshot
+from .project_sync import inspect_project_scope, inspect_project_working_set, compare_project_snapshot, load_project_snapshot, ProjectInventoryError
 from .project_bundle import dependency_evidence, build_source_bundles, delta_records, build_project_delta
 from .project_sync_message import build_atomic_project_sync
 from .project_ledger import inspect_project_ledger, query_project_history
@@ -40,12 +41,24 @@ from .security_context import SecurityContext
 from .windows_security import restricted_executor_required
 
 
-_SCOPED_INSPECTION_TOOLS = {"list_directory", "inspect_directory", "inspect_project_scope"}
+_SCOPED_INSPECTION_TOOLS = {"list_directory", "inspect_directory", "inspect_project_scope", "inspect_project_working_set", "find_file"}
 _PROJECT_SCOPE_UNSUPPORTED_FIELDS = {"project_root", "path", "depth", "include_files"}
+READ_FILE_TEXT_MAX_BYTES = 1_000_000
+
+
+def _read_bounded_bytes(path: Path) -> bytes:
+    # The extra byte detects a file growing after stat without reading an
+    # unbounded payload into memory.
+    with path.open('rb') as stream:
+        return stream.read(READ_FILE_TEXT_MAX_BYTES + 1)
 
 
 def _directory_listing_request(agent) -> bool:
     text = str(getattr(agent, "current_request_text", "") or "")
+    # Negated mentions are not affirmative listing instructions. Keep any
+    # separate positive listing instruction intact; this never changes scope.
+    text = re.sub(r'(?:不是|並非|不要|禁止|不得|不需要|無需|不必)\s*(?:再|去|要)?\s*(?:列出|顯示)', '', text)
+    text = re.sub(r"\b(?:do not|don't|never|no need to)\s+(?:list (?:the )?files|show files|show directory contents)\b", '', text, flags=re.I)
     lowered = text.casefold()
     chinese_listing = any(token in text for token in ("列出", "顯示", "有哪些檔案", "有什麼檔案")) and any(
         token in text for token in ("檔案", "文件", "目錄", "資料夾", "路徑下")
@@ -86,6 +99,28 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
         "scope_source": "none",
         "error": "",
     }
+    if tool == 'run_command':
+        try:
+            context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+            cwd = resolve_command_working_directory(tool_call.get('working_directory'), context, agent)
+            info.update(requested_paths=[tool_call.get('working_directory') or str(context.workspace_root)],
+                resolved_paths=[str(cwd)],scope_source='working_directory' if 'working_directory' in tool_call else 'workspace_default')
+        except (PathSecurityError, ValueError, OSError) as exc:
+            info.update(allowed=False,error=str(exc))
+        return info
+    if tool == 'delete_path':
+        requested = str(tool_call.get('path', '') or '')
+        info['requested_paths'] = [requested]
+        info['scope_source'] = 'absolute_delete_target'
+        try:
+            context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+            target = context.require_write(requested, require_absolute=True, allow_root=False, forbid_glob=True)
+            if target == context.workspace_root or target == context.config.runtime_write_root or target in context.write_roots:
+                raise ValueError('authorized_root_delete_forbidden')
+            info['resolved_paths'] = [str(target)]
+        except (PathSecurityError, ValueError, OSError) as exc:
+            info.update(allowed=False, error=str(exc))
+        return info
     if tool not in _SCOPED_INSPECTION_TOOLS:
         return info
 
@@ -103,14 +138,28 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
             info["requested_paths"] = [requested] if requested else []
             resolved_paths = [Path(_project_workspace(tool_call, agent)).resolve()]
             info["scope_source"] = "workspace" if requested else "workspace_default"
-        elif tool == "list_directory":
-            requested = str(tool_call.get("path", "") or "").strip()
+        elif tool == 'inspect_project_working_set':
+            requested=str(tool_call.get('workspace','') or '').strip()
+            if explicit_paths and not requested:raise ValueError('explicit_path_scope_requires_workspace')
+            values=tool_call.get('paths')
+            if not isinstance(values,list) or not values or not all(isinstance(v,str) and v.strip() and v==v.strip() for v in values):
+                raise ValueError('project_working_set_paths_invalid')
+            root=Path(_project_workspace(tool_call,agent)).resolve()
+            resolved_paths=[];info['requested_paths']=list(values);info['scope_source']='workspace_and_paths'
+            for value in values:
+                candidate=Path(value)
+                resolved=security_context.require_read(str(candidate if candidate.is_absolute() else root/candidate))
+                if not is_within(resolved,root):raise ValueError('project_working_set_path_outside_workspace:'+value)
+                resolved_paths.append(resolved)
+        elif tool in {"list_directory", "find_file"}:
+            field = "root" if tool == "find_file" else "path"
+            requested = str(tool_call.get(field, "") or "").strip()
             if explicit_paths and not requested:
-                raise ValueError("explicit_path_scope_requires_path")
+                raise ValueError("explicit_path_scope_requires_" + field)
             requested = requested or "."
             info["requested_paths"] = [requested]
             resolved_paths = [security_context.require_read(requested)]
-            info["scope_source"] = "path" if requested != "." else "workspace_default"
+            info["scope_source"] = field if requested != "." else "workspace_default"
         else:
             requested_values = [str(value) for value in tool_call.get("paths", [])]
             if explicit_paths and not requested_values:
@@ -179,6 +228,7 @@ def _evaluate_verification_step(
     capture_root: str | Path | None = None,
     *,
     security_context: SecurityContext | None = None,
+    working_directory: Path | None = None,
 ) -> dict:
     """Mechanically execute Planner-specified verification; no AI decision here."""
     if not isinstance(step, dict):
@@ -189,7 +239,30 @@ def _evaluate_verification_step(
             "spec_valid": False,
             "error": f"verification step must be dict/object; got {type(step).__name__}: {step!r}",
         }
-    action = step.get("action", "run_command")
+    # Accept equivalent schema spellings, but never silently downgrade a
+    # declared file predicate into a command exit-code-only check.
+    step = dict(step)
+    primary, alias = step.get("action"), step.get("type")
+    if primary is not None and alias is not None and primary != alias:
+        return {"label":"invalid_verification_step","action":"invalid","passed":False,
+                "spec_valid":False,"error":"verification action/type conflict"}
+    action = primary if primary is not None else alias if alias is not None else "run_command"
+    if not isinstance(action, str) or action not in {"run_command", "file_exists", "file_contains"}:
+        return {"label":"invalid_verification_step","action":"invalid","passed":False,
+                "spec_valid":False,"error":"unsupported verification action"}
+    if action in {"file_exists", "file_contains"}:
+        if not isinstance(step.get("path"), str) or not step["path"].strip() or type(step.get("expect", True)) is not bool:
+            return {"label":"invalid_verification_step","action":action,"passed":False,
+                    "spec_valid":False,"error":"file verification requires non-empty path and boolean expect"}
+    if action == "file_contains":
+        if "text" in step and "contains" in step and step["text"] != step["contains"]:
+            return {"label":"invalid_verification_step","action":action,"passed":False,
+                    "spec_valid":False,"error":"verification text/contains conflict"}
+        needle = step.get("text", step.get("contains"))
+        if not isinstance(needle, str) or not needle:
+            return {"label":"invalid_verification_step","action":action,"passed":False,
+                    "spec_valid":False,"error":"file_contains requires non-empty text/contains"}
+        step["text"] = needle
     label = step.get("label", action)
     delay_sec = float(step.get("delay_sec", 0) or 0)
     if delay_sec > 0:
@@ -203,7 +276,7 @@ def _evaluate_verification_step(
             return evidence
         result = _run_powershell_capture(
             command, int(step.get("timeout", default_timeout)), capture_root,
-            cwd=security_context.workspace_root if security_context else None,
+            cwd=working_directory or (security_context.workspace_root if security_context else None),
         )
         evidence["result"] = result
         passed = not result.get("timed_out") and result.get("exit_code") == step.get("expect_exit_code", 0)
@@ -232,18 +305,29 @@ def _evaluate_verification_step(
 
     if action == "file_exists":
         try:
-            path = security_context.require_read(step.get("path", "")) if security_context else Path(step.get("path", ""))
+            candidate = Path(step.get('path',''))
+            if working_directory and not candidate.is_absolute(): candidate = working_directory / candidate
+            path = security_context.require_read(candidate) if security_context else candidate
         except PathSecurityError as exc:
             evidence["error"] = f"SECURITY_PATH_REJECTED:{exc}"
             return evidence
-        exists = path.exists()
+        try:
+            path.stat()
+            exists = True
+        except (FileNotFoundError, NotADirectoryError):
+            exists = False
+        except OSError as exc:
+            evidence.update({"path":str(path),"exists":None,"error":f"{type(exc).__name__}: {exc}"})
+            return evidence
         expected = bool(step.get("expect", True))
         evidence.update({"path": str(path), "exists": exists, "expected": expected, "passed": exists == expected})
         return evidence
 
     if action == "file_contains":
         try:
-            path = security_context.require_read(step.get("path", "")) if security_context else Path(step.get("path", ""))
+            candidate = Path(step.get('path',''))
+            if working_directory and not candidate.is_absolute(): candidate = working_directory / candidate
+            path = security_context.require_read(candidate) if security_context else candidate
         except PathSecurityError as exc:
             evidence["error"] = f"SECURITY_PATH_REJECTED:{exc}"
             return evidence
@@ -272,9 +356,11 @@ def tool_run_command(
     verifies_action_id: str = "",
     condition_id: str = "",
     expected_failure: dict | None = None,
+    expected_verification: dict | None = None,
     *,
     security_context: SecurityContext | None = None,
     approval_manifest: dict | None = None,
+    working_directory: str | Path | None = None,
 ) -> str:
     """Run an action and the Web Planner's explicit post-action verification plan.
 
@@ -287,12 +373,40 @@ def tool_run_command(
         result_schema_for_operation,
     )
     operation = normalize_command_operation(operation)
+    if expected_verification is not None:
+        from .verification_expectation import validate_expectation
+        try:
+            if expected_failure is not None or operation not in {'MUTATE','BUILD','TEST','VERIFY','GIT_MUTATE'}:
+                raise ValueError('expected_verification operation/expected_failure conflict')
+            expected_verification = validate_expectation(expected_verification, verify)
+        except ValueError as exc:
+            from .tool_result_contract import encode_result
+            return encode_result('REJECTED','EXPECTED_VERIFICATION_INVALID',tool='run_command',executed=False,detail=str(exc))
+    cwd = resolve_command_working_directory(working_directory, security_context)
+    from .action_dependencies import command_is_proven_observation
+    observation_confirmed = command_is_proven_observation({'operation':operation,'command':command})
+    def finish(operation_result):
+        from .tool_result_contract import attach_runtime_result
+        rejected = bool(main.get('security_rejected'))
+        execution = operation_result['execution_status']
+        running = main.get('process_state') == 'RUNNING'
+        status = 'REJECTED' if rejected else 'RUNNING' if running else execution
+        executed = not rejected and (running or main.get('exit_code') is not None)
+        return attach_runtime_result('\n'.join(lines), status,
+            'COMMAND_REJECTED' if rejected else 'COMMAND_RUNNING' if running else 'COMMAND_EXITED' if executed else 'PROCESS_NOT_STARTED', tool='run_command',
+            executed=executed, data={**operation_result,
+                'execution_status':status, 'verification_status':'UNVERIFIED' if running else operation_result['verification_status'],
+                'terminal_eligible':False if running or rejected else operation_result['terminal_eligible'],
+                'working_directory':str(cwd),
+                'observation_confirmed':observation_confirmed,
+                'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
+                'process_state':'RUNNING' if running else 'EXITED' if executed else 'NOT_STARTED', 'pid':main.get('pid')})
     telemetry = None
     if security_context and security_context.interface_name == "remote":
         telemetry = {"root": security_context.workspace_root, "task_id": security_context.task_id, "request_id": security_context.request_id}
     main = _run_powershell_capture(
         command, timeout, capture_root,
-        cwd=security_context.workspace_root if security_context else None,
+        cwd=cwd,
         telemetry=telemetry, approval_manifest=approval_manifest,
     )
     lines = [
@@ -302,6 +416,8 @@ def tool_run_command(
         "required_result_fields: " + ",".join(operation_result_contract(operation)),
         f"operation: {operation}",
         f"command: {command}",
+        f"working_directory: {cwd}",
+        'working_directory_source: ' + ('explicit' if working_directory else 'workspace_default'),
         f"exit_code: {main.get('exit_code')}",
     ]
     if main.get("stdout"):
@@ -368,7 +484,7 @@ def tool_run_command(
             lines.append("預期失敗已被客觀結果證明；原始 FAILED/FAIL 狀態保留，任務契約 assertion 為 PASS。")
         else:
             lines.append("預期失敗契約未符合；不得以負向測試成功結案。")
-        return "\n".join(lines)
+        return finish(operation_result)
 
     if main.get("timed_out") or main.get("exit_code") not in (0,):
         verification_status = "FAIL"
@@ -382,7 +498,7 @@ def tool_run_command(
         )
         lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
         lines.append("原因: 主指令本身未成功完成；請 Planner 根據 stderr/error 修正後再執行。")
-        return "\n".join(lines)
+        return finish(operation_result)
 
     if verify is None:
         checks = []
@@ -405,7 +521,7 @@ def tool_run_command(
         )
         lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
         lines.append("原因: Planner 沒有提供 post-run verification actions；不得僅憑指令 exit_code 宣告改動成功。")
-        return "\n".join(lines)
+        return finish(operation_result)
 
     lines.append("[POST_RUN_VERIFICATION]")
     if success_criteria:
@@ -417,12 +533,19 @@ def tool_run_command(
         ev = _evaluate_verification_step(
             step, default_timeout=timeout, capture_root=capture_root,
             security_context=security_context,
+            working_directory=cwd,
         )
         all_specs_valid = all_specs_valid and bool(ev.get("spec_valid", True))
         all_passed = all_passed and bool(ev.get("passed"))
         verification_evidence.append(ev)
         lines.append(f"verify[{idx}]: " + json.dumps(ev, ensure_ascii=False, default=str))
     verification_status = "SPEC_INVALID" if not all_specs_valid else ("PASS" if all_passed else "FAIL")
+    expectation_status = ''
+    expectation_evidence = {}
+    if expected_verification is not None:
+        from .verification_expectation import evaluate_expectation
+        expectation_status, expectation_evidence = evaluate_expectation(expected_verification, verification_status, verification_evidence)
+        lines.append('EXPECTATION_STATUS: ' + expectation_status)
     lines.append("VERIFICATION_STATUS: " + verification_status)
     lines.append("TERMINAL_ELIGIBLE: " + str(operation_terminal_eligible(operation, verification_status)).lower())
     operation_result = build_operation_result(
@@ -431,13 +554,19 @@ def tool_run_command(
         stdout_ref=main.get("stdout_ref", ""), verification_evidence=verification_evidence,
         verifies_action_id=verifies_action_id,
         condition_id=condition_id,
+        expectation_status=expectation_status, expectation_evidence=expectation_evidence,
     )
+    if expected_verification is not None:
+        operation_result['expected_verification'] = expected_verification
     lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
     if verification_status == "SPEC_INVALID":
         lines.append("驗證規格無效：請 Planner 修正 verify schema/matcher 後，以 verifies_action_id 綁定原 action 重新驗證。")
     elif not all_passed:
-        lines.append("驗證失敗：請 Planner 讀取上述 evidence，定位問題、修正，再重新執行與驗證。")
-    return "\n".join(lines)
+        if expectation_status == 'PASS':
+            lines.append('負向後置驗證符合事前契約；原 verification_status=FAIL 保留，不要重做或改寫檔案。')
+        else:
+            lines.append("驗證失敗：請 Planner 讀取上述 evidence，定位問題、修正，再重新執行與驗證。")
+    return finish(operation_result)
 
 def run_verification_input_self_tests() -> dict:
     """Regression tests for malformed verification payloads."""
@@ -477,28 +606,100 @@ def tool_read_file(path: str, *, security_context: SecurityContext | None = None
     except Exception as e:
         return f"[錯誤] {e}"
 
-def tool_write_file(path: str, content: str, *, security_context: SecurityContext | None = None) -> str:
+def tool_write_file(path: str, content: str, *, security_context: SecurityContext | None = None, structured: bool = False) -> str:
+    from .tool_result_contract import encode_result
+    import hashlib
+    p=None
+    opened=False
+    saved=False
+    checked=False
+    verified=False
+    actual=b''
+    expected=b''
+    def result(status,reason,text):
+        if not structured:
+            return text
+        return encode_result(status,reason,executed=opened,requested_path=path,
+            resolved_path=str(p) if p is not None else None,
+            data={'text':text,'file_saved':saved,'readback_checked':checked,
+                  'bytes_written':len(expected) if saved else None,'readback_bytes':len(actual) if checked else None,
+                  'expected_bytes':len(expected),'sha256':hashlib.sha256(actual).hexdigest() if verified else '',
+                  'verification_status':'PASS' if verified else 'FAIL' if checked else 'UNVERIFIED',
+                  'possible_partial_write':opened and not verified,'terminal_eligible':verified},tool='write_file')
     try:
+        if structured and len(content)>4096:
+            return result('REJECTED','WRITE_CONTENT_LIMIT','[錯誤] write_file content 超過 4096 字元')
+        expected=content.encode('utf-8')
         p = security_context.require_write(path) if security_context else Path(path)
+        try:
+            metadata=p.stat()
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(metadata.st_mode):
+                return result('REJECTED','NOT_A_FILE',f'[錯誤] 目標不是一般檔案: {path}')
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        return f"[成功] 寫入 {p.stat().st_size} bytes 到 {path}"
+        with p.open('w',encoding='utf-8',newline='') as stream:
+            opened=True
+            stream.write(content)
+        saved=True
+        with p.open('rb') as stream:
+            actual=stream.read(len(expected)+1)
+        checked=True
+        verified=actual==expected
+        if not verified:
+            return result('PARTIAL','WRITE_READBACK_MISMATCH',f'[錯誤] 寫入後讀回內容不一致: {path}')
+        return result('SUCCEEDED','FILE_WRITTEN_VERIFIED',f'[成功] 寫入 {len(actual)} bytes 到 {path}')
+    except PathSecurityError as e:
+        return result('REJECTED','PATH_NOT_AUTHORIZED',f'[錯誤] {e}')
+    except PermissionError as e:
+        return result('PARTIAL' if opened else 'REJECTED','WRITE_ACCESS_DENIED',f'[錯誤] {e}')
+    except UnicodeError as e:
+        return result('PARTIAL' if opened else 'REJECTED','INVALID_WRITE_ENCODING',f'[錯誤] {e}')
     except Exception as e:
-        return f"[錯誤] {e}"
+        return result('PARTIAL' if opened else 'FAILED','WRITE_IO_ERROR',f'[錯誤] {e}')
 
-def tool_list_directory(path: str = ".", *, security_context: SecurityContext | None = None) -> str:
+def tool_list_directory(path: str = ".", *, security_context: SecurityContext | None = None, structured: bool = False) -> str:
+    from .tool_result_contract import encode_result
+    p = None
+    items = []
+    entries = []
+    enumeration_completed = False
+    def result(status, reason, text, *, executed=False):
+        if not structured:
+            return text
+        return encode_result(status, reason, executed=executed, requested_path=path,
+            resolved_path=str(p) if p is not None else None,
+            data={'text':text, 'entries':entries, 'recursive':False,
+                  'terminal_eligible':status=='SUCCEEDED'}, tool='list_directory')
     try:
         p = security_context.require_read(path) if security_context else Path(path)
-        if not p.exists():
-            return f"[錯誤] 目錄不存在: {path}"
-        items = []
-        for item in sorted(p.iterdir()):
-            tag = "[DIR] " if item.is_dir() else "[FILE]"
-            size = f" ({item.stat().st_size/1024:.1f}KB)" if item.is_file() else ""
+        if not stat.S_ISDIR(p.stat().st_mode):
+            return result('REJECTED','NOT_A_DIRECTORY',f'[錯誤] 不是目錄: {path}')
+        children = sorted(p.iterdir())
+        enumeration_completed = True
+        for item in children:
+            metadata = item.stat()
+            directory = stat.S_ISDIR(metadata.st_mode)
+            regular_file = stat.S_ISREG(metadata.st_mode)
+            tag = "[DIR] " if directory else "[FILE]"
+            size = f" ({metadata.st_size/1024:.1f}KB)" if regular_file else ""
             items.append(f"{tag} {item.name}{size}")
-        return "\n".join(items) if items else "(空目錄)"
+            entries.append({'name':item.name,'kind':'DIRECTORY' if directory else 'FILE' if regular_file else 'OTHER',
+                            'size_bytes':metadata.st_size if regular_file else None})
+        return result('SUCCEEDED','DIRECTORY_LISTED',"\n".join(items) if items else "(空目錄)",executed=True)
+    except FileNotFoundError as e:
+        return result('PARTIAL' if enumeration_completed else 'FAILED',
+                      'DIRECTORY_LIST_INCOMPLETE' if enumeration_completed else 'DIRECTORY_NOT_FOUND',
+                      f'[錯誤] {e}',executed=enumeration_completed)
+    except PermissionError as e:
+        return result('PARTIAL' if enumeration_completed else 'REJECTED',
+                      'DIRECTORY_LIST_INCOMPLETE' if enumeration_completed else 'ACCESS_DENIED',f'[錯誤] {e}',executed=enumeration_completed)
+    except PathSecurityError as e:
+        return result('REJECTED','PATH_NOT_AUTHORIZED',f'[錯誤] {e}')
     except Exception as e:
-        return f"[錯誤] {e}"
+        return result('PARTIAL' if enumeration_completed else 'FAILED','DIRECTORY_LIST_INCOMPLETE' if enumeration_completed else 'DIRECTORY_IO_ERROR',
+                      f'[錯誤] {e}',executed=enumeration_completed)
 
 
 def _path_within_allowed_roots(path: Path, allowed_roots: list[str]) -> bool:
@@ -539,9 +740,7 @@ def tool_inspect_directory(
             report["authorized"] = _path_within_allowed_roots(root, allowed_roots)
             if not report["authorized"]:
                 report["errors"].append("path_not_authorized_by_user_turn")
-            elif not root.exists():
-                report["errors"].append("path_not_found")
-            elif not root.is_dir():
+            elif not stat.S_ISDIR(root.stat().st_mode):
                 report["errors"].append("not_a_directory")
             else:
                 report["exists"] = True
@@ -559,13 +758,13 @@ def tool_inspect_directory(
                                         continue
                                     if not entry.is_file(follow_symlinks=False):
                                         continue
-                                    stat = entry.stat(follow_symlinks=False)
+                                    metadata = entry.stat(follow_symlinks=False)
                                     report["file_count"] += 1
-                                    report["total_bytes"] += int(stat.st_size)
+                                    report["total_bytes"] += int(metadata.st_size)
                                     extensions[Path(entry.name).suffix.lower() or "[no_extension]"] += 1
                                     if len(report["samples"]) < limit:
                                         report["samples"].append({
-                                            "path": str(Path(entry.path)), "bytes": int(stat.st_size),
+                                            "path": str(Path(entry.path)), "bytes": int(metadata.st_size),
                                         })
                                 except (OSError, PermissionError) as exc:
                                     report["inaccessible_count"] += 1
@@ -575,6 +774,11 @@ def tool_inspect_directory(
                         report["inaccessible_count"] += 1
                         if len(report["errors"]) < 10:
                             report["errors"].append(f"{current}: {type(exc).__name__}: {exc}")
+        except FileNotFoundError:
+            report["errors"].append("path_not_found")
+        except PermissionError as exc:
+            report["inaccessible_count"] += 1
+            report["errors"].append(f"PermissionError: {exc}")
         except Exception as exc:
             report["errors"].append(f"{type(exc).__name__}: {exc}")
 
@@ -608,9 +812,15 @@ def tool_web_search(query: str) -> str:
             data = json.loads(r.read().decode())
         abstract = data.get("AbstractText", "")
         related = [t.get("Text","") for t in data.get("RelatedTopics", [])[:3]]
-        return abstract or "\n".join(related) or "(無結果)"
+        from .tool_result_contract import attach_runtime_result
+        return attach_runtime_result(abstract or "\n".join(related) or "(無結果)",
+            'SUCCEEDED','SEARCH_COMPLETED',tool='web_search',executed=True,
+            data={'query':query,'result_count':1 if abstract else len([x for x in related if x]),
+                'network_status':'RESPONDED'})
     except Exception as e:
-        return f"[網路搜尋失敗] {e}"
+        from .tool_result_contract import encode_result
+        return encode_result('FAILED','NETWORK_SEARCH_FAILED',tool='web_search',executed=True,
+            detail=f'{type(e).__name__}: {e}',data={'network_status':'FAILED'})
 
 import urllib.parse
 
@@ -622,37 +832,121 @@ def tool_find_file(
     max_results: int = 20,
     *,
     security_context: SecurityContext | None = None,
+    structured: bool = False,
 ) -> str:
     """Find files below root by exact name first, then by substring."""
+    from .tool_result_contract import encode_result
+    base = None
+    visited = 0
+    exact, partial, errors = [], [], []
+    total = 0
+    error_count = 0
+    excluded_link_count = 0
+    scope_exclusions = []
+    limit = 20
+    def result(status, reason, text, complete=False):
+        if not structured:
+            return text
+        matches = (exact + partial)[:limit]
+        return encode_result(status, reason, executed=visited>0,
+            requested_path=root,resolved_path=str(base) if base is not None else None,
+            data={'text':text,'matches':matches,'result_limit':limit,
+                  'truncated':total>len(matches),'total_matches':total,
+                  'search_complete':complete,'errors':errors,'error_count':error_count,
+                  'scope_exclusions':scope_exclusions,'excluded_link_count':excluded_link_count,
+                  'excluded_directory_names':sorted(SKIP_SEARCH_DIRS),
+                  'terminal_eligible':status=='SUCCEEDED'},tool='find_file')
+    def onerror(exc):
+        nonlocal error_count
+        error_count += 1
+        if len(errors)<10:
+            errors.append({'type':type(exc).__name__,'path':str(getattr(exc,'filename','') or ''),'detail':str(exc)})
     try:
         base = security_context.require_read(root) if security_context else Path(root).expanduser().resolve()
-        if not base.exists() or not base.is_dir():
-            return f"[錯誤] 搜尋根目錄不存在: {root}"
+        if not stat.S_ISDIR(base.stat().st_mode):
+            return result('REJECTED','NOT_A_DIRECTORY',f'[錯誤] 搜尋根路徑不是目錄: {root}')
         query = name.strip().lower()
         if not query:
-            return "[錯誤] find_file 缺少 name"
-
-        exact, partial = [], []
-        for current_root, dirs, files in os.walk(base):
-            dirs[:] = [d for d in dirs if d not in SKIP_SEARCH_DIRS]
-            for filename in files:
+            return result('REJECTED','SEARCH_NAME_REQUIRED','[錯誤] find_file 缺少 name')
+        if any(c in query for c in '*?'):
+            return result('REJECTED','UNSUPPORTED_GLOB_PATTERN','[錯誤] find_file 使用精確檔名／substring，不接受 glob；請改用檔名片段')
+        limit=int(max_results)
+        if limit<1:
+            return result('REJECTED','INVALID_RESULT_LIMIT','[錯誤] max_results 必須大於零')
+        limit=min(limit,100)
+        for current_root, dirs, files in os.walk(base,onerror=onerror,followlinks=False):
+            visited += 1
+            bounded_dirs = []
+            for directory in sorted(dirs):
+                if directory.lower() in SKIP_SEARCH_DIRS:
+                    continue
+                child = Path(current_root) / directory
+                try:
+                    metadata = child.lstat()
+                    # Windows os.walk(followlinks=False) does not exclude
+                    # junctions. Prune every reparse directory before descent.
+                    if stat.S_ISLNK(metadata.st_mode) or getattr(metadata,'st_file_attributes',0) & 0x400:
+                        excluded_link_count += 1
+                        if len(scope_exclusions)<10:
+                            scope_exclusions.append({'path':str(child),'reason':'LINK_OR_REPARSE_NOT_FOLLOWED'})
+                        continue
+                    resolved = security_context.require_read(str(child)) if security_context else child.resolve()
+                    if not is_within(resolved,base):
+                        raise PathSecurityError('search_directory_outside_requested_root')
+                    bounded_dirs.append(directory)
+                except (PathSecurityError,OSError) as exc:
+                    onerror(exc)
+            dirs[:] = bounded_dirs
+            for filename in sorted(files):
                 low = filename.lower()
-                full = str(Path(current_root) / filename)
-                if low == query:
-                    exact.append(full)
-                elif query in low:
-                    partial.append(full)
-                if len(exact) + len(partial) >= max_results * 3:
-                    break
-        results = (exact + partial)[:max_results]
-        return "\n".join(results) if results else f"[未找到] {name} (root={base})"
+                if low != query and query not in low:
+                    continue
+                full = Path(current_root) / filename
+                try:
+                    resolved = security_context.require_read(str(full)) if security_context else full.resolve()
+                    if not is_within(resolved,base):
+                        raise PathSecurityError('search_match_outside_requested_root')
+                except (PathSecurityError,OSError) as exc:
+                    onerror(exc);continue
+                total += 1
+                bucket = exact if low==query else partial
+                if len(bucket)<limit:
+                    bucket.append(str(full))
+        matches=(exact+partial)[:limit]
+        text='\n'.join(matches) if matches else f'[未找到] {name} (root={base})'
+        if error_count:
+            denied=all(e['type']=='PermissionError' for e in errors)
+            return result('PARTIAL' if visited else 'REJECTED' if denied else 'FAILED',
+                'SEARCH_INCOMPLETE' if visited else 'SEARCH_ACCESS_DENIED' if denied else 'SEARCH_IO_ERROR',
+                '[錯誤] 搜尋未完成；不得將空 matches 當作已證實未找到\n'+text)
+        return result('SUCCEEDED','SEARCH_COMPLETED',text,complete=True)
+    except FileNotFoundError as e:
+        return result('FAILED','SEARCH_ROOT_NOT_FOUND',f'[錯誤] {e}')
+    except PermissionError as e:
+        onerror(e);return result('REJECTED','SEARCH_ACCESS_DENIED',f'[錯誤] {e}')
+    except PathSecurityError as e:
+        return result('REJECTED','PATH_NOT_AUTHORIZED',f'[錯誤] {e}')
     except Exception as e:
-        return f"[錯誤] {e}"
+        onerror(e);return result('PARTIAL' if visited else 'FAILED','SEARCH_IO_ERROR',f'[錯誤] {e}')
 
 def tool_save_session_summary(agent, payload: dict) -> str:
     if not agent or not agent.workspace_root:
         return "[錯誤] 尚未建立 Workspace Root，無法保存 project session summary"
-    return agent.save_project_summary(payload)
+    if not callable(getattr(agent,'save_project_summary',None)):
+        from .tool_result_contract import encode_result
+        return encode_result('REJECTED','CAPABILITY_UNAVAILABLE',tool='save_session_summary')
+    result=agent.save_project_summary(payload)
+    from .tool_result_contract import decode_result, attach_runtime_result, encode_result
+    if decode_result(result): return result
+    target=Path(agent.workspace_root)/'.agents'/'agent_session_summary.md'
+    if str(result).startswith('[成功]') and target.is_file():
+        import hashlib
+        raw=target.read_bytes()
+        if str(payload.get('summary','')).encode('utf-8') in raw:
+            return attach_runtime_result(result,'SUCCEEDED','SESSION_SUMMARY_SAVED',tool='save_session_summary',
+                executed=True,resolved_path=str(target),data={'file_saved':True,'verification_status':'PASS',
+                    'size_bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
+    return encode_result('FAILED','SUMMARY_NOT_CONFIRMED',tool='save_session_summary',executed=True,data={'text':str(result)})
 
 
 def _project_workspace(tool_call: dict, agent, *, write: bool = False):
@@ -736,14 +1030,28 @@ def _project_query_workspace(tool_call: dict, agent) -> str:
             raise ValueError("query_project_root_conflict:target_outside_workspace")
     return str(target)
 
-def _execution_approval_manifest(tool_call: dict, agent, security_context: SecurityContext) -> dict | None:
+def resolve_command_working_directory(value, security_context: SecurityContext | None, agent=None) -> Path:
+    context = security_context or SecurityContext.for_workspace(Path.cwd())
+    if value is not None and (not isinstance(value, (str,Path)) or not str(value).strip()):
+        raise PathSecurityError('command_working_directory_invalid')
+    cwd = context.require_write(value or context.workspace_root, require_absolute=True, forbid_glob=True)
+    if not cwd.is_dir():
+        raise PathSecurityError('command_working_directory_not_directory:' + str(cwd))
+    requested = _explicit_request_paths(agent)
+    requested = [root.parent if root.is_file() else root for root in requested]
+    if requested and not any(is_within(cwd, root) for root in requested):
+        raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
+    return cwd
+
+
+def _execution_approval_manifest(tool_call: dict, agent, security_context: SecurityContext, working_directory=None) -> dict | None:
     command = str(tool_call.get("command", "") or "")
-    admission = inspect_command(command, workspace=security_context.workspace_root)
+    admission = inspect_command(command, workspace=working_directory or security_context.workspace_root)
     if admission.allowed:
         return None
     if not admission.approval_eligible:
         raise CommandSecurityError(admission.code, admission.detail)
-    manifest = build_command_approval_manifest(command, workspace=security_context.workspace_root)
+    manifest = build_command_approval_manifest(command, workspace=working_directory or security_context.workspace_root)
     from .protocol_v8 import action_digest as v8_action_digest
     action_id = str(tool_call.get("action_id", "") or "")
     admitted = dict(getattr(agent, "_v8_admitted_actions", {}).get(action_id, {}) or {}) if agent else {}
@@ -787,6 +1095,128 @@ def _execution_approval_manifest(tool_call: dict, agent, security_context: Secur
 
 
 def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str:
+    """Common P0 result boundary; original transcripts/business data remain intact."""
+    from .smartagent_protocol import normalize_tool_numeric_fields
+    tool_call = normalize_tool_numeric_fields(tool_call)
+    from .tool_result_contract import decode_result, attach_runtime_result
+    from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
+    p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
+    tool = str(tool_call.get('tool', ''))
+    if 'field_refs' in tool_call:
+        from .tool_result_contract import encode_result
+        return encode_result('REJECTED', 'UNEXPANDED_REQUEST_CONTEXT_REFERENCE',
+            tool=tool, executed=False,
+            detail='Resolve field_refs through request-bound WebAgent admission before execution.')
+    try:
+        result = _execute_tool_impl(tool_call, agent, models)
+    except (PathSecurityError, ProjectAccessError, PermissionError, FileNotFoundError, ValueError, OSError) as exc:
+        if tool not in P1_TOOLS | p2_tools:
+            raise
+        from .tool_result_contract import encode_result
+        # An unexpected exception may follow partial work. Do not invent a
+        # successful execution or turn an unknown mutation into a safe retry.
+        rejected = isinstance(exc,(PathSecurityError,ProjectAccessError)) or str(exc).startswith((
+            'workspace_not_authorized:', 'workspace_not_found_', 'project_sync_strategy_invalid:',
+            'project_sync_root_conflict:', 'query_project_top_level_query_fields_forbidden:',
+            'query_project_project_root_required', 'query_project_root_conflict:',
+            'project_working_set_paths_invalid', 'project_working_set_path_outside_workspace:',
+        ))
+        status = 'REJECTED' if rejected else 'UNKNOWN'
+        reason = 'PREFLIGHT_REJECTED' if rejected else 'EXECUTION_STATE_UNKNOWN'
+        result = encode_result(status, reason, tool=tool,
+            requested_path=tool_call.get('path',''),detail=f'{type(exc).__name__}: {exc}',
+            data={'execution_confirmed':False,'possible_partial_execution':not rejected})
+        return attach_runtime_result(result, status, reason, tool=tool, executed=False,
+            requested_path=tool_call.get('path',''),
+            data={'execution_confirmed':False,'possible_partial_execution':not rejected},
+            action_id=tool_call.get('action_id',''),
+            request_id=getattr(agent,'current_request_id','') if agent else '',
+            task_id=getattr(agent,'current_task_id','') if agent else '')
+    if tool not in {'read_file','write_file','list_directory','find_file','run_command','upload_file','upload_files','return_artifact',
+                    'download_artifact','web_edit_file','execute_artifact_bundle',
+                    'web_search','save_session_summary','google_drive_upload','ask_executor'} | P1_TOOLS:
+        return result
+    outcome = decode_result(result)
+    if tool=='google_drive_upload' or (tool=='ask_executor' and str(result).startswith(('[LOCAL_AI_FALLBACK_RESULT]', '[LOCAL_AI_EVIDENCE_FAIL]', '[執行引擎失敗]'))):
+        # Local model prose can contain lookalike trailers. Only the trusted
+        # invocation branch below may produce its Runtime outcome.
+        outcome=None
+    if outcome:
+        status, reason, executed, data = outcome['status'], outcome['reason'], outcome['executed'], outcome.get('data', {})
+        if tool in _SCOPED_INSPECTION_TOOLS and str(result).startswith('[TOOL_SCOPE_REJECTED]'):
+            reason = 'TOOL_SCOPE_REJECTED'
+            data = {'scope':json.loads(str(result).split('] ',1)[1]),'terminal_eligible':False}
+        original_tool = outcome.get('tool', tool)
+        alias = tool=='upload_file' and original_tool=='upload_files'
+        stale_action = outcome.get('action_id') and tool_call.get('action_id') and outcome['action_id'] != tool_call['action_id']
+        stale_request = outcome.get('request_id') and agent and outcome['request_id'] != getattr(agent,'current_request_id','')
+        if (original_tool != tool and not alias) or stale_action or stale_request:
+            status, reason, executed, data = 'UNKNOWN', 'RESULT_IDENTITY_MISMATCH', False, {}
+    elif tool in P1_TOOLS:
+        status, reason, executed, data = structured_outcome(tool, business_payload(result))
+    else:
+        text = str(result)
+        data = {}
+        rejected = any(marker in text for marker in ('SECURITY_PATH_REJECTED','SECURITY_COMMAND_REJECTED',
+            'TELEGRAM_ARTIFACT_REJECTED','WEB_DIRECT_EDIT_UNAVAILABLE'))
+        failed = text.startswith(('[錯誤]', '[ARTIFACT_DOWNLOAD_FAILED]', '[WEB_DIRECT_EDIT_FAILED]', '[ARTIFACT_BUNDLE_FAILED]'))
+        status, reason, executed = ('REJECTED','PREFLIGHT_REJECTED',False) if rejected else ('FAILED','TOOL_FAILED',False) if failed else ('UNKNOWN','UNCLASSIFIED_PRODUCER_RESULT',False)
+        if tool=='execute_artifact_bundle':
+            try: payload = json.loads(text)
+            except ValueError: payload = {}
+            business = payload.get('status', '')
+            if business == 'ARTIFACT_BUNDLE_COMPLETED':
+                status, reason, executed = 'SUCCEEDED','BUNDLE_COMMITTED',True
+            elif business == 'ARTIFACT_BUNDLE_FAILED':
+                status, reason, executed = 'FAILED','BUNDLE_FAILED',bool(payload.get('executed'))
+            data = {'business_status':business, 'executed_count':payload.get('executed',0),
+                'replayed_count':payload.get('replayed',0), 'bundle_id':payload.get('bundle_id',''),
+                'failed_action_executed':payload.get('failed_action_executed',False),
+                'partial_execution':bool(payload.get('executed') or payload.get('failed_action_executed'))}
+            executed = executed or bool(payload.get('failed_action_executed'))
+        elif tool=='google_drive_upload':
+            if text.startswith('[GOOGLE_DRIVE_UPLOAD_SUCCESS] '):
+                payload=json.loads(text.split('] ',1)[1])
+                if payload.get('file_id'):
+                    status,reason,executed='SUCCEEDED','DRIVE_UPLOAD_CONFIRMED',True
+                    data={'delivery_status':'CONFIRMED','remote_file_id':payload['file_id'],'artifact':payload}
+            elif text.startswith('[GOOGLE_DRIVE_UPLOAD_REJECTED]'):
+                status,reason,executed='REJECTED','DRIVE_PREFLIGHT_REJECTED',False
+            elif text.startswith('[GOOGLE_DRIVE_UPLOAD_FAILED]'):
+                status,reason,executed='FAILED','DRIVE_UPLOAD_FAILED',True
+        elif tool=='ask_executor':
+            if text.startswith('[LOCAL_AI_FALLBACK_BLOCKED]'):
+                status,reason,executed='REJECTED','FALLBACK_NOT_ADMITTED',False
+            elif text.startswith('[LOCAL_AI_FALLBACK_RESULT]'):
+                status,reason,executed='SUCCEEDED','EXECUTOR_RESPONSE_RECEIVED',True
+                data={'verification_status':'UNVERIFIED','terminal_eligible':False,'machine_actions_executed':False}
+            elif text.startswith(('[執行引擎失敗]','[LOCAL_AI_EVIDENCE_FAIL]')):
+                status,reason,executed='FAILED','EXECUTOR_RESPONSE_FAILED',True
+    # The final Runtime trailer is authoritative even if transcript text contains
+    # lookalike status markers. JSON results keep their old business fields.
+    attached = attach_runtime_result(result, status, reason, tool=tool, executed=executed, data=data,
+        requested_path=tool_call.get('path', tool_call.get('output_path','')),
+        resolved_path=(outcome or {}).get('resolved_path'), action_id=tool_call.get('action_id',''),
+        request_id=getattr(agent,'current_request_id','') if agent else '',
+        task_id=getattr(agent,'current_task_id','') if agent else '')
+    if tool == 'query_project':
+        # max_bytes covers the transmitted result, including Runtime metadata.
+        # Reuse query pagination rather than dropping the authoritative envelope.
+        from .project_access import _fit_payload, DEFAULT_QUERY_MAX_BYTES, HARD_QUERY_MAX_BYTES
+        payload = json.loads(attached)
+        limit = max(4096, min(int(tool_call.get('max_bytes') or DEFAULT_QUERY_MAX_BYTES), HARD_QUERY_MAX_BYTES))
+        if len(attached.encode('utf-8')) > limit:
+            before_count = len(payload.get('results', []))
+            payload = _fit_payload(payload, limit - 128)
+            if len(payload.get('results', [])) < before_count:
+                payload['_runtime_result']['status'] = 'PARTIAL'
+                payload['_runtime_result']['reason'] = 'PROJECT_QUERY_RESPONSE_PARTIAL'
+                payload['_runtime_result']['data']['terminal_eligible'] = False
+            attached = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+    return attached
+
+
+def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) -> str:
     models = models or getattr(agent, "_models_registry", {}) or {}
     tool = tool_call.get("tool", "")
     security_context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
@@ -798,7 +1228,12 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     if tool == "run_command":
         workspace = security_context.workspace_root
         try:
-            approval_manifest = _execution_approval_manifest(tool_call, agent, security_context)
+            cwd = resolve_command_working_directory(tool_call.get('working_directory'), security_context, agent)
+            approval_manifest = _execution_approval_manifest(tool_call, agent, security_context, cwd)
+        except PathSecurityError as exc:
+            from .tool_result_contract import encode_result
+            return encode_result('REJECTED','WORKING_DIRECTORY_REJECTED',tool='run_command',executed=False,
+                requested_path=tool_call.get('working_directory',''),detail=str(exc))
         except (CommandSecurityError, SecurityApprovalError) as exc:
             if agent:
                 agent.last_verification_status = "FAIL"
@@ -813,7 +1248,9 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             verifies_action_id=tool_call.get("verifies_action_id", ""),
             condition_id=tool_call.get("condition_id", ""),
             expected_failure=tool_call.get("expected_failure"),
+            expected_verification=tool_call.get('expected_verification'),
             security_context=security_context, approval_manifest=approval_manifest,
+            working_directory=tool_call.get('working_directory'),
         )
         if agent:
             if "VERIFICATION_STATUS: PASS" in result:
@@ -826,31 +1263,92 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 agent.last_verification_status = "UNVERIFIED"
         return result
     elif tool == "read_file":
+        from .tool_result_contract import encode_result
         path = tool_call.get("path", "")
         try:
             authorized_path = security_context.require_read(path)
         except PathSecurityError as exc:
-            return f"[SECURITY_PATH_REJECTED] {exc}"
-        # Web Planner mode is attachment-first: if the web brain asks to
-        # inspect a file, never paste the file contents back as text. Queue
-        # the real file for upload to the SAME web conversation instead.
+            return encode_result('REJECTED', 'PATH_NOT_AUTHORIZED', requested_path=path, detail=str(exc), tool=tool)
+        # Preflight before any upload route: a missing/non-file target is not
+        # an attachment queue success and must not trigger a needless upload.
+        try:
+            # Path.is_file() suppresses OSError on newer Python; stat preserves
+            # the distinction between an inaccessible path and a missing file.
+            import stat
+            if not stat.S_ISREG(authorized_path.stat().st_mode):
+                return encode_result('FAILED', 'NOT_A_FILE',
+                    requested_path=path, resolved_path=str(authorized_path), tool=tool)
+        except FileNotFoundError as exc:
+            return encode_result('FAILED', 'FILE_NOT_FOUND', requested_path=path, detail=str(exc), tool=tool)
+        except PermissionError as exc:
+            return encode_result('REJECTED', 'ACCESS_DENIED', requested_path=path, detail=str(exc), tool=tool)
+        except OSError as exc:
+            return encode_result('FAILED', 'READ_PREFLIGHT_IO_ERROR', requested_path=path, detail=str(exc), tool=tool)
+        # Preserve the project evidence route, but ordinary bounded UTF-8
+        # reads should return content. Binary/large payloads retain explicit
+        # attachment staging; QUEUED never means content was delivered.
         if agent and models.get(agent.planner_key, {}).get("provider") == "web_scraper":
             evidence_route = build_evidence_to_action_route(
                 [tool_call], getattr(agent, "_authorized_local_paths", ()) or (),
             )
             if evidence_route.get("active"):
-                return (
-                    "[WEBAGENT_EVIDENCE_ROUTE_REQUIRED]\n"
-                    + render_evidence_to_action_guidance(evidence_route)
-                )
+                return encode_result('REJECTED', 'EVIDENCE_ROUTE_REQUIRED', requested_path=path,
+                    resolved_path=str(authorized_path), data={'route':evidence_route,
+                    'text':render_evidence_to_action_guidance(evidence_route), 'content_read':False}, tool=tool)
+            try:
+                from .project_artifact_policy import classify_project_file, SOURCE_CODE, TEXT_DATA_CONFIG
+                if (authorized_path.stat().st_size <= READ_FILE_TEXT_MAX_BYTES
+                        and classify_project_file(authorized_path)['classification'] in {SOURCE_CODE, TEXT_DATA_CONFIG}):
+                    raw = _read_bounded_bytes(authorized_path)
+                    if len(raw) > READ_FILE_TEXT_MAX_BYTES:
+                        return encode_result('FAILED', 'READ_SIZE_LIMIT_EXCEEDED_DURING_READ', executed=True,
+                            requested_path=path, resolved_path=str(authorized_path), tool=tool)
+                    try:
+                        content = raw.decode('utf-8')
+                    except UnicodeDecodeError:
+                        content = None
+                    if content is not None and not any(ord(char) < 32 and char not in '\t\r\n' for char in content):
+                        return encode_result('SUCCEEDED', 'FILE_READ', executed=True,
+                            requested_path=path, resolved_path=str(authorized_path),
+                            data={'text':content, 'content_read':True, 'bytes_read':len(raw)}, tool=tool)
+            except FileNotFoundError as exc:
+                return encode_result('FAILED', 'FILE_NOT_FOUND', requested_path=path, detail=str(exc), tool=tool)
+            except PermissionError as exc:
+                return encode_result('REJECTED', 'ACCESS_DENIED', requested_path=path, detail=str(exc), tool=tool)
+            except OSError as exc:
+                return encode_result('FAILED', 'READ_IO_ERROR', executed=True, requested_path=path, detail=str(exc), tool=tool)
             queued = agent.queue_attachments([str(authorized_path)])
-            return "[Web Planner 模式：read_file 已自動改道為 upload_file，不展開檔案文字]\n" + queued
-        return tool_read_file(str(authorized_path), security_context=security_context)
+            from .tool_result_contract import decode_result
+            queue_outcome = decode_result(queued)
+            queued_ok = (queue_outcome or {}).get('status') == 'QUEUED' or '[WEBAGENT_ATTACHMENT_QUEUED]' in queued or '[附件已排程' in queued
+            return encode_result('QUEUED' if queued_ok else 'FAILED', 'READ_REROUTED_TO_ATTACHMENT' if queued_ok else 'ATTACHMENT_QUEUE_FAILED',
+                executed=True, requested_path=path, resolved_path=str(authorized_path),
+                data={'text':queued, 'content_read':False, 'delivery_status':'NOT_DELIVERED',
+                      'artifacts':((queue_outcome or {}).get('data') or {}).get('artifacts', [])}, tool=tool)
+        try:
+            if authorized_path.stat().st_size > READ_FILE_TEXT_MAX_BYTES:
+                return encode_result('REJECTED', 'READ_SIZE_LIMIT', requested_path=path, tool=tool)
+            raw = _read_bounded_bytes(authorized_path)
+            if len(raw) > READ_FILE_TEXT_MAX_BYTES:
+                return encode_result('FAILED', 'READ_SIZE_LIMIT_EXCEEDED_DURING_READ', executed=True,
+                    requested_path=path, resolved_path=str(authorized_path), tool=tool)
+            content = raw.decode('utf-8', errors='replace')
+            return encode_result('SUCCEEDED', 'FILE_READ', executed=True,
+                requested_path=path, resolved_path=str(authorized_path), data={'text':content,
+                    'content_read':True, 'bytes_read':len(raw)}, tool=tool)
+        except FileNotFoundError as exc:
+            return encode_result('FAILED', 'FILE_NOT_FOUND', requested_path=path, detail=str(exc), tool=tool)
+        except PermissionError as exc:
+            return encode_result('REJECTED', 'ACCESS_DENIED', requested_path=path, detail=str(exc), tool=tool)
+        except OSError as exc:
+            return encode_result('FAILED', 'READ_IO_ERROR', executed=True, requested_path=path, detail=str(exc), tool=tool)
     elif tool == "write_file":
-        return tool_write_file(
+        from .tool_result_contract import adapt_legacy_result
+        result = tool_write_file(
             tool_call.get("path", ""), tool_call.get("content", ""),
-            security_context=security_context,
+            security_context=security_context, structured=True,
         )
+        return adapt_legacy_result(tool, result, tool_call.get('path', ''))
     elif tool in {"begin_file_write", "write_file_chunk", "commit_file_write", "abort_file_write"}:
         if not agent:
             return '[CHUNKED_WRITE_FAILED] ' + json.dumps({
@@ -883,9 +1381,11 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 manager.failure_result(tool_call, exc), ensure_ascii=False, sort_keys=True,
             )
     elif tool == "list_directory":
-        return tool_list_directory(
-            scope["resolved_paths"][0], security_context=security_context
+        from .tool_result_contract import adapt_legacy_result
+        result = tool_list_directory(
+            scope["resolved_paths"][0], security_context=security_context, structured=True
         )
+        return adapt_legacy_result(tool, result, scope['resolved_paths'][0])
     elif tool == "inspect_directory":
         allowed_roots = [str(path) for path in security_context.read_roots]
         try:
@@ -903,7 +1403,14 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         )
     elif tool == "inspect_project_scope":
         workspace=scope["resolved_paths"][0]
-        return json.dumps(inspect_project_scope(workspace),ensure_ascii=False,separators=(",",":"))
+        try:
+            return json.dumps(inspect_project_scope(workspace,verify_cached_content=True),ensure_ascii=False,separators=(",",":"))
+        except ProjectInventoryError as exc:
+            from .tool_result_contract import encode_result
+            return encode_result('FAILED','PROJECT_SCAN_INCOMPLETE',tool=tool,executed=exc.scan_started,
+                requested_path=workspace,resolved_path=workspace,detail=str(exc),
+                data={'workspace_root':workspace,'scan_completed':False,'snapshot_id':'',
+                      'error_path':exc.path,'error_reason':exc.reason,'terminal_eligible':False})
     elif tool == "inspect_project_working_set":
         workspace=_project_workspace(tool_call,agent)
         return json.dumps(inspect_project_working_set(workspace,tool_call.get("paths",[])),ensure_ascii=False,separators=(",",":"))
@@ -1030,12 +1537,15 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     elif tool == "web_search":
         return tool_web_search(tool_call.get("query", ""))
     elif tool == "find_file":
-        root = tool_call.get("root", "") or (str(agent.workspace_root) if agent and agent.workspace_root else ".")
-        return tool_find_file(
+        from .tool_result_contract import adapt_legacy_result
+        root = scope['resolved_paths'][0]
+        result = tool_find_file(
             tool_call.get("name", ""), root=root,
             max_results=int(tool_call.get("max_results", 20)),
             security_context=security_context,
+            structured=True,
         )
+        return adapt_legacy_result(tool, result, root)
     elif tool == "upload_file":
         if not agent:
             return "[錯誤] Agent 實例遺失，無法排程附件"
@@ -1088,17 +1598,33 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     elif tool == "web_edit_file":
         if not agent:
             return "[WEB_DIRECT_EDIT_FAILED] Agent 實例遺失"
+        if not callable(getattr(agent, 'web_edit_file', None)):
+            return '[WEB_DIRECT_EDIT_UNAVAILABLE] provider has no direct-edit capability'
         try:
             source = security_context.require_read(tool_call.get("path", ""))
             output_value = tool_call.get("output_path")
             output = security_context.require_write(output_value) if output_value else None
         except PathSecurityError as exc:
             return f"[WEB_DIRECT_EDIT_FAILED] SECURITY_PATH_REJECTED:{exc}"
-        return agent.web_edit_file(
-            str(source),
-            tool_call.get("instruction", ""),
-            str(output) if output else None,
-        )
+        import hashlib
+        target = output or source
+        def digest_file(path):
+            if not path.is_file(): return ''
+            with path.open('rb') as handle: return hashlib.file_digest(handle, 'sha256').hexdigest()
+        before = digest_file(target)
+        try:
+            result = agent.web_edit_file(str(source), tool_call.get('instruction',''), str(output) if output else None)
+        except Exception as exc:
+            result = f'[WEB_DIRECT_EDIT_FAILED] {type(exc).__name__}: {exc}'
+        from .tool_result_contract import attach_runtime_result
+        after = digest_file(target)
+        changed = before != after
+        saved = str(result).startswith('[WEB_DIRECT_EDIT_SUCCESS]') and target.is_file() and changed
+        return attach_runtime_result(result, 'SUCCEEDED' if saved else 'PARTIAL' if changed else 'FAILED',
+            'WEB_EDIT_SAVED' if saved else 'WEB_EDIT_FAILED', tool=tool, executed=True,
+            resolved_path=str(target), data={'file_saved':saved,'verification_status':'UNVERIFIED',
+                'sha256':after, 'changed':changed, 'before_sha256':before,
+                'delivery_status':'NOT_DELIVERED'})
     elif tool == "download_artifact":
         if not agent:
             return "[ARTIFACT_DOWNLOAD_FAILED] Agent 實例遺失"
@@ -1131,6 +1657,18 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             execute_action=lambda action: execute_tool(action, agent=agent, models=models),
         )
     elif tool == "delete_path":
+        from .tool_result_contract import encode_result, rejection_reason
+        def delete_result(status, reason, executed=False, data=None, detail=''):
+            return encode_result(status, reason, executed=executed,
+                requested_path=tool_call.get('path', ''),
+                resolved_path=(data or {}).get('target'), data=data, detail=detail)
+        def perform_delete(manifest):
+            try:
+                return execute_delete_manifest(security_context, manifest), None
+            except SafeFileOperationError as exc:
+                return None, delete_result('REJECTED', 'ACCESS_DENIED' if rejection_reason(exc) == 'ACCESS_DENIED' else 'TARGET_CHANGED', detail=str(exc))
+            except OSError as exc:
+                return None, delete_result('FAILED', 'ACCESS_DENIED' if isinstance(exc, PermissionError) else 'FILESYSTEM_ERROR', executed=True, detail=str(exc))
         try:
             manifest = build_delete_manifest(
                 security_context,
@@ -1138,7 +1676,9 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 recursive=bool(tool_call.get("recursive", False)),
             )
         except SafeFileOperationError as exc:
-            return f"[SECURITY_DELETE_REJECTED] {exc}"
+            return delete_result('REJECTED', rejection_reason(exc), detail=str(exc))
+        except OSError as exc:
+            return delete_result('FAILED', 'ACCESS_DENIED' if isinstance(exc, PermissionError) else 'FILESYSTEM_ERROR', detail=str(exc))
         from .protocol_v8 import action_digest as v8_action_digest
         action_id = str(tool_call.get("action_id", "") or "")
         admitted = dict(getattr(agent, "_v8_admitted_actions", {}).get(action_id, {}) or {}) if agent else {}
@@ -1163,22 +1703,19 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             security_context.workspace_root, manifest["target"]
         )
         if authorized_scope:
-            deleted = execute_delete_manifest(security_context, manifest)
+            deleted, error = perform_delete(manifest)
+            if error:
+                return error
             deleted["authorization"] = "PERMANENT_WORKSPACE"
             deleted["workspace_scope"] = authorized_scope
-            return "[SECURITY_DELETE_SUCCESS] " + json.dumps(
-                deleted, ensure_ascii=False, separators=(",", ":")
-            )
+            return delete_result('SUCCEEDED', 'DELETED', executed=True, data=deleted)
         record = ledger.request(
             binding,
             ttl_sec=float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0),
         )
         notifier = getattr(agent, "notify_security_approval", None)
         if not callable(notifier) or getattr(agent, "_security_approval_notifier", None) is None:
-            return "[SECURITY_CONFIRMATION_REQUIRED] " + json.dumps(
-                {**manifest, "approval_id": record["approval_id"]},
-                ensure_ascii=False, separators=(",", ":"),
-            )
+            return delete_result('REJECTED', 'USER_APPROVAL_REQUIRED', data={**manifest, 'approval_id':record['approval_id']})
         notify_manifest = dict(manifest)
         if permanent_scope:
             notify_manifest["permanent_scope"] = permanent_scope
@@ -1192,14 +1729,12 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             state = str((current or {}).get("state", ""))
             if state == "APPROVED":
                 ledger.consume(record["approval_id"], binding)
-                return "[SECURITY_DELETE_SUCCESS] " + json.dumps(
-                    execute_delete_manifest(security_context, manifest),
-                    ensure_ascii=False, separators=(",", ":"),
-                )
+                deleted, error = perform_delete(manifest)
+                return error or delete_result('SUCCEEDED', 'DELETED', executed=True, data=deleted)
             if state in {"REJECTED", "CANCELLED", "EXPIRED", "CONSUMED"}:
-                return f"[SECURITY_DELETE_REJECTED] approval_state={state}"
+                return delete_result('REJECTED', 'USER_APPROVAL_'+state)
             time.sleep(0.5)
-        return "[SECURITY_DELETE_REJECTED] approval_expired"
+        return delete_result('REJECTED', 'USER_APPROVAL_EXPIRED')
     elif tool == "save_session_summary":
         return tool_save_session_summary(agent, tool_call)
     elif tool == "final_response":
@@ -1209,6 +1744,10 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     elif tool == "ask_executor":
         if not agent:
             return "[錯誤] Agent 實例遺失，無法呼叫執行引擎"
+        if not callable(getattr(agent,'_call',None)):
+            from .tool_result_contract import encode_result
+            return encode_result('REJECTED','CAPABILITY_UNAVAILABLE',tool=tool,
+                data={'machine_actions_executed':False})
         requested_run_id = str(tool_call.get("run_id", ""))
         explicitly_allowed = tool_call.get("allow_local_ai_fallback") is True
         if not explicitly_allowed or not requested_run_id or requested_run_id != str(agent.current_run_id):

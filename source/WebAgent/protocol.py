@@ -29,7 +29,17 @@ def render_initial_planner_toolkit() -> str:
         "這是本次任務可由 Runtime 執行的完整工具包。你是 Planner；你不直接操作本機，"
         "而是以這些 typed tools 指揮 Runtime。建立第一份 report_progress 前，先依原始目標與 Base "
         "判斷需要哪些客觀 evidence，並用下列工具能力規劃有限步驟。\n"
-        "規劃規則：\n"
+          "規劃規則：\n"
+          "INSPECT／GIT_INSPECT 成功取得觀察輸出、未提供 verify 時可保持 UNVERIFIED 並結束唯讀任務，不要多補驗證或建立 plan_id。"
+          "負向後置驗證測試：在該 MUTATE／VERIFY 執行前提供 expected_verification={status:FAIL,failed_checks:[1]}，"
+          "verify 索引從 1 起，且 success_criteria 必須逐字對應 completion_contract.success 的測試達標條件。"
+          "此欄位只接受 FAIL；預期正常 PASS 時不提供 expected_verification，只提供 verify。"
+          "Runtime 保存原 SUCCEEDED/FAIL，另外計算 expectation_status；不可為通過測試改寫檔案或事後補此欄位。\n"
+        "缺少 Runtime 能讀取的資料時，使用 CONTINUE 並選擇精確讀取 action；"
+        "不能把 NEED_MORE_CONTEXT 直接當成 INTERRUPT。若真正需要使用者選擇，"
+        "在 report_progress 提供 context_request={kind:USER_INPUT,detail:具體問題}；"
+        "客觀阻塞用 kind:BLOCKED、detail 與 Runtime 列出的 blocking_action_id。"
+        "模型聲稱看不到本機、尚未嘗試讀取或猜錯檔名，都不代表整個任務受阻。\n"
         "1. steps[].desc 必須說明該階段要取得的結果，並在需要 Runtime 操作時標出預計使用的精確 tool 名稱。\n"
         "2. decision=CONTINUE 時，next_action 必須指出下一個精確 tool 與用途；同一輪可安全執行的獨立 action "
         "應一次完整列出，不要退化成每輪只問一個欄位。\n"
@@ -46,6 +56,15 @@ def render_initial_planner_toolkit() -> str:
         "GIT_MUTATE、PROCESS、TRANSFER、GENERAL；Runtime 會驗證 operation 與 command。GENERAL 只作低頻"
         "逃生口且不能支持任務成功。run_command 必須原子化：一個 action 只做一個主要操作或副作用；不要用變數、分號或 "
         "control flow 串接相依工作。verify[] 只做同一 action 的唯讀 postcondition 檢查。\n"
+        "9. action 可使用 depends_on:[前置 action_id] 表達依賴，僅能引用本 request 已執行或同輪較前方的 action。"
+        "獨立 action 不需依賴；前置失敗只阻擋依賴它的操作。收到 action_admission.deferred_actions 時，"
+        "只補指定 action，不重送成功操作。已執行失敗 action 的結果不可改寫：修正操作使用新 action_id，"
+        "未執行的 schema 錯誤若需 ACTION_REPLAN，使用新 action_id 並以 replaces_action_id 指向 deferred action。"
+        "待執行的依賴 action 更新 depends_on 指向新前置。省略依賴不會解除來源證據、交易、授權或驗證前置條件。\n"
+        "10. Runtime 的 REQUEST_CONTEXT_OBJECTS 是已確認 input，不是執行授權或成功 evidence。"
+        "需要沿用 path/paths/project_root/output_path/expected_filename 時，明確使用 field_refs:{field:{ref_id,version}}，"
+        "不要同時填該欄位的 literal。缺少引用或過期／不同欄位的引用需重答；Runtime 不會猜測省略欄位。"
+        "command、decision、outcome、evidence、snapshot、verify、plan 不可透過 field_refs 沿用。\n"
         "task_plan_schema_contract=" + _TASK_PLAN_SCHEMA_CONTRACT + "\n"
         + _SHARED_TOOL_SECTION + "\n" + render_write_budget()
         + "\n[/SMARTAGENT_INITIAL_PLANNER_TOOLKIT]"
@@ -67,6 +86,15 @@ def render_action_response_constraints() -> str:
         "只輸出一個 report_progress 與失敗位置的修正版 action；若唯一失敗 action 必須改成 canonical "
         "sequence（例如 chunked write），可輸出完整 replacement sequence。不要重送 preserved action。"
         "Runtime 會依原順序合併、重新驗證整批，全部通過後才原子執行。\n"
+        "6. 工具結果的 _runtime_result／[RUNTIME_TOOL_RESULT] 完全由軟體記錄，不要回填到 action。"
+        "SUCCEEDED 只表示該操作完成；QUEUED 不是交付、RUNNING 不是退出、chunk_accepted 不是 file_committed。"
+        "你只需提出下一個待執行 action，不是在宣稱自己已執行。"
+        "LOCAL_TEST／TELEGRAM_SIMULATION 只替換訊息傳輸，仍使用真實網頁與本機 Runtime，不是 mock 執行器。\n"
+        "7. blockers[] 是 Runtime-owned。依 missing、remedies、release_conditions 補真正缺少的 evidence，"
+        "不要只換措辭、重送 pending 操作、用舊 PASS 隱藏 OPEN/QUEUED/RUNNING，或以 PARTIAL 跳過驗證。\n"
+        "8. Progress 修復時只補必要欄位；Runtime 保留原 action，不能提前 final_response 或換掉尚未執行的操作。"
+        "STALE evidence 必須刷新，SUPERSEDED 依 Runtime 的新證據取代。數值仍優先用 JSON number；"
+        "只有 schema 明確定義的數字欄位可由 Runtime 無歧義正規化，不會猜測路徑、ID、bool 或命令。\n"
         "[/SMARTAGENT_ACTION_RESPONSE_CONSTRAINTS]\n" + render_write_budget()
     )
 
@@ -86,7 +114,18 @@ the smallest suitable typed action; Runtime executes it and returns evidence.
 Every normal reply must contain only fenced `smartagent_tool` transport.
 Natural language outside that transport is invalid. Any other model-facing format
 will be rejected. A reply must contain exactly one
-report_progress block before its local actions or final_response. Every block
+report_progress block before its local actions or final_response. The schema stays
+fixed. Establish the complete first Progress; after Runtime accepts the plan,
+omitted plan fields are merged automatically, without requiring a PATCH label.
+Answer only PROGRESS_REPLY_CONTRACT required fields
+and changed planning fields. Runtime preserves omitted accepted plan fields,
+never old decisions, evidence, blocker claims or action arguments. COMPLETE still
+requires current outcome/evidence and all original terminal verification checks.
+For delete_path, never infer an absolute target from a guessed workspace or a
+spelling correction. First locate the exact target using bounded read tools, or
+ask the user for the full path when ambiguous. A REJECTED result executed=false
+means no deletion took place, not a successful change awaiting verification.
+Every block
 except turn_commit must have a fresh non-empty action_id. The final block must
 be exactly one compact commit:
 {"tool":"turn_commit","action_count":N}
@@ -137,7 +176,14 @@ should cite the supporting action_id. Correlation is Runtime-owned: if the
 model omits that known reference, Runtime may bind the newest non-contradictory
 completed result from the same request before validating the terminal decision.
 
-Use CONTINUE/in_progress while more work is required. Use COMPLETE/success or
+Use CONTINUE/in_progress while more work is required.
+When more context is needed, use the available Runtime read tools first. Missing
+data is not proof that Runtime cannot obtain it. NEED_MORE_CONTEXT must distinguish
+RUNTIME_READ (CONTINUE plus a canonical read action), USER_INPUT (a specific human
+question), and BLOCKED (cite an actual Runtime blocking action_id). report_progress
+may include context_request={kind,detail,blocking_action_id}. Never fabricate a
+blocker or ask the user to upload Runtime-readable project source.
+Use COMPLETE/success or
 COMPLETE/failure when the requested work has ended; an unsuccessful command can
 therefore finish a verification task with outcome FAILED. Use INTERRUPT only
 when Runtime cannot continue or obtain the required evidence. Runtime validates
@@ -207,9 +253,15 @@ action; wait for the controller's result.
 Tool results are authoritative. Decide the next action from the returned
 result. Large results may be represented by a local result reference or JSON
 attachment; consume and verify the reference before committing the next turn.
-Every normal run_command must include operation, a non-empty success_criteria and verify
-plan in the same action before execution. Do not postpone these fields until a
-later round. Runtime records command execution and postcondition verification
+run_command INSPECT/GIT_INSPECT can return observations without success_criteria or verify.
+GENERAL still requires success_criteria and verify, remains non-terminal and cannot prove task success. BUILD/MUTATE/TEST/VERIFY/
+GIT_MUTATE/PROCESS/TRANSFER require success_criteria and a non-empty verify plan before execution.
+Use an explicit absolute working_directory for project commands; main and verification
+processes share it. Set-Location inside the command does NOT change the verification process.
+On COMMAND_FIELD_REPAIR, return the same tool/action_id and only requested fields;
+Runtime restores the unexecuted action and revalidates authorization, dependencies and schema.
+Changing command/operation/working_directory requires a new action_id and replaces_action_id;
+never inherit old verification for the changed operation. Runtime records command execution and postcondition verification
 as separate facts, so an executed command is never confused with a verified
 task outcome.
 When a later action only repairs or strengthens verification for an earlier

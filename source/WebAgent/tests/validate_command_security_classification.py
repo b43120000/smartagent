@@ -38,7 +38,7 @@ def validate_format_is_classified_by_executable_position() -> None:
         "Get-Date -Format o",
         "Get-ChildItem | Format-Table -AutoSize",
         r".\gradlew.bat clean assembleDebug --no-daemon",
-        r"cmake --build E:\card\build --config Debug",
+        r"cmake --build E:\workspace\build --config Debug",
     )
     for command in allowed:
         result = inspect_command(command)
@@ -63,17 +63,17 @@ def validate_format_is_classified_by_executable_position() -> None:
 
 def validate_git_read_only_verification_is_allowed() -> None:
     valid, diagnostic = _run(
-        "git -C 'E:\\card\\release\\SmartAgentv2' commit --allow-empty -m 'checkpoint: before change'",
+        "git -C 'E:\\workspace\\release\\SmartAgentv2' commit --allow-empty -m 'checkpoint: before change'",
         verify=[
             {
                 "action": "run_command",
-                "command": "git -C 'E:\\card\\release\\SmartAgentv2' rev-parse HEAD",
+                "command": "git -C 'E:\\workspace\\release\\SmartAgentv2' rev-parse HEAD",
                 "expect_exit_code": 0,
                 "expect_regex": "(?m)^[0-9a-f]{40}$",
             },
             {
                 "action": "run_command",
-                "command": "git -C 'E:\\card\\release\\SmartAgentv2' log -1 --format=%s",
+                "command": "git -C 'E:\\workspace\\release\\SmartAgentv2' log -1 --format=%s",
                 "expect_exit_code": 0,
                 "expect_contains": "checkpoint: before change",
             },
@@ -84,7 +84,7 @@ def validate_git_read_only_verification_is_allowed() -> None:
 
 def validate_complex_shell_still_fails_closed() -> None:
     valid, diagnostic = _run(
-        "$p='E:\\card\\release\\SmartAgentv2'; git -C $p add -A; "
+        "$p='E:\\workspace\\release\\SmartAgentv2'; git -C $p add -A; "
         "if($LASTEXITCODE -ne 0){exit 1}; "
         "git -C $p commit --allow-empty -m 'checkpoint: before change'; exit $LASTEXITCODE"
     )

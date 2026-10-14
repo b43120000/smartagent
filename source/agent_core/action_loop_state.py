@@ -24,6 +24,7 @@ TRANSITIONS = {
     "REPLAN_REQUIRED",
     "VERIFY_REQUIRED",
     "TERMINAL",
+    "WAIT_RUNTIME",
 }
 
 DISCOVERY_TOOLS = {
@@ -64,6 +65,7 @@ def semantic_action_signature(action: Mapping[str, Any]) -> str:
         if key not in {
             "action_id", "run_id", "turn_id", "request_id", "task_id",
             "task_epoch", "local_nonce", "protocol_version",
+            "depends_on", "replaces_action_id",
         }
     }
     encoded = json.dumps(
@@ -123,6 +125,9 @@ def action_lifecycle(
     verification = str(verification_status or "UNKNOWN").upper()
     evidence = str(evidence_state or "MISSING").upper()
     expectation = str(expectation_status or "").upper()
+    if execution in {'REJECTED','QUEUED','RUNNING','PARTIAL','UNKNOWN'}:
+        return {'REJECTED':'REJECTED','QUEUED':'QUEUED','RUNNING':'RUNNING',
+                'PARTIAL':'PARTIAL','UNKNOWN':'EXECUTION_UNKNOWN'}[execution]
     if expectation == "PASS":
         return "EXPECTED_FAILURE_PASS"
     if expectation in {"FAIL", "SPEC_INVALID"}:
@@ -167,18 +172,38 @@ def classify_evidence_state(
     execution = str(execution_status or "UNKNOWN").upper()
     verification = str(verification_status or "UNKNOWN").upper()
     expectation = str(expectation_status or "").upper()
+    if execution == 'REJECTED':
+        return 'REJECTED', ['action was rejected before execution; resolve the exact cause']
+    if execution in {'QUEUED','RUNNING','PARTIAL'}:
+        return 'PENDING', [f'{execution}: receipt/start/partial work is not final completion']
+    if execution == 'UNKNOWN' and action:
+        return 'MISSING', ['execution outcome is unknown; inspect before any retry']
     if expectation == "PASS":
         return "SUFFICIENT", []
     if expectation in {"FAIL", "SPEC_INVALID"}:
         return "CONTRADICTED", ["observed result did not match the declared expected failure"]
     if execution == "FAILED":
         return "CONTRADICTED", ["last action did not execute successfully"]
+    if tool in {'begin_file_write','write_file_chunk'} and execution=='SUCCEEDED':
+        from .tool_result_contract import decode_result
+        outcome=decode_result(result)
+        if outcome and (outcome.get('data') or {}).get('transaction_state')=='OPEN':
+            # Staging receipt is usable transaction evidence, not a committed
+            # target file. Do not demand final-file verification before commit.
+            return 'AVAILABLE', []
+    if execution == 'UNKNOWN' and (action or {}).get('tool') == 'delete_path':
+        return 'MISSING', ['delete result has no authoritative execution outcome']
     if verification in {"FAIL", "SPEC_INVALID"}:
         return "CONTRADICTED", ["postcondition verification did not pass"]
     if verification == "PASS":
         return "SUFFICIENT", []
     if not action:
         return "MISSING", ["no Runtime action evidence exists yet"]
+    if tool == 'run_command' and phase_for_action(action) == 'DISCOVERY' and verification in {'UNKNOWN','UNVERIFIED'}:
+        from .action_dependencies import command_is_proven_observation
+        if command_is_proven_observation(action):
+            return 'AVAILABLE', []
+        return 'UNVERIFIED', ['command observation role is not mechanically proven; provide verification']
     if tool == "query_project":
         try:
             payload = json.loads(str(result or ""))
@@ -194,7 +219,7 @@ def classify_evidence_state(
         )):
             return "MISSING", [f"{tool} returned no usable evidence"]
         return "AVAILABLE", []
-    if tool in MUTATION_TOOLS and verification in {"UNKNOWN", "UNVERIFIED"}:
+    if tool in MUTATION_TOOLS and phase_for_action(action) != 'DISCOVERY' and verification in {"UNKNOWN", "UNVERIFIED"}:
         return "UNVERIFIED", ["the executed change still requires postcondition verification"]
     return "AVAILABLE", []
 
@@ -229,6 +254,8 @@ def build_action_loop_state(
     pending_recovery: Mapping[str, Any] | None = None,
     pending_verification: Mapping[str, Any] | None = None,
     action_records: Sequence[Mapping[str, Any]] | None = None,
+    admission_records: Sequence[Mapping[str, Any]] | None = None,
+    available_tools: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Build one complete, model-readable, Runtime-owned state snapshot."""
     progress = dict(progress or {})
@@ -277,23 +304,38 @@ def build_action_loop_state(
         requested_verify_tools = [
             str(item) for item in list(verification.get("supported_verify_actions") or [])
             if str(item)
-        ] or [str(verification.get("required_action", "run_command") or "run_command")]
+        ]
+        external_wait = verification.get('owner') == 'transport' and not verification.get('required_action')
+        if not requested_verify_tools and not external_wait:
+            requested_verify_tools = [str(verification.get('required_action') or 'run_command')]
         # file_exists/file_contains/expect_regex are verify[] check kinds, not
         # top-level smartagent tools.  Never advertise them as executable actions.
         allowed = [item for item in requested_verify_tools if item in KNOWN_ACTION_TOOLS]
-        if not allowed:
+        if not allowed and not external_wait:
             allowed = ["run_command"]
         missing = [str(verification.get("missing_condition", "verification evidence is missing"))]
         evidence_state = "UNVERIFIED"
+    elif (tool=='aggregate_verification' and phase=='VERIFY'
+          and str(execution_status or '').upper()=='SUCCEEDED'
+          and str(verification_status or '').upper()=='FAIL'
+          and (action or {}).get('verifies_action_id')):
+        # The scoped checker actually completed with a negative result. Permit
+        # new verification evidence instead of forcing unrelated plan creation.
+        transition='VERIFY_REQUIRED'
+        allowed=['run_command','aggregate_verification','query_project','read_file']
     elif (
         str(execution_status or "UNKNOWN").upper() == "FAILED"
         and str(expectation_status or "").upper() != "PASS"
     ) or evidence_state == "CONTRADICTED":
         transition = "REPLAN_REQUIRED"
-        allowed = ["propose_task_plan", "repair_task_plan", "query_project", "read_file", "run_command"]
-    elif action and evidence_state == "MISSING":
+        allowed = ["propose_task_plan", "repair_task_plan", "query_project", "read_file", "list_directory", "find_file", "inspect_directory", "run_command"]
+    elif action and evidence_state == 'PENDING':
+        transition = 'WAIT_RUNTIME'
+        allowed = sorted(DISCOVERY_TOOLS | VERIFY_TOOLS | {'run_command','final_response'})
+        blocked_signatures = [semantic_action_signature(action)]
+    elif action and evidence_state in {'MISSING','REJECTED'}:
         transition = "REPLAN_REQUIRED"
-        allowed = ["propose_task_plan", "repair_task_plan", "query_project", "read_file", "list_directory"]
+        allowed = ["propose_task_plan", "repair_task_plan", "query_project", "read_file", "list_directory", "find_file", "inspect_directory", "run_command"]
         blocked_signatures = [semantic_action_signature(action)]
     elif action and tool in MUTATION_TOOLS and evidence_state == "UNVERIFIED":
         phase = "VERIFY"
@@ -302,6 +344,39 @@ def build_action_loop_state(
     else:
         transition = "CONTINUE_PLAN"
         allowed = sorted(KNOWN_ACTION_TOOLS)
+    if available_tools is not None:
+        available = set(available_tools)
+        allowed = [name for name in allowed if name in available]
+
+    blockers = []
+    if transition in {'PREREQUISITE_REQUIRED','VERIFY_REQUIRED','REPLAN_REQUIRED'} or evidence_state == 'PENDING':
+        pending_kind = str(execution_status or '').upper()
+        if tool in {'begin_file_write','write_file_chunk'}:
+            release_kind = 'FILE_COMMITTED'
+        elif pending_kind == 'RUNNING':
+            release_kind = 'PROCESS_EXITED'
+        elif pending_kind == 'QUEUED':
+            release_kind = 'DELIVERY_CONFIRMED'
+        elif transition == 'VERIFY_REQUIRED':
+            release_kind = 'SCOPED_VERIFICATION_PASS_OR_FAIL'
+        elif recovery.get('active'):
+            release_kind = 'RUNTIME_PREREQUISITE_SATISFIED'
+        else:
+            release_kind = 'NEW_OBJECTIVE_EVIDENCE_OR_RESOLVED_FIELDS'
+        remedies = _compact_recovery_actions(recovery)
+        if not remedies and transition == 'VERIFY_REQUIRED':
+            remedies = [{'tool':name, 'verifies_action_id':str((action or {}).get('action_id',''))}
+                        for name in allowed if name in {'run_command','aggregate_verification'}]
+        if available_tools is not None:
+            remedies = [item for item in remedies if item['tool'] in set(available_tools)]
+        facts = {'blocking_action_id':str((action or {}).get('action_id','')),
+                 'reason':pending_kind+'_NOT_COMPLETE' if evidence_state=='PENDING' else str(recovery.get('reason') or transition),
+                 'execution_status':str(execution_status or 'UNKNOWN').upper(),
+                 'release_kind':release_kind,'missing':missing}
+        blockers = [{'blocker_id':'BLK-'+hashlib.sha256(json.dumps(facts,sort_keys=True).encode()).hexdigest()[:16],
+                     **facts,'satisfied':False,'remedies':remedies,
+                     'release_conditions':[{'kind':release_kind,'owner':'runtime'}],
+                     'retry_policy':'No blind replay; inspect UNKNOWN/PARTIAL outcomes first.'}]
 
     states: list[dict[str, Any]] = []
     for record in list(action_records or []):
@@ -330,11 +405,50 @@ def build_action_loop_state(
             "missing_evidence": record_missing,
             "verifies_action_id": str(record_action.get("verifies_action_id", "") or ""),
             "semantic_signature": semantic_action_signature(record_action),
+            'evidence_status':record.get('evidence_status','ACTIVE'),
+            'produced_round':record.get('produced_round'),
         })
+        active = record.get('evidence_status','ACTIVE') == 'ACTIVE'
+        from .tool_result_contract import decode_result
+        typed = decode_result(str(record.get('result',''))) or {}
+        data = typed.get('data') or {}
+        open_write = record_action.get('tool') in {'begin_file_write','write_file_chunk'} and data.get('transaction_state') == 'OPEN'
+        pending = record_execution in {'QUEUED','RUNNING','PARTIAL','UNKNOWN'} and not record.get('pending_resolution')
+        unverified = phase_for_action(record_action) == 'EXECUTE' and record_execution=='SUCCEEDED' and record_verification not in {'PASS','FAIL'} and not record.get('terminal_eligible',True)
+        if active and (open_write or pending or unverified):
+            recorded_id = str(record_action.get('action_id',''))
+            if not any(item.get('blocking_action_id') == recorded_id for item in blockers):
+                kind = 'FILE_COMMITTED_OR_ABORTED' if open_write else 'SCOPED_VERIFICATION_PASS_OR_FAIL' if unverified else 'DELIVERY_CONFIRMED' if record_execution=='QUEUED' else 'OBJECTIVE_EXECUTION_OUTCOME'
+                remedies = [{'tool':'commit_file_write','write_id':record_action.get('write_id','')},
+                            {'tool':'abort_file_write','write_id':record_action.get('write_id','')}] if open_write else []
+                blockers.append({'blocker_id':'BLK-'+hashlib.sha256(recorded_id.encode()).hexdigest()[:16],
+                    'blocking_action_id':recorded_id,'reason':'OPEN_WRITE_TRANSACTION' if open_write else 'VERIFY_REQUIRED' if unverified else record_execution+'_NOT_COMPLETE',
+                    'execution_status':record_execution,
+                    'satisfied':False,'remedies':remedies,'release_conditions':[{'kind':kind,'owner':'runtime'}],
+                    'retry_policy':'Do not replay the original action while unresolved.'})
+            if pending:
+                blocked_signatures.append(semantic_action_signature(record_action))
+
+    for record in admission_records or []:
+        pending_action = dict(record.get('action') or {})
+        ref = str(record.get('action_id') or pending_action.get('action_id') or '')
+        states.append({'action_id':ref, 'tool':pending_action.get('tool',''),
+            'lifecycle':'BLOCKED_DEPENDENCY' if record.get('status') == 'BLOCKED_DEPENDENCY' else 'ADMISSION_REJECTED',
+            'admission_status':record.get('status','REPAIR_REQUIRED'), 'executed':False,
+            'execution_status':'NOT_EXECUTED', 'depends_on':pending_action.get('depends_on',[]),
+            'diagnostics':record.get('diagnostics',[]), 'evidence_state':'MISSING'})
+        blockers.append({'blocker_id':'BLK-ADMISSION-'+hashlib.sha256(ref.encode()).hexdigest()[:16],
+            'blocking_action_id':ref, 'reason':record.get('status','REPAIR_REQUIRED'),
+            'execution_status':'NOT_EXECUTED', 'satisfied':False,
+            'affected_action_ids':[ref], 'depends_on':pending_action.get('depends_on',[]),
+            'diagnostics':record.get('diagnostics',[]),
+            'remedies':[{'tool':pending_action.get('tool',''),'action_id':ref,'repair_only':True}],
+            'release_conditions':[{'kind':'ACTION_ADMITTED_AND_EXECUTED','owner':'runtime'}],
+            'retry_policy':'Repair this unexecuted action only; never replay completed siblings.'})
 
     terminal = transition == "TERMINAL"
     response_contract = {
-        "required_blocks": ["report_progress", "final_response" if terminal else "canonical_action"],
+        "required_blocks": ["report_progress"] + (["final_response" if terminal else "canonical_action"] if allowed else []),
         "allowed_action_tools": list(dict.fromkeys(allowed)),
         "runtime_owned_progress_fields": [
             "runtime_state_ref", "next_phase", "selected_action",
@@ -342,7 +456,7 @@ def build_action_loop_state(
         "model_owned_progress_fields": [
             "decision", "outcome", "matched_condition", "evidence_refs",
             "decision_reason", "current_step", "total_steps", "current_focus",
-            "next_action", "steps", "completion_contract",
+            "next_action", "steps", "completion_contract", "context_request",
         ],
     }
 
@@ -364,6 +478,7 @@ def build_action_loop_state(
         },
         "action_states": states,
         "prerequisite_actions": _compact_recovery_actions(recovery),
+        "blockers": blockers,
         "response_contract": response_contract,
     }
     task_state = (

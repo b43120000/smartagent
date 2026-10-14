@@ -161,6 +161,9 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     queue = RemoteTaskQueue(TaskStateStore(remote_tasks_path(root)))
     events = RemoteEventStore(remote_events_path(root))
     task = queue.adopt_dispatched(task_id, token, worker_pid=os.getpid())
+    from agent_core.task_continuation import TaskContinuationStore, task_owner, render_task_reply
+    continuation_store = TaskContinuationStore(root)
+    continuation_store.register_task(task)
     protocol_version = int((task.metadata or {}).get("protocol_version", 9) or 0)
     protocol_family = str((task.metadata or {}).get("protocol_family", "SMARTAGENT_V9"))
     if protocol_version not in {8, 9}:
@@ -237,6 +240,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     attached_pw = None
     started_at = time.time()
     try:
+        continuation_store.prepare_request(task.task_id, request=task.request,
+            owner=task_owner(task), workspace=task.workspace)
         if queue.cancellation_requested(task.task_id):
             raise RemoteTaskCancelled("telegram_interrupt_requested")
         ingress_metadata = dict(
@@ -265,7 +270,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 request_id=task.request_id, skill=package.name,
                 skill_sha256=package.sha256, skill_files=list(package.files),
             )
-        if source_transport == "TELEGRAM":
+        if source_transport == "TELEGRAM" and not continuation_store.get(task.task_id).get('source_task_id'):
             fast_summary, fast_artifact = _telegram_get_file_fast_result(task.request, task.workspace)
             if fast_artifact is not None:
                 terminal_payload = prepare_telegram_completion(
@@ -275,11 +280,17 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     artifacts=[fast_artifact],
                 )
                 fast_summary = terminal_payload["summary"]
+                # File obtained/queued is not proof of remote delivery.
+                terminal_payload['task_outcome'] = 'UNKNOWN'
+                terminal_payload['summary'] = render_task_reply(original_request=task.request,
+                    base='', conclusion=fast_summary, task_id=task.task_id,
+                    request_id=task.request_id, state='COMPLETED', outcome='UNKNOWN')
                 elapsed = round(time.time() - started_at, 3)
                 if queue.cancellation_requested(task.task_id):
                     raise RemoteTaskCancelled("telegram_interrupt_requested")
                 completed = queue.complete(task.task_id, result={
-                    "response": fast_summary, "worker_pid": os.getpid(),
+                    "response": terminal_payload['summary'], "worker_pid": os.getpid(),
+                    'task_outcome': 'UNKNOWN',
                     "elapsed_sec": elapsed, "protocol_engine": "telegram_get_file_fast_path",
                     "outbound_artifacts": terminal_payload["artifacts"],
                     "artifact_rejections": terminal_payload["artifact_rejections"],
@@ -289,6 +300,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     payload=terminal_payload,
                 )
                 set_runtime_state(task.task_id, "COMPLETED", root=root)
+                continuation_store.finish(task.task_id, 'COMPLETED', fast_summary, outcome='UNKNOWN')
                 delete_progress(task.task_id, root=root)
                 runtime_log.write("TASK_COMPLETED", component="telegram_webagent_worker",
                     stage="TELEGRAM_GET_FILE_COMPLETED", task_id=task.task_id,
@@ -446,6 +458,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 tool_context=tool_context,
                 cancel_check=check_task_cancelled,
                 progress_root=root,
+                continuation_store=continuation_store,
+                continuation_owner=task_owner(task),
             )
             from agent_core.project_sync_receiver import browser_receiver_identity
             loop.tools.configure_project_sync_receiver(lambda: browser_receiver_identity(scraper))
@@ -530,6 +544,12 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             expect_artifact=False if plan_id else None,
         )
         terminal_payload["plan_id"] = plan_id
+        terminal_payload['task_outcome'] = loop.terminal_outcome
+        terminal_payload['summary'] = render_task_reply(
+            original_request=loop.task_request, base=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
+            conclusion=terminal_payload['summary'], task_id=task.task_id, request_id=task.request_id,
+            state='COMPLETED', outcome=loop.terminal_outcome,
+            source_task_id=(loop.continuation_source or {}).get('task_id', ''))
         final_content = terminal_payload["summary"]
         if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
             raise RemoteTaskCancelled("telegram_interrupt_requested")
@@ -578,6 +598,11 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         print(f"[RemoteAgent] 任務完成，等待 Telegram 回傳: {task.request_id}", flush=True)
         return 0
     except BaseException as exc:
+        try:
+            continuation_store.finish(task.task_id, 'INTERRUPTED', f'{type(exc).__name__}: {exc}')
+        except Exception as persistence_error:
+            runtime_log.write('ERROR', component='telegram_webagent_worker', stage='CONTINUATION_FINISH_FAILED',
+                task_id=task.task_id, error=str(persistence_error))
         if isinstance(exc, RemoteTaskCancelled) or cancel_seen.is_set():
             set_runtime_state(
                 task.task_id, "INTERRUPTED",
@@ -623,6 +648,11 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             loop_protocol == "INTERRUPTED"
             and loop_execution == "SUCCEEDED"
         )
+        failure_payload['summary'] = render_task_reply(
+            original_request=getattr(locals().get('loop'), 'task_request', task.request),
+            base=str(getattr(progress, 'base_evaluation', '') or ''),
+            conclusion=failure_payload['error'], task_id=task.task_id, request_id=task.request_id,
+            state='INTERRUPTED' if protocol_only_interruption else 'FAILED')
         if protocol_only_interruption:
             interrupted = queue.interrupt_running(
                 task.task_id,

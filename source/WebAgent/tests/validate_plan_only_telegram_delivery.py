@@ -13,7 +13,7 @@ PLAN_REQUEST = """規劃用 Python 生成灰階 PNG，最後上傳到 Telegram�
 路徑：E:\\card
 只規劃不實做"""
 EXECUTE_REQUEST = """用 Python 生成灰階 PNG，最後上傳到 Telegram。
-路徑：E:\\card"""
+路徑：E:\\workspace"""
 
 
 class FakeTelegramClient:

@@ -13,6 +13,13 @@ def _bounded(value: object, limit: int=1200) -> str:
 def classify_tool_result(tool: str, result: Any) -> dict:
     """Return a durable status; command exit success alone is insufficient."""
     text=result if isinstance(result,str) else json.dumps(result,ensure_ascii=False,default=str)
+    from .tool_result_contract import decode_result
+    outcome = decode_result(text)
+    if outcome:
+        from .tool_result_contract import outcome_committable
+        committed = outcome_committable(tool, outcome)
+        return {'status':'COMMITTED' if committed else 'FAILED',
+                'reason':outcome.get('reason', ''), 'evidence':_bounded(text)}
     parsed=None
     try: parsed=json.loads(text) if isinstance(text,str) else result
     except Exception: pass
@@ -35,6 +42,10 @@ def classify_tool_result(tool: str, result: Any) -> dict:
 def safe_stage_summary(tool: str, result: Any, status: str) -> dict:
     """Privacy-safe Stage3 evidence; never include text/path/command bytes."""
     parsed=result if isinstance(result,dict) else None
+    from .tool_result_contract import decode_result
+    outcome = decode_result(result) if not isinstance(result, dict) else None
+    if outcome:
+        parsed = {**outcome, **(outcome.get('data') or {})}
     if parsed is None:
         try: parsed=json.loads(str(result))
         except Exception: parsed={}
@@ -43,10 +54,11 @@ def safe_stage_summary(tool: str, result: Any, status: str) -> dict:
     verification=str(parsed.get("verification_status", parsed.get("VERIFICATION_STATUS", "")) or "").upper()
     reason_code="OK" if status=="COMMITTED" else "TOOL_FAILURE"
     if verification in {"FAIL","UNVERIFIED"}: reason_code="VERIFICATION_"+verification
-    elif observed in {"ROLLED_BACK","FAILED"}: reason_code="EDIT_"+observed
+    elif tool == 'apply_edit_plan' and observed in {"ROLLED_BACK","FAILED"}: reason_code="EDIT_"+observed
     elif observed and status!="COMMITTED": reason_code="STATUS_"+observed[:48]
     rows=parsed.get("results", []); rows=rows if isinstance(rows,list) else []
     exit_codes=[item.get("exit_code") for item in rows if isinstance(item,dict) and type(item.get("exit_code")) is int][:16]
+    if not exit_codes and type(parsed.get('exit_code')) is int: exit_codes=[parsed['exit_code']]
     timed_out=any(bool(item.get("timed_out")) for item in rows if isinstance(item,dict))
     safe={"tool":str(tool),"status":str(status),"reason_code":reason_code}
     if verification: safe["verification_status"]=verification

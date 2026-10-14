@@ -193,6 +193,7 @@ def validate_model_action(
     action: Mapping[str, Any],
     *,
     allow_missing_fields: set[str] | frozenset[str] = frozenset(),
+    transport_only: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(action, Mapping):
         raise ProtocolV8Error("ACTION_NOT_OBJECT")
@@ -201,6 +202,9 @@ def validate_model_action(
     if tool == "turn_commit":
         raise ProtocolV8Error("ACTION_TOOL_RESERVED", tool)
     for field in TOOL_REQUIRED_FIELDS.get(tool, set()):
+        if tool == 'report_progress' and action.get('progress_update') == 'PATCH' and field in {'current_step', 'total_steps'}:
+            # Only accepted planning state may be materialized by Runtime.
+            continue
         if field not in action and field not in allow_missing_fields:
             raise ProtocolV8Error("MISSING_OR_INVALID_FIELD", field)
     for field in RUNTIME_OWNED_FIELDS:
@@ -209,14 +213,14 @@ def validate_model_action(
     result = dict(action)
     result["tool"] = tool
     result["action_id"] = action_id
-    if tool == "run_command" and "operation" in result:
+    if not transport_only and tool == "run_command" and "operation" in result:
         try:
             mismatch = operation_mismatch_detail(result)
         except ValueError as exc:
             raise ProtocolV8Error("RUN_COMMAND_OPERATION_INVALID", str(exc)) from exc
         if mismatch:
             raise ProtocolV8Error("RUN_COMMAND_OPERATION_MISMATCH", mismatch)
-    if tool == "project_sync" and "strategy" in result:
+    if not transport_only and tool == "project_sync" and "strategy" in result:
         strategy = str(result.get("strategy", "") or "").strip().upper()
         if strategy not in PROJECT_SYNC_STRATEGIES:
             raise ProtocolV8Error(
@@ -448,6 +452,7 @@ def parse_v8_tool_transport_detailed(
             validate_model_action(
                 action,
                 allow_missing_fields=TOOL_REQUIRED_FIELDS.get(str(action.get("tool", "")), set()),
+                transport_only=True,
             )
         except ProtocolV8Error as exc:
             # ``index`` is the action ordinal in the decoded transport, not the

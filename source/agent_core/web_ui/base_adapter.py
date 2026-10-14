@@ -37,6 +37,10 @@ _REQUEST_MARKER_PATTERNS = (
 def _request_markers(value: object) -> tuple[str, ...]:
     """Extract software-owned request markers that survive UI text folding."""
     text = str(value or "")
+    # Per-submit identity takes precedence over a request ID reused across rounds.
+    submit_ids = re.findall(r'\[WEBUI_SUBMIT_ID\]\s*(WUS-[A-F0-9]{32})\s*\[/WEBUI_SUBMIT_ID\]', text)
+    if submit_ids:
+        return tuple(dict.fromkeys(submit_ids))
     markers: list[str] = []
     for pattern in _REQUEST_MARKER_PATTERNS:
         for match in pattern.finditer(text):
@@ -423,7 +427,25 @@ class BaseWebUIAdapter:
             baseline_user_count=len(snapshot.user_turns),
             baseline_assistant_count=len(snapshot.assistant_turns),
             request_markers=_request_markers(prompt),
+            baseline_assistant_content=tuple((self.durable_turn_id(turn), turn.content_digest)
+                for turn in snapshot.assistant_turns),
         )
+
+    def prepare_transport_prompt(self, prompt: str) -> str:
+        return prompt
+
+    def recover_turn_mounts(self) -> bool:
+        """Provider-specific bounded materialization, never resubmit."""
+        return False
+
+    def turn_mount_diagnostic(self) -> dict:
+        return {}
+
+    def blocking_transport_error(self) -> dict:
+        return {}
+
+    def assistant_is_fresh(self, turn: TurnRef, scope: RequestScope) -> bool:
+        return self.durable_turn_id(turn) not in set(scope.baseline_assistant_ids)
 
     def _confirmed_user_turn_candidate(
         self,
@@ -441,6 +463,9 @@ class BaseWebUIAdapter:
         """
         baseline = set(scope.baseline_user_ids)
         request_markers = set(scope.request_markers)
+        if any(marker.startswith('WUS-') for marker in request_markers):
+            matches = [turn for turn in turns if request_markers.intersection(_request_markers(turn.raw_text))]
+            return matches[0] if len(matches) == 1 else None
         if request_markers:
             marker_matches = [
                 turn for turn in turns
@@ -535,6 +560,10 @@ class BaseWebUIAdapter:
             }
             return candidate, state
 
+        if any(marker.startswith('WUS-') for marker in scope.request_markers):
+            return None, {'after_confirmed':False, 'reason':'submit_nonce_not_uniquely_visible',
+                'strategy':'unique_submit_marker', 'request_marker_count':len(scope.request_markers)}
+
         users = self.turns("user")
         assistants = self.turns("assistant")
         baseline = set(scope.baseline_assistant_ids)
@@ -595,6 +624,12 @@ class BaseWebUIAdapter:
     def rebind_user_turn(self, scope: RequestScope) -> TurnRef | None:
         """Rebind the semantic user anchor after a page reload rebuilt the DOM."""
         turns = self.turns("user")
+        if any(marker.startswith('WUS-') for marker in scope.request_markers):
+            matches = [turn for turn in turns if set(scope.request_markers).intersection(_request_markers(turn.raw_text))]
+            if len(matches) != 1:
+                return None
+            scope.user_turn = matches[0]
+            return scope.user_turn
         if scope.user_turn is not None:
             # Provider fallback keys and query ordinals may be reassigned after
             # a render.  The rendered text captured from the confirmed submit
@@ -682,13 +717,13 @@ class BaseWebUIAdapter:
             grouped = tuple(
                 turn for turn in assistants
                 if self.conversation_unit_id(turn) == unit_id
-                and self.durable_turn_id(turn) not in baseline
+                and self.assistant_is_fresh(turn, scope)
             )
             if grouped:
                 return grouped
         return tuple(
             turn for turn in assistants
-            if self.durable_turn_id(turn) not in baseline
+            if self.assistant_is_fresh(turn, scope)
             and self._is_after(scope.user_turn, turn)
         )
 

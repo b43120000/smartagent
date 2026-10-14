@@ -54,7 +54,7 @@ def validate_state_classification() -> None:
 
     empty_query = {
         "tool": "query_project", "action_id": "Q-1",
-        "project_root": r"E:\card", "queries": [{"operation": "search_text", "query": "missing"}],
+        "project_root": r"E:\workspace", "queries": [{"operation": "search_text", "query": "missing"}],
     }
     empty = build_action_loop_state(
         action=empty_query,
@@ -137,7 +137,7 @@ def validate_action_phase_and_lifecycle_contract() -> None:
 def validate_prerequisite_and_verification_routes() -> None:
     prerequisite = {
         "tool": "query_project",
-        "project_root": r"E:\card",
+        "project_root": r"E:\workspace",
         "queries": [{"operation": "read_range", "path": "a.py", "start_line": 1, "end_line": 80}],
     }
     state = build_action_loop_state(

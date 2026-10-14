@@ -167,13 +167,15 @@ class SessionProtocol:
             f"[/{PROTOCOL_BOOTSTRAP_MARKER}]"
         )
 
-    def session_attach_prompt(self, *, session_id: str) -> str:
+    def session_attach_prompt(self, *, session_id: str, handshake_id: str = '') -> str:
         payload = {
             "protocol_name": self.identity.protocol_name,
             "protocol_version": self.identity.protocol_version,
             "protocol_hash": self.identity.protocol_hash,
             "session_id": session_id,
         }
+        if handshake_id:
+            payload['handshake_id'] = handshake_id
         ready = _marker_block(SESSION_READY_MARKER, payload)
         return (
             f"[{SESSION_ATTACH_MARKER}]\n"
@@ -192,11 +194,11 @@ class SessionProtocol:
             payload = _extract_unclosed_marker_payload(text, PROTOCOL_READY_MARKER)
         return self._matches(payload, session_id=session_id)
 
-    def parse_session_ready(self, text: str, *, session_id: str) -> bool:
+    def parse_session_ready(self, text: str, *, session_id: str, handshake_id: str = '') -> bool:
         payload = _extract_marker_payload(text, SESSION_READY_MARKER)
         if payload is None and _allow_missing_readiness_closing_marker(self.debug_config_path):
             payload = _extract_unclosed_marker_payload(text, SESSION_READY_MARKER)
-        return self._matches(payload, session_id=session_id)
+        return self._matches(payload, session_id=session_id) and (not handshake_id or payload.get('handshake_id') == handshake_id)
 
     def _matches(self, payload: dict | None, *, session_id: str) -> bool:
         if not payload:

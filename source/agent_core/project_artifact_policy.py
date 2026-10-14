@@ -66,13 +66,15 @@ _SOURCE_NAMES = {'CMakeLists.txt','Dockerfile','Makefile','GNUmakefile','Android
 
 def _looks_text(path: Path) -> bool:
     try:
-        sample = path.read_bytes()[:8192]
+        with path.open('rb') as stream:
+            sample = stream.read(8192)
     except OSError:
         return False
     if b'\x00' in sample:
         return False
     try:
-        sample.decode('utf-8')
+        import codecs
+        codecs.getincrementaldecoder('utf-8')('strict').decode(sample, final=False)
         return True
     except UnicodeDecodeError:
         return False

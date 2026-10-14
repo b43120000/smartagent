@@ -302,7 +302,9 @@ def _range_result(root: Path, snapshot: Mapping[str, object], query: Mapping[str
         "operation": "read_range", "status": "OK", "path": record["path"],
         "start_line": start, "end_line": end, "total_lines": len(lines),
         "file_sha256": record["sha256"], "content": content,
-        "truncated": end < requested_end or end < len(lines),
+        # An end_line beyond EOF is not missing content.  Only actual
+        # remaining lines require another page; EOF must agree with cursor.
+        "truncated": end < len(lines),
         "next_cursor": end + 1 if end < len(lines) else None,
     }
 
@@ -456,7 +458,7 @@ def _execute_query(root: Path, snapshot: Mapping[str, object], query: Mapping[st
 
 
 def _fit_payload(payload: dict, limit_bytes: int) -> dict:
-    payload["response_truncated"] = False
+    payload["response_truncated"] = bool(payload.get("response_truncated", False))
     while _json_bytes(payload) > limit_bytes:
         changed = False
         for result in reversed(payload.get("results", [])):

@@ -35,6 +35,8 @@ def build_delete_manifest(
         raise SafeFileOperationError(f"filesystem_root_delete_forbidden:{target}")
     if target == context.workspace_root or target == context.config.runtime_write_root:
         raise SafeFileOperationError(f"authorized_root_delete_forbidden:{target}")
+    if target in context.write_roots:
+        raise SafeFileOperationError(f"authorized_root_delete_forbidden:{target}")
     if not target.exists():
         raise SafeFileOperationError(f"delete_target_not_found:{target}")
     if target.is_dir() and not recursive:
@@ -58,6 +60,7 @@ def build_delete_manifest(
                 "path": str(item),
                 "kind": "directory" if item.is_dir() else "file",
                 "size_bytes": item.stat().st_size if item.is_file() else 0,
+                'identity': [item.stat().st_dev, item.stat().st_ino, item.stat().st_mtime_ns],
             })
     else:
         entries.append({"path": str(target), "kind": "file", "size_bytes": target.stat().st_size})
@@ -66,6 +69,7 @@ def build_delete_manifest(
         "target": str(target),
         "recursive": bool(recursive),
         "entries": entries,
+        'target_identity': [target.stat().st_dev, target.stat().st_ino, target.stat().st_mtime_ns],
     }
     digest = hashlib.sha256(
         json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -84,10 +88,14 @@ __all__ = ["SafeFileOperationError", "build_delete_manifest"]
 
 
 def execute_delete_manifest(context: SecurityContext, manifest: dict) -> dict:
-    fresh = build_delete_manifest(
-        context, str(manifest.get("target", "")),
-        recursive=bool(manifest.get("recursive", False)),
-    )
+    try:
+        fresh = build_delete_manifest(
+            context, str(manifest.get("target", "")),
+            recursive=bool(manifest.get("recursive", False)),
+        )
+    except OSError as exc:
+        # Validation failed before any unlink/rmtree was attempted.
+        raise SafeFileOperationError('delete_preflight_failed') from exc
     if fresh["manifest_digest"] != str(manifest.get("manifest_digest", "")):
         raise SafeFileOperationError("delete_manifest_changed_since_approval")
     target = Path(fresh["target"])

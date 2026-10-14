@@ -64,6 +64,7 @@ def run_bounded_process(
             "stdout_ref": "", "stderr_ref": "", "timed_out": False,
             "error": f"SECURITY_COMMAND_REJECTED:{exc}",
             "security_rejected": True,
+            "process_started": False,
         }
     from .windows_security import restricted_executor_required
     restricted_required = restricted_executor_required()
@@ -76,6 +77,7 @@ def run_bounded_process(
                 from .execution_telemetry import write_snapshot
                 write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="RUNNING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid())
             result = execute_restricted(command, cwd=cwd, timeout=timeout, shell=shell, max_stream_bytes=max_stream_bytes, approval_manifest=approval_manifest, security_command=security_text)
+            result.setdefault('process_started', True if result.get('exit_code') is not None else None)
             if telemetry_root and telemetry_task:
                 write_snapshot(telemetry_root, telemetry_task, state="TIMED_OUT" if result.get("timed_out") else "EXITED", ended_at=__import__("time").time(), exit_code=result.get("exit_code"), stdout_tail=str(result.get("stdout", ""))[-8192:], stderr_tail=str(result.get("stderr", ""))[-8192:])
             return result
@@ -87,6 +89,7 @@ def run_bounded_process(
                 "stdout_ref": "", "stderr_ref": "", "timed_out": False,
                 "error": f"RESTRICTED_EXECUTOR_REQUIRED:{type(exc).__name__}: {exc}",
                 "security_rejected": True,
+                "process_started": None,
             }
     capture_dir = (
         Path(capture_root).expanduser().resolve()
@@ -103,6 +106,7 @@ def run_bounded_process(
     if telemetry_root and telemetry_task:
         from .execution_telemetry import write_snapshot
         write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="STARTING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid(), stdout_path=str(stdout_path), stderr_path=str(stderr_path))
+    process_started = False
     try:
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
             process = subprocess.Popen(
@@ -112,6 +116,7 @@ def run_bounded_process(
                 stdout=stdout_handle,
                 stderr=stderr_handle,
             )
+            process_started = True
             if telemetry_root and telemetry_task:
                 write_snapshot(telemetry_root, telemetry_task, state="RUNNING", pid=process.pid)
             timed_out = False
@@ -119,7 +124,21 @@ def run_bounded_process(
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 timed_out = True
-                process.kill()
+                # On Windows shell=True owns cmd.exe, not just the actual child.
+                # Kill only this still-live Popen tree; otherwise inherited capture
+                # handles (and the command itself) can survive the timeout.
+                if os.name == 'nt' and process.poll() is None:
+                    try:
+                        subprocess.run(
+                            [str(Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'taskkill.exe'),
+                             '/PID', str(process.pid), '/T', '/F'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=10, check=False,
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                if process.poll() is None:
+                    process.kill()
                 process.wait(timeout=5)
 
         stdout, stdout_bytes, stdout_truncated, stdout_ref = _read_capture(stdout_path, max_stream_bytes)
@@ -135,6 +154,7 @@ def run_bounded_process(
             "stdout_ref": stdout_ref,
             "stderr_ref": stderr_ref,
             "timed_out": timed_out,
+            "process_started": process_started,
         }
         if timed_out:
             result["error"] = f"指令超過 {timeout} 秒"
@@ -159,4 +179,5 @@ def run_bounded_process(
             "stderr_ref": "",
             "timed_out": False,
             "error": str(exc),
+            "process_started": process_started,
         }

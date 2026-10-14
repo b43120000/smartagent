@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import uuid
 from typing import Callable
 
 from agent_core.conversation_registry import ConversationRegistry
@@ -61,11 +62,12 @@ def ensure_webagent_session(
         f"[{display_name}] Session mode: SESSION_ATTACH；正在確認此對話保留既有 WebAgent 協議。",
         flush=True,
     )
+    handshake_id = 'HND-' + uuid.uuid4().hex.upper()
     response = send_prompt(
-        session.session_attach_prompt(session_id=decision.session_id),
+        session.session_attach_prompt(session_id=decision.session_id, handshake_id=handshake_id),
         stage="協議附著確認",
     )
-    if session.parse_session_ready(response, session_id=decision.session_id):
+    if session.parse_session_ready(response, session_id=decision.session_id, handshake_id=handshake_id):
         state = session.armed_state(session_id=decision.session_id)
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
         print(f"[{display_name}] 協議附著成功。", flush=True)

@@ -24,6 +24,10 @@ def _workspace(agent) -> Path:
 
 
 def _verification_status(text: str) -> str:
+    from .tool_result_contract import decode_result
+    outcome = decode_result(text)
+    if outcome:
+        return str((outcome.get('data') or {}).get('verification_status',''))
     for value in ("PASS", "FAIL", "UNVERIFIED"):
         if f"VERIFICATION_STATUS: {value}" in text:
             return value
@@ -51,6 +55,7 @@ def _compact_project_sync_result(text: str, workspace: Path) -> str:
     })
     summary = {
         "schema": "PROJECT_SYNC_RESULT_SUMMARY_V1",
+        "_runtime_result": payload.get('_runtime_result',{}),
         "status": payload.get("status", ""),
         "local_status": payload.get("local_status", ""),
         "sync_status": payload.get("sync_status", ""),
@@ -89,6 +94,7 @@ def _actionable_json_summary(tool_call: dict, text: str) -> str:
     if not isinstance(payload, dict):
         return ""
     keys = (
+        "_runtime_result",
         "schema", "status", "reason", "missing_fields", "current_snapshot_id",
         "base_snapshot_id", "plan_id", "plan_sha256", "semantic_map_revision",
         "applied", "rolled_back", "error",

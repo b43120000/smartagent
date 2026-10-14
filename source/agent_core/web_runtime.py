@@ -2078,6 +2078,21 @@ class WebLLMScraper:
                 last_log = now
             time.sleep(0.25)
 
+    def _check_provider_transport_error(self) -> None:
+        check = getattr(self._web_ui_adapter(), 'blocking_transport_error', None)
+        error = check() if check else {}
+        if error.get('reason') in {'PROVIDER_RATE_LIMITED','PROVIDER_CONVERSATION_FULL'}:
+            self._log_stage('provider_transport_blocked', json.dumps(error, ensure_ascii=False))
+            # A provider rejection is not an ambiguous submit. Do not poison
+            # the session once its quota panel clears.
+            full = error['reason'] == 'PROVIDER_CONVERSATION_FULL'
+            self._set_request_state('RECOVERY_REQUIRED' if getattr(self, '_pending_submit_context', None)
+                else ('CONVERSATION_FULL' if full else 'RATE_LIMITED'), error['reason'].lower())
+            message = ('[WEB_PROVIDER_CONVERSATION_FULL] 對話已滿，請建立新對話並更新 Workspace 的對話 URL；本次不自動重送。'
+                if full else '[WEB_PROVIDER_RATE_LIMITED] ' + str(error.get('message','')))
+            raise WebScraperStageError(message,
+                stage='provider_conversation_full' if full else 'provider_rate_limit', safe_to_retry=False)
+
     def _wait_for_user_sent(self, snapshot: dict, timeout_sec: float = 45.0) -> None:
         """Require a genuinely new user turn before looking at assistant content.
 
@@ -2096,9 +2111,11 @@ class WebLLMScraper:
         deferred_last_progress = 0.0
         deferred_signature = ""
         inactive_since = 0.0
+        mount_recovery_count = 0
         while True:
             self._run_control_hook()
             scope = snapshot.get("_web_ui_scope")
+            self._check_provider_transport_error()
             if scope is not None:
                 user_turn, binding_state = self._web_ui_adapter().reconcile_user_turn(scope)
                 if user_turn is not None:
@@ -2130,6 +2147,10 @@ class WebLLMScraper:
                         self._log_composer_state("user_sent_composer")
                         return
             now = time.time()
+            if scope is not None and user_turn is None and mount_recovery_count < 2 and now >= deadline - 10:
+                mount_recovery_count += 1
+                mounted = self._web_ui_adapter().recover_turn_mounts()
+                self._log_stage('user_scope_mount_recovery', f'attempt={mount_recovery_count} mounted={mounted}')
             composer_state = self._composer_debug_state()
             if now >= deadline:
                 try:
@@ -2259,9 +2280,12 @@ class WebLLMScraper:
         stable_image_fingerprint = ""
         stable_image_polls = 0
 
+        mount_recovery_count = 0
+
         while True:
             self._run_control_hook()
             self._check_cancel_requested("assistant_started")
+            self._check_provider_transport_error()
             if self._maybe_recover_disconnected_generation():
                 last_signature = ""
                 last_progress_at = time.time()
@@ -2276,6 +2300,11 @@ class WebLLMScraper:
                         f"scope={scope.scope_id} assistant_ordinal={owned_assistant.ordinal}",
                     )
                     return owned_assistant
+                if mount_recovery_count < 2 and time.time() - last_progress_at >= 10 * (mount_recovery_count + 1):
+                    mount_recovery_count += 1
+                    mounted = self._web_ui_adapter().recover_turn_mounts()
+                    self._log_stage('assistant_scope_mount_recovery', f'attempt={mount_recovery_count} mounted={mounted}')
+                    self._log_stage('provider_turn_mount_diagnostic', json.dumps(self._web_ui_adapter().turn_mount_diagnostic(), ensure_ascii=False))
             assistants = self._turn_elements("assistant")
             responses = self._response_elements()
             # RequestScope is authoritative whenever it is available.  A
@@ -3137,6 +3166,7 @@ class WebLLMScraper:
             self._dismiss_known_blocking_dialogs()
             self._run_control_hook()
             self._check_cancel_requested("generation")
+            self._check_provider_transport_error()
             if self._maybe_recover_disconnected_generation():
                 scope = snapshot.get("_web_ui_scope")
                 if scope is not None:
@@ -4480,6 +4510,10 @@ class WebLLMScraper:
         if protocol_expected:
             prompt = guard_web_prompt(self, prompt, protocol_expected)
 
+        if self._page is not None:
+            self._check_provider_transport_error()
+            prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
+
         try:
             prompt_bytes = ensure_webgpt_prompt_budget(prompt)
         except PromptBudgetExceeded as exc:
@@ -4689,6 +4723,8 @@ class WebLLMScraper:
             try:
                 self._wait_for_user_sent(snapshot)
             except WebScraperStageError as user_exc:
+                if user_exc.stage in {'provider_rate_limit','provider_conversation_full'}:
+                    raise
                 delivery = (
                     "sent"
                     if snapshot.get("_submit_delivery_confirmed") is True

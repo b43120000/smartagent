@@ -23,6 +23,7 @@ from .capability_recovery import (
 )
 from .protocol_v8 import TOOL_REQUIRED_FIELDS
 from .recovery_protocol import RECOVERY_FIELD_RECONSTRUCTION_MODE
+from .context_acquisition import CONTEXT_KINDS, context_interrupt_allowed
 
 NARRATIVE_DRAFT_SCHEMA = "SMARTAGENT_NARRATIVE_DRAFT_V1"
 DECISION_KINDS = {
@@ -139,6 +140,8 @@ class NarrativeDecisionDraft:
     progress: dict[str, Any]
     authorized_paths: list[str] = field(default_factory=list)
     capability_recovery: dict[str, Any] = field(default_factory=dict)
+    context_capabilities: dict[str, Any] = field(default_factory=dict)
+    context_request: dict[str, Any] = field(default_factory=dict)
     state: str = "COLLECTING"
     decision_kind: str = ""
     terminal_outcome: str = ""
@@ -157,6 +160,8 @@ class NarrativeDecisionDraft:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     schema: str = NARRATIVE_DRAFT_SCHEMA
+    request_context_epoch: str = ''
+    context_field_refs: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -171,6 +176,12 @@ class NarrativeDecisionBridge:
         self.path = self.root / f"{_safe_id(draft.conversion_id)}.json"
         if save_initial:
             self._save()
+
+    def _request_context_store(self):
+        if not self.draft.request_context_epoch:
+            return None
+        from .request_context import RequestContextStore
+        return RequestContextStore(self.root.parent/'request_contexts',self.draft.request_id,self.draft.request_context_epoch)
 
     @classmethod
     def create(
@@ -201,6 +212,7 @@ class NarrativeDecisionBridge:
                 or loaded.request_id != request_id
                 or loaded.round_id != round_id
                 or loaded.source_response_sha256 != digest
+                or context.get('request_context_epoch') and loaded.request_context_epoch!=context['request_context_epoch']
             ):
                 raise NarrativeBridgeError("existing narrative draft identity mismatch")
             migrated = False
@@ -240,6 +252,11 @@ class NarrativeDecisionBridge:
                     loaded.pending_slot = "decision_kind"
                 migrated = True
             bridge = cls(loaded, root=root, save_initial=False)
+            if loaded.decision_kind == 'NEED_MORE_CONTEXT' and not loaded.context_request and loaded.state in {'READY_FOR_VALIDATION', 'VALIDATED'}:
+                loaded.context_capabilities = dict(context.get('context_capabilities') or {})
+                loaded.state = 'COLLECTING'
+                loaded.pending_slot = 'context_kind'
+                migrated = True
             if migrated:
                 bridge._save()
             return bridge
@@ -255,6 +272,8 @@ class NarrativeDecisionBridge:
                 str(item) for item in list(context.get("authorized_paths") or [])
                 if str(item).strip()
             ],
+            context_capabilities=dict(context.get('context_capabilities') or {}),
+            request_context_epoch=str(context.get('request_context_epoch') or ''),
             capability_recovery=(
                 dict(context.get("capability_recovery", {}) or {})
                 or build_capability_recovery_context(
@@ -368,6 +387,9 @@ class NarrativeDecisionBridge:
             + "\n" + render_write_budget()
         )
         retry = ""
+        store=self._request_context_store()
+        if store:
+            header += '\n[REQUEST_CONTEXT_OBJECTS]\n'+json.dumps(store.catalog(),ensure_ascii=False)+'\n[/REQUEST_CONTEXT_OBJECTS]\n'
         if self.draft.validation_errors:
             retry = (
                 "The previous normalization was rejected for: "
@@ -379,10 +401,28 @@ class NarrativeDecisionBridge:
                 "Classify what the original reply intends next. Reply with exactly one token:\n"
                 + " | ".join(sorted(DECISION_KINDS))
             )
+        if slot in {'context_kind', 'context_detail', 'context_blocker'}:
+            context = json.dumps(self.draft.context_capabilities, ensure_ascii=False, separators=(',', ':'))
+            guidance = ('\n[RUNTIME_CONTEXT_ACQUISITION]\n' + context + '\n[/RUNTIME_CONTEXT_ACQUISITION]\n'
+                        'Missing evidence is not a failure to acquire it. Runtime reads do not require you to access the computer directly.\n')
+            if slot == 'context_kind':
+                return header + retry + guidance + (
+                    'Classify the missing information: RUNTIME_READ for data obtainable through the listed read tools; '
+                    'USER_INPUT for a specific human choice or information not available to Runtime; '
+                    'BLOCKED only for a listed objective blocker. Reply with exactly one token: RUNTIME_READ | USER_INPUT | BLOCKED')
+            if slot == 'context_detail':
+                return header + retry + guidance + 'Provide one exact string stating the specific user question or objective blocking reason. Do not ask for source uploads when Runtime can read it.'
+            return header + retry + guidance + 'Reply only with the action_id of one listed objective blocker. If none exists, do not fabricate one; reconsider context_kind.'
         if slot == "tool":
+            available = set(NARRATIVE_TOOL_FIELDS)
+            if self.draft.context_request.get('kind') == 'RUNTIME_READ':
+                available.intersection_update(self.draft.context_capabilities.get('read_tools') or [])
             return header + retry + (
                 "Choose exactly one executable tool for the original reply. Reply with exactly one token:\n"
-                + " | ".join(sorted(NARRATIVE_TOOL_FIELDS))
+                + " | ".join(sorted(available))
+                + ('\nUse the authorized target path explicitly. For project source choose query_project; for unknown filenames first list_directory.\n'
+                   + json.dumps(self.draft.context_capabilities, ensure_ascii=False)
+                   if self.draft.context_request.get('kind') == 'RUNTIME_READ' else '')
             )
         if slot == "terminal_outcome":
             return header + retry + (
@@ -393,8 +433,18 @@ class NarrativeDecisionBridge:
         if slot.startswith("field:"):
             field_name = slot.split(":", 1)[1]
             expected_type = _field_schema_type(self.draft.tool, field_name)
+            from .typed_field_values import PATH_FIELDS, PATH_LIST_FIELDS, STABLE_FIELDS
             if self.draft.tool == "project_sync" and field_name == "strategy":
                 instruction = "Reply with exactly one token: INDEX_ONLY | DIRECT | DELTA | FULL_BUNDLE"
+            elif field_name in PATH_LIST_FIELDS:
+                instruction = (
+                    f'Provide only `{self.draft.tool}.{field_name}`: a JSON array of 1..32 path strings, '
+                    'or the preferred literal format (one path per line, no JSON escaping):\n'
+                    '[V9_PATHS]\nC:\\example\\directory\n[/V9_PATHS]\n'
+                    'JSON alternative: ["C:\\\\example\\\\directory"]. Never add prose.'
+                )
+            elif field_name in PATH_FIELDS:
+                instruction = f'Provide only the exact string value for `{self.draft.tool}.{field_name}` as one literal path:\n[V9_PATH]\nC:\\example\\directory\n[/V9_PATH]\nDo not JSON-escape a literal tagged path.'
             elif expected_type is str:
                 instruction = (
                     f"Provide only the exact string value for `{self.draft.tool}.{field_name}`. "
@@ -409,6 +459,8 @@ class NarrativeDecisionBridge:
                 )
             else:
                 raise NarrativeBridgeError(f"unknown narrative field: {self.draft.tool}.{field_name}")
+            if store and field_name in STABLE_FIELDS:
+                instruction += '\nTo reuse a confirmed input explicitly, instead reply exactly:\n[V9_CONTEXT_REF]\n{"ref_id":"CTX-...","version":1}\n[/V9_CONTEXT_REF]\nChoose a listed matching object, never invent a reference.'
             return header + retry + instruction
         raise NarrativeBridgeError(f"unknown narrative slot: {slot}")
 
@@ -416,6 +468,7 @@ class NarrativeDecisionBridge:
         if self.draft.state != "COLLECTING":
             raise NarrativeBridgeError(f"draft is not collecting: {self.draft.state}")
         slot = self.draft.pending_slot or "decision_kind"
+        field_error = None
         self.draft.total_attempts += 1
         self.draft.slot_attempts[slot] = int(self.draft.slot_attempts.get(slot, 0)) + 1
         if self.draft.total_attempts > MAX_TOTAL_ATTEMPTS:
@@ -431,9 +484,42 @@ class NarrativeDecisionBridge:
                     self.draft.pending_slot = "tool"
                 elif value == "FINAL_RESPONSE":
                     self.draft.pending_slot = "terminal_outcome"
+                elif value == 'NEED_MORE_CONTEXT':
+                    self.draft.pending_slot = 'context_kind'
                 else:
                     self.draft.pending_slot = ""
                     self.draft.state = "READY_FOR_VALIDATION"
+        elif slot == 'context_kind':
+            value = _single_token(text, CONTEXT_KINDS)
+            if value == 'RUNTIME_READ' and self.draft.context_capabilities.get('read_tools') and (self.draft.context_capabilities.get('authorized_paths') or self.draft.context_capabilities.get('discovery_paths')):
+                self.draft.context_request = {'kind': value, 'detail': '取得缺少的客觀資料；未知目標先定位，不可猜測刪除路徑', 'blocking_action_id': ''}
+                self.draft.decision_kind = 'ACTION'
+                self.draft.pending_slot = 'tool'
+                accepted = True
+            elif value in {'USER_INPUT', 'BLOCKED'}:
+                self.draft.context_request = {'kind': value, 'detail': '', 'blocking_action_id': ''}
+                self.draft.pending_slot = 'context_detail'
+                accepted = True
+        elif slot == 'context_detail':
+            value = _single_value(text)
+            if value and len(value) <= 2000:
+                self.draft.context_request['detail'] = value
+                if self.draft.context_request.get('kind') == 'BLOCKED':
+                    self.draft.pending_slot = 'context_blocker'
+                    accepted = True
+                elif context_interrupt_allowed(self.draft.context_request, self.draft.context_capabilities):
+                    self.draft.pending_slot = ''
+                    self.draft.state = 'READY_FOR_VALIDATION'
+                    accepted = True
+                else:
+                    self.draft.pending_slot = 'context_kind'
+        elif slot == 'context_blocker':
+            value = _single_value(text)
+            self.draft.context_request['blocking_action_id'] = value
+            if context_interrupt_allowed(self.draft.context_request, self.draft.context_capabilities):
+                self.draft.pending_slot = ''
+                self.draft.state = 'READY_FOR_VALIDATION'
+                accepted = True
         elif slot == "terminal_outcome":
             value = _single_token(text, TERMINAL_OUTCOMES)
             if value:
@@ -443,6 +529,8 @@ class NarrativeDecisionBridge:
                 accepted = True
         elif slot == "tool":
             value = _single_token(text, {item.upper() for item in NARRATIVE_TOOL_FIELDS})
+            if self.draft.context_request.get('kind') == 'RUNTIME_READ' and value.lower() not in self.draft.context_capabilities.get('read_tools', []):
+                value = ''
             if value:
                 self.draft.tool = value.lower()
                 accepted = True
@@ -454,18 +542,38 @@ class NarrativeDecisionBridge:
         elif slot.startswith("field:"):
             field_name = slot.split(":", 1)[1]
             expected_type = _field_schema_type(self.draft.tool, field_name)
+            from .typed_field_values import STABLE_FIELDS, parse_stable_field, _json_value
+            reference = re.fullmatch(r'\[V9_CONTEXT_REF\]\s*\r?\n([\s\S]*?)\r?\n\[/V9_CONTEXT_REF\]',str(text or '').strip())
             if self.draft.tool == "project_sync" and field_name == "strategy":
                 value = _single_token(text, {"INDEX_ONLY", "DIRECT", "DELTA", "FULL_BUNDLE"})
+            elif reference:
+                from .request_context import RequestContextError
+                ref,field_error = _json_value(reference.group(1))
+                value=None
+                if not field_error:
+                    try:
+                        store=self._request_context_store()
+                        if not store: raise RequestContextError('request_context_unavailable')
+                        value=store.resolve(field_name,ref)
+                    except RequestContextError as exc:
+                        field_error={'reason':str(exc),'detail':field_name}
+            elif field_name in STABLE_FIELDS:
+                value,field_error = parse_stable_field(text,field_name)
             elif expected_type is str:
                 value = _single_value(text)
             elif expected_type is not None:
-                value = _single_json_value(text)
+                value,field_error = _json_value(str(text or ''))
                 if value is not None and not _matches_field_type(value, expected_type):
                     value = None
+                    field_error={'reason':'field_type_invalid','detail':field_name,'expected':str(expected_type)}
             else:
                 self._fail(f"unknown narrative field: {self.draft.tool}.{field_name}")
             if value is not None and value != "":
                 self.draft.fields[field_name] = value
+                if reference:
+                    self.draft.context_field_refs[field_name]=ref
+                else:
+                    self.draft.context_field_refs.pop(field_name,None)
                 self._derive_bounded_query_project_fields()
                 accepted = True
                 required = NARRATIVE_TOOL_FIELDS[self.draft.tool]
@@ -479,12 +587,14 @@ class NarrativeDecisionBridge:
         if accepted:
             self.draft.validation_errors = []
         else:
-            self.draft.validation_errors = [{
+            self.draft.validation_errors = [field_error or {
                 "reason": "narrative_slot_invalid",
                 "detail": slot,
             }]
         if not accepted and self.draft.slot_attempts[slot] >= MAX_SLOT_ATTEMPTS:
-            self._fail(f"narrative slot could not be confirmed: {slot}")
+            issue=self.draft.validation_errors[0]
+            location=''.join(f'; {key}={issue[key]}' for key in ('line','column') if key in issue)
+            self._fail(f"narrative slot could not be confirmed: {slot}; reason={issue.get('reason','narrative_slot_invalid')}{location}")
         self._save()
 
     @property
@@ -553,6 +663,7 @@ class NarrativeDecisionBridge:
             "current_focus": str(progress.get("current_focus", "") or "接收並驗證模型自然語言決策")[:2000],
             "next_action": str(progress.get("next_action", "") or "完成 v9 decision admission")[:2000],
             "completion_contract": completion_contract,
+            "context_request": dict(self.draft.context_request),
             "decision": decision,
             "outcome": outcome,
             "matched_condition": matched_condition[:2000],
@@ -584,7 +695,8 @@ class NarrativeDecisionBridge:
             blocks.append({
                 "tool": self.draft.tool,
                 "action_id": f"V9-ACTION-{self.draft.conversion_id}",
-                **self.draft.fields,
+                **{key:value for key,value in self.draft.fields.items() if key not in self.draft.context_field_refs},
+                **({'field_refs':dict(self.draft.context_field_refs)} if self.draft.context_field_refs else {}),
             })
         elif kind in {"FINAL_RESPONSE", "NEED_MORE_CONTEXT", "ABORT"}:
             blocks.append({

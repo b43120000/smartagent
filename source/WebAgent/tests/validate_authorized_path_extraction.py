@@ -15,7 +15,7 @@ def run() -> dict:
 
     saved_plan = (
         "[SMARTAGENT_EXECUTE_SAVED_PLAN]\n"
-        "[ORIGINAL_PLANNING_REQUEST]\n路徑在這\nE:\\card\n只規劃不修改\n"
+        "[ORIGINAL_PLANNING_REQUEST]\n路徑在這\nE:\\workspace\n只規劃不修改\n"
         "[/ORIGINAL_PLANNING_REQUEST]\n"
         "[ACCEPTED_PLAN]\n未來建立 E:\\outside\\generated\n[/ACCEPTED_PLAN]\n"
         "[PLAN_PROGRESS_SNAPSHOT]\n"
@@ -23,16 +23,16 @@ def run() -> dict:
         "[/PLAN_PROGRESS_SNAPSHOT]\n"
         "[/SMARTAGENT_EXECUTE_SAVED_PLAN]"
     )
-    assert resolve_authorized_paths(saved_plan) == [r"E:\card"]
+    assert resolve_authorized_paths(saved_plan) == [r"E:\workspace"]
     assert resolve_authorized_paths(
-        saved_plan, trusted_authorized_paths=[r"E:\card"]
-    ) == [r"E:\card"]
+        saved_plan, trusted_authorized_paths=[r"E:\workspace"]
+    ) == [r"E:\workspace"]
     future_output = authorize_path(
-        r"E:\card\grayscale_16step\gray16.png",
-        [r"E:\card"],
+        r"E:\workspace\grayscale_16step\gray16.png",
+        [r"E:\workspace"],
         require_absolute=True,
     )
-    assert str(future_output) == r"E:\card\grayscale_16step\gray16.png"
+    assert str(future_output) == r"E:\workspace\grayscale_16step\gray16.png"
     try:
         resolve_authorized_paths(
             "[SMARTAGENT_EXECUTE_SAVED_PLAN]\nmissing original request\n"
@@ -57,23 +57,23 @@ def run() -> dict:
 
     assert extract_authorized_paths(r"list C:\workspace\picture") == [r"C:\workspace\picture"]
     assert extract_authorized_paths(
-        "列出 E:\\card\\runtime_it 第一層內容\n在 E:\\card\\runtime_it 建立 batch_large_probe.txt"
-    ) == [r"E:\card\runtime_it"]
+        "列出 E:\\workspace\\runtime_it 第一層內容\n在 E:\\workspace\\runtime_it 建立 batch_large_probe.txt"
+    ) == [r"E:\workspace\runtime_it"]
     assert extract_authorized_paths(
-        r'列出 "E:\card\runtime_it 第一層內容"'
-    ) == [r"E:\card\runtime_it 第一層內容"]
+        r'列出 "E:\workspace\runtime_it 第一層內容"'
+    ) == [r"E:\workspace\runtime_it 第一層內容"]
     assert extract_authorized_paths(
-        r"列出 E:\card\runtime_it 第一層內容\nested"
-    ) == [r"E:\card\runtime_it 第一層內容\nested"]
+        r"列出 E:\workspace\runtime_it 第一層內容\nested"
+    ) == [r"E:\workspace\runtime_it 第一層內容\nested"]
     assert extract_authorized_paths(
-        r"列出 E:\card\Team 建立 專案\src"
-    ) == [r"E:\card\Team 建立 專案\src"]
+        r"列出 E:\workspace\Team 建立 專案\src"
+    ) == [r"E:\workspace\Team 建立 專案\src"]
     assert extract_authorized_paths(
-        r"列出 E:\card\Team 建立 專案"
-    ) == [r"E:\card\Team 建立 專案"]
+        r"列出 E:\workspace\Team 建立 專案"
+    ) == [r"E:\workspace\Team 建立 專案"]
     assert extract_authorized_paths(
-        r"建立 E:\card\Team 建立 report.txt"
-    ) == [r"E:\card\Team 建立 report.txt"]
+        r"建立 E:\workspace\Team 建立 report.txt"
+    ) == [r"E:\workspace\Team 建立 report.txt"]
     assert extract_authorized_paths(
         r'讀取 "C:\workspace with spaces\plan, v1.md"，再處理 C:\workspace\source'
     ) == [r"C:\workspace with spaces\plan, v1.md", r"C:\workspace\source"]
@@ -90,11 +90,11 @@ def run() -> dict:
         r"讀取 C:\workspace with spaces\plan.md 接著檢查結果"
     ) == [r"C:\workspace with spaces\plan.md"]
     assert extract_authorized_paths(
-        r"列出E:\card\release\SmartAgentv2下的檔案有多少"
-    ) == [r"E:\card\release\SmartAgentv2"]
+        r"列出E:\workspace\release\SmartAgentv2下的檔案有多少"
+    ) == [r"E:\workspace\release\SmartAgentv2"]
     assert extract_authorized_paths(
-        r"你先看C:\Users\example\Desktop\picture裡面有多少檔案"
-    ) == [r"C:\Users\example\Desktop\picture"]
+        r"你先看C:\Users\ExampleUser\Desktop\picture裡面有多少檔案"
+    ) == [r"C:\Users\ExampleUser\Desktop\picture"]
 
     # The parser must not hide a real ADS suffix from the security layer.
     ads_path = r"C:\workspace\file.txt:secret"

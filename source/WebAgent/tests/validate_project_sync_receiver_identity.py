@@ -38,11 +38,11 @@ def expect_error(actual: str, expected: str, marker: str) -> None:
 
 def run() -> dict:
     project_url = (
-        "https://chatgpt.com/c/example-conversation"
-        "localagentspace/c/6ab7ed8b-eb34-83ee-bb95-11a4fe966f1b"
+        "https://chatgpt.com/g/g-p-bf0e669e5e7c53079bfea69b765f3a49-"
+        "examplespace/c/e5b6e288-90e5-5f82-8ac2-cff9a281a2ef"
     )
     canonical = browser_receiver_identity(FakeScraper(project_url, project_url))
-    assert canonical == "https://chatgpt.com/c/example-conversation"
+    assert canonical == "https://chatgpt.com/c/e5b6e288-90e5-5f82-8ac2-cff9a281a2ef"
 
     expect_error(
         project_url,
@@ -51,12 +51,12 @@ def run() -> dict:
     )
     expect_error("https://chatgpt.com/", "", "project_sync_receiver_identity_unavailable")
     expect_error(
-        "https://claude.ai/chat/e364c2b5-b42e-4f0b-9507-c06c5fb67186",
+        "https://claude.ai/chat/16a81290-52f3-5e53-8328-092c5aefe555",
         "",
         "project_sync_receiver_provider_not_implemented:claude",
     )
     expect_error(
-        "https://gemini.google.com/u/1/app/0000000000000002",
+        "https://gemini.google.com/u/1/app/a3ed636af167597f",
         "",
         "project_sync_receiver_provider_not_implemented:gemini",
     )

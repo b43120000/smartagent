@@ -25,6 +25,7 @@ from .browser_client import WebAgentBrowserClient
 from .protocol_loop import WebAgentProtocolLoop
 from .runtime_log import WebAgentRuntimeLog
 from .session import ensure_webagent_session
+from agent_core.task_continuation import TaskContinuationStore, local_owner, render_task_reply
 
 
 def build_final_render_prompt(
@@ -35,6 +36,10 @@ def build_final_render_prompt(
     ack_id: str = "",
     original_request: str = "",
     base_evaluation: str = "",
+    task_id: str = "",
+    state: str = "COMPLETED",
+    source_task_id: str = "",
+    outcome: str = "",
 ) -> str:
     ack_line = (
         f"[WEBAGENT_ACK] request_id={request_id} rounds={int(round_count)} ack_id={ack_id}"
@@ -42,7 +47,11 @@ def build_final_render_prompt(
     # Runtime assembles these sections from this request's accepted state.
     # The final presentation round must not reconstruct them from old DOM turns.
     display_content = str(final_content)
-    if original_request or base_evaluation:
+    if task_id:
+        display_content = render_task_reply(original_request=original_request, base=base_evaluation,
+            conclusion=final_content, task_id=task_id, request_id=request_id, state=state,
+            source_task_id=source_task_id, ack_id=ack_id, outcome=outcome)
+    elif original_request or base_evaluation:
         display_content = (
             "使用者原始需求：\n" + str(original_request or "（未提供）")
             + "\n\nBase（最後已接受的評估）：\n" + str(base_evaluation or "（未提供）")
@@ -74,6 +83,10 @@ def render_final_ack(
     ack_id: str,
     original_request: str = "",
     base_evaluation: str = "",
+    task_id: str = "",
+    state: str = "COMPLETED",
+    source_task_id: str = "",
+    outcome: str = "",
 ) -> str:
     return client.ask(
         build_final_render_prompt(
@@ -83,6 +96,7 @@ def render_final_ack(
             ack_id=ack_id,
             original_request=original_request,
             base_evaluation=base_evaluation,
+            task_id=task_id, state=state, source_task_id=source_task_id, outcome=outcome,
         ),
         stage="最終自然語言 ACK",
         protocol_expected=None,
@@ -277,6 +291,9 @@ def main(argv: list[str] | None = None) -> int:
             client, prompt, expected, attachments
         ),
         event_sink=runtime_log.emit,
+        progress_root=runtime_root,
+        continuation_store=TaskContinuationStore(runtime_root),
+        continuation_owner=local_owner(),
     )
     if bootstrap_pending:
         loop.tools.enable_bootstrap_install_policy(runtime_root)
@@ -396,8 +413,11 @@ def main(argv: list[str] | None = None) -> int:
                     request_id=loop.run_id,
                     round_count=loop.turn_id,
                     ack_id=loop.pending_web_ack_id,
-                    original_request=request,
+                    original_request=loop.task_request,
                     base_evaluation=str(getattr(loop.progress_ledger, "base_evaluation", "") or ""),
+                    task_id=loop.task_id,
+                    outcome=loop.terminal_outcome,
+                    source_task_id=(loop.continuation_source or {}).get('task_id', ''),
                 )
                 if "smartagent_tool" in str(rendered):
                     print("[WebAgent][WARN] 最終呈現仍是 protocol envelope；不自動重送。", flush=True)
@@ -443,6 +463,16 @@ def main(argv: list[str] | None = None) -> int:
                     from WebAgent.bootstrap_provisioning import fail_bootstrap_provisioning
                     fail_bootstrap_provisioning(runtime_root, exc)
                 print(f"[WebAgent][ERROR] {type(exc).__name__}: {exc}", flush=True)
+                try:
+                    render_final_ack(client, f'{type(exc).__name__}: {exc}',
+                        request_id=loop.run_id, round_count=loop.turn_id, ack_id=loop.pending_web_ack_id,
+                        original_request=getattr(loop, 'task_request', request),
+                        base_evaluation=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
+                        task_id=loop.task_id, state='INTERRUPTED',
+                        source_task_id=(loop.continuation_source or {}).get('task_id', ''))
+                except Exception as render_error:
+                    runtime_log.emit('interruption_render_unavailable', request_id=loop.run_id,
+                                     error=str(render_error), persisted=True)
                 runtime_log.emit(
                     "request_failed",
                     request_id=loop.run_id,

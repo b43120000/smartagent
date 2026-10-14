@@ -94,6 +94,12 @@ class ArtifactBundleReceiver:
             action_id = action["action_id"]
 
             if action_id in committed:
+                from .tool_result_contract import decode_result, outcome_committable
+                cached_outcome = decode_result(committed[action_id].get('result', ''))
+                if not outcome_committable(action.get('tool'), cached_outcome, action_id):
+                    return json.dumps({'status':'ARTIFACT_BUNDLE_FAILED','bundle_id':bundle_id,
+                        'reason':'CACHED_CHILD_RESULT_UNKNOWN','failed_action_id':action_id,
+                        'executed':executed,'replayed':replayed},ensure_ascii=False)
                 replayed += 1
                 results.append({
                     "index": index,
@@ -123,7 +129,18 @@ class ArtifactBundleReceiver:
                 raise
 
             result_text = str(result)
-            if action.get("tool") == "run_command":
+            from .tool_result_contract import decode_result, outcome_committable
+            child_outcome = decode_result(result_text)
+            if not outcome_committable(action.get('tool'), child_outcome, action_id):
+                state['status'] = 'FAILED'
+                state['failed_action_id'] = action_id
+                state['failure'] = {'kind':'CHILD_NOT_COMMITTED','result':result_text[:12000]}
+                self._save_state(bundle_id, state)
+                return json.dumps({'status':'ARTIFACT_BUNDLE_FAILED','bundle_id':bundle_id,
+                    'failed_action_id':action_id,'reason':'CHILD_NOT_COMMITTED' if child_outcome else 'CHILD_RESULT_UNKNOWN',
+                    'result':result_text,'executed':executed,'replayed':replayed,
+                    'failed_action_executed':bool((child_outcome or {}).get('executed'))}, ensure_ascii=False)
+            if action.get("tool") == "run_command" and not child_outcome:
                 if "VERIFICATION_STATUS: FAIL" in result_text or "VERIFICATION_STATUS: UNVERIFIED" in result_text:
                     state["status"] = "FAILED"
                     state["failed_action_id"] = action_id

@@ -98,6 +98,7 @@ class RequestScope:
     baseline_assistant_count: int
     request_markers: tuple[str, ...] = ()
     user_turn: TurnRef | None = None
+    baseline_assistant_content: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

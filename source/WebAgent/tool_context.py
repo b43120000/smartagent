@@ -172,11 +172,20 @@ class WebAgentToolContext:
             for source, digest in duplicates
         )
         lines.extend(f"[WEBAGENT_ATTACHMENT_ERROR] {value}" for value in errors)
-        return "\n".join(lines) if lines else "[WEBAGENT_ATTACHMENT_ERROR] 沒有可排程的檔案"
+        from agent_core.tool_result_contract import attach_runtime_result
+        text = "\n".join(lines) if lines else "[WEBAGENT_ATTACHMENT_ERROR] 沒有可排程的檔案"
+        status = 'PARTIAL' if errors and queued else 'FAILED' if errors or not (queued or duplicates) else 'QUEUED'
+        return attach_runtime_result(text, status, 'ATTACHMENT_STAGED' if status=='QUEUED' else 'ATTACHMENT_STAGING_FAILED',
+            tool='upload_files', executed=True, request_id=self.current_request_id,
+            data={'delivery_status':'NOT_CONFIRMED', 'queued_count':len(queued), 'errors':errors,
+                'artifacts':[{'artifact_id':item.sha256,'sha256':item.sha256,
+                    'source_path':item.source_path,'staged_path':item.staged_path,'name':item.upload_name}
+                    for item in queued], 'duplicates':[{'path':path,'sha256':digest} for path,digest in duplicates]})
 
     def take_pending_attachments(self) -> list[str]:
         values = list(self._pending_attachments)
         self._pending_attachments.clear()
+        self._attachment_sha_ledger.clear()
         return values
 
     @staticmethod
@@ -209,7 +218,11 @@ class WebAgentToolContext:
             return f"[TELEGRAM_ARTIFACT_REJECTED] file not found: {target}"
         digest = self._file_sha256(target)
         if digest in self._outbound_artifact_sha_ledger:
-            return f"[TELEGRAM_ARTIFACT_DEDUPED] path={target} sha256={digest}"
+            from agent_core.tool_result_contract import attach_runtime_result
+            return attach_runtime_result(f'[TELEGRAM_ARTIFACT_DEDUPED] path={target} sha256={digest}',
+                'QUEUED', 'OUTBOUND_ARTIFACT_ALREADY_QUEUED', tool='return_artifact',executed=True,
+                request_id=self.current_request_id, resolved_path=str(target),
+                data={'delivery_status':'NOT_CONFIRMED','artifact_id':digest,'deduplicated':True})
         self._outbound_artifact_sha_ledger.add(digest)
         normalized_kind = str(kind or "").strip().lower()
         if normalized_kind not in {"photo", "image", "document"}:
@@ -226,18 +239,28 @@ class WebAgentToolContext:
             "size_bytes": target.stat().st_size,
             "sha256": digest,
         })
-        return (
+        text = (
             f"[TELEGRAM_ARTIFACT_QUEUED] name={target.name} "
             f"size_bytes={target.stat().st_size} sha256={digest}"
         )
+        from agent_core.tool_result_contract import attach_runtime_result
+        return attach_runtime_result(text, 'QUEUED', 'OUTBOUND_ARTIFACT_QUEUED', tool='return_artifact',
+            executed=True, request_id=self.current_request_id, resolved_path=str(target),
+            data={'delivery_status':'NOT_DELIVERED', 'artifact_id':digest,
+                'artifact':dict(self._outbound_artifacts[-1])})
 
     def take_outbound_artifacts(self) -> list[dict]:
         values = [dict(row) for row in self._outbound_artifacts]
         self._outbound_artifacts.clear()
+        self._outbound_artifact_sha_ledger.clear()
         return values
 
     def configure_project_sync_transport(self, transport) -> None:
         self._project_sync_transport = transport
+
+    def save_project_summary(self, payload: dict) -> str:
+        from agent_core.session_summary import save_native_summary
+        return save_native_summary(self,payload)
 
     def configure_project_sync_receiver(self, identity_provider) -> None:
         self._project_sync_receiver = identity_provider
@@ -312,15 +335,29 @@ class WebAgentToolContext:
             return f"[ARTIFACT_DOWNLOAD_FAILED] {type(exc).__name__}: {exc}"
         status = str((result or {}).get("status", "") or "")
         succeeded = status.upper() in {"SUCCESS", "DOWNLOADED", "ARTIFACT_DOWNLOAD_SUCCESS"}
-        if succeeded and self.interface_name == "remote" and self.artifact_delivery_mode == "telegram":
-            downloaded_path = str((result or {}).get("path", "") or "")
-            if downloaded_path:
-                result = dict(result)
-                result["telegram_queue"] = self.queue_outbound_artifact(
-                    downloaded_path, kind="photo"
-                )
         marker = "ARTIFACT_DOWNLOAD_SUCCESS" if succeeded else "ARTIFACT_DOWNLOAD_RESULT"
-        return f"[{marker}] {result}"
+        from agent_core.tool_result_contract import attach_runtime_result
+        result = dict(result or {})
+        actual_path = str(result.get('path', '') or '')
+        saved = succeeded and bool(actual_path) and Path(actual_path).is_file()
+        requested = Path(output_path).expanduser().resolve()
+        if saved:
+            returned = Path(actual_path).expanduser().resolve()
+            matches = returned.parent == requested if requested.is_dir() else returned == requested
+            if not matches:
+                saved = False
+                result['error'] = 'ARTIFACT_OUTPUT_PATH_MISMATCH'
+            elif result.get('sha256') and self._file_sha256(returned) != result['sha256']:
+                saved = False
+                result['error'] = 'ARTIFACT_CONTENT_HASH_MISMATCH'
+        if saved and self.interface_name=='remote' and self.artifact_delivery_mode=='telegram':
+            result['telegram_queue'] = self.queue_outbound_artifact(actual_path, kind='photo')
+        # A producer's SUCCESS without a persisted local artifact is not saved.
+        return attach_runtime_result(f"[{marker}] {result}", 'SUCCEEDED' if saved else 'FAILED',
+            'ARTIFACT_SAVED' if saved else 'ARTIFACT_NOT_SAVED', tool='download_artifact',
+            executed=True, request_id=self.current_request_id, resolved_path=actual_path,
+            data={'artifact':result, 'artifact_id':result.get('artifact_id', result.get('sha256','')),
+                'file_acquired':succeeded, 'file_saved':saved, 'delivery_status':'NOT_DELIVERED'})
 
     def execute(self, action: dict) -> str:
         tool = str(action.get("tool", "") or "")

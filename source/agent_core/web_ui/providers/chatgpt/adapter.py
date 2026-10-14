@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 from ...base_adapter import BaseWebUIAdapter
 from . import attachments
@@ -87,6 +88,73 @@ class ChatGPTUIAdapter(BaseWebUIAdapter):
             if value:
                 return f"{name}:{value}"
         return super().durable_turn_id(turn)
+
+    def prepare_transport_prompt(self, prompt: str) -> str:
+        return '[WEBUI_SUBMIT_ID]\nWUS-' + uuid.uuid4().hex.upper() + '\n[/WEBUI_SUBMIT_ID]\n' + prompt
+
+    def assistant_is_fresh(self, turn, scope) -> bool:
+        attrs = dict(turn.stable_attributes)
+        # Only recycled fallback keys may use a changed-content proof. Native
+        # message IDs remain immutable. A unique current submit anchor is required.
+        native = any(attrs.get(name) for name in ('data-message-id',
+            'data-chatgpt-selection-message-id', 'data-chatgpt-search-message-ids', 'id'))
+        if native or not str(attrs.get('data-content-search-unit-key','')).startswith('fallback-turn-'):
+            return super().assistant_is_fresh(turn, scope)
+        if not any(marker.startswith('WUS-') for marker in scope.request_markers):
+            return super().assistant_is_fresh(turn, scope)
+        if not scope.user_turn:
+            return False
+        from ...base_adapter import _request_markers
+        if not set(scope.request_markers).intersection(_request_markers(scope.user_turn.raw_text)):
+            return False
+        unit = self.conversation_unit_id(scope.user_turn)
+        if not unit or self.conversation_unit_id(turn) != unit:
+            return False
+        baseline_digests = {digest for _identity, digest in scope.baseline_assistant_content}
+        return bool(turn.content_digest not in baseline_digests and turn.raw_text.strip())
+
+    def recover_turn_mounts(self) -> bool:
+        # Use only the pinned profile. Scroll the latest known user into view
+        # to remount its conversation unit; no reload, alternate selector or send.
+        users = self.turn_elements('user')
+        if not users:
+            return False
+        try:
+            users[-1].scroll_into_view_if_needed(timeout=1500)
+            return True
+        except Exception:
+            return False
+
+    def turn_mount_diagnostic(self) -> dict:
+        try:
+            return self.page.evaluate(r"""() => ({units:Array.from(document.querySelectorAll('[data-content-search-unit-key]')).slice(-14).map(e=>({key:e.getAttribute('data-content-search-unit-key'),message:e.getAttribute('data-message-id'),tag:e.tagName,text_len:(e.innerText||'').length,ready_marker_present:/\[AGENT_(SESSION|PROTOCOL)_READY\]/.test(e.innerText||'')}))})""")
+        except Exception as exc:
+            return {'error_type':type(exc).__name__}
+
+    def blocking_transport_error(self) -> dict:
+        """Only a visible provider error panel, not quoted user/model content."""
+        try:
+            return self.page.evaluate("""() => {
+                const texts = ['你已達到上限。請稍後再試一次。', "You've reached the limit. Please try again later."];
+                const visible = e => !!(e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+                for (const e of document.querySelectorAll('div,p,span')) {
+                    const text=(e.innerText||'').trim();
+                    const full = /^(You've reached the maximum length for this conversation|You have reached the maximum length for this conversation)/i.test(text)
+                        || /^.{0,12}(這段|此|這個)?對話.{0,12}(長度上限|已滿)/.test(text);
+                    if(e.children.length || !visible(e) || (!texts.includes(text) && !full)) continue;
+                    if(e.closest('[data-content-search-unit-key], [data-message-author-role], #prompt-textarea, pre, code, [contenteditable=true]')) continue;
+                    let panel=e;
+                    for(let i=0;panel && i<5;i++,panel=panel.parentElement) {
+                        if(panel.tagName==='BODY' || panel.tagName==='MAIN') break;
+                        const controls=full ? ['New chat','Start a new chat','新聊天','開始新聊天','開啟新對話','重試','Retry'] : ['重試','Retry'];
+                        if(Array.from(panel.querySelectorAll('button,a')).some(b=>visible(b) && controls.includes((b.innerText||'').trim())))
+                            return {reason:full?'PROVIDER_CONVERSATION_FULL':'PROVIDER_RATE_LIMITED',message:text.slice(0,300),retry_control_visible:true};
+                    }
+                }
+                return {};
+            }""") or {}
+        except Exception:
+            return {}
 
     def analysis_complete_visible(self, assistant=None) -> bool:
         """Observe ChatGPT's collapsed analysis label without treating it as final output."""

@@ -247,7 +247,8 @@ def validate_unverified_success_requests_and_obtains_evidence() -> None:
                 assert "WEBAGENT_VERIFICATION_REQUIRED" in prompt
                 assert '"missing_condition":"checkpoint commit 已建立且 HEAD 可解析"' in prompt
                 assert '"required_action":"run_command"' in prompt
-                assert '"required_fields":["operation","command","success_criteria","verify"]' in prompt
+                assert '"required_fields":["operation","command","success_criteria","verify","condition_id"]' in prompt
+                assert loop.pending_verification_requirement['next_actions'][0]['condition_id'] == loop.pending_verification_requirement['condition_id']
                 progress = completed_progress("P-VERIFY")
                 progress.update({
                     "current_step": 0.5,
@@ -1087,35 +1088,35 @@ def validate_action_batch_repair_preserves_valid_siblings() -> None:
             ],
             {"ack_web_ack_id": ""},
         )
-        assert rejected == []
-        assert diagnostics[0]["reason"] == "unexpected_field"
-        assert diagnostics[0]["repair_scope"] == "ACTION_BATCH"
-        assert diagnostics[0]["preserved_action_ids"] == ["A-LIST-KEEP"]
-        assert diagnostics[0]["repair_action_indexes"] == [2]
-        assert loop.v8_admitted_actions == {}
+        assert diagnostics == []
+        assert [item['action_id'] for item in rejected] == ['P-BAD','A-LIST-KEEP']
+        assert loop.deferred_action_repairs['A-WRITE-BAD']['diagnostics'][0]['reason'] == 'unexpected_field'
+        assert set(loop.v8_admitted_actions) == {'P-BAD','A-LIST-KEEP'}
         assert loop.action_ledger == {}
 
         repaired_calls, repair_diagnostic = loop._restore_action_repair_batch([
             progress("P-REPAIRED"),
             {
                 "tool": "write_file", "action_id": "A-WRITE-FIXED",
+                "replaces_action_id":"A-WRITE-BAD",
                 "path": str(root / "probe.txt"), "content": "ok",
             },
             {"tool": "turn_commit", "action_count": 2},
         ])
         assert repair_diagnostic is None
         assert [item["tool"] for item in repaired_calls[:-1]] == [
-            "report_progress", "list_directory", "write_file",
+            "report_progress", "write_file",
         ]
-        assert repaired_calls[-1]["action_count"] == 3
+        assert repaired_calls[-1]["action_count"] == 2
         accepted, diagnostics = loop._accept_ack(
             repaired_calls, {"ack_web_ack_id": ""},
         )
         assert diagnostics == []
         assert [item["action_id"] for item in accepted] == [
-            "P-REPAIRED", "A-LIST-KEEP", "A-WRITE-FIXED",
+            "P-REPAIRED", "A-WRITE-FIXED",
         ]
         assert loop.pending_action_repair == {}
+        assert not loop.deferred_action_repairs
 
         prompt = loop._with_commit("next", loop._new_commit())
         assert "[SMARTAGENT_ACTION_RESPONSE_CONSTRAINTS]" in prompt

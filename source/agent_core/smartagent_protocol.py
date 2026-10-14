@@ -113,6 +113,7 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"command": str, "operation": str},
         "optional": {
             "timeout": int,
+            "working_directory": str,
             "verify": (list, dict),
             "success_criteria": str,
             "result_transport": str,
@@ -121,6 +122,7 @@ TOOL_ENVELOPE_SCHEMAS = {
             "verifies_action_id": str,
             "condition_id": str,
             "expected_failure": dict,
+            "expected_verification": dict,
         },
     },
     "read_file": {
@@ -323,10 +325,12 @@ TOOL_ENVELOPE_SCHEMAS = {
             "current_focus": str,
         },
         "optional": {
+            "progress_update": str,
             "base_evaluation": str,
             "steps": list,
             "next_action": str,
             "completion_contract": dict,
+            "context_request": dict,
             "decision": str,
             "outcome": str,
             "matched_condition": str,
@@ -364,6 +368,43 @@ def _type_name(spec) -> str:
     if isinstance(spec, tuple):
         return " | ".join(t.__name__ for t in spec)
     return spec.__name__
+
+
+def normalize_tool_numeric_fields(call):
+    """Coerce only schema-declared numeric fields; never IDs, paths or flags."""
+    from copy import deepcopy
+    import math
+    if not isinstance(call, dict):
+        return call
+    result = deepcopy(call)
+    def coerce(value, spec):
+        types = spec if isinstance(spec, tuple) else (spec,)
+        if not isinstance(value, str) or not re.fullmatch(r'-?[0-9]+(?:\.[0-9]+)?', value.strip()):
+            return value
+        if int in types and '.' not in value.strip():
+            try:
+                return int(value.strip())
+            except ValueError:
+                return value
+        if float in types:
+            try:
+                number = float(value.strip())
+                return number if math.isfinite(number) else value
+            except ValueError:
+                pass
+        return value
+    schema = TOOL_ENVELOPE_SCHEMAS.get(result.get('tool'), {})
+    for name, spec in {**schema.get('required', {}), **schema.get('optional', {})}.items():
+        if name in result:
+            result[name] = coerce(result[name], spec)
+    if result.get('tool') == 'query_project' and isinstance(result.get('queries'), list):
+        for query in result['queries']:
+            if not isinstance(query, dict):
+                continue
+            for name in ('start_line', 'end_line', 'cursor', 'limit', 'context_lines'):
+                if name in query:
+                    query[name] = coerce(query[name], int)
+    return result
 
 
 def _matches_type(value, spec) -> bool:
@@ -661,6 +702,7 @@ def _validate_run_command_complexity(command: str, *, block_index: int | None = 
 def validate_tool_envelope(call: object, raw_payload: str = "",
                            block_index: int | None = None) -> tuple[bool, dict | None]:
     """Validate schema and control-plane complexity before any execution."""
+    call = normalize_tool_numeric_fields(call)
     raw_tool = call.get("tool") if isinstance(call, dict) else _guess_tool_name(raw_payload)
     raw_limit = FINAL_RESPONSE_MAX_BYTES if raw_tool == "final_response" else TOOL_ENVELOPE_MAX_BYTES
     if raw_payload and len(raw_payload.encode("utf-8")) > raw_limit:
@@ -710,7 +752,24 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
             block_index=block_index,
         )
 
+    if 'field_refs' in call:
+        return False, _diagnostic('[TOOL_ENVELOPE_REJECTED]', 'UNEXPANDED_REQUEST_CONTEXT_REFERENCE',
+            tool=tool, detail='field_refs must be expanded by the request-bound WebAgent admission layer before generic validation')
     allowed_fields = {"tool", "action_id", *schema["required"], *schema["optional"]}
+    if tool not in {'report_progress', 'final_response', 'turn_commit'}:
+        allowed_fields.add('depends_on')
+        allowed_fields.add('replaces_action_id')
+        replacement = call.get('replaces_action_id')
+        if replacement is not None and (not isinstance(replacement,str) or not replacement.strip()):
+            return False, _diagnostic('[TOOL_ENVELOPE_REJECTED]', 'action_replacement_invalid',
+                tool=tool,detail='replaces_action_id must be a non-empty deferred action ID')
+        dependencies = call.get('depends_on', [])
+        if (not isinstance(dependencies, list) or len(dependencies) > 32
+            or any(not isinstance(item, str) or not item.strip() for item in dependencies)
+            or len(set(dependencies)) != len(dependencies)):
+            return False, _diagnostic('[TOOL_ENVELOPE_REJECTED]', 'action_dependencies_invalid',
+                tool=tool, detail='depends_on must be at most 32 unique non-empty action IDs',
+                suggestion='只引用同一 request 中的前置 action ID；不得使用自己、後方 action 或其他任務的 ID。')
     unexpected_fields = sorted(str(field) for field in set(call) - allowed_fields)
     if unexpected_fields:
         if tool == "inspect_project_scope":
@@ -743,6 +802,15 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
             block_index=block_index,
         )
 
+    field_issues = []
+    for name, spec in schema['required'].items():
+        if name not in call:
+            field_issues.append({'field':name,'reason':'missing','expected':_type_name(spec)})
+        elif not _matches_type(call[name],spec):
+            field_issues.append({'field':name,'reason':'wrong_type','expected':_type_name(spec),'actual':type(call[name]).__name__})
+    for name, spec in schema['optional'].items():
+        if name in call and not _matches_type(call[name],spec):
+            field_issues.append({'field':name,'reason':'wrong_type','expected':_type_name(spec),'actual':type(call[name]).__name__})
     for field, expected_type in schema["required"].items():
         if field not in call:
             return False, _diagnostic(
@@ -751,6 +819,7 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 tool=tool,
                 detail=f"field={field}",
                 suggestion=f"重送同一個 {tool} 決策並補上必要欄位 '{field}'。",
+                field_issues=field_issues, repair_mode='BATCH_FIELDS',
                 block_index=block_index,
             )
         if not _matches_type(call[field], expected_type):
@@ -763,6 +832,7 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                     f"actual={type(call[field]).__name__}"
                 ),
                 suggestion=f"重送同一個 {tool} 決策並修正欄位 '{field}' 的 JSON type。",
+                field_issues=field_issues, repair_mode='BATCH_FIELDS',
                 block_index=block_index,
             )
 
@@ -777,6 +847,7 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                     f"actual={type(call[field]).__name__}"
                 ),
                 suggestion=f"重送同一個 {tool} 決策並修正欄位 '{field}' 的 JSON type。",
+                field_issues=field_issues, repair_mode='BATCH_FIELDS',
                 block_index=block_index,
             )
 
@@ -899,6 +970,17 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 block_index=block_index,
             )
 
+        expected_verification = call.get('expected_verification')
+        if expected_verification is not None:
+            from .verification_expectation import validate_expectation
+            try:
+                if call.get('expected_failure') is not None or call.get('operation') not in {'MUTATE','BUILD','TEST','VERIFY','GIT_MUTATE'}:
+                    raise ValueError('expected_verification requires a postcondition operation; cannot combine expected_failure')
+                validate_expectation(expected_verification, call.get('verify'))
+            except ValueError as exc:
+                return False, _diagnostic('[TOOL_ENVELOPE_REJECTED]', 'run_command_expected_verification_invalid',
+                    tool=tool, detail=str(exc), block_index=block_index,
+                    suggestion='負向後置驗證須事前提供 expected_verification={"status":"FAIL","failed_checks":[1]}；verify index 從 1 開始。')
         expected_failure = call.get("expected_failure")
         if expected_failure is not None:
             operation = str(call.get("operation", "") or "").strip().upper()
@@ -1995,7 +2077,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 
 1. 執行指令＋驗證：{{"tool": "run_command", "operation":"BUILD", "command": "PowerShell指令", "timeout": 30, "result_transport":"SUMMARY_ONLY", "success_criteria": "什麼條件代表這次動作真的生效", "verify": [{{"action":"run_command","command":"驗證指令","expect_exit_code":0,"expect_contains":"可選關鍵字","expect_regex":"可選正規表示式"}}, {{"action":"file_exists","path":"檔案路徑","expect":true}}, {{"action":"file_contains","path":"檔案路徑","text":"應存在內容","expect":true}}]}}
    operation 必填且只能是 INSPECT、MUTATE、BUILD、TEST、VERIFY、GIT_INSPECT、GIT_MUTATE、PROCESS、TRANSFER、GENERAL。VERIFY 必須帶 verifies_action_id。GENERAL 只作低頻逃生口，不能單獨支持任務 SUCCESS。
-   run_command 的 executor 固定是 Windows PowerShell 5.1。不得直接使用 CMD 的 `cd /d`、裸露 `&&` 或 `||`；Git 請優先使用 `git -C 'E:\\path\\to\\repo' ...`，一般目錄切換使用 `Set-Location -LiteralPath 'E:\\path'`，多指令以 `;` 分隔。verify 必須是 object 或 object list，不得填自然語言字串。
+   run_command 的 executor 固定是 Windows PowerShell 5.1。不得直接使用 CMD 的 `cd /d`、裸露 `&&` 或 `||`；Git 請優先使用 `git -C 'E:\\path\\to\\repo' ...`。專案命令請提供絕對目錄 working_directory；主程序與 verify 共用該目錄，command 內的 Set-Location 不會傳到 verify。INSPECT/GIT_INSPECT 可省略 success_criteria/verify；其餘 operation 必須提供。verify 必須是 object 或 object list，不得填自然語言字串。
 2. 讀取檔案（僅 Local/Cloud Planner 使用；Web Planner 禁止使用）：{{"tool": "read_file", "path": "絕對路徑"}}
 3. 寫入小型檔案（content 最多 4096 字元）：{{"tool": "write_file", "path": "絕對路徑", "content": "完整檔案內容"}}
 3a. 刪除明確目標：{{"tool":"delete_path","action_id":"A-DELETE-唯一值","path":"workspace 內單一絕對路徑","recursive":true,"reason":"刪除原因"}}。此工具只會建立固定 manifest 並要求人類確認；不得改用 run_command 繞過確認。
@@ -2007,6 +2089,7 @@ SYSTEM_PROMPT_TEMPLATE = """
    只要使用者要求「列出／顯示某目錄有哪些檔案」，固定使用 list_directory；不得改用 inspect_project_scope、inspect_directory 或 run_command。
 5. 一次統計一或多個目錄：{{"tool":"inspect_directory","paths":["C:/path1","D:/path2"],"recursive":true,"sample_limit":20}}
 6. 尋找檔案：{{"tool": "find_file", "name": "檔名", "root": "可省略；預設 Workspace Root"}}
+   name 使用精確檔名或檔名片段，不使用 glob。若需求指定搜尋目錄，root 必須明確使用該目錄，不能省略而擴大範圍。max_results=1..100。只有 search_complete=true 才能將空 matches 視為已確認未找到；PARTIAL／search_complete=false 應回報未完成及 errors，不得假稱搜尋成功。
 7. 上傳單一附件到目前網頁對話：{{"tool": "upload_file", "path": "絕對路徑"}}
 8. 上傳多個附件到目前網頁對話：{{"tool": "upload_files", "paths": ["絕對路徑1", "絕對路徑2"]}}
 8a. 將 Workspace 內檔案回傳給本次 Telegram 使用者：{{"tool":"return_artifact","path":"絕對路徑","kind":"document|photo（可省略）","caption":"可省略"}}
@@ -2046,6 +2129,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 - upload_file / upload_files 只把檔案送進目前 WebGPT 網頁，絕不代表已傳給 Telegram。來源為 REMOTEAGENT_TELEGRAM 且使用者要求把本機檔案傳回 Telegram 時，必須使用 return_artifact；software 會驗證路徑、大小與 SHA-256，再由 Telegram transport 實際送出。
 - return_artifact 的工具結果若為 TELEGRAM_ARTIFACT_REJECTED，禁止宣告已上傳；依 software 回傳的原因如實 final_response。即使工具結果為 QUEUED，也只能說「已準備回傳」，不得在 Telegram delivery 真正執行前說「已上傳」。
 - Web Planner 不得使用 read_file 取得專案 source/text implementation。已知檔案或 symbol 時必須使用 query_project.read_range/read_symbol；Runtime 會在精確 project_root 建立或重用 INDEX_ONLY，且不會上傳附件。
+- 一般非專案來源文字檔使用 read_file：可辨識的 UTF-8 文字且不超過 1,000,000 bytes 時 Runtime 真正讀取並回傳內容，超過文字回覆預算時保留本地 result_ref；不為此自動上傳附件。超過讀取上限或必須交給網頁解讀的二進位文件才走附件；QUEUED 只是排程，不代表附件 ready、已送達或已讀取。
 - 若你只知道檔名或相依模組名稱，先使用 find_file 或 query_project.search_text 找到實際路徑；source/text 接著使用 query_project.read_symbol/read_range，非 source artifact 才使用 upload_file。
 - read_file 僅保留給非 Web Planner 模式或本地執行流程的內部需求。
 - 【Web Planner 單檔修改最高優先】若使用者要求修改已存在、可上傳、且能以單一檔案合理完成的內容，第一選擇必須是 web_edit_file：Web AI 修改完整附件 → 下載完整 artifact → Local 僅做 staging/replace/hash/verify，不再交給 Local AI 重做。
@@ -2069,6 +2153,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 - VERIFICATION_STATUS=PASS 才能把該 action 視為驗證通過。
 - VERIFICATION_STATUS=FAIL 時，必須根據 stdout/stderr/verification evidence 找出問題，必要時 upload/find 相關檔案、修正後重新 run_command + verify。
 - 若任務本身是負向測試，預期 command 必須失敗，請在原 action 明確加入 expected_failure，例如 {{"exit_codes":[1],"stderr_regex":"not a directory"}}，並以 condition_id 或 success_criteria 精確綁定本輪 completion_contract.success 的條件文字／ID。Runtime 仍保存 execution_status=FAILED、verification_status=FAIL，另產生 expectation_status=PASS/FAIL 供任務終局判定；不得在一般失敗後才補填 expected_failure，也不得用它掩蓋副作用操作失敗。
+- 若負向測試預期主命令成功但特定後置驗證 FAIL，事前使用 expected_verification={{"status":"FAIL","failed_checks":[1]}}，索引對應 verify 的第幾項，並以 success_criteria 精確綁定 completion_contract.success；Runtime 保留 SUCCEEDED/FAIL，另計算 expectation_status。不得事後補上此欄位掩蓋普通驗證失敗。
 - 若只是補驗證而不是重做原操作，新的 run_command 必須用 verifies_action_id 指向原 action_id；Runtime 會保留歷史，並以同一 action 最新的有效驗證結果判斷終態。condition_id 可填 completion_contract 中對應的精確條件。
 - Git SHA 等結構化輸出應使用 expect_regex（例如 ^[0-9a-f]{{40}}$），不要用 expect_contains:"HEAD" 檢查 rev-parse 的 SHA 輸出。
 - VERIFICATION_STATUS=UNVERIFIED 時，不得直接向使用者宣告成功；你必須補做可驗證的 action。

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from RemoteAgent.telegram_artifacts import prepare_telegram_completion
+from agent_core.task_continuation import terminal_heading, normalize_task_outcome, resume_instructions
 from RemoteAgent.remote_feature_catalog import (
     security_approval_inline_keyboard,
     task_progress_inline_keyboard,
@@ -14,6 +15,19 @@ from RemoteAgent.remote_feature_catalog import (
 
 TELEGRAM_TEXT_LIMIT_UTF16 = 4096
 TELEGRAM_CHUNK_BODY_LIMIT_UTF16 = 3800
+
+
+def _terminal_text(event, summary, state, outcome=''):
+    heading = terminal_heading(state, outcome)
+    hint = resume_instructions(str(event.get('task_id', '') or ''), str(event.get('request_id', '') or ''))
+    if hint and str(summary).endswith('\n' + hint):
+        summary = summary[:-len('\n' + hint)]
+    text = (f"{heading}\n{summary}\nevent_id: {event.get('event_id', '')}"
+            f"\nrequest_id: {event.get('request_id', '')}\ntask_id: {event.get('task_id', '')}")
+    if heading != '🟢 已完成':
+        if hint:
+            text += '\n' + hint
+    return text
 
 
 def _utf16_units(value: str) -> int:
@@ -110,11 +124,17 @@ class TelegramDeliveryAdapter:
                     summary.rstrip()
                     + f"\n\nplan_id: {plan_id}\n後續可直接回覆：執行 {plan_id}"
                 ).lstrip()
-            return f"🟢 已完成\n{summary}\nevent_id: {event_id}\nrequest_id: {request_id}"
+            return _terminal_text(event, summary, 'COMPLETED', normalize_task_outcome(payload.get('task_outcome')))
         if event_type == "TASK_FAILED":
-            return f"🔴 執行失敗\n{str(payload.get('error', ''))}\nevent_id: {event_id}\nrequest_id: {request_id}"
+            summary = payload.get('summary') or str(payload.get('error', ''))
+            if not payload.get('summary') and '[WEB_PROVIDER_CONVERSATION_FULL]' in str(payload.get('error','')):
+                summary = '對話已滿，請建立新對話並更新 Workspace 的對話 URL，再重新發送需求。\n本次未自動重送；已完成的工具結果仍保留。'
+            return _terminal_text(event, summary, 'FAILED')
         if event_type == "TASK_INTERRUPTED":
-            return f"🟠 任務中斷\nevent_id: {event_id}\nrequest_id: {request_id}\ntask_id: {task_id}"
+            summary = payload.get('summary') or str(payload.get('error', ''))
+            if not payload.get('summary') and '[WEB_PROVIDER_CONVERSATION_FULL]' in str(payload.get('error','')):
+                summary = '對話已滿，請建立新對話並更新 Workspace 的對話 URL，再重新發送需求。\n本次未自動重送；已完成的工具結果仍保留。'
+            return _terminal_text(event, summary, 'INTERRUPTED')
         if event_type == "SECURITY_CONFIRMATION_REQUIRED":
             kind = str(payload.get("approval_kind", "DELETE") or "DELETE").upper()
             if kind == "EXECUTION":

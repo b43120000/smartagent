@@ -82,7 +82,6 @@ _TOOL_PURPOSES = MappingProxyType({
 _WEB_DIRECT_DENY = frozenset({
     "ask_executor",
     "execute_artifact_bundle",
-    "save_session_summary",
     "web_edit_file",
     "final_response",
     "turn_commit",
@@ -140,6 +139,10 @@ def render_protocol_tool_section(interface: str) -> str:
             f"{name}:{_type_name(kind)}"
             for name, kind in schema.get("optional", {}).items()
         ) or "(none)"
+        if TOOL_CATEGORIES.get(tool) != PROTOCOL_CONTROL:
+            optional += ', depends_on:list (prior action IDs), replaces_action_id:str (never-executed deferred action only)'
+            if str(interface or '').strip().lower().replace('-', '_') in {'web_direct','webdirect','remote'}:
+                optional += ', field_refs:dict (explicit current-request stable input ref_id+version)'
         lines.append(
             f"- {tool} [{tool_category(tool)}] required={required}; optional={optional}"
         )

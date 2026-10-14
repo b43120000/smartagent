@@ -63,7 +63,7 @@ class FakeAgent:
 
 
 def run() -> None:
-    root = r"E:\card\release\SmartAgentv2"
+    root = r"E:\workspace\release\SmartAgentv2"
     action = {
         "tool": "apply_edit_plan",
         "action_id": "APPLY-INVALID",

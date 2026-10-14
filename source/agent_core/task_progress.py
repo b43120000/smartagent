@@ -52,6 +52,8 @@ class TaskProgressLedger:
     current_focus: str = "等待模型評估任務階段"
     next_action: str = ""
     completion_contract: dict[str, list[str]] = field(default_factory=dict)
+    context_request: dict[str, Any] = field(default_factory=dict)
+    repair_state: dict[str, Any] = field(default_factory=dict)
     decision: str = "CONTINUE"
     outcome: str = "PENDING"
     matched_condition: str = ""
@@ -89,6 +91,8 @@ class TaskProgressLedger:
                 for key, value in dict(data.get("completion_contract") or {}).items()
             },
             decision=str(data.get("decision", "CONTINUE") or "CONTINUE"),
+            context_request=dict(data.get("context_request") or {}),
+            repair_state=dict(data.get('repair_state') or {}),
             outcome=str(data.get("outcome", "PENDING") or "PENDING"),
             matched_condition=str(data.get("matched_condition", "") or ""),
             matched_condition_id=str(data.get("matched_condition_id", "") or ""),
@@ -338,6 +342,11 @@ def validate_model_progress(
 ) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise TaskProgressError("report_progress payload must be an object")
+    from .progress_reply_contract import materialize_progress
+    try:
+        payload = materialize_progress(payload, existing)
+    except ValueError as exc:
+        raise TaskProgressError(str(exc), field='progress_update') from exc
     total = _number(payload.get("total_steps"), "total_steps")
     current = _number(payload.get("current_step"), "current_step")
     if float(total) <= 0 or float(current) < 0 or float(current) > float(total):
@@ -364,6 +373,11 @@ def validate_model_progress(
         existing.completion_contract if existing else None,
     )
     decision = str(payload.get("decision", "") or "").strip().upper()
+    from .context_acquisition import normalize_context_request
+    try:
+        context_request = normalize_context_request(payload.get('context_request'))
+    except ValueError as exc:
+        raise TaskProgressError(str(exc), field='context_request') from exc
     if decision not in PROGRESS_DECISIONS:
         raise TaskProgressError(f"invalid progress decision: {decision or '(missing)'}")
     outcome = str(payload.get("outcome", "") or "").strip().upper()
@@ -456,6 +470,7 @@ def validate_model_progress(
         "total_steps": total, "current_step": current, "steps": steps,
         "base_evaluation": base, "current_focus": focus, "next_action": next_action,
         "completion_contract": completion_contract,
+        "context_request": context_request,
         "decision": decision, "outcome": outcome,
         "matched_condition": matched_condition,
         "matched_condition_id": matched_condition_id,
@@ -508,6 +523,8 @@ def record_model_progress(
         total_steps=total, current_step=current, steps=steps,
         current_focus=focus, next_action=next_action, round_id=int(round_id),
         completion_contract=completion_contract, decision=decision, outcome=outcome,
+        context_request=normalized['context_request'],
+        repair_state=dict(ledger.repair_state),
         matched_condition=matched_condition,
         matched_condition_id=matched_condition_id,
         evidence_refs=evidence_refs,
@@ -570,6 +587,9 @@ def format_telegram_status_view(ledger: TaskProgressLedger | Mapping[str, Any]) 
         lines.append(f"模型決策：{ledger.decision}")
     if ledger.outcome and ledger.outcome != "PENDING":
         lines.append(f"執行結果：{ledger.outcome}")
+    if ledger.repair_state.get('status') == 'REPAIR_REQUIRED':
+        lines.append('Progress 欄位待修正：' + ', '.join(list(ledger.repair_state.get('remaining_fields') or [])[:8]))
+        lines.append('目前顯示最後有效的 Progress；合法讀取結果另由 Runtime 保存。')
     if ledger.matched_condition:
         lines.append(f"符合條件：{ledger.matched_condition}")
     if ledger.matched_condition_id:
@@ -580,15 +600,33 @@ def format_telegram_status_view(ledger: TaskProgressLedger | Mapping[str, Any]) 
     return "\n".join(lines)
 
 
+def record_progress_repair(task_id, diagnostic, *, round_id, executed_action_ids=(), root=None):
+    ledger = read_progress(task_id, root)
+    if ledger is None:
+        return None
+    previous = list(ledger.repair_state.get('history') or [])
+    row = {'round':round_id, 'field_issues':list(diagnostic.get('field_issues') or []),
+           'detail':str(diagnostic.get('detail', ''))[:MAX_TEXT], 'executed_action_ids':list(executed_action_ids)}
+    remaining = sorted(issue['field'] for issue in diagnostic.get('field_issues', []))
+    old = set(ledger.repair_state.get('remaining_fields') or [])
+    ledger.repair_state = {'status':'REPAIR_REQUIRED' if diagnostic else 'RESOLVED',
+                          'remaining_fields':remaining, 'resolved_fields':sorted(old-set(remaining)),
+                          'history':[*previous, row][-MAX_HISTORY:]}
+    _atomic_write(get_ledger_path(task_id, root), ledger.to_dict())
+    return ledger
+
+
 def format_prompt_context(ledger: TaskProgressLedger | Mapping[str, Any]) -> str:
     if isinstance(ledger, Mapping):
         ledger = TaskProgressLedger.from_dict(ledger)
+    from .progress_reply_contract import reply_contract
     payload = {
         "goal": ledger.goal, "base_evaluation": ledger.base_evaluation,
         "total_steps": ledger.total_steps, "current_step": ledger.current_step,
         "steps": ledger.steps, "current_focus": ledger.current_focus,
         "next_action": ledger.next_action, "runtime_state": ledger.runtime_state,
         "completion_contract": ledger.completion_contract,
+        "context_request": ledger.context_request,
         "completion_condition_ids": {
             key: completion_condition_choices(ledger.completion_contract, key)
             for key in COMPLETION_CONTRACT_KEYS
@@ -606,6 +644,15 @@ def format_prompt_context(ledger: TaskProgressLedger | Mapping[str, Any]) -> str
         "[CURRENT_TASK_PROGRESS]\n"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         + "\n[/CURRENT_TASK_PROGRESS]\n"
+        + "[PROGRESS_REPAIR_STATE]\n"
+        + json.dumps({**ledger.repair_state, 'history':list(ledger.repair_state.get('history') or [])[-3:]}, ensure_ascii=False, separators=(',', ':'))
+        + "\n[/PROGRESS_REPAIR_STATE]\n"
+        + "[PROGRESS_REPLY_CONTRACT]\n"
+        + json.dumps(reply_contract(ledger), ensure_ascii=False, separators=(',', ':'))
+        + "\n[/PROGRESS_REPLY_CONTRACT]\n"
+        + "schema 固定；第一輪建立完整計畫，已有有效計畫後 Runtime 自動以增量方式合併，無需標記 PATCH；"
+        "只回覆本輪必要欄位與發生變更的計畫欄位。未提供的計畫欄位由 Runtime 沿用；"
+        "本輪 decision、evidence_refs、decision_reason 必須重新提供，禁止沿用舊證據冒充本輪結果。"
         + "以上是 runtime 已接受的進度。請以原始目標、Base、最新工具結果與此進度決定下一步；"
         "runtime_state 僅供讀取且由 Runtime 持有，禁止在 report_progress 回填；"
         "本輪仍須先輸出一個 report_progress。若新 evidence 未被 completion_contract 覆蓋，"

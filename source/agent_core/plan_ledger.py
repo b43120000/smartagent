@@ -52,8 +52,6 @@ def is_planning_request(text: str) -> bool:
         "只評估不改",
         "先分析不改",
         "只分析不改",
-        "不要修改",
-        "不做修改",
         "盤點與改動規劃",
     )
     if any(marker in normalized for marker in explicit_planning):

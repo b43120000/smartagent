@@ -77,11 +77,18 @@ def operation_mismatch_detail(action: Mapping[str, Any]) -> str:
     command = str(action.get("command", "") or "").strip()
     verifies = str(action.get("verifies_action_id", "") or "").strip()
     condition = str(action.get("condition_id", "") or "").strip()
+    from .action_dependencies import command_is_proven_observation
+    proven_observation = command_is_proven_observation(action)
     mismatch = ""
     if verifies and operation != "VERIFY":
         mismatch = "verifies_action_id_requires_VERIFY"
     elif operation == "VERIFY" and not verifies and not condition:
         mismatch = "VERIFY_requires_verifies_action_id_or_condition_id"
+    elif operation in {'INSPECT','GIT_INSPECT'} and not proven_observation and (
+        _looks_like_git_mutation(command) or re.search(
+            r'(?i)\b(?:Set-Content|Add-Content|Out-File|Remove-Item|New-Item|Copy-Item|Move-Item|Rename-Item|'
+            r'Start-Process|Invoke-Expression|Set-Item|Stop-Process)\b|(?:^|\s)(?:>{1,2})\s*\S',command)):
+        mismatch = 'INSPECT_contains_explicit_mutation'
     elif operation == "GIT_INSPECT" and _looks_like_git_mutation(command):
         mismatch = "GIT_INSPECT_contains_git_mutation"
     elif operation == "GIT_MUTATE" and not _looks_like_git(command):
