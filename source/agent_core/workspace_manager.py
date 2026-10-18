@@ -1005,6 +1005,37 @@ def _telegram_menu() -> int:
             print(f"[!] Telegram operation failed: {type(exc).__name__}: {exc}")
 
 
+def _browser_menu() -> int:
+    from .browser_preferences import load_browser_preferences, save_browser_preferences, browser_launch_selection
+    current = load_browser_preferences()
+    print('\n瀏覽器設定（Agent / WebCopilot / DOM 校準共用）')
+    print(f"目前：{current['browser']}，瀏覽器 {current['instance']}")
+    print('[1] Chrome（預設）\n[2] Edge\n[0] 取消')
+    while True:
+        choice = input('請選擇瀏覽器 [1]: ').strip() or '1'
+        if choice == '0':
+            return 0
+        if choice in {'1', '2'}:
+            break
+        print('[!] 請輸入 1 或 2，或輸入 0 取消。')
+    browser = 'chrome' if choice == '1' else 'edge'
+    print('瀏覽器 1～5 是各自獨立的瀏覽器與登入資料夾，不是分頁。')
+    while True:
+        raw = input('請選擇瀏覽器編號 1～5 [1]，0 取消: ').strip() or '1'
+        if raw == '0':
+            return 0
+        if raw in {'1', '2', '3', '4', '5'}:
+            break
+        print('[!] 請輸入 1～5。')
+    saved = save_browser_preferences(browser, int(raw))
+    launch = browser_launch_selection(saved)
+    print(f"[OK] 已設定 {browser}，瀏覽器 {raw}。")
+    print(f"登入資料夾：{launch['profile_dir']}")
+    print('下次啟動 Agent 或校準時生效；已執行的程式請重新啟動。')
+    print('每個瀏覽器環境首次使用需登入網站一次，之後 Agent 與校準共用登入。')
+    return 0
+
+
 def _interactive() -> int:
     snapshot = _binding_snapshot()
     print("\nSmartAgent Workspace Manager")
@@ -1025,6 +1056,7 @@ def _interactive() -> int:
     print("[2] 設定 Local / Remote Workspace + WebGPT")
     print("[3] 設定 / 配對 Telegram（逐步引導）")
     print("[4] 管理已設定的 Telegram")
+    print("[5] 瀏覽器設定")
     print("[0] Exit")
     choice = input("Select: ").strip()
     if choice == "1":
@@ -1037,6 +1069,8 @@ def _interactive() -> int:
         return _telegram_first_time_wizard()
     if choice == "4":
         return _telegram_menu()
+    if choice == "5":
+        return _browser_menu()
     return 0
 
 
@@ -1050,9 +1084,11 @@ def main(argv=None) -> int:
     parser.add_argument("--set-binding", choices=("local", "remote"))
     parser.add_argument("--workspace", default="")
     parser.add_argument("--url", default="")
+    parser.add_argument("--browser-settings", action="store_true")
     args = parser.parse_args(argv)
     if args.show:
         print(json.dumps(_binding_snapshot(), ensure_ascii=False, indent=2)); return 0
+    if args.browser_settings: return _browser_menu()
     if args.security_menu: return _security_menu()
     if args.initialize_security:
         if not _is_admin():

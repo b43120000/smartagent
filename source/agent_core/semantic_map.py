@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .project_ledger import append_project_event
 from .project_sync import inspect_project_scope, is_ignored_project_path
+from .path_security import canonicalize_path, PathSecurityError
 
 SEMANTIC_MAP_SCHEMA = "PROJECT_SEMANTIC_MAP_V1"
 _SOURCE_LANGUAGES = {
@@ -14,6 +15,57 @@ _SOURCE_LANGUAGES = {
     "javascript", "typescript", "rust", "go", "cmake", "gradle",
 }
 SEMANTIC_PATCH_FILE_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _snapshot_v5_identity(snapshot: dict, files: list, git_status: list) -> str:
+    """Exact v5 identity; schema upgrades fail closed at the caller."""
+    head = snapshot.get('git_head', '')
+    basis = {'schema_version':5,
+        'files':[{'path':r['path'], 'size_bytes':r['size_bytes'],
+                  'content_identity':r['content_identity']} for r in files],
+        'git_head':head, 'git_status':git_status}
+    manifest = hashlib.sha256(json.dumps(basis,sort_keys=True,separators=(',', ':')).encode()).hexdigest()
+    return hashlib.sha256((f'5\n{manifest}\n{head}\n'+'\n'.join(git_status)).encode()).hexdigest()
+
+
+def _patch_only_snapshot(workspace: Path, source: Path, digest: str, base_id: str) -> dict | None:
+    """Prove the old snapshot equals current state minus this one JSON input.
+
+    Nothing is excluded from normal indexing. This is a file-import proof,
+    never an allowance for source changes or arbitrary JSON files.
+    """
+    if source.suffix.lower() != '.json':
+        return None
+    current = inspect_project_scope(workspace, verify_cached_content=True)
+    status = current.get('git_status', [])
+    # Public snapshots truncate status at 200; never reason from a partial list.
+    if current.get('schema_version') != 5 or len(status) >= 200:
+        return None
+    files = current['files']
+    if _snapshot_v5_identity(current, files, status) != current['snapshot_id']:
+        return None
+    relative = source.relative_to(workspace).as_posix()
+    matches = [r for r in files if r['path'] == relative]
+    if len(matches) != 1 or matches[0].get('sha256') != digest:
+        return None
+    filtered_status = []
+    # Git core.quotePath may emit UTF-8 bytes as C-style octal escapes.
+    # Compare only encodings of this exact known path, never decode arbitrary
+    # status text into a broader path match.
+    quoted = '"' + ''.join(f'\\{byte:03o}' if byte >= 128 else chr(byte)
+                           for byte in relative.encode('utf-8')) + '"'
+    artifact_names = {relative, json.dumps(relative, ensure_ascii=False), quoted}
+    for line in status:
+        if line.startswith('?? ') and line[3:] in artifact_names:
+            continue
+        filtered_status.append(line)
+    remaining = [r for r in files if r['path'] != relative]
+    if _snapshot_v5_identity(current, remaining, filtered_status) != base_id:
+        return None
+    return {'original_base_snapshot_id':base_id,
+            'verified_current_snapshot_id':current['snapshot_id'],
+            'artifact_path':relative, 'artifact_sha256':digest,
+            'rule':'EXACT_SNAPSHOT_WITHOUT_SINGLE_PATCH_FILE'}
 
 
 def semantic_map_root(workspace: str | Path) -> Path:
@@ -38,9 +90,14 @@ def _atomic_json(path: Path, value: dict) -> None:
 def _load(workspace: str | Path) -> dict:
     try:
         value = json.loads(semantic_map_path(workspace).read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except Exception:
+    except FileNotFoundError:
         return {}
+    if (not isinstance(value, dict) or value.get('schema') != SEMANTIC_MAP_SCHEMA
+        or not isinstance(value.get('files'), list)
+        or not all(isinstance(row, dict) and isinstance(row.get('path'), str)
+                   and isinstance(row.get('source_sha256'), str) for row in value['files'])):
+        raise ValueError('semantic_map_invalid_stored_map')
+    return value
 
 
 def _normalized_required_paths(snapshot: dict, required_paths: object) -> set[str] | None:
@@ -80,6 +137,9 @@ def _targets(snapshot: dict, required_paths: object = None) -> dict[str, dict]:
         and (row.get("language") in _SOURCE_LANGUAGES or row.get("path") in build)
         and (required is None or str(row.get("path", "")) in required)
     }
+    unknown = (required or set()) - {str(row.get('path', '')) for row in snapshot.get('files', [])}
+    if unknown:
+        raise ValueError('semantic_map_scope_mismatch:unknown_requested_paths:' + ','.join(sorted(unknown)))
     if required and not targets:
         raise ValueError(
             "semantic_map_scope_mismatch:no_requested_path_resolved:"
@@ -101,7 +161,7 @@ def _revision(value: dict) -> str:
 
 
 def inspect_semantic_map(workspace: str | Path, required_paths: object = None) -> dict:
-    snapshot = inspect_project_scope(workspace)
+    snapshot = inspect_project_scope(workspace, verify_cached_content=True)
     targets = _targets(snapshot, required_paths)
     current = _load(workspace)
     records = {
@@ -180,7 +240,7 @@ def _render_markdown(value: dict) -> str:
 def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
     if not isinstance(patch, dict):
         return {"status": "INVALID", "reason": "PATCH_NOT_OBJECT"}
-    snapshot = inspect_project_scope(workspace)
+    snapshot = inspect_project_scope(workspace, verify_cached_content=True)
     if str(patch.get("base_snapshot_id", "")) != snapshot["snapshot_id"]:
         return {"status": "SNAPSHOT_MISMATCH", "current_snapshot_id": snapshot["snapshot_id"]}
     supplied = patch.get("files", [])
@@ -192,17 +252,23 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
     except ValueError as exc:
         return {"status": "INVALID", "reason": str(exc)}
     old = _load(workspace)
+    all_targets = _targets(snapshot)
     records = {
         str(row.get("path", "")): dict(row)
         for row in old.get("files", [])
-        if isinstance(row, dict) and str(row.get("path", "")) in targets
-        and row.get("source_sha256") == targets[str(row.get("path"))].get("sha256")
+        if isinstance(row, dict) and str(row.get("path", "")) in all_targets
+        and (str(row.get("path", "")) not in targets
+             or row.get("source_sha256") == targets[str(row.get("path"))].get("sha256"))
     }
     try:
+        seen_paths = set()
         for item in supplied:
             if not isinstance(item, dict):
                 raise ValueError("semantic_map_invalid_file_entry")
             path = str(item.get("path", "")).replace("\\", "/").lstrip("/")
+            if path in seen_paths:
+                raise ValueError(f"semantic_map_duplicate_path:{path}")
+            seen_paths.add(path)
             if path not in targets:
                 raise ValueError(f"semantic_map_unknown_path:{path}")
             if str(item.get("source_sha256", "")) != targets[path].get("sha256"):
@@ -220,14 +286,15 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
                 "invariants": _string_list(item.get("invariants", []), "invariants"),
                 "tests": _string_list(item.get("tests", []), "tests"),
             }
-        project_summary = str(patch.get("project_summary", old.get("project_summary", ""))).strip()[:65536]
+        preserve_global = required_paths is not None and bool(old)
+        project_summary = str(old.get("project_summary", "") if preserve_global else patch.get("project_summary", old.get("project_summary", ""))).strip()[:65536]
         if _placeholder(project_summary):
             raise ValueError("semantic_map_placeholder_project_summary")
         value = {
             "schema": SEMANTIC_MAP_SCHEMA,
             "snapshot_id": snapshot["snapshot_id"],
             "project_summary": project_summary,
-            "flows": _string_list(patch.get("flows", old.get("flows", [])), "flows", maximum=128),
+            "flows": _string_list(old.get("flows", []) if preserve_global else patch.get("flows", old.get("flows", [])), "flows", maximum=128),
             "files": [records[path] for path in sorted(records)],
         }
         value["semantic_map_revision"] = _revision(value)
@@ -239,6 +306,16 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
     except ValueError as exc:
         return {"status": "INVALID", "reason": str(exc)}
     status = inspect_semantic_map(workspace, required_paths)
+    if status['snapshot_id'] != snapshot['snapshot_id']:
+        return {**status, 'status':'PARTIAL', 'reason':'SOURCE_CHANGED_DURING_UPDATE',
+                'accepted_snapshot_id':snapshot['snapshot_id'],
+                'verification_status':'FAIL', 'mutation_applied':True}
+    # Verification is performed against saved bytes, not the in-memory value.
+    persisted = _load(workspace)
+    verified = persisted == value and semantic_map_markdown_path(workspace).read_text(encoding='utf-8') == _render_markdown(value)
+    if not verified:
+        return {**status, 'status':'PARTIAL', 'reason':'PERSISTED_MAP_VERIFICATION_FAILED',
+                'verification_status':'FAIL', 'mutation_applied':True}
     result_status = "UPDATED" if status["status"] == "FRESH" else "PARTIAL"
     ledger_event = append_project_event(
         workspace,
@@ -264,19 +341,27 @@ def update_semantic_map(workspace: str | Path, patch: dict) -> dict:
         "status": result_status,
         "updated_file_count": len(supplied),
         "ledger_event_id": ledger_event["event_id"],
+        "verification_status": "PASS",
+        "mutation_applied": True,
+        "verification_evidence": {"json_readback_equal":True,"markdown_readback_equal":True},
+        "preserved_project_fields": ["project_summary", "flows"] if preserve_global else [],
     }
 
 
 def update_semantic_map_file(workspace: str | Path, path: str, expected_sha256: str = "") -> dict:
     root = Path(workspace).expanduser().resolve()
-    source = Path(path).expanduser().resolve()
+    try:
+        source = canonicalize_path(path, base=root, forbid_glob=True)
+    except PathSecurityError as exc:
+        return {"status":"INVALID", "reason":str(exc)}
     try:
         source.relative_to(root)
     except ValueError:
         return {"status": "INVALID", "reason": "PATH_OUTSIDE_WORKSPACE"}
     if not source.is_file():
         return {"status": "INVALID", "reason": "PATCH_FILE_MISSING"}
-    raw = source.read_bytes()
+    with source.open('rb') as stream:
+        raw = stream.read(SEMANTIC_PATCH_FILE_MAX_BYTES + 1)
     if len(raw) > SEMANTIC_PATCH_FILE_MAX_BYTES:
         return {"status": "INVALID", "reason": "PATCH_FILE_TOO_LARGE", "max_bytes": SEMANTIC_PATCH_FILE_MAX_BYTES}
     digest = hashlib.sha256(raw).hexdigest()
@@ -286,7 +371,16 @@ def update_semantic_map_file(workspace: str | Path, path: str, expected_sha256: 
         patch = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         return {"status": "INVALID", "reason": f"JSON_DECODE:{type(exc).__name__}"}
-    return update_semantic_map(root, patch)
+    proof = None
+    if isinstance(patch, dict):
+        proof = _patch_only_snapshot(root, source, digest, str(patch.get('base_snapshot_id', '')))
+        if proof:
+            patch = {**patch, 'base_snapshot_id':proof['verified_current_snapshot_id']}
+    # Normal update takes another fresh snapshot, detecting changes after proof.
+    result = update_semantic_map(root, patch)
+    if proof:
+        result['patch_snapshot_evidence'] = proof
+    return result
 
 
 def compact_semantic_map_context(workspace: str | Path, *, path_limit: int = 30) -> str:

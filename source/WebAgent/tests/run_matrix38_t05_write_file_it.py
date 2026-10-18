@@ -60,7 +60,8 @@ def unit(s):
 def runtime(s):
     assert s['phases'].get('UT',{}).get('status')=='PASS'
     root=Path(s['fixture']);ctx=WebAgentToolContext(root,interface_name='remote');turns=[]
-    actions=[{'tool':'write_file','action_id':'T05-R-'+str(i),'path':str(root/n),'content':c} for i,(n,c) in enumerate((('runtime_unicode.txt',TEXT),('runtime_empty.txt','')))]
+    run_token=uuid.uuid4().hex[:8]
+    actions=[{'tool':'write_file','action_id':f'T05-R-{run_token}-{i}','path':str(root/f'{run_token}_{n}'),'content':c} for i,(n,c) in enumerate((('runtime_unicode.txt',TEXT),('runtime_empty.txt','')))]
     goal='指定檔案已寫入且 bytes 與內容驗證相符'
     p={**initial(),'base_evaluation':'T05 bounded file writes','next_action':'write_file',
        'completion_contract':{'success':[goal],'failure':['寫入失敗'],'in_progress':['待寫入'],'interrupted':['環境阻塞']},'matched_condition':'待寫入'}
@@ -71,7 +72,12 @@ def runtime(s):
           'steps':[{'step':1,'desc':'檔案寫入','status':'COMPLETED'}],'matched_condition':goal,'evidence_refs':[a['action_id'] for a in actions]},
           {'tool':'final_response','action_id':'T05-R-FINAL','content':'T05_RUNTIME_PASS'})
     loop=WebAgentProtocolLoop(root,planner,tool_context=ctx,progress_root=ROOT)
-    assert loop.run('只寫入以下指定檔案：\n'+'\n'.join(a['path'] for a in actions))=='T05_RUNTIME_PASS'
+    try:
+        result=loop.run('只寫入以下指定檔案：\n'+'\n'.join(a['path'] for a in actions))
+    except Exception:
+        s['phases']['IT-R']={'status':'FAIL','actions':loop.action_result_ledger,'rounds':len(turns)}
+        raise
+    assert result=='T05_RUNTIME_PASS'
     for a in actions:check(decode_result(loop.action_ledger[a['action_id']]['result']),Path(a['path']),a['content'])
     from ctypes import WinDLL,c_void_p,get_last_error,WinError,wintypes
     locked=root/'locked.txt';locked.write_bytes(b'T05_KEEP_EXISTING')
@@ -96,7 +102,7 @@ def live(s):
     from agent_core.task_continuation import TaskContinuationStore
     root=Path(s['fixture']);output=root/('web_'+uuid.uuid4().hex[:8]+'.txt');content='T05_WEB_WRITE_'+uuid.uuid4().hex[:12]+'\n中文與海鷗🐦\n'
     request='只測試 write_file。用一個 write_file action 將下方 content 原樣寫入指定 path（UTF-8、LF 換行，末尾包含一個 LF）。不能用命令、分塊工具或其他工具。根據 Runtime 的寫入／readback 檢查回報 bytes、SHA256、verification_status。不得上傳、刪除或寫其他路徑。\npath：\n'+str(output)+'\ncontent JSON 字串：\n'+json.dumps(content,ensure_ascii=False)
-    sink={};code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    sink={};code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];j=TaskContinuationStore(ROOT).get(sink['task_id']) or {};calls=list(j.get('actions',{}).values());final=task.result_ledger.get('final',{});passed=False
     if len(calls)==1 and calls[0]['action']['tool']=='write_file':
         c=calls[0];assert c['action']['path']==str(output) and c['action']['content']==content
@@ -111,7 +117,7 @@ def main():
     assert read_json_retry(STATE.with_name('t04_find_file.json'))['status']=='PASS','T04 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T05-'+uuid.uuid4().hex[:12]);root.mkdir()
+        root=Path(r'E:\card\runtime_it\matrix38')/('T05-'+uuid.uuid4().hex[:12]);root.mkdir()
         s={'tool':'write_file','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
     try:{'UT':unit,'IT-R':runtime,'IT-W':live}[a.phase](s)
     except Exception as exc:

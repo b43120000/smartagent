@@ -18,7 +18,7 @@ from WebAgent.tests.validate_progress_terminal_lifecycle import response
 
 
 def run():
-    assert extract_authorized_paths('只在 E:\\workspace\\runtime_it 建立 disposable_delete_probe 測試資料夾。') == [r'E:\workspace\runtime_it']
+    assert extract_authorized_paths('只在 E:\\card\\runtime_it 建立 disposable_delete_probe 測試資料夾。') == [r'E:\card\runtime_it']
     assert not is_planning_request('請測試 Runtime 的只讀命令。不要修改檔案。')
     assert is_planning_request('先規劃不改，分析怎麼修改。')
     with tempfile.TemporaryDirectory(prefix='matrix-fixed-') as temp:

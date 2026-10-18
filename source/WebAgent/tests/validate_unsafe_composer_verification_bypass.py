@@ -57,7 +57,7 @@ def run() -> None:
     finally:
         runtime.DEBUG_CONFIG_PATH = original_path
 
-    write_source = inspect.getsource(runtime.WebLLMScraper._write_prompt_to_composer)
+    write_source = inspect.getsource(runtime.WebLLMScraper._write_prompt_to_composer_legacy)
     assert "if self._composer_matches_prompt(prompt):" in write_source
     assert write_source.count("self._composer_verification_passes(prompt)") == 2
 

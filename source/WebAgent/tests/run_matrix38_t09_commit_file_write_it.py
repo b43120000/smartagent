@@ -27,6 +27,9 @@ def check_commit(ctx,a,p,row,content):
     return m
 
 def unit(s):
+    assert is_readonly_command({'operation':'VERIFY','command':'Get-Content -Raw -LiteralPath "E:\\card\\probe.txt"'})
+    for bad in ('Get-Content -Raw -LiteralPath "$env:TEMP"','Get-Content -Raw -LiteralPath "$(Remove-Item x)"','Get-Content -Raw -LiteralPath "x`;y"','Get-Content -Raw -LiteralPath "x"; Remove-Item x'):
+        assert not is_readonly_command({'operation':'VERIFY','command':bad}),bad
     with tempfile.TemporaryDirectory(prefix='matrix38-t09-') as temp:
         root=Path(temp);ctx=WebAgentToolContext(root,interface_name='remote')
         ctx.begin_run('REQ-T09','隔離 commit 測試\n'+str(root),[str(root)])
@@ -96,7 +99,7 @@ def runtime(s):
     assert Path(a['path']).read_bytes()==TEXT.encode()
     s['phases']['IT-R']={'status':'PASS','E':'PASS','V':'PASS','R':'PASS','rounds':len(turns),'actions':loop.action_ledger}
 
-def live(s):
+def live(s,collect_only=False):
     assert s['phases'].get('IT-R',{}).get('status')=='PASS'
     if s['phases'].get('IT-W'):s.setdefault('attempt_history',[]).append(dict(s['phases']['IT-W']))
     from RemoteAgent.local_telegram_sender import send_and_wait
@@ -104,19 +107,24 @@ def live(s):
     from agent_core.task_state import TaskStateStore
     from agent_core.task_continuation import TaskContinuationStore
     root=Path(s['fixture']);dest=root/('web_'+uuid.uuid4().hex[:8]+'.txt');wid='W-T09-WEB-'+uuid.uuid4().hex[:12]
+    if collect_only:
+        previous=s['phases']['IT-W'];dest=Path(previous['path']);wid=previous['write_id']
+        assert dest.parent==root and dest.name.startswith('web_')
+        sink={k:previous[k] for k in ('request_id','task_id')};code=previous.get('sender_exit_code',2)
     request='只測試 commit_file_write。依序 begin_file_write streaming (utf-8, overwrite=false，不提供 expected_size/hash/chunk_count)，write_file_chunk 寫下方 JSON string 的完整原文（由 Runtime 算 bytes/offset），再 commit_file_write 同一 write_id。最後 run_command operation=VERIFY、verifies_action_id 指向實際 commit，working_directory=parent，唯讀 Get-Content -Raw；verify 檔案存在且 contains=T09_COMMIT_OK。不改行尾、不重做 commit、不上傳、不使用其他寫入工具。共 begin/chunk/commit/VERIFY 四項 action，回報 Runtime commit SHA/bytes 與真驗證結果。\npath：\n'+str(dest)+'\nparent：\n'+str(root)+'\nwrite_id：'+wid+'\ncontent JSON string：\n'+json.dumps(TEXT,ensure_ascii=False)
     request+='\n本次要特別測別名相容：verify 的兩項使用 type=file_exists 與 type=file_contains（不填 action）；內容條件使用 contains=T09_COMMIT_OK（不填 text）。兩項 path 都指向上述目的檔、expect=true，Runtime 必須真的比较這兩個條件，不能僅以命令 exit code=0 宣稱驗證 PASS。'
-    sink={};code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    if not collect_only:
+        sink={};code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];j=TaskContinuationStore(ROOT).get(sink['task_id']) or {};calls=list(j.get('actions',{}).values());final=task.result_ledger.get('final',{});passed=False
     s['phases']['IT-W']={'status':'UNKNOWN',**sink,'sender_exit_code':code,'actions':calls,'path':str(dest),'write_id':wid,'response':final.get('response',''),'error':task.error}
     if len(calls)==4 and [c['action']['tool'] for c in calls]==['begin_file_write','write_file_chunk','commit_file_write','run_command']:
-        assert all(c['action']['write_id']==wid for c in calls[:3]) and calls[0]['action']['path']==str(dest) and calls[1]['action']['content']==TEXT
+        assert all(c['action']['write_id']==wid for c in calls[:3]) and Path(calls[0]['action']['path']).resolve()==dest.resolve() and calls[1]['action']['content']==TEXT
         p=json.loads(calls[2]['result'].split('] ',1)[1]);row=decode_result(calls[2]['result'])
         assert p['state']=='COMMITTED' and row['data']['file_committed'] and dest.read_bytes()==TEXT.encode()
         assert p['output_sha256']==hashlib.sha256(TEXT.encode()).hexdigest() and p['received_bytes']==len(TEXT.encode())
-        m=json.loads((Path(r'E:\workspace\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
+        m=json.loads((Path(r'E:\card\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
         assert m['state']=='COMMITTED' and not Path(m['staging_path']).exists()
-        v=calls[-1];assert v['action']['operation']=='VERIFY' and v['action']['verifies_action_id']==calls[-2]['action']['action_id'] and v['action']['working_directory']==str(root)
+        v=calls[-1];assert v['action']['operation']=='VERIFY' and v['action']['verifies_action_id']==calls[-2]['action']['action_id'] and Path(v['action']['working_directory']).resolve()==root.resolve()
         assert is_readonly_command(v['action'])
         checks=v['action']['verify'];assert checks and all(c.get('type') in {'file_exists','file_contains'} for c in checks) and {c.get('action',c.get('type')) for c in checks}=={'file_exists','file_contains'}
         for check in checks:
@@ -133,13 +141,15 @@ def live(s):
     assert passed,s['phases']['IT-W']
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--phase',choices=['UT','IT-R','IT-W'],required=True);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--phase',choices=['UT','IT-R','IT-W'],required=True);p.add_argument('--collect-only',action='store_true');a=p.parse_args()
+    assert not a.collect_only or a.phase=='IT-W'
     assert read_json_retry(STATE.with_name('t08_write_file_chunk.json'))['status']=='PASS','T08 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T09-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'commit_file_write','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
-    try:{'UT':unit,'IT-R':runtime,'IT-W':live}[a.phase](s)
+        root=Path(r'E:\card\runtime_it\matrix38')/('T09-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'commit_file_write','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
+    try:{'UT':unit,'IT-R':runtime,'IT-W':lambda v:live(v,a.collect_only)}[a.phase](s)
     except Exception as exc:
+        s['status']='FAIL'
         s['phases'].setdefault(a.phase,{}).update(status='FAIL',error=f'{type(exc).__name__}: {exc}');write_json_atomic(STATE,s);raise
     s['status']='PASS' if all(s['phases'].get(x,{}).get('status')=='PASS' for x in ('UT','IT-R','IT-W')) else 'IN_PROGRESS';write_json_atomic(STATE,s)
     print('T09_PHASE_PASS',a.phase,'overall='+s['status'])

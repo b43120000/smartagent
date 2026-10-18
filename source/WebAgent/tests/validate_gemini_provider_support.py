@@ -16,7 +16,7 @@ from agent_core.web_ui.providers.gemini.profiles import GEMINI_WEB_2026_PROFILE
 from agent_core.web_ui.contracts import ComposerSnapshot
 
 
-GEMINI_URL = "https://gemini.google.com/u/1/app/a3ed636af167597f?dest=manage"
+GEMINI_URL = "https://gemini.google.com/u/1/app/4444444444444444?dest=manage"
 
 
 class Element:
@@ -74,7 +74,7 @@ class Page:
         if "compareDocumentPosition" in script and isinstance(arg, list):
             return arg[1].order > arg[0].order
         if "location.hostname" in script: return "gemini.google.com"
-        if "location.pathname" in script: return "/u/1/app/a3ed636af167597f"
+        if "location.pathname" in script: return "/u/1/app/4444444444444444"
         return None
 
 
@@ -82,7 +82,7 @@ def run() -> dict:
     assert provider_from_url(GEMINI_URL) == "gemini"
     assert provider_for_url(GEMINI_URL) == "gemini"
     assert conversation_provider(GEMINI_URL) == "gemini"
-    assert conversation_id(GEMINI_URL) == "a3ed636af167597f"
+    assert conversation_id(GEMINI_URL) == "4d7689a3b59b9885"
     assert web_model_key_for_url(GEMINI_URL) == "web_gemini"
     assert endpoint_for_url(GEMINI_URL) == "gemini.google.com"
     assert "gemini" in registered_providers()
@@ -104,7 +104,7 @@ def run() -> dict:
     initial = adapter.snapshot()
     assert initial.profile_name == "gemini_web_2026"
     assert len(initial.user_turns) == 1 and len(initial.assistant_turns) == 1
-    scope = adapter.capture_request("new request", conversation_id="a3ed636af167597f")
+    scope = adapter.capture_request("new request", conversation_id="4d7689a3b59b9885")
     p = GEMINI_WEB_2026_PROFILE
     page.users.append(Element("newrequest", attrs={"data-query-id": "q2"}, order=3,
                               children={p.user_content_selector: [Element("newrequest")]}) )
@@ -136,7 +136,7 @@ def run() -> dict:
         record, created = registry.upsert_binding(str(workspace), GEMINI_URL)
         assert created and record["gpt_url"] == GEMINI_URL
         matched = registry.find_by_url(
-            "https://gemini.google.com/u/1/app/a3ed636af167597f?dest=other"
+            "https://gemini.google.com/u/1/app/4444444444444444?dest=other"
         )
         assert matched and matched["workspace"] == str(workspace)
 

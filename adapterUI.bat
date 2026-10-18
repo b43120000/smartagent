@@ -18,6 +18,34 @@ if not exist "%PYTHON_EXE%" (
 
 set "PYTHONPATH=%~dp0source"
 set "PYTHONDONTWRITEBYTECODE=1"
+set "PYTHONIOENCODING=utf-8"
+if "%~1"=="" goto mode_menu
+if /I "%~1"=="--manual" goto manual_cli
+goto model_mode
+
+:mode_menu
+echo.
+echo [1] Model Adapter Calibration
+echo [2] manualAdapterUI - Select composer and verify input
+echo [3] Exit
+choice /C 123 /N /M "Select mode [1/2/3]: "
+if errorlevel 3 exit /b 0
+if errorlevel 2 goto manual_mode
+goto model_mode
+
+:manual_cli
+"%PYTHON_EXE%" -B -m agent_core.web_ui.manual_adapter %2 %3 %4 %5 %6 %7 %8 %9
+goto manual_done
+
+:manual_mode
+"%PYTHON_EXE%" -B -m agent_core.web_ui.composer_calibration
+:manual_done
+set "ADAPTER_EXIT=%errorlevel%"
+echo [adapterUI] Manual composer workflow exit_code=%ADAPTER_EXIT%
+if not defined SMARTAGENT_TEST_NO_PAUSE pause
+endlocal & exit /b %ADAPTER_EXIT%
+
+:model_mode
 echo [adapterUI] install_root=%~dp0
 echo [adapterUI] python=%PYTHON_EXE%
 echo [adapterUI] source=%~dp0source\agent_core\ui_calibration.py
@@ -41,6 +69,6 @@ if "%ADAPTER_EXIT%"=="0" (
     echo [adapterUI] Calibration did not publish any profile. exit_code=%ADAPTER_EXIT%
     echo [adapterUI] RESULT=FAILED ^| exit_code=%ADAPTER_EXIT%
 )
-pause
+if not defined SMARTAGENT_TEST_NO_PAUSE pause
 endlocal & exit /b %ADAPTER_EXIT%
 

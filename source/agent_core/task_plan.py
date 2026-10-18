@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import tempfile
 from pathlib import Path
 
 from .aggregated_verification import run_aggregated_verification
-from .batch_apply import apply_edit_plan
+from .batch_apply import apply_edit_plan, _write_atomic
 from .edit_plan_contract import validate_edit_plan
 from .project_sync import inspect_project_scope
+from .path_security import authorize_path, reject_reparse_components
 from .semantic_map import (
     inspect_semantic_map, load_semantic_map, semantic_map_markdown_path,
     semantic_map_path, semantic_target_paths, update_semantic_map,
@@ -72,7 +76,7 @@ def canonicalize_task_plan(plan: object) -> tuple[dict, list[dict]]:
     normalized = dict(plan)
     repairs: list[dict] = []
     submitted_schema = normalized.get("schema")
-    if submitted_schema in TASK_PLAN_SCHEMA_ALIASES:
+    if isinstance(submitted_schema, str) and submitted_schema in TASK_PLAN_SCHEMA_ALIASES:
         normalized["schema"] = TASK_PLAN_SCHEMA
         repairs.append({
             "path": "$.schema", "code": "SCHEMA_ALIAS_CANONICALIZED",
@@ -203,7 +207,9 @@ def validate_task_plan(workspace: str | Path, plan: dict) -> dict:
             target = root / rel.replace("\\", "/").lstrip("/")
             if not _inside(root, target) or not target.is_file():
                 raise ValueError(f"task_plan_invalid_read_path:{rel}")
-        edit_plan = dict(plan.get("edit_plan") or {})
+        if not isinstance(plan.get("edit_plan"), dict):
+            raise ValueError("task_plan_invalid_edit_plan")
+        edit_plan = dict(plan["edit_plan"])
         edit_plan["base_snapshot_id"] = plan["base_snapshot_id"]
         edit_plan["verification_commands"] = verification
         edit_plan["rollback_condition"] = rollback
@@ -218,14 +224,15 @@ def validate_task_plan(workspace: str | Path, plan: dict) -> dict:
                     "detail": edit_check,
                 }],
             )
+        edit_plan['files_to_modify'] = edit_check['files_to_modify']
         semantic_required_paths = sorted(set(reads) | {
             str(row.get("path", "") or "")
             for row in edit_check.get("files_to_modify", [])
             if str(row.get("path", "") or "")
         })
-        semantic_required_paths = sorted(
-            semantic_target_paths(root, snapshot, semantic_required_paths)
-        )
+        # Non-source files still need byte/snapshot checks, not semantic records.
+        source_targets = semantic_target_paths(root, snapshot)
+        semantic_required_paths = sorted(set(semantic_required_paths) & source_targets)
         if semantic_required_paths:
             semantic = inspect_semantic_map(root, semantic_required_paths)
             if semantic["status"] != "FRESH":
@@ -240,7 +247,6 @@ def validate_task_plan(workspace: str | Path, plan: dict) -> dict:
                     "current_semantic_map_revision": semantic["semantic_map_revision"],
                     "required_semantic_paths": semantic_required_paths,
                 }
-        source_targets = semantic_target_paths(root, snapshot)
         required_post = {row["path"] for row in edit_check["files_to_modify"] if row["path"] in source_targets or Path(row["path"]).name == "CMakeLists.txt" or Path(row["path"]).suffix.lower() in {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".java", ".kt", ".kts", ".py", ".js", ".ts", ".rs", ".go", ".cmake", ".gradle"}}
         if not required_post <= post_paths:
             missing_paths = sorted(required_post - post_paths)
@@ -256,7 +262,7 @@ def validate_task_plan(workspace: str | Path, plan: dict) -> dict:
         diagnostic_path = "$"
         for field in (
             "post_change_semantic", "rollback_condition", "verification_command",
-            "affected_flows", "files_to_read", "acceptance_criteria", "goal",
+            "affected_flows", "files_to_read", "acceptance_criteria", "goal", "edit_plan",
         ):
             if field in error_code:
                 diagnostic_path = "$." + (
@@ -276,7 +282,9 @@ def validate_task_plan(workspace: str | Path, plan: dict) -> dict:
 
 
 def freeze_task_plan(workspace: str | Path, plan: dict, request_scope: dict | None = None) -> dict:
-    plan = dict(plan or {})
+    if not isinstance(plan, dict):
+        return validate_task_plan(workspace, plan)
+    plan = dict(plan)
     try:
         trusted_scope = _normalized_request_scope(request_scope)
     except ValueError as exc:
@@ -294,15 +302,40 @@ def freeze_task_plan(workspace: str | Path, plan: dict, request_scope: dict | No
     plan_id = "PLAN-" + plan_sha256[:20].upper()
     frozen = {**normalized, "plan_id": plan_id, "plan_sha256": plan_sha256, "state": "FROZEN"}
     path = task_plan_root(workspace) / f"{plan_id}.json"
+    reject_reparse_components(path, Path(workspace).resolve())
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        existing = json.loads(path.read_text(encoding="utf-8"))
-        if existing.get("plan_sha256") != frozen["plan_sha256"]:
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            valid = (isinstance(existing, dict)
+                and existing.get("plan_sha256") == plan_sha256
+                and existing.get("plan_id") == plan_id
+                and _hash(_plan_hash_basis(existing)) == plan_sha256)
+        except (ValueError, OSError):
+            valid = False
+        if not valid:
             return {"status": "PLAN_ID_CONFLICT", "plan_id": plan_id}
+        if existing.get("state") != "FROZEN":
+            return {"status": "PLAN_NOT_EXECUTABLE", "plan_id": plan_id,
+                    "reason": "frozen_plan_invalid_state"}
     else:
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(frozen, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        # Never truncate a predictable temp path: it could be a hardlink.
+        fd, name = tempfile.mkstemp(prefix=path.name+'.', suffix='.tmp', dir=path.parent)
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(json.dumps(frozen, ensure_ascii=False, indent=2, sort_keys=True).encode('utf-8'))
+                stream.flush()
+                os.fsync(stream.fileno())
+            reject_reparse_components(path, Path(workspace).resolve())
+            if os.name == 'nt':
+                os.rename(tmp, path)  # Exclusive publication on Windows.
+            else:
+                os.link(tmp, path)
+        except FileExistsError:
+            return freeze_task_plan(workspace, plan, request_scope=request_scope)
+        finally:
+            tmp.unlink(missing_ok=True)
     return {"status": "PLAN_FROZEN", "plan_id": plan_id, "plan_sha256": frozen["plan_sha256"], "path": str(path)}
 
 
@@ -340,8 +373,11 @@ def freeze_task_plan_file(workspace: str | Path, path: str, expected_sha256: str
 
 def _load_frozen(workspace: str | Path, plan_id: str,
                  request_scope: dict | None = None) -> tuple[Path, dict]:
+    if not isinstance(plan_id, str) or not re.fullmatch(r'PLAN-[0-9A-F]{20}', plan_id):
+        raise ValueError('frozen_plan_invalid_id')
     root = task_plan_root(workspace)
     path = root / f"{plan_id}.json"
+    reject_reparse_components(path, Path(workspace).resolve())
     if not _inside(root, path) or not path.is_file():
         raise ValueError("frozen_plan_not_found")
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -354,13 +390,51 @@ def _load_frozen(workspace: str | Path, plan_id: str,
         raise ValueError("frozen_plan_id_mismatch")
     expected_scope = _normalized_request_scope(request_scope)
     plan_scope = _normalized_request_scope(value.get("request_scope"))
-    if plan_scope != expected_scope:
+    if bool(plan_scope) != bool(expected_scope) or (plan_scope and (
+            any(plan_scope[field] != expected_scope[field] for field in _REQUEST_SCOPE_FIELDS[:4])
+            or expected_scope['continuation_seq'] < plan_scope['continuation_seq'])):
         raise ValueError("frozen_plan_request_scope_mismatch")
     return path, value
 
 
+def _restore_frozen_changes(root: Path, originals: dict, expected: dict,
+                            directories: list, authorize_target=None) -> list[dict]:
+    """Restore only known transaction bytes; never overwrite an unknown change."""
+    errors = []
+    for target, before in reversed(list(originals.items())):
+        try:
+            reject_reparse_components(target, root)
+            if authorize_target:
+                authorize_target(target)
+            current = target.read_bytes() if target.exists() else None
+            if current == before:
+                continue
+            if target not in expected or current != expected[target]:
+                raise ValueError('ROLLBACK_TARGET_CHANGED_OR_UNCONFIRMED')
+            if before is None:
+                target.unlink()
+                if target.exists():
+                    raise ValueError('ROLLBACK_DELETE_READBACK_FAILED')
+            else:
+                _write_atomic(root, target, before, expected=current)
+                if target.read_bytes() != before:
+                    raise ValueError('ROLLBACK_READBACK_MISMATCH')
+        except Exception as exc:
+            errors.append({'path':target.relative_to(root).as_posix(),
+                           'error':type(exc).__name__+':'+str(exc)})
+    for directory in sorted(set(directories), key=lambda p: len(p.parts), reverse=True):
+        try:
+            reject_reparse_components(directory, root)
+            if directory.exists():
+                directory.rmdir()  # Empty, newly-created directories only.
+        except Exception as exc:
+            errors.append({'path':directory.relative_to(root).as_posix(),
+                           'error':type(exc).__name__+':'+str(exc)})
+    return errors
+
+
 def execute_frozen_task_plan(workspace: str | Path, plan_id: str, timeout: int = 120,
-                             request_scope: dict | None = None) -> dict:
+                             request_scope: dict | None = None, *, authorize_target=None) -> dict:
     root = Path(workspace).expanduser().resolve()
     if type(timeout) is not int or not 1 <= timeout <= 600:
         return {"status": "PLAN_NOT_EXECUTABLE", "reason": "INVALID_TIMEOUT"}
@@ -372,57 +446,84 @@ def execute_frozen_task_plan(workspace: str | Path, plan_id: str, timeout: int =
     if check.get("status") != "VALID":
         return {"status": "PLAN_NOT_EXECUTABLE", "validation": check}
     files = check["plan"]["edit_plan"]["files_to_modify"]
-    backups: dict[Path, bytes] = {}
-    created: list[Path] = []
-    for item in files:
-        target = root / item["path"]
-        if target.exists():
-            backups[target] = target.read_bytes()
-        else:
-            created.append(target)
-    applied = apply_edit_plan(root, check["plan"]["edit_plan"])
-    if applied.get("status") != "APPLIED":
-        return {"status": "REPAIR_REQUIRED", "plan_id": plan_id, "apply": applied, "rolled_back": bool(applied.get("rolled_back"))}
-    verification = run_aggregated_verification(root, check["plan"]["verification_commands"], timeout=timeout)
-    if verification.get("status") != "PASS":
-        for target, data in backups.items():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        for target in created:
-            if target.exists():
-                target.unlink()
-        return {"status": "REPAIR_REQUIRED", "plan_id": plan_id, "apply": applied, "verification": verification, "rolled_back": True}
-    current = inspect_project_scope(root)
-    hashes = {row["path"]: row["sha256"] for row in current.get("files", [])}
-    semantic_before = load_semantic_map(root)
-    semantic_files = (semantic_map_path(root), semantic_map_markdown_path(root))
-    semantic_backups = {item: item.read_bytes() for item in semantic_files if item.is_file()}
-    semantic_rows = []
-    for row in check["plan"]["post_change_semantic"]:
-        if row["path"] in hashes:
-            semantic_rows.append({**row, "source_sha256": hashes[row["path"]]})
-    semantic_result = update_semantic_map(root, {
-        "base_snapshot_id": current["snapshot_id"],
-        "required_paths": [row["path"] for row in semantic_rows],
-        "project_summary": semantic_before.get("project_summary", ""),
-        "flows": semantic_before.get("flows", []),
-        "files": semantic_rows,
-    })
-    if semantic_result.get("status") != "UPDATED":
-        for target, data in backups.items():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        for target in created:
-            if target.exists():
-                target.unlink()
-        for semantic_file in semantic_files:
-            if semantic_file in semantic_backups:
-                semantic_file.write_bytes(semantic_backups[semantic_file])
-            elif semantic_file.exists():
-                semantic_file.unlink()
-        return {"status": "REPAIR_REQUIRED", "plan_id": plan_id, "apply": applied, "verification": verification, "semantic_update": semantic_result, "rolled_back": True}
-    completed = {**plan, "state": "COMPLETED", "verification_status": "PASS"}
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(completed, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
-    return {"status": "PASS", "plan_id": plan_id, "applied": applied.get("applied", []), "verification": verification, "semantic_update": semantic_result, "rolled_back": False}
+    originals, expected, directories = {}, {}, []
+    # Preflight every canonical target before the first side effect.
+    try:
+        targets = [(item, authorize_path(item['path'], [root], base=root, forbid_glob=True)) for item in files]
+        for item, target in targets:
+            reject_reparse_components(target, root)
+            if authorize_target:
+                authorize_target(target)
+            before = None if item.get('create') else target.read_bytes()
+            originals[target] = before
+            encoding = item.get('encoding', 'utf-8')
+            after = (item['content'] if item.get('mode', 'whole_file') == 'whole_file'
+                     else before.decode(encoding).replace(item['old'], item['new'], 1))
+            expected[target] = after.encode(encoding)
+            cursor = target.parent
+            while cursor != root and not cursor.exists():
+                directories.append(cursor)
+                cursor = cursor.parent
+        if authorize_target:
+            authorize_target(path)
+        plan_bytes = path.read_bytes()
+    except Exception as exc:
+        return {'status':'PLAN_NOT_EXECUTABLE','reason':type(exc).__name__+':'+str(exc),
+                'executed':False,'rolled_back':False}
+    applied, verification, semantic_result = {}, {}, {'status':'NOT_REQUIRED'}
+    uncertain_metadata = []
+    try:
+        applied = apply_edit_plan(root, check['plan']['edit_plan'], authorize_target=authorize_target)
+        if applied.get('status') != 'APPLIED':
+            uncertain = applied.get('status') == 'ROLLBACK_INCOMPLETE'
+            return {'status':'ROLLBACK_INCOMPLETE' if uncertain else 'REPAIR_REQUIRED',
+                    'plan_id':plan_id,'apply':applied,'rolled_back':bool(applied.get('rolled_back')),
+                    'executed':applied.get('status') in {'ROLLED_BACK','ROLLBACK_INCOMPLETE'},
+                    'possible_partial_execution':uncertain,
+                    'rollback_errors':applied.get('rollback_errors',[])}
+        verification = run_aggregated_verification(root, check['plan']['verification_commands'], timeout=timeout)
+        if verification.get('status') != 'PASS':
+            raise ValueError('FROZEN_PLAN_VERIFICATION_NOT_PASS')
+        rows = check['plan']['post_change_semantic']
+        if rows:
+            current = inspect_project_scope(root, verify_cached_content=True)
+            hashes = {row['path']:row['sha256'] for row in current.get('files',[])}
+            semantic_before = load_semantic_map(root)
+            semantic_files = (semantic_map_path(root), semantic_map_markdown_path(root))
+            for metadata in semantic_files:
+                reject_reparse_components(metadata, root)
+                if authorize_target:
+                    authorize_target(metadata)
+                # Existing predictable temps must never be followed by the old writer.
+                if os.path.lexists(metadata.with_name(metadata.name+'.tmp')):
+                    raise ValueError('SEMANTIC_TEMP_ALREADY_EXISTS')
+                originals[metadata] = metadata.read_bytes() if metadata.exists() else None
+            uncertain_metadata = list(semantic_files)
+            semantic_result = update_semantic_map(root, {
+                'base_snapshot_id':current['snapshot_id'], 'required_paths':[row['path'] for row in rows],
+                'project_summary':semantic_before.get('project_summary',''), 'flows':semantic_before.get('flows',[]),
+                'files':[{**row,'source_sha256':hashes[row['path']]} for row in rows],
+            })
+            for metadata in semantic_files:
+                expected[metadata] = metadata.read_bytes() if metadata.exists() else None
+            uncertain_metadata = []
+            if semantic_result.get('status') != 'UPDATED':
+                raise ValueError('FROZEN_PLAN_SEMANTIC_UPDATE_NOT_PASS')
+        completed = {**plan, 'state':'COMPLETED', 'verification_status':'PASS'}
+        originals[path] = plan_bytes
+        expected[path] = json.dumps(completed, ensure_ascii=False, indent=2, sort_keys=True).encode('utf-8')
+        if authorize_target:
+            authorize_target(path)
+        _write_atomic(root, path, expected[path], expected=plan_bytes)
+        return {'status':'PASS','plan_id':plan_id,'applied':applied.get('applied',[]),
+                'apply':applied,'verification':verification,'semantic_update':semantic_result,
+                'executed':True,'rolled_back':False}
+    except Exception as exc:
+        errors = _restore_frozen_changes(root, originals, expected, directories, authorize_target)
+        errors.extend({'path':p.relative_to(root).as_posix(), 'error':'SEMANTIC_PUBLICATION_UNCONFIRMED'}
+                      for p in uncertain_metadata)
+        return {'status':'ROLLBACK_INCOMPLETE' if errors else 'REPAIR_REQUIRED',
+                'plan_id':plan_id,'error':type(exc).__name__+':'+str(exc),
+                'apply':applied,'verification':verification,'semantic_update':semantic_result,
+                'executed':True,'rolled_back':not errors,'rollback_errors':errors,
+                'possible_partial_execution':bool(errors)}

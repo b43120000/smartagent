@@ -1,5 +1,6 @@
 @echo off
 setlocal
+call force_stop_all_agents.bat
 if /I "%~1"=="--launcher-self-test" echo REMOTE_AGENT_LAUNCHER_PARSE_OK
 if /I "%~1"=="--launcher-self-test" exit /b 0
 chcp 65001 >nul 2>&1

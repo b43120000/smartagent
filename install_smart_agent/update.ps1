@@ -12,6 +12,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'deployment_baseline.ps1')
 
 # Normal update is intentionally non-elevated. This script never changes ACL mode,
 # requests administrator elevation, or opens a protected-updater lease. ACL OFF is an external
@@ -21,9 +22,7 @@ $AclSchema = 'SMARTAGENT_ACL_MODE_V1'
 $AclStateRelativePath = 'localdata\secure\windows_security\acl_mode.json'
 $MutexName = 'Local\SmartAgentUpdate'
 # TEMPORARY Phase 1 development whitelist. Remove when ACL on/off provisioning is complete.
-$DevelopmentAclBypassTargets = @(
-    'C:\Users\example\Desktop\remoteagent\release\SmartAgentv2_1'
-)
+$DevelopmentAclBypassTargets = @()
 $script:Mutex = $null
 $script:MutexOwned = $false
 $script:StageRoot = $null
@@ -77,6 +76,7 @@ function Assert-AclOff([string]$Target) {
     Write-Host '[SmartAgent Update] ACL gate: OFF'
 }
 function Test-ExcludedRelativePath([string]$RelativePath) {
+    if(Test-PrivateDeploymentPath $RelativePath){return $true}
     $r=$RelativePath.Replace('/','\').TrimStart('\'); $segments=$r.Split('\')
     foreach($s in $segments){if($s -in @('.git','.venv','.agents','__pycache__')){return $true}}
     if($segments.Count -gt 0 -and $segments[0] -ieq 'localdata'){return $true}
@@ -101,7 +101,7 @@ function Get-Sha256([string]$Path){return (Get-FileHash -LiteralPath $Path -Algo
 function Ensure-Parent([string]$Path){$parent=Split-Path -Parent $Path;if(-not(Test-Path -LiteralPath $parent -PathType Container)){New-Item -ItemType Directory -Path $parent -Force|Out-Null}}
 function Copy-SourceSet([object[]]$Files,[string]$DestinationRoot){foreach($f in $Files){$dst=Join-Path $DestinationRoot $f.Relative;Ensure-Parent $dst;Copy-Item -LiteralPath $f.Full -Destination $dst -Force}}
 function Assert-FileSet([object[]]$Files,[string]$DestinationRoot,[string]$Phase){foreach($f in $Files){$dst=Join-Path $DestinationRoot $f.Relative;if(-not(Test-Path -LiteralPath $dst -PathType Leaf)){throw "$Phase missing destination file: $($f.Relative)"};if((Get-Sha256 $f.Full) -ne (Get-Sha256 $dst)){throw "$Phase hash mismatch: $($f.Relative)"}}}
-function Assert-TargetParentsSafe([object[]]$Files,[string]$TargetRoot){foreach($f in $Files){$parts=$f.Relative.Replace('/','\').Split('\');$cursor=$TargetRoot;for($i=0;$i -lt ($parts.Count-1);$i++){$cursor=Join-Path $cursor $parts[$i];if(Test-Path -LiteralPath $cursor){$item=Get-Item -LiteralPath $cursor -Force;if(($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)-ne 0){throw "Target reparse point blocked: $cursor"}}}}}
+function Assert-TargetParentsSafe([object[]]$Files,[string]$TargetRoot){foreach($f in $Files){$null=Resolve-BaselineChild $TargetRoot $f.Relative}}
 function Backup-TargetFiles([object[]]$Files,[string]$TargetRoot,[string]$BackupRoot){foreach($f in $Files){$targetFile=Join-Path $TargetRoot $f.Relative;if(Test-Path -LiteralPath $targetFile -PathType Leaf){$backup=Join-Path $BackupRoot $f.Relative;Ensure-Parent $backup;Copy-Item -LiteralPath $targetFile -Destination $backup -Force;$script:BackedUpTargets.Add($f.Relative)}else{$script:CreatedTargets.Add($f.Relative)}}}
 function Commit-Stage([object[]]$Files,[string]$StageRoot,[string]$TargetRoot){foreach($f in $Files){$src=Join-Path $StageRoot $f.Relative;$dst=Join-Path $TargetRoot $f.Relative;Ensure-Parent $dst;Copy-Item -LiteralPath $src -Destination $dst -Force}}
 function Rollback-Target([string]$TargetRoot,[string]$BackupRoot){foreach($relative in $script:CreatedTargets){$dst=Join-Path $TargetRoot $relative;if(Test-Path -LiteralPath $dst -PathType Leaf){Remove-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue}};foreach($relative in $script:BackedUpTargets){$backup=Join-Path $BackupRoot $relative;$dst=Join-Path $TargetRoot $relative;if(Test-Path -LiteralPath $backup -PathType Leaf){Ensure-Parent $dst;Copy-Item -LiteralPath $backup -Destination $dst -Force}}}
@@ -127,6 +127,11 @@ try {
     Write-Host ("[SmartAgent Update] Staging {0} files..." -f $files.Count)
     Copy-SourceSet $files $script:StageRoot;Assert-FileSet $files $script:StageRoot 'stage verification'
     Backup-TargetFiles $files $target $script:BackupRoot;Commit-Stage $files $script:StageRoot $target;Assert-FileSet $files $target 'target verification'
+    $null = Get-DeploymentBaselinePath $target
+    Backup-TargetFiles @([pscustomobject]@{Relative='localdata\update\deployment_baseline.json'}) $target $script:BackupRoot
+    $baselineHashes = @{}
+    foreach($file in $files){$baselineHashes[$file.Relative] = Get-Sha256 (Join-Path $script:StageRoot $file.Relative)}
+    Save-DeploymentBaseline $target $source $baselineHashes 'software-update' 0
     Write-Host ("[SmartAgent Update] UPDATE_OK files={0}" -f $files.Count);exit 0
 } catch {
     $failure=$_.Exception.Message

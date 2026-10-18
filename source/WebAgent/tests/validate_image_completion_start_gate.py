@@ -67,6 +67,9 @@ def make_scraper(current_state: dict):
     scraper._active_generation_warn_sec = 0.01
     scraper._run_control_hook = lambda: False
     scraper._check_cancel_requested = lambda _stage: None
+    # Transport errors are covered independently; this fixture has no browser
+    # adapter and tests only the image start gate.
+    scraper._check_provider_transport_error = lambda: None
     scraper._maybe_recover_disconnected_generation = lambda: False
     scraper._turn_elements = lambda _role: []
     scraper._response_elements = lambda: []
@@ -80,24 +83,24 @@ def make_scraper(current_state: dict):
 def run() -> dict:
     exact_request = (
         "生成一張柴犬衝浪，然後存在這個路徑下"
-        "C:\\Users\\ExampleUser\\Desktop\\remoteagent\\柴犬與海鷗\n"
+        "C:\\SmartAgent\\柴犬與海鷗\n"
         "就叫5.jpg 然後也把圖上傳到telegram"
     )
     assert is_image_generation_request(exact_request)
     assert is_image_generation_request("把這張圖上面的文字拿掉")
     plan = plan_image_delivery(
         exact_request,
-        workspace=r"C:\Users\ExampleUser\Desktop\remoteagent\柴犬與海鷗",
+        workspace=r"C:\SmartAgent\柴犬與海鷗",
         interface_name="remote",
         source_tag="REMOTEAGENT_TELEGRAM",
         request_id="RR-TEST-IMAGE",
     )
     assert plan.get("delivery") == "telegram"
-    assert plan.get("output_path") == r"C:\Users\ExampleUser\Desktop\remoteagent\柴犬與海鷗\5.jpg"
+    assert plan.get("output_path") == r"C:\SmartAgent\柴犬與海鷗\5.jpg"
     assert plan.get("expected_filename") == "5.jpg"
     telegram_only = plan_image_delivery(
         "生成一張圖片並傳回 Telegram",
-        workspace=r"C:\Users\ExampleUser\Desktop\remoteagent",
+        workspace=r"C:\SmartAgent",
         interface_name="remote",
         source_tag="REMOTEAGENT_TELEGRAM",
         request_id="RR-TEST-ONLY",
@@ -149,7 +152,7 @@ def run() -> dict:
     loop.run_id = "RR-TEST-IMAGE"
     loop.image_delivery_plan = {
         "delivery": "local",
-        "output_path": r"C:\Users\ExampleUser\Desktop\remoteagent\柴犬與海鷗\5.jpg",
+        "output_path": r"C:\SmartAgent\柴犬與海鷗\5.jpg",
         "expected_filename": "5.jpg",
     }
     expected_delivery = loop._new_commit()

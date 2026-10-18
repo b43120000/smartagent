@@ -160,6 +160,24 @@ def run():
         rejected(lambda: guard_continuation_action({**mutate, 'action_id':'NEW-MUTATE'}, crash, 'RESUME'), 'readonly')
         guard_continuation_action(correct, crash, 'RESUME')
         guard_continuation_action({**correct, 'verify': correct['verify'][0]}, crash, 'RESUME')
+        # Web T29 follow-up: executor accepts type aliases, so reconciliation
+        # must admit the same read-only predicates without relaxing commands.
+        from agent_core.tools import _evaluate_verification_step
+        for field in ('action', 'type'):
+            checks = [{field:'file_exists', 'path':'negative_probe.txt'},
+                      {field:'file_contains', 'path':'negative_probe.txt', 'text':'ACTUAL_VALUE'}]
+            guard_continuation_action({**correct, 'verify':checks}, crash, 'FOLLOWUP_VERIFY')
+            for check in checks:
+                result = _evaluate_verification_step(check, working_directory=root)
+                assert result['spec_valid'] and result['passed'], result
+            guard_continuation_action({**correct, 'verify':[
+                {field:'run_command', 'command':"Get-Content -LiteralPath 'negative_probe.txt'"}]}, crash, 'FOLLOWUP_VERIFY')
+            rejected(lambda: guard_continuation_action({**correct, 'verify':[
+                {field:'run_command', 'command':"Set-Content -LiteralPath 'negative_probe.txt' 'BAD'"}]}, crash, 'FOLLOWUP_VERIFY'), 'readonly')
+        for check in ({'action':'file_exists','type':'run_command','command':"Write-Output 'OK'"},
+                      {'action':'run_command','type':'file_exists','path':'negative_probe.txt'},
+                      {'type':'unknown'}, {'type':[]}):
+            rejected(lambda: guard_continuation_action({**correct,'verify':[check]}, crash, 'FOLLOWUP_VERIFY'), 'readonly')
         rejected(lambda: guard_continuation_action({**correct, 'command':"Set-Content -LiteralPath 'negative_probe.txt' 'BAD'"}, saved, 'FOLLOWUP_VERIFY'), 'readonly')
 
         # Runtime state, not frozen source text, releases the reconciliation latch.

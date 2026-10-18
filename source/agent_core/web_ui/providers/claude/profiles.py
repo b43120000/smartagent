@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ...dom_config import apply_dom_config
 
 
 @dataclass(frozen=True)
@@ -70,16 +71,16 @@ CLAUDE_UI_PROFILES = (CLAUDE_WEB_2026_PROFILE,)
 def profile_by_name(name: str) -> ClaudeUIProfile | None:
     builtin = next((profile for profile in CLAUDE_UI_PROFILES if profile.name == name), None)
     if builtin is not None:
-        return builtin
+        return apply_dom_config("claude", builtin)
     from ...profile_store import profile_values
     values = profile_values("claude", name=name)
-    return ClaudeUIProfile(**values) if values else None
+    return apply_dom_config("claude", ClaudeUIProfile(**values)) if values else None
 
 
 def active_profile() -> ClaudeUIProfile:
     from ...profile_store import profile_values
     values = profile_values("claude")
-    return ClaudeUIProfile(**values) if values else CLAUDE_WEB_2026_PROFILE
+    return apply_dom_config("claude", ClaudeUIProfile(**values) if values else CLAUDE_WEB_2026_PROFILE)
 
 
 __all__ = [

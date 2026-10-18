@@ -12,11 +12,12 @@ from pathlib import Path
 
 SCHEMA = "SMARTAGENT_UPDATE_MANIFEST_V1"
 SECURITY_POLICY_VERSION = 1
-RELEASE_SEQUENCE = 2026100704
+RELEASE_SEQUENCE = 2026100706
 EXCLUDED_DIRS = {
     ".git", ".venv", "localdata", ".agents", "__pycache__", ".pytest_cache",
+    "browser_profile", ".codex", ".aws", ".ssh",
 }
-EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".lnk"}
+EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".lnk", ".pem", ".key", ".pfx", ".p12", ".ppk"}
 EXCLUDED_FILES = {
     "config/debug_config.json",
     "config/update_manifest.json",
@@ -37,10 +38,13 @@ def deployable_files(root: Path) -> dict[str, str]:
         directories[:] = sorted(
             name for name in directories
             if name.casefold() not in EXCLUDED_DIRS
+            and not name.casefold().startswith(".env")
             and not name.casefold().startswith(".update_")
         )
         base = Path(current)
         for name in sorted(files):
+            if name.casefold().startswith(".env"):
+                continue
             path = base / name
             relative = path.relative_to(root).as_posix()
             if relative.casefold() in EXCLUDED_FILES:

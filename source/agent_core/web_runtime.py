@@ -34,6 +34,10 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from .shared_browser import (shared_browser_enabled, shared_browser_endpoint, connect_shared_browser,
+                             mark_shared_page, is_shared_page, same_provider_url)
+from .browser_preferences import browser_launch_selection
+
 try:
     from .webgpt_rate_governor import WebGPTRateGovernor
 except ImportError:  # standalone execution compatibility
@@ -114,10 +118,13 @@ except ImportError:  # standalone execution compatibility
 # ─── Chromium user data dir (保留登入 Cookie) ────────────────────────────────
 # 每個 service 用獨立的 profile，避免 session 衝突
 PROFILE_DIR = browser_profile_root()
+_BROWSER_SELECTION = browser_launch_selection()
+CHATGPT_BROWSER_CHANNEL = _BROWSER_SELECTION['channel']
+CHATGPT_BROWSER_PROFILE = _BROWSER_SELECTION['profile']
 DEBUG_LOG_PATH = web_llm_debug_log_path()
-CHATGPT_CDP_PORT = 1272
+CHATGPT_CDP_PORT = _BROWSER_SELECTION['port']
 CHATGPT_CDP_ENDPOINT = f"http://127.0.0.1:{CHATGPT_CDP_PORT}"
-M365_CDP_PORT = 1275
+M365_CDP_PORT = CHATGPT_CDP_PORT
 M365_CDP_ENDPOINT = f"http://127.0.0.1:{M365_CDP_PORT}"
 CANONICAL_PAGE_MARKER_PREFIX = "SMARTAGENT_CANONICAL_CONVERSATION:"
 REMOTE_PAGE_START_LOCK = remote_page_start_lock_path()
@@ -217,12 +224,15 @@ class WebLLMScraper:
         self._page = None
         self._cdp_browser = None
         self._attached_over_cdp = False
+        self._shared_personal_browser = False
+        self._active_cdp_endpoint = ""
         self._owns_attached_page = False
         self._conversation_owner_interface = "remote" if os.environ.get("SMARTAGENT_REMOTE_WORKER_TASK") else str(os.environ.get("SMARTAGENT_RUNTIME_INTERFACE") or "local")
         self._conversation_owner_token = ""
         self._claimed_conversation_id = ""
         self._isolated_browser = None
-        self._profile_dir = PROFILE_DIR / self.cfg["profile_subdir"]
+        # Original: self._profile_dir = PROFILE_DIR / self.cfg["profile_subdir"]
+        self._profile_dir = PROFILE_DIR / CHATGPT_BROWSER_PROFILE
         self._profile_dir.mkdir(parents=True, exist_ok=True)
 
         # Generation lifecycle control. There is deliberately no normal hard
@@ -242,6 +252,10 @@ class WebLLMScraper:
         # media.  Require a continuously quiet assistant UI window before the
         # protocol layer is even allowed to inspect smartagent_tool JSON.
         self._ui_idle_grace_sec = 5.0
+        from .web_ui.dom_config import load_capability
+        lifecycle=load_capability(service,'generation_state')
+        if lifecycle:
+            self._ui_idle_grace_sec=max(5.0,float(lifecycle['quiet_seconds']))
         # Once UI_CONFIRMED_IDLE is reached, a matching turn_commit becomes the
         # final protocol commit gate.  This short second debounce only protects
         # against a response changing immediately after the commit was parsed.
@@ -642,7 +656,10 @@ class WebLLMScraper:
 
     def start(self, show_browser: bool = True, *, playwright=None):
         """Launch browser with persistent context (keeps login cookies)."""
-        print(f"[WebScraper] 啟動瀏覽器 → {self.service} (profile: {self._profile_dir})")
+        if shared_browser_enabled():
+            print(f"[WebScraper] 連線共用 Chrome → {self.service}")
+        else:
+            print(f"[WebScraper] 啟動瀏覽器 → {self.service} (profile: {self._profile_dir})")
         self._bind_playwright(playwright)
 
         # Use persistent context = saves cookies between sessions.  Visible
@@ -678,10 +695,13 @@ class WebLLMScraper:
             # or resizes, allowing the page's responsive UI to reflow normally.
             viewport = None
 
-        attach_cdp = (
-            self.service in {"chatgpt", "m365"}
-            and not isolated_worker
-            and os.environ.get("SMARTAGENT_ATTACH_CDP", "") == "1"
+        self._shared_personal_browser = shared_browser_enabled() and not isolated_worker
+        attach_cdp = not isolated_worker
+        # Original Chrome/Chromium launch omitted channel. Edge uses the same
+        # Chromium Playwright API and the existing CDP/selector contracts.
+        browser_channel = (
+            {"channel": CHATGPT_BROWSER_CHANNEL}
+            if CHATGPT_BROWSER_CHANNEL else {}
         )
         if isolated_worker:
             state_path = Path(os.environ.get("SMARTAGENT_REMOTE_BROWSER_STATE", "")).resolve()
@@ -699,6 +719,7 @@ class WebLLMScraper:
             self._log_stage("isolated_browser_start", f"task={os.environ.get('SMARTAGENT_REMOTE_WORKER_TASK', '')}")
             self._emit_status("CDP_CONNECTING", message="啟動 Agent1 獨立瀏覽器", detail="isolated_process")
             self._isolated_browser = self._pw.chromium.launch(
+                **browser_channel,
                 headless=self.headless,
                 slow_mo=self.slow_mo,
                 args=browser_args,
@@ -709,18 +730,53 @@ class WebLLMScraper:
                 **({"viewport": viewport} if self.headless else {"no_viewport": True}),
             )
         elif attach_cdp:
-            # The worker's --remote-cdp is still conveyed through this legacy
-            # variable. It must default to this provider's endpoint, never ChatGPT.
-            endpoint = os.environ.get("SMARTAGENT_CHATGPT_CDP", M365_CDP_ENDPOINT if self.service == "m365" else CHATGPT_CDP_ENDPOINT)
+            if not self._shared_personal_browser and os.environ.get('SMARTAGENT_ATTACH_CDP') != '1':
+                from .web_ui.manual_browser import ensure_agent_browser
+                try:
+                    ensure_agent_browser(self._pw, headless=self.headless)
+                except BaseException:
+                    if self._owns_playwright:
+                        self._pw.stop()
+                        self._pw = None
+                    raise
+            # Explicit worker attachment may override the centrally selected endpoint.
+            endpoint = (os.environ.get('SMARTAGENT_CHATGPT_CDP') or CHATGPT_CDP_ENDPOINT
+                        if os.environ.get('SMARTAGENT_ATTACH_CDP') == '1' else CHATGPT_CDP_ENDPOINT)
+            if self._shared_personal_browser:
+                explicit = os.environ.get("SMARTAGENT_CHATGPT_CDP", "") if os.environ.get("SMARTAGENT_ATTACH_CDP") == "1" else ""
+                try:
+                    endpoint = explicit or shared_browser_endpoint()
+                except BaseException:
+                    if self._owns_playwright:
+                        self._pw.stop()
+                        self._pw = None
+                    raise
             self._log_stage("cdp_connecting", f"endpoint={endpoint}")
             self._emit_status("CDP_CONNECTING", message="連線共用瀏覽器", detail=endpoint)
-            self._cdp_browser = self._pw.chromium.connect_over_cdp(endpoint)
+            if self._shared_personal_browser:
+                try:
+                    self._cdp_browser, endpoint = connect_shared_browser(self._pw, endpoint)
+                except BaseException:
+                    if self._owns_playwright:
+                        self._pw.stop()
+                        self._pw = None
+                    raise
+            else:
+                try:
+                    self._cdp_browser = self._pw.chromium.connect_over_cdp(endpoint)
+                except BaseException:
+                    if self._owns_playwright:
+                        self._pw.stop()
+                        self._pw = None
+                    raise
+            self._active_cdp_endpoint = endpoint
             if not self._cdp_browser.contexts:
                 raise RuntimeError("CDP browser has no context")
             self._browser = self._cdp_browser.contexts[0]
             self._attached_over_cdp = True
         else:
             self._browser = self._pw.chromium.launch_persistent_context(
+                **browser_channel,
                 user_data_dir=str(self._profile_dir),
                 headless=self.headless,
                 slow_mo=self.slow_mo,
@@ -755,7 +811,11 @@ class WebLLMScraper:
                     if isolated_page:
                         marker = os.environ.get("SMARTAGENT_REMOTE_WORKER_TASK", "REMOTE_WORKER")
                         target_id=self._conversation_id_from_url(self.cfg.get("url",""))
-                        matches=[page for page in list(self._browser.pages) if self._conversation_id_from_url(str(getattr(page,"url","") or ""))==target_id] if target_id else []
+                        matches=[page for page in list(self._browser.pages)
+                                 if same_provider_url(str(getattr(page, 'url', '') or ''), self.cfg['url'])
+                                 and self._conversation_id_from_url(str(getattr(page,"url","") or ""))==target_id] if target_id else []
+                        if self._shared_personal_browser:
+                            matches = [page for page in matches if is_shared_page(page) and same_provider_url(page.url, self.cfg['url'])]
                         if matches:
                             matches.sort(
                                 key=lambda page: not self._page_has_canonical_marker(
@@ -764,11 +824,13 @@ class WebLLMScraper:
                             )
                             self._page=matches[0]
                             self._owns_attached_page=False
-                            for duplicate in matches[1:]:
+                            for duplicate in ([] if self._shared_personal_browser else matches[1:]):
                                 try: duplicate.close(run_before_unload=False)
                                 except Exception: pass
                         else:
                             self._page = self._browser.new_page()
+                            if self._shared_personal_browser:
+                                mark_shared_page(self._page)
                             self._owns_attached_page=True
                             self._mark_page_canonical(self._page, target_id)
                         self._log_stage(
@@ -1025,8 +1087,10 @@ class WebLLMScraper:
 
     def get_cdp_endpoint(self, timeout_sec: float = 8.0) -> str:
         """Return the verified localhost CDP endpoint for this ChatGPT runtime."""
-        if self.service not in {"chatgpt", "m365"}:
-            raise RuntimeError("CDP endpoint is only enabled for the ChatGPT runtime")
+        if getattr(self, "_active_cdp_endpoint", ""):
+            if self._cdp_browser is not None and not self._cdp_browser.is_connected():
+                raise RuntimeError("shared_chrome_disconnected")
+            return self._active_cdp_endpoint
         if self._browser is None:
             raise RuntimeError("ChatGPT browser is not running")
 
@@ -1371,6 +1435,41 @@ class WebLLMScraper:
             pass
 
     def _write_prompt_to_composer(self, prompt: str, timeout_sec: float = 18.0) -> bool:
+        """Bound retained ChatGPT CDP writes; other providers retain their path."""
+        if self.service != "chatgpt" or getattr(self, "_isolated_browser", None):
+            return self._write_prompt_to_composer_legacy(prompt, timeout_sec)
+        from .composer_operation import prepare_composer
+        from .paths import runtime_root
+        self._composer_io_unconfirmed = True
+        self._composer_operation_url = self._page.url
+        self._log_stage("composer_bounded_begin", f"prompt_len={len(prompt)} timeout_sec=30")
+        try:
+            result = prepare_composer(
+                endpoint=self.get_cdp_endpoint(),
+                url=self._composer_operation_url, prompt=prompt,
+                journal_root=runtime_root() / "composer_operations",
+                timeout_sec=30.0, observation_timeout_sec=8.0,
+                cancel_check=lambda: self._check_cancel_requested("composer"),
+            )
+        except KeyboardInterrupt:
+            self._set_request_state("RECOVERY_REQUIRED", "composer_cancelled_unconfirmed")
+            raise
+        except Exception as exc:
+            prewrite = getattr(exc, "evidence", {}).get("mutation_possible") is False
+            self._composer_io_unconfirmed = not prewrite
+            self._set_request_state("READY_IDLE" if prewrite else "RECOVERY_REQUIRED", "composer_prewrite_failed" if prewrite else "composer_unconfirmed")
+            reason = str(exc).splitlines()[0][:160]
+            self._log_stage("composer_bounded_failed", f"reason={reason} no_auto_retry=true")
+            raise WebScraperStageError(
+                f"[{'WEB_COMPOSER_PREWRITE_FAILED' if prewrite else 'WEB_COMPOSER_UNCONFIRMED'}] 輸入未能在期限內安全確認；不送出、不清空、不重填。reason={reason}",
+                stage="composer", safe_to_retry=False,
+            ) from exc
+        self._composer_io_unconfirmed = False
+        self._composer_operation_id = result['operation_id']
+        self._log_stage("composer_bounded_verified", json.dumps(result, ensure_ascii=False))
+        return True
+
+    def _write_prompt_to_composer_legacy(self, prompt: str, timeout_sec: float = 18.0) -> bool:
         """Stage prompt in ChatGPT/Gemini composer and verify the DOM content.
 
         Returns True when this call mutated/reconciled composer state.  A prompt
@@ -1545,6 +1644,21 @@ class WebLLMScraper:
             send_locator = self._wait_for_send_ready(prompt, timeout_sec=5.0)
             self._log_stage("final_send_ready")
 
+        if prompt and self.service == "chatgpt" and not getattr(self, "_isolated_browser", None):
+            from .composer_operation import verify_prepared_composer
+            from .paths import runtime_root
+            self._composer_io_unconfirmed = True
+            try:
+                verify_prepared_composer(endpoint=self.get_cdp_endpoint(),
+                    url=self._composer_operation_url, prompt=prompt, journal_root=runtime_root()/"composer_operations",
+                    operation_id=getattr(self,"_composer_operation_id",None),
+                    cancel_check=lambda:self._check_cancel_requested("composer_pre_submit"))
+            except Exception as exc:
+                self._set_request_state("RECOVERY_REQUIRED", "composer_pre_submit_unconfirmed")
+                raise WebScraperStageError("[WEB_COMPOSER_UNCONFIRMED] 送出前對話或草稿無法核對；不送出、不清空、不重送。",
+                    stage="composer_pre_submit",safe_to_retry=False) from exc
+            self._composer_io_unconfirmed = False
+
         click_completed = False
         self._submit_click_attempted = False
         try:
@@ -1564,6 +1678,12 @@ class WebLLMScraper:
                 except Exception:
                     pass
             click_completed = True
+            if self.service == "chatgpt" and not getattr(self,"_isolated_browser",None):
+                from .composer_operation import mark_composer_submitted
+                from .paths import runtime_root
+                mark_composer_submitted(endpoint=self.get_cdp_endpoint(),
+                    url=self._composer_operation_url,journal_root=runtime_root()/"composer_operations",
+                    operation_id=self._composer_operation_id)
         except Exception as exc:
             raise WebScraperStageError(
                 f"[WEB_SUBMIT_ERROR] 發送動作失敗或結果不確定: {type(exc).__name__}；為避免 duplicate 不自動重送。",
@@ -1585,16 +1705,17 @@ class WebLLMScraper:
                 user_turn, _binding_state = self._web_ui_adapter().reconcile_user_turn(scope)
                 if user_turn is not None:
                     return "sent"
-            users = self._turn_elements("user")
-            if len(users) > snapshot.get("user_count", 0):
-                return "sent"
-            if users and snapshot.get("user_count", 0) > 0:
-                if self._element_fingerprint(users[-1]) != snapshot.get("last_user_fp", ""):
+            if scope is None:
+                users = self._turn_elements("user")
+                if len(users) > snapshot.get("user_count", 0):
                     return "sent"
+                if users and snapshot.get("user_count", 0) > 0:
+                    if self._element_fingerprint(users[-1]) != snapshot.get("last_user_fp", ""):
+                        return "sent"
             composer_matches = self._composer_matches_prompt(prompt)
             active = self._is_generation_active()
             composer_empty = not self._normalize_composer_text(self._read_composer_text())
-            if composer_empty and active:
+            if scope is None and composer_empty and active:
                 return "sent"
             if composer_matches and not active:
                 time.sleep(0.15)
@@ -1644,6 +1765,9 @@ class WebLLMScraper:
         return self._reset_pre_submit_to_ready_idle(attachment_paths)
 
     def _reconcile_pending_submit_before_request(self) -> None:
+        if getattr(self,"_composer_io_unconfirmed",False):
+            raise WebScraperStageError("[WEB_COMPOSER_UNCONFIRMED] 前一輪草稿或對話範圍未確認；禁止以無關 turn 推定已送出。",
+                stage="composer_recovery_required",safe_to_retry=False)
         if getattr(self, "_request_state", "READY_IDLE") != "RECOVERY_REQUIRED":
             return
         context = getattr(self, "_pending_submit_context", None)
@@ -1664,6 +1788,41 @@ class WebLLMScraper:
             return
         self._set_request_state("RECOVERY_REQUIRED",f"classification={delivery}")
         raise WebScraperStageError("[WEB_RECOVERY_REQUIRED] 前一輪 submit 仍無法安全判定；禁止新 request。",stage="recovery_required",safe_to_retry=False)
+
+    def _recover_composer_before_request(self, new_prompt=None) -> None:
+        if self.service != 'chatgpt' or getattr(self,'_isolated_browser',None):
+            return
+        from .composer_operation import recover_composer,page_key
+        from .json_state_io import read_json_retry
+        from .paths import runtime_root
+        endpoint=self.get_cdp_endpoint()
+        url=self._page.url;root=runtime_root()/'composer_operations'
+        path=root/(page_key(endpoint,url)+'.json')
+        if not path.exists():return
+        record=read_json_retry(path)
+        if record.get('state') not in {'IN_FLIGHT','QUARANTINED','COMPLETE','SUBMIT_RESERVED','SUBMIT_ATTEMPTED'}:
+            return
+        try:
+            result=recover_composer(endpoint=endpoint,url=url,journal_root=root,
+                new_prompt=new_prompt,
+                cancel_check=lambda:self._check_cancel_requested('composer_recovery'))
+        except Exception as exc:
+            self._composer_io_unconfirmed=True
+            self._set_request_state('RECOVERY_REQUIRED','composer_recovery_blocked')
+            raise WebScraperStageError('[WEB_COMPOSER_RECOVERY_REQUIRED] 舊草稿或送達狀態未釐清；不重送。reason='+str(exc)[:160],
+                stage='composer_recovery',safe_to_retry=False) from exc
+        self._composer_io_unconfirmed=False
+        self._pending_submit_context=None;self._submit_click_attempted=False
+        self._set_request_state('READY_IDLE','composer_recovered')
+        self._log_stage('composer_recovered',json.dumps(result,ensure_ascii=False))
+
+    def _record_composer_delivery(self) -> None:
+        if self.service != 'chatgpt' or getattr(self,'_isolated_browser',None):return
+        from .composer_operation import mark_delivery_confirmed
+        from .paths import runtime_root
+        mark_delivery_confirmed(endpoint=self.get_cdp_endpoint(),
+            url=self._composer_operation_url,journal_root=runtime_root()/'composer_operations',
+            operation_id=self._composer_operation_id)
 
 
 
@@ -1873,6 +2032,11 @@ class WebLLMScraper:
              manager as the final recovery tier.
         """
         self._cancel_requested.set()
+        if getattr(self, "_composer_io_unconfirmed", False):
+            # The bounded helper polls this event and kills only its owned job.
+            # Never issue another sync page command while a write is uncertain.
+            return {"status": "composer_cancel_requested", "stopped": False,
+                    "reloaded": False, "browser_alive": None}
         result = {
             "status": "not_running",
             "stopped": False,
@@ -2081,6 +2245,10 @@ class WebLLMScraper:
     def _check_provider_transport_error(self) -> None:
         check = getattr(self._web_ui_adapter(), 'blocking_transport_error', None)
         error = check() if check else {}
+        if error.get('reason') in {'PROVIDER_LOGIN_REQUIRED','PROVIDER_DISCONNECTED','PROVIDER_ERROR'}:
+            self._set_request_state('RECOVERY_REQUIRED',error['reason'].lower())
+            raise WebScraperStageError('['+error['reason']+'] '+str(error.get('message','')),
+                                      stage='provider_blocked',safe_to_retry=False)
         if error.get('reason') in {'PROVIDER_RATE_LIMITED','PROVIDER_CONVERSATION_FULL'}:
             self._log_stage('provider_transport_blocked', json.dumps(error, ensure_ascii=False))
             # A provider rejection is not an ambiguous submit. Do not poison
@@ -2119,6 +2287,7 @@ class WebLLMScraper:
             if scope is not None:
                 user_turn, binding_state = self._web_ui_adapter().reconcile_user_turn(scope)
                 if user_turn is not None:
+                    self._record_composer_delivery()
                     self._log_stage(
                         "user_scope_reconcile",
                         json.dumps(
@@ -2905,11 +3074,11 @@ class WebLLMScraper:
             and bool(value.get("artifact_save_expected"))
             and str(value.get("artifact_kind", "") or "").lower() == "image"
             and output_path
+            and value.get("artifact_auto_delivery_allowed", True) is True
         ):
             return ""
         identity = "|".join((
             str(value.get("run_id", "") or ""),
-            str(value.get("turn_id", "") or ""),
             output_path,
         ))
         progress = dict(value.get("runtime_image_progress") or {})
@@ -2940,6 +3109,20 @@ class WebLLMScraper:
             + json.dumps(commit, ensure_ascii=False, separators=(",", ":"))
             + "\n```"
         )
+
+    @classmethod
+    def _runtime_progress_image_delivery_response(cls, text, expected, *, fresh_artifact_seen):
+        """Prioritize an already authorized save over display-only Progress.
+
+        Never replace a response containing operational actions or an explicit
+        stop/terminal decision. Those remain in the normal admission path.
+        """
+        parsed = parse_v9_tool_transport_detailed(text)
+        if parsed.diagnostics or [call.get('tool') for call in parsed.calls] != ['report_progress', 'turn_commit']:
+            return ''
+        if parsed.calls[0].get('decision', 'CONTINUE') != 'CONTINUE':
+            return ''
+        return cls._runtime_fresh_image_delivery_response(expected, fresh_artifact_seen=fresh_artifact_seen)
 
     def _protocol_recovery_admission_state(self) -> tuple[bool, dict]:
         """Check whether a bounded recovery probe is safe to place in composer.
@@ -3021,6 +3204,8 @@ class WebLLMScraper:
         try:
             self._submit_verified_prompt(send_locator, prompt=prompt)
         except WebScraperStageError as submit_exc:
+            if getattr(self, "_composer_io_unconfirmed", False):
+                raise
             delivery = self._reconcile_submit_delivery(snapshot, prompt, timeout_sec=3.0)
             self._log_stage(stage_prefix + "_submit_reconcile", f"classification={delivery}")
             if delivery == "sent":
@@ -3355,6 +3540,24 @@ class WebLLMScraper:
                                         text,
                                         action_id_seed=self._protocol_action_id_seed(protocol_expected),
                                     )
+                                    priority_delivery = self._runtime_progress_image_delivery_response(
+                                        text, protocol_expected,
+                                        fresh_artifact_seen=(self.service == 'chatgpt' and fresh_artifact_delivery_ready),
+                                    )
+                                    if priority_delivery:
+                                        # The image is already observed and save intent is
+                                        # Runtime-owned; display-only model Progress must
+                                        # not defer this operation to another Web turn.
+                                        text = priority_delivery
+                                        accepted_parse = parse_v9_tool_transport_detailed(text)
+                                        if accepted_parse.diagnostics:
+                                            raise WebScraperStageError(
+                                                '[WEB_RUNTIME_IMAGE_BRIDGE_INVALID] 無法建立圖片優先下載 envelope。',
+                                                stage='runtime_image_bridge_invalid', safe_to_retry=False,
+                                            )
+                                        matching_commit = accepted_parse.calls[-1]
+                                        self._log_stage('runtime_image_delivery_priority',
+                                            'fresh image + Progress-only response replaced by one validated download action; action_executed=false')
                                     if accepted_parse.normalizations:
                                         self._log_stage(
                                             "protocol_transport_normalized",
@@ -3380,12 +3583,15 @@ class WebLLMScraper:
                                         round=int((protocol_expected or {}).get("turn_id", 0) or 0),
                                         protocol_version=9,
                                         action_count=int(matching_commit.get("action_count", 0) or 0),
-                                        commit_state="accepted",
+                                        commit_state="runtime_priority_from_progress" if priority_delivery else "accepted",
                                         ui_state="confirmed_idle",
                                         response_stable=True,
                                         action_executed=False,
                                     )
-                                    self._cancel_requested.clear()
+                                    if priority_delivery:
+                                        self._check_cancel_requested('image_delivery_priority')
+                                    else:
+                                        self._cancel_requested.clear()
                                     return text
                             else:
                                 stable_text = text
@@ -3435,7 +3641,7 @@ class WebLLMScraper:
                                     response_stable=True,
                                     action_executed=False,
                                 )
-                                self._cancel_requested.clear()
+                                self._check_cancel_requested('image_delivery_bridge')
                                 return runtime_image_response
 
                             response_bytes = utf8_size(text)
@@ -4154,6 +4360,7 @@ class WebLLMScraper:
             }
 
         error_text = ""
+        error_source = ""
         error_terms = (
             "too many files", "too many attachments", "file limit", "attachment limit",
             "upload limit", "reached your upload limit", "upload failed", "couldn't upload",
@@ -4163,10 +4370,16 @@ class WebLLMScraper:
             "you've already uploaded this file", "already uploaded this file",
             "try uploading new content",
         )
-        lowered_body = (composer_text + "\n" + alert_text + "\n" + dialog_text).lower()
-        for term in error_terms:
-            if term in lowered_body:
-                error_text = term
+        # composer_text includes the outgoing task and Progress failure
+        # conditions. Quoting "upload failed" is not a provider error.
+        # Only provider error surfaces and per-file error state can reject.
+        for origin, surface in (("alert", alert_text), ("dialog", dialog_text)):
+            for term in error_terms:
+                if term in surface.lower():
+                    error_text = term
+                    error_source = origin
+                    break
+            if error_text:
                 break
         set_mismatch = ""
         unexpected_attachment_chips = []
@@ -4205,6 +4418,7 @@ class WebLLMScraper:
 
         if not error_text and any(item["error"] for item in attachment_states.values()):
             error_text = "attachment_file_rejected"
+            error_source = "attachment"
         if error_text:
             state = "REJECTED"
         elif (
@@ -4232,6 +4446,7 @@ class WebLLMScraper:
             "alert_text": alert_text,
             "dialog_text": dialog_text,
             "error": error_text,
+            "error_source": error_source,
         }
 
     def _composer_attachment_count(self) -> int:
@@ -4354,6 +4569,11 @@ class WebLLMScraper:
                 else:
                     ready_since = None
                 if state == "REJECTED":
+                    self._log_stage("attachment_rejection_evidence",
+                        f"source={snapshot.get('error_source', 'unknown')} "
+                        f"error={snapshot.get('error', 'unknown')} "
+                        f"files={len(paths)} send_ready={bool(snapshot.get('send_ready'))} "
+                        f"upload_rings={int(snapshot.get('upload_ring_count', 0) or 0)}")
                     self._last_attachment_wait_reason = f"attachment_rejected: {snapshot.get('error', 'unknown')}"
                     return False
                 actively_processing = bool(
@@ -4541,6 +4761,8 @@ class WebLLMScraper:
         # A new ask owns a fresh cancellation lifecycle. A previous cooperative
         # cancel must never poison the next user request.
         self._cancel_requested.clear()
+        # Recover before staging/uploading attachments or claiming a new draft.
+        self._recover_composer_before_request(prompt)
         # Do not discard a proven artifact merely because the same outer
         # request needs another control/progress repair ask.
         self._last_artifact_scope = self._artifact_scope_for_request(artifact_request_id)
@@ -4631,6 +4853,7 @@ class WebLLMScraper:
             # keyboard.insert_text(), avoiding ElementHandle.fill() entirely.
             stage = "composer"
             self._set_request_state("PREPARING_COMPOSER")
+            composer_claimed = True
             mutated = self._write_prompt_to_composer(prompt)
             # Even if the exact prompt was already present from a prior partial
             # attempt, this call now owns that draft and must not blind-retry it.
@@ -4700,6 +4923,8 @@ class WebLLMScraper:
                 )
                 submit_attempted = bool(getattr(self, "_submit_click_attempted", False))
             except WebScraperStageError as submit_exc:
+                if getattr(self, "_composer_io_unconfirmed", False):
+                    raise
                 submit_attempted = bool(getattr(self, "_submit_click_attempted", False))
                 delivery = self._reconcile_submit_delivery(snapshot, prompt, timeout_sec=3.0)
                 self._log_stage("submit_reconcile", f"classification={delivery}")
@@ -4761,6 +4986,8 @@ class WebLLMScraper:
                             stage="user_scope_reconcile",
                             safe_to_retry=False,
                         ) from user_exc
+                    if scope is not None:
+                        self._record_composer_delivery()
                 elif delivery == "not_sent":
                     recovered = self._recover_not_sent_to_ready_idle(prompt, attachments)
                     raise WebScraperStageError(
@@ -4849,7 +5076,8 @@ class WebLLMScraper:
                 f"composer_claimed={composer_claimed}"
             )
             try:
-                self.cancel_current_generation()
+                if not getattr(self, "_composer_io_unconfirmed", False):
+                    self.cancel_current_generation()
             except Exception as cancel_exc:
                 _debug_log(
                     f"ASK_KEYBOARD_INTERRUPT_CANCEL_FAILED "
@@ -4857,7 +5085,7 @@ class WebLLMScraper:
                 )
             raise
         except WebScraperStageError as exc:
-            if composer_claimed and not submit_attempted and getattr(self, "_request_state", "") != "READY_IDLE":
+            if composer_claimed and not submit_attempted and not getattr(self, "_composer_io_unconfirmed", False) and getattr(self, "_request_state", "") != "READY_IDLE":
                 self._reset_pre_submit_to_ready_idle(attachments)
             # Once this prompt has occupied the composer, fail closed unless the
             # error itself is from an earlier stage. This prevents restart from
@@ -4870,7 +5098,7 @@ class WebLLMScraper:
             )
             raise
         except Exception as exc:
-            if composer_claimed and not submit_attempted and getattr(self, "_request_state", "") != "READY_IDLE":
+            if composer_claimed and not submit_attempted and not getattr(self, "_composer_io_unconfirmed", False) and getattr(self, "_request_state", "") != "READY_IDLE":
                 self._reset_pre_submit_to_ready_idle(attachments)
             safe_to_retry = not submit_attempted and not composer_claimed
             _debug_log(
@@ -5028,6 +5256,7 @@ class WebLLMScraper:
 
     def close(self):
         """Close browser (profile/cookies are saved automatically)."""
+        was_shared = getattr(self, '_shared_personal_browser', False)
         self._cancel_requested.set()
         if self._attached_over_cdp:
             remaining_refs = self.release_conversation_owner()
@@ -5054,7 +5283,9 @@ class WebLLMScraper:
         self._pw = None
         self._owns_playwright = False
         self._activity_observer_installed = False
-        print(f"[WebScraper] 瀏覽器已關閉（登入狀態已儲存）")
+        self._active_cdp_endpoint = ''
+        self._shared_personal_browser = False
+        print('[WebScraper] 已斷開共用 Chrome（原瀏覽器保持開啟）' if was_shared else '[WebScraper] 瀏覽器已關閉（登入狀態已儲存）')
 
     def release_conversation(self, target_url: str, *, owner: str = "") -> bool:
         """Release this owner and physically close the target only at refcount zero."""
@@ -5074,7 +5305,9 @@ class WebLLMScraper:
             page_id = self._conversation_id_from_url(
                 str(getattr(page, "url", "") or "")
             )
-            if page_id != target_id:
+            if page_id != target_id or not same_provider_url(str(getattr(page, 'url', '') or ''), target_url):
+                continue
+            if getattr(self, '_shared_personal_browser', False) and (not is_shared_page(page) or not same_provider_url(page.url, target_url)):
                 continue
             try:
                 page.close(run_before_unload=False)
@@ -5083,6 +5316,7 @@ class WebLLMScraper:
                 continue
         if (
             self._page is not None
+            and same_provider_url(str(getattr(self._page, 'url', '') or ''), target_url)
             and self._conversation_id_from_url(
                 str(getattr(self._page, "url", "") or "")
             )

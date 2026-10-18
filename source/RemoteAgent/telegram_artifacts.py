@@ -102,6 +102,7 @@ def prepare_telegram_completion(
                 "workspace": str(root),
                 "size_bytes": size,
                 "sha256": digest,
+                **{key: str(row[key]) for key in ('artifact_id', 'request_id', 'task_id') if key in row},
             })
         except Exception as exc:
             rejected.append({

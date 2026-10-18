@@ -19,7 +19,7 @@ def build_atomic_project_sync(workspace:str|Path,strategy:str='FULL_BUNDLE',base
  if strategy not in {'FULL_BUNDLE','DELTA'}: raise ValueError(f'project_sync_strategy_invalid:{strategy}')
  policy=resolve_attachment_policy(policy,max_files=max_files,max_bytes=max_bytes)
  parent_snapshot=(load_project_snapshot(root,base_snapshot_id) if strategy=='DELTA' and base_snapshot_id else load_current_project_snapshot(root))
- snapshot=inspect_project_scope(root);evidence=dependency_evidence(root,snapshot.get('files',[]))
+ snapshot=inspect_project_scope(root,verify_cached_content=True);evidence=dependency_evidence(root,snapshot.get('files',[]))
  if strategy=='DELTA':
   delta=build_project_delta(root,base_snapshot_id,policy=policy)
   if delta.get('status')=='DELTA_NOT_AVAILABLE':

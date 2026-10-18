@@ -111,7 +111,7 @@ def live(s):
     prompt=('T14 exact working set 測試。專案根目錄：\n'+s['target']+
             '\n只執行一次 inspect_project_working_set，workspace 明確填此根目錄，paths 精確為 ["src/a.py","docs/b.md"]。'
             '\n回報指定兩檔的 path、size_bytes、SHA256、snapshot_id、missing_paths。不得把 unrelated.txt 納入，不 inspect_project_scope、不 project_sync、不 query、不上傳、不修改或額外執行命令。根據實際 Runtime 結果結案。')
-    sink={};code=send_and_wait(request=prompt,workspace=r'E:\workspace',root=ROOT,timeout_sec=900,result_sink=sink)
+    sink={};code=send_and_wait(request=prompt,workspace=r'E:\card',root=ROOT,timeout_sec=900,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];journal=TaskContinuationStore(ROOT).get(task.task_id) or {}
     actions=list(journal.get('actions',{}).values());final=task.result_ledger.get('final',{})
     record={'status':'UNKNOWN',**sink,'sender_exit_code':code,'actions':actions,'task_state':task.state,
@@ -127,7 +127,7 @@ def main():
     assert read_json_retry(STATE.with_name('t13_inspect_project_scope.json'))['status']=='PASS','T13 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        parent=Path(r'E:\workspace\runtime_it\matrix38')/('T14-'+uuid.uuid4().hex[:12]);parent.mkdir();root=setup(parent)
+        parent=Path(r'E:\card\runtime_it\matrix38')/('T14-'+uuid.uuid4().hex[:12]);parent.mkdir();root=setup(parent)
         s={'tool':'inspect_project_working_set','status':'IN_PROGRESS','fixture':str(parent),'target':str(root),'phases':{},'rca':[]}
     s['rca']=[{'layer':'RUNTIME_CONTENT_EVIDENCE','reason':'unchanged size/mtime caused old SHA reuse for changed selected bytes',
                'fix':'fresh SHA256 for exact working set; Runtime inspect_project_scope also verifies cached content without changing background sync cache policy'},

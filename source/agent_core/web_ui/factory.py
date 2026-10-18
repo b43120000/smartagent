@@ -8,6 +8,7 @@ from .provider_contract import WebUIProviderAdapter
 from .provider_registry import (
     create_provider_adapter,
     known_providers,
+    is_other_provider,
     normalize_provider_name,
     provider_from_url as _registry_provider_from_url,
     registered_providers,
@@ -23,7 +24,7 @@ class WebUIProviderNotImplemented(WebUIProviderError):
 
 
 def provider_from_url(url: str) -> str:
-    """Resolve one known provider from a browser URL; never guess."""
+    """Resolve a built-in provider or an origin-isolated manual provider."""
     try:
         return _registry_provider_from_url(url)
     except ValueError as exc:
@@ -31,7 +32,7 @@ def provider_from_url(url: str) -> str:
 
 
 def normalize_web_conversation_url(raw: str) -> str:
-    """Normalize one supported Web conversation URL without changing its provider/path."""
+    """Normalize an HTTP(S) conversation URL without changing its origin/path."""
     value = str(raw or "").strip().strip('"')
     if not value:
         raise ValueError("Web conversation URL must not be empty")
@@ -43,6 +44,8 @@ def normalize_web_conversation_url(raw: str) -> str:
     parsed = urlparse(value)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("Web conversation URL must use http(s)")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Web conversation URL must have a host and no credentials")
     provider_from_url(value)
     return value
 
@@ -57,7 +60,7 @@ def create_web_ui_for_page(page, *, provider: str = "", profile_name: str = "") 
 def create_web_ui(*, provider: str, page, profile_name: str = "") -> WebUIProviderAdapter:
     """Return one provider adapter; never fall back to another provider."""
     name = normalize_provider_name(provider)
-    if name not in known_providers():
+    if name not in known_providers() and not is_other_provider(name):
         raise WebUIProviderError(f"WEB_UI_PROVIDER_UNKNOWN: {name or '(empty)'}")
     try:
         adapter = create_provider_adapter(name, page, profile_name=profile_name)

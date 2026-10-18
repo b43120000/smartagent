@@ -68,25 +68,31 @@ def runtime(s):
     assert dest.read_bytes()==BASE.encode()
     s['phases']['IT-R']={'status':'PASS','E':'PASS','V':'PASS','R':'PASS','rounds':len(turns),'actions':loop.action_ledger}
 
-def live(s):
+def live(s,collect_only=False):
     assert s['phases'].get('IT-R',{}).get('status')=='PASS'
     if s['phases'].get('IT-W'):s.setdefault('attempt_history',[]).append(dict(s['phases']['IT-W']))
     from RemoteAgent.local_telegram_sender import send_and_wait
     from agent_core.paths import remote_tasks_path
     from agent_core.task_state import TaskStateStore
     from agent_core.task_continuation import TaskContinuationStore
-    root=Path(s['fixture']);dest=root/('web_'+uuid.uuid4().hex[:8]+'.txt');dest.write_bytes(BASE.encode());wid='W-T10-WEB-'+uuid.uuid4().hex[:12]
+    root=Path(s['fixture']);dest=root/('web_'+uuid.uuid4().hex[:8]+'.txt');wid='W-T10-WEB-'+uuid.uuid4().hex[:12]
+    if collect_only:
+        previous=s['phases']['IT-W'];dest=Path(previous['path']);wid=previous['write_id']
+        assert dest.parent==root and dest.name.startswith('web_')
+        sink={k:previous[k] for k in ('request_id','task_id')};code=previous.get('sender_exit_code',2)
+    else:dest.write_bytes(BASE.encode())
     request='只測試 abort_file_write 保護原目的檔。測試器已建立下方 path，其原內容是 JSON string '+json.dumps(BASE)+'。依序 begin_file_write streaming (utf-8, overwrite=true，不提供 expected_size/hash/chunk_count)，write_id 指定如下；用一筆 write_file_chunk 寫下方暫存 content；然後 abort_file_write 同一交易，不可 commit。最後 run_command operation=VERIFY、verifies_action_id 指向實際 abort、working_directory=parent，唯讀 Get-Content -Raw；verify 檔案存在且 file_contains text=T10_KEEP_ORIGINAL expect=true。共 begin/chunk/abort/VERIFY 四項 action，不改原目的檔、不上傳、不使用其他修改工具。回報 ABORTED、file_committed=false 與原檔保存驗證。\npath：\n'+str(dest)+'\nparent：\n'+str(root)+'\nwrite_id：'+wid+'\nstaging content JSON string：\n'+json.dumps(PART,ensure_ascii=False)
-    sink={};code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    if not collect_only:
+        sink={};code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];j=TaskContinuationStore(ROOT).get(sink['task_id']) or {};calls=list(j.get('actions',{}).values());final=task.result_ledger.get('final',{});passed=False
     s['phases']['IT-W']={'status':'UNKNOWN',**sink,'sender_exit_code':code,'actions':calls,'path':str(dest),'write_id':wid,'response':final.get('response',''),'error':task.error}
     if len(calls)==4 and [c['action']['tool'] for c in calls]==['begin_file_write','write_file_chunk','abort_file_write','run_command']:
-        assert all(c['action']['write_id']==wid for c in calls[:3]) and calls[0]['action']['path']==str(dest) and calls[0]['action']['overwrite'] is True and calls[1]['action']['content']==PART
+        assert all(c['action']['write_id']==wid for c in calls[:3]) and Path(calls[0]['action']['path']).resolve()==dest.resolve() and calls[0]['action']['overwrite'] is True and calls[1]['action']['content']==PART
         p=json.loads(calls[2]['result'].split('] ',1)[1]);row=decode_result(calls[2]['result'])
         assert p['state']=='ABORTED' and not row['data']['file_committed'] and dest.read_bytes()==BASE.encode()
-        m=json.loads((Path(r'E:\workspace\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
+        m=json.loads((Path(r'E:\card\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
         assert m['state']=='ABORTED' and m['next_offset']==len(PART.encode()) and not Path(m['staging_path']).exists()
-        v=calls[-1];assert v['action']['operation']=='VERIFY' and v['action']['verifies_action_id']==calls[-2]['action']['action_id'] and v['action']['working_directory']==str(root)
+        v=calls[-1];assert v['action']['operation']=='VERIFY' and v['action']['verifies_action_id']==calls[-2]['action']['action_id'] and Path(v['action']['working_directory']).resolve()==root.resolve()
         assert is_readonly_command(v['action'])
         checks=v['action']['verify'];assert checks and {c.get('action',c.get('type')) for c in checks}=={'file_exists','file_contains'}
         for check in checks:
@@ -102,13 +108,15 @@ def live(s):
     assert passed,s['phases']['IT-W']
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--phase',choices=['UT','IT-R','IT-W'],required=True);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--phase',choices=['UT','IT-R','IT-W'],required=True);p.add_argument('--collect-only',action='store_true');a=p.parse_args()
+    assert not a.collect_only or a.phase=='IT-W'
     assert read_json_retry(STATE.with_name('t09_commit_file_write.json'))['status']=='PASS','T09 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T10-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'abort_file_write','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
-    try:{'UT':unit,'IT-R':runtime,'IT-W':live}[a.phase](s)
+        root=Path(r'E:\card\runtime_it\matrix38')/('T10-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'abort_file_write','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
+    try:{'UT':unit,'IT-R':runtime,'IT-W':lambda v:live(v,a.collect_only)}[a.phase](s)
     except Exception as exc:
+        s['status']='FAIL'
         s['phases'].setdefault(a.phase,{}).update(status='FAIL',error=f'{type(exc).__name__}: {exc}'[:2000]);write_json_atomic(STATE,s);raise
     s['status']='PASS' if all(s['phases'].get(x,{}).get('status')=='PASS' for x in ('UT','IT-R','IT-W')) else 'IN_PROGRESS';write_json_atomic(STATE,s)
     print('T10_PHASE_PASS',a.phase,'overall='+s['status'])

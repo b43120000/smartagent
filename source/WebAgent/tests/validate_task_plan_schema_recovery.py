@@ -138,13 +138,13 @@ def run() -> None:
         loop.intent_digest = "d" * 64
         loop.pending_result_recovery = route
         forbidden_calls = [
-            _progress("P-FORBIDDEN"),
+            _progress("P-FORBIDDEN", "propose_task_plan"),
             {**proposed, "action_id": "PLAN-FORBIDDEN-RESUBMIT"},
             {"tool": "turn_commit", "action_count": 2},
         ]
         accepted, diagnostics = loop._accept_ack(forbidden_calls, {})
         assert accepted == []
-        assert diagnostics[0]["reason"] == "task_plan_repair_latch_active"
+        assert diagnostics[0]["reason"] == "task_plan_repair_latch_active", diagnostics
 
         mismatched_repair = dict(repair_action)
         mismatched_repair["action_id"] = "PLAN-REPAIR-MISMATCH"
@@ -184,6 +184,27 @@ def run() -> None:
         )
         dispatched = json.loads(unlocked_loop.tools.execute(repair_action))
         assert dispatched["status"] == "PLAN_FROZEN", dispatched
+
+        # Web IT cited BOTH audit receipts: the original rejection must remain
+        # visible without poisoning its exact, successfully repaired successor.
+        proof = WebAgentProtocolLoop(workspace, lambda *_args: '')
+        proof.run_id='RR-T28-PROOF';proof.task_id='TASK-T28-PROOF';proof.task_epoch='EPOCH-T28'
+        proof.turn_id=1
+        original_id=proposed['action_id'];repair_id=repair_action['action_id']
+        rejected_raw=unlocked_loop.tools.execute(proposed)
+        proof.action_ledger[original_id]={'action':proposed,'result':rejected_raw,'recovery_context':route}
+        facts=proof._classify_action_evidence(proposed,rejected_raw)
+        proof._record_action_result_evidence(proposed,facts)
+        proof.turn_id=2
+        proof.action_ledger[repair_id]={'action':repair_action,'result':json.dumps(dispatched)}
+        facts=proof._classify_action_evidence(repair_action,json.dumps(dispatched))
+        proof._record_action_result_evidence(repair_action,facts)
+        assert proof.action_result_ledger[original_id]['execution_status']=='FAILED'
+        assert proof.action_result_ledger[original_id]['evidence_status']=='SUPERSEDED'
+        assert proof._terminal_evidence_verdict([original_id,repair_id])=='PASS'
+        proof.action_result_ledger['unrelated']={**proof.action_result_ledger[original_id],
+            'evidence_status':'ACTIVE','superseded_by_action_id':''}
+        assert proof._terminal_evidence_verdict(['unrelated',repair_id])=='FAIL'
 
         high_level_plan = {
             **alias_plan,

@@ -193,7 +193,7 @@ TOOL_ENVELOPE_SCHEMAS = {
         "optional": {"workspace": str, "expected_sha256": str},
     },
     "compare_project_snapshot": {
-        "required": {"known_snapshot": dict},
+        "required": {"known_snapshot": (dict, str)},
         "optional": {"workspace": str},
     },
     "extract_project_dependencies": {
@@ -1059,7 +1059,19 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
         verify = call.get("verify")
         verify_steps = [verify] if isinstance(verify, dict) else (verify if isinstance(verify, list) else [])
         for verify_index, step in enumerate(verify_steps):
-            if not isinstance(step, dict) or step.get("action", "run_command") != "run_command":
+            if not isinstance(step, dict):
+                continue
+            primary, alias = step.get("action"), step.get("type")
+            kind = primary if primary is not None else alias if alias is not None else "run_command"
+            if (primary is not None and alias is not None and primary != alias
+                or not isinstance(kind, str) or kind not in {"run_command", "file_exists", "file_contains"}):
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]", "verification_action_invalid", tool=tool,
+                    detail=f"verify[{verify_index}]: action/type conflict or unsupported verification action",
+                    suggestion="使用一致的 action/type：run_command、file_exists 或 file_contains。",
+                    block_index=block_index,
+                )
+            if kind != "run_command":
                 continue
             verify_command = step.get("command", "")
             if not isinstance(verify_command, str):

@@ -18,3 +18,8 @@ install_smart_agent/environment_report.txt
 install_smart_agent/install_report.txt
 install_smart_agent/install-state.json
 
+
+# Account-specific manual calibration and browser settings stay local.
+**/dom_config.history/
+**/dom_config.json
+config/browser_session.json

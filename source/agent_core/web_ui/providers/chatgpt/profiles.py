@@ -6,6 +6,7 @@ from different renderer generations are never unioned for freshness decisions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ...dom_config import apply_dom_config
 
 
 CHATGPT_COMPOSER_SELECTOR = (
@@ -109,13 +110,13 @@ CHATGPT_UI_PROFILES = (SEARCH_UNIT_2026_PROFILE, LEGACY_ROLE_PROFILE)
 def profile_by_name(name: str) -> ChatGPTUIProfile | None:
     builtin = next((profile for profile in CHATGPT_UI_PROFILES if profile.name == name), None)
     if builtin is not None:
-        return builtin
+        return apply_dom_config("chatgpt", builtin)
     from ...profile_store import profile_values
     values = profile_values("chatgpt", name=name)
-    return ChatGPTUIProfile(**values) if values else None
+    return apply_dom_config("chatgpt", ChatGPTUIProfile(**values)) if values else None
 
 
 def active_profile() -> ChatGPTUIProfile:
     from ...profile_store import profile_values
     values = profile_values("chatgpt")
-    return ChatGPTUIProfile(**values) if values else SEARCH_UNIT_2026_PROFILE
+    return apply_dom_config("chatgpt", ChatGPTUIProfile(**values) if values else SEARCH_UNIT_2026_PROFILE)

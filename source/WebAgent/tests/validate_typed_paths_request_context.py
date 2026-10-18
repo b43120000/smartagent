@@ -33,7 +33,7 @@ def run():
         result=decode_result(execute_tool(unresolved))
         assert result['status']=='REJECTED' and result['executed'] is False
         assert result['reason']=='UNEXPANDED_REQUEST_CONTEXT_REFERENCE'
-    path=r'C:\Users\ExampleUser\Desktop\remoteagent\HDRViewer\sources\Androidviewer\third_party'
+    path=r'C:\SmartAgent\HDRViewer\sources\Androidviewer\third_party'
     malformed='["'+path+'"]'
     value,error=parse_stable_field(malformed,'paths')
     assert value is None and error['reason']=='invalid_json_value' and 'escape' in error['detail']

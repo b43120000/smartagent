@@ -7,15 +7,14 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'deployment_baseline.ps1')
 
 $ManifestSchema = 'SMARTAGENT_UPDATE_MANIFEST_V1'
 $AclSchema = 'SMARTAGENT_ACL_MODE_V1'
 $AclStateRelativePath = 'localdata\secure\windows_security\acl_mode.json'
 $UpdateManifestRelativePath = 'config\update_manifest.json'
 $MutexName = 'Local\SmartAgentManifestUpdate'
-$DevelopmentAclBypassTargets = @(
-    'C:\Users\example\Desktop\remoteagent\release\SmartAgentv2_1'
-)
+$DevelopmentAclBypassTargets = @()
 $PreservedDirectoryNames = @(
     '.git', '.venv', '.agents', '__pycache__', '.pytest_cache', 'localdata'
 )
@@ -117,6 +116,7 @@ function Test-PreservedDirectory([string]$RelativePath) {
     return $false
 }
 function Test-PreservedFile([string]$RelativePath) {
+    if (Test-PrivateDeploymentPath $RelativePath) { return $true }
     $relative = $RelativePath.Replace('/', '\').TrimStart('\')
     if (Test-PreservedDirectory $relative) { return $true }
     if ($relative -ieq 'config\debug_config.json') { return $true }
@@ -223,7 +223,7 @@ function Get-ManifestFiles([string]$Source) {
 function Assert-TargetParentsSafe([object[]]$Files, [string]$TargetRoot) {
     foreach ($file in $Files) {
         $parts = $file.Relative.Replace('/', '\').Split('\'); $cursor = $TargetRoot
-        for ($index = 0; $index -lt ($parts.Count - 1); $index++) {
+        for ($index = 0; $index -lt $parts.Count; $index++) {
             $cursor = Join-Path $cursor $parts[$index]
             if (Test-Path -LiteralPath $cursor) {
                 $item = Get-Item -LiteralPath $cursor -Force
@@ -315,6 +315,8 @@ try {
     catch [System.Threading.AbandonedMutexException] { $script:MutexOwned = $true }
     if (-not $script:MutexOwned) { throw 'Another SmartAgent update is already running.' }
     $transactionId = [Guid]::NewGuid().ToString('N')
+    $receiptRelative = 'localdata\update\deployment_baseline.json'
+    $null = Get-DeploymentBaselinePath $target
     $tempBase = Join-Path ([System.IO.Path]::GetTempPath()) ('SmartAgentUpdate-' + $transactionId)
     $script:StageRoot = Join-Path $tempBase 'stage'; $script:BackupRoot = Join-Path $tempBase 'backup'
     New-Item -ItemType Directory -Path $script:StageRoot -Force | Out-Null
@@ -323,12 +325,16 @@ try {
     Copy-SourceSet $transferFiles $script:StageRoot
     Assert-FileSet $transferFiles $script:StageRoot 'stage verification'
     Backup-TargetFiles $transferFiles $target $script:BackupRoot
+    Backup-TargetFiles @([pscustomobject]@{Relative=$receiptRelative}) $target $script:BackupRoot
     Backup-TargetFiles $staleFiles $target $script:BackupRoot
     Commit-Stage $transferFiles $script:StageRoot $target
     Remove-StaleFiles $staleFiles $target
     Assert-FileSet $transferFiles $target 'target verification'
     $remainingStale = @(Get-SafeTreeFiles $target | Where-Object { -not $release.Keys.ContainsKey($_.Relative.ToLowerInvariant()) })
     if ($remainingStale.Count -gt 0) { throw ('target verification stale files remain: ' + (($remainingStale | ForEach-Object { $_.Relative }) -join ',')) }
+    $baselineHashes = @{}
+    foreach ($file in $files) { $baselineHashes[$file.Relative] = $file.Sha256 }
+    Save-DeploymentBaseline $target $source $baselineHashes ([string](Get-JsonProperty $release.Manifest 'release_id')) ([long](Get-JsonProperty $release.Manifest 'release_sequence'))
     Write-Host ("[SmartAgent Update] UPDATE_OK files={0} removed={1} release_id={2}" -f $files.Count, $staleFiles.Count, (Get-JsonProperty $release.Manifest 'release_id'))
     exit 0
 } catch {

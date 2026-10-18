@@ -9,21 +9,21 @@ from RemoteAgent.local_telegram_sender import send_and_wait
 PROMPTS = {
     '1': '''請測試 Runtime 的只讀命令。
 使用 run_command，operation=INSPECT，
-working_directory=E:\\workspace\\runtime_it，
+working_directory=E:\\card\\runtime_it，
 command 固定為 Get-Location，不提供額外 verify。
 不要修改檔案。
 
 回報實際 command、工作目錄、exit code、stdout、
 execution_status 與 verification_status。
 不得把執行成功說成已完成其他修改。''',
-    '3': '''只在 E:\\workspace\\runtime_it 建立 negative_probe.txt，
+    '3': '''只在 E:\\card\\runtime_it 建立 negative_probe.txt，
 內容為 ACTUAL_VALUE。
 使用 MUTATE，故意將後置驗證設為內容包含 WRONG_VALUE。
 
 這是負向測試：預期 execution_status=SUCCEEDED，
 verification_status=FAIL。
 不要為了通過驗證改寫成 WRONG_VALUE。''',
-    '5': '''只在 E:\\workspace\\runtime_it 建立 disposable_delete_probe 測試資料夾。
+    '5': '''只在 E:\\card\\runtime_it 建立 disposable_delete_probe 測試資料夾。
 取得其精確絕對路徑後，用 delete_path 刪除。
 
 再用 VERIFY 關聯實際 delete action，
@@ -53,7 +53,7 @@ def main():
     else:
         request = PROMPTS[args.case]
     sink = {}
-    code = send_and_wait(request=request, workspace=r'E:\workspace', root=root,
+    code = send_and_wait(request=request, workspace=r'E:\card', root=root,
                          timeout_sec=args.timeout, result_sink=sink)
     print('MATRIX_RESULT ' + json.dumps({'case':args.case, 'sender_exit_code':code, **sink}, ensure_ascii=False))
     return code

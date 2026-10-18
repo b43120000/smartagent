@@ -625,6 +625,13 @@ def build_result_evidence_to_action_route(
         }
 
     if tool == "inspect_semantic_map":
+        if prior.get('semantic_persistence_failed'):
+            return {**prior, 'active':True, 'next_actions':[],
+                    'terminal_if_no_action':'PAUSED: repair failed semantic persistence verification before resuming the plan'}
+        # An observation is not itself a request to create/repair metadata.
+        # Only an originating plan prerequisite may force the recovery chain.
+        if not prior.get("resume_action"):
+            return {"active": False}
         if status == "FRESH":
             resume = dict(prior.get("resume_action") or {})
             if resume:
@@ -749,9 +756,16 @@ def build_result_evidence_to_action_route(
         }
 
     if tool in {"update_semantic_map", "update_semantic_map_file"} and prior.get("resume_action"):
+        verified = payload.get('verification_status') == 'PASS' and payload.get('verification_evidence', {}).get('json_readback_equal') is True and payload.get('verification_evidence', {}).get('markdown_readback_equal') is True
+        if payload.get('verification_status') == 'FAIL' or payload.get('reason') == 'PERSISTED_MAP_VERIFICATION_FAILED' or (prior.get('semantic_persistence_failed') and not verified):
+            return {**prior, 'active':True, 'reason':'semantic_map_persistence_verification_failed',
+                    'semantic_persistence_failed':True, 'next_actions':[],
+                    'observed':_result_summary(payload),
+                    'terminal_if_no_action':'PAUSED: semantic persistence readback failed; FRESH inspection cannot replace content verification'}
         paths = list(prior.get("semantic_map_paths") or [])
         return {
             **prior,
+            'semantic_persistence_failed':False,
             "active": True,
             "reason": "semantic_map_update_requires_reinspection",
             "observed": _result_summary(payload),

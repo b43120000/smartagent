@@ -159,7 +159,7 @@ def live(s,group):
     prompt='T11 原生命令小組 '+group+'。只在此合成 fixture root 操作，所有 working_directory 固定為此目錄：\n'+str(root)+'\n\n'+instructions[group]+'\n所有需要 verify 的动作都提供明确 success_criteria。不得上傳、下載、調用其他工具或操作使用者專案；不增加多餘 source/plan 操作。由 Runtime 實際結果決定狀態，無法執行如實回報。'
     phase='IT-W-'+group
     if phase in s['phases']:s.setdefault('attempt_history',[]).append(dict(s['phases'][phase]))
-    sink={};code=send_and_wait(request=prompt,workspace=r'E:\workspace',root=ROOT,timeout_sec=900,result_sink=sink)
+    sink={};code=send_and_wait(request=prompt,workspace=r'E:\card',root=ROOT,timeout_sec=900,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];journal=TaskContinuationStore(ROOT).get(task.task_id) or {};actions=list(journal.get('actions',{}).values());final=task.result_ledger.get('final',{})
     s['phases'][phase]={'status':'UNKNOWN',**sink,'sender_exit_code':code,'fixture':str(root),'actions':actions,'task_state':task.state,'outcome':final.get('task_outcome'),'error':task.error,'response':final.get('response','')}
     validate_live(s,group,journal)
@@ -215,7 +215,7 @@ def main():
     assert read_json_retry(STATE.with_name('t10_abort_file_write.json'))['status']=='PASS','T10 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T11-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'run_command','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
+        root=Path(r'E:\card\runtime_it\matrix38')/('T11-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'run_command','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
     try:
         if a.phase.startswith('IT-W-'):
             group=a.phase[-1]

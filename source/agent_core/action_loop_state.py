@@ -160,6 +160,28 @@ def _query_result_has_evidence(payload: Mapping[str, Any]) -> bool:
     return False
 
 
+def _completed_partial_query(action: Mapping[str, Any] | None, result: str) -> bool:
+    """A completed read batch with errors is not a pending write/delivery."""
+    if (action or {}).get('tool') != 'query_project':
+        return False
+    from .tool_result_contract import decode_result
+    typed = decode_result(result) or {}
+    if typed.get('tool') != 'query_project' or typed.get('status') != 'PARTIAL' or typed.get('executed') is not True:
+        return False
+    try:
+        payload = json.loads(result)
+    except (TypeError, ValueError):
+        return False
+    rows = payload.get('results')
+    return bool(payload.get('schema') == 'PROJECT_ACCESS_QUERY_RESULT_V1'
+        and payload.get('status') in {'READY', 'INCOMPLETE'}
+        and not payload.get('response_truncated') and isinstance(rows, list) and rows
+        and payload.get('result_count') == len(rows)
+        and all(isinstance(row, dict) and row.get('status') in {'OK', 'NOT_FOUND', 'ERROR'} for row in rows)
+        and any(row.get('status') in {'OK', 'NOT_FOUND'} for row in rows)
+        and any(row.get('status') == 'ERROR' for row in rows))
+
+
 def classify_evidence_state(
     action: Mapping[str, Any] | None,
     result: str,
@@ -174,6 +196,10 @@ def classify_evidence_state(
     expectation = str(expectation_status or "").upper()
     if execution == 'REJECTED':
         return 'REJECTED', ['action was rejected before execution; resolve the exact cause']
+    if execution == 'PARTIAL' and _completed_partial_query(action, result):
+        # Available evidence is not SUCCESS: the failed rows and PARTIAL outcome
+        # remain intact, but a truthful PARTIAL report need not replay the read.
+        return 'AVAILABLE', []
     if execution in {'QUEUED','RUNNING','PARTIAL'}:
         return 'PENDING', [f'{execution}: receipt/start/partial work is not final completion']
     if execution == 'UNKNOWN' and action:
@@ -413,7 +439,9 @@ def build_action_loop_state(
         typed = decode_result(str(record.get('result',''))) or {}
         data = typed.get('data') or {}
         open_write = record_action.get('tool') in {'begin_file_write','write_file_chunk'} and data.get('transaction_state') == 'OPEN'
-        pending = record_execution in {'QUEUED','RUNNING','PARTIAL','UNKNOWN'} and not record.get('pending_resolution')
+        pending = (record_execution in {'QUEUED','RUNNING','PARTIAL','UNKNOWN'}
+                   and not record.get('pending_resolution')
+                   and not _completed_partial_query(record_action, str(record.get('result',''))))
         unverified = phase_for_action(record_action) == 'EXECUTE' and record_execution=='SUCCEEDED' and record_verification not in {'PASS','FAIL'} and not record.get('terminal_eligible',True)
         if active and (open_write or pending or unverified):
             recorded_id = str(record_action.get('action_id',''))

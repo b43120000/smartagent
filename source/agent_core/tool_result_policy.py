@@ -51,10 +51,12 @@ def structured_outcome(tool, payload):
             executed=good>0
     elif tool=='query_project':
         if business=='REJECTED': status,reason='REJECTED',str(payload.get('error','QUERY_REJECTED'))
-        elif business=='READY' and isinstance(payload.get('results'),list):
+        elif business in {'READY','INCOMPLETE'} and isinstance(payload.get('results'),list):
             rows=payload['results']; good=sum(row.get('status') in {'OK','NOT_FOUND'} for row in rows)
-            status='SUCCEEDED' if rows and good==len(rows) else 'PARTIAL' if good else 'FAILED'
+            status='SUCCEEDED' if business=='READY' and rows and good==len(rows) else 'PARTIAL' if good else 'FAILED'
             reason='PROJECT_QUERIED' if status=='SUCCEEDED' else 'PROJECT_QUERY_INCOMPLETE'; executed=bool(rows)
+            data.update(successful_query_count=good,failed_query_count=len(rows)-good,
+                terminal_eligible=status=='SUCCEEDED',query_error=payload.get('error',''))
         data.update(snapshot_id=payload.get('snapshot_id',''),project_handle=payload.get('project_handle',''))
     elif tool=='project_sync':
         if business=='READY': status,reason,executed='SUCCEEDED','PROJECT_INDEX_OR_SYNC_READY',True
@@ -64,15 +66,18 @@ def structured_outcome(tool, payload):
             strategy=payload.get('strategy','INDEX_ONLY' if payload.get('schema')=='PROJECT_ACCESS_CAPSULE_V1' else ''),
             delivery_status='NOT_ATTEMPTED' if payload.get('attachments_uploaded')==0 else 'CONFIRMED' if payload.get('sync_status')=='PROJECT_SYNC_READY' else 'NOT_CONFIRMED')
     elif tool=='validate_edit_plan':
-        if business in {'VALID','INVALID_PLAN','INVALID'}:
+        if business in {'VALID','INVALID_PLAN','INVALID','PLAN_BASE_MISMATCH','INVALID_PATH',
+                        'MISSING_TARGET','CREATE_TARGET_EXISTS','BASE_HASH_MISMATCH','PRECONDITION_FAILED','READ_FAILED'}:
             status,reason,executed='SUCCEEDED','EDIT_PLAN_VALIDATION_COMPLETED',True
             data.update(validation_status=business, valid=business=='VALID', mutation_applied=False,terminal_eligible=business=='VALID')
     elif tool=='apply_edit_plan':
         if business=='APPLIED': status,reason,executed='SUCCEEDED','EDIT_PLAN_APPLIED',True
         elif business=='ROLLED_BACK': status,reason,executed='FAILED','EDIT_ROLLED_BACK',True
+        elif business=='ROLLBACK_INCOMPLETE': status,reason,executed='UNKNOWN','EDIT_ROLLBACK_INCOMPLETE',True
         elif business: status,reason='REJECTED','EDIT_PLAN_REJECTED'
         data.update(mutation_applied=business=='APPLIED',rolled_back=bool(payload.get('rolled_back')),
-            verification_status='UNVERIFIED',terminal_eligible=False)
+            verification_status='UNVERIFIED',terminal_eligible=False,
+            possible_partial_execution=business=='ROLLBACK_INCOMPLETE',rollback_errors=payload.get('rollback_errors',[]))
     elif tool in {'propose_task_plan','repair_task_plan','propose_task_plan_file'}:
         if business=='PLAN_FROZEN': status,reason,executed='SUCCEEDED','PLAN_FROZEN',True
         elif business: status,reason='REJECTED',business
@@ -100,14 +105,30 @@ def structured_outcome(tool, payload):
         if uncertain:data['verification_status']='UNKNOWN'
     elif tool=='execute_frozen_plan':
         if business=='PASS': status,reason,executed='SUCCEEDED','VERIFICATION_PASSED',True
-        elif business in {'FAIL','FAILED','REPAIR_REQUIRED'}: status,reason,executed='FAILED','VERIFICATION_OR_EXECUTION_FAILED',True
+        elif business=='ROLLBACK_INCOMPLETE': status,reason,executed='UNKNOWN','ROLLBACK_INCOMPLETE',True
+        elif business in {'FAIL','FAILED','REPAIR_REQUIRED'}:
+            executed=payload.get('executed',True) is True
+            status,reason=('FAILED','VERIFICATION_OR_EXECUTION_FAILED') if executed else ('REJECTED','PLAN_NOT_APPLIED')
         elif business: status,reason='REJECTED',business
         data.update(verification_status='PASS' if business=='PASS' else 'FAIL' if executed else 'UNKNOWN',
-            rolled_back=bool(payload.get('rolled_back')))
-    elif tool in {'update_semantic_map','update_semantic_map_file','build_project_delta','inspect_project_working_set'}:
+            rolled_back=bool(payload.get('rolled_back')),rollback_errors=payload.get('rollback_errors',[]),
+            possible_partial_execution=bool(payload.get('possible_partial_execution')))
+        if business=='ROLLBACK_INCOMPLETE':data['verification_status']='UNKNOWN'
+    elif tool=='build_project_delta':
+        if business=='READY':status,reason,executed='SUCCEEDED','LOCAL_DELTA_BUILT',True
+        elif business:status,reason='REJECTED',business
+        verified=bool(business=='READY' and payload.get('verification_status')=='PASS'
+            and payload.get('replay_verification',{}).get('status')=='PASS'
+            and payload.get('bundle',{}).get('complete'))
+        data.update(delivery_status='NOT_ATTEMPTED',verification_status='PASS' if verified else 'UNVERIFIED',terminal_eligible=verified)
+    elif tool in {'update_semantic_map','update_semantic_map_file','inspect_project_working_set'}:
         if business in {'UPDATED','READY'}: status,reason,executed='SUCCEEDED','PROJECT_STATE_UPDATED_OR_READ',True
         elif business in {'PARTIAL','INCOMPLETE'}: status,reason,executed='PARTIAL','PROJECT_STATE_INCOMPLETE',True
         elif business: status,reason='REJECTED',business
+        if tool in {'update_semantic_map','update_semantic_map_file'}:
+            verified=business=='UPDATED' and payload.get('verification_status')=='PASS' and payload.get('verification_evidence',{}).get('json_readback_equal') is True and payload.get('verification_evidence',{}).get('markdown_readback_equal') is True
+            data.update(verification_status='PASS' if verified else 'FAIL' if payload.get('verification_status')=='FAIL' else 'UNVERIFIED',
+                terminal_eligible=verified,mutation_applied=payload.get('mutation_applied') is True)
     elif tool=='inspect_project_scope' and payload.get('schema')=='PROJECT_SNAPSHOT_V1' and payload.get('snapshot_id'):
         status,reason,executed='SUCCEEDED','PROJECT_SNAPSHOT_READ',True
     elif tool=='inspect_semantic_map' and business in {'FRESH','STALE','MISSING'}:
@@ -115,10 +136,23 @@ def structured_outcome(tool, payload):
     elif tool=='compare_project_snapshot' and payload.get('freshness') in {'FRESH','CHANGED','UNKNOWN'}:
         status,reason,executed='SUCCEEDED','SNAPSHOT_COMPARISON_COMPLETED',True
     elif tool=='extract_project_dependencies' and payload.get('schema')=='DEPENDENCY_EVIDENCE_V1':
-        status,reason,executed='SUCCEEDED','DEPENDENCY_EVIDENCE_READ',True
+        warnings=payload.get('warnings',[])
+        status,reason,executed=('PARTIAL' if payload.get('scanned_files') else 'FAILED') if warnings else 'SUCCEEDED','DEPENDENCY_EVIDENCE_READ_INCOMPLETE' if warnings else 'DEPENDENCY_EVIDENCE_READ',True
+        data.update(verification_status=payload.get('verification_status','UNVERIFIED'),
+            observation_completed=payload.get('observation_completed') is True,
+            terminal_eligible=not warnings,delivery_status='NOT_ATTEMPTED')
     elif tool=='build_project_bundle' and payload.get('schema')=='PROJECT_SOURCE_BUNDLE_V2':
         status,reason,executed=('SUCCEEDED' if payload.get('complete') else 'PARTIAL'),'LOCAL_BUNDLE_BUILT',True
         data['delivery_status']='NOT_ATTEMPTED'
+        verified=bool(payload.get('complete') and payload.get('verification_status')=='PASS'
+            and payload.get('bundle_count',0)>0 and payload.get('verified_bundle_count')==payload.get('bundle_count')
+            and isinstance(payload.get('bundles'),list) and len(payload['bundles'])==payload['bundle_count'])
+        data.update(verification_status='PASS' if verified else 'UNVERIFIED',
+            verified_bundle_count=payload.get('verified_bundle_count',0),terminal_eligible=verified)
+    elif tool=='inspect_project_ledger' and business=='PARTIAL':
+        status,reason,executed='PARTIAL','PROJECT_LEDGER_INDEX_UNCONFIRMED',True
+        data.update(terminal_eligible=False,index_consistency=payload.get('index_consistency'),
+                    observation_completed=True)
     elif tool in {'inspect_project_ledger','query_project_history'} and business in {'READY','EMPTY'}:
         status,reason,executed='SUCCEEDED','PROJECT_LEDGER_READ',True
     elif tool=='query_project_history' and payload.get('schema')=='PROJECT_LEDGER_QUERY_RESULT_V1':

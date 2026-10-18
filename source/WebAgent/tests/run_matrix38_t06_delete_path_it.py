@@ -76,7 +76,7 @@ def runtime(s):
         'delete_result':loop.action_ledger[deletion['action_id']]['result'],'verify_result':loop.action_ledger[verify['action_id']]['result']}
 
 
-def live(s, reuse_target=False):
+def live(s, reuse_target=False, collect_only=False):
     assert s['phases'].get('IT-R',{}).get('status')=='PASS'
     if s['phases'].get('IT-W'):s.setdefault('attempt_history',[]).append(dict(s['phases']['IT-W']))
     from RemoteAgent.local_telegram_sender import send_and_wait
@@ -84,18 +84,31 @@ def live(s, reuse_target=False):
     from agent_core.task_state import TaskStateStore
     from agent_core.task_continuation import TaskContinuationStore
     root=Path(s['fixture'])
-    if reuse_target:
+    if collect_only:
+        previous=s['phases']['IT-W']
+        target=Path(s['live_target'])
+        assert target.parent==root and target.name.startswith('web_disposable_')
+        sink={k:previous[k] for k in ('request_id','task_id')}
+        code=previous.get('sender_exit_code',2)
+    elif reuse_target:
         target=Path(s['live_target'])
         assert target.parent==root and target.name.startswith('web_disposable_')
         assert target.resolve()==target and target.is_dir() and not target.is_junction() and not target.is_symlink()
     else:
         target=root/('web_disposable_'+uuid.uuid4().hex[:8]);target.mkdir()
-    assert not list(target.iterdir())
-    s['live_target']=str(target);s['phases']['IT-W']={'status':'RUNNING'};write_json_atomic(STATE,s)
+    if not collect_only:
+        assert not list(target.iterdir())
+        s['live_target']=str(target);s['phases']['IT-W']={'status':'RUNNING'};write_json_atomic(STATE,s)
     request='只測試 delete_path。下方 target 是測試器建立且尚未刪除的空目錄，只能刪除這一個；使用 delete_path recursive=false，不可刪除 parent 或其他路徑。保留 Runtime 所有安全檢查與人工批准，不得猜測或繞過批准。刪除成功後，以 run_command operation=VERIFY、verifies_action_id 指向實際 delete action，working_directory 使用下方 parent，唯讀確認 target 不存在（verify file_exists expect=false）。若需要批准請等待批准；不寫入、不上傳、不重做已成功刪除。\ntarget：\n'+str(target)+'\n只供唯讀驗證的 parent：\n'+str(root)
-    sink={};code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    if not collect_only:
+        sink={};code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];j=TaskContinuationStore(ROOT).get(sink['task_id']) or {};calls=list(j.get('actions',{}).values());final=task.result_ledger.get('final',{});passed=False
-    deletes=[c for c in calls if c['action']['tool']=='delete_path'];verifies=[c for c in calls if c['action']['tool']=='run_command' and c['action'].get('operation')=='VERIFY']
+    delete_calls=[c for c in calls if c['action']['tool']=='delete_path']
+    deletes=[c for c in delete_calls if decode_result(c['result'])['status']=='SUCCEEDED'];verifies=[c for c in calls if c['action']['tool']=='run_command' and c['action'].get('operation')=='VERIFY']
+    for c in delete_calls:
+        assert c['action']['path']==str(target) and c['action'].get('recursive') is False
+        row=decode_result(c['result'])
+        assert row['status']=='SUCCEEDED' or (row['status']=='REJECTED' and row['executed'] is False),row
     if len(deletes)==1 and verifies and not target.exists():
         d=deletes[0];assert d['action']['path']==str(target) and decode_result(d['result'])['status']=='SUCCEEDED'
         assert any(v['action'].get('verifies_action_id')==d['action']['action_id'] and decode_result(v['result'])['data']['verification_status']=='PASS' for v in verifies)
@@ -106,14 +119,16 @@ def live(s, reuse_target=False):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--phase',choices=['UT','IT-R','IT-W'],required=True)
-    p.add_argument('--reuse-live-target',action='store_true');a=p.parse_args()
+    p.add_argument('--reuse-live-target',action='store_true');p.add_argument('--collect-only',action='store_true');a=p.parse_args()
+    assert not a.collect_only or a.phase=='IT-W'
     assert read_json_retry(STATE.with_name('t05_write_file.json'))['status']=='PASS','T05 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T06-'+uuid.uuid4().hex[:12]);root.mkdir()
+        root=Path(r'E:\card\runtime_it\matrix38')/('T06-'+uuid.uuid4().hex[:12]);root.mkdir()
         s={'tool':'delete_path','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
-    try:{'UT':unit,'IT-R':runtime,'IT-W':lambda v:live(v,a.reuse_live_target)}[a.phase](s)
+    try:{'UT':unit,'IT-R':runtime,'IT-W':lambda v:live(v,a.reuse_live_target,a.collect_only)}[a.phase](s)
     except Exception as exc:
+        s['status']='FAIL'
         s['phases'].setdefault(a.phase,{}).update(status='FAIL',error=f'{type(exc).__name__}: {exc}');write_json_atomic(STATE,s);raise
     s['status']='PASS' if all(s['phases'].get(x,{}).get('status')=='PASS' for x in ('UT','IT-R','IT-W')) else 'IN_PROGRESS'
     write_json_atomic(STATE,s);print('T06_PHASE_PASS',a.phase,'overall='+s['status'])

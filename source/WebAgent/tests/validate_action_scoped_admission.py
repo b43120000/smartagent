@@ -159,6 +159,17 @@ def run():
                       {'result_status':'QUEUED'},{'result_status':'UNKNOWN'}, {'verification_status':'FAIL'},
                       {'verification_status':'UNVERIFIED'}):
             assert unsatisfied_dependencies(check,{'P':{**good,**delta}},'R','T')==['P']
+        linked={'tool':'run_command','operation':'VERIFY','verifies_action_id':'P','depends_on':['P'],
+                'command':"Get-Content -LiteralPath 'proof.txt'",'verify':[{'action':'file_exists','path':'proof.txt'}]}
+        unverified={**good,'tool':'apply_edit_plan','verification_status':'UNVERIFIED'}
+        assert not unsatisfied_dependencies(linked,{'P':unverified},'R','T')
+        assert not unsatisfied_dependencies(linked,{'P':{**unverified,'effective_verification_status':'FAIL'}},'R','T')
+        for delta in ({'request_id':'FOREIGN'},{'task_epoch':'OLD'},{'evidence_status':'STALE'},
+                      {'execution_status':'FAILED'},{'executed':False},{'result_status':'UNKNOWN'}):
+            assert unsatisfied_dependencies(linked,{'P':{**unverified,**delta}},'R','T')==['P']
+        assert unsatisfied_dependencies({**linked,'verifies_action_id':'OTHER'},{'P':unverified},'R','T')==['P']
+        assert unsatisfied_dependencies({**linked,'command':"Set-Content -LiteralPath 'proof.txt' -Value X"},{'P':unverified},'R','T')==['P']
+        assert unsatisfied_dependencies({**linked,'verify':[{'command':"Set-Content -LiteralPath 'proof.txt' -Value X"}]},{'P':unverified},'R','T')==['P']
         control.deferred_action_repairs={'B':{'action_id':'B','status':'REPAIR_REQUIRED'}}
         admitted,errors=control._accept_ack([finished(['RUNTIME_STATUS']),
             {'tool':'final_response','action_id':'F','content':'done'}, {'tool':'turn_commit','action_count':2}],{})

@@ -1,5 +1,6 @@
 """Bootstrap selectors are candidates, not evidence of live compatibility."""
 from dataclasses import dataclass
+from ...dom_config import apply_dom_config
 
 
 @dataclass(frozen=True)
@@ -30,13 +31,13 @@ M365_BOOTSTRAP_PROFILE = M365UIProfile(
 
 def profile_by_name(name):
     if name == M365_BOOTSTRAP_PROFILE.name:
-        return M365_BOOTSTRAP_PROFILE
+        return apply_dom_config("m365", M365_BOOTSTRAP_PROFILE)
     from ...profile_store import profile_values
     values = profile_values("m365", name=name)
-    return M365UIProfile(**values) if values else None
+    return apply_dom_config("m365", M365UIProfile(**values)) if values else None
 
 
 def active_profile():
     from ...profile_store import profile_values
     values = profile_values("m365")
-    return M365UIProfile(**values) if values else M365_BOOTSTRAP_PROFILE
+    return apply_dom_config("m365", M365UIProfile(**values) if values else M365_BOOTSTRAP_PROFILE)

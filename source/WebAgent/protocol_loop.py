@@ -170,6 +170,23 @@ def extract_authorized_paths(request: str) -> list[str]:
     for match in _WINDOWS_PATH_START_RE.finditer(text):
         if match.start() < consumed_until:
             continue
+        # A complete JSON string value has its own lexical boundary. Do not
+        # mistake a neighbouring field's colon for an ADS suffix. Decode only
+        # the explicit string (never plan prose); real/escaped ADS remains in
+        # the candidate for canonical path security to reject.
+        quote = match.start() - 1
+        if quote >= 0 and text[quote] == '"' and re.search(r':\s*$', text[:quote]):
+            try:
+                value, length = json.JSONDecoder().raw_decode(text[quote:])
+            except (ValueError, json.JSONDecodeError):
+                pass
+            else:
+                tail = text[quote + length:]
+                if isinstance(value, str) and re.match(r'\s*(?:,\s*"[^"\r\n]+"\s*:|[}\]])', tail):
+                    consumed_until = quote + length
+                    if value and value not in paths:
+                        paths.append(value)
+                    continue
         hard_end = _hard_authorized_path_end(text, match.end())
         hidden_colon = text.find(":", match.end(), hard_end)
         # Do not let prose/quote parsing erase a possible ADS suffix.  Preserve
@@ -414,6 +431,14 @@ class WebAgentProtocolLoop:
                     "steps": existing_steps,
                     "current_focus": "Runtime 正在交付已暫存的 PNG 原檔。",
                     "next_action": "完成本機寫入與必要的 Telegram 排程後回報交付結果。",
+                    "completion_contract": {
+                        key: list(value) for key, value in dict(getattr(ledger, 'completion_contract', {}) or {}).items()
+                    },
+                    "decision": "CONTINUE",
+                    "outcome": "PENDING",
+                    "matched_condition": next(iter((getattr(ledger, 'completion_contract', {}) or {}).get('in_progress', [])), ''),
+                    "evidence_refs": ["RUNTIME_STATUS"],
+                    "decision_reason": "Runtime 已確認本輪 fresh image，須先執行授權的 PNG 保存，再依實際結果更新進度。",
                 }
             else:
                 runtime_progress = {
@@ -440,6 +465,12 @@ class WebAgentProtocolLoop:
                 }
             commit.update({
                 "artifact_save_expected": True,
+                # Once any download actually ran, do not synthesize a new
+                # attempt just because a failed artifact is still mounted.
+                "artifact_auto_delivery_allowed": not any(
+                    (entry.get('action') or {}).get('tool') == 'download_artifact'
+                    for entry in self.action_ledger.values()
+                ),
                 "artifact_kind": "image",
                 "artifact_delivery": self.image_delivery_plan["delivery"],
                 "artifact_output_path": self.image_delivery_plan["output_path"],
@@ -1266,27 +1297,36 @@ class WebAgentProtocolLoop:
         if isinstance(checks,list):
             values.extend(item.get('path') for item in checks if isinstance(item,dict))
         paths = []
+        from agent_core.path_security import canonicalize_path
+        resource_base = self.workspace
+        if action.get('tool') in {'validate_edit_plan','apply_edit_plan'}:
+            resource_base = action.get('workspace') or self.workspace
+        elif action.get('tool') == 'run_command':
+            resource_base = action.get('working_directory') or self.workspace
+        try:resource_base = canonicalize_path(resource_base,base=self.workspace)
+        except (TypeError,ValueError,OSError):return []
         for value in values:
             if value:
                 try:
-                    candidate = Path(value)
-                    paths.append(str((candidate if candidate.is_absolute() else self.workspace / candidate).resolve()))
+                    paths.append(str(canonicalize_path(value,base=resource_base)))
                 except (TypeError,ValueError,OSError):
                     continue
         return list(dict.fromkeys(paths))
 
     def _reconcile_read_attachment_delivery(self, attachments, started_at, expected):
-        """Refresh queued reads from trusted transport records, without replay."""
+        """Refresh staged reads/uploads from trusted transport records, without replay."""
         if not attachments:
             return
         from agent_core.paths import source_root
-        from agent_core.tool_result_contract import decode_result, encode_result
+        from agent_core.tool_result_contract import decode_result, attach_runtime_result
         from agent_core.web_attachment_delivery import confirmed_delivery
         for action_id, cached in self.action_ledger.items():
             action = cached.get('action') or {}
             entry = self.action_result_ledger.get(action_id) or {}
             outcome = decode_result(cached.get('result', '')) or {}
-            if (action.get('tool') != 'read_file' or outcome.get('status') != 'QUEUED'
+            tool = action.get('tool')
+            if (tool not in {'read_file', 'upload_file', 'upload_files'}
+                    or outcome.get('status') not in {'QUEUED', 'PARTIAL'}
                     or entry.get('request_id') != self.run_id
                     or entry.get('task_epoch') != expected.get('task_epoch')):
                 continue
@@ -1300,19 +1340,25 @@ class WebAgentProtocolLoop:
                 continue
             if not receipts:
                 continue
-            data = {**outcome['data'], 'delivery_status':'DELIVERED_TO_CONVERSATION',
+            partial = bool(outcome['data'].get('errors')) or outcome.get('status') == 'PARTIAL'
+            data = {**outcome['data'], 'delivery_status':'PARTIAL_DELIVERY' if partial else 'DELIVERED_TO_CONVERSATION',
                     'delivery_receipts':receipts, 'verification_status':'PASS',
                     'verification_scope':'TRANSPORT_ONLY', 'content_read':False}
-            updated = encode_result('SUCCEEDED', 'READ_ATTACHMENT_DELIVERY_CONFIRMED',
+            if partial:
+                data.update(verification_status='UNVERIFIED', terminal_eligible=False)
+            updated = attach_runtime_result(cached['result'], 'PARTIAL' if partial else 'SUCCEEDED',
+                'ATTACHMENT_PARTIAL_DELIVERY_CONFIRMED' if partial else
+                'READ_ATTACHMENT_DELIVERY_CONFIRMED' if tool == 'read_file' else 'ATTACHMENT_DELIVERY_CONFIRMED',
                 executed=True, requested_path=outcome.get('requested_path',''),
-                resolved_path=outcome.get('resolved_path'), data=data, tool='read_file')
+                resolved_path=outcome.get('resolved_path'), data=data, tool=tool,
+                request_id=self.run_id, task_id=self.task_id, action_id=action_id)
             # Keep the staging result for audit; current result reflects delivery.
             cached.setdefault('transport_history', []).append(outcome)
             cached['result'] = updated
             facts = self._classify_action_evidence(action, updated)
             cached.update(facts)
-            entry.update(facts, effective_verification_status='PASS',
-                effective_terminal_eligible=True, delivery_status=data['delivery_status'],
+            entry.update(facts, effective_verification_status='UNVERIFIED' if partial else 'PASS',
+                effective_terminal_eligible=not partial, delivery_status=data['delivery_status'],
                 delivery_receipts=receipts, last_verified_round=self.turn_id)
             self._emit('attachment_delivery_confirmed', request_id=self.run_id,
                 action_id=action_id, receipts=receipts, content_read=False,
@@ -1320,6 +1366,62 @@ class WebAgentProtocolLoop:
         self._refresh_action_loop_state()
         if self.continuation_store:
             self.continuation_store.snapshot(self)
+
+    def _reconcile_committed_write_repairs(self, action: dict, producer: dict) -> None:
+        """Retire only proven equivalent, never-executed single-chunk repairs.
+
+        A new action ID may finish a previously blocked transaction. Retaining
+        its old chunk/commit then asks the planner to replay a closed write.
+        Do not infer equivalence for repeated or multi-chunk content.
+        """
+        if (action.get('tool') != 'commit_file_write' or producer.get('status') != 'SUCCEEDED'
+                or producer.get('executed') is not True):
+            return
+        cached = self.action_ledger.get(action.get('action_id'), {})
+        try:
+            receipt = json.loads(cached['result'].split('] ', 1)[1])
+        except (KeyError, ValueError, TypeError):
+            return
+        if (receipt.get('state') != 'COMMITTED' or receipt.get('received_chunks') != 1
+                or receipt.get('write_id') != action.get('write_id')):
+            return
+        write_id = action.get('write_id')
+        ignored = {'action_id', 'depends_on', 'replaces_action_id', 'field_refs'}
+        def payload(value):
+            result = {k:v for k,v in value.items() if k not in ignored}
+            if result.get('tool') == 'write_file_chunk':
+                result.setdefault('content_encoding', 'utf-8')
+            return result
+        pending = getattr(self, 'deferred_action_repairs', {})
+        for old_id, repair in list(pending.items()):
+            old = repair.get('action') or {}
+            if (old_id in self.action_ledger or repair.get('executed') is not False
+                    or old.get('write_id') != write_id
+                    or old.get('tool') not in {'write_file_chunk','commit_file_write'}):
+                continue
+            matches = []
+            for new_id, record in self.action_ledger.items():
+                actual = record.get('action') or {}
+                evidence = self.action_result_ledger.get(new_id) or {}
+                if (new_id != old_id and payload(actual) == payload(old)
+                        and evidence.get('request_id') == self.run_id
+                        and evidence.get('execution_status') == 'SUCCEEDED'
+                        and evidence.get('executed') is True):
+                    matches.append(new_id)
+            if len(matches) != 1 or sum(payload((r.get('action') or {})) == payload(old) for r in pending.values()) != 1:
+                continue
+            if old.get('tool') == 'write_file_chunk':
+                if old.get('content_encoding','utf-8') != 'utf-8' or not isinstance(old.get('content'),str):
+                    continue
+                data = old['content'].encode('utf-8')
+                if receipt.get('received_bytes') != len(data) or receipt.get('output_sha256') != hashlib.sha256(data).hexdigest():
+                    continue
+            proof = {**repair, 'status':'SUPERSEDED', 'superseded_by_action_id':matches[0],
+                     'commit_action_id':action['action_id'], 'reason':'COMMITTED_EQUIVALENT_ACTION_PROVEN'}
+            self.action_ledger[action['action_id']].setdefault('resolved_admission_repairs', []).append(proof)
+            pending.pop(old_id)
+            self.current_action_repairs = [r for r in getattr(self,'current_action_repairs',[]) if r.get('action_id') != old_id]
+            self._emit('action_repair_superseded', request_id=self.run_id, round=self.turn_id, **proof)
 
     def _record_action_result_evidence(self, action: dict, ledger_entry: dict) -> dict:
         """Append verification history and apply an explicit scoped supersession."""
@@ -1418,6 +1520,25 @@ class WebAgentProtocolLoop:
                     # current verifier resolves the pending postcondition only.
                     target['pending_resolution'] = 'SCOPED_VERIFICATION_OBTAINED'
         self.action_result_ledger[action_id] = ledger_entry
+        if (action.get('tool') == 'repair_task_plan'
+                and ledger_entry.get('result_status') == 'SUCCEEDED'
+                and ledger_entry.get('result_reason') == 'PLAN_FROZEN'
+                and ledger_entry.get('executed') is True):
+            # Preserve the rejected receipt, but resolve only the exact Runtime
+            # repair prerequisite it produced. Unrelated FAILs remain active.
+            submitted = {key:value for key,value in action.items() if key != 'action_id'}
+            for prior_id, prior in self.action_result_ledger.items():
+                original = self.action_ledger.get(prior_id) or {}
+                recovery = original.get('recovery_context') or {}
+                remedies = recovery.get('next_actions') or []
+                if (prior_id != action_id and prior.get('executed') is False
+                        and prior.get('result_status') == 'REJECTED'
+                        and recovery.get('active') is True
+                        and recovery.get('required_action') == 'repair_task_plan'
+                        and any({k:v for k,v in remedy.items() if k != 'action_id'} == submitted
+                                for remedy in remedies if isinstance(remedy,dict))):
+                    prior['evidence_status'] = 'SUPERSEDED'
+                    prior['superseded_by_action_id'] = action_id
         if action.get('tool') in {'commit_file_write','abort_file_write'} and ledger_entry.get('execution_status') == 'SUCCEEDED':
             for prior_id, prior in self.action_result_ledger.items():
                 prior_action = (self.action_ledger.get(prior_id) or {}).get('action') or {}
@@ -1443,6 +1564,7 @@ class WebAgentProtocolLoop:
                 "verification_id": str(ledger_entry.get("verification_id", "") or ""),
                 "round": self.turn_id,
             }
+        self._reconcile_committed_write_repairs(action, producer)
         return ledger_entry
 
     def _terminal_recovery_requirement(self, progress: dict, verdict: str) -> dict:
@@ -3392,7 +3514,11 @@ class WebAgentProtocolLoop:
                 "\n[WEBAGENT_IMAGE_DELIVERY_PLAN]\n"
                 "Generate exactly one image and wait for the media UI to finish. Do not generate a second "
                 "image and do not emit a phase-2 download envelope. After a request-scoped fresh image is "
-                "stable, the software runtime will stage and deliver the PNG through its validated action path.\n"
+                "stable, the software runtime prioritizes staging and local PNG delivery for image-only or "
+                "CONTINUE Progress-only responses through the validated action path. Do not claim a download "
+                "has run before its Runtime result. If your response includes other operational actions, keep "
+                "them explicit; Runtime will preserve that response for normal admission. After a failed "
+                "download, use the actual error to decide a safe next step; never regenerate or blindly repeat.\n"
                 f"delivery={self.image_delivery_plan['delivery']}\n"
                 "[/WEBAGENT_IMAGE_DELIVERY_PLAN]"
             )

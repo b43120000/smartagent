@@ -38,6 +38,9 @@ class ChatGPTUIAdapter(BaseWebUIAdapter):
         "data-chatgpt-selection-message-id",
     )
 
+    def calibration_picker_options(self, field):
+        return {'contentRootSelector':'[data-markdown-text-style="assistant-message"], .markdown'} if field=='assistant_content' else {}
+
     @classmethod
     def load_profile_by_name(cls, name: str):
         return profile_by_name(name)
@@ -133,6 +136,9 @@ class ChatGPTUIAdapter(BaseWebUIAdapter):
 
     def blocking_transport_error(self) -> dict:
         """Only a visible provider error panel, not quoted user/model content."""
+        configured=super().blocking_transport_error()
+        if configured:
+            return configured
         try:
             return self.page.evaluate("""() => {
                 const texts = ['你已達到上限。請稍後再試一次。', "You've reached the limit. Please try again later."];

@@ -31,7 +31,7 @@ def shared_read(path):
 
 def observe_staging(wid,dest,stop,observations):
     """Read only this test's staging, before abort; never instantiate a manager."""
-    staging=Path(r'E:\workspace\.agents\chunked_writes\staging')/(hashlib.sha256(wid.encode()).hexdigest()+'.part')
+    staging=Path(r'E:\card\.agents\chunked_writes\staging')/(hashlib.sha256(wid.encode()).hexdigest()+'.part')
     expected=[TEXTS[0].encode(),''.join(TEXTS).encode()]
     while not stop.is_set():
         try:
@@ -145,7 +145,7 @@ def live(s):
     root=Path(s['fixture']);dest=root/('web_'+uuid.uuid4().hex[:8]+'.txt');wid='W-T08-WEB-'+uuid.uuid4().hex[:12]
     request='只驗證 write_file_chunk，不產生正式檔案。先 begin_file_write streaming mode (encoding=utf-8, overwrite=false，不提供 expected_size/hash/chunk_count)，write_id 使用指定值。再按順序用兩筆 write_file_chunk 寫下方 JSON array 的兩段文字，每段各一次，不更改文字、不重播已收 chunk；省略 offset/chunk_index/size/hash 由 Runtime 計算。回報兩次 next_offset 與 received_chunks，狀態仍 OPEN，不算檔案完成。最後 abort_file_write 同一交易，以 run_command operation=VERIFY、verifies_action_id 指向該 abort、working_directory=parent，唯讀確認 path 不存在，verify file_exists expect=false。禁止 commit、其他寫入、上傳；共 begin/兩塊/abort/唯讀verify 五項 action。\npath：\n'+str(dest)+'\nparent：\n'+str(root)+'\nwrite_id：'+wid+'\ncontent array：\n'+json.dumps(TEXTS,ensure_ascii=False)
     sink={};observations=[];stop=threading.Event();watcher=threading.Thread(target=observe_staging,args=(wid,dest,stop,observations),daemon=True);watcher.start()
-    try:code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    try:code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     finally:stop.set();watcher.join(timeout=2)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];j=TaskContinuationStore(ROOT).get(sink['task_id']) or {};calls=list(j.get('actions',{}).values());final=task.result_ledger.get('final',{});passed=False
     # Persist raw evidence even if a strict ground-truth assertion rejects it.
@@ -158,7 +158,7 @@ def live(s):
             assert c['action']['content']==text
             cumulative+=text.encode();body=json.loads(c['result'].split('] ',1)[1]);row=decode_result(c['result'])
             assert body['state']=='OPEN' and body['next_offset']==len(cumulative) and row['data']['chunk_accepted'] and not row['data']['file_committed']
-        m=json.loads((Path(r'E:\workspace\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
+        m=json.loads((Path(r'E:\card\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
         assert m['state']=='ABORTED' and m['next_offset']==len(cumulative) and len(m['received_chunks'])==2
         assert [c['sha256'] for c in m['received_chunks']]==[hashlib.sha256(t.encode()).hexdigest() for t in TEXTS]
         for count in (1,2):
@@ -175,7 +175,7 @@ def main():
     assert read_json_retry(STATE.with_name('t07_begin_file_write.json'))['status']=='PASS','T07 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T08-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'write_file_chunk','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
+        root=Path(r'E:\card\runtime_it\matrix38')/('T08-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'write_file_chunk','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
     try:{'UT':unit,'IT-R':runtime,'IT-W':live}[a.phase](s)
     except Exception as exc:
         s['phases'].setdefault(a.phase,{}).update(status='FAIL',error=f'{type(exc).__name__}: {exc}');write_json_atomic(STATE,s);raise

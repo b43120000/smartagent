@@ -16,7 +16,15 @@ def is_readonly_command(action):
     if command_is_proven_observation(action):return True
     command=str(action.get('command',''))
     match=re.fullmatch(r"Get-Content\s+-Raw\s+-LiteralPath\s+('(?:[^'\r\n]|'')*')",command,re.I)
-    return bool(match and command_is_proven_observation({**action,'command':'Get-Content -LiteralPath '+match[1]+' -Raw'}))
+    if match:
+        return command_is_proven_observation({**action,'command':'Get-Content -LiteralPath '+match[1]+' -Raw'})
+    # A literal double-quoted path is equivalent only without PowerShell
+    # interpolation/escape characters. Keep the oracle read-only and bounded.
+    match=re.fullmatch(r'Get-Content\s+-Raw\s+-LiteralPath\s+"([^"\r\n$`]+)"',command,re.I)
+    if match:
+        literal="'"+match[1].replace("'","''")+"'"
+        return command_is_proven_observation({**action,'command':'Get-Content -LiteralPath '+literal+' -Raw'})
+    return False
 
 def check_absence_verify(action,result,target,parent,aborted_id):
     assert action['operation']=='VERIFY' and action['verifies_action_id']==aborted_id
@@ -120,13 +128,13 @@ def live(s):
     from agent_core.task_continuation import TaskContinuationStore
     root=Path(s['fixture']);dest=root/('web_'+uuid.uuid4().hex[:8]+'.txt');wid='W-T07-WEB-'+uuid.uuid4().hex[:12]
     request='只測試 begin_file_write 交易建立，不測寫入內容。對下方 path 用 begin_file_write，write_id 使用下方指定值、encoding=utf-8、overwrite=false；使用 streaming mode，不提供 expected_size/expected_sha256/chunk_count。確認 Runtime 回傳 OPEN/next_offset=0，這不代表目的檔已寫入。然後用 abort_file_write 取消同一 write_id，回報 ABORTED。最後以 run_command operation=VERIFY、verifies_action_id 指向實際 abort action，working_directory 使用下方 parent，唯讀確認目的檔不存在（verify file_exists expect=false）。禁止 write_file_chunk、commit_file_write、上傳或任何修改命令。只執行 begin、abort、唯讀 VERIFY 三項操作；回報交易狀態與是否尚未 commit，不得宣稱產生了目的檔案。\npath：\n'+str(dest)+'\nparent：\n'+str(root)+'\nwrite_id：'+wid
-    sink={};code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    sink={};code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];j=TaskContinuationStore(ROOT).get(sink['task_id']) or {};calls=list(j.get('actions',{}).values());final=task.result_ledger.get('final',{});passed=False
     if len(calls)==3 and {c['action']['tool'] for c in calls}=={'begin_file_write','abort_file_write','run_command'}:
         assert all(c['action']['write_id']==wid for c in calls if c['action']['tool']!='run_command')
         b=next(c for c in calls if c['action']['tool']=='begin_file_write');assert b['action']['path']==str(dest)
         body=json.loads(b['result'].split('] ',1)[1]);assert body['state']=='OPEN' and body['next_offset']==0
-        m=json.loads((Path(r'E:\workspace\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
+        m=json.loads((Path(r'E:\card\.agents\chunked_writes\manifests')/(hashlib.sha256(wid.encode()).hexdigest()+'.json')).read_text(encoding='utf-8'))
         assert m['state']=='ABORTED' and not Path(m['staging_path']).exists() and not dest.exists()
         aborted=next(c for c in calls if c['action']['tool']=='abort_file_write')
         checked=next(c for c in calls if c['action']['tool']=='run_command')
@@ -141,7 +149,7 @@ def main():
     assert read_json_retry(STATE.with_name('t06_delete_path.json'))['status']=='PASS','T06 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T07-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'begin_file_write','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
+        root=Path(r'E:\card\runtime_it\matrix38')/('T07-'+uuid.uuid4().hex[:12]);root.mkdir();s={'tool':'begin_file_write','status':'IN_PROGRESS','fixture':str(root),'phases':{},'rca':[]}
     try:{'UT':unit,'IT-R':runtime,'IT-W':live}[a.phase](s)
     except Exception as exc:
         s['phases'].setdefault(a.phase,{}).update(status='FAIL',error=f'{type(exc).__name__}: {exc}');write_json_atomic(STATE,s);raise

@@ -3,6 +3,8 @@ setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 title SmartAgent - Sync Installed Changes Back To Source
+rem Default destination is defined in install_smart_agent\sync_back.ps1:
+rem E:\card\release\SmartAgentv2. An explicit first path argument overrides it.
 
 if /I "%~1"=="--launcher-self-test" (
     echo SMARTAGENT_SYNC_BACK_LAUNCHER_PARSE_OK

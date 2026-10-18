@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import base64,hashlib,json,re
+import base64,hashlib,json,os,re,tempfile
 from collections import Counter
 from pathlib import Path
 from .attachment_policy import AttachmentPolicy,resolve_attachment_policy
 from .project_artifact_policy import INLINE_OR_CHUNK,artifact_policy_manifest,policy_for_record
 from .project_sync import inspect_project_scope,load_project_snapshot,save_project_snapshot
+from .path_security import is_reparse_path,reject_reparse_components
 
 TEXT_EXTS={'.c','.cc','.cpp','.cxx','.h','.hpp','.java','.kt','.kts','.py','.cmake','.txt','.md','.xml','.json','.js','.ts','.rs','.go'}
 PROJECT_SYNC_RECEIPT_SCHEMA='PSR1'
@@ -21,12 +22,16 @@ def _bundle_receipt(bundle_index:int,body:bytes)->tuple[str,bytes]:
  return token,header+body+footer
 
 def dependency_evidence(workspace:str|Path,records:list[dict])->dict:
- root=Path(workspace).resolve();out=[];warnings=[]
+ root=Path(workspace).resolve();out=[];warnings=[];scanned=[];unsupported=[];source_checks=[]
  for rec in records:
   rel=rec['path'];p=root/rel
-  if p.suffix.lower() not in TEXT_EXTS and p.name!='CMakeLists.txt': continue
-  try:text=p.read_text(encoding='utf-8',errors='replace')
+  if p.suffix.lower() not in TEXT_EXTS and p.name!='CMakeLists.txt':unsupported.append(rel);continue
+  try:
+   raw=p.read_bytes();digest=hashlib.sha256(raw).hexdigest()
+   if rec.get('sha256') and rec['sha256']!=digest:raise ValueError('dependency_source_changed')
+   text=raw.decode('utf-8')
   except Exception as e:warnings.append({'path':rel,'warning':type(e).__name__});continue
+  scanned.append(rel);source_checks.append({'path':rel,'sha256':digest,'bytes':len(raw)})
   for i,line in enumerate(text.splitlines(),1):
    m=re.match(r'\s*#\s*include\s*[<"]([^>"]+)',line)
    if m:out.append({'source':rel,'relation':'include','target':m.group(1),'evidence_line':i})
@@ -36,7 +41,7 @@ def dependency_evidence(workspace:str|Path,records:list[dict])->dict:
    if m:out.append({'source':rel,'relation':'cmake_target_link_libraries','target':' '.join(m.group(1).split()),'evidence_line':i})
    m=re.search(r'add_(?:library|executable)\s*\(([^)]*)\)',line,re.I)
    if m:out.append({'source':rel,'relation':'cmake_target_definition','target':' '.join(m.group(1).split()),'evidence_line':i})
- return {'schema':'DEPENDENCY_EVIDENCE_V1','records':sorted(out,key=lambda x:(x['source'],x['evidence_line'],x['relation'],x['target'])),'warnings':sorted(warnings,key=lambda x:x['path'])}
+ return {'schema':'DEPENDENCY_EVIDENCE_V1','records':sorted(out,key=lambda x:(x['source'],x['evidence_line'],x['relation'],x['target'])),'warnings':sorted(warnings,key=lambda x:x['path']),'scanned_files':sorted(scanned),'unsupported_files':sorted(unsupported),'source_checks':source_checks,'complete':not warnings,'observation_completed':True,'verification_status':'PASS' if scanned and not warnings else 'UNVERIFIED','scope':'SUPPORTED_SOURCE_PATTERNS_ONLY'}
 
 def _encode_payload(raw:bytes)->tuple[str,bytes]:
  try: raw.decode('utf-8');return 'utf-8',raw
@@ -121,12 +126,23 @@ def build_source_bundles(workspace:str|Path,records:list[dict],output_dir:str|Pa
  def flush():
   nonlocal current,size
   if not current:return
-  idx=len(bundles)+1;body=b'\n'.join(x[1] for x in current);receipt_token,enveloped=_bundle_receipt(idx,body);path=outdir/f'source_part_{idx:03d}.bundle.txt';path.write_bytes(enveloped)
+  idx=len(bundles)+1;body=b'\n'.join(x[1] for x in current);receipt_token,enveloped=_bundle_receipt(idx,body);path=outdir/f'source_part_{idx:03d}.bundle.txt'
+  if is_reparse_path(path) or not path.resolve().is_relative_to(outdir):
+   raise ValueError('bundle_output_reparse_forbidden:'+str(path))
+  # Replace an entry, never truncate a possible hard-link target in place.
+  fd,temporary=tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=outdir)
+  try:
+   with os.fdopen(fd,'wb') as stream:stream.write(enveloped)
+   os.replace(temporary,path)
+  finally:
+   Path(temporary).unlink(missing_ok=True)
   if path.stat().st_size>max_bytes:raise ValueError('bundle_receipt_envelope_exceeds_bundle_limit')
+  readback=path.read_bytes()
+  if readback!=enveloped:raise ValueError('bundle_readback_mismatch')
   reconstructed=reconstruct_bundle(path);expected={x[0] for x in current}
   if set(reconstructed)!=expected:raise ValueError('bundle_completeness_mismatch')
   logical_paths=sorted({x[2] for x in current})
-  bundles.append({'path':str(path),'bundle_index':idx,'file_count':len(current),'bytes':path.stat().st_size,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'receipt_token':receipt_token,'source_paths':logical_paths})
+  bundles.append({'path':str(path),'bundle_index':idx,'file_count':len(current),'bytes':len(readback),'sha256':hashlib.sha256(readback).hexdigest(),'receipt_token':receipt_token,'source_paths':logical_paths})
   current=[];size=0
  for rec in records:
   artifact_policy=policy_for_record(root,rec);class_counts[artifact_policy.classification]+=1
@@ -146,7 +162,11 @@ def build_source_bundles(workspace:str|Path,records:list[dict],output_dir:str|Pa
  flush()
  if len(bundles)>limits.max_total_bundles:raise ValueError(f'total_bundle_safety_limit_exceeded:{len(bundles)}>{limits.max_total_bundles}')
  bundle_entry_count=sum(x['file_count'] for x in bundles);project_count=len(records);accounted=len(materialized)+len(manifest_only)
- return {'schema':'PROJECT_SOURCE_BUNDLE_V2','bundle_count':len(bundles),'bundles':bundles,'source_file_count':len(materialized),'bundle_entry_count':bundle_entry_count,'project_file_count':project_count,'manifest_only_file_count':len(manifest_only),'manifest_only_files':manifest_only,'materialized_paths':sorted(materialized),'complete':accounted==project_count,'class_counts':dict(sorted(class_counts.items())),'materialized_class_counts':dict(sorted(materialized_counts.items())),'manifest_only_class_counts':dict(sorted(manifest_counts.items())),'artifact_policy':artifact_policy_manifest(),'policy':{'max_files_per_bundle':limits.max_files_per_bundle,'max_bytes_per_bundle':limits.max_bytes_per_bundle,'max_attachments_per_message':limits.max_attachments_per_message,'max_batches':limits.max_batches,'max_total_bundles':limits.max_total_bundles}}
+ complete=accounted==project_count
+ # flush() read back every physical part, checked its reconstruction and hash.
+ # Publish those executed checks; no part means no artifact postcondition PASS.
+ verification='PASS' if complete and bundles else 'UNVERIFIED'
+ return {'schema':'PROJECT_SOURCE_BUNDLE_V2','verification_status':verification,'verified_bundle_count':len(bundles),'bundle_count':len(bundles),'bundles':bundles,'source_file_count':len(materialized),'bundle_entry_count':bundle_entry_count,'project_file_count':project_count,'manifest_only_file_count':len(manifest_only),'manifest_only_files':manifest_only,'materialized_paths':sorted(materialized),'complete':complete,'class_counts':dict(sorted(class_counts.items())),'materialized_class_counts':dict(sorted(materialized_counts.items())),'manifest_only_class_counts':dict(sorted(manifest_counts.items())),'artifact_policy':artifact_policy_manifest(),'policy':{'max_files_per_bundle':limits.max_files_per_bundle,'max_bytes_per_bundle':limits.max_bytes_per_bundle,'max_attachments_per_message':limits.max_attachments_per_message,'max_batches':limits.max_batches,'max_total_bundles':limits.max_total_bundles}}
 
 def delta_records(base:dict,current:dict)->dict:
  old={r['path']:r for r in base.get('files',[])};new={r['path']:r for r in current.get('files',[])}
@@ -156,12 +176,26 @@ def delta_records(base:dict,current:dict)->dict:
 def build_project_delta(workspace:str|Path,base_snapshot_id:str,output_dir:str|Path|None=None,max_bytes:int|None=None,max_files:int|None=None,policy:AttachmentPolicy|None=None)->dict:
  root=Path(workspace).resolve();base=load_project_snapshot(root,base_snapshot_id)
  if not base:return {'schema':'PROJECT_DELTA_BUNDLE_V1','status':'DELTA_NOT_AVAILABLE','base_snapshot_id':base_snapshot_id}
- current=inspect_project_scope(root);delta=delta_records(base,current);changed=set(delta['added']+delta['modified'])
+ # Check lexical components before resolve erases a junction's identity.
+ state=root/'.agents'/'project_context'
+ for target in (state/'deltas',state/'snapshots',state/'current.json',state/'current.json.tmp'):
+  reject_reparse_components(target,root)
+ current=inspect_project_scope(root,verify_cached_content=True);delta=delta_records(base,current);changed=set(delta['added']+delta['modified'])
  records=[r for r in current.get('files',[]) if r['path'] in changed]
- outdir=Path(output_dir).resolve() if output_dir else root/'.agents'/'project_context'/'deltas'/f'{base_snapshot_id[:12]}-{current["snapshot_id"][:12]}'
+ candidate=Path(output_dir) if output_dir else state/'deltas'/f'{base_snapshot_id[:12]}-{current["snapshot_id"][:12]}'
+ if not candidate.is_absolute():candidate=root/candidate
+ reject_reparse_components(candidate,root);outdir=candidate.resolve()
+ for suffix in ('.json','.json.tmp'):
+  reject_reparse_components(state/'snapshots'/f'{current["snapshot_id"]}{suffix}',root)
  bundle=build_source_bundles(root,records,outdir,max_bytes=max_bytes,max_files=max_files,policy=policy)
+ replay=verify_delta_replay(base,current,delta)
+ if replay['status']!='PASS':raise ValueError('delta_replay_mismatch')
+ # Empty/deletion-only deltas have no physical part; replay still checks the
+ # entire resulting manifest. Nonempty parts retain their readback checks.
+ verified=bool(bundle['complete'] and replay['status']=='PASS' and
+               (not bundle['bundle_count'] or bundle['verification_status']=='PASS'))
  tombstones=[{'path':p,'deleted':True} for p in delta['deleted']];save_project_snapshot(current)
- return {'schema':'PROJECT_DELTA_BUNDLE_V1','status':'READY','base_snapshot_id':base_snapshot_id,'current_snapshot_id':current['snapshot_id'],'delta':delta,'bundle':bundle,'tombstones':tombstones}
+ return {'schema':'PROJECT_DELTA_BUNDLE_V1','status':'READY','verification_status':'PASS' if verified else 'UNVERIFIED','replay_verification':replay,'base_snapshot_id':base_snapshot_id,'current_snapshot_id':current['snapshot_id'],'delta':delta,'bundle':bundle,'tombstones':tombstones}
 
 def verify_delta_replay(base:dict,current:dict,delta:dict)->dict:
  old={r['path']:r.get('sha256') for r in base.get('files',[])};expected={r['path']:r.get('sha256') for r in current.get('files',[])};replayed=dict(old);current_map={r['path']:r.get('sha256') for r in current.get('files',[])}

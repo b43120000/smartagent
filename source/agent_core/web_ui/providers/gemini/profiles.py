@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ...dom_config import apply_dom_config
 
 
 @dataclass(frozen=True)
@@ -76,16 +77,16 @@ GEMINI_UI_PROFILES = (GEMINI_WEB_2026_PROFILE,)
 def profile_by_name(name: str) -> GeminiUIProfile | None:
     builtin = next((profile for profile in GEMINI_UI_PROFILES if profile.name == name), None)
     if builtin is not None:
-        return builtin
+        return apply_dom_config("gemini", builtin)
     from ...profile_store import profile_values
     values = profile_values("gemini", name=name)
-    return GeminiUIProfile(**values) if values else None
+    return apply_dom_config("gemini", GeminiUIProfile(**values)) if values else None
 
 
 def active_profile() -> GeminiUIProfile:
     from ...profile_store import profile_values
     values = profile_values("gemini")
-    return GeminiUIProfile(**values) if values else GEMINI_WEB_2026_PROFILE
+    return apply_dom_config("gemini", GeminiUIProfile(**values) if values else GEMINI_WEB_2026_PROFILE)
 
 
 __all__ = [
