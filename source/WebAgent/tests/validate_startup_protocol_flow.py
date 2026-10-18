@@ -128,14 +128,18 @@ def run() -> dict:
                 assert prompt.startswith(f"[{PROTOCOL_BOOTSTRAP_MARKER}]")
                 return short_reply
 
-            short = ensure_webagent_session(
-                workspace=str(root),
-                gpt_url="https://chatgpt.com/c/webagent-short-ready-test",
-                state_dir=root / "state",
-                send_prompt=short_send_prompt,
-                allow_scoped_marker_only_bootstrap=True,
-            )
-            assert short["state"]["readiness_mode"] == "MARKER_ONLY_SCOPED_BOOTSTRAP"
+            try:
+                ensure_webagent_session(
+                    workspace=str(root),
+                    gpt_url="https://chatgpt.com/c/webagent-short-ready-test",
+                    state_dir=root / "state",
+                    send_prompt=short_send_prompt,
+                    allow_scoped_marker_only_bootstrap=True,
+                )
+            except RuntimeError as exc:
+                assert "matching WEBAGENT protocol readiness" in str(exc)
+            else:
+                raise AssertionError("marker-only reply bypassed mandatory identity")
             marker_only_results[short_reply] = True
 
     with tempfile.TemporaryDirectory(prefix="webagent-short-ready-negative-") as temp:
@@ -181,7 +185,7 @@ def run() -> dict:
         "rate_delay_is_observable": True,
         "bootstrap_sent": True,
         "session_attach_sent": True,
-        "scoped_marker_only_bootstrap": marker_only_results,
+        "marker_only_rejected_even_with_legacy_flag": marker_only_results,
         "marker_only_with_extra_text_rejected": True,
         "marker_only_default_is_fail_closed": True,
         "local_agent_started": False,

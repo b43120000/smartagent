@@ -400,7 +400,6 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 state_dir=remote_webagent_state_root(root),
                 send_prompt=client.ask,
                 display_name="RemoteAgent",
-                allow_scoped_marker_only_bootstrap=True,
             )
             tool_context = WebAgentToolContext(
                 task.workspace, interface_name="remote"

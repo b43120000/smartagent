@@ -288,7 +288,6 @@ def main(argv: list[str] | None = None) -> int:
         gpt_url=selected_url,
         state_dir=state_dir,
         send_prompt=client.ask,
-        allow_scoped_marker_only_bootstrap=True,
     )
     loop = WebAgentProtocolLoop(
         workspace,

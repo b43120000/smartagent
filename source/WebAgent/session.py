@@ -52,16 +52,9 @@ def ensure_webagent_session(
         full_identity_ready = session.parse_protocol_ready(
             response, session_id=decision.session_id, allow_smart_quotes=claude_quotes
         )
-        normalized_response = str(response or "").strip()
-        marker_only_ready = bool(
-            allow_scoped_marker_only_bootstrap
-            and normalized_response
-            in {
-                PROTOCOL_READY_MARKER,
-                f"[{PROTOCOL_READY_MARKER}]",
-            }
-        )
-        if not full_identity_ready and not marker_only_ready:
+        # The legacy marker-only flag is retained for call compatibility only.
+        # A complete matching identity is mandatory, including for Claude.
+        if not full_identity_ready:
             registry.set_protocol_state(
                 workspace,
                 gpt_url,
@@ -70,18 +63,8 @@ def ensure_webagent_session(
             )
             raise RuntimeError("WebGPT 未回傳 matching WEBAGENT protocol readiness")
         state = session.armed_state(session_id=decision.session_id)
-        state["readiness_mode"] = (
-            "FULL_IDENTITY"
-            if full_identity_ready
-            else "MARKER_ONLY_SCOPED_BOOTSTRAP"
-        )
+        state["readiness_mode"] = "FULL_IDENTITY"
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
-        if marker_only_ready:
-            print(
-                f"[{display_name}][WARN] 本輪 bootstrap 回覆僅含 {PROTOCOL_READY_MARKER}；"
-                "已依本輪已配對的 assistant turn 與 Runtime 保存的協議身分建立 session。",
-                flush=True,
-            )
         print(f"[{display_name}] 協議初始化成功，ChatGPT 已回傳 matching readiness。", flush=True)
         return {"mode": BOOTSTRAP, "reason": reason, "state": state}
 
