@@ -172,6 +172,8 @@ CORE_FILES = (
     'source/agent_core/project_sync_transaction.py',
     'source/agent_core/project_sync_protocol.py',
     'source/agent_core/project_sync_runner.py',
+    'source/WebAgent/session.py',
+    'source/agent_core/session_protocol.py',
     'source/WebAgent/protocol.py',
     'source/WebAgent/protocol_loop.py',
     'source/WebAgent/controller.py',
