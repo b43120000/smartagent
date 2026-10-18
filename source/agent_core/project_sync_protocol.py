@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -22,7 +23,13 @@ class ProjectSyncAckIncompleteError(ProjectSyncProtocolError):
 
 def _receiver_binding(binding: Mapping[str, object] | None = None) -> dict:
     value = dict(binding or {})
-    return {"interface_name": str(value.get("interface_name", "") or ""), "conversation_id": str(value.get("conversation_id", "") or ""), "session_id": str(value.get("session_id", "") or "")}
+    conversation = str(value.get("conversation_id", "") or "")
+    # DOM/readback may represent a URL as a Markdown link. Only unwrap an
+    # identical URL label/target; never accept another target or infer identity.
+    link = re.fullmatch(r"\[(https?://[^\s\[\]()]+)\]\((https?://[^\s\[\]()]+)\)", conversation)
+    if link and link.group(1) == link.group(2):
+        conversation = link.group(1)
+    return {"interface_name": str(value.get("interface_name", "") or ""), "conversation_id": conversation, "session_id": str(value.get("session_id", "") or "")}
 
 
 def _batch_receipts(plan: Mapping[str, object], batch_index: int) -> list[dict]:

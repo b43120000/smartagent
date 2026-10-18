@@ -26,7 +26,7 @@ def load():
     t01=read_json_retry(STATE.with_name('t01_read_file.json'))
     assert t01['status']=='PASS','T01 must pass before T02'
     if STATE.exists():return read_json_retry(STATE)
-    fixture=Path(r'E:\workspace\runtime_it\matrix38')/('T02-'+uuid.uuid4().hex[:12])
+    fixture=Path(r'E:\card\runtime_it\matrix38')/('T02-'+uuid.uuid4().hex[:12])
     target=fixture/'listed';target.mkdir(parents=True,exist_ok=False)
     (target/'alpha.txt').write_bytes(b'T02_ALPHA')
     (target/'中文.txt').write_bytes(b'T02_UTF8_NAME')
@@ -94,7 +94,7 @@ def live(s):
     from RemoteAgent.local_telegram_sender import send_and_wait
     target=Path(s['target'])
     prompt='只測試 list_directory；分別列出以下兩個目錄的第一層，不遞迴、不讀取檔案、不上傳、不寫入或刪除。使用真實 Runtime 結果列出所有名稱並說明第二目錄是否為空。\n'+str(target)+'\n'+str(target/'empty')
-    sink={};code=send_and_wait(request=prompt,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    sink={};code=send_and_wait(request=prompt,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']]
     journal=TaskContinuationStore(ROOT).get(sink['task_id']) or {}
     calls=list(journal.get('actions',{}).values());final=task.result_ledger.get('final',{})

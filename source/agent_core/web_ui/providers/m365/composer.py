@@ -10,6 +10,10 @@ def read_composer_snapshot(composer):
     semantic = str(composer.evaluate(r"""el => {
         if ('value' in el) return el.value || '';
         const clone = el.cloneNode(true);
+        // Lexical appends an aria-hidden text span containing U+200B/U+200C.
+        // Exclude editor decoration by DOM ownership, preserving the same
+        // characters when they belong to the user's visible message text.
+        for (const decoration of clone.querySelectorAll('[aria-hidden="true"]')) decoration.remove();
         for (const br of clone.querySelectorAll('br')) br.replaceWith('\n');
         for (const block of clone.querySelectorAll('p, div')) {
             if (block.nextSibling) block.append('\n');

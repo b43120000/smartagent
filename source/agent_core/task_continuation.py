@@ -384,6 +384,17 @@ def proven_read_command(action):
     return command_is_proven_observation(probe)
 
 
+def proven_read_verification_step(step):
+    # Match the executor's action/type alias semantics. Conflicting declarations
+    # must not let a command disguise itself as a file predicate.
+    primary, alias = step.get('action'), step.get('type')
+    if primary is not None and alias is not None and primary != alias:
+        return False
+    kind = primary if primary is not None else alias if alias is not None else 'run_command'
+    return isinstance(kind, str) and (kind in {'file_exists', 'file_contains'} or (
+        kind == 'run_command' and proven_read_command(step)))
+
+
 def guard_continuation_action(action, source, mode):
     from .action_dependencies import OBSERVATION_TOOLS
     action_id = str(action.get('action_id', ''))
@@ -398,8 +409,7 @@ def guard_continuation_action(action, source, mode):
         if not isinstance(steps, list) or any(not isinstance(step, dict) for step in steps):
             raise ContinuationError('continuation_verification_shape_invalid')
         readonly = action.get('operation') in {'VERIFY', 'INSPECT', 'GIT_INSPECT'} and proven_read_command(action) and all(
-            step.get('action') in {'file_exists', 'file_contains'} or (
-                step.get('action') == 'run_command' and proven_read_command(step))
+            proven_read_verification_step(step)
             for step in steps)
     else:
         readonly = action.get('tool') in OBSERVATION_TOOLS

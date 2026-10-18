@@ -1,10 +1,10 @@
 """Browser-side trusted-input bridge owned by the Gemini provider."""
 
-BRIDGE_VERSION = 1
+BRIDGE_VERSION = 2
 
 BRIDGE_SCRIPT = r"""
 () => {
-  const bridgeVersion = 1;
+  const bridgeVersion = 2;
   if (window.__webAgentDirectBridgeVersion === bridgeVersion) return true;
   window.__webAgentDirectBridgeInstalled = true;
   window.__webAgentDirectBridgeVersion = bridgeVersion;
@@ -22,7 +22,7 @@ BRIDGE_SCRIPT = r"""
   const clear = el => {
     el.focus();
     if ('value' in el) el.value = '';
-    else el.innerHTML = '';
+    else el.replaceChildren();
     el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'deleteContentBackward', data:null}));
     el.dispatchEvent(new Event('change', {bubbles:true}));
   };
@@ -34,12 +34,13 @@ BRIDGE_SCRIPT = r"""
     window.__webAgentDirectQueue.push({text, captured_at:Date.now()});
     return true;
   };
-  document.addEventListener('keydown', event => {
+  // Capture before a legacy v1 document listener in a reused browser context.
+  window.addEventListener('keydown', event => {
     if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
     const box = composer();
     if (box && (event.target === box || box.contains(event.target))) capture(event);
   }, true);
-  document.addEventListener('click', event => {
+  window.addEventListener('click', event => {
     const button = event.target?.closest?.(
       'button.send-button, button[aria-label*="Send message" i], button[data-test-id="send-button"], button[data-testid="send-button"]'
     );

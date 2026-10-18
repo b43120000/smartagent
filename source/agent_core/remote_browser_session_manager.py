@@ -72,7 +72,8 @@ class RemoteBrowserSessionManager:
             raise RuntimeError("remote_linked_conversation_missing")
         url = str(binding["gpt_url"])
         workspace = str(binding["workspace"])
-        from .web_runtime import WebLLMScraper
+        from .web_runtime import WebLLMScraper, CHATGPT_CDP_ENDPOINT
+        from .shared_browser import shared_browser_enabled
 
         from .web_provider_routing import provider_for_url
         scraper = WebLLMScraper(provider_for_url(url))
@@ -83,13 +84,16 @@ class RemoteBrowserSessionManager:
         previous_cdp = os.environ.get("SMARTAGENT_CHATGPT_CDP")
         shared = host.live_local_agent_state()
         try:
-            if shared and scraper.service == "chatgpt":
+            if shared and scraper.service == "chatgpt" and (
+                shared_browser_enabled() or shared.get('cdp_endpoint') == CHATGPT_CDP_ENDPOINT
+            ):
                 os.environ["SMARTAGENT_ATTACH_CDP"] = "1"
                 os.environ["SMARTAGENT_CHATGPT_CDP"] = str(
                     shared["cdp_endpoint"]
                 )
             else:
                 os.environ.pop("SMARTAGENT_ATTACH_CDP", None)
+                os.environ.pop("SMARTAGENT_CHATGPT_CDP", None)
             try:
                 scraper.start()
             except Exception:
@@ -137,7 +141,7 @@ class RemoteBrowserSessionManager:
         # driver so the next ensure() cannot accidentally reuse stale DOM,
         # navigation, or generation state.
         page = getattr(scraper, "_page", None)
-        if page is not None:
+        if page is not None and not getattr(scraper, '_shared_personal_browser', False):
             try:
                 page.close(run_before_unload=False)
             except TypeError:

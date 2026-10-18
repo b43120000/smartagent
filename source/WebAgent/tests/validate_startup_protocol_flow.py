@@ -118,12 +118,72 @@ def run() -> dict:
         assert second["mode"] == "SESSION_ATTACH"
         assert stages == ["協議初始化", "協議附著確認"]
 
+    marker_only_results = {}
+    for short_reply in (PROTOCOL_READY_MARKER, f"[{PROTOCOL_READY_MARKER}]"):
+        with tempfile.TemporaryDirectory(prefix="webagent-short-ready-") as temp:
+            root = Path(temp)
+
+            def short_send_prompt(prompt: str, *, stage: str, **_kwargs) -> str:
+                assert stage == "協議初始化"
+                assert prompt.startswith(f"[{PROTOCOL_BOOTSTRAP_MARKER}]")
+                return short_reply
+
+            short = ensure_webagent_session(
+                workspace=str(root),
+                gpt_url="https://chatgpt.com/c/webagent-short-ready-test",
+                state_dir=root / "state",
+                send_prompt=short_send_prompt,
+                allow_scoped_marker_only_bootstrap=True,
+            )
+            assert short["state"]["readiness_mode"] == "MARKER_ONLY_SCOPED_BOOTSTRAP"
+            marker_only_results[short_reply] = True
+
+    with tempfile.TemporaryDirectory(prefix="webagent-short-ready-negative-") as temp:
+        root = Path(temp)
+
+        def unsafe_short_send_prompt(prompt: str, *, stage: str, **_kwargs) -> str:
+            return f"[{PROTOCOL_READY_MARKER}] extra"
+
+        try:
+            ensure_webagent_session(
+                workspace=str(root),
+                gpt_url="https://chatgpt.com/c/webagent-short-ready-negative",
+                state_dir=root / "state",
+                send_prompt=unsafe_short_send_prompt,
+                allow_scoped_marker_only_bootstrap=True,
+            )
+        except RuntimeError as exc:
+            assert "matching WEBAGENT protocol readiness" in str(exc)
+        else:
+            raise AssertionError("marker-only compatibility accepted trailing text")
+
+    with tempfile.TemporaryDirectory(prefix="webagent-short-ready-default-off-") as temp:
+        root = Path(temp)
+
+        def default_off_send_prompt(prompt: str, *, stage: str, **_kwargs) -> str:
+            return f"[{PROTOCOL_READY_MARKER}]"
+
+        try:
+            ensure_webagent_session(
+                workspace=str(root),
+                gpt_url="https://chatgpt.com/c/webagent-short-ready-default-off",
+                state_dir=root / "state",
+                send_prompt=default_off_send_prompt,
+            )
+        except RuntimeError as exc:
+            assert "matching WEBAGENT protocol readiness" in str(exc)
+        else:
+            raise AssertionError("marker-only compatibility was enabled implicitly")
+
     return {
         "webagent_owned_sender": True,
         "busy_lock_is_observable": True,
         "rate_delay_is_observable": True,
         "bootstrap_sent": True,
         "session_attach_sent": True,
+        "scoped_marker_only_bootstrap": marker_only_results,
+        "marker_only_with_extra_text_rejected": True,
+        "marker_only_default_is_fail_closed": True,
         "local_agent_started": False,
     }
 

@@ -112,7 +112,7 @@ def live(s):
     from agent_core.task_state import TaskStateStore
     from agent_core.task_continuation import TaskContinuationStore
     request='只測試 find_file；只在下方 root 搜尋 needle.txt 與 absent_xyz.txt，分別使用一個 find_file action。回報完整 matches、是否完整搜尋、無命中狀態。使用預設 max_results；不讀檔內容、不上傳、不寫入或刪除，禁止其他工具。\nroot：\n'+s['target']
-    sink={};code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    sink={};code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];j=TaskContinuationStore(ROOT).get(sink['task_id']) or {}
     calls=list(j.get('actions',{}).values());final=task.result_ledger.get('final',{});passed=False
     if len(calls)==2 and all(c['action']['tool']=='find_file' for c in calls):
@@ -129,7 +129,7 @@ def main():
     assert read_json_retry(STATE.with_name('t03_inspect_directory.json'))['status']=='PASS','T03 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T04-'+uuid.uuid4().hex[:12]);root.mkdir();target=fixture(root)
+        root=Path(r'E:\card\runtime_it\matrix38')/('T04-'+uuid.uuid4().hex[:12]);root.mkdir();target=fixture(root)
         s={'tool':'find_file','status':'IN_PROGRESS','fixture':str(root),'target':str(target),'phases':{},'rca':[]}
     try:{'UT':unit,'IT-R':runtime,'IT-W':live}[a.phase](s)
     except Exception as exc:

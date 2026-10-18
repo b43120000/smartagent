@@ -21,7 +21,7 @@ from agent_core.project_sync_protocol import ProjectSyncProtocolError
 from agent_core.web_runtime import WebLLMScraper, SERVICE_CONFIG, M365_CDP_ENDPOINT, CHATGPT_CDP_ENDPOINT
 from validate_gemini_provider_support import Element, Locator
 
-URL = "https://m365.cloud.microsoft/chat/conversation/f59f771b-070a-41ca-b80b-1d01c43f7d60?fromcode=test&es=Click"
+URL = "https://m365.cloud.microsoft/chat/conversation/33333333-3333-4333-8333-333333333333?fromcode=test&es=Click"
 
 
 class Page:

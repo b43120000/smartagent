@@ -13,7 +13,9 @@ from urllib.request import urlopen
 from .paths import agent_host_state_path, remote_runtime_state_path
 
 
-DEFAULT_CHATGPT_CDP_ENDPOINT = "http://127.0.0.1:1272"
+from .browser_preferences import browser_launch_selection
+
+DEFAULT_CHATGPT_CDP_ENDPOINT = browser_launch_selection()['endpoint']
 PAGE_TARGET_TYPES = frozenset({"page", "webview"})
 
 

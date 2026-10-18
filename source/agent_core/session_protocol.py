@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -40,7 +41,7 @@ def _marker_block(marker: str, payload: dict) -> str:
     return f"[{marker}]\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n[/{marker}]"
 
 
-def _extract_marker_payload(text: str, marker: str) -> dict | None:
+def _extract_marker_payload(text: str, marker: str, *, allow_smart_quotes: bool = False) -> dict | None:
     source = str(text or "")
     start_token = f"[{marker}]"
     end_token = f"[/{marker}]"
@@ -55,7 +56,25 @@ def _extract_marker_payload(text: str, marker: str) -> dict | None:
     try:
         payload = json.loads(body)
     except Exception:
-        return None
+        if not allow_smart_quotes or not any(c in body for c in '“”'):
+            return None
+        try:
+            def unique_keys(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result: raise ValueError('duplicate_readiness_key')
+                    result[key] = value
+                return result
+            payload = json.loads(body.translate(str.maketrans({'“':'"', '”':'"'})), object_pairs_hook=unique_keys)
+        except (ValueError, TypeError):
+            return None
+        # Compatibility is limited to the ASCII identity envelope. Never repair
+        # arbitrary prose, nested values or quoted content from normal replies.
+        allowed = {'protocol_name','protocol_version','protocol_hash','session_id','handshake_id'}
+        if not isinstance(payload, dict) or not set(payload).issubset(allowed): return None
+        if type(payload.get('protocol_version')) is not int: return None
+        if any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]+', value)
+               for key, value in payload.items() if key != 'protocol_version'): return None
     return payload if isinstance(payload, dict) else None
 
 
@@ -188,14 +207,14 @@ class SessionProtocol:
             f"[/{SESSION_ATTACH_MARKER}]"
         )
 
-    def parse_protocol_ready(self, text: str, *, session_id: str) -> bool:
-        payload = _extract_marker_payload(text, PROTOCOL_READY_MARKER)
+    def parse_protocol_ready(self, text: str, *, session_id: str, allow_smart_quotes: bool = False) -> bool:
+        payload = _extract_marker_payload(text, PROTOCOL_READY_MARKER, allow_smart_quotes=allow_smart_quotes)
         if payload is None and _allow_missing_readiness_closing_marker(self.debug_config_path):
             payload = _extract_unclosed_marker_payload(text, PROTOCOL_READY_MARKER)
         return self._matches(payload, session_id=session_id)
 
-    def parse_session_ready(self, text: str, *, session_id: str, handshake_id: str = '') -> bool:
-        payload = _extract_marker_payload(text, SESSION_READY_MARKER)
+    def parse_session_ready(self, text: str, *, session_id: str, handshake_id: str = '', allow_smart_quotes: bool = False) -> bool:
+        payload = _extract_marker_payload(text, SESSION_READY_MARKER, allow_smart_quotes=allow_smart_quotes)
         if payload is None and _allow_missing_readiness_closing_marker(self.debug_config_path):
             payload = _extract_unclosed_marker_payload(text, SESSION_READY_MARKER)
         return self._matches(payload, session_id=session_id) and (not handshake_id or payload.get('handshake_id') == handshake_id)

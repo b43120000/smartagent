@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import hashlib,json,os,subprocess,time
+import hashlib,json,os,re,subprocess,time
 import stat as stat_module
 from collections import Counter
 from pathlib import Path
@@ -213,9 +213,16 @@ def save_project_snapshot(snapshot:dict)->Path:
  return path
 
 def load_project_snapshot(workspace:str|Path,snapshot_id:str)->dict:
- path=snapshot_registry_root(workspace)/f'{snapshot_id}.json'
+ # Snapshot identities are digests, never model-supplied filesystem paths.
+ if not isinstance(snapshot_id,str) or not re.fullmatch(r'[0-9a-fA-F]{64}',snapshot_id):return {}
+ root=Path(workspace).expanduser().resolve();sid=snapshot_id.lower()
+ path=snapshot_registry_root(root)/f'{sid}.json'
  try:
-  data=json.loads(path.read_text(encoding='utf-8'));return data if isinstance(data,dict) else {}
+  if not path.resolve().is_relative_to(root):return {}
+  data=json.loads(path.read_text(encoding='utf-8'))
+  if not isinstance(data,dict) or data.get('snapshot_id')!=sid or not data.get('workspace_root'):return {}
+  if Path(data['workspace_root']).resolve()!=root or not isinstance(data.get('files'),list):return {}
+  return data
  except Exception:return {}
 
 def load_current_project_snapshot(workspace:str|Path)->dict:

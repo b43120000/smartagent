@@ -113,7 +113,7 @@ def build_project_capsule(workspace: str | Path) -> dict:
     """Build a local index and return only a compact model-facing capsule."""
     root = Path(workspace).expanduser().resolve()
     parent_snapshot = load_current_project_snapshot(root)
-    snapshot = inspect_project_scope(root)
+    snapshot = inspect_project_scope(root, verify_cached_content=True)
     snapshot_path = save_project_snapshot(snapshot)
     records = list(snapshot.get("files", []) or [])
     language_counts = Counter(str(item.get("language", "unknown")) for item in records)

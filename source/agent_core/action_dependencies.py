@@ -26,14 +26,23 @@ def unsatisfied_dependencies(action, result_ledger, request_id, task_epoch):
     blocked = []
     for ref in action.get('depends_on', []):
         record = result_ledger.get(ref) or {}
+        # A read-only verifier needs completed execution, not the PASS it is
+        # itself about to produce. Other consumers still need valid evidence.
+        checks=action.get('verify',[])
+        if isinstance(checks,dict):checks=[checks]
+        readonly_checks=isinstance(checks,list) and bool(checks) and all(
+            (isinstance(step,dict) and step.get('action',step.get('type','run_command')) in {'file_exists','file_contains'})
+            or command_is_proven_observation({'operation':'VERIFY','command':step.get('command','') if isinstance(step,dict) else step if isinstance(step,str) else ''})
+            for step in checks)
+        linked_check = (action.get('tool')=='run_command' and action.get('operation')=='VERIFY'
+            and action.get('verifies_action_id')==ref and command_is_proven_observation(action) and readonly_checks)
         if (record.get('request_id') != request_id
             or record.get('task_epoch') != task_epoch
             or record.get('action_id') != ref or not record.get('tool')
             or record.get('evidence_status', 'ACTIVE') != 'ACTIVE'
             or record.get('execution_status') != 'SUCCEEDED'
             or record.get('executed') is not True
-            or record.get('effective_verification_status',record.get('verification_status')) in {'UNVERIFIED','SPEC_INVALID'}
-            or record.get('effective_verification_status', record.get('verification_status')) == 'FAIL'
+            or (not linked_check and record.get('effective_verification_status',record.get('verification_status')) in {'UNVERIFIED','SPEC_INVALID','FAIL'})
             or record.get('result_status') != 'SUCCEEDED'):
             blocked.append(ref)
     return blocked

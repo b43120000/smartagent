@@ -5,6 +5,7 @@ import hashlib
 import re
 import uuid
 from typing import Any, Iterable
+from .message_text import read_message_text, read_answer_text
 
 from .contracts import (
     ArtifactObservation,
@@ -188,18 +189,20 @@ class BaseWebUIAdapter:
     def _turn_text(self, element, role: str) -> str:
         """Return semantic message content without turn-level UI controls."""
         if role == "user" and self.profile is not None:
+            if self.profile.user_content_selector == ':scope':
+                return read_message_text(element)
             try:
                 candidates = element.query_selector_all(self.profile.user_content_selector)
             except Exception:
                 candidates = ()
-            texts = [_safe_text(candidate) for candidate in candidates]
+            texts = [read_message_text(candidate) for candidate in candidates]
             texts = [text for text in texts if text]
             if texts:
                 # Nested renderer wrappers can expose the same message more than
                 # once.  The longest content node preserves the full prompt while
                 # excluding sibling controls exposed by provider renderers.
                 return max(texts, key=len)
-        return _safe_text(element)
+        return read_message_text(element) if role == 'user' else _safe_text(element)
 
     def _turn_ref(self, element, role: str, ordinal: int) -> TurnRef:
         attrs = tuple(
@@ -224,14 +227,28 @@ class BaseWebUIAdapter:
             element=element,
         )
 
+    @staticmethod
+    def turn_identity_candidates(turn: TurnRef) -> tuple[tuple[str, str], ...]:
+        """Identity candidates, not proof of uniqueness or cross-turn freshness.
+
+        Shared testids/roles identify a TYPE of node; busy/streaming values are
+        state. Neither may cause distinct message nodes to disappear.
+        """
+        names = {'id', 'data-message-id', 'data-turn-id', 'data-response-id',
+                 'data-query-id', 'data-content-search-unit-key', 'data-transcript-row-index',
+                 'data-chatgpt-search-message-ids', 'data-chatgpt-selection-message-id'}
+        return tuple((name, value) for name, value in turn.stable_attributes if name in names and value)
+
     def turns(self, role: str) -> tuple[TurnRef, ...]:
         result = []
         seen = set()
         for element in self.turn_elements(role):
             turn = self._turn_ref(element, role, len(result) + 1)
-            if turn.structural_id in seen:
+            identity_candidates = self.turn_identity_candidates(turn)
+            if identity_candidates and turn.structural_id in seen:
                 continue
-            seen.add(turn.structural_id)
+            if identity_candidates:
+                seen.add(turn.structural_id)
             result.append(turn)
         return tuple(result)
 
@@ -442,9 +459,13 @@ class BaseWebUIAdapter:
         return {}
 
     def blocking_transport_error(self) -> dict:
-        return {}
+        from .dialogue_state import configured_blocking
+        return configured_blocking(self)
 
     def assistant_is_fresh(self, turn: TurnRef, scope: RequestScope) -> bool:
+        if turn.stable_attributes and not self.turn_identity_candidates(turn):
+            # A shared type or streaming-state change cannot prove a new reply.
+            return False
         return self.durable_turn_id(turn) not in set(scope.baseline_assistant_ids)
 
     def _confirmed_user_turn_candidate(
@@ -756,7 +777,7 @@ class BaseWebUIAdapter:
             blocks = ()
         texts: list[str] = []
         for block in blocks:
-            text = _safe_text(block).strip()
+            text = read_answer_text(block).strip()
             normalized = normalize_ui_text(text).lower()
             if text and normalized not in _PLACEHOLDER_TEXTS and text not in texts:
                 texts.append(text)
@@ -769,7 +790,7 @@ class BaseWebUIAdapter:
             ))
         except Exception:
             root_is_final = False
-        text = _safe_text(element).strip() if root_is_final else ""
+        text = read_answer_text(element).strip() if root_is_final else ""
         return "" if normalize_ui_text(text).lower() in _PLACEHOLDER_TEXTS else text
 
     def activity(self, assistant: TurnRef | object | None = None) -> ActivitySnapshot:
@@ -839,6 +860,10 @@ class BaseWebUIAdapter:
             rendered_width >= 96 and rendered_height >= 96
         )
         return bool(generation_marker or substantial)
+
+    def busy_indicator_active(self, element, selector: str) -> bool:
+        """Provider hook for persistent wrappers matched by broad busy hints."""
+        return True
 
     def media_state(self, assistant_turn) -> dict:
         """Inspect media/busy state scoped to the fresh assistant turn.
@@ -976,6 +1001,8 @@ class BaseWebUIAdapter:
                 try:
                     # Ignore hidden layout/template nodes.
                     if not element.is_visible():
+                        continue
+                    if not self.busy_indicator_active(element,selector):
                         continue
                     ident = (
                         element.get_attribute("data-testid")

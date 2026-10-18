@@ -1,7 +1,10 @@
 """M365 adapter implements the shared contract without another provider adapter."""
 import json
+import hashlib
+from dataclasses import replace
 from urllib.parse import urlsplit
 from ...base_adapter import BaseWebUIAdapter
+from ...contracts import text_digest
 from .profiles import active_profile, profile_by_name
 from .composer import read_composer_snapshot, validate_composer_prompt
 from .compatibility import probe_profile
@@ -22,8 +25,61 @@ class M365UIAdapter(BaseWebUIAdapter):
     read_provider_composer = staticmethod(read_composer_snapshot)
     validate_provider_composer = staticmethod(validate_composer_prompt)
 
+    def calibration_picker_options(self, field):
+        if field == 'assistant_content':
+            return {'contentRootSelector':'[data-testid="markdown-reply"], [data-testid="message-content"], .message-content, .markdown'}
+        if field == 'assistant_turn':
+            return {'turnRootSelector': '.fai-CopilotMessage',
+                    'preferredTurnSelector': 'div.fai-CopilotMessage'}
+        return {}
+
+    def _turn_ref(self, element, role, ordinal):
+        turn = super()._turn_ref(element, role, ordinal)
+        if role != 'assistant':
+            return turn
+        if element.evaluate('''el => (el.getAttribute('data-role')==='assistant' ||
+            el.getAttribute('data-message-author-role')==='assistant' ||
+            el.getAttribute('data-testid')==='assistant-message') &&
+            !!(el.getAttribute('data-message-id') || el.getAttribute('data-turn-id') || el.id)'''):
+            return turn
+        # Observed M365 outer articles have no message ID. The reply renderer
+        # INSIDE this single article carries it. Never borrow from ancestors,
+        # siblings or the page, nor use a style class / shared testid as identity.
+        info = element.evaluate('''el => {
+            if (!el.matches('.fai-CopilotMessage, [data-testid="copilot-message-div"], [data-testid="copilot-message-reply-div"]')) return null;
+            const replies=[...el.querySelectorAll('[data-testid="markdown-reply"][data-message-id]')];
+            const ids=[...new Set(replies.map(e=>e.getAttribute('data-message-id')).filter(Boolean))];
+            if(ids.length!==1 || el.querySelector('.fai-UserMessage__message')) return null;
+            return {id:ids[0],text:replies.map(e=>e.innerText||e.textContent||'').sort((a,b)=>b.length-a.length)[0]};
+        }''')
+        if not info:
+            return replace(turn, stable_attributes=())
+        structural_id = hashlib.sha256(('assistant\ndata-message-id=' + info['id']).encode('utf-8')).hexdigest()
+        return replace(turn, structural_id=structural_id,
+                       stable_attributes=(('data-message-id', info['id']),),
+                       raw_text=info['text'], content_digest=text_digest(info['text']))
+
     def probe_provider_profile(self, profile):
         return probe_profile(self.page, profile)
+
+    def blocking_transport_error(self):
+        configured=super().blocking_transport_error()
+        if configured:return configured
+        # This bootstrap alert is needed before stage 9 has saved any rules.
+        # It is a site failure, never evidence that a prompt may be resent.
+        from ...dialogue_state import detect_blocking
+        return detect_blocking(self.page,[{'kind':'provider_error','selectors':['[role="alert"]'],
+            'tokens':['無法完成您的要求','unable to complete your request','we couldn’t complete your request',"we couldn't complete your request"]}],
+            extra_conversation_selectors=('.fai-CopilotMessage','.fai-UserMessage__message'))
+
+    def busy_indicator_active(self, element, selector):
+        # Observed on completed replies: loading-message permanently wraps the
+        # markdown and code. Its name alone does not mean generation is active.
+        # Explicit active flags and actual descendant spinners still count.
+        if element.get_attribute('data-testid')=='loading-message':
+            return (element.get_attribute('aria-busy')=='true' or
+                    element.get_attribute('data-state') in {'loading','generating','processing','thinking','working','creating','preparing'})
+        return super().busy_indicator_active(element,selector)
 
     def page_reachable(self):
         return (urlsplit(str(getattr(self.page, "url", ""))).hostname == "m365.cloud.microsoft"

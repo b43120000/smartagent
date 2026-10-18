@@ -125,7 +125,7 @@ def live(s):
     if s['phases'].get('IT-W'):s.setdefault('attempt_history',[]).append(dict(s['phases']['IT-W']))
     from RemoteAgent.local_telegram_sender import send_and_wait
     prompt='只測試 inspect_directory 目錄 metadata 統計。對下方目錄執行兩個 inspect_directory action：第一個 recursive=false，第二個 recursive=true；兩者 sample_limit=1。回報各自 file_count、directory_count、total_bytes、inaccessible_count。禁止讀檔內容、上傳、寫入、刪除或其他工具。\n'+s['target']
-    sink={};code=send_and_wait(request=prompt,workspace=r'E:\workspace',root=ROOT,timeout_sec=600,result_sink=sink)
+    sink={};code=send_and_wait(request=prompt,workspace=r'E:\card',root=ROOT,timeout_sec=600,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']]
     journal=TaskContinuationStore(ROOT).get(sink['task_id']) or {};calls=list(journal.get('actions',{}).values())
     final=task.result_ledger.get('final',{});passed=False
@@ -144,7 +144,7 @@ def main():
     assert read_json_retry(STATE.with_name('t02_list_directory.json'))['status']=='PASS','T02 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T03-'+uuid.uuid4().hex[:12]);root.mkdir();target=fixture(root)
+        root=Path(r'E:\card\runtime_it\matrix38')/('T03-'+uuid.uuid4().hex[:12]);root.mkdir();target=fixture(root)
         s={'tool':'inspect_directory','status':'IN_PROGRESS','fixture':str(root),'target':str(target),'phases':{},'rca':[]}
     try:{'UT':unit,'IT-R':runtime,'IT-W':live}[a.phase](s)
     except Exception as exc:

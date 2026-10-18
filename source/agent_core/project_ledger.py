@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -54,13 +55,21 @@ def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     temporary.replace(path)
 
 
-def _load_index(root: Path) -> dict:
+def _load_index(root: Path, *, strict: bool = False) -> dict:
     path = project_ledger_index_path(root)
+    loaded = False
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        loaded = True
+    except FileNotFoundError:
+        value = {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        if strict:
+            raise
         value = {}
     if not isinstance(value, dict) or value.get("schema") != LEDGER_INDEX_SCHEMA:
+        if strict and loaded:
+            raise ValueError("project_ledger_index_invalid")
         return {
             "schema": LEDGER_INDEX_SCHEMA,
             "project_id": _project_id(root),
@@ -73,6 +82,15 @@ def _load_index(root: Path) -> dict:
             "event_keys": {},
             "updated_at": 0.0,
         }
+    if strict:
+        valid_count = lambda item: type(item) is int and item >= 0
+        if (not all(isinstance(value.get(key), str) and value[key] for key in ("project_id", "workspace_root"))
+            or not valid_count(value.get("event_count"))
+            or not isinstance(value.get("event_type_counts"), dict)
+            or not all(isinstance(key, str) and valid_count(count) for key, count in value["event_type_counts"].items())
+            or not isinstance(value.get("latest_event_id"), str)
+            or not all(isinstance(value.get(key, ""), str) for key in ("latest_snapshot_id", "latest_semantic_map_revision"))):
+            raise ValueError("project_ledger_index_invalid_fields")
     return value
 
 
@@ -207,7 +225,7 @@ def _read_events(workspace: str | Path) -> list[dict]:
     path = project_ledger_path(workspace)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except (FileNotFoundError, OSError, UnicodeError):
+    except FileNotFoundError:
         return []
     events: list[dict] = []
     for line_number, line in enumerate(lines, 1):
@@ -233,6 +251,8 @@ def query_project_history(
     limit: int = 50,
 ) -> dict:
     root = Path(workspace).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"project_ledger_workspace_not_directory:{root}")
     kinds = {str(value or "").strip().lower() for value in (event_types or []) if str(value or "").strip()}
     needle = str(path_contains or "").strip().replace("\\", "/").casefold()
     bounded_limit = max(1, min(int(limit), 500))
@@ -260,9 +280,37 @@ def query_project_history(
 
 def inspect_project_ledger(workspace: str | Path, *, limit: int = 20) -> dict:
     root = Path(workspace).expanduser().resolve()
-    index = _load_index(root)
-    history = query_project_history(root, limit=limit)
-    return {
+    if not root.is_dir():
+        raise ValueError(f"project_ledger_workspace_not_directory:{root}")
+    # Missing/stale index or unreadable history must not masquerade as EMPTY.
+    # Read operations never repair or rewrite persistent provenance.
+    # Writers publish ledger then index. Brief bounded rereads tolerate that
+    # publication window without creating write locks in read-only projects.
+    for attempt in range(3):
+        index = _load_index(root, strict=True)
+        events = _read_events(root)
+        if int(index.get("event_count", 0) or 0) == len(events) and (
+            str(index.get("latest_event_id", "") or "") == (events[-1].get("event_id") if events else "")
+        ):
+            break
+        if attempt < 2:
+            time.sleep(0.01)
+    else:
+        # The writer may be paused between publishing history and index. This
+        # is not proof of corruption. Return one coherent history-backed view
+        # as PARTIAL; never repair disk or advertise the stale index as READY.
+        index = {
+            **index, "event_count":len(events),
+            "event_type_counts":dict(Counter(str(e.get("event_type", "")) for e in events)),
+            "latest_event_id":events[-1].get("event_id", "") if events else "",
+            "latest_snapshot_id":next((e["snapshot_id"] for e in reversed(events) if e.get("snapshot_id")), ""),
+            "latest_semantic_map_revision":next((e["semantic_map_revision"] for e in reversed(events) if e.get("semantic_map_revision")), ""),
+            "inspection_partial":True,
+        }
+    # Use the same history read that was checked above. A second read could
+    # contain a concurrent append absent from the returned count/index.
+    recent_events = list(reversed(events))[:max(1, min(int(limit), 500))]
+    inspection = {
         "schema": LEDGER_INSPECTION_SCHEMA,
         "status": "READY" if int(index.get("event_count", 0) or 0) else "EMPTY",
         "project_id": index["project_id"],
@@ -274,8 +322,12 @@ def inspect_project_ledger(workspace: str | Path, *, limit: int = 20) -> dict:
         "latest_semantic_map_revision": str(index.get("latest_semantic_map_revision", "") or ""),
         "ledger_path": str(project_ledger_path(root)),
         "index_path": str(project_ledger_index_path(root)),
-        "recent_events": history["events"],
+        "recent_events": recent_events,
     }
+    if index.get("inspection_partial"):
+        inspection.update(status="PARTIAL", index_consistency="MISMATCH_OR_UPDATE_IN_PROGRESS",
+                          metadata_source="LEDGER_EVENTS")
+    return inspection
 
 
 def changed_files_between(parent: Mapping[str, object] | None, current: Mapping[str, object] | None) -> list[str]:

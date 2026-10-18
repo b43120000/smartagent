@@ -3,6 +3,7 @@ import argparse,tempfile
 from pathlib import Path
 from unittest.mock import patch
 from agent_core.tools import _evaluate_verification_step
+from agent_core.smartagent_protocol import validate_tool_envelope
 
 def run(legacy=False):
     with tempfile.TemporaryDirectory(prefix='matrix38-verify-alias-') as temp:
@@ -20,6 +21,22 @@ def run(legacy=False):
         assert evaluate({**wrong,'contains':'ACTUAL'})['passed']
         assert evaluate({'action':'file_contains','path':str(target),'text':'ACTUAL','expect':True})['passed']
         assert evaluate({'type':'file_exists','path':str(root/'missing.txt'),'expect':False})['passed']
+        # T29 Web: admission must use the same alias grammar as the executor,
+        # not treat a file predicate without command as empty_command.
+        envelope = {'tool':'run_command','action_id':'ALIAS-VERIFY','operation':'VERIFY',
+                    'command':"Get-Content -LiteralPath 'probe.txt'",'working_directory':str(root),
+                    'verifies_action_id':'ORIGINAL','success_criteria':'probe is ACTUAL'}
+        for field in ('action','type'):
+            checks = [{field:'file_exists','path':'probe.txt'},
+                      {field:'file_contains','path':'probe.txt','text':'ACTUAL'}]
+            ok, diagnostic = validate_tool_envelope({**envelope,'verify':checks})
+            assert ok, diagnostic
+            ok, diagnostic = validate_tool_envelope({**envelope,'verify':[
+                {field:'run_command','command':"Remove-Item -Recurse -LiteralPath 'probe.txt'"}]})
+            assert not ok, diagnostic
+        for check in ({'action':'file_exists','type':'run_command'}, {'type':'unknown'}, {'type':[]}):
+            ok, diagnostic = validate_tool_envelope({**envelope,'verify':[check]})
+            assert not ok and diagnostic['reason']=='verification_action_invalid', diagnostic
         for malformed in (
             {'action':'file_exists','type':'file_contains','path':str(target)},
             {'type':'file_contains','text':'ACTUAL','contains':'WRONG','path':str(target)},

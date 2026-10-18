@@ -142,7 +142,7 @@ def live(s):
     prompt=('T13 inspect_project_scope 測試。只對以下小專案取得完整 snapshot inventory，不是列出目錄：\n'+s['target']+
             '\n只執行一次 inspect_project_scope，workspace 明確填此路徑；不要 path/depth/include_files。回報實際 file_count、total_bytes、build_files、snapshot_id 及每檔 SHA256。'
             '\n禁止掃父目錄、不 project_sync、不 query、不上傳、不修改任何檔案、不補跑命令。依真實 Runtime 結果判斷，完整快照成功才 SUCCESS。')
-    sink={};code=send_and_wait(request=prompt,workspace=r'E:\workspace',root=ROOT,timeout_sec=900,result_sink=sink)
+    sink={};code=send_and_wait(request=prompt,workspace=r'E:\card',root=ROOT,timeout_sec=900,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']];journal=TaskContinuationStore(ROOT).get(task.task_id) or {}
     actions=list(journal.get('actions',{}).values());final=task.result_ledger.get('final',{})
     record={'status':'UNKNOWN',**sink,'sender_exit_code':code,'actions':actions,'task_state':task.state,
@@ -158,7 +158,7 @@ def main():
     assert read_json_retry(STATE.with_name('t12_aggregate_verification.json'))['status']=='PASS','T12 gate'
     if STATE.exists():s=read_json_retry(STATE)
     else:
-        parent=Path(r'E:\workspace\runtime_it\matrix38')/('T13-'+uuid.uuid4().hex[:12]);parent.mkdir();root=setup(parent)
+        parent=Path(r'E:\card\runtime_it\matrix38')/('T13-'+uuid.uuid4().hex[:12]);parent.mkdir();root=setup(parent)
         s={'tool':'inspect_project_scope','status':'IN_PROGRESS','fixture':str(parent),'target':str(root),'phases':{},'rca':[]}
     s['rca']=[{'layer':'RUNTIME_INVENTORY','reason':'os.walk silently ignored unreadable subdirectory and stat failures; incomplete inventory published as SUCCEEDED snapshot',
                'fix':'onerror and metadata/content failures raise ProjectInventoryError; inspect tool returns FAILED/PROJECT_SCAN_INCOMPLETE with no snapshot_id; other snapshot consumers fail closed'},

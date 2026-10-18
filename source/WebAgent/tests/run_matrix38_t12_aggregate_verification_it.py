@@ -128,7 +128,7 @@ def live(s):
       '\n預期兩項真實檢查 exit 0、批次 PASS，檔案仍為 T12_ACTUAL 加 Windows 換行；保留先前 FAIL 歷史並回報原 MUTATE 最新有效 PASS。'
       '\n第一份 Progress completion_contract 要涵蓋這個負向→正向測試；每輪 next_action 與真實工具一致。最後依 Runtime 證據結案。'
       '\n只允許上述三個 action，不操作其他路徑、不上傳、不 project_sync、不新增 plan、不重做 MUTATE。檢查用明確 powershell.exe，不能將裸 Get-Location 當 cmd 命令。')
-    sink={};code=send_and_wait(request=prompt,workspace=r'E:\workspace',root=ROOT,timeout_sec=900,result_sink=sink)
+    sink={};code=send_and_wait(request=prompt,workspace=r'E:\card',root=ROOT,timeout_sec=900,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']]
     journal=TaskContinuationStore(ROOT).get(task.task_id) or {};actions=list(journal.get('actions',{}).values());final=task.result_ledger.get('final',{})
     record={'status':'UNKNOWN',**sink,'sender_exit_code':code,'fixture':str(root),'actions':actions,
@@ -155,7 +155,7 @@ def main():
     assert read_json_retry(STATE.with_name('t11_run_command.json'))['status']=='PASS','T11 gate'
     s=read_json_retry(STATE) if STATE.exists() else {'tool':'aggregate_verification','status':'IN_PROGRESS','phases':{},'rca':[]}
     if not s.get('fixture'):
-        root=Path(r'E:\workspace\runtime_it\matrix38')/('T12-'+uuid.uuid4().hex[:12]);root.mkdir();s['fixture']=str(root)
+        root=Path(r'E:\card\runtime_it\matrix38')/('T12-'+uuid.uuid4().hex[:12]);root.mkdir();s['fixture']=str(root)
     s['rca']=[
       {'layer':'RUNTIME_RESULT','reason':'all security-rejected commands reported executed=true','fix':'per-row rejection and real process_started authority; aggregate all refused REJECTED/false; mixed PARTIAL'},
       {'layer':'PROCESS_TIMEOUT','reason':'killing Windows shell alone left child holding capture files','fix':'terminate only owned live Popen PID tree on timeout before parent fallback'},

@@ -6,9 +6,14 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 from typing import Callable
+from urllib.parse import urlsplit
 
 from agent_core.conversation_registry import ConversationRegistry
-from agent_core.session_protocol import BOOTSTRAP, SessionProtocol
+from agent_core.session_protocol import (
+    BOOTSTRAP,
+    PROTOCOL_READY_MARKER,
+    SessionProtocol,
+)
 
 from .protocol import WEBAGENT_PROTOCOL_BODY, WEBAGENT_PROTOCOL_NAME, WEBAGENT_PROTOCOL_VERSION
 
@@ -20,6 +25,7 @@ def ensure_webagent_session(
     state_dir: str | Path,
     send_prompt: Callable[..., str],
     display_name: str = "WebAgent",
+    allow_scoped_marker_only_bootstrap: bool = False,
 ) -> dict:
     state_root = Path(state_dir)
     state_root.mkdir(parents=True, exist_ok=True)
@@ -33,6 +39,7 @@ def ensure_webagent_session(
     )
     stored = registry.get_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME)
     decision = session.decide(stored)
+    claude_quotes = urlsplit(gpt_url).hostname == 'claude.ai'
     def bootstrap(reason: str) -> dict:
         print(
             f"[{display_name}] Session mode: BOOTSTRAP ({reason})；即將注入 WebAgent/smartagent_tool 協議。",
@@ -42,7 +49,19 @@ def ensure_webagent_session(
             session.bootstrap_prompt(session_id=decision.session_id),
             stage="協議初始化",
         )
-        if not session.parse_protocol_ready(response, session_id=decision.session_id):
+        full_identity_ready = session.parse_protocol_ready(
+            response, session_id=decision.session_id, allow_smart_quotes=claude_quotes
+        )
+        normalized_response = str(response or "").strip()
+        marker_only_ready = bool(
+            allow_scoped_marker_only_bootstrap
+            and normalized_response
+            in {
+                PROTOCOL_READY_MARKER,
+                f"[{PROTOCOL_READY_MARKER}]",
+            }
+        )
+        if not full_identity_ready and not marker_only_ready:
             registry.set_protocol_state(
                 workspace,
                 gpt_url,
@@ -51,7 +70,18 @@ def ensure_webagent_session(
             )
             raise RuntimeError("WebGPT 未回傳 matching WEBAGENT protocol readiness")
         state = session.armed_state(session_id=decision.session_id)
+        state["readiness_mode"] = (
+            "FULL_IDENTITY"
+            if full_identity_ready
+            else "MARKER_ONLY_SCOPED_BOOTSTRAP"
+        )
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
+        if marker_only_ready:
+            print(
+                f"[{display_name}][WARN] 本輪 bootstrap 回覆僅含 {PROTOCOL_READY_MARKER}；"
+                "已依本輪已配對的 assistant turn 與 Runtime 保存的協議身分建立 session。",
+                flush=True,
+            )
         print(f"[{display_name}] 協議初始化成功，ChatGPT 已回傳 matching readiness。", flush=True)
         return {"mode": BOOTSTRAP, "reason": reason, "state": state}
 
@@ -67,7 +97,7 @@ def ensure_webagent_session(
         session.session_attach_prompt(session_id=decision.session_id, handshake_id=handshake_id),
         stage="協議附著確認",
     )
-    if session.parse_session_ready(response, session_id=decision.session_id, handshake_id=handshake_id):
+    if session.parse_session_ready(response, session_id=decision.session_id, handshake_id=handshake_id, allow_smart_quotes=claude_quotes):
         state = session.armed_state(session_id=decision.session_id)
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
         print(f"[{display_name}] 協議附著成功。", flush=True)

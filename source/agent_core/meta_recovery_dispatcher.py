@@ -8,10 +8,12 @@ from .issue_recorder import redact_sensitive
 from .workspace import AGENT_PROJECT_ROOT
 from .webgpt_rate_governor import WebGPTRateGovernor
 from .paths import self_repair_root
+from .shared_browser import shared_browser_enabled, shared_browser_endpoint
 from .web_ui import create_web_ui_for_page
 from WebAgent.browser_bridge import execution_page_lease
 
-DEFAULT_CDP=os.environ.get("SMARTAGENT_CHATGPT_CDP","http://127.0.0.1:1272")
+from .browser_preferences import browser_launch_selection
+DEFAULT_CDP=os.environ.get("SMARTAGENT_CHATGPT_CDP",browser_launch_selection()['endpoint'])
 STATE_ROOT=self_repair_root()
 PLAN_PATH=STATE_ROOT/"meta_repair_plan.json"
 RESULT_PATH=STATE_ROOT/"meta_dispatch_result.json"
@@ -126,6 +128,8 @@ def _submit_with_rate_gate(web_ui,rate_lease):
         rate_lease.record_submit()
 
 def dispatch_once(meta,cdp=DEFAULT_CDP,root=AGENT_PROJECT_ROOT):
+    if cdp == DEFAULT_CDP and shared_browser_enabled():
+        cdp = shared_browser_endpoint()
     root=Path(root).resolve()
     rate_lease=WebGPTRateGovernor(root).acquire(wait=True)
     try:

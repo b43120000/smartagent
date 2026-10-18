@@ -27,7 +27,7 @@ STATE=ROOT/'localdata/runtime_it/matrix38/t01_read_file.json'
 def state():
     if STATE.exists():
         return read_json_retry(STATE)
-    fixture=Path(r'E:\workspace\runtime_it\matrix38')/('T01-'+uuid.uuid4().hex[:12])
+    fixture=Path(r'E:\card\runtime_it\matrix38')/('T01-'+uuid.uuid4().hex[:12])
     fixture.mkdir(parents=True,exist_ok=False)
     small='T01_SMALL_RUNTIME_READ_OK\n中文與海鷗\n'
     (fixture/'small.txt').write_bytes(small.encode('utf-8'))
@@ -107,13 +107,19 @@ def runtime_it(s):
         assert denied['status']=='REJECTED' and denied['reason']=='ACCESS_DENIED' and not denied['executed'],denied
     finally:
         kernel.CloseHandle(handle)
-    _,_,queue,_=read_action(context,fixture/'large.txt','R-LARGE')
+    large_fixture = fixture/'large.txt'
+    _,_,queue,_=read_action(context,large_fixture,'R-LARGE')
     assert queue['status']=='QUEUED' and not queue['data']['content_read']
     staged=context.take_pending_attachments();assert len(staged)==1
-    assert hashlib.sha256(Path(staged[0]).read_bytes()).hexdigest()==s['large_sha256']
+    # Web delivery rotates a fresh large fixture and updates the top-level
+    # delivery identity.  IT-R must compare against the file it actually
+    # staged, not against a later Web attempt's identity.
+    expected_large_sha256 = hashlib.sha256(large_fixture.read_bytes()).hexdigest()
+    assert hashlib.sha256(Path(staged[0]).read_bytes()).hexdigest()==expected_large_sha256
     s['phases']['IT-R']={'status':'PASS','E':'PASS','V':'PASS','R':'PASS','rounds':len(turns),
         'permission_check':'actual Windows exclusive file handle; no ACL edits',
         'large_route':'real staging/hash check; external delivery NOT_TESTED here',
+        'large_fixture_sha256':expected_large_sha256,
         'events':[e for e in events if e['event'] in {'tool_started','action_evidence_recorded','protocol_rejected'}]}
     write_json_atomic(STATE,s)
 
@@ -149,7 +155,7 @@ def live(s,large):
                  '原樣回報第一檔兩行文字，以及第二檔是否為空、bytes_read 是否為0；以實際 Runtime 結果結案。\n檔案：\n'
                  +str(fixture/'small.txt')+'\n'+str(fixture/'empty.txt'))
         phase='IT-W-SMALL'
-    sink={};code=send_and_wait(request=request,workspace=r'E:\workspace',root=ROOT,timeout_sec=700,result_sink=sink)
+    sink={};code=send_and_wait(request=request,workspace=r'E:\card',root=ROOT,timeout_sec=700,result_sink=sink)
     task=TaskStateStore(remote_tasks_path(ROOT)).load()[sink['task_id']]
     journal=TaskContinuationStore(ROOT).get(sink['task_id']) or {}
     actual=[c.get('action',{}) for c in journal.get('actions',{}).values()]

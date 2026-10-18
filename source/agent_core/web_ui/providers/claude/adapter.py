@@ -69,12 +69,32 @@ class ClaudeUIAdapter(BaseWebUIAdapter):
         except Exception:
             return ""
 
+    def calibration_picker_options(self, field):
+        if field == 'user_turn':
+            # Observed bubble: the styled child of the semantic UserMessage row.
+            selector = 'div[data-cds="UserMessage"] > div.relative:has(.cds-user-message-body)'
+            return {'turnRootSelector': selector, 'preferredTurnSelector': selector}
+        return {}
+
     def _turn_ref(self, element, role: str, ordinal: int) -> TurnRef:
         attrs = tuple(
             (name, value)
             for name in ("data-testid", "id", "data-message-id", "data-is-streaming")
             if (value := self._safe_attr(element, name))
         )
+        if role in ('user', 'assistant'):
+            # Repeated user/assistant testids are types, not message IDs.
+            # Use the observed conversation-local transcript index when present;
+            # Streaming flags and React IDs must not change either turn anchor.
+            row_index = element.evaluate('''(el, role) => {
+                const kind=role==='user'?'human':'assistant';
+                const row=el.closest('[data-testid="transcript-row"][data-perf-row="'+kind+'"]');
+                if(!row)return null;
+                if(role==='assistant' && row.querySelectorAll('[data-testid="assistant-message"]').length!==1)return null;
+                return row.getAttribute('data-index') || row.getAttribute('data-rs-index');
+            }''', role)
+            if isinstance(row_index, str) and row_index.isdigit():
+                attrs = (('data-transcript-row-index', row_index),)
         raw_text = self._turn_text(element, role)
         structural_source = "\\n".join(f"{name}={value}" for name, value in attrs)
         if not structural_source:

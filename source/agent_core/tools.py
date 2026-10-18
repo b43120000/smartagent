@@ -804,23 +804,54 @@ def tool_inspect_directory(
 
 def tool_web_search(query: str) -> str:
     """Simple web search via DuckDuckGo (no API key needed)."""
+    from .tool_result_contract import attach_runtime_result, encode_result
+    if not isinstance(query, str) or not query.strip():
+        return encode_result('REJECTED','SEARCH_QUERY_REQUIRED',tool='web_search',
+            data={'network_status':'NOT_ATTEMPTED'})
+    response_received = False
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://api.duckduckgo.com/?q={encoded}&format=json&no_redirect=1"
         req = urllib.request.Request(url, headers={"User-Agent": "SmartAgent/1.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
-            data = json.loads(r.read().decode())
+            raw_response = r.read()
+            response_received = True
+            data = json.loads(raw_response.decode())
+        if not isinstance(data, dict) or not isinstance(data.get('RelatedTopics', []), list):
+            raise ValueError('invalid_search_response')
         abstract = data.get("AbstractText", "")
-        related = [t.get("Text","") for t in data.get("RelatedTopics", [])[:3]]
-        from .tool_result_contract import attach_runtime_result
-        return attach_runtime_result(abstract or "\n".join(related) or "(無結果)",
+        if not isinstance(abstract, str):
+            raise ValueError('invalid_search_abstract')
+        results = []
+        if abstract:
+            results.append({'text':abstract,'url':str(data.get('AbstractURL', '') or ''),
+                            'title':str(data.get('Heading', '') or '')})
+        # Instant Answer topics can be grouped. Preserve provider text/URLs;
+        # bounded output is not a claim of complete web-search coverage.
+        pending = list(data.get('RelatedTopics', []))
+        visited = 0
+        while pending and len(results) < 4 and visited < 100:
+            topic = pending.pop(0); visited += 1
+            if not isinstance(topic, dict):
+                raise ValueError('invalid_search_topic')
+            if 'Topics' in topic:
+                if not isinstance(topic['Topics'], list):
+                    raise ValueError('invalid_search_topic_group')
+                pending = topic['Topics'] + pending
+            elif topic.get('Text'):
+                if not isinstance(topic['Text'], str):
+                    raise ValueError('invalid_search_topic_text')
+                results.append({'text':topic['Text'],'url':str(topic.get('FirstURL', '') or ''),'title':''})
+        return attach_runtime_result(abstract or "\n".join(row['text'] for row in results) or "(無結果)",
             'SUCCEEDED','SEARCH_COMPLETED',tool='web_search',executed=True,
-            data={'query':query,'result_count':1 if abstract else len([x for x in related if x]),
-                'network_status':'RESPONDED'})
+            data={'query':query,'result_count':len(results),'results':results,
+                'provider':'duckduckgo_instant_answer','request_url':url,
+                'network_status':'RESPONDED','verification_status':'PASS',
+                'verification_scope':'PROVIDER_RESPONSE_ONLY'})
     except Exception as e:
-        from .tool_result_contract import encode_result
-        return encode_result('FAILED','NETWORK_SEARCH_FAILED',tool='web_search',executed=True,
-            detail=f'{type(e).__name__}: {e}',data={'network_status':'FAILED'})
+        return encode_result('FAILED','SEARCH_RESPONSE_INVALID' if response_received else 'NETWORK_SEARCH_FAILED',
+            tool='web_search',executed=True,detail=f'{type(e).__name__}: {e}',
+            data={'query':query,'network_status':'RESPONDED' if response_received else 'FAILED'})
 
 import urllib.parse
 
@@ -949,15 +980,33 @@ def tool_save_session_summary(agent, payload: dict) -> str:
     return encode_result('FAILED','SUMMARY_NOT_CONFIRMED',tool='save_session_summary',executed=True,data={'text':str(result)})
 
 
-def _project_workspace(tool_call: dict, agent, *, write: bool = False):
+def _task_plan_request_scope(agent):
+    """Identity comes from Runtime, never optional model-owned action fields."""
+    epoch = getattr(agent, 'current_task_epoch', '')
+    digest = getattr(agent, 'current_intent_digest', '')
+    if not epoch or not digest:
+        return None
+    return dict(request_id=agent.current_request_id, task_id=agent.current_task_id,
+                task_epoch=epoch, intent_digest=digest, request_phase='PLANNER_ROUND_PENDING',
+                continuation_seq=max(1, int(getattr(agent, '_protocol_turn_seq', 0))))
+
+
+def _project_workspace(tool_call: dict, agent, *, write: bool = False, request_scoped: bool = False):
     requested=tool_call.get("workspace","")
     default=str(agent.workspace_root) if agent and getattr(agent,"workspace_root",None) else "."
     context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
     candidate = requested or default
+    explicit_paths = _explicit_request_paths(agent) if request_scoped else []
+    if not requested and explicit_paths:
+        if len(explicit_paths) != 1:
+            raise ValueError('workspace_scope:explicit_workspace_required')
+        candidate = str(explicit_paths[0])
     try:
         authorized = context.require_write(candidate) if write else context.require_read(candidate)
     except PathSecurityError as exc:
         raise ValueError(f"workspace_not_authorized:{candidate}:{exc}") from exc
+    if explicit_paths and not any(is_within(authorized, root) for root in explicit_paths):
+        raise ValueError('workspace_scope:target_outside_request_scope')
     if not authorized.exists() or not authorized.is_dir():
         raise ValueError(f"workspace_not_found_or_not_directory:{authorized}")
     return str(authorized)
@@ -975,9 +1024,16 @@ def _project_sync_workspace(tool_call: dict, agent) -> str:
     workspace_value = str(tool_call.get("workspace", "") or "").strip()
 
     target_value = project_value or path_value or workspace_value
+    explicit_paths = _explicit_request_paths(agent)
+    if not target_value and explicit_paths:
+        if len(explicit_paths) != 1:
+            raise ValueError("project_sync_root_required:ambiguous_request_scope")
+        target_value = str(explicit_paths[0])
     target = Path(
         _project_workspace({"workspace": target_value}, agent, write=True)
     ).resolve()
+    if explicit_paths and not any(is_within(target, root) for root in explicit_paths):
+        raise ValueError("project_sync_target_outside_request_scope:" + str(target))
 
     if project_value and path_value:
         alias = Path(
@@ -1020,6 +1076,9 @@ def _project_query_workspace(tool_call: dict, agent) -> str:
     target = Path(
         _project_workspace({"workspace": project_value}, agent, write=False)
     ).resolve()
+    explicit_paths = _explicit_request_paths(agent)
+    if explicit_paths and not any(is_within(target, root) for root in explicit_paths):
+        raise ValueError("query_project_target_outside_request_scope:" + str(target))
 
     workspace_value = str(tool_call.get("workspace", "") or "").strip()
     if workspace_value:
@@ -1094,6 +1153,19 @@ def _execution_approval_manifest(tool_call: dict, agent, security_context: Secur
     raise SecurityApprovalError("execution_approval_expired")
 
 
+def _ledger_read_result(tool, reader, workspace, **fields):
+    """Record read failures only after invoking the actual read operation."""
+    try:
+        return json.dumps(reader(workspace, **fields), ensure_ascii=False, separators=(',', ':'))
+    except (ValueError, OSError) as exc:
+        if str(exc).startswith('project_ledger_workspace_not_directory:'):
+            raise
+        from .tool_result_contract import encode_result
+        return encode_result('FAILED', 'LEDGER_READ_FAILED', tool=tool, executed=True,
+            detail=f'{type(exc).__name__}: {exc}',
+            data={'execution_confirmed':True,'possible_partial_execution':False})
+
+
 def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str:
     """Common P0 result boundary; original transcripts/business data remain intact."""
     from .smartagent_protocol import normalize_tool_numeric_fields
@@ -1116,10 +1188,14 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         # An unexpected exception may follow partial work. Do not invent a
         # successful execution or turn an unknown mutation into a safe retry.
         rejected = isinstance(exc,(PathSecurityError,ProjectAccessError)) or str(exc).startswith((
-            'workspace_not_authorized:', 'workspace_not_found_', 'project_sync_strategy_invalid:',
-            'project_sync_root_conflict:', 'query_project_top_level_query_fields_forbidden:',
+            'workspace_not_authorized:', 'workspace_not_found_', 'workspace_scope:', 'project_sync_strategy_invalid:',
+            'project_sync_root_conflict:', 'project_sync_root_required:',
+            'project_sync_target_outside_request_scope:', 'query_project_top_level_query_fields_forbidden:',
             'query_project_project_root_required', 'query_project_root_conflict:',
+            'query_project_target_outside_request_scope:',
+            'compare_project_snapshot_invalid:', 'compare_project_snapshot_scope:',
             'project_working_set_paths_invalid', 'project_working_set_path_outside_workspace:',
+            'project_ledger_workspace_not_directory:',
         ))
         status = 'REJECTED' if rejected else 'UNKNOWN'
         reason = 'PREFLIGHT_REJECTED' if rejected else 'EXECUTION_STATE_UNKNOWN'
@@ -1415,38 +1491,84 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         workspace=_project_workspace(tool_call,agent)
         return json.dumps(inspect_project_working_set(workspace,tool_call.get("paths",[])),ensure_ascii=False,separators=(",",":"))
     elif tool == "inspect_semantic_map":
-        workspace=_project_workspace(tool_call,agent)
-        return json.dumps(inspect_semantic_map(workspace,tool_call.get("paths")),ensure_ascii=False,separators=(",",":"))
+        workspace=_project_workspace(tool_call,agent,request_scoped=True)
+        try:
+            return json.dumps(inspect_semantic_map(workspace,tool_call.get("paths")),ensure_ascii=False,separators=(",",":"))
+        except (ValueError, OSError) as exc:
+            from .tool_result_contract import encode_result
+            rejected=str(exc).startswith(('semantic_map_scope_mismatch:', 'semantic_map_path_outside_workspace:', 'semantic_map_invalid_required_paths'))
+            return encode_result('REJECTED' if rejected else 'FAILED',
+                'SEMANTIC_MAP_SCOPE_REJECTED' if rejected else 'SEMANTIC_MAP_READ_FAILED',
+                tool=tool,executed=not rejected,detail=f'{type(exc).__name__}: {exc}',
+                data={'possible_partial_execution':False,'execution_confirmed':not rejected})
     elif tool == "update_semantic_map":
-        workspace=_project_workspace(tool_call,agent,write=True)
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
         return json.dumps(update_semantic_map(workspace,tool_call.get("patch",{})),ensure_ascii=False,separators=(",",":"))
     elif tool == "update_semantic_map_file":
-        workspace=_project_workspace(tool_call,agent,write=True)
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
         return json.dumps(update_semantic_map_file(workspace,tool_call.get("path",""),tool_call.get("expected_sha256","")),ensure_ascii=False,separators=(",",":"))
     elif tool == "compare_project_snapshot":
-        workspace=_project_workspace(tool_call,agent)
-        current=inspect_project_scope(workspace)
         known_snapshot=tool_call.get("known_snapshot")
+        if known_snapshot is not None and not isinstance(known_snapshot,(str,dict)):
+            raise ValueError("compare_project_snapshot_invalid:known_snapshot_type")
+        explicit_paths=_explicit_request_paths(agent)
+        scoped_call=dict(tool_call)
+        if not scoped_call.get('workspace') and explicit_paths:
+            if len(explicit_paths)!=1:
+                raise ValueError('compare_project_snapshot_scope:workspace_required')
+            scoped_call['workspace']=str(explicit_paths[0])
+        workspace=_project_workspace(scoped_call,agent)
+        if explicit_paths and not any(is_within(Path(workspace),root) for root in explicit_paths):
+            raise ValueError('compare_project_snapshot_scope:target_outside_request_scope')
         if isinstance(known_snapshot,str):
+            if not re.fullmatch(r'[0-9a-fA-F]{64}',known_snapshot):
+                raise ValueError('compare_project_snapshot_invalid:known_snapshot_id_format')
             known=load_project_snapshot(workspace,known_snapshot)
-        elif known_snapshot is None or isinstance(known_snapshot,dict):
-            known=known_snapshot
+            if not known:
+                raise ValueError('compare_project_snapshot_invalid:known_snapshot_id_not_found')
         else:
-            raise TypeError(f"known_snapshot must be snapshot ID string, dict, or None; got {type(known_snapshot).__name__}")
+            known=known_snapshot
+        if known:
+            if not isinstance(known.get('files',[]),list) or any(
+                not isinstance(row,dict) or not isinstance(row.get('path'),str) or not row['path']
+                for row in known.get('files',[])
+            ):
+                raise ValueError('compare_project_snapshot_invalid:known_snapshot_files')
+            if known.get('workspace_root') is not None and not isinstance(known.get('workspace_root'),(str,Path)):
+                raise ValueError('compare_project_snapshot_invalid:known_snapshot_root_type')
+            if known.get('workspace_root') and Path(known['workspace_root']).resolve()!=Path(workspace):
+                raise ValueError('compare_project_snapshot_invalid:known_snapshot_root')
+        current=inspect_project_scope(workspace,verify_cached_content=True)
         return json.dumps(compare_project_snapshot(current,known),ensure_ascii=False,separators=(",",":"))
     elif tool == "extract_project_dependencies":
-        workspace=_project_workspace(tool_call,agent)
-        snapshot=inspect_project_scope(workspace)
+        workspace=_project_workspace(tool_call,agent,request_scoped=True)
+        snapshot=inspect_project_scope(workspace,verify_cached_content=True)
         return json.dumps(dependency_evidence(workspace,snapshot.get("files",[])),ensure_ascii=False,separators=(",",":"))
     elif tool == "build_project_bundle":
-        workspace=_project_workspace(tool_call,agent,write=True)
-        snapshot=inspect_project_scope(workspace)
-        output_dir=tool_call.get("output_dir","") or str(Path(workspace)/".agents"/"project_sync"/snapshot.get("snapshot_id","unknown"))
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
+        context=SecurityContext.from_agent(agent,fallback_workspace=Path.cwd())
+        explicit_paths=_explicit_request_paths(agent)
+        def bundle_output(value):
+            target=Path(value)
+            if not target.is_absolute():target=Path(workspace)/target
+            resolved=context.require_write(str(target),require_absolute=True,forbid_glob=True)
+            if explicit_paths and not any(is_within(resolved,root) for root in explicit_paths):
+                raise PathSecurityError('bundle_output_outside_request_scope:'+str(resolved))
+            return str(resolved)
+        requested_output=tool_call.get('output_dir','')
+        output_dir=bundle_output(requested_output) if requested_output else ''
+        # Inventory cache is also a write: validate .agents before the scan.
+        bundle_output(Path(workspace)/'.agents')
+        snapshot=inspect_project_scope(workspace,verify_cached_content=True)
+        if not output_dir:output_dir=bundle_output(Path(workspace)/'.agents'/'project_sync'/snapshot['snapshot_id'])
         result=build_source_bundles(workspace,snapshot.get("files",[]),output_dir,max_bytes=int(tool_call.get("max_bytes",500000)),max_files=int(tool_call.get("max_files",50)))
         result["snapshot_id"]=snapshot.get("snapshot_id","")
         return json.dumps(result,ensure_ascii=False,separators=(",",":"))
     elif tool == "build_project_delta":
-        workspace=_project_workspace(tool_call,agent,write=True)
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
+        # Delta creates inventory caches, parts and snapshot records locally.
+        context=SecurityContext.from_agent(agent,fallback_workspace=Path.cwd())
+        context.require_write(str(Path(workspace)/'.agents'),require_absolute=True,forbid_glob=True)
         return json.dumps(build_project_delta(workspace,tool_call.get("base_snapshot_id","")),ensure_ascii=False,separators=(",",":"))
     elif tool == "project_sync":
         strategy=str(tool_call.get("strategy","FULL_BUNDLE") or "FULL_BUNDLE").upper()
@@ -1492,48 +1614,47 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         return json.dumps(result,ensure_ascii=False,separators=(",",":"))
     elif tool == "inspect_project_ledger":
         workspace=_project_workspace(tool_call,agent)
-        return json.dumps(
-            inspect_project_ledger(workspace,limit=int(tool_call.get("limit",20))),
-            ensure_ascii=False,separators=(",",":"),
-        )
+        return _ledger_read_result(tool, inspect_project_ledger, workspace, limit=int(tool_call.get("limit",20)))
     elif tool == "query_project_history":
         workspace=_project_workspace(tool_call,agent)
-        return json.dumps(
-            query_project_history(
+        return _ledger_read_result(tool, query_project_history,
                 workspace,
                 event_types=tool_call.get("event_types",[]),
                 snapshot_id=str(tool_call.get("snapshot_id","") or ""),
                 path_contains=str(tool_call.get("path_contains","") or ""),
                 since=tool_call.get("since"),
                 limit=int(tool_call.get("limit",50)),
-            ),
-            ensure_ascii=False,separators=(",",":"),
         )
     elif tool == "validate_edit_plan":
-        workspace=_project_workspace(tool_call,agent)
+        workspace=_project_workspace(tool_call,agent,request_scoped=True)
         return json.dumps(validate_edit_plan(workspace,tool_call.get("plan",{})),ensure_ascii=False,separators=(",",":"))
     elif tool == "apply_edit_plan":
-        workspace=_project_workspace(tool_call,agent,write=True)
-        return json.dumps(apply_edit_plan(workspace,tool_call.get("plan",{})),ensure_ascii=False,separators=(",",":"))
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
+        context=SecurityContext.from_agent(agent,fallback_workspace=Path.cwd())
+        return json.dumps(apply_edit_plan(workspace,tool_call.get("plan",{}),
+            authorize_target=lambda target:context.require_write(str(target),require_absolute=True,forbid_glob=True)),ensure_ascii=False,separators=(",",":"))
     elif tool == "aggregate_verification":
         workspace=_project_workspace(tool_call,agent,write=True)
         return json.dumps(run_aggregated_verification(workspace,tool_call.get("commands",[]),timeout=int(tool_call.get("timeout",120))),ensure_ascii=False,separators=(",",":"))
     elif tool == "propose_task_plan":
-        workspace=_project_workspace(tool_call,agent,write=True)
-        request_scope={field:tool_call.get(field) for field in ("request_id","task_id","task_epoch","intent_digest","request_phase","continuation_seq")} if tool_call.get("task_epoch") else None
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
+        request_scope=_task_plan_request_scope(agent)
         return json.dumps(freeze_task_plan(workspace,tool_call.get("plan",{}),request_scope=request_scope),ensure_ascii=False,separators=(",",":"))
     elif tool == "repair_task_plan":
-        workspace=_project_workspace(tool_call,agent,write=True)
-        request_scope={field:tool_call.get(field) for field in ("request_id","task_id","task_epoch","intent_digest","request_phase","continuation_seq")} if tool_call.get("task_epoch") else None
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
+        request_scope=_task_plan_request_scope(agent)
         return json.dumps(repair_task_plan(workspace,tool_call.get("plan",{}),request_scope=request_scope),ensure_ascii=False,separators=(",",":"))
     elif tool == "propose_task_plan_file":
-        workspace=_project_workspace(tool_call,agent,write=True)
-        request_scope={field:tool_call.get(field) for field in ("request_id","task_id","task_epoch","intent_digest","request_phase","continuation_seq")} if tool_call.get("task_epoch") else None
-        return json.dumps(freeze_task_plan_file(workspace,tool_call.get("path",""),tool_call.get("expected_sha256",""),request_scope=request_scope),ensure_ascii=False,separators=(",",":"))
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
+        request_scope=_task_plan_request_scope(agent)
+        source=security_context.require_read(tool_call.get("path",""),require_absolute=True,forbid_glob=True)
+        return json.dumps(freeze_task_plan_file(workspace,str(source),tool_call.get("expected_sha256",""),request_scope=request_scope),ensure_ascii=False,separators=(",",":"))
     elif tool == "execute_frozen_plan":
-        workspace=_project_workspace(tool_call,agent,write=True)
-        request_scope={field:tool_call.get(field) for field in ("request_id","task_id","task_epoch","intent_digest","request_phase","continuation_seq")} if tool_call.get("task_epoch") else None
-        return json.dumps(execute_frozen_task_plan(workspace,tool_call.get("plan_id",""),timeout=int(tool_call.get("timeout",120)),request_scope=request_scope),ensure_ascii=False,separators=(",",":"))
+        workspace=_project_workspace(tool_call,agent,write=True,request_scoped=True)
+        request_scope=_task_plan_request_scope(agent)
+        context=SecurityContext.from_agent(agent,fallback_workspace=Path.cwd())
+        return json.dumps(execute_frozen_task_plan(workspace,tool_call.get("plan_id",""),timeout=int(tool_call.get("timeout",120)),request_scope=request_scope,
+            authorize_target=lambda target:context.require_write(str(target),require_absolute=True,forbid_glob=True)),ensure_ascii=False,separators=(",",":"))
     elif tool == "web_search":
         return tool_web_search(tool_call.get("query", ""))
     elif tool == "find_file":

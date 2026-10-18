@@ -183,7 +183,11 @@ def self_test() -> int:
     assert open_target_conversation(reused_context, alias) is reused
     assert reused.navigated == [] and reused_context.created == 0
     new_context = FakeContext([])
-    created = open_target_conversation(new_context, "https://chatgpt.com/c/new-456")
+    # This self-test covers navigation; the fake page has no real DOM for the
+    # provider compatibility probe. Real browser tests cover composer readiness.
+    from unittest.mock import patch
+    with patch('WebAgent.browser_bridge._visible_composer', return_value=FakeLocator()):
+        created = open_target_conversation(new_context, "https://chatgpt.com/c/new-456")
     assert created.url == "https://chatgpt.com/c/new-456" and new_context.created == 1
     print("WEBAGENT_CONTROLLER_SELF_TEST_OK")
     return 0
@@ -284,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         gpt_url=selected_url,
         state_dir=state_dir,
         send_prompt=client.ask,
+        allow_scoped_marker_only_bootstrap=True,
     )
     loop = WebAgentProtocolLoop(
         workspace,

@@ -114,6 +114,19 @@ class GeminiUIAdapter(BaseWebUIAdapter):
         )
         raw_text = self._turn_text(element, role)
         structural_source = "\n".join(f"{name}={value}" for name, value in attrs)
+        if role == 'assistant':
+            # Gemini's visible response frame has no identity attribute. Its
+            # message-content child owns the response ID. Never look outside
+            # the selected frame or derive identity from text/ordinal position.
+            own_id = self._safe_attr(element, 'id')
+            response_id = own_id if own_id.startswith('message-content-id-r_') else ''
+            if not response_id:
+                messages = element.query_selector_all('message-content[id^="message-content-id-r_"]')
+                if len(messages) == 1:
+                    response_id = self._safe_attr(messages[0], 'id')
+            if response_id:
+                attrs = attrs + (('data-response-id', response_id),)
+                structural_source = 'data-response-id=' + response_id
         if not structural_source:
             structural_source = f"{role}:ordinal:{ordinal}"
         structural_id = hashlib.sha256(
@@ -142,6 +155,16 @@ class GeminiUIAdapter(BaseWebUIAdapter):
             return None
         scope.user_turn = candidate
         return scope.user_turn
+
+    def busy_indicator_active(self, element, selector):
+        # Observed on a fully completed answer: this class keeps the structured
+        # content visible after processing. Only reject that broad class hint;
+        # explicit aria-busy/data-state flags and descendant spinners still count.
+        if selector=='[class*="processing"]' and element.evaluate(
+            'el=>el.matches("structured-content-container.processing-state-visible")'
+        ):
+            return False
+        return super().busy_indicator_active(element,selector)
 
     @staticmethod
     def _is_relevant_assistant_image(info: dict) -> bool:

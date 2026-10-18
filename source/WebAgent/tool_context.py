@@ -9,7 +9,7 @@ import re
 import subprocess
 import uuid
 
-from agent_core.attachment_staging import stage_attachments
+from agent_core.attachment_staging import StagedAttachment, stage_attachments
 from agent_core.tools import execute_tool, preview_tool_scope
 
 from .protocol import SUPPORTED_ACTION_TOOLS
@@ -31,7 +31,7 @@ class WebAgentToolContext:
         }
         self._authorized_local_paths: list[str] = []
         self._pending_attachments: list[str] = []
-        self._attachment_sha_ledger: set[str] = set()
+        self._attachment_sha_ledger: dict[str, StagedAttachment] = {}
         self._outbound_artifacts: list[dict] = []
         self._outbound_artifact_sha_ledger: set[str] = set()
         self._chunked_write_manager = None
@@ -141,6 +141,7 @@ class WebAgentToolContext:
 
     def queue_attachments(self, paths: list[str], trace_id: str = "") -> str:
         queued = []
+        referenced = {}
         duplicates = []
         errors = []
         request_trace = str(trace_id or self.current_request_id or uuid.uuid4().hex)
@@ -159,8 +160,10 @@ class WebAgentToolContext:
                 continue
             if item.sha256 in self._attachment_sha_ledger:
                 duplicates.append((item.source_path, item.sha256))
+                referenced[item.sha256] = self._attachment_sha_ledger[item.sha256]
                 continue
-            self._attachment_sha_ledger.add(item.sha256)
+            self._attachment_sha_ledger[item.sha256] = item
+            referenced[item.sha256] = item
             self._pending_attachments.append(item.staged_path)
             queued.append(item)
         lines = [
@@ -180,7 +183,7 @@ class WebAgentToolContext:
             data={'delivery_status':'NOT_CONFIRMED', 'queued_count':len(queued), 'errors':errors,
                 'artifacts':[{'artifact_id':item.sha256,'sha256':item.sha256,
                     'source_path':item.source_path,'staged_path':item.staged_path,'name':item.upload_name}
-                    for item in queued], 'duplicates':[{'path':path,'sha256':digest} for path,digest in duplicates]})
+                    for item in referenced.values()], 'duplicates':[{'path':path,'sha256':digest} for path,digest in duplicates]})
 
     def take_pending_attachments(self) -> list[str]:
         values = list(self._pending_attachments)
@@ -223,29 +226,36 @@ class WebAgentToolContext:
                 'QUEUED', 'OUTBOUND_ARTIFACT_ALREADY_QUEUED', tool='return_artifact',executed=True,
                 request_id=self.current_request_id, resolved_path=str(target),
                 data={'delivery_status':'NOT_CONFIRMED','artifact_id':digest,'deduplicated':True})
-        self._outbound_artifact_sha_ledger.add(digest)
         normalized_kind = str(kind or "").strip().lower()
         if normalized_kind not in {"photo", "image", "document"}:
             normalized_kind = (
                 "photo" if target.suffix.lower() in {".jpg", ".jpeg", ".png"}
                 else "document"
             )
-        self._outbound_artifacts.append({
+        size = target.stat().st_size
+        record = {
             "path": str(target),
             "kind": normalized_kind,
             "name": target.name,
             "caption": str(caption or ""),
             "workspace": str(self.workspace_root),
-            "size_bytes": target.stat().st_size,
+            "size_bytes": size,
             "sha256": digest,
-        })
+            "artifact_id": digest,
+            "request_id": self.current_request_id,
+            "task_id": self.current_task_id,
+        }
+        # Publish only after all fallible file inspection is complete. A failed
+        # preparation must not leave a dedup marker with no actual queue entry.
+        self._outbound_artifacts.append(record)
+        self._outbound_artifact_sha_ledger.add(digest)
         text = (
             f"[TELEGRAM_ARTIFACT_QUEUED] name={target.name} "
-            f"size_bytes={target.stat().st_size} sha256={digest}"
+            f"size_bytes={size} sha256={digest}"
         )
         from agent_core.tool_result_contract import attach_runtime_result
         return attach_runtime_result(text, 'QUEUED', 'OUTBOUND_ARTIFACT_QUEUED', tool='return_artifact',
-            executed=True, request_id=self.current_request_id, resolved_path=str(target),
+            executed=True, request_id=self.current_request_id, task_id=self.current_task_id, resolved_path=str(target),
             data={'delivery_status':'NOT_DELIVERED', 'artifact_id':digest,
                 'artifact':dict(self._outbound_artifacts[-1])})
 
@@ -322,25 +332,49 @@ class WebAgentToolContext:
         if not str(output_path or "").strip():
             return "[ARTIFACT_DOWNLOAD_FAILED] download_artifact 需要 output_path"
         from agent_core.web_runtime import get_manager
-
+        from agent_core.tool_result_contract import attach_runtime_result
+        requested = Path(output_path).expanduser().resolve()
+        def output_state():
+            try:
+                if requested.is_dir():
+                    # A provider may have written a child before raising; a
+                    # directory's own existence cannot prove no file changed.
+                    return None
+                return (requested.is_file(), self._file_sha256(requested) if requested.is_file() else '')
+            except OSError:
+                return None
+        before = output_state()
+        attempted = False
+        def failed_download(exc):
+            after = output_state()
+            changed = before != after if before is not None and after is not None else None
+            return attach_runtime_result(f"[ARTIFACT_DOWNLOAD_FAILED] {type(exc).__name__}: {exc}",
+                'UNKNOWN' if changed is None else 'PARTIAL' if changed else 'FAILED',
+                'ARTIFACT_DOWNLOAD_EXCEPTION', tool='download_artifact', executed=attempted,
+                request_id=self.current_request_id, requested_path=str(requested),
+                data={'file_saved':False,'output_changed':changed,'verification_status':'UNVERIFIED',
+                      'error':f'{type(exc).__name__}: {exc}','delivery_status':'NOT_DELIVERED'})
         try:
-            result = get_manager().download_latest_artifact(
-                "chatgpt",
-                output_path,
-                expected_filename=expected_filename,
-                timeout_sec=float(timeout),
-                request_id=self.current_request_id,
+            manager = get_manager()
+            attempted = True
+            result = manager.download_latest_artifact(
+                "chatgpt", output_path, expected_filename=expected_filename,
+                timeout_sec=float(timeout), request_id=self.current_request_id,
             )
+            return self._saved_download_result(result, requested)
         except Exception as exc:
-            return f"[ARTIFACT_DOWNLOAD_FAILED] {type(exc).__name__}: {exc}"
+            return failed_download(exc)
+
+    def _saved_download_result(self, result, requested):
+        """Validate persistence before reporting success or publishing delivery."""
+        from agent_core.tool_result_contract import attach_runtime_result
         status = str((result or {}).get("status", "") or "")
         succeeded = status.upper() in {"SUCCESS", "DOWNLOADED", "ARTIFACT_DOWNLOAD_SUCCESS"}
         marker = "ARTIFACT_DOWNLOAD_SUCCESS" if succeeded else "ARTIFACT_DOWNLOAD_RESULT"
-        from agent_core.tool_result_contract import attach_runtime_result
         result = dict(result or {})
         actual_path = str(result.get('path', '') or '')
         saved = succeeded and bool(actual_path) and Path(actual_path).is_file()
-        requested = Path(output_path).expanduser().resolve()
+        integrity_verified = False
         if saved:
             returned = Path(actual_path).expanduser().resolve()
             matches = returned.parent == requested if requested.is_dir() else returned == requested
@@ -350,6 +384,13 @@ class WebAgentToolContext:
             elif result.get('sha256') and self._file_sha256(returned) != result['sha256']:
                 saved = False
                 result['error'] = 'ARTIFACT_CONTENT_HASH_MISMATCH'
+            elif result.get('size') is not None and returned.stat().st_size != result['size']:
+                saved = False
+                result['error'] = 'ARTIFACT_CONTENT_SIZE_MISMATCH'
+            else:
+                # PASS describes local persistence integrity only, never remote
+                # delivery. Missing producer hash/size stays UNVERIFIED.
+                integrity_verified = bool(result.get('sha256') and result.get('size') is not None)
         if saved and self.interface_name=='remote' and self.artifact_delivery_mode=='telegram':
             result['telegram_queue'] = self.queue_outbound_artifact(actual_path, kind='photo')
         # A producer's SUCCESS without a persisted local artifact is not saved.
@@ -357,7 +398,9 @@ class WebAgentToolContext:
             'ARTIFACT_SAVED' if saved else 'ARTIFACT_NOT_SAVED', tool='download_artifact',
             executed=True, request_id=self.current_request_id, resolved_path=actual_path,
             data={'artifact':result, 'artifact_id':result.get('artifact_id', result.get('sha256','')),
-                'file_acquired':succeeded, 'file_saved':saved, 'delivery_status':'NOT_DELIVERED'})
+                'file_acquired':succeeded, 'file_saved':saved,
+                'verification_status':'PASS' if saved and integrity_verified else 'UNVERIFIED',
+                'verification_scope':'LOCAL_FILE_INTEGRITY', 'delivery_status':'NOT_DELIVERED'})
 
     def execute(self, action: dict) -> str:
         tool = str(action.get("tool", "") or "")

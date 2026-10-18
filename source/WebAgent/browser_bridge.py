@@ -15,6 +15,8 @@ from agent_core.web_provider_routing import provider_for_url
 from agent_core.web_ui.factory import normalize_web_conversation_url
 from agent_core.paths import remote_execution_page_lock_path
 from agent_core.web_ui import create_web_ui_for_page
+from agent_core.shared_browser import (shared_browser_enabled, shared_browser_endpoint,
+    connect_shared_browser, mark_shared_page, is_shared_page, same_provider_url)
 
 CHATGPT_HOME = "https://chatgpt.com/"
 EXECUTION_PAGE_LOCK = remote_execution_page_lock_path()
@@ -128,11 +130,12 @@ def _open_target_conversation_unlocked(context, target_url: str):
     matching = [
         candidate for candidate in pages
         if conversation_id(str(getattr(candidate, "url", "") or "")) == target_id
+        and (not shared_browser_enabled() or (is_shared_page(candidate) and same_provider_url(candidate.url, target)))
     ]
     page = matching[0] if matching else None
     # Conversation identity is unique inside the RemoteAgent profile. Collapse
     # historical duplicates before a second worker can trigger another request.
-    for duplicate in matching[1:]:
+    for duplicate in ([] if shared_browser_enabled() else matching[1:]):
         try:
             duplicate.close()
         except Exception:
@@ -141,6 +144,8 @@ def _open_target_conversation_unlocked(context, target_url: str):
         # The caller holds the common cross-process page lease, so this check
         # and create operation is atomic across Local/Web/Remote interfaces.
         page = context.new_page()
+        if shared_browser_enabled():
+            mark_shared_page(page)
         try:
             _conversation_ready(page, target)
         except BaseException:
@@ -197,6 +202,7 @@ def attach_remote_agent_execution_page(context, target_url: str = ""):
                 candidate for candidate in pages
                 if conversation_id(str(getattr(candidate, "url", "") or ""))
                 == target_id
+                and (not shared_browser_enabled() or (is_shared_page(candidate) and same_provider_url(candidate.url, target_url)))
             ]
         if not marked:
             raise RuntimeError("remote_agent_execution_page_unavailable")
@@ -225,12 +231,17 @@ def open_or_attach_browser(target_url: str, *, reuse_remote_agent_page: bool = F
 
     target = normalize_conversation_url(target_url)
     provider = provider_for_url(target)
-    endpoint = web_runtime.CHATGPT_CDP_ENDPOINT if provider == "chatgpt" else ""
-    if provider == "chatgpt" and _cdp_available(endpoint):
+    use_shared = shared_browser_enabled()
+    endpoint = shared_browser_endpoint() if use_shared else web_runtime.CHATGPT_CDP_ENDPOINT
+    if use_shared or _cdp_available(endpoint):
         from playwright.sync_api import sync_playwright
 
         pw = sync_playwright().start()
-        browser = pw.chromium.connect_over_cdp(endpoint)
+        try:
+            browser = connect_shared_browser(pw, endpoint)[0] if use_shared else pw.chromium.connect_over_cdp(endpoint)
+        except BaseException:
+            pw.stop()
+            raise
         if not browser.contexts:
             pw.stop()
             raise RuntimeError("既有 CDP browser 沒有可用的 BrowserContext")
@@ -264,6 +275,16 @@ def adopt_page(page, context, attached_pw=None):
     scraper._pw = attached_pw or getattr(scraper, "_pw", None)
     scraper._browser = context
     scraper._page = page
+    # All managed browser sessions now use CDP too. Adoption must never turn
+    # a borrowed shared context into an owned context that close() can destroy.
+    scraper._attached_over_cdp = True
+    scraper._cdp_browser = context.browser
+    scraper._active_cdp_endpoint = web_runtime.CHATGPT_CDP_ENDPOINT
+    if attached_pw is not None:
+        scraper._owns_playwright = True
+    if shared_browser_enabled():
+        scraper._shared_personal_browser = True
+        scraper._active_cdp_endpoint = shared_browser_endpoint()
     scraper._claim_conversation_owner(str(getattr(page, "url", "") or ""))
     manager._scrapers[provider] = scraper
     return scraper
