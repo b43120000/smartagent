@@ -20,6 +20,7 @@ class ClaudeUIAdapter(BaseWebUIAdapter):
     """
 
     provider_name = "claude"
+    attachments = attachments
     authenticated_session_selectors = (
         "button[aria-label*='account' i]",
         "button[aria-label*='profile' i]",
@@ -166,24 +167,6 @@ class ClaudeUIAdapter(BaseWebUIAdapter):
             ))
         except Exception:
             return False
-
-    def attachment_file_inputs(self) -> tuple:
-        return tuple(attachments.file_inputs(self.page))
-
-    def attachment_button(self):
-        return attachments.attach_button(self.page)
-
-    def attachment_menu_items(self) -> tuple:
-        return attachments.attach_menu_items(self.page)
-
-    def attachment_dom_state(self, expected_names: list[str]) -> dict:
-        return attachments.attachment_dom_state(self.page, expected_names)
-
-    def composer_attachment_count(self) -> int:
-        return attachments.composer_attachment_count(self.page)
-
-    def clear_one_attachment(self) -> bool:
-        return attachments.clear_one_attachment(self.page)
 
     def dismiss_rate_limit_dialog(self) -> bool:
         result = self.dismiss_blocking_dialog()

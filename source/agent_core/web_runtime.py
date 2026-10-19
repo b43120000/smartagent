@@ -4727,6 +4727,10 @@ class WebLLMScraper:
         from .payload_budget import PromptBudgetExceeded, ensure_webgpt_prompt_budget
         from .request_ownership import guard_web_prompt
 
+        # A new ask (including a pre-submit failure) retires the previous file
+        # scope. Empty request IDs must never reopen a prior response artifact.
+        self._calibrated_file_request = None
+
         if protocol_expected:
             prompt = guard_web_prompt(self, prompt, protocol_expected)
 
@@ -5032,6 +5036,7 @@ class WebLLMScraper:
             fresh_page_image = self._fresh_ready_page_image_state(snapshot, page_media_after)
             page_media_before = snapshot.get("page_media_before") or {}
             web_ui_scope = snapshot.get("_web_ui_scope")
+            from .web_ui.file_config import load_files
             current_artifact_scope = {
                 "assistant_count_before": int(snapshot.get("assistant_count", 0) or 0),
                 "last_assistant_fp_before": str(snapshot.get("last_assistant_fp", "") or ""),
@@ -5064,6 +5069,8 @@ class WebLLMScraper:
             self._submit_click_attempted = False
             self._set_request_state("READY_IDLE", "request_complete")
             print("  [WebScraper] 回應完成", flush=True)
+            if load_files(self.service).get('download_verified') and web_ui_scope is not None:
+                self._calibrated_file_request = (artifact_request_id, str(self._page.url), web_ui_scope)
             return response
 
         except KeyboardInterrupt:
@@ -5133,6 +5140,19 @@ class WebLLMScraper:
         This is the generic Stage-2 entry point used by SmartAgent when the
         WebGPT turn itself produced a file or image (not only web_edit_file).
         """
+        from .web_ui.file_config import load_files
+        if load_files(self.service).get('download_verified'):
+            from .web_ui.file_runtime import download_owned
+            record = getattr(self, '_calibrated_file_request', None)
+            if record is None or (request_id and request_id != record[0]) or str(self._page.url) != record[1]:
+                return {'status': 'ARTIFACT_DOWNLOAD_FAILED', 'error': 'NO_CURRENT_REQUEST_FILE_SCOPE'}
+            try:
+                result = download_owned(self._web_ui_adapter(), record[2], output_path,
+                                        timeout=timeout_sec, expected_filename=expected_filename)
+                self._calibrated_file_request = None
+                return {**result, 'status': 'ARTIFACT_DOWNLOAD_SUCCESS'}
+            except Exception as exc:
+                return {'status': 'ARTIFACT_DOWNLOAD_FAILED', 'error': str(exc)}
         if self.service != "chatgpt":
             return {"status": "ARTIFACT_DOWNLOAD_UNAVAILABLE", "error": "目前 generic artifact download 僅支援 ChatGPT"}
         scope = self._artifact_scope_for_request(request_id)

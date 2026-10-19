@@ -1120,6 +1120,10 @@ class BaseWebUIAdapter:
         )
 
     def attachment_file_inputs(self) -> tuple:
+        from .file_config import load_files
+        config = load_files(self.provider_name)
+        if config.get('upload_verified'):
+            return tuple(self.page.query_selector_all(config['input']))
         if self.attachments is None:
             return ()
         inputs = list(self.attachments.file_inputs(self.page))
@@ -1136,20 +1140,62 @@ class BaseWebUIAdapter:
         return tuple(element for _score, element in sorted(ranked, key=lambda item: item[0]))
 
     def attachment_button(self):
+        from .file_config import load_files
+        from .file_runtime import unique
+        config = load_files(self.provider_name)
+        if config.get('entry_verified'):
+            return unique(self.page, config['entry'])
         return self.attachments.attach_button(self.page) if self.attachments is not None else None
 
     def attachment_menu_items(self) -> tuple:
+        from .file_config import load_files
+        config = load_files(self.provider_name)
+        if config.get('upload_verified') and config.get('upload_action'):
+            return tuple(node for node in self.page.query_selector_all(config['upload_action']) if node.is_visible())
         return self.attachments.attach_menu_items(self.page) if self.attachments is not None else ()
 
     def attachment_dom_state(self, expected_names: list[str]) -> dict:
+        from .file_runtime import attachment_state
+        calibrated = attachment_state(self, expected_names)
+        if calibrated is not None:
+            return calibrated
         if self.attachments is None:
             return {"supported": False, "reason": "ATTACHMENTS_UNSUPPORTED"}
         return self.attachments.attachment_dom_state(self.page, expected_names)
 
     def composer_attachment_count(self) -> int:
+        from .file_config import load_files
+        from .file_runtime import attachment_state
+        calibrated = attachment_state(self, [])
+        if calibrated is not None:
+            selected_count = len(calibrated['chip_records'])
+            if selected_count == 0 and calibrated.get('selected_inputs'):
+                raise ValueError('attachment_inventory_drift:selected_input_without_calibrated_chip')
+            native_state = self.attachments.attachment_dom_state(self.page, []) if self.attachments is not None else None
+            if native_state is None or native_state.get('supported') is False:
+                if selected_count == 0:
+                    if load_files(self.provider_name).get('attachment_inventory_verified'):
+                        return 0
+                    raise ValueError('attachment_absence_not_proven:unknown_provider_or_stale_selector')
+                return selected_count
+            return max(selected_count, int(self.attachments.composer_attachment_count(self.page)))
+        if load_files(self.provider_name).get('upload_verified'):
+            native_state = self.attachments.attachment_dom_state(self.page, []) if self.attachments is not None else None
+            if native_state is None or native_state.get('supported') is False:
+                raise ValueError('attachment_state_not_verified:unknown_existing_attachments')
         return self.attachments.composer_attachment_count(self.page) if self.attachments is not None else 0
 
     def clear_one_attachment(self) -> bool:
+        from .file_config import load_files
+        from .file_runtime import unique
+        config = load_files(self.provider_name)
+        if config.get('attachment_verified'):
+            chips = self.page.locator(config['chip'])
+            visible = [node for node in chips.all() if node.is_visible()]
+            if not visible:
+                return False
+            unique(visible[0], config['remove']).click()
+            return True
         return self.attachments.clear_one_attachment(self.page) if self.attachments is not None else False
 
     def dismiss_rate_limit_dialog(self) -> bool:

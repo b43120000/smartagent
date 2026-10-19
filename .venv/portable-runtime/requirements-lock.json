@@ -1,0 +1,157 @@
+[
+  {
+    "name": "certifi-2026.10.18-py3-none-any.whl",
+    "sha256": "73191c47aaa79da394e8fee2dbc2ec827432cab56311122c9e47abf79e390f62",
+    "bytes": 134093
+  },
+  {
+    "name": "cffi-2.1.1-cp313-cp313-win_amd64.whl",
+    "sha256": "1aa5645c30469b09530c4ebca77ebf8f17618293c58f8549cb1a543a50236e7d",
+    "bytes": 185688
+  },
+  {
+    "name": "charset_normalizer-3.5.2-cp313-cp313-win_amd64.whl",
+    "sha256": "78456a747de8dc58360ffa581f30a002baf5aa28cb262536545e91f113ed7639",
+    "bytes": 206489
+  },
+  {
+    "name": "colorama-0.4.6-py2.py3-none-any.whl",
+    "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+    "bytes": 25335
+  },
+  {
+    "name": "cryptography-50.0.2-cp311-abi3-win_amd64.whl",
+    "sha256": "7afa5a6602a9f29af1f3a2965f831bae7c9d5d597b7cbb716d41ab3b7d89879c",
+    "bytes": 3824692
+  },
+  {
+    "name": "google_api_core-2.42.0-py3-none-any.whl",
+    "sha256": "b1bdf4f72dc4f910736ce4ba49038352effbbc309579215107649b22973a1317",
+    "bytes": 221364
+  },
+  {
+    "name": "google_api_python_client-2.201.0-py3-none-any.whl",
+    "sha256": "2d9bf1ba3f12eee8ed3d0f1791ce0605d163432f496baa72d3677faa2cf097d6",
+    "bytes": 16812656
+  },
+  {
+    "name": "google_auth-2.62.0-py3-none-any.whl",
+    "sha256": "4ff4319aeb4ad128409759d397a9fcafad126d0031d241cc0dd6b9a00b43e3f3",
+    "bytes": 267911
+  },
+  {
+    "name": "google_auth_httplib2-0.4.4-py3-none-any.whl",
+    "sha256": "bbe5d7b2401bb3a4017f4720e1e91bd273ab9a2bb60b84e65edbc0de127852da",
+    "bytes": 9542
+  },
+  {
+    "name": "google_auth_oauthlib-1.5.0-py3-none-any.whl",
+    "sha256": "71625fdea21c6c03217eb9ff13741c3096e6d257ebca0ad084dbd6e9f4aa4ef4",
+    "bytes": 20348
+  },
+  {
+    "name": "googleapis_common_protos-1.75.5-py3-none-any.whl",
+    "sha256": "d7285525c23039db98f2463e6d5a4f9b958b94d497f03a844ece3259c4e72d5d",
+    "bytes": 307737
+  },
+  {
+    "name": "greenlet-3.5.6-cp313-cp313-win_amd64.whl",
+    "sha256": "5b602b4201b965a8354d74e232364a66ff243dd142e350d035f46169bb36e13d",
+    "bytes": 324086
+  },
+  {
+    "name": "httplib2-0.32.0-py3-none-any.whl",
+    "sha256": "dc6705cacdf3fb0a2aba7629fa33c90fd93e30035db0c157325826be177e4816",
+    "bytes": 93148
+  },
+  {
+    "name": "idna-3.20-py3-none-any.whl",
+    "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+    "bytes": 69583
+  },
+  {
+    "name": "oauthlib-4.0.0-py3-none-any.whl",
+    "sha256": "624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd",
+    "bytes": 159715
+  },
+  {
+    "name": "opentelemetry_api-1.45.1-py3-none-any.whl",
+    "sha256": "b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb",
+    "bytes": 60256
+  },
+  {
+    "name": "pillow-13.0.0-cp313-cp313-win_amd64.whl",
+    "sha256": "9dda0788a9932776a75d8bcc020076edc308ce2508b51f6739a45e3158b3fc42",
+    "bytes": 7284777
+  },
+  {
+    "name": "playwright-1.62.0-py3-none-win_amd64.whl",
+    "sha256": "92c0d98ed04eb35af557b709875edba415b1f548bdb22ddb5bb3e1e6c835c2f1",
+    "bytes": 38164458
+  },
+  {
+    "name": "proto_plus-1.29.0-py3-none-any.whl",
+    "sha256": "8acd070469a7aaf43f440b022ef9757c8cac1a9f866e933f59ae98669ddc6c8b",
+    "bytes": 50786
+  },
+  {
+    "name": "protobuf-7.36.2-cp310-abi3-win_amd64.whl",
+    "sha256": "a300819d441e078a5608c0d3c709796bb548136058fda017ae51d425b44fd353",
+    "bytes": 456514
+  },
+  {
+    "name": "pyasn1-0.6.4-py3-none-any.whl",
+    "sha256": "deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b",
+    "bytes": 84410
+  },
+  {
+    "name": "pyasn1_modules-0.4.2-py3-none-any.whl",
+    "sha256": "29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a",
+    "bytes": 181259
+  },
+  {
+    "name": "pycparser-3.11-py3-none-any.whl",
+    "sha256": "51d5a8ba2be0bbe440b99d2112604c95bbbc3c2748a64260186c541e1729cd80",
+    "bytes": 51178
+  },
+  {
+    "name": "pyee-13.0.1-py3-none-any.whl",
+    "sha256": "af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228",
+    "bytes": 15659
+  },
+  {
+    "name": "pyparsing-3.3.3-py3-none-any.whl",
+    "sha256": "ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4",
+    "bytes": 126420
+  },
+  {
+    "name": "qrcode-8.2-py3-none-any.whl",
+    "sha256": "16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f",
+    "bytes": 45986
+  },
+  {
+    "name": "requests-2.34.2-py3-none-any.whl",
+    "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+    "bytes": 73075
+  },
+  {
+    "name": "requests_oauthlib-2.0.0-py2.py3-none-any.whl",
+    "sha256": "7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36",
+    "bytes": 24179
+  },
+  {
+    "name": "typing_extensions-4.16.0-py3-none-any.whl",
+    "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+    "bytes": 45571
+  },
+  {
+    "name": "uritemplate-4.2.0-py3-none-any.whl",
+    "sha256": "962201ba1c4edcab02e60f9a0d3821e82dfc5d2d6662a21abd533879bdb8a686",
+    "bytes": 11488
+  },
+  {
+    "name": "urllib3-2.8.0-py3-none-any.whl",
+    "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+    "bytes": 135717
+  }
+]

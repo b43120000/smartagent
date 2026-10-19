@@ -67,6 +67,8 @@ def validate_document(document: dict, provider: str) -> dict:
             validate_blocking_rules(entry.get('rules'))
         elif not {'generation_state','blocking_state'}.issubset(capabilities):
             raise ValueError('manual_dom_loop_requires_lifecycle_and_blockers')
+    from .file_config import validate_file_config
+    validate_file_config(document.get('files', {}))
     return document
 
 
@@ -117,7 +119,14 @@ def save_element(provider: str, url: str, name: str, selector: str, metadata: di
         "scope": "composer_only" if set(elements) == {"composer"} else "partial_conversation",
         "elements": elements,
         "capabilities": capabilities,
+        "files": dict((existing or {}).get('files', {})),
     }
+    if changed:
+        document['files'].pop('roundtrip', None)
+        if name in {'user_turn','assistant_turn','send'}:
+            document['files'].pop('attachment_verified',None)
+        if name=='assistant_turn':
+            document['files'].pop('download_verified',None)
     validate_document(document, provider)
     path = config_path(provider, root=root)
     if path.exists():

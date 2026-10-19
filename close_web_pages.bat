@@ -2,6 +2,8 @@
 setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
+call "%~dp0ensure_portable_runtime.bat"
+if errorlevel 1 exit /b %ERRORLEVEL%
 
 set "SMARTAGENT_PYTHON=%~dp0.venv\Scripts\python.exe"
 if not exist "%SMARTAGENT_PYTHON%" (

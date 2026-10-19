@@ -21,6 +21,21 @@ PROTOCOL_VERSION = 9
 # Keep this list small and explicit: these files define the wire/tool and
 # project-sync behavior that must be identical in every process/package.
 CORE_FILES = (
+    'ensure_portable_runtime.bat',
+    'ensure_portable_runtime.ps1',
+    'install_smart_agent/build_portable_runtime.py',
+    'install_smart_agent/validate_portable_runtime.ps1',
+    'source/agent_core/web_ui/file_calibration.py',
+    'source/agent_core/web_ui/file_config.py',
+    'source/agent_core/web_ui/file_runtime.py',
+    'source/agent_core/web_ui/file_picker.js',
+    'source/agent_core/web_ui/attachment_probe.py',
+    'adapterUI/11.attachmentEntry.bat',
+    'adapterUI/12.fileUpload.bat',
+    'adapterUI/13.attachmentState.bat',
+    'adapterUI/14.downloadArtifact.bat',
+    'adapterUI/15.fileRoundtripIT.bat',
+
     'update.bat',
     'adapterUI.bat',
     'writeSendBox.bat',

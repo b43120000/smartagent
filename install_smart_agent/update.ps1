@@ -76,6 +76,7 @@ function Assert-AclOff([string]$Target) {
     Write-Host '[SmartAgent Update] ACL gate: OFF'
 }
 function Test-ExcludedRelativePath([string]$RelativePath) {
+    if(Test-PortableDistributionPath $RelativePath){return $false}
     if(Test-PrivateDeploymentPath $RelativePath){return $true}
     $r=$RelativePath.Replace('/','\').TrimStart('\'); $segments=$r.Split('\')
     foreach($s in $segments){if($s -in @('.git','.venv','.agents','__pycache__')){return $true}}

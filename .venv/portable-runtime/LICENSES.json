@@ -1,0 +1,40 @@
+{
+  "python": {
+    "license": "PSF",
+    "url": "https://docs.python.org/3/license.html"
+  },
+  "wheels": [
+    "certifi-2026.10.18-py3-none-any.whl",
+    "cffi-2.1.1-cp313-cp313-win_amd64.whl",
+    "charset_normalizer-3.5.2-cp313-cp313-win_amd64.whl",
+    "colorama-0.4.6-py2.py3-none-any.whl",
+    "cryptography-50.0.2-cp311-abi3-win_amd64.whl",
+    "google_api_core-2.42.0-py3-none-any.whl",
+    "google_api_python_client-2.201.0-py3-none-any.whl",
+    "google_auth-2.62.0-py3-none-any.whl",
+    "google_auth_httplib2-0.4.4-py3-none-any.whl",
+    "google_auth_oauthlib-1.5.0-py3-none-any.whl",
+    "googleapis_common_protos-1.75.5-py3-none-any.whl",
+    "greenlet-3.5.6-cp313-cp313-win_amd64.whl",
+    "httplib2-0.32.0-py3-none-any.whl",
+    "idna-3.20-py3-none-any.whl",
+    "oauthlib-4.0.0-py3-none-any.whl",
+    "opentelemetry_api-1.45.1-py3-none-any.whl",
+    "pillow-13.0.0-cp313-cp313-win_amd64.whl",
+    "playwright-1.62.0-py3-none-win_amd64.whl",
+    "proto_plus-1.29.0-py3-none-any.whl",
+    "protobuf-7.36.2-cp310-abi3-win_amd64.whl",
+    "pyasn1-0.6.4-py3-none-any.whl",
+    "pyasn1_modules-0.4.2-py3-none-any.whl",
+    "pycparser-3.11-py3-none-any.whl",
+    "pyee-13.0.1-py3-none-any.whl",
+    "pyparsing-3.3.3-py3-none-any.whl",
+    "qrcode-8.2-py3-none-any.whl",
+    "requests-2.34.2-py3-none-any.whl",
+    "requests_oauthlib-2.0.0-py2.py3-none-any.whl",
+    "typing_extensions-4.16.0-py3-none-any.whl",
+    "uritemplate-4.2.0-py3-none-any.whl",
+    "urllib3-2.8.0-py3-none-any.whl"
+  ],
+  "notice": "Wheel METADATA and license files are retained in extracted *.dist-info directories."
+}

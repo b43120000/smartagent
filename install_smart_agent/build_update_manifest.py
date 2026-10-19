@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -52,6 +53,13 @@ def deployable_files(root: Path) -> dict[str, str]:
             if path.suffix.casefold() in EXCLUDED_SUFFIXES:
                 continue
             output[relative] = sha256(path)
+    # The only distributable venv content is a clean, immutable payload.
+    # Existing extracted interpreters, packages and machine configuration stay private.
+    payload=root / '.venv' / 'portable-runtime'
+    if payload.is_dir() and not payload.is_symlink():
+        for path in payload.iterdir():
+            if re.fullmatch(r'(manifest\.json|requirements-lock\.json|LICENSES\.json|README\.md|runtime\.zip(?:\.part[0-9]+)?)',path.name) and path.is_file() and not path.is_symlink():
+                output[path.relative_to(root).as_posix()]=sha256(path)
     return output
 
 

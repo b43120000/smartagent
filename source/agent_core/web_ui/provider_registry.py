@@ -34,7 +34,7 @@ class ProviderSpec:
 _SPECS = (
     ProviderSpec(
         name="m365",
-        hosts=("m365.cloud.microsoft",),
+        hosts=("m365.cloud.microsoft", "copilot.cloud.microsoft"),
         aliases=("microsoft_365", "m365_copilot"),
         adapter_module=".providers.m365",
         adapter_class="M365UIAdapter",

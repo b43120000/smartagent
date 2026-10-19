@@ -2,6 +2,8 @@
 setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0.."
+call "%CD%\ensure_portable_runtime.bat"
+if errorlevel 1 exit /b %ERRORLEVEL%
 title SmartAgent - 9. blockingState Calibration
 if /I "%~1"=="--launcher-self-test" (
     echo SMARTAGENT_COMPONENT_STAGE_9_LAUNCHER_OK

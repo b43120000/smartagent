@@ -39,7 +39,7 @@ ChatGPT 若無法直接操作你的電腦，仍可依 skill 逐步指導；請�
 
 - 64 位元 Windows 10 或 Windows 11。
 - 網路連線與可使用 ChatGPT 網頁版的帳號。
-- 可安裝 Python、Playwright Chromium 與專案相依套件的環境。
+- 已安裝 Chrome 或 Edge；本套件隨附 Windows x64 Python 與相依套件，首次啟動會在本機解開。
 - 建議先使用獨立測試 Workspace 與獨立 ChatGPT 對話。
 
 ## 下載
@@ -53,6 +53,14 @@ cd smartagent
 
 不要從其他電腦複製 `.venv`、`localdata`、`.agents`、瀏覽器 profile、Token 或暫存檔。
 
+## 免安裝 Python 啟動
+
+下載完整 repository ZIP 並解壓縮後，可直接執行 `Edit_workspace.bat` 設定 Workspace 與對話網址，再執行 `launch_webcopilot_chatgpt.bat`。手動 DOM 校準可直接執行 `adapterUI` 內各 BAT。
+
+`.venv/portable-runtime` 包含乾淨建置的 Python 與全部相依套件。啟動腳本使用 Windows PowerShell 校驗並解開，不需要另外安裝 Python 或連網下載 Python 套件；網站對話仍需要網路、已安裝 Chrome/Edge 與手動登入。既有正常 `.venv` 會保留。
+
+企業 Copilot 的 `copilot.cloud.microsoft/chat/conversation` 與 `m365.cloud.microsoft/chat/conversation` 共用 M365 provider、校準設定與 Agent 流程。完整建置及離線驗證方式見 [`PORTABLE_RUNTIME.md`](install_smart_agent/PORTABLE_RUNTIME.md)。附件校準 11～15 的 BAT 隨包提供，其各網站實站驗證另行進行，不代表所有網站測項已通過。
+
 ## 安裝
 
 1. 在 SmartAgent 根目錄雙擊：
@@ -61,7 +69,7 @@ cd smartagent
    install_smart_agent.bat
    ```
 
-2. 等待安裝程式建立本機 `.venv`、安裝 Python 套件與 Playwright Chromium。
+2. 完整安裝程式會建立環境並下載相依項目。若只需啟動 Workspace 設定、WebCopilot 或 DOM 校準，直接使用上方免安裝 Python 入口即可。
 3. 安裝完成後，預設為 **ACL OFF**：保留軟體層的命令與路徑安全檢查，但不啟用 restricted executor 的 NTFS 防竄改保護。
 4. 若只想檢查環境、不進行安裝，可執行：
 

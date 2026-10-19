@@ -1,4 +1,12 @@
-.venv/
+.venv/*
+!.venv/portable-runtime/
+.venv/portable-runtime/*
+!.venv/portable-runtime/manifest.json
+!.venv/portable-runtime/requirements-lock.json
+!.venv/portable-runtime/LICENSES.json
+!.venv/portable-runtime/README.md
+!.venv/portable-runtime/runtime.zip
+!.venv/portable-runtime/runtime.zip.part[0-9]*
 localdata/
 .agents/
 source/.agents/
