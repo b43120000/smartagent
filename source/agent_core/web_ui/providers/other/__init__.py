@@ -1,5 +1,5 @@
 """Origin-isolated manual adapters for sites without built-in selectors."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 
 from ...base_adapter import BaseWebUIAdapter
@@ -30,6 +30,19 @@ class OtherUIAdapter(BaseWebUIAdapter):
         if not is_other_provider(self.provider_name):
             raise ValueError('manual_other_origin_required')
         super().__init__(page, profile_name=profile_name)
+
+    def _turn_ref(self, element, role, ordinal):
+        turn = super()._turn_ref(element, role, ordinal)
+        if role != 'user':
+            return turn
+        # Shared testids describe node types, not individual user messages.
+        # With no identity field, retain the existing request-local ordinal
+        # fallback; it is not a durable identity across reloads.
+        attrs = tuple((name, value) for name, value in turn.stable_attributes
+                      if name != 'data-testid')
+        source = '\n'.join(f'{name}={value}' for name, value in attrs)
+        identity = hashlib.sha256(f'{role}\n{source or f"{role}:ordinal:{ordinal}"}'.encode('utf-8')).hexdigest()
+        return replace(turn, stable_attributes=attrs, structural_id=identity)
 
     def load_active_profile(self):
         document = load_dom_config(self.provider_name)
