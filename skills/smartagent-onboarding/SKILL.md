@@ -30,7 +30,7 @@ Use this skill when a user gives you this repository and asks how to install or 
 
 1. Confirm the user is on 64-bit Windows 10 or Windows 11 and has internet access.
 2. Confirm the repository is extracted to a normal user-writable directory.
-3. Ask the user to run `install_smart_agent.bat` from the repository root.
+3. When `.venv/portable-runtime/manifest.json` exists, the requested BAT launchers bootstrap the bundled runtime offline; start with `Edit_workspace.bat` and then `launch_webcopilot_chatgpt.bat`. The clean distribution payload is allowed; never copy a machine venv. Require installed Chrome/Edge and manual website login. For full installation use `install_smart_agent.bat`.
 4. If local execution is available and the user asked you to install, run the launcher from the repository root and report the first failing stage exactly. Do not bypass a failed security check.
 5. After installation succeeds, guide the user through `Edit_workspace.bat`:
    - add the smallest required Writable Workspace;

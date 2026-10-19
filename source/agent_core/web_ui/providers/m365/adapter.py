@@ -82,7 +82,8 @@ class M365UIAdapter(BaseWebUIAdapter):
         return super().busy_indicator_active(element,selector)
 
     def page_reachable(self):
-        return (urlsplit(str(getattr(self.page, "url", ""))).hostname == "m365.cloud.microsoft"
+        from ...provider_registry import provider_from_url
+        return (provider_from_url(str(getattr(self.page, "url", ""))) == self.provider_name
                 and super().page_reachable())
 
     def install_input_bridge(self, *, reset_legacy=False):
@@ -99,6 +100,10 @@ class M365UIAdapter(BaseWebUIAdapter):
         return None
 
     def attachment_dom_state(self, expected_names):
+        from ...file_runtime import attachment_state
+        calibrated = attachment_state(self, expected_names)
+        if calibrated is not None:
+            return calibrated
         return {"supported": False, "reason": "M365_ATTACHMENTS_NOT_CALIBRATED",
                 "text": "", "busy": [], "chips": [], "chip_records": [],
                 "alerts": [], "dialogs": [], "upload_ring_count": 0}

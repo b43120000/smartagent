@@ -1,6 +1,11 @@
 # Independent deployment receipt. Not a signature or machine authorization.
 # Publish only after the deployed file set has passed SHA-256 verification.
+function Test-PortableDistributionPath([string]$Relative) {
+    $value=$Relative.Replace('\','/').ToLowerInvariant()
+    return $value -match '^\.venv/portable-runtime/(manifest\.json|requirements-lock\.json|licenses\.json|readme\.md|runtime\.zip(\.part[0-9]+)?)$'
+}
 function Test-PrivateDeploymentPath([string]$Relative) {
+    if (Test-PortableDistributionPath $Relative) { return $false }
     $parts = $Relative.Replace('\', '/').ToLowerInvariant().Split('/')
     # Manual calibration receipts and site/account-specific selectors stay local.
     if ('dom_config.history' -in $parts -or $parts[-1] -eq 'dom_config.json') { return $true }

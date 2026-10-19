@@ -2,6 +2,8 @@
 setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
+call "%~dp0ensure_portable_runtime.bat"
+if errorlevel 1 exit /b %ERRORLEVEL%
 title SmartAgent - writeSendBox
 if /I "%~1"=="--launcher-self-test" (
     echo SMARTAGENT_WRITE_SEND_BOX_LAUNCHER_OK

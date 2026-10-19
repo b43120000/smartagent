@@ -5,6 +5,8 @@ if /I "%~1"=="--launcher-self-test" echo REMOTE_AGENT_LAUNCHER_PARSE_OK
 if /I "%~1"=="--launcher-self-test" exit /b 0
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
+call "%~dp0ensure_portable_runtime.bat"
+if errorlevel 1 exit /b %ERRORLEVEL%
 set "SMARTAGENT_SOURCE=%~dp0source"
 if not exist "%SMARTAGENT_SOURCE%\agent_core\__init__.py" (
     echo [SmartAgent] ERROR Canonical source is missing: %SMARTAGENT_SOURCE%

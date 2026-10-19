@@ -51,6 +51,11 @@ try {
     } | ConvertTo-Json
     [IO.File]::WriteAllText((Join-Path $target 'localdata\secure\windows_security\acl_mode.json'), $aclState)
 
+    $payload=Join-Path $source '.venv\portable-runtime'
+    New-Item -ItemType Directory -Force -Path $payload | Out-Null
+    [IO.File]::WriteAllText((Join-Path $payload 'manifest.json'), '{"schema":"clean-portable-fixture"}')
+    [IO.File]::WriteAllText((Join-Path $payload 'runtime.zip'), 'clean-runtime-payload')
+    [IO.File]::WriteAllText((Join-Path $payload 'private.txt'), 'must-stay-private')
     & $PythonExe $builder --root $source --release-id 'manifest-update-test'
     if ($LASTEXITCODE -ne 0) { throw "manifest builder failed: $LASTEXITCODE" }
 
@@ -104,6 +109,11 @@ function Save-DeploymentBaseline {
     $ErrorActionPreference = $oldPreference
     if ($failedExit -eq 0 -or ($output -join "`n") -notmatch 'injected_after_receipt_publish' -or (Get-FileHash -LiteralPath $receiptPath).Hash -ne $receiptBefore) { throw 'post-publication failure did not restore baseline' }
 
+    foreach($name in @('manifest.json','runtime.zip')) {
+        $deployed=Join-Path $target ('.venv\portable-runtime\'+$name)
+        if(-not(Test-Path -LiteralPath $deployed)){throw "portable_payload_not_deployed:$name"}
+    }
+    if(Test-Path -LiteralPath (Join-Path $target '.venv\portable-runtime\private.txt')){throw 'unallowlisted_venv_content_deployed'}
     Write-Output 'SMARTAGENT_MANIFEST_UPDATE_TEST_OK'
 } finally {
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }

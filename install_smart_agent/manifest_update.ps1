@@ -110,12 +110,15 @@ function Convert-RelativePath([string]$RelativePath) {
     return $normalized
 }
 function Test-PreservedDirectory([string]$RelativePath) {
+    $portable=$RelativePath.Replace('\','/').ToLowerInvariant()
+    if ($portable -in @('.venv','.venv/portable-runtime')) { return $false }
     foreach ($segment in @($RelativePath.Replace('/', '\').TrimStart('\').Split('\'))) {
         if ($PreservedDirectoryNames -icontains $segment) { return $true }
     }
     return $false
 }
 function Test-PreservedFile([string]$RelativePath) {
+    if (Test-PortableDistributionPath $RelativePath) { return $false }
     if (Test-PrivateDeploymentPath $RelativePath) { return $true }
     $relative = $RelativePath.Replace('/', '\').TrimStart('\')
     if (Test-PreservedDirectory $relative) { return $true }
