@@ -13,7 +13,7 @@ from pathlib import Path
 
 SCHEMA = "SMARTAGENT_UPDATE_MANIFEST_V1"
 SECURITY_POLICY_VERSION = 1
-RELEASE_SEQUENCE = 2026102201
+RELEASE_SEQUENCE = 2026102202
 EXCLUDED_DIRS = {
     ".git", ".venv", "localdata", ".agents", "__pycache__", ".pytest_cache",
     "browser_profile", ".codex", ".aws", ".ssh", "dom_config.history", "defaultworkspace",

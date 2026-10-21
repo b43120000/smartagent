@@ -845,7 +845,9 @@ class WebLLMScraper:
                     current_id = self._conversation_id_from_url(
                         str(getattr(self._page, "url", "") or "")
                     )
-                    if not target_id or current_id != target_id:
+                    if attach_cdp and self.service == "chatgpt" and target_id:
+                        self._start_attached_chatgpt_conversation()
+                    elif not target_id or current_id != target_id:
                         self._page.goto(
                             self.cfg["url"],
                             wait_until="commit" if attach_cdp else "domcontentloaded",
@@ -876,6 +878,10 @@ class WebLLMScraper:
                         isolated_page
                         and self._page is not None
                         and self._owns_attached_page
+                        and not (
+                            attach_cdp and self.service == "chatgpt"
+                            and self._attached_chatgpt_target_matches()
+                        )
                     ):
                         try:
                             self._page.close(run_before_unload=False)
@@ -911,6 +917,62 @@ class WebLLMScraper:
             time.sleep(2)
 
         print(f"[WebScraper] 已連接 {self.service}")
+
+    def _attached_chatgpt_target_matches(self) -> bool:
+        """Never accept a matching conversation ID from another provider."""
+        target = self.cfg.get("url", "")
+        current = str(getattr(self._page, "url", "") or "")
+        target_id = self._conversation_id_from_url(target)
+        return bool(
+            target_id and same_provider_url(current, target)
+            and self._conversation_id_from_url(current) == target_id
+        )
+
+    def _start_attached_chatgpt_conversation(self, *, timeout_ms: int = 30000) -> None:
+        """Observe conversation/composer readiness instead of redirect load events.
+
+        Schedule navigation after the evaluate response, so ChatGPT project
+        redirects cannot consume the command's execution context before reply.
+        This uses only the selected page and never writes or submits a prompt.
+        """
+        if not self._attached_chatgpt_target_matches():
+            self._log_stage("page_navigation_requested", "mode=scheduled_location")
+            try:
+                self._page.evaluate(
+                    "target => { setTimeout(() => window.location.assign(target), 0); return true; }",
+                    self.cfg["url"],
+                )
+            except Exception as exc:
+                # A redirect may still replace the context before the response.
+                # Driver disconnections and other errors must remain visible.
+                if "execution context was destroyed" not in str(exc).lower():
+                    raise
+        deadline = time.monotonic() + max(0.001, timeout_ms / 1000.0)
+        self._log_stage("page_navigation_wait", "waiting=conversation_and_composer")
+        while time.monotonic() < deadline:
+            if self._page.is_closed():
+                raise RuntimeError("chatgpt_startup_page_closed")
+            if self._attached_chatgpt_target_matches():
+                try:
+                    adapter = self._web_ui_adapter()
+                    adapter.probe_compatibility(force=True)
+                    composer = adapter.visible_composer()
+                    if composer is not None and composer.is_visible():
+                        self._log_stage("page_navigation_ready", "conversation_and_composer=ready")
+                        return
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if not (
+                        "execution context was destroyed" in message
+                        or message.startswith("web_ui_profile_unsupported:")
+                    ):
+                        raise
+            self._page.wait_for_timeout(200)
+        raise RuntimeError(
+            "chatgpt_startup_not_ready: target_match="
+            f"{self._attached_chatgpt_target_matches()}; "
+            "check browser login, conversation access and composer calibration"
+        )
 
     def get_conversation_display_name(self) -> str:
         """Return provider-normalized visible conversation name."""

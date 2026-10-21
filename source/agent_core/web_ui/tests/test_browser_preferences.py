@@ -127,6 +127,7 @@ class ManagedRoutingTests(unittest.TestCase):
              patch.object(WebLLMScraper, '_bind_playwright', bind), \
              patch.object(WebLLMScraper, '_is_logged_in', return_value=True), \
              patch.object(WebLLMScraper, '_dismiss_known_blocking_dialogs'), \
+             patch.object(WebLLMScraper, '_start_attached_chatgpt_conversation'), \
              patch.object(WebLLMScraper, '_claim_conversation_owner'), \
              patch.object(WebLLMScraper, 'release_conversation_owner', return_value=0), \
              patch('agent_core.web_runtime.time.sleep'), \
