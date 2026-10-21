@@ -31,10 +31,8 @@ class PromptTests(unittest.TestCase):
                     _submit_verified_prompt=Mock(),_wait_for_user_sent=Mock())
                 WebLLMScraper._send_protocol_recovery_probe(fake,{},prompt_override='repair request')
                 sent=fake._write_prompt_to_composer.call_args.args[0]
-                if service=='m365':
-                    self.assertTrue(sent.startswith('[WEBUI_SUBMIT_ID]'))
-                    self.assertTrue(sent.endswith('\nrepair request'))
-                else:self.assertEqual(sent,'repair request')
+                self.assertTrue(sent.startswith('[WEBUI_SUBMIT_ID]'))
+                self.assertTrue(sent.endswith('\nrepair request'))
                 fake._capture_request_turn_state.assert_called_once_with(sent)
                 fake._submit_verified_prompt.assert_called_once_with('send',prompt=sent,submit_snapshot={'scope':'new'})
 

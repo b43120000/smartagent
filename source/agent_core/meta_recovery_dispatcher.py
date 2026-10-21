@@ -10,6 +10,7 @@ from .webgpt_rate_governor import WebGPTRateGovernor
 from .paths import self_repair_root
 from .shared_browser import shared_browser_enabled, shared_browser_endpoint
 from .web_ui import create_web_ui_for_page
+from .payload_budget import ensure_webgpt_prompt_budget
 from WebAgent.browser_bridge import execution_page_lease
 
 from .browser_preferences import browser_launch_selection
@@ -162,6 +163,8 @@ def _dispatch_once_locked(meta,cdp,root,rate_lease):
                 raise
         result["rate_limit_dialog_dismissed"]=_dismiss_rate_limit_dialog(page)
         web_ui=create_web_ui_for_page(page)
+        prompt=web_ui.prepare_transport_prompt(prompt)
+        ensure_webgpt_prompt_budget(prompt)
         scope=web_ui.capture_request(prompt,conversation_id=_cid(page.url))
         composer=web_ui.visible_composer()
         if composer is None:
@@ -198,6 +201,8 @@ def _dispatch_once_locked(meta,cdp,root,rate_lease):
                     _atomic(result_path,result); return result
                 total+=len(encoded); source.append({"path":rel,"content":content})
             followup="[SELF_REPAIR_SOURCE_CONTEXT]\nissue_id: "+issue+"\nCurrent worktree source follows. Return only the final fenced self_repair_control SELF_REPAIR_PLAN with files matching modified_paths exactly.\n"+json.dumps(source,ensure_ascii=False)
+            followup=web_ui.prepare_transport_prompt(followup)
+            ensure_webgpt_prompt_budget(followup)
             scope=web_ui.capture_request(followup,conversation_id=_cid(page.url))
             composer=web_ui.visible_composer()
             if composer is None:

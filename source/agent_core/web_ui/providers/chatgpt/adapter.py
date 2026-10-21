@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import uuid
 
 from ...base_adapter import BaseWebUIAdapter
 from . import attachments
@@ -91,9 +90,6 @@ class ChatGPTUIAdapter(BaseWebUIAdapter):
             if value:
                 return f"{name}:{value}"
         return super().durable_turn_id(turn)
-
-    def prepare_transport_prompt(self, prompt: str) -> str:
-        return '[WEBUI_SUBMIT_ID]\nWUS-' + uuid.uuid4().hex.upper() + '\n[/WEBUI_SUBMIT_ID]\n' + prompt
 
     def assistant_is_fresh(self, turn, scope) -> bool:
         attrs = dict(turn.stable_attributes)

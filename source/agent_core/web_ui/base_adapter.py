@@ -430,6 +430,11 @@ class BaseWebUIAdapter:
 
     def capture_request(self, prompt: str, *, conversation_id: str = "") -> RequestScope:
         snapshot = self.snapshot()
+        # Only the software-generated leading envelope identifies this submit.
+        # Quoted historical prompts must never become alternative anchors.
+        submit_marker = re.match(
+            r'^\[WEBUI_SUBMIT_ID\]\s*(WUS-[A-F0-9]{32})\s*\[/WEBUI_SUBMIT_ID\]', prompt
+        )
         return RequestScope(
             scope_id="WEBUI-" + uuid.uuid4().hex.upper(),
             conversation_id=str(conversation_id or ""),
@@ -443,13 +448,15 @@ class BaseWebUIAdapter:
             ),
             baseline_user_count=len(snapshot.user_turns),
             baseline_assistant_count=len(snapshot.assistant_turns),
-            request_markers=_request_markers(prompt),
+            request_markers=(submit_marker.group(1),) if submit_marker else _request_markers(prompt),
             baseline_assistant_content=tuple((self.durable_turn_id(turn), turn.content_digest)
                 for turn in snapshot.assistant_turns),
         )
 
     def prepare_transport_prompt(self, prompt: str) -> str:
-        return prompt
+        # Every provider, including origin-isolated Other URLs, shares the same
+        # per-submit identity. Preserve the original prompt and output protocol.
+        return '[WEBUI_SUBMIT_ID]\nWUS-' + uuid.uuid4().hex.upper() + '\n[/WEBUI_SUBMIT_ID]\n' + prompt
 
     def recover_turn_mounts(self) -> bool:
         """Provider-specific bounded materialization, never resubmit."""
