@@ -74,6 +74,9 @@ def validate_document(document: dict, provider: str) -> dict:
 
 def load_dom_config(provider: str, *, root: Path | None = None) -> dict | None:
     path = config_path(provider, root=root)
+    if not path.exists() and provider in known_providers():
+        # Published, sanitized defaults never overwrite a user's local mapping.
+        path = path.with_name('dom_config.default.json')
     if not path.exists():
         return None
     # An explicitly present broken manual config must not silently use old DOM.
