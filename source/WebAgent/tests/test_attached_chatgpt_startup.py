@@ -39,7 +39,7 @@ def scraper(page):
     s._page = page
     s._log_stage = Mock()
     s._emit_status = Mock()
-    s._web_ui_adapter = Mock(return_value=SimpleNamespace(probe_compatibility=Mock(), visible_composer=Mock(return_value=Mock(is_visible=Mock(return_value=True)))))
+    s._web_ui_adapter = Mock(return_value=SimpleNamespace(authentication_state=Mock(return_value=SimpleNamespace(status="UNKNOWN")), probe_compatibility=Mock(), visible_composer=Mock(return_value=Mock(is_visible=Mock(return_value=True)))))
     return s
 
 
@@ -68,7 +68,7 @@ class StartupTests(unittest.TestCase):
         with patch('agent_core.web_runtime.time.monotonic', side_effect=lambda: p.clock):
             with self.assertRaisesRegex(RuntimeError, 'target_match=False'):
                 s._start_attached_chatgpt_conversation(timeout_ms=400)
-        s._web_ui_adapter.assert_not_called()
+        s._web_ui_adapter().visible_composer.assert_not_called()
 
     def test_composer_required_even_for_matching_conversation(self):
         p = Page(TARGET)
@@ -107,6 +107,15 @@ class StartupTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'target_match=True'):
                 s._start_attached_chatgpt_conversation(timeout_ms=400)
 
+    def test_login_page_returns_to_existing_manual_login_flow(self):
+        p = Page(TARGET)
+        s = scraper(p)
+        s._web_ui_adapter().authentication_state.return_value.status = 'LOGIN_REQUIRED'
+        s._web_ui_adapter().visible_composer.return_value = None
+        s._start_attached_chatgpt_conversation()
+        s._log_stage.assert_any_call('page_login_required', 'waiting=manual_login')
+        p.close.assert_not_called()
+
     def test_driver_disconnect_is_not_swallowed(self):
         p = Page()
         p.evaluate = Mock(side_effect=RuntimeError('Connection closed while reading from the driver'))
@@ -127,7 +136,7 @@ class StartupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'page_closed'):
             scraper(p)._start_attached_chatgpt_conversation()
 
-    def test_start_reuses_target_after_readiness_timeout(self):
+    def test_start_reuses_target_after_timeout_and_manual_login(self):
         p = Page()
         s = scraper(p)
         context = SimpleNamespace(pages=[], new_page=Mock(return_value=p))
@@ -141,7 +150,7 @@ class StartupTests(unittest.TestCase):
         s._page_has_canonical_marker = Mock(return_value=True)
         s._claim_conversation_owner = Mock()
         s._dismiss_known_blocking_dialogs = Mock()
-        s._is_logged_in = Mock(return_value=True)
+        s._is_logged_in = Mock(side_effect=[False, True])
         def navigate():
             p.url = TARGET
             context.pages = [p]
@@ -154,7 +163,7 @@ class StartupTests(unittest.TestCase):
              patch('agent_core.web_runtime.exclusive_process_lock', return_value=nullcontext()), \
              patch('agent_core.web_runtime.time.sleep'):
             s.start(playwright=pw)
-        self.assertEqual(helper.call_count, 2)
+        self.assertEqual(helper.call_count, 3)
         context.new_page.assert_called_once()
         p.close.assert_not_called()
         p.goto.assert_not_called()

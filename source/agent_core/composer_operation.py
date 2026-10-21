@@ -93,6 +93,7 @@ def stop_owned_helper(process):
 
 
 def run_helper(payload, timeout_sec, cancel_check=None):
+    payload = {**payload, 'connect_timeout_ms': max(500, min(12000, int((timeout_sec - 2) * 1000)))}
     command=[sys.executable,'-B','-m','agent_core.composer_operation']
     process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,creationflags=(subprocess.CREATE_NO_WINDOW | 0x4) if os.name=='nt' else 0)
@@ -129,6 +130,22 @@ def run_helper(payload, timeout_sec, cancel_check=None):
         if job:
             job.close()
         stop_owned_helper(process)
+
+
+def observe_composer(payload, timeout_sec, cancel_check=None):
+    """Retry only a failed read-only CDP connection; never replay a writer."""
+    for attempt in range(2):
+        try:
+            result = run_helper({**payload, 'mode': 'observe'}, max(15.0, timeout_sec), cancel_check)
+        except subprocess.TimeoutExpired:
+            return dict(status='OBSERVER_TIMEOUT', error_code='OBSERVER_TIMEOUT')
+        except ComposerOperationError as exc:
+            return dict(status='OBSERVER_FAILED', error_code=str(exc).split(':')[-1][:80])
+        if result.get('status') not in {'CDP_CONNECT_TIMEOUT', 'CDP_CONNECTION_CLOSED'} or attempt:
+            return result
+        if cancel_check:
+            cancel_check()
+    return result
 
 
 def prepare_composer(*,endpoint,url,prompt,journal_root,timeout_sec=30.0,
@@ -175,9 +192,9 @@ def _prepare_locked(*,endpoint,url,prompt,journal_root,timeout_sec,
         # The writer has exited before observation begins. Never start a second
         # write; a late browser command may still have changed the draft.
         try:
-            result=run_helper({**payload,'mode':'observe'},observation_timeout_sec,cancel_check)
+            result=observe_composer(payload,observation_timeout_sec,cancel_check)
         except Exception as exc:
-            result=dict(status='UNKNOWN',error_type=type(exc).__name__)
+            result=dict(status='OBSERVER_FAILED',error_type=type(exc).__name__,error_code='observer_exception')
         if timed_out:
             result['writer_timed_out']=True
             # A browser command can outlive its CDP client; never submit after timeout.
@@ -232,7 +249,7 @@ def _verify_prepared_locked(*,endpoint,url,prompt,journal_root,cancel_check,oper
         raise ComposerOperationError('composer_submit_identity_unconfirmed')
     payload=dict(mode='observe',endpoint=endpoint,url=url,prompt=prompt,journal=str(journal),operation_id=record['operation_id'])
     try:
-        result=run_helper(payload,8.0,cancel_check)
+        result=observe_composer(payload,15.0,cancel_check)
         if cancel_check:cancel_check()
         if result.get('status')!='VERIFIED_SAFE_TO_SUBMIT':
             raise ComposerOperationError('composer_submit_scope_changed',result)
@@ -444,7 +461,17 @@ def helper_main():
     if record.get('operation_id')!=payload['operation_id']:
         raise ComposerOperationError('composer_operation_identity_changed')
     with sync_playwright() as pw:
-        browser=pw.chromium.connect_over_cdp(payload['endpoint'],timeout=5000)
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        try:
+            browser=pw.chromium.connect_over_cdp(payload['endpoint'],timeout=payload.get('connect_timeout_ms',12000))
+        except PlaywrightTimeoutError:
+            print('COMPOSER_RESULT '+json.dumps({'status':'CDP_CONNECT_TIMEOUT','error_code':'CDP_CONNECT_TIMEOUT'}),flush=True)
+            return
+        except Exception as exc:
+            if 'closed' not in str(exc).lower():
+                raise
+            print('COMPOSER_RESULT '+json.dumps({'status':'CDP_CONNECTION_CLOSED','error_code':'CDP_CONNECTION_CLOSED'}),flush=True)
+            return
         pages=[page for context in browser.contexts for page in context.pages if page.url==payload['url']]
         if len(pages)!=1:
             print('COMPOSER_RESULT '+json.dumps({'status':'TARGET_NOT_UNIQUE'}),flush=True)

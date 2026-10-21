@@ -8,14 +8,16 @@ from playwright.sync_api import sync_playwright
 from agent_core.web_runtime import WebLLMScraper
 
 
-def run(endpoint):
+def run(endpoint, target=""):
     result = {"test": "attached_chatgpt_startup", "messages_submitted": 0}
     with sync_playwright() as pw:
         browser = pw.chromium.connect_over_cdp(endpoint, timeout=6000)
         context = browser.contexts[0]
         originals = list(context.pages)
-        target = next((p.url for p in originals
+        target = target or next((p.url for p in originals
                        if p.url.startswith("https://chatgpt.com/") and "/c/" in p.url), "")
+        if target and not (target.startswith("https://chatgpt.com/") and "/c/" in target):
+            raise ValueError("Live test target must be a ChatGPT conversation URL")
         if not target:
             raise RuntimeError("Open an existing ChatGPT conversation in this browser first")
         page = context.new_page()
@@ -39,9 +41,10 @@ def run(endpoint):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default="http://127.0.0.1:12801")
+    parser.add_argument("--target", default="", help="Optional existing ChatGPT conversation URL")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    result = run(args.endpoint)
+    result = run(args.endpoint, args.target)
     args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result))
     raise SystemExit(0 if result["status"] == "PASS" else 1)

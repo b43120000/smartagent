@@ -627,6 +627,8 @@ class WebLLMScraper:
             return "VALIDATING_PROTOCOL", "驗證 ChatGPT 回覆"
         if key in {"protocol_commit_complete", "complete"}:
             return "RESPONSE_RECEIVED", "已收到 ChatGPT 回覆"
+        if key == "composer_bounded_failed":
+            return "COMPOSER_CONFIRMATION_FAILED", "網頁已開啟，但訊息尚未確認；保留草稿，未送出"
         if "failed" in key or key in {"timeout", "emergency_stalled"}:
             return "FAILED", "ChatGPT 網頁操作失敗"
         return "", ""
@@ -913,7 +915,10 @@ class WebLLMScraper:
                 time.sleep(3)
                 print("    等待登入完成...")
             print("    偵測到登入完成！繼續執行...")
-            self._page.goto(self.cfg["url"], wait_until="domcontentloaded", timeout=30000)
+            if attach_cdp and self.service == "chatgpt" and target_id:
+                self._start_attached_chatgpt_conversation()
+            else:
+                self._page.goto(self.cfg["url"], wait_until="domcontentloaded", timeout=30000)
             time.sleep(2)
 
         print(f"[WebScraper] 已連接 {self.service}")
@@ -952,9 +957,13 @@ class WebLLMScraper:
         while time.monotonic() < deadline:
             if self._page.is_closed():
                 raise RuntimeError("chatgpt_startup_page_closed")
+            adapter = self._web_ui_adapter()
+            if adapter.authentication_state().status == "LOGIN_REQUIRED":
+                # Preserve start()'s existing human-login flow and its page.
+                self._log_stage("page_login_required", "waiting=manual_login")
+                return
             if self._attached_chatgpt_target_matches():
                 try:
-                    adapter = self._web_ui_adapter()
                     adapter.probe_compatibility(force=True)
                     composer = adapter.visible_composer()
                     if composer is not None and composer.is_visible():

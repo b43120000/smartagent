@@ -106,6 +106,7 @@ def run():
             assert helper.call_count==4 # later explicit request not quarantined forever
     scraper=WebLLMScraper.__new__(WebLLMScraper)
     scraper.service='chatgpt';scraper._page=type('Page',(),{'url':before['url']})()
+    scraper.get_cdp_endpoint=lambda: 'http://127.0.0.1:1272'
     scraper._log_stage=lambda *a:None;scraper._set_request_state=lambda *a:None
     with patch.object(co,'prepare_composer',side_effect=co.ComposerOperationError('UNKNOWN')):
         try:scraper._write_prompt_to_composer('x')
