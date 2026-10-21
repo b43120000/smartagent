@@ -1,4 +1,4 @@
-"""M365 presentation instructions preserve strict protocol and request binding."""
+"""M365 keeps original prompts while filtering only recognized answer UI."""
 import html
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,19 +9,13 @@ from ...protocol_v9 import parse_v9_tool_transport_detailed
 from .test_m365_code_ui_filter import M365CodeUIFilterTests, BODY
 
 class PromptTests(unittest.TestCase):
-    def test_only_m365_appends_format_instruction_without_altering_request(self):
-        raw='[AGENT_SESSION_ATTACH]\n{"session_id":"test","handshake_id":"h1"}\n[/AGENT_SESSION_ATTACH]'
+    def test_m365_preserves_original_prompt_without_format_instructions(self):
         adapter=object.__new__(M365UIAdapter)
-        result=adapter.prepare_transport_prompt(raw)
-        self.assertTrue(result.startswith(raw+'\n\n'))
-        self.assertIn('smartagent_tool alone on its own line',result)
-        self.assertIn('turn_commit',result)
-        self.assertIn('exact action_count',result)
-        self.assertIn('actual line breaks',result)
-        self.assertIn('\n[M365_PLAIN_TEXT_TRANSPORT]\n',result)
-        self.assertEqual(BaseWebUIAdapter.prepare_transport_prompt(None,raw),raw)
+        for raw in ['[AGENT_SESSION_ATTACH]\n{"session_id":"test","handshake_id":"h1"}\n[/AGENT_SESSION_ATTACH]',
+                    'Return the original ```smartagent_tool protocol format.']:
+            self.assertEqual(adapter.prepare_transport_prompt(raw),raw)
 
-    def test_recovery_submission_uses_same_formatted_prompt_for_capture_and_send(self):
+    def test_recovery_submission_preserves_prompt_for_capture_and_send(self):
         from agent_core.web_runtime import WebLLMScraper
         for service in ['m365','chatgpt']:
             with self.subTest(service=service):
@@ -33,12 +27,12 @@ class PromptTests(unittest.TestCase):
                     _submit_verified_prompt=Mock(),_wait_for_user_sent=Mock())
                 WebLLMScraper._send_protocol_recovery_probe(fake,{},prompt_override='repair request')
                 sent=fake._write_prompt_to_composer.call_args.args[0]
-                self.assertEqual('[M365_PLAIN_TEXT_TRANSPORT]' in sent,service=='m365')
+                self.assertEqual(sent,'repair request')
                 fake._capture_request_turn_state.assert_called_once_with(sent)
                 fake._submit_verified_prompt.assert_called_once_with('send',prompt=sent,submit_snapshot={'scope':'new'})
 
 class PlainTextDOMTests(M365CodeUIFilterTests):
-    # Inherited code-widget tests cover the fallback when the model ignores the request.
+    # Inherited code-widget tests cover the retained post-processing path.
     def test_plain_text_paragraphs_and_br_keep_protocol_lines(self):
         for markup in ['<p>smartagent_tool</p>'+''.join('<p>'+html.escape(x)+'</p>' for x in BODY.splitlines()),
                        html.escape('smartagent_tool\n'+BODY).replace('\n','<br>')]:

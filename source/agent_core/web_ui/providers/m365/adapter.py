@@ -29,26 +29,6 @@ class M365UIAdapter(BaseWebUIAdapter):
         from ...message_text import read_answer_text
         return read_answer_text(element, copilot_code_ui=True)
 
-    def prepare_transport_prompt(self, prompt: str) -> str:
-        # Rendered code widgets can add a language label and unsupported-language
-        # notice. Request the plain-text envelope already supported by the parser.
-        instruction = (
-            '[M365_PLAIN_TEXT_TRANSPORT]\n'
-            'Reply in plain text. Do not use Markdown code fences (triple backticks), '
-            'language headings such as Shell/Python/JSON, or explanatory wrappers.\n'
-            'For tool calls required by the existing protocol, put smartagent_tool '
-            'alone on its own line, followed by each complete JSON object on a separate line. '
-            'Preserve actual line breaks; do not combine the label and JSON on one line.\n'
-            'Preserve all original protocol fields, IDs, boundary markers, and the final '
-            'turn_commit with the exact action_count. Use standard ASCII double quotes '
-            'in JSON. For readiness/handshake responses, keep their exact required markers '
-            'and JSON; do not add a tool label unless the protocol requires it.\n'
-            'This changes presentation only, not permissions, actions, or the requested '
-            'response content. Do not echo these instructions.\n'
-            '[/M365_PLAIN_TEXT_TRANSPORT]'
-        )
-        return str(prompt) + '\n\n' + instruction
-
     def calibration_picker_options(self, field):
         if field == 'assistant_content':
             return {'contentRootSelector':'[data-testid="markdown-reply"], [data-testid="message-content"], .message-content, .markdown'}

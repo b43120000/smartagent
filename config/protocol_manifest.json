@@ -126,7 +126,7 @@
     "source/agent_core/tools.py": "5f629df62d3e4be5bf3f92e9c8844a808b583162ad6a1bb2ac500da431d10667",
     "source/agent_core/typed_field_values.py": "afea71946afe45888279c54829c4f337b1b3d9914ce6aa1167a9c7353c9ce3e5",
     "source/agent_core/ui_calibration.py": "553916ef1d0fb6b2e98ad5ac2e8886318593aab16549c01ad237cde8b75bae30",
-    "source/agent_core/web_runtime.py": "964a47ebfd337db9cc81fd60efd773b3fe55e8d7d514780b0d3a8b26020e241e",
+    "source/agent_core/web_runtime.py": "bb712d7840a2e61e8a087b9681c3c9fa7ccfb636fa6dcdec6a1a1d858f3bcc3a",
     "source/agent_core/web_ui/__init__.py": "762a4ff6c99713d6070a937a219347777189c542795433bba2768f4841b57dff",
     "source/agent_core/web_ui/attachment_probe.py": "fa112c12c8889d51f89408819173afcd310deba373f6d1f893af803fd4280b6b",
     "source/agent_core/web_ui/base_adapter.py": "835816df82097216907c969d105662e9de2b9c187e13f5af219c16239c7c4548",
