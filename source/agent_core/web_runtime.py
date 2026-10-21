@@ -2276,6 +2276,25 @@ class WebLLMScraper:
             raise WebScraperStageError(message,
                 stage='provider_conversation_full' if full else 'provider_rate_limit', safe_to_retry=False)
 
+    def _log_user_binding_diagnostic(self, snapshot: dict, trigger: str) -> None:
+        """Observe the original request without rebinding or changing admission."""
+        scope = snapshot.get('_web_ui_scope')
+        if scope is None:
+            return
+        try:
+            from .web_ui.user_binding_diagnostic import diagnose_user_binding
+            report = diagnose_user_binding(self._web_ui_adapter(), scope)
+            self._log_stage('user_binding_diagnostic', json.dumps(
+                {'trigger': trigger, **report}, ensure_ascii=False, sort_keys=True))
+        except Exception as exc:
+            try:
+                self._log_stage('user_binding_diagnostic_failed', json.dumps({
+                    'scope_id':str(getattr(scope, 'scope_id', '')), 'trigger':trigger, 'error_type':type(exc).__name__}))
+            except Exception:
+                # Closed stdout/log sinks must not replace the admission result
+                # or the original timeout with an observational failure.
+                pass
+
     def _confirm_generation_delivery(self, snapshot: dict, composer_state: dict, *, deadline_reached: bool) -> bool:
         """Acknowledge transport only; never fabricate a user/assistant anchor."""
         scope = snapshot.get('_web_ui_scope')
@@ -2309,6 +2328,7 @@ class WebLLMScraper:
         self._set_request_state('SUBMIT_CONFIRMED_PENDING_SCOPE', 'generation_after_completed_click')
         self._log_stage('user_sent_generation_fallback',
                         'delivery_confirmed=true user_scope_confirmed=false assistant_ownership_required=true')
+        self._log_user_binding_diagnostic(snapshot, 'generation_fallback')
         return True
 
     def _wait_for_user_sent(self, snapshot: dict, timeout_sec: float = 45.0) -> None:
@@ -2428,6 +2448,7 @@ class WebLLMScraper:
                     )
                     stalled_for = now - deferred_last_progress
                     if stalled_for >= stall_limit:
+                        self._log_user_binding_diagnostic(snapshot, 'user_scope_active_stalled')
                         self._set_request_state(
                             "RECOVERY_REQUIRED", "user_scope_active_stalled"
                         )
@@ -2472,6 +2493,7 @@ class WebLLMScraper:
                 next_diag = now + 1.0
             time.sleep(0.25)
         self._log_composer_state("user_sent_timeout_composer")
+        self._log_user_binding_diagnostic(snapshot, 'user_sent_timeout')
         self._log_stage("timeout", "stage=user_sent")
         raise WebScraperStageError(
             "[WEB_SEND_TIMEOUT] submit 已嘗試，但未確認本輪新的 user turn 出現在對話 DOM；不得讀取舊 assistant 回應。",
@@ -2621,6 +2643,7 @@ class WebLLMScraper:
             if stalled_for >= stall_limit and not disconnect_wait:
                 marker = "WEB_ASSISTANT_START_EMERGENCY_STALLED" if active else "WEB_ASSISTANT_START_STALLED"
                 stage_name = "assistant_started_emergency_stalled" if active else "assistant_started_stalled"
+                self._log_user_binding_diagnostic(snapshot, 'assistant_start_stalled')
                 try:
                     final_diagnostic = self._assistant_wait_diagnostics(
                         snapshot, assistants, responses, state, owned_assistant

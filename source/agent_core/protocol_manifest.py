@@ -102,6 +102,7 @@ CORE_FILES = (
     'source/agent_core/web_ui/provider_registry.py',
     'source/agent_core/web_ui/base_adapter.py',
     'source/agent_core/web_ui/message_text.py',
+    'source/agent_core/web_ui/user_binding_diagnostic.py',
     'source/agent_core/web_ui/factory.py',
     'source/agent_core/web_ui/request_scope.py',
     'source/agent_core/web_ui/profile_store.py',

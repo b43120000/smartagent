@@ -160,3 +160,13 @@ M365 與 copilot.cloud.microsoft 維持原本協議提示與回覆格式，不�
 若回覆出現已識別的 Shell 程式碼框及 smartagent_tool 不支援提示，擷取器在 DOM 副本中移除該網站提示與語言標題，保留原始程式碼並重建協議邊界。未知提示、額外解說、缺少提交或無法證明為本輪的新回覆仍會拒絕。純文字與標籤合併成一行也不會放寬接受。
 
 更新後重新啟動 launch_webcopilot_chatgpt.bat；保留自己校準的 dom_config.json 與登入資料。若先前已在網頁手動要求純文字，請在對話中撤銷該要求並恢復原本協議格式；程式更新不會移除既有對話指令。此變更已有受控 DOM、解析與回復新鮮度測試；封閉環境的實際頁面需再驗證。
+
+## DOM 本輪 user 綁定診斷
+
+所有 provider 在生成送達回退、user 確認逾時及 assistant 啟動停滯時，會額外輸出 `stage=user_binding_diagnostic` 到 `localdata/logs/web_llm_scraper_debug.log`。若只有診斷讀取失敗則是 `user_binding_diagnostic_failed`；不改變原本成功／拒絕條件，也不觸發重送。
+
+更新並重新啟動後重現一次。先提供最新失敗時間的 `user_binding_diagnostic`，優先選 `trigger=assistant_start_stalled`，以 `scope_id` 與 `request_id` 對應原始失敗輪次。`prompt_kind=WEBAGENT_FINAL_RENDER` 表示回填結果輪次，不能與前一輪混用；部分非任務輪次的 request_id 為空，但 scope_id 仍會保留。
+
+報告包含預期及各候選的正規化長度、雜湊、第一個差異位置、正文 selector 命中數、節點連線狀態、文字匹配和新鮮度證據。`first_difference` 從 0 計算，null 表示正規化後相同；`first_nonwhitespace_difference=null` 代表忽略空白後相同。`content_selector_missing` 表示正文定位沒命中；`element_detached` 表示節點已離開 DOM；`no_text_match` 表示未讀到相符提示；`text_match_without_newness` 表示文字相符但缺少新增證據。這些是診斷分類，不是自動放寬條件。
+
+最多列出六個候選（末五則及最接近的一則），不包含完整提示、正文片段、網址、屬性值或例外訊息；不需要為診斷重新校準第 3、4 項。
