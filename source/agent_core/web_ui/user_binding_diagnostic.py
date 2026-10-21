@@ -12,6 +12,8 @@ def _sha(value):
 def _identity(text):
     # Only recognized transport labels and software-shaped request IDs are logged.
     # Never log arbitrary prompt fragments, URLs, attribute values or exception text.
+    envelope=re.match(r'^\[WEBUI_SUBMIT_ID\]\s*WUS-[A-F0-9]{32}\s*\[/WEBUI_SUBMIT_ID\]\s*',text)
+    if envelope:text=text[envelope.end():]
     kinds=('WEBAGENT_ACTIVE_REQUEST','WEBAGENT_FINAL_RENDER','AGENT_PROTOCOL_BOOTSTRAP',
            'AGENT_SESSION_ATTACH','WEBUI_SUBMIT_ID')
     match=re.match(r'^\[('+'|'.join(kinds)+r')\]',text)
@@ -23,7 +25,7 @@ def _identity(text):
             value=data.get('request_id','') if isinstance(data,dict) else ''
             if isinstance(value,str) and re.fullmatch(r'WA-[A-Za-z0-9-]{1,76}',value):request_id=value
         except (ValueError,TypeError):pass
-    return {'prompt_kind':kind,'request_id':request_id}
+    return {'prompt_kind':kind,'request_id':request_id,'submit_marker_present':bool(envelope)}
 
 
 def _comparison(actual,expected):

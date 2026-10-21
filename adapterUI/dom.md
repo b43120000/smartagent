@@ -153,6 +153,8 @@ Other URL 可用首頁、路徑或 hash 路由，程式會產生網址識別；�
 
 M365 與 copilot.cloud.microsoft 維持原本協議提示與回覆格式，不額外要求純文字。初始化、附著確認、一般輪次與格式修復都不附加純文字指令。
 
+送出內容前會加入獨立的 `[WEBUI_SUBMIT_ID]`／`WUS-…`／`[/WEBUI_SUBMIT_ID]` 本輪標記；每次送出（含格式修復）都不同，原始提示正文保持不變。標記唯一出現在一則 user 訊息時，可在網站改寫長提示或重用 DOM ID 的情況下綁定本輪；缺失或多則命中仍拒絕。正文裡引用的歷史標記不會取代本次標記。這是傳輸識別，不要求模型改成純文字，也不放寬 assistant 新鮮度、turn_commit 或工具授權。
+
 也支援沒有 pre/code 標籤的 `.scriptor-codeblock-virtualized` DIV 代碼框。必須找到已識別的網站提示、只有語言標題的標頭，以及唯一正文，才會重建 smartagent_tool 邊界；不依賴隨機 class 或子節點順序。未知提示、額外標頭文字、巢狀代碼框或多個正文候選不會直接放寬接受。
 
 若仍被拒絕，可查看 `localdata/logs/web_llm_scraper_debug.log` 的 `protocol_response_rejected` 紀錄，其中 `response_source.dom_filter` 會列出 `structure`、`body_candidates`、`reconstructed` 與 `reason`，不包含回覆正文。`reconstructed` 表示外框轉換完成，不表示 JSON、turn_commit 或本輪歸屬檢查已通過。常見原因：`recognized_notice_missing`（未知提示）、`unexpected_header_text`（標頭另有文字）、`ambiguous_body`（正文不唯一）、`json_body_not_found`（正文不是 JSON 開頭）。

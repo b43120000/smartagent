@@ -1,6 +1,8 @@
 """M365 adapter implements the shared contract without another provider adapter."""
 import json
 import hashlib
+import re
+import uuid
 from dataclasses import replace
 from urllib.parse import urlsplit
 from ...base_adapter import BaseWebUIAdapter
@@ -24,6 +26,20 @@ class M365UIAdapter(BaseWebUIAdapter):
     load_active_profile = staticmethod(active_profile)
     read_provider_composer = staticmethod(read_composer_snapshot)
     validate_provider_composer = staticmethod(validate_composer_prompt)
+
+    def prepare_transport_prompt(self, prompt: str) -> str:
+        # Per-submit identity survives rich-text rendering and recycled DOM rows.
+        # This adds no output-format instruction and preserves the original body.
+        return '[WEBUI_SUBMIT_ID]\nWUS-' + uuid.uuid4().hex.upper() + '\n[/WEBUI_SUBMIT_ID]\n' + prompt
+
+    def capture_request(self, prompt: str, *, conversation_id: str = ''):
+        scope=super().capture_request(prompt, conversation_id=conversation_id)
+        marker=re.match(r'^\[WEBUI_SUBMIT_ID\]\s*(WUS-[A-F0-9]{32})\s*\[/WEBUI_SUBMIT_ID\]',prompt)
+        if marker:
+            # Quoted historical prompts may contain old nonces. Only our leading
+            # envelope identifies THIS submit; none of the quoted IDs may bind it.
+            scope.request_markers=(marker.group(1),)
+        return scope
 
     def _read_answer_text(self, element):
         from ...message_text import read_answer_text

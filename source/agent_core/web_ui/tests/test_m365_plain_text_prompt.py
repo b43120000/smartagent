@@ -13,7 +13,11 @@ class PromptTests(unittest.TestCase):
         adapter=object.__new__(M365UIAdapter)
         for raw in ['[AGENT_SESSION_ATTACH]\n{"session_id":"test","handshake_id":"h1"}\n[/AGENT_SESSION_ATTACH]',
                     'Return the original ```smartagent_tool protocol format.']:
-            self.assertEqual(adapter.prepare_transport_prompt(raw),raw)
+            prepared=adapter.prepare_transport_prompt(raw)
+            self.assertRegex(prepared,r'^\[WEBUI_SUBMIT_ID\]\nWUS-[A-F0-9]{32}\n\[/WEBUI_SUBMIT_ID\]\n')
+            self.assertTrue(prepared.endswith('\n'+raw))
+            self.assertNotIn('M365_PLAIN_TEXT_TRANSPORT',prepared)
+            self.assertNotEqual(prepared,adapter.prepare_transport_prompt(raw))
 
     def test_recovery_submission_preserves_prompt_for_capture_and_send(self):
         from agent_core.web_runtime import WebLLMScraper
@@ -27,7 +31,10 @@ class PromptTests(unittest.TestCase):
                     _submit_verified_prompt=Mock(),_wait_for_user_sent=Mock())
                 WebLLMScraper._send_protocol_recovery_probe(fake,{},prompt_override='repair request')
                 sent=fake._write_prompt_to_composer.call_args.args[0]
-                self.assertEqual(sent,'repair request')
+                if service=='m365':
+                    self.assertTrue(sent.startswith('[WEBUI_SUBMIT_ID]'))
+                    self.assertTrue(sent.endswith('\nrepair request'))
+                else:self.assertEqual(sent,'repair request')
                 fake._capture_request_turn_state.assert_called_once_with(sent)
                 fake._submit_verified_prompt.assert_called_once_with('send',prompt=sent,submit_snapshot={'scope':'new'})
 

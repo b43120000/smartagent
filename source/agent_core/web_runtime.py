@@ -3261,6 +3261,12 @@ class WebLLMScraper:
             diagnostic=diagnostic,
             source_text=source_text,
         )
+        if self.service == 'm365':
+            # Repair/replan submissions bypass ask(), so capture a new nonce here
+            # as well. Reusing the rejected submit's nonce cannot prove a new turn.
+            from .payload_budget import ensure_webgpt_prompt_budget
+            prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
+            ensure_webgpt_prompt_budget(prompt)
         stage_prefix = (
             str(recovery_mode or "").strip()
             if prompt_override
