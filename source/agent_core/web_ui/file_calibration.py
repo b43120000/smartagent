@@ -53,9 +53,10 @@ def select(page, stage):
 
 def fixture(folder):
     folder.mkdir(parents=True,exist_ok=True)
-    marker='DOMFILE_'+uuid.uuid4().hex[:12].upper()
+    # Alphanumeric payload avoids model Markdown escaping in native text files.
+    marker='DOMFILE'+uuid.uuid4().hex[:12].upper()
     path=folder/('attachment_'+uuid.uuid4().hex[:8]+'.txt')
-    path.write_text(marker+'\n',encoding='utf-8')
+    path.write_bytes((marker+'\n').encode('utf-8'))
     return path,marker
 
 

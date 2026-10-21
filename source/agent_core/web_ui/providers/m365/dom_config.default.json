@@ -1,0 +1,190 @@
+{
+  "schema": "SMARTAGENT_MANUAL_DOM_V1",
+  "provider": "m365",
+  "source_origin": "https://m365.cloud.microsoft",
+  "scope": "partial_conversation",
+  "revision": "shared-default-20261021",
+  "elements": {
+    "assistant_content": {
+      "kind": "assistant_content",
+      "scope": "assistant_turn",
+      "selector": "div[data-testid=\"markdown-reply\"]",
+      "tag": "div",
+      "validation": {
+        "content_verified": true,
+        "distinct_probe_markers_verified": true,
+        "full_conversation": false
+      }
+    },
+    "assistant_turn": {
+      "kind": "assistant_turn",
+      "scope": "page",
+      "selector": "div.fai-CopilotMessage",
+      "tag": "div",
+      "validation": {
+        "distinct_probe_markers_verified": true,
+        "full_conversation": false,
+        "ownership_verified": true
+      }
+    },
+    "composer": {
+      "kind": "contenteditable",
+      "scope": "page",
+      "selector": "#m365-chat-editor-target-element",
+      "tag": "span",
+      "validation": {
+        "editable_unique": true,
+        "full_conversation": false
+      }
+    },
+    "send": {
+      "kind": "send",
+      "scope": "page",
+      "selector": "button[aria-label=\"傳送\"]",
+      "tag": "button",
+      "validation": {
+        "click_verified": true,
+        "full_conversation": false,
+        "send_returned_with_draft": true
+      }
+    },
+    "stop": {
+      "kind": "stop",
+      "scope": "page",
+      "selector": "button[aria-label=\"停止產生\"]",
+      "tag": "button",
+      "validation": {
+        "full_conversation": false,
+        "stop_clicked_once": true,
+        "stop_verified": true
+      }
+    },
+    "user_content": {
+      "kind": "user_content",
+      "scope": "user_turn",
+      "selector": "div[data-testid=\"chatOutput\"]",
+      "tag": "div",
+      "validation": {
+        "content_verified": true,
+        "distinct_probe_markers_verified": true,
+        "full_conversation": false
+      }
+    },
+    "user_turn": {
+      "kind": "user_turn",
+      "scope": "page",
+      "selector": "div.fai-UserMessage__message",
+      "tag": "div",
+      "validation": {
+        "distinct_probe_markers_verified": true,
+        "full_conversation": false,
+        "marker_verified": true
+      }
+    }
+  },
+  "capabilities": {
+    "blocking_state": {
+      "positive_validation": "fixture_only",
+      "real_blocker_observed": false,
+      "rules": [
+        {
+          "kind": "rate_limit",
+          "selectors": [
+            "[role=\"alert\"]",
+            "[role=\"dialog\"]"
+          ],
+          "tokens": [
+            "too many requests",
+            "rate limit",
+            "usage limit",
+            "使用次數上限",
+            "達到使用限制",
+            "太多要求"
+          ]
+        },
+        {
+          "kind": "conversation_full",
+          "selectors": [
+            "[role=\"alert\"]",
+            "[role=\"dialog\"]"
+          ],
+          "tokens": [
+            "conversation is too long",
+            "maximum length",
+            "對話已滿",
+            "對話過長"
+          ]
+        },
+        {
+          "kind": "login_required",
+          "selectors": [
+            "[role=\"dialog\"]"
+          ],
+          "tokens": [
+            "log in to continue",
+            "sign in to continue",
+            "請先登入",
+            "登入以繼續"
+          ]
+        },
+        {
+          "kind": "disconnected",
+          "selectors": [
+            "[role=\"alert\"]",
+            "[role=\"dialog\"]"
+          ],
+          "tokens": [
+            "connection interrupted",
+            "network error",
+            "reconnecting",
+            "連線中斷",
+            "網路錯誤"
+          ]
+        },
+        {
+          "kind": "provider_error",
+          "selectors": [
+            "[role=\"alert\"]",
+            "[role=\"dialog\"]"
+          ],
+          "tokens": [
+            "something went wrong",
+            "error generating",
+            "unable to complete your request",
+            "發生錯誤",
+            "無法產生回覆",
+            "無法完成您的要求"
+          ]
+        }
+      ],
+      "validation": {
+        "normal_page_verified": true,
+        "rules_verified": true
+      }
+    },
+    "generation_state": {
+      "quiet_seconds": 5,
+      "strategy": "stop_busy_and_stable_text",
+      "validation": {
+        "active_to_idle_verified": true,
+        "lifecycle_verified": true
+      }
+    }
+  },
+  "files": {
+    "attachment_inventory_verified": true,
+    "attachment_verified": true,
+    "busy": "[aria-busy=\"true\"],[role=\"progressbar\"],[data-state=\"uploading\"],[data-state=\"processing\"]",
+    "chip": "div.fx-Attachment",
+    "entry": "button[data-testid=\"PlusMenuButton\"]",
+    "entry_verified": true,
+    "error": "[role=\"alert\"]",
+    "input": "input[type=file]",
+    "remove": "button[aria-label*=\"Remove\" i],button[aria-label*=\"Delete\" i],button[aria-label*=\"移除\"],button[aria-label*=\"刪除\"],button[data-testid*=\"remove\"]",
+    "upload_action": "div[role=\"menu\"] > div:nth-of-type(2)",
+    "upload_verified": true,
+    "attachment_probe": {
+      "completion": "busy_idle"
+    }
+  }
+}

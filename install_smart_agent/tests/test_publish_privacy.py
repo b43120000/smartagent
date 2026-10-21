@@ -14,6 +14,7 @@ class PublishPrivacyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             allowed=['adapterUI/dom.md','source/agent_core/web_ui/dom_config.py',
+                     'source/agent_core/web_ui/providers/m365/dom_config.default.json',
                      '.venv/portable-runtime/manifest.json','.venv/portable-runtime/runtime.zip.part000']
             private=['config/debug_config.json','config/browser_session.json',
                      'source/agent_core/web_ui/providers/m365/dom_config.json',

@@ -18,6 +18,8 @@ $env:PYTHONPATH = "$PWD\source"
 .\.venv\Scripts\python.exe -B -c "from agent_core.web_ui.provider_registry import provider_from_url; from agent_core.web_ui.dom_config import config_path; u=input('URL: '); p=provider_from_url(u); print(p); print(config_path(p))"
 ```
 
+四個內建網站附帶 `dom_config.default.json`（通用 selector 與原有校準驗證旗標；不含訊息 ID、對話 URL、探針與執行紀錄）。載入順序為個人 `dom_config.json` → 內建網站預設檔；Other 不使用四站預設。更新只更新預設檔，不蓋掉個人校準。要手改時先把同目錄預設檔複製為 `dom_config.json`，再改自己的檔案。網站、語系或介面版本不同仍須重驗；驗證旗標不是任何環境的通過保證。
+
 修改前備份原檔；結束正在使用它的 Agent／校準程序，改完後重新啟動。以 UTF-8 儲存，JSON 使用英文直引號，反斜線必須寫成 `\\`。不要修改 Python 程式裡的內建 selector 來代替個別網站設定。
 
 ## 如何從開啟的 WebGPT 取得 selector
