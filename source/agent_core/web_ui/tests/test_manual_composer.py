@@ -184,6 +184,17 @@ class ManualComposerTests(unittest.TestCase):
         self.assertTrue(validate_composer_prompt('A\u200bB\u200cC', snapshot).matched)
         self.assertFalse(validate_composer_prompt('ABC', snapshot).matched)
 
+    def test_editor_replaced_on_first_pointer_down_is_refocused_before_typing(self):
+        self.fixture('''<div id="chat" contenteditable="true" style="min-height:30px"></div>
+            <script>
+            const editor=document.getElementById('chat');
+            editor.onpointerdown=()=>editor.replaceWith(editor.cloneNode(true));
+            </script>''')
+        dom_config.save_composer('chatgpt', self.page.url, '#chat', {})
+        result=write_sample(self.page)
+        self.assertTrue(result['roundtrip_match'])
+        self.assertEqual(result['write_attempts'],1)
+
     def test_editor_requires_pointer_focus_before_input(self):
         self.fixture('''<span style="display:block;min-height:30px" id="chat" role="textbox" contenteditable="true"></span>
             <script>

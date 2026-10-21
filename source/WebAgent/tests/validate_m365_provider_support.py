@@ -21,7 +21,7 @@ from agent_core.project_sync_protocol import ProjectSyncProtocolError
 from agent_core.web_runtime import WebLLMScraper, SERVICE_CONFIG, M365_CDP_ENDPOINT, CHATGPT_CDP_ENDPOINT
 from validate_gemini_provider_support import Element, Locator
 
-URL = "https://m365.cloud.microsoft/chat/conversation/33333333-3333-4333-8333-333333333333?fromcode=test&es=Click"
+URL = "https://m365.cloud.microsoft/chat/conversation/00000000-0000-4000-8000-000000000005?fromcode=test&es=Click"
 
 
 class Page:
@@ -55,7 +55,8 @@ def run():
     assert set(registered_providers()) == {"chatgpt", "claude", "gemini", "m365"}
     assert "m365" in calibration_providers()
     assert SERVICE_CONFIG["m365"]["profile_subdir"] == "m365"
-    assert M365_CDP_ENDPOINT != CHATGPT_CDP_ENDPOINT
+    # All providers use the configured common browser session.
+    assert M365_CDP_ENDPOINT == CHATGPT_CDP_ENDPOINT
     assert same_conversation(URL, URL.split("?")[0] + "?es=Other")
     assert not same_conversation(URL, "https://claude.ai/chat/" + conversation_id(URL))
     page = Page()
@@ -86,7 +87,7 @@ def run():
     assert not validate_composer_prompt("abc", ComposerSnapshot(primary_text="ab", semantic_text="ab")).matched
     scraper = type("Scraper", (), {"_page": page, "_expected_execution_url": URL})()
     assert browser_receiver_identity(scraper) == URL.split("?")[0]
-    scraper._expected_execution_url = URL.replace("f59f", "aaaa")
+    scraper._expected_execution_url = URL.replace(conversation_id(URL), "00000000-0000-4000-8000-000000000006")
     try:
         browser_receiver_identity(scraper)
     except ProjectSyncProtocolError as exc:

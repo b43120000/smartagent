@@ -70,11 +70,13 @@ def target_for(page,stage):
         if not names:raise ValueError('no_test_file_selected')
         text=page.get_by_text(names[0],exact=True).filter(visible=True).last
         text.wait_for(timeout=45000)
-        node=text.element_handle()
+        node=text
         for _ in range(7):
-            if node.query_selector('button[aria-label*="remove" i],button[aria-label*="移除"],button[aria-label*="刪除"],button[data-testid*="remove"]'):
+            if node.locator('button[aria-label*="remove" i],button[aria-label*="移除"],button[aria-label*="刪除"],button[data-testid*="remove"]').count():
                 return node
-            node=node.evaluate_handle('el=>el.parentElement').as_element()
+            # Upload completion can replace the card between discovery/click.
+            # A locator resolves against the current DOM; ElementHandle cannot.
+            node=node.locator('..')
         raise ValueError('test_attachment_chip_with_remove_not_found')
     if stage==14:
         document=__import__('importlib').import_module('..dom_config',__package__).load_dom_config(adapter.provider_name)

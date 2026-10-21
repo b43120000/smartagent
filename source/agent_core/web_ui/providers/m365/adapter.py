@@ -99,6 +99,23 @@ class M365UIAdapter(BaseWebUIAdapter):
                 return links.nth(i)
         return None
 
+    def is_informational_attachment_notice(self, node):
+        # Observed M365 uses role=alert even for this OneDrive copy notice.
+        # Require the native info glyph and OneDrive link, independent of UI language.
+        # Unknown or explicit failure alerts still fail closed.
+        return bool(node.evaluate(r'''el => {
+            if (!el.matches('.fui-MessageBar') || el.matches('[aria-invalid="true"],[data-state="error"],[data-state="failed"]')
+                || el.querySelector('[aria-invalid="true"],[data-state="error"],[data-state="failed"]')) return false;
+            const title=el.querySelector('.fui-MessageBarTitle')?.textContent?.trim();
+            if (!title || /failed|failure|error|失敗|錯誤/i.test(title)) return false;
+            const infoPath='M18 10a8 8 0 1 0-16 0 8 8 0 0 0 16 0M9.5 8.91a.5.5 0 0 1 1 0v4.69a.5.5 0 0 1-1 0V8.9m-.25-2.16a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0';
+            if (![...el.querySelectorAll('.fui-MessageBar__icon svg path')].some(p => p.getAttribute('d')===infoPath)) return false;
+            return [...el.querySelectorAll('a[href]')].some(a => {
+                try { const url=new URL(a.href); return url.protocol==='https:' && url.hostname==='onedrive.live.com'; }
+                catch { return false; }
+            });
+        }'''))
+
     def attachment_dom_state(self, expected_names):
         from ...file_runtime import attachment_state
         calibrated = attachment_state(self, expected_names)

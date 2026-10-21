@@ -48,8 +48,15 @@ def run(url: str) -> dict:
             # Match the time a human takes to inspect the page before selecting;
             # M365 initially renders a server editor before mounting Lexical.
             page.wait_for_timeout(2000)
+            # SSR can replace the editor while the test is waiting. Resolve the
+            # live editable again rather than using a locator's stale ordinal.
+            candidates = page.locator('textarea:visible,[contenteditable="true"]:visible,[contenteditable="plaintext-only"]:visible')
+            targets = [item for item in candidates.all() if item.is_editable()]
+            if len(targets) != 1:
+                raise AssertionError(f"live_it_ambiguous_mounted_composer:{len(targets)}")
             panel.get_by_role("button", name="開始選取", exact=True).click()
             targets[0].click()
+            page.wait_for_function('() => !!window.__smartAgentComposerPicker?.selected', timeout=5000)
             selection = page.evaluate("() => window.__smartAgentComposerPicker.selected")
             if not selection or not targets[0].evaluate("(el,s)=>document.querySelector(s)===el", selection["selector"]):
                 raise AssertionError("selected_wrong_composer")

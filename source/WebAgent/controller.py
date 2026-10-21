@@ -28,6 +28,22 @@ from .session import ensure_webagent_session
 from agent_core.task_continuation import TaskContinuationStore, local_owner, render_task_reply
 
 
+def prepare_browser_input_bridge(page, attached_pw=None):
+    """Validate/install before claiming ownership or initializing a session."""
+    try:
+        bridge = BrowserInputBridge(page)
+        bridge.install(reset_legacy=True)
+        return bridge
+    except (ValueError, RuntimeError) as exc:
+        if attached_pw is not None:
+            try:
+                attached_pw.stop()
+            except Exception:
+                pass
+        print(f'[WebAgent] DOM input bridge requires attention: {exc}', flush=True)
+        return None
+
+
 def build_final_render_prompt(
     final_content: str,
     *,
@@ -264,21 +280,29 @@ def main(argv: list[str] | None = None) -> int:
         requested_url = input(
             "[WebAgent] 請貼上 ChatGPT 對話窗連結 (https://chatgpt.com/c/...): "
         ).strip()
-    target_url = normalize_conversation_url(requested_url)
+    try:
+        target_url = normalize_conversation_url(requested_url)
+    except ValueError as exc:
+        print(f'[WebAgent] Invalid WebGPT URL: {exc}', flush=True)
+        return 2
     print("[WebAgent] 步驟 2/4：連結已接收，正在啟動瀏覽器並開啟指定對話窗...", flush=True)
-    page, context, attached_pw, mode = open_or_attach_browser(target_url)
+    try:
+        page, context, attached_pw, mode = open_or_attach_browser(target_url)
+    except (ValueError, RuntimeError) as exc:
+        print(f'[WebAgent] Browser startup requires attention: {exc}', flush=True)
+        return 2
     print(f"[WebAgent] Browser mode: {mode}", flush=True)
     selected_url = str(getattr(page, "url", "") or "")
     selected_id = conversation_id(selected_url)
     if not selected_id:
         raise RuntimeError(f"目前分頁不是 ChatGPT conversation URL: {selected_url}")
+    # Install before ownership/session writes. Invalid Other config produces
+    # an actionable exit while leaving the borrowed browser/page untouched.
+    bridge = prepare_browser_input_bridge(page, attached_pw)
+    if bridge is None:
+        return 2
     scraper = adopt_page(page, context, attached_pw)
     atexit.register(scraper.release_conversation_owner)
-    # Install capture before bootstrap. Human requests submitted while startup
-    # is running remain queued; browser automation sends are excluded by the
-    # __webAgentAutomationSubmit guard in the shared scraper.
-    bridge = BrowserInputBridge(page)
-    bridge.install(reset_legacy=True)
     client = WebAgentBrowserClient(scraper, event_sink=runtime_log.emit)
     runtime_log.emit("browser_attached", mode=mode, conversation_url=selected_url)
     print(f"[WebAgent] 已開啟指定對話窗: {selected_url}", flush=True)

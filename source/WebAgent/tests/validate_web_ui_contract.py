@@ -193,6 +193,7 @@ def run() -> dict[str, bool]:
         SEARCH_UNIT_2026_PROFILE.user_content_selector
     ][0]._text = "unrelated rerendered user text"
     unbound_runtime = WebLLMScraper.__new__(WebLLMScraper)
+    unbound_runtime._record_composer_delivery = lambda: None  # No real IPC journal in this DOM fixture.
     unbound_runtime._run_control_hook = lambda: None
     unbound_runtime._web_ui_adapter = lambda: unbound_ui
     unbound_runtime._turn_elements = lambda role: list(unbound_page.users) if role == "user" else []
@@ -235,6 +236,7 @@ def run() -> dict[str, bool]:
 
     deferred_ui.reconcile_user_turn = deferred_reconcile
     deferred_runtime = WebLLMScraper.__new__(WebLLMScraper)
+    deferred_runtime._record_composer_delivery = lambda: None  # No real IPC journal in this DOM fixture.
     deferred_runtime._run_control_hook = lambda: None
     deferred_runtime._web_ui_adapter = lambda: deferred_ui
     deferred_runtime._turn_elements = (
@@ -268,10 +270,11 @@ def run() -> dict[str, bool]:
     deferred_state_recorded = (
         deferred_snapshot.get("_submit_delivery_confirmed") is True
         and any(
-            state == "SUBMIT_CONFIRMED_PENDING_SCOPE"
+            state == "WAIT_USER_TURN_ACK"
             for state, _detail in deferred_runtime_states
         )
         and any(stage == "user_scope_deferred" for stage, _detail in deferred_runtime_logs)
+        and not any(stage == "user_sent_generation_fallback" for stage, _detail in deferred_runtime_logs)
     )
 
     # Search-unit rendering may recycle a fixed number of visible turns.  The
@@ -321,6 +324,7 @@ def run() -> dict[str, bool]:
 
     recycled_scope.user_turn = None
     recycled_runtime = WebLLMScraper.__new__(WebLLMScraper)
+    recycled_runtime._record_composer_delivery = lambda: None  # No real IPC journal in this DOM fixture.
     recycled_runtime._run_control_hook = lambda: None
     recycled_runtime._web_ui_adapter = lambda: recycled_ui
     recycled_runtime._turn_elements = (
@@ -477,6 +481,7 @@ def run() -> dict[str, bool]:
     # Runtime must not bypass RequestScope when the preceding assistant node is
     # re-rendered before the genuinely new assistant turn is mounted.
     runtime = WebLLMScraper.__new__(WebLLMScraper)
+    runtime._record_composer_delivery = lambda: None  # No real IPC journal in this DOM fixture.
     runtime._generation_stall_sec = 1.0
     runtime._active_generation_emergency_sec = 1.0
     runtime._active_generation_warn_sec = 1.0

@@ -30,6 +30,14 @@ def conversation_id(url: str) -> str:
         "m365": _M365_RE,
     }.get(provider)
     if matcher is None:
+        if provider.startswith("other_"):
+            from hashlib import sha256
+            from .web_ui.factory import normalize_web_conversation_url
+            try:
+                normalized = normalize_web_conversation_url(value).rstrip("/")
+            except (ValueError, WebUIProviderError, TypeError):
+                return ""
+            return sha256((provider + "\n" + normalized).encode("utf-8")).hexdigest()
         return ""
     match = matcher.search(value)
     return match.group(1).lower() if match else ""

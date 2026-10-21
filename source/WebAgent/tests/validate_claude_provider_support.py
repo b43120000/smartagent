@@ -18,7 +18,7 @@ from agent_core.web_ui import (
 from agent_core.web_ui.providers.claude import ClaudeUIAdapter
 
 
-CLAUDE_URL = "https://claude.ai/chat/11111111-1111-4111-8111-111111111111"
+CLAUDE_URL = "https://claude.ai/chat/00000000-0000-4000-8000-000000000004"
 
 
 class Page:
@@ -30,7 +30,7 @@ def run() -> dict:
     assert provider_from_url(CLAUDE_URL) == "claude"
     assert provider_for_url(CLAUDE_URL) == "claude"
     assert conversation_provider(CLAUDE_URL) == "claude"
-    assert conversation_id(CLAUDE_URL) == "e364c2b5-b42e-4f0b-9507-c06c5fb67186"
+    assert conversation_id(CLAUDE_URL) == "00000000-0000-4000-8000-000000000004"
     assert same_conversation(
         CLAUDE_URL,
         CLAUDE_URL + "?from=acceptance",

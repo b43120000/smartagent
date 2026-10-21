@@ -14,7 +14,7 @@ from .dom_config import ELEMENT_FIELDS, VALIDATION_KEYS, load_dom_config, save_e
 from .factory import create_web_ui_for_page, normalize_web_conversation_url
 from .manual_adapter import prompt_url, unique_composer
 from .manual_browser import open_manual_page
-from .provider_registry import provider_from_url, is_other_provider
+from .provider_registry import provider_from_url
 from .message_text import read_message_text
 from .tests.write_send_box import write_sample
 
@@ -49,7 +49,7 @@ def select_component(page, stage: int, probe: dict, *, timeout: float = 900) -> 
     options = {'field':field,'marker':probe['marker'],'title':TITLES[stage], 'preflightBridge':True,
                'instructions': ('請點可用的送出按鈕。選取不會送出；按「儲存並測試」後，程式才會實際送出一則校準問題。' if stage == 2 else
                   '把使用者發送的訊息框，框選文字框，緊貼文字不含外框' if stage == 4 else
-                  ('把使用者發送的訊息框完整框選，選外框' + ('。外框可含時間；第 4 步再標記不含時間的正文。' if is_other_provider(provider_from_url(page.url)) else '')) if stage == 3 else
+                  '把使用者發送的訊息框完整框選，選外框' if stage == 3 else
                   '把本輪模型回答的完整回答框框選，選外框，不要只選文字。只包含這一則回答，不含使用者問題或其他回答。可用擴大／縮小範圍調整。')}
     if stage>=6:options.update(keepVisibleOnCommit=True,showStateLegend=True)
     if stage == 3:
@@ -146,6 +146,16 @@ def clear_probe(page, prompt: str) -> None:
     raise AssertionError('test_draft_not_cleared')
 
 
+def click_automation_send(adapter, control):
+    """One software click must bypass shared trusted-human input capture."""
+    previous = bool(adapter.page.evaluate('() => !!window.__webAgentAutomationSubmit'))
+    adapter.set_automation_submit(True)
+    try:
+        control.click(timeout=10000)
+    finally:
+        adapter.set_automation_submit(previous)
+
+
 def send_probe(page, probe: dict, selector: str, *, timeout: float = 120) -> dict:
     """One click only. Ambiguous/blocked submissions are never repeated."""
     adapter = create_web_ui_for_page(page)
@@ -154,6 +164,9 @@ def send_probe(page, probe: dict, selector: str, *, timeout: float = 120) -> dic
     print('[componentAdapter] 等待送出按鈕可用…',flush=True)
     ready_deadline=time.monotonic()+min(timeout,60)
     while True:
+        blocked=adapter.blocking_transport_error()
+        if blocked:
+            raise RuntimeError('provider_blocked:' + str(blocked.get('reason','PROVIDER_ERROR')))
         try:
             control=send_control(page,selector)
             break
@@ -173,10 +186,13 @@ def send_probe(page, probe: dict, selector: str, *, timeout: float = 120) -> dic
       };
       observe();new MutationObserver(observe).observe(document.body,{subtree:true,attributes:true,childList:true});
     }''',selector)
-    control.click(timeout=10000)
+    click_automation_send(adapter,control)
     deadline = time.monotonic()+timeout
     accepted = response = False
     while time.monotonic()<deadline:
+        blocked=adapter.blocking_transport_error()
+        if blocked:
+            raise RuntimeError('provider_blocked_after_single_submit:' + str(blocked.get('reason','PROVIDER_ERROR')))
         texts = marker_texts(page, probe)
         accepted = accepted or any(normalize_ui_text(probe['prompt']) in normalize_ui_text(text) for text in texts)
         response = response or any(probe['marker'] in text and 'SmartAgent DOM calibration' not in text and '[WEBUI_SUBMIT_ID]' not in text for text in texts)
@@ -211,24 +227,6 @@ def user_root(page, selector: str, probe: dict):
     if len(matches) != 1:
         raise ValueError('new_user_turn_not_unique')
     return matches[0]
-
-
-def stage3_user_turns(adapter, probe: dict):
-    """Validate Other outer nodes independently of their timestamp/UI text.
-
-    user_root enforces one visible node containing the complete prompt and
-    exactly its marker count. Stage 4 separately verifies semantic body text.
-    """
-    turns = adapter.turns('user')
-    if not is_other_provider(adapter.provider_name):
-        return [turn for turn in turns if ui_text_matches(turn.raw_text, probe['prompt'])]
-    root = user_root(adapter.page, adapter.profile.user_turn_selector, probe)
-    handle = root.element_handle()
-    try:
-        return [turn for turn in turns
-                if turn.element.evaluate('(el,root)=>el===root', handle)]
-    finally:
-        handle.dispose()
 
 
 def content_text(root, selector: str) -> str:
@@ -311,8 +309,8 @@ def calibrate_stage(page, stage: int, evidence: Path, *, provider: str = '', no_
         report['probe_markers'].append(second['marker'])
         if stage == 3:
             turns = adapter.turns('user')
-            first_turns=stage3_user_turns(adapter,first)
-            second_turns=stage3_user_turns(adapter,second)
+            first_turns=[turn for turn in turns if ui_text_matches(turn.raw_text,first['prompt'])]
+            second_turns=[turn for turn in turns if ui_text_matches(turn.raw_text,second['prompt'])]
             if len(first_turns)!=1 or len(second_turns)!=1 or first_turns[0].structural_id==second_turns[0].structural_id:
                 raise AssertionError('runtime_requires_two_distinct_user_turns')
             report['repeated_turn_verified'] = True

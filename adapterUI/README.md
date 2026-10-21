@@ -1,5 +1,7 @@
 # DOM 校準入口
 
+完全無法使用點選校準時，請閱讀 [DOM 手動取得與填寫指南](dom.md)：依第 1～15 項功能查找 selector、設定檔位置與手動驗證方式。
+
 每一個元件用一個批次檔完成「輸入 URL → 點選元件 → 儲存設定 → 自動功能驗證」。第 8～10 步沿用前面設定，在右上角按「開始驗證」。第 6～10 步支援 ChatGPT、Gemini、Claude、M365 Copilot 與 Other URL；貼上網址後自動選擇各自的 provider 設定。
 
 ## 6～10：純文字對話流程
@@ -55,7 +57,7 @@ $env:PYTHONPATH = "$PWD\source"
 
 其他網站設定存放於 `source/agent_core/web_ui/providers/other/other_<網站來源 SHA256>/dom_config.json`。網站來源按協定、主機與連接埠區分；同站不同對話路徑共用設定，不同來源分開保存。設定內的 `source_origin` 可確認對應網站。瀏覽器登入資料也按來源隔離；登入完成回到原網站後再選取。
 
-通用 web_ui adapter 只使用已校準的 selector，沒有設定時會要求先校準。這提供手動校準與 web_ui factory 載入能力；SmartAgent 主程式的服務清單與啟動管理尚未新增任意網站服務。第 1～5 步仍不包含停止控制、最終回答內容與完整回覆完成判定，不能視為任意網站已完整適配。
+通用 web_ui adapter 只使用該網站已校準的 selector，沒有設定時會要求先校準。WebCopilot 可載入 Other 網站自己的 DOM 設定，使用已校準的輸入框與送出鈕擷取使用者輸入；至少先完成第 1、2 步，其餘對話能力仍需依序驗證。此支援不會把 Other 網站冒充成 ChatGPT，也不會新增通用模型選單項目。第 1～5 步仍不包含停止控制、最終回答內容與完整回覆完成判定，不能視為任意網站已完整適配。
 
 Gemini 等啟用 Trusted Types 的頁面，標記面板以 DOM API 建立，不使用 `innerHTML`，也不修改網站的安全政策。
 

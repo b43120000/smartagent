@@ -12,7 +12,7 @@ data => {
  const outline=document.createElement('div');outline.style.cssText='position:fixed;pointer-events:none;border:3px solid #eab308;z-index:2147483646';document.documentElement.append(outline);
  let target=null,picking=false;
  const state=window.__smartAgentFilePicker={action:'',selection:null,phase:'waiting'};
- const label=(el)=>{for(const a of ['data-testid','aria-label','title','name','role']){const v=el.getAttribute(a);if(v&&!/DOMFILE_|DOMPROBE_|attachment_|\.txt/i.test(v))return el.tagName.toLowerCase()+'['+a+'='+JSON.stringify(v)+']';}if(el.id&&!/[a-f0-9]{12}|\d{5}/i.test(el.id))return '#'+CSS.escape(el.id);const classes=[...el.classList].filter(v=>!/[a-f0-9]{12}|\d{5}/i.test(v));return el.tagName.toLowerCase()+classes.slice(0,8).map(v=>'.'+CSS.escape(v)).join('');};
+ const label=(el)=>{for(const a of ['data-testid','aria-label','title','name','role']){const v=el.getAttribute(a);if(v&&!/DOMFILE_|DOMPROBE_|attachment_|\.txt/i.test(v))return el.tagName.toLowerCase()+'['+a+'='+JSON.stringify(v)+']';}if(el.id&&!/[a-f0-9]{12}|\d{5}/i.test(el.id))return '#'+CSS.escape(el.id);const classes=[...el.classList].filter(v=>!/[a-f0-9]{12}|\d{5}/i.test(v));const semantic=classes.filter(v=>v.includes('-')&&!v.startsWith('___'));return el.tagName.toLowerCase()+(semantic.length?semantic.slice(0,1):classes.slice(0,8)).map(v=>'.'+CSS.escape(v)).join('');};
  const render=(el)=>{const r=el.getBoundingClientRect();outline.style.cssText+=';left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px';};
  const buttons={};
  state.update=(phase,text)=>{state.phase=phase;status.style.color={invalid:'#fca5a5',preflight:'#fde68a',verified:'#93e5c0'}[phase]||'#e6edf7';status.textContent=text;};

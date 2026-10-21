@@ -615,8 +615,15 @@ class WebAgentProtocolLoop:
                 "delivery_status": item.get("delivery_status", ""),
                 "delivery_receipts": item.get("delivery_receipts", []),
             })
+        all_refs = self._runtime_evidence_refs()
+        if len(all_refs) > 24:
+            recent_ids = {str(item.get("action_id", "")) for item in evidence[-16:]}
+            progress_cited = set(getattr(self.progress_ledger, "evidence_refs", []) or [])
+            filtered_refs = sorted({"REQUEST_ACCEPTED", "RUNTIME_STATUS"} | recent_ids | progress_cited)
+        else:
+            filtered_refs = sorted(all_refs)
         payload = {
-            "available_refs": sorted(self._runtime_evidence_refs()),
+            "available_refs": filtered_refs,
             "verification_status": self._effective_verification_status(),
             "legacy_last_verification_status": self.tools.last_verification_status,
             "execution_state": self.execution_state,

@@ -111,5 +111,29 @@ class ClaudeUserTurnTests(unittest.TestCase):
         self.assertTrue(result['old_response_rejected'])
         self.assertTrue(result['runtime_config_loaded'])
 
+    def test_long_rendered_prompt_binds_with_fixed_count_and_unique_submit_id(self):
+        self.submit()
+        dom_config.save_element('claude',self.page.url,'user_turn',BUBBLE,{}, {dom_config.VALIDATION_KEYS['user_turn']:True})
+        dom_config.save_element('claude',self.page.url,'user_content','p.whitespace-pre-wrap',{}, {dom_config.VALIDATION_KEYS['user_content']:True})
+        adapter=candidate_adapter(self.page,'assistant_turn','div[data-testid="assistant-message"]')
+        prompt=adapter.prepare_transport_prompt('Initialize `canonical` protocol\n'+'long body '*3000+'\nEnd')
+        scope=adapter.capture_request(prompt)
+        # The transcript recycles a mounted row; Markdown strips backticks.
+        self.page.locator('.cds-user-message-body').evaluate('''(el,text)=>{
+            el.replaceChildren();for(const part of text.replaceAll('`','').split('\\n')){
+                const p=document.createElement('p');p.className='whitespace-pre-wrap';p.textContent=part;el.append(p);
+            }el.closest('[data-testid="transcript-row"]').dataset.index='100';
+        }''',prompt)
+        self.assertEqual(len(adapter.turns('user')),scope.baseline_user_count)
+        self.assertGreater(len(adapter.turns('user')[0].raw_text),30000)
+        self.assertIsNotNone(adapter.confirm_user_turn(scope))
+        self.assertIsNone(adapter.latest_owned_assistant(scope)) # Old response is still rejected.
+        self.page.locator('[data-testid="assistant-message"]').evaluate('''el=>{
+            el.textContent='fresh response';el.closest('[data-testid="transcript-row"]').dataset.index='101';
+        }''')
+        self.assertIsNotNone(adapter.latest_owned_assistant(scope))
+        other=adapter.capture_request(adapter.prepare_transport_prompt('different request'))
+        self.assertIsNone(adapter.confirm_user_turn(other))
+
 
 if __name__=='__main__':unittest.main()
