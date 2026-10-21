@@ -461,6 +461,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 continuation_store=continuation_store,
                 continuation_owner=task_owner(task),
             )
+            loop.tools.configure_web_file_capabilities(client.scraper.web_file_capabilities)
             from agent_core.project_sync_receiver import browser_receiver_identity
             loop.tools.configure_project_sync_receiver(lambda: browser_receiver_identity(scraper))
             trusted_authorized_paths = None

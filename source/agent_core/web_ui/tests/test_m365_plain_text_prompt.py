@@ -25,6 +25,7 @@ class PromptTests(unittest.TestCase):
             with self.subTest(service=service):
                 adapter=object.__new__(M365UIAdapter)
                 fake=SimpleNamespace(service=service,_web_ui_adapter=lambda:adapter,
+                    _web_file_planner_prompt=lambda prompt:prompt,
                     _log_stage=Mock(),_protocol_recovery_admission_state=lambda:(True,{}),
                     _write_prompt_to_composer=Mock(),_wait_for_send_ready=Mock(return_value='send'),
                     _capture_request_turn_state=Mock(return_value={'scope':'new'}),

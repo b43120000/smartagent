@@ -88,6 +88,7 @@ CORE_FILES = (
     'source/agent_core/progress_reply_contract.py',
     'source/agent_core/tool_result_contract.py',
     'source/agent_core/tool_result_policy.py',
+    'source/agent_core/result_exchange.py',
     'source/agent_core/session_summary.py',
     'source/agent_core/progress_recovery.py',
     'source/agent_core/stage_result.py',

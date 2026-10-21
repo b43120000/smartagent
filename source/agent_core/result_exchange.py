@@ -158,7 +158,10 @@ def _write_attachment(workspace: Path, tool_call: dict, text: str, ref: dict, ag
     temp.write_bytes(raw); temp.replace(path)
     file_sha = hashlib.sha256(raw).hexdigest()
     queue_status = str(agent.queue_attachments([str(path)]) or "")
-    if "ERROR" in queue_status.upper() or "失敗" in queue_status:
+    from .tool_result_contract import decode_result
+    queue_result = decode_result(queue_status) or {}
+    if ("ERROR" in queue_status.upper() or "失敗" in queue_status
+            or queue_result.get('status') in {'REJECTED', 'FAILED', 'UNKNOWN'}):
         raise ValueError(f"result_attachment_staging_failed:{queue_status[:300]}")
     return {"path": str(path), "filename": path.name, "file_sha256": file_sha,
             "file_bytes": len(raw), "transfer_id": transfer_id}
@@ -193,10 +196,18 @@ def prepare_tool_result(tool_call: dict, result: object, agent, *, force_attachm
         requested == "ATTACHMENT" and full_result_required and result_purpose
     )
     attachment_allowed = bool(force_attachment or explicit_attachment)
+    capability_reader = getattr(agent, 'web_file_capabilities', None)
+    browser_attachment_unavailable = False
+    if callable(capability_reader):
+        try:
+            browser_attachment_unavailable = capability_reader().get('browser_upload') is not True
+        except Exception:
+            browser_attachment_unavailable = True
     sensitive = contains_sensitive_text(text)
     low_value_bulk = is_low_value_bulk(tool_call, text)
     local_only = bool(
-        sensitive
+        browser_attachment_unavailable
+        or sensitive
         or low_value_bulk
         or size > RESULT_ATTACHMENT_MAX_BYTES
         or requested in {"INLINE", "SUMMARY_ONLY"}
@@ -204,7 +215,9 @@ def prepare_tool_result(tool_call: dict, result: object, agent, *, force_attachm
     )
 
     if local_only:
-        if sensitive:
+        if browser_attachment_unavailable:
+            reason = 'WEB_FILE_TRANSFER_UNAVAILABLE'
+        elif sensitive:
             reason = "SENSITIVE_CONTENT"
         elif size > RESULT_ATTACHMENT_MAX_BYTES:
             reason = "ATTACHMENT_TOO_LARGE"
@@ -242,6 +255,9 @@ def prepare_tool_result(tool_call: dict, result: object, agent, *, force_attachm
     try:
         attachment = _write_attachment(workspace, tool_call, text, ref, agent)
     except ValueError as exc:
+        failure_reason = ('WEB_FILE_TRANSFER_UNAVAILABLE' if 'WEB_FILE_TRANSFER_UNAVAILABLE' in str(exc)
+                          else 'ATTACHMENT_TOO_LARGE' if 'too_large' in str(exc)
+                          else 'ATTACHMENT_STAGING_FAILED')
         print(
             f"[PayloadGuard] JSON 附件建立/排程失敗，改用 LOCAL_REF：{str(exc)[:160]}",
             flush=True,
@@ -253,9 +269,9 @@ def prepare_tool_result(tool_call: dict, result: object, agent, *, force_attachm
         )
         return (
             "[SMARTAGENT_RESULT_LOCAL_REF]\n"
-            + common + "\nreason=ATTACHMENT_TOO_LARGE\n"
+            + common + f"\nreason={failure_reason}\n"
             + summary_line
-            + "JSON 封裝後超過附件安全上限；完整結果保留本地，請分頁或縮小範圍。\n"
+            + "附件無法建立或排程；完整結果保留本地，請分頁或縮小範圍。\n"
             + "preview:\n" + bounded_preview(text) + status_line
             + "\n[/SMARTAGENT_RESULT_LOCAL_REF]"
         )

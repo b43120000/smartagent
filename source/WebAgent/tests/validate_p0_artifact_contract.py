@@ -16,6 +16,7 @@ def run():
     with tempfile.TemporaryDirectory(prefix='p0-artifacts-') as temp:
         root = Path(temp); target = root/'test.txt'; target.write_text('TEST', encoding='utf-8')
         agent = WebAgentToolContext(root, interface_name='remote')
+        agent.configure_web_file_capabilities(lambda:{'browser_upload':True,'browser_download':True})
         agent.current_request_id='REQ-P0'; agent.current_task_id='TASK-P0'
         context=SecurityContext.for_workspace(root)
         with patch('agent_core.tools.SecurityContext.from_agent', return_value=context):

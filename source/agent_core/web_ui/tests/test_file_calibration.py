@@ -184,6 +184,8 @@ class FileTests(DialogueTests):
         scraper=WebLLMScraper.__new__(WebLLMScraper)
         scraper.service='chatgpt';scraper._page=self.page
         scraper._web_ui_adapter=lambda:create_web_ui_for_page(self.page)
+        # File-capability admission is covered separately; exercise scope gates here.
+        scraper.web_file_capabilities=lambda:{'browser_download':True}
         scraper._calibrated_file_request=None
         self.assertEqual(scraper.download_latest_artifact(str(self.root/'absent'))['status'],'ARTIFACT_DOWNLOAD_FAILED')
         scraper._calibrated_file_request=('R1',self.page.url,object())

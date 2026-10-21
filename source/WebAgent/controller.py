@@ -325,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if bootstrap_pending:
         loop.tools.enable_bootstrap_install_policy(runtime_root)
+    loop.tools.configure_web_file_capabilities(client.scraper.web_file_capabilities)
     loop.tools.enable_console_security_approval()
     from agent_core.project_sync_receiver import browser_receiver_identity
     loop.tools.configure_project_sync_receiver(lambda: browser_receiver_identity(scraper))

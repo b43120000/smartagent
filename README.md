@@ -61,6 +61,8 @@ cd smartagent
 
 企業 Copilot 的 `copilot.cloud.microsoft/chat/conversation` 與 `m365.cloud.microsoft/chat/conversation` 共用 M365 provider、校準設定與 Agent 流程。完整建置及離線驗證方式見 [`PORTABLE_RUNTIME.md`](install_smart_agent/PORTABLE_RUNTIME.md)。附件校準 11～15 的 BAT 隨包提供，其各網站實站驗證另行進行，不代表所有網站測項已通過。
 
+所有 WebGPT（包含 Other URL）依目前網站的 DOM 校準結果安排任務：完成 1～10 項可使用文字與授權本機工具；只有完整完成 1～15 項、保有第 15 項上傳下載往返驗證時，才啟用網頁附件與檔案下載。未完成時，Planner 會改用本機讀寫／查詢與文字回覆，Runtime 也會拒絕網頁上傳下載及附件型專案同步；`project_sync INDEX_ONLY`、Telegram 與 Google Drive 各自授權的能力不受影響。每輪會重新檢查，重新校準造成驗證失效後會立即停用檔案能力。
+
 ## 安裝
 
 1. 在 SmartAgent 根目錄雙擊：

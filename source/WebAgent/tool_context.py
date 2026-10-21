@@ -45,6 +45,7 @@ class WebAgentToolContext:
         self._protocol_turn_seq = 0
         self.last_verification_status: str | None = None
         self._project_sync_transport = None
+        self._web_file_capability_provider = None
         self._project_sync_receiver = None
         self._project_sync_event_sink = None
         self._security_approval_notifier = None
@@ -140,6 +141,9 @@ class WebAgentToolContext:
         return preview_tool_scope(action, self)
 
     def queue_attachments(self, paths: list[str], trace_id: str = "") -> str:
+        rejected = self._web_file_rejection('upload_files', 'upload')
+        if rejected:
+            return rejected
         queued = []
         referenced = {}
         duplicates = []
@@ -268,6 +272,25 @@ class WebAgentToolContext:
     def configure_project_sync_transport(self, transport) -> None:
         self._project_sync_transport = transport
 
+    def configure_web_file_capabilities(self, provider) -> None:
+        self._web_file_capability_provider = provider
+
+    def web_file_capabilities(self) -> dict:
+        try:
+            capabilities = self._web_file_capability_provider() if self._web_file_capability_provider else {}
+            return {'browser_upload': capabilities.get('browser_upload') is True,
+                    'browser_download': capabilities.get('browser_download') is True}
+        except Exception:
+            return {'browser_upload': False, 'browser_download': False}
+
+    def _web_file_rejection(self, tool: str, direction: str) -> str:
+        from agent_core.tool_result_contract import encode_result
+        if self.web_file_capabilities().get('browser_' + direction):
+            return ''
+        return encode_result('REJECTED', 'WEB_FILE_TRANSFER_UNAVAILABLE', executed=False,
+            tool=tool, data={'browser_operation': direction,
+                'detail': 'Complete DOM stages 1-15 before browser file transfer. Local tools remain available.'})
+
     def save_project_summary(self, payload: dict) -> str:
         from agent_core.session_summary import save_native_summary
         return save_native_summary(self,payload)
@@ -302,6 +325,9 @@ class WebAgentToolContext:
         self.configure_security_approval(prompt)
 
     def run_project_sync_transaction(self, plan: dict, *, project_root=None) -> dict:
+        if self._web_file_rejection('project_sync', 'upload'):
+            return {'status': 'REJECTED', 'reason': 'WEB_FILE_TRANSFER_UNAVAILABLE',
+                    'executed': False}
         if self._project_sync_transport is None:
             raise RuntimeError("project_sync_transport_not_configured")
         from agent_core.project_sync_runner import run_project_sync_transaction
@@ -329,6 +355,9 @@ class WebAgentToolContext:
         expected_filename: str = "",
         timeout: int = 45,
     ) -> str:
+        rejected = self._web_file_rejection('download_artifact', 'download')
+        if rejected:
+            return rejected
         if not str(output_path or "").strip():
             return "[ARTIFACT_DOWNLOAD_FAILED] download_artifact 需要 output_path"
         from agent_core.web_runtime import get_manager
@@ -406,6 +435,14 @@ class WebAgentToolContext:
         tool = str(action.get("tool", "") or "")
         if tool not in SUPPORTED_ACTION_TOOLS:
             return f"[WEBAGENT_TOOL_REJECTED] unsupported_tool={tool}"
+        direction = ('download' if tool == 'download_artifact' else 'upload' if
+                     tool in {'upload_file', 'upload_files'} or
+                     (tool == 'project_sync' and str(action.get('strategy', 'FULL_BUNDLE') or
+                      'FULL_BUNDLE').upper() in {'FULL_BUNDLE', 'DELTA'}) else '')
+        if direction:
+            rejected = self._web_file_rejection(tool, direction)
+            if rejected:
+                return rejected
         if self._bootstrap_install_root is not None:
             if tool == "run_command":
                 return self._execute_bootstrap_command(action)

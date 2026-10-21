@@ -25,6 +25,7 @@ def run() -> None:
         second.write_text("second", encoding="utf-8")
 
         scraper = WebLLMScraper.__new__(WebLLMScraper)
+        scraper.web_file_capabilities = lambda: {'browser_upload': True}
         selections: list[str] = []
         stages: list[tuple[str, str]] = []
         waits = 0

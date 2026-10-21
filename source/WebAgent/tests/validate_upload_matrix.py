@@ -14,6 +14,7 @@ def run(tool):
         files=[root/'one.txt',root/'two.txt']
         for n,p in enumerate(files):p.write_text('UNIQUE_'+str(n),encoding='utf-8')
         ctx=WebAgentToolContext(root,interface_name='remote')
+        ctx.configure_web_file_capabilities(lambda:{'browser_upload':True,'browser_download':True})
         ctx.begin_run('UPLOAD-TEST','Upload only\n'+str(root),[str(root)])
         action=dict(tool=tool,action_id='UPLOAD-ACT',**({'path':str(files[0])} if tool=='upload_file' else {'paths':[str(p) for p in files]}))
         raw=ctx.execute(action);out=decode_result(raw)

@@ -3264,6 +3264,7 @@ class WebLLMScraper:
         # Repair/replan submissions bypass ask(); every provider must receive a
         # new submit identity here too, including manually calibrated Other URLs.
         from .payload_budget import ensure_webgpt_prompt_budget
+        prompt = self._web_file_planner_prompt(prompt)
         prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
         ensure_webgpt_prompt_budget(prompt)
         stage_prefix = (
@@ -4740,10 +4741,28 @@ class WebLLMScraper:
         logical_count = self._composer_attachment_count()
         return logical_count >= 0 and logical_count == len(previous_names)
 
+    def web_file_capabilities(self) -> dict:
+        from .web_ui.file_config import web_file_capabilities
+        return web_file_capabilities(self._web_ui_adapter().provider_name)
+
+    def _web_file_planner_prompt(self, prompt: str) -> str:
+        from .web_ui.file_config import render_web_file_capabilities
+        return prompt + render_web_file_capabilities(self.web_file_capabilities())
+
+    def _require_web_file_transfer(self, direction: str) -> None:
+        capabilities = self.web_file_capabilities()
+        if not capabilities.get('browser_' + direction):
+            raise WebScraperStageError(
+                '[WEB_FILE_TRANSFER_UNAVAILABLE] browser_' + direction
+                + ' requires completed DOM stages 1-15; reason=' + capabilities['reason'],
+                stage='web_file_capability', safe_to_retry=False)
+
     def _upload_attachments(self, paths: list[str]) -> None:
         """Upload files with one evidence-gated retry for a lost selection event."""
         if not paths:
             return
+
+        self._require_web_file_transfer('upload')
 
         print(f"  [WebScraper] 準備上傳 {len(paths)} 個附件...")
         self._emit_status(
@@ -4825,6 +4844,9 @@ class WebLLMScraper:
 
         if self._page is not None:
             self._check_provider_transport_error()
+            if image_paths or attachment_paths or file_paths:
+                self._require_web_file_transfer('upload')
+            prompt = self._web_file_planner_prompt(prompt)
             prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
 
         try:
@@ -5211,6 +5233,7 @@ class WebLLMScraper:
 
     def _download_latest_artifact(self, output_path: str, timeout_sec: float = 45.0, expected_filename: str = "") -> str:
         """Compatibility method delegating all download logic to artifact_transfer."""
+        self._require_web_file_transfer('download')
         if not self._last_artifact_scope:
             raise RuntimeError("NO_CURRENT_REQUEST_ARTIFACT_SCOPE: refuse stale/page-global artifact fallback")
         return download_latest_artifact(
@@ -5230,6 +5253,11 @@ class WebLLMScraper:
         This is the generic Stage-2 entry point used by SmartAgent when the
         WebGPT turn itself produced a file or image (not only web_edit_file).
         """
+        capabilities = self.web_file_capabilities()
+        if not capabilities.get('browser_download'):
+            return {'status': 'ARTIFACT_DOWNLOAD_UNAVAILABLE',
+                    'error': 'WEB_FILE_TRANSFER_UNAVAILABLE: complete DOM stages 1-15',
+                    'executed': False, 'capabilities': capabilities}
         from .web_ui.file_config import load_files
         if load_files(self.service).get('download_verified'):
             from .web_ui.file_runtime import download_owned

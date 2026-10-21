@@ -3471,7 +3471,7 @@ class WebAgentProtocolLoop:
         self.tools.artifact_delivery_mode = str(self.image_delivery_plan.get("delivery", ""))
         if initial_attachments:
             queued = self.tools.queue_attachments(list(initial_attachments))
-            if "[WEBAGENT_ATTACHMENT_ERROR]" in queued:
+            if "[WEBAGENT_ATTACHMENT_ERROR]" in queued or 'WEB_FILE_TRANSFER_UNAVAILABLE' in queued:
                 raise RuntimeError(queued)
         self._emit("request_started", request_id=self.run_id, request=request, authorized_paths=authorized)
         print(f"[{self.display_name}] Request ID: {self.run_id}", flush=True)

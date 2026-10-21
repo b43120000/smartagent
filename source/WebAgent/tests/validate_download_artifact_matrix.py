@@ -12,6 +12,7 @@ def run():
     with tempfile.TemporaryDirectory(prefix='t34-contract-') as temp:
         root=Path(temp);target=root/'fresh.png';target.write_bytes(b'KNOWN_TEST_BYTES')
         before=target.read_bytes();ctx=WebAgentToolContext(root,interface_name='remote')
+        ctx.configure_web_file_capabilities(lambda:{'browser_upload':True,'browser_download':True})
         ctx.current_request_id='T34-REQUEST';ctx.current_task_id='T34-TASK'
         ctx.artifact_delivery_mode='telegram'
         manager=SimpleNamespace()
