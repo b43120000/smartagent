@@ -3234,6 +3234,10 @@ class WebLLMScraper:
             diagnostic=diagnostic,
             source_text=source_text,
         )
+        # Recovery bypasses ask(); retain M365's plain-text transport request on
+        # every submitted repair/replan as well as the initial request.
+        if self.service == "m365":
+            prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
         stage_prefix = (
             str(recovery_mode or "").strip()
             if prompt_override

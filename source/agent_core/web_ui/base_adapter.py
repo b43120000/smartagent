@@ -766,6 +766,9 @@ class BaseWebUIAdapter:
             return users[-1]
         return assistants[-1] if self._is_after(users[-1], assistants[-1]) else users[-1]
 
+    def _read_answer_text(self, element) -> str:
+        return read_answer_text(element)
+
     def extract_final_text(self, assistant: TurnRef | object | None) -> str:
         if assistant is None:
             return ""
@@ -777,7 +780,7 @@ class BaseWebUIAdapter:
             blocks = ()
         texts: list[str] = []
         for block in blocks:
-            text = read_answer_text(block).strip()
+            text = self._read_answer_text(block).strip()
             normalized = normalize_ui_text(text).lower()
             if text and normalized not in _PLACEHOLDER_TEXTS and text not in texts:
                 texts.append(text)
@@ -790,7 +793,7 @@ class BaseWebUIAdapter:
             ))
         except Exception:
             root_is_final = False
-        text = read_answer_text(element).strip() if root_is_final else ""
+        text = self._read_answer_text(element).strip() if root_is_final else ""
         return "" if normalize_ui_text(text).lower() in _PLACEHOLDER_TEXTS else text
 
     def activity(self, assistant: TurnRef | object | None = None) -> ActivitySnapshot:
