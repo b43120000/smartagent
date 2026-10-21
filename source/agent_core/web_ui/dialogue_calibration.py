@@ -40,7 +40,9 @@ PANEL_SCRIPT='''data=>{
             b.onclick=()=>{state.action=action;if(action!=='cancel'){state.phase='checking';status.textContent='正在驗證，請稍候…';for(const x of ui.querySelectorAll('button'))if(x.id!=='cancel')x.disabled=true;}};box.append(b);
         }
         state.update=(phase,message)=>{
-            state.phase=phase;host.style.display='block';
+            state.phase=phase;
+            const picker=document.querySelector('#smartagent-component-picker,#smartagent-file-picker');
+            host.style.display=picker&&picker.getClientRects().length&&getComputedStyle(picker).display!=='none'?'none':'block';
             const labels={invalid:'選取不符',preflight:'初步檢查通過，待功能驗證',verified:'功能驗證通過'};
             status.style.color={invalid:'#fca5a5',preflight:'#fde68a',verified:'#93e5c0'}[phase]||'#cbd5e1';
             status.textContent=(labels[phase]?labels[phase]+'\\n':'')+message;
@@ -105,12 +107,12 @@ def update_panel(page,phase,message):
 
 def wait_panel_close(page):
     while not page.is_closed():
-        if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"'):break
+        if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"||window.__smartAgentFilePicker?.action==="cancel"'):break
         page.wait_for_timeout(200)
 
 
 def begin_request(page,probe,*,stop_selector=None):
-    if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"'):
+    if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"||window.__smartAgentFilePicker?.action==="cancel"'):
         raise InterruptedError('calibration_cancelled')
     adapter=create_web_ui_for_page(page)
     blocked=adapter.blocking_transport_error()
@@ -123,13 +125,14 @@ def begin_request(page,probe,*,stop_selector=None):
     arm_generation_trace(page,selector)
     control=wait_send_ready(page,document['elements']['send']['selector'])
     if not adapter.validate_composer(probe['prompt']).matched:raise AssertionError('probe_changed_before_submit')
-    control.click(timeout=10000)
+    from .component_calibration import click_automation_send
+    click_automation_send(adapter,control)
     # A successful click is not proof that the website accepted a new turn.
     # Never spend the response timeout waiting on a previous/stopped answer.
     update_panel(page,'preflight','已點擊送出一次，正在確認本輪測試訊息已出現在對話中；不會自動重送。')
     deadline=time.monotonic()+15
     while time.monotonic()<deadline:
-        if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"'):
+        if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"||window.__smartAgentFilePicker?.action==="cancel"'):
             raise InterruptedError('calibration_cancelled')
         blocked=adapter.blocking_transport_error()
         if blocked:raise RuntimeError('provider_blocked:'+blocked['reason'])
@@ -144,7 +147,7 @@ def begin_request(page,probe,*,stop_selector=None):
 def wait_send_ready(page,selector):
     deadline=time.monotonic()+15
     while True:
-        if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"'):
+        if page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"||window.__smartAgentFilePicker?.action==="cancel"'):
             raise InterruptedError('calibration_cancelled')
         try:return send_control(page,selector)
         except ValueError:

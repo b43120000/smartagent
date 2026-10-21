@@ -43,9 +43,21 @@ def write_sample(page, *, text: str = SAMPLE_TEXT, replace_known_sample: bool = 
         raise ValueError("composer_contains_draft:輸入框已有文字，請清空或使用空白對話後重試")
     # Real editors bind their state through focus/input events. Match runtime's
     # keyboard path instead of replacing content through Locator.fill().
-    composer.click(timeout=10000)
-    composer = unique_composer(page, selector)
-    if not composer.evaluate("el => el === document.activeElement || el.contains(document.activeElement)"):
+    for focus_attempt in range(3):
+        composer = unique_composer(page, selector)
+        composer.click(timeout=10000)
+        # A just-focused SSR node can disappear on the next rendering tick.
+        # Confirm focus on the mounted editor before issuing keyboard input.
+        page.wait_for_timeout(250)
+        composer = unique_composer(page, selector)
+        if composer.evaluate("el => el === document.activeElement || el.contains(document.activeElement)"):
+            break
+        # Hydration can replace a clicked SSR editor. Before typing anything,
+        # reacquire and refocus only while the user's draft remains unchanged.
+        if adapter.composer_snapshot().semantic_text.strip() != previous:
+            raise AssertionError("composer_changed_before_focus_retry")
+        page.wait_for_timeout(150)
+    else:
         raise AssertionError("composer_focus_lost")
     if previous:
         page.keyboard.press("Control+A")
@@ -82,6 +94,8 @@ def write_sample(page, *, text: str = SAMPLE_TEXT, replace_known_sample: bool = 
                 empty_since = None
         page.wait_for_timeout(100)
     else:
+        from dataclasses import asdict
+        print('[writeSendBox] composer_validation=' + json.dumps(asdict(validation)), flush=True)
         raise AssertionError("composer_roundtrip_mismatch")
     return {"passed": True, "provider": provider, "selector": selector,
             "config_revision": document["revision"], "runtime_config_loaded": True,

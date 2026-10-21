@@ -30,7 +30,9 @@ def attachment_state(adapter, names, *, config=None):
         if chip.evaluate('(el,s)=>el.matches(s)', config['busy']):
             busy.append(chip)
         busy.extend(node for node in chip.locator(config['busy']).all() if node.is_visible())
+    informational = getattr(adapter, 'is_informational_attachment_notice', lambda node: False)
     errors = [node.inner_text() for node in page.locator(config['error']).all() if node.is_visible()
+              and not informational(node)
               and not any(node.evaluate('(el,s)=>!!el.closest(s)', selector)
                   for selector in (adapter.profile.user_turn_selector, adapter.profile.assistant_turn_selector))]
     records = []

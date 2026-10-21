@@ -357,10 +357,40 @@ class TaskContinuationStore:
             return copy.deepcopy(self._load()['records'].get(task_id))
 
 
+def compact_continuation_results(results: dict, max_recent: int = 8) -> dict:
+    if not results or not isinstance(results, dict):
+        return {}
+    all_keys = list(results.keys())
+    recent_keys = set(all_keys[-max_recent:])
+    compact = {}
+    for action_id, item in results.items():
+        if not isinstance(item, dict):
+            continue
+        entry = {
+            'tool': item.get('tool', ''),
+            'execution_status': item.get('execution_status', item.get('status', 'SUCCEEDED')),
+            'verification_status': item.get('effective_verification_status', item.get('verification_status', 'UNKNOWN')),
+            'produced_round': item.get('produced_round'),
+        }
+        if item.get('verifies_action_id'):
+            entry['verifies_action_id'] = item['verifies_action_id']
+        if action_id in recent_keys or item.get('execution_status') not in {'SUCCEEDED', 'COMPLETED'}:
+            if item.get('resource_paths'):
+                entry['resource_paths'] = item['resource_paths']
+            if item.get('result_reason'):
+                entry['result_reason'] = item['result_reason']
+        else:
+            entry['checkpoint_archived'] = True
+        compact[action_id] = entry
+    return compact
+
+
 def continuation_prompt(source, mode):
+    raw_results = source.get('results', {})
+    compact_results = compact_continuation_results(raw_results)
     payload = {'mode': mode, 'source_task_id': source['task_id'], 'source_request_id': source['request_id'],
                'original_goal': source.get('effective_goal') or source['goal'], 'progress': source.get('progress', {}),
-               'action_results': source.get('results', {}), 'uncertain_actions': source.get('prepared', {}),
+               'action_results': compact_results, 'uncertain_actions': source.get('prepared', {}),
                'not_executed_actions': source.get('pending_actions', []), 'pending_repairs': source.get('pending', {})}
     if source.get('_reset_progress'):
         payload.update(progress_is_historical=True, revised_goal=source.get('_revised_goal', ''),

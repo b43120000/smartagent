@@ -45,6 +45,12 @@ def run_stage(url: str, stage: int, evidence: Path, *, check_invalid: bool = Fal
                 target=page.locator(document['elements']['user_turn']['selector']).filter(has_text=marker).last.locator('p.query-text-line').filter(has_text=marker).last
             elif provider=='gemini' and stage==5:
                 target=page.locator('div.response-container-content').filter(has_text=marker).last
+            elif provider=='m365' and stage==2:
+                from ..factory import create_web_ui_for_page
+                target=create_web_ui_for_page(page).send_control()
+            elif provider=='m365' and stage==4:
+                root=page.locator(document['elements']['user_turn']['selector']).filter(has_text=marker).last
+                target=root.locator(document['elements']['user_content']['selector']).last
             elif provider=='m365' and stage==5:
                 target=page.locator('div.fai-CopilotMessage').filter(has_text=marker).last
             elif provider=='claude' and stage==3:

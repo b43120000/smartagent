@@ -32,6 +32,71 @@ class FileTests(DialogueTests):
             save_element('chatgpt',self.page.url,name,selector,{}, {VALIDATION_KEYS[name]:True})
         self.folder=self.root/'fixtures'
 
+    def test_m365_upload_recalibration_does_not_require_stage13_inventory(self):
+        self.page.goto('https://m365.cloud.microsoft/chat/conversation/fixture')
+        self.page.set_content(FILE_HTML)
+        save_composer('m365',self.page.url,'#composer',{})
+        save_files('m365',dict(entry='#entry',entry_verified=True,input='#file',upload_verified=True))
+        adapter=create_web_ui_for_page(self.page)
+        with self.assertRaisesRegex(ValueError,'unknown_existing_attachments'):
+            adapter.composer_attachment_count()
+        with patch.object(flow,'select',return_value='#upload'):
+            result=flow.run_stage(self.page,12,self.folder)
+        self.assertTrue(result['upload_verified'])
+        self.assertEqual(self.page.evaluate('window.submits'),0)
+
+    def test_upload_baseline_preserves_preexisting_file_and_draft(self):
+        self.page.goto('https://m365.cloud.microsoft/chat/conversation/fixture')
+        self.page.set_content(FILE_HTML)
+        save_composer('m365',self.page.url,'#composer',{})
+        save_files('m365',dict(entry='#entry',entry_verified=True,input='#file',upload_verified=True))
+        self.page.locator('#file').set_input_files({'name':'existing.txt','mimeType':'text/plain','buffer':b'KEEP'})
+        adapter=create_web_ui_for_page(self.page)
+        with self.assertRaisesRegex(ValueError,'existing_draft_or_attachment_preserved'):
+            flow.bootstrap_attachment_baseline(adapter)
+        self.assertEqual(self.page.locator('#file').evaluate('el=>el.files[0].name'),'existing.txt')
+        self.assertEqual(self.page.evaluate('window.submits'),0)
+
+    def test_attachment_picker_uses_semantic_class_across_upload_state_changes(self):
+        self.page.locator('#chips').evaluate('''el=>{el.innerHTML='<div class="fx-Attachment temporaryState">sample.txt<button aria-label="Remove">x</button></div>';}''')
+        flow.show(self.page,13)
+        panel=self.page.locator('#smartagent-file-picker')
+        panel.locator('#pick').click()
+        self.page.locator('.fx-Attachment').dispatch_event('click')
+        selector=self.page.evaluate('window.__smartAgentFilePicker.selection.selector')
+        self.assertEqual(selector,'div.fx-Attachment')
+        self.page.locator('.fx-Attachment').evaluate("el=>el.className='fx-Attachment readyState'")
+        self.assertEqual(self.page.locator(selector).count(),1)
+        self.assertFalse(panel.locator('#save').is_disabled())
+
+    def test_m365_onedrive_copy_notice_is_not_an_upload_failure(self):
+        self.page.goto('https://m365.cloud.microsoft/chat/conversation/fixture')
+        self.page.set_content(FILE_HTML)
+        save_composer('m365',self.page.url,'#composer',{})
+        save_files('m365',dict(input='#file',upload_verified=True,chip='.fixture-chip',
+            busy='[aria-busy=true]',error='[role=alert]',remove='button',attachment_probe={'completion':'busy_idle'},
+            attachment_inventory_verified=True,attachment_verified=True))
+        adapter=create_web_ui_for_page(self.page)
+        title='\u5f9e\u88dd\u7f6e\u4e0a\u50b3\u5c07\u6703\u50b3\u9001\u8907\u672c\u7d66 OneDrive (\u500b\u4eba)\u3002'
+        self.page.locator('body').evaluate('''(body,title)=>{const bar=document.createElement('div');bar.className='fui-MessageBar';bar.role='alert';bar.innerHTML='<span class="fui-MessageBarTitle"></span><a href="https://onedrive.live.com/">Manage</a>';bar.querySelector('span').textContent=title;body.append(bar);}''',title)
+        info_path='M18 10a8 8 0 1 0-16 0 8 8 0 0 0 16 0M9.5 8.91a.5.5 0 0 1 1 0v4.69a.5.5 0 0 1-1 0V8.9m-.25-2.16a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0'
+        bar=self.page.locator('.fui-MessageBar')
+        self.assertTrue(file_runtime.attachment_state(adapter,[])['alerts'])
+        bar.evaluate("(el,d)=>{const icon=document.createElement('i');icon.className='fui-MessageBar__icon';const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',d);svg.append(path);icon.append(svg);el.append(icon);}",info_path)
+        self.assertEqual(file_runtime.attachment_state(adapter,[])['alerts'],[])
+        bar.locator('.fui-MessageBarTitle').evaluate("el=>el.textContent='Uploading from your device sends a copy to OneDrive (Personal).'")
+        self.assertEqual(file_runtime.attachment_state(adapter,[])['alerts'],[])
+        bar.locator('a').evaluate("el=>el.href='https://onedrive.live.com.example.invalid/'")
+        self.assertTrue(file_runtime.attachment_state(adapter,[])['alerts'])
+        bar.locator('a').evaluate("el=>el.href='https://onedrive.live.com/'")
+        bar.locator('path').evaluate("el=>el.setAttribute('d','M0 0')")
+        self.assertTrue(file_runtime.attachment_state(adapter,[])['alerts'])
+        bar.locator('path').evaluate('(el,d)=>el.setAttribute("d",d)',info_path)
+        self.page.locator('.fui-MessageBar').evaluate("el=>el.setAttribute('aria-invalid','true')")
+        self.assertTrue(file_runtime.attachment_state(adapter,[])['alerts'])
+        self.page.locator('.fui-MessageBar').evaluate("el=>{el.removeAttribute('aria-invalid');el.querySelector('span').textContent='Upload failed';}")
+        self.assertEqual(file_runtime.attachment_state(adapter,[])['alerts'],['Upload failedManage'])
+
     def test_complete_file_flow_and_agent_adapter_consumption(self):
         with patch.object(flow,'select',return_value='#entry'):
             self.assertTrue(flow.run_stage(self.page,11,self.folder)['entry_verified'])

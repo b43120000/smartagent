@@ -108,7 +108,7 @@ def close_owned_context(context) -> None:
 
 
 @contextmanager
-def open_manual_page(url: str, *, endpoint: str = "", headless: bool = False):
+def open_manual_page(url: str, *, endpoint: str = "", headless: bool = False, navigation_wait: str = "domcontentloaded"):
     from playwright.sync_api import sync_playwright
     from ..shared_browser import shared_browser_enabled, connect_shared_browser, mark_shared_page
 
@@ -139,7 +139,7 @@ def open_manual_page(url: str, *, endpoint: str = "", headless: bool = False):
             page = create_manual_page(context, shared_browser=True)
             if shared_browser_enabled():
                 mark_shared_page(page)
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            page.goto(url, wait_until=navigation_wait, timeout=60000)
             if not headless:
                 page.bring_to_front()
             yield page

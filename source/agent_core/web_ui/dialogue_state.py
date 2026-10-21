@@ -90,7 +90,7 @@ def finish_generation_trace(page):
 def wait_owned_response(adapter, scope, marker, *, quiet_seconds=5, timeout=180, allow_raw_preview=False):
     deadline=time.monotonic()+timeout;stable_since=None;previous=None;samples=[]
     while time.monotonic()<deadline:
-        if adapter.page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"'):
+        if adapter.page.evaluate('()=>window.__smartAgentDialoguePanel?.action==="cancel"||window.__smartAgentComponentPicker?.action==="cancel"||window.__smartAgentFilePicker?.action==="cancel"'):
             raise InterruptedError('calibration_cancelled')
         blocked=adapter.blocking_transport_error()
         if blocked:raise RuntimeError('provider_blocked:'+blocked['reason'])

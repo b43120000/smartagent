@@ -5,7 +5,7 @@ from .message_text import read_message_text, read_answer_text
 
 def check_component_selection(page, stage, probe, selection):
     # Import lazily: component_calibration also owns the selection polling loop.
-    from .component_calibration import candidate_adapter, content_text, send_control, user_root, stage3_user_turns
+    from .component_calibration import candidate_adapter, content_text, send_control, user_root
     from .dom_config import load_dom_config
     from .provider_registry import provider_from_url
     checks = []
@@ -59,7 +59,8 @@ def check_component_selection(page, stage, probe, selection):
             check('單則訊息範圍', text.count(probe['marker']) == probe['prompt'].count(probe['marker']), '選取範圍混入其他訊息或重複內容，請縮小範圍。')
             if stage == 3:
                 check('本輪定位', root.evaluate('(el,chosen)=>el===chosen', element), '目前點到的元件須是本輪訊息，不能是其他歷史訊息。')
-                matching = stage3_user_turns(candidate_adapter(page, 'user_turn', selector), probe)
+                turns = candidate_adapter(page, 'user_turn', selector).turns('user')
+                matching = [turn for turn in turns if ui_text_matches(turn.raw_text, probe['prompt'])]
                 check('執行時讀取', len(matching) == 1 and matching[0].element.evaluate('(el,chosen)=>el===chosen', element), '執行時無法唯一辨認本輪使用者訊息；請調整外框。')
                 attrs = matching[0].stable_attributes
                 checks.append(dict(label='識別方式', passed=None,

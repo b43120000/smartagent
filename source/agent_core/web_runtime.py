@@ -1442,13 +1442,15 @@ class WebLLMScraper:
         from .paths import runtime_root
         self._composer_io_unconfirmed = True
         self._composer_operation_url = self._page.url
-        self._log_stage("composer_bounded_begin", f"prompt_len={len(prompt)} timeout_sec=30")
+        timeout_sec = max(30.0, (len(prompt) / 4096.0) * 3.5 + 10.0)
+        observation_timeout_sec = max(8.0, (len(prompt) / 4096.0) * 1.5 + 4.0)
+        self._log_stage("composer_bounded_begin", f"prompt_len={len(prompt)} timeout_sec={timeout_sec:.1f}")
         try:
             result = prepare_composer(
                 endpoint=self.get_cdp_endpoint(),
                 url=self._composer_operation_url, prompt=prompt,
                 journal_root=runtime_root() / "composer_operations",
-                timeout_sec=30.0, observation_timeout_sec=8.0,
+                timeout_sec=timeout_sec, observation_timeout_sec=observation_timeout_sec,
                 cancel_check=lambda: self._check_cancel_requested("composer"),
             )
         except KeyboardInterrupt:
@@ -1622,9 +1624,15 @@ class WebLLMScraper:
         )
 
     def _submit_verified_prompt(
-        self, send_locator, *, prompt: str = "", attachment_paths: list | None = None
+        self, send_locator, *, prompt: str = "", attachment_paths: list | None = None,
+        submit_snapshot: dict | None = None,
     ) -> None:
         """Cross the submit boundary exactly once after final UI validation."""
+        if submit_snapshot is not None:
+            submit_snapshot['_submit_click_completed'] = False
+            submit_snapshot.pop('_submit_delivery_confirmed', None)
+            submit_snapshot.pop('_generation_after_submit_seen', None)
+            submit_snapshot.pop('_generation_delivery_pending_scope', None)
         self._log_stage("submit_begin", "mode=send_button")
         rate_lease = getattr(self, "_rate_submit_lease", None)
         if rate_lease is not None:
@@ -1678,6 +1686,8 @@ class WebLLMScraper:
                 except Exception:
                     pass
             click_completed = True
+            if submit_snapshot is not None:
+                submit_snapshot['_submit_click_completed'] = True
             if self.service == "chatgpt" and not getattr(self,"_isolated_browser",None):
                 from .composer_operation import mark_composer_submitted
                 from .paths import runtime_root
@@ -2168,6 +2178,11 @@ class WebLLMScraper:
         conversation_id = self._conversation_id_from_url(
             str(getattr(self._page, "url", "") or "")
         )
+        snapshot['_submit_page_url'] = str(getattr(self._page, 'url', '') or '')
+        try:
+            snapshot['_generation_active_before_submit'] = bool(self._is_generation_active())
+        except Exception:
+            snapshot['_generation_active_before_submit'] = None
         snapshot["_web_ui_scope"] = self._web_ui_adapter().capture_request(
             prompt,
             conversation_id=conversation_id,
@@ -2261,6 +2276,41 @@ class WebLLMScraper:
             raise WebScraperStageError(message,
                 stage='provider_conversation_full' if full else 'provider_rate_limit', safe_to_retry=False)
 
+    def _confirm_generation_delivery(self, snapshot: dict, composer_state: dict, *, deadline_reached: bool) -> bool:
+        """Acknowledge transport only; never fabricate a user/assistant anchor."""
+        scope = snapshot.get('_web_ui_scope')
+        if (scope is None or scope.user_turn is not None
+                or snapshot.get('_submit_click_completed') is not True
+                or snapshot.get('_generation_active_before_submit') is not False):
+            return False
+        page_url = str(getattr(getattr(self, '_page', None), 'url', '') or '')
+        if not snapshot.get('_submit_page_url') or page_url != snapshot['_submit_page_url']:
+            return False
+        if composer_state.get('generation_active'):
+            snapshot['_generation_after_submit_seen'] = True
+        if not deadline_reached or snapshot.get('_generation_after_submit_seen') is not True:
+            return False
+        try:
+            editor = self._web_ui_adapter().composer_snapshot()
+            # Semantic text must be empty. A raw view may retain Lexical's
+            # hidden U+200B/U+200C decoration; never strip user semantic text.
+            if not isinstance(editor.semantic_text, str) or editor.semantic_text.strip():
+                return False
+            candidates = editor.candidates
+            if not candidates or any(not isinstance(value, str)
+                    or value.replace('\u200b', '').replace('\u200c', '').strip()
+                    for value in candidates):
+                return False
+        except Exception:
+            return False
+        snapshot['_submit_delivery_confirmed'] = True
+        snapshot['_generation_delivery_pending_scope'] = True
+        self._record_composer_delivery()
+        self._set_request_state('SUBMIT_CONFIRMED_PENDING_SCOPE', 'generation_after_completed_click')
+        self._log_stage('user_sent_generation_fallback',
+                        'delivery_confirmed=true user_scope_confirmed=false assistant_ownership_required=true')
+        return True
+
     def _wait_for_user_sent(self, snapshot: dict, timeout_sec: float = 45.0) -> None:
         """Require a genuinely new user turn before looking at assistant content.
 
@@ -2269,7 +2319,9 @@ class WebLLMScraper:
         conversation unit.  The normal ACK window therefore remains short for
         inactive pages, but becomes a progress-based deferred-binding window
         while generation is visibly active.  Assistant content is never read
-        until the semantic user anchor is recovered.
+        until the semantic user anchor is recovered. All providers can acknowledge
+        transport provisionally after a verified idle-to-active submit; the
+        assistant-start gate still requires the original request ownership.
         """
         deadline = time.time() + timeout_sec
         next_diag = 0.0
@@ -2287,6 +2339,7 @@ class WebLLMScraper:
             if scope is not None:
                 user_turn, binding_state = self._web_ui_adapter().reconcile_user_turn(scope)
                 if user_turn is not None:
+                    snapshot['_submit_delivery_confirmed'] = True
                     self._record_composer_delivery()
                     self._log_stage(
                         "user_scope_reconcile",
@@ -2321,6 +2374,8 @@ class WebLLMScraper:
                 mounted = self._web_ui_adapter().recover_turn_mounts()
                 self._log_stage('user_scope_mount_recovery', f'attempt={mount_recovery_count} mounted={mounted}')
             composer_state = self._composer_debug_state()
+            if self._confirm_generation_delivery(snapshot, composer_state, deadline_reached=now >= deadline):
+                return
             if now >= deadline:
                 try:
                     generation_active = bool(
@@ -2357,14 +2412,13 @@ class WebLLMScraper:
                         deferred = True
                         deferred_started = now
                         deferred_last_progress = now
-                        snapshot["_submit_delivery_confirmed"] = True
                         self._set_request_state(
-                            "SUBMIT_CONFIRMED_PENDING_SCOPE",
+                            "WAIT_USER_TURN_ACK",
                             "generation_active_before_user_scope",
                         )
                         self._log_stage(
                             "user_scope_deferred",
-                            "submit_confirmed=true generation_active=true",
+                            "submit_confirmed=false generation_active=true waiting_for_scope",
                         )
                     if signature != deferred_signature:
                         deferred_signature = signature
@@ -2464,6 +2518,9 @@ class WebLLMScraper:
             if scope is not None:
                 owned_assistant = self._web_ui_adapter().latest_owned_assistant(scope)
                 if owned_assistant is not None:
+                    if snapshot.pop('_generation_delivery_pending_scope', False):
+                        self._log_stage('user_scope_restored_after_generation_fallback',
+                                        'assistant_ownership_confirmed=true')
                     self._log_stage(
                         "assistant_started",
                         f"scope={scope.scope_id} assistant_ordinal={owned_assistant.ordinal}",
@@ -3202,7 +3259,7 @@ class WebLLMScraper:
         send_locator = self._wait_for_send_ready(prompt)
         snapshot = self._capture_request_turn_state(prompt)
         try:
-            self._submit_verified_prompt(send_locator, prompt=prompt)
+            self._submit_verified_prompt(send_locator, prompt=prompt, submit_snapshot=snapshot)
         except WebScraperStageError as submit_exc:
             if getattr(self, "_composer_io_unconfirmed", False):
                 raise
@@ -4923,7 +4980,8 @@ class WebLLMScraper:
             self._pending_submit_context = {"snapshot": snapshot, "prompt": prompt, "attachments": list(attachments)}
             try:
                 self._submit_verified_prompt(
-                    send_locator, prompt=prompt, attachment_paths=attachments
+                    send_locator, prompt=prompt, attachment_paths=attachments,
+                    submit_snapshot=snapshot,
                 )
                 submit_attempted = bool(getattr(self, "_submit_click_attempted", False))
             except WebScraperStageError as submit_exc:

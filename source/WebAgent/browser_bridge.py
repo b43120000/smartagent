@@ -84,17 +84,21 @@ def execution_page_lease(
 
 
 def normalize_conversation_url(url: str) -> str:
-    value = normalize_web_conversation_url(url).rstrip("/")
-    if not conversation_id(value):
-        raise ValueError(f"Web conversation URL has no conversation identity: {value}")
-    return value
+    # URL validity and a provider's canonical conversation ID are separate.
+    # Other origins already use a deterministic URL hash. Known entry pages
+    # may acquire their real ID only after navigation or human selection.
+    return normalize_web_conversation_url(url).rstrip("/")
 
 
 def _conversation_ready(page, target: str, *, timeout_ms: int = 60000) -> None:
     """Navigate without depending on ChatGPT project redirects completing load."""
     target_id = conversation_id(target)
+    target_provider = provider_for_url(target)
     current_id = conversation_id(str(getattr(page, "url", "") or ""))
-    if current_id != target_id:
+    if not target_id:
+        print('[WebAgent] URL is a site entry. Select the intended existing conversation '
+              'in this new tab; waiting for its conversation ID before session initialization.', flush=True)
+    if not target_id or current_id != target_id:
         try:
             page.evaluate("target => { window.location.assign(target); }", target)
         except Exception:
@@ -106,14 +110,20 @@ def _conversation_ready(page, target: str, *, timeout_ms: int = 60000) -> None:
         if page.is_closed():
             raise RuntimeError("remote_execution_page_closed_during_navigation")
         current = str(getattr(page, "url", "") or "")
-        if conversation_id(current) == target_id:
+        current_id = conversation_id(current)
+        if current_id and (not target_id or current_id == target_id):
             try:
+                if provider_for_url(current) != target_provider:
+                    raise ValueError('conversation_redirect_provider_mismatch')
                 composer = _visible_composer(page)
                 if composer is not None:
                     return
             except Exception:
                 pass
         page.wait_for_timeout(200)
+    if not target_id:
+        raise RuntimeError('WEB_CONVERSATION_ID_PENDING: select an existing conversation '
+                           'and use its full URL; no session was initialized and no message was submitted.')
     raise RuntimeError(
         f"remote_execution_conversation_not_ready: target={target_id} "
         f"current={conversation_id(str(getattr(page, 'url', '') or ''))}"
@@ -129,7 +139,8 @@ def _open_target_conversation_unlocked(context, target_url: str):
     ]
     matching = [
         candidate for candidate in pages
-        if conversation_id(str(getattr(candidate, "url", "") or "")) == target_id
+        if target_id and conversation_id(str(getattr(candidate, "url", "") or "")) == target_id
+        and provider_for_url(str(candidate.url)) == provider_for_url(target)
         and (not shared_browser_enabled() or (is_shared_page(candidate) and same_provider_url(candidate.url, target)))
     ]
     page = matching[0] if matching else None
@@ -231,8 +242,25 @@ def open_or_attach_browser(target_url: str, *, reuse_remote_agent_page: bool = F
 
     target = normalize_conversation_url(target_url)
     provider = provider_for_url(target)
+    if provider not in web_runtime.SERVICE_CONFIG:
+        if not provider.startswith("other_"):
+            raise ValueError(f"Unsupported WebGPT provider: {provider}")
+        web_runtime.SERVICE_CONFIG[provider] = {
+            "url": target,
+            "new_chat_url": target,
+            "send_by_enter": True,
+            "profile_subdir": provider,
+        }
+    web_runtime.SERVICE_CONFIG[provider]["url"] = target
     use_shared = shared_browser_enabled()
     endpoint = shared_browser_endpoint() if use_shared else web_runtime.CHATGPT_CDP_ENDPOINT
+    if not conversation_id(target) and not use_shared and not _cdp_available(endpoint):
+        # A manager cannot bind an identity-less URL. Launch the standard
+        # authenticated browser first; resolve the real ID before adoption.
+        from playwright.sync_api import sync_playwright
+        from agent_core.web_ui.manual_browser import ensure_agent_browser
+        with sync_playwright() as starter:
+            endpoint, _ = ensure_agent_browser(starter)
     if use_shared or _cdp_available(endpoint):
         from playwright.sync_api import sync_playwright
 
@@ -246,11 +274,16 @@ def open_or_attach_browser(target_url: str, *, reuse_remote_agent_page: bool = F
             pw.stop()
             raise RuntimeError("既有 CDP browser 沒有可用的 BrowserContext")
         context = browser.contexts[0]
-        page = (
-            attach_remote_agent_execution_page(context, target)
-            if reuse_remote_agent_page
-            else open_target_conversation(context, target)
-        )
+        try:
+            page = (
+                attach_remote_agent_execution_page(context, target)
+                if reuse_remote_agent_page
+                else open_target_conversation(context, target)
+            )
+        except BaseException:
+            pw.stop()
+            raise
+        web_runtime.SERVICE_CONFIG[provider]['url'] = str(page.url)
         mode = "REUSE_REMOTE_AGENT_PAGE" if reuse_remote_agent_page else "REUSE_EXISTING_CDP"
         return page, context, pw, mode
     web_runtime.SERVICE_CONFIG[provider]["url"] = target

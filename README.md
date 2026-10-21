@@ -199,3 +199,12 @@ legacy/                         保留但不再作為主要入口的舊版
 SmartAgent 仍在開發中。建議先在測試 Workspace 驗證，再用於重要專案或長時間 unattended 任務。
 
 目前 repository 尚未附開源授權；除非另有書面授權，著作權依法保留給 repository 所有者。
+
+## 手動 DOM 適配
+
+- [依 DOM 功能查找的手動填寫指南](adapterUI/dom.md)：從瀏覽器 F12 取得 selector，找到對應設定欄位與檔案，包含第 1～15 步。
+- [點選校準入口與測試](adapterUI/README.md)：使用各編號 BAT 校準；Other 網站依來源分開保存設定，WebCopilot 載入該網站自己的 DOM。
+- `copilot.cloud.microsoft` 與 `m365.cloud.microsoft` 共用 M365 流程。
+- 網站送出後短暫生成、但 user DOM 延後更新時，會記錄生成狀態作為暫時送達確認，仍須驗證本輪回答歸屬。
+
+Repository 不包含使用者的 `dom_config.json`、校準歷史、瀏覽器登入、工作區設定、對話網址或上傳下載檔案。指南與校準程式會隨版本發布，各網站的實際設定需在自己的環境產生。入口存在不代表所有網站的 1～15 步均已實站驗證通過。

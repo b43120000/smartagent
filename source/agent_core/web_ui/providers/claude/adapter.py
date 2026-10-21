@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
+from ...message_text import read_message_text
 from ...base_adapter import BaseWebUIAdapter
 from .composer import read_composer_snapshot, validate_composer_prompt
 from ...contracts import CompatibilityReport, RequestScope, TurnRef, text_digest
@@ -76,6 +78,24 @@ class ClaudeUIAdapter(BaseWebUIAdapter):
             selector = 'div[data-cds="UserMessage"] > div.relative:has(.cds-user-message-body)'
             return {'turnRootSelector': selector, 'preferredTurnSelector': selector}
         return {}
+
+    def prepare_transport_prompt(self, prompt: str) -> str:
+        # Identity survives Markdown rendering and a fixed-size transcript window.
+        return '[WEBUI_SUBMIT_ID]\nWUS-' + uuid.uuid4().hex.upper() + '\n[/WEBUI_SUBMIT_ID]\n' + prompt
+
+    def _turn_text(self, element, role: str) -> str:
+        if role == 'user' and self.profile.user_content_selector != ':scope':
+            selector = self.profile.user_content_selector
+            nodes = element.query_selector_all(selector)
+            indices = element.evaluate('''(root,selector)=>{
+                const nodes=[...root.querySelectorAll(selector)];
+                return nodes.map((node,i)=>[node,i]).filter(([node])=>
+                    !nodes.some(other=>other!==node&&other.contains(node))).map(([,i])=>i);
+            }''', selector)
+            texts = [read_message_text(nodes[i]) for i in indices]
+            if any(texts):
+                return '\n'.join(text for text in texts if text)
+        return super()._turn_text(element, role)
 
     def _turn_ref(self, element, role: str, ordinal: int) -> TurnRef:
         attrs = tuple(

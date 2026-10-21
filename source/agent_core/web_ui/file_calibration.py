@@ -117,7 +117,7 @@ def bootstrap_attachment_baseline(adapter):
         raise ValueError('existing_draft_or_attachment_preserved:請先處理原有草稿與附件')
     if adapter.generation_active():raise ValueError('previous_response_still_generating')
     config=load_files(adapter.provider_name)
-    install_attachment_probe(adapter.page,config['input'])
+    install_attachment_probe(adapter.page,config.get('input', 'input[type=file]'))
     baseline=input_files(adapter.page)
     if baseline:
         raise ValueError('existing_draft_or_attachment_preserved:請先處理原有草稿與附件')
@@ -208,7 +208,10 @@ def run_stage(page,stage,folder):
         page.keyboard.press('Escape')
         return dict(entry_verified=True,selector=selector)
     if stage==12:
-        ensure_clean(adapter);open_entry(adapter)
+        # Recalibrating upload must not depend on stage 13's chip parser:
+        # stage 12 supplies the input locator needed to calibrate that parser.
+        # Prove an empty baseline from factual file inputs/removal controls.
+        bootstrap_attachment_baseline(adapter);open_entry(adapter)
         selector=select(page,stage);control=unique(page,selector)
         path,marker=fixture(folder)
         with page.expect_file_chooser(timeout=10000) as pending:

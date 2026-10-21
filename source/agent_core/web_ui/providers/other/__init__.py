@@ -1,6 +1,9 @@
 """Origin-isolated manual adapters for sites without built-in selectors."""
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import hashlib
+import json
+from urllib.parse import urlsplit
+from .bridge import BRIDGE_SCRIPT, BRIDGE_VERSION
 
 from ...base_adapter import BaseWebUIAdapter
 from ...contracts import CompatibilityReport, ComposerSnapshot, ComposerValidation, ui_text_matches
@@ -31,18 +34,30 @@ class OtherUIAdapter(BaseWebUIAdapter):
             raise ValueError('manual_other_origin_required')
         super().__init__(page, profile_name=profile_name)
 
-    def _turn_ref(self, element, role, ordinal):
-        turn = super()._turn_ref(element, role, ordinal)
-        if role != 'user':
-            return turn
-        # Shared testids describe node types, not individual user messages.
-        # With no identity field, retain the existing request-local ordinal
-        # fallback; it is not a durable identity across reloads.
-        attrs = tuple((name, value) for name, value in turn.stable_attributes
-                      if name != 'data-testid')
-        source = '\n'.join(f'{name}={value}' for name, value in attrs)
-        identity = hashlib.sha256(f'{role}\n{source or f"{role}:ordinal:{ordinal}"}'.encode('utf-8')).hexdigest()
-        return replace(turn, stable_attributes=attrs, structural_id=identity)
+    bridge_version = BRIDGE_VERSION
+
+    def install_input_bridge(self, *, reset_legacy=False):
+        if provider_from_url(self.page.url) != self.provider_name:
+            raise ValueError('manual_other_page_origin_changed')
+        document = load_dom_config(self.provider_name)
+        if not document or not {'composer', 'send'}.issubset(document['elements']):
+            raise ValueError('manual_other_input_bridge_requires_composer_and_send')
+        # Reinstallation of the same adapter must consume the current mapping.
+        self.profile = self.load_active_profile()
+        self._compatibility_report = None
+        profile = self._active_profile()
+        url = urlsplit(self.page.url)
+        # The browser serializes the canonical origin, including nondefault ports.
+        origin = self.page.evaluate('location.origin')
+        if not url.hostname or provider_from_url(origin) != self.provider_name:
+            raise ValueError('manual_other_page_origin_changed')
+        script = BRIDGE_SCRIPT.replace('__OTHER_CONFIG__', json.dumps({
+            'origin': origin, 'provider': self.provider_name,
+            'composer': profile.composer_selector, 'send': profile.send_selector}))
+        # Page-scoped init scripts must never intercept another shared tab.
+        self.page.add_init_script(script='(' + script + ')()')
+        if not self.page.evaluate(script):
+            raise RuntimeError('WEB_UI_INPUT_BRIDGE_INSTALL_FAILED')
 
     def load_active_profile(self):
         document = load_dom_config(self.provider_name)
