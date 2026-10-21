@@ -27,7 +27,15 @@ class M365UIAdapter(BaseWebUIAdapter):
 
     def _read_answer_text(self, element):
         from ...message_text import read_answer_text
-        return read_answer_text(element, copilot_code_ui=True)
+        diagnostic=[]
+        text=read_answer_text(element, copilot_code_ui=True, diagnostics=diagnostic)
+        current=getattr(self, '_answer_dom_filter_diagnostics', [])
+        self._answer_dom_filter_diagnostics=(current+diagnostic)[:10]
+        return text
+
+    def extract_final_text(self, assistant):
+        self._answer_dom_filter_diagnostics=[]
+        return super().extract_final_text(assistant)
 
     def calibration_picker_options(self, field):
         if field == 'assistant_content':

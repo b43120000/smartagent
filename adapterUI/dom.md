@@ -153,6 +153,10 @@ Other URL 可用首頁、路徑或 hash 路由，程式會產生網址識別；�
 
 M365 與 copilot.cloud.microsoft 維持原本協議提示與回覆格式，不額外要求純文字。初始化、附著確認、一般輪次與格式修復都不附加純文字指令。
 
+也支援沒有 pre/code 標籤的 `.scriptor-codeblock-virtualized` DIV 代碼框。必須找到已識別的網站提示、只有語言標題的標頭，以及唯一正文，才會重建 smartagent_tool 邊界；不依賴隨機 class 或子節點順序。未知提示、額外標頭文字、巢狀代碼框或多個正文候選不會直接放寬接受。
+
+若仍被拒絕，可查看 `localdata/logs/web_llm_scraper_debug.log` 的 `protocol_response_rejected` 紀錄，其中 `response_source.dom_filter` 會列出 `structure`、`body_candidates`、`reconstructed` 與 `reason`，不包含回覆正文。`reconstructed` 表示外框轉換完成，不表示 JSON、turn_commit 或本輪歸屬檢查已通過。常見原因：`recognized_notice_missing`（未知提示）、`unexpected_header_text`（標頭另有文字）、`ambiguous_body`（正文不唯一）、`json_body_not_found`（正文不是 JSON 開頭）。
+
 若回覆出現已識別的 Shell 程式碼框及 smartagent_tool 不支援提示，擷取器在 DOM 副本中移除該網站提示與語言標題，保留原始程式碼並重建協議邊界。未知提示、額外解說、缺少提交或無法證明為本輪的新回覆仍會拒絕。純文字與標籤合併成一行也不會放寬接受。
 
 更新後重新啟動 launch_webcopilot_chatgpt.bat；保留自己校準的 dom_config.json 與登入資料。若先前已在網頁手動要求純文字，請在對話中撤銷該要求並恢復原本協議格式；程式更新不會移除既有對話指令。此變更已有受控 DOM、解析與回復新鮮度測試；封閉環境的實際頁面需再驗證。

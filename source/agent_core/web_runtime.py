@@ -2888,7 +2888,11 @@ class WebLLMScraper:
             except Exception:
                 durable_id = ""
         assistant_fp = self._element_fingerprint(assistant_turn) if assistant_turn is not None else ""
+        dom_filter = []
+        if getattr(self, 'service', '') == 'm365':
+            dom_filter = list(getattr(self._web_ui_adapter(), '_answer_dom_filter_diagnostics', []))[:10]
         return {
+            "dom_filter": dom_filter,
             "scope_id": str(getattr(scope, "scope_id", "") or ""),
             "assistant_id_sha256": (
                 hashlib.sha256(durable_id.encode("utf-8", errors="replace")).hexdigest()
