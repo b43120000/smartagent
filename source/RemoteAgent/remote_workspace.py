@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_core.conversation_registry import ConversationRegistry
-from agent_core.workspace import normalize_chatgpt_url, normalize_workspace_path
+from agent_core.workspace import normalize_web_conversation_url, normalize_workspace_path
 
 
 def _registry() -> ConversationRegistry:
@@ -33,7 +33,7 @@ def cmd_list(_args) -> int:
 
 def cmd_set(args) -> int:
     workspace = normalize_workspace_path(args.workspace)
-    url = normalize_chatgpt_url(args.url)
+    url = normalize_web_conversation_url(args.url)
     reg = _registry()
     from agent_core.remote_binding import DEFAULT_SKILL_PATH, load, save
     try:
@@ -60,7 +60,7 @@ def cmd_set(args) -> int:
 
 def cmd_disable(args) -> int:
     reg = _registry()
-    record = reg.find_by_url(normalize_chatgpt_url(args.url))
+    record = reg.find_by_url(normalize_web_conversation_url(args.url))
     if not record:
         raise SystemExit("conversation not registered")
     updated = reg.configure_remote_conversation(

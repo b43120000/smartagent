@@ -81,7 +81,8 @@ def _run(req:dict,profile:dict)->dict:
   if str(binding.get('approval_kind','')).upper()!='EXECUTION':raise RuntimeError('execution_approval_kind_invalid')
   if str(binding.get('manifest_digest',''))!=str(approval_manifest.get('manifest_digest','')):raise RuntimeError('execution_approval_manifest_binding_mismatch')
   SecurityApprovalLedger(cwd).consume(approval_id,binding)
- env=dict(os.environ);env['SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE']='1';temp=Path(profile['runtime_root']).resolve();temp.mkdir(parents=True,exist_ok=True);env.update(TEMP=str(temp),TMP=str(temp))
+ from .runtime_environment import build_runtime_environment
+ env=build_runtime_environment();env['SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE']='1';temp=Path(profile['runtime_root']).resolve();temp.mkdir(parents=True,exist_ok=True);env.update(TEMP=str(temp),TMP=str(temp))
  flags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=='nt' else 0
  cp=subprocess.Popen(req['command'],cwd=str(cwd),shell=bool(req.get('shell')),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,creationflags=flags)
  timed_out=False

@@ -1,11 +1,10 @@
 @echo off
 setlocal
-call force_stop_all_agents.bat
 if /I "%~1"=="--launcher-self-test" echo REMOTE_AGENT_LAUNCHER_PARSE_OK
 if /I "%~1"=="--launcher-self-test" exit /b 0
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
-call "%~dp0ensure_portable_runtime.bat"
+call "%~dp0install_smart_agent\launchers\ensure_portable_runtime.bat"
 if errorlevel 1 exit /b %ERRORLEVEL%
 set "SMARTAGENT_SOURCE=%~dp0source"
 if not exist "%SMARTAGENT_SOURCE%\agent_core\__init__.py" (
@@ -21,7 +20,7 @@ if not exist "%SMARTAGENT_PYTHON%" (
     echo.
     echo [RemoteAgent-0] ERROR SmartAgent runtime is not installed for this launcher.
     echo [RemoteAgent-0] Missing: %~dp0.venv\Scripts\python.exe
-    echo [RemoteAgent-0] Run install_smart_agent.bat first, then start RemoteAgent again.
+    echo [RemoteAgent-0] Run install_smart_agent\launchers\install_smart_agent.bat first, then start RemoteAgent again.
     pause
     exit /b 2
 )

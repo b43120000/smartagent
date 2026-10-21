@@ -153,5 +153,10 @@
     "name": "urllib3-2.8.0-py3-none-any.whl",
     "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
     "bytes": 135717
+  },
+  {
+    "name": "pip-26.0.1-py3-none-any.whl",
+    "sha256": "bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b",
+    "bytes": 1787723
   }
 ]

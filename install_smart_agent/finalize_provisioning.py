@@ -36,13 +36,13 @@ def main() -> int:
     checks: dict[str, object] = {
         "source_present": (root / "source" / "smart_agent.py").is_file(),
         "remote_launcher": (root / "launch_remote_agent.bat").is_file(),
-        "webdirect_launcher": (root / "launch_webcopilot_chatgpt.bat").is_file(),
+        "webdirect_launcher": (root / "launch_webcopilot.bat").is_file(),
         "edit_workspace": (root / "Edit_workspace.bat").is_file(),
         "force_stop_launcher": (root / "force_stop_all_agents.bat").is_file(),
-        "installer_launcher": (root / "install_smart_agent.bat").is_file(),
+        "installer_launcher": (root / "install_smart_agent/launchers/install_smart_agent.bat").is_file(),
         "acl_status_launcher": (root / "ACLstatus.bat").is_file(),
-        "reinstall_launcher": (root / "reinstall_smart_agent.bat").is_file(),
-        "checklist_launcher": (root / "InstallCheckList.bat").is_file(),
+        "reinstall_launcher": (root / "install_smart_agent/launchers/reinstall_smart_agent.bat").is_file(),
+        "checklist_launcher": (root / "install_smart_agent/launchers/InstallCheckList.bat").is_file(),
     }
     requirements = root / "install_smart_agent" / "requirements.txt"
     try:

@@ -13,16 +13,17 @@ from pathlib import Path
 
 SCHEMA = "SMARTAGENT_UPDATE_MANIFEST_V1"
 SECURITY_POLICY_VERSION = 1
-RELEASE_SEQUENCE = 2026102102
+RELEASE_SEQUENCE = 2026102201
 EXCLUDED_DIRS = {
     ".git", ".venv", "localdata", ".agents", "__pycache__", ".pytest_cache",
-    "browser_profile", ".codex", ".aws", ".ssh", "dom_config.history",
+    "browser_profile", ".codex", ".aws", ".ssh", "dom_config.history", "defaultworkspace",
 }
-EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".lnk", ".pem", ".key", ".pfx", ".p12", ".ppk"}
+EXCLUDED_SUFFIXES = {".bak", ".tmp",".pyc", ".pyo", ".lnk", ".pem", ".key", ".pfx", ".p12", ".ppk"}
 EXCLUDED_FILES = {
     "config/debug_config.json",
     "config/browser_session.json",
     "config/update_manifest.json",
+    "doc/portable_git_handoff.md",
 }
 
 
@@ -51,6 +52,8 @@ def deployable_files(root: Path) -> dict[str, str]:
             relative = path.relative_to(root).as_posix()
             if relative.casefold() in EXCLUDED_FILES:
                 continue
+            if name.casefold().startswith('dom_config - ') or (relative.startswith('source/run_t16_') and path.suffix == '.py'):
+                continue
             if path.suffix.casefold() in EXCLUDED_SUFFIXES:
                 continue
             output[relative] = sha256(path)
@@ -61,6 +64,12 @@ def deployable_files(root: Path) -> dict[str, str]:
         for path in payload.iterdir():
             if re.fullmatch(r'(manifest\.json|requirements-lock\.json|LICENSES\.json|README\.md|runtime\.zip(?:\.part[0-9]+)?)',path.name) and path.is_file() and not path.is_symlink():
                 output[path.relative_to(root).as_posix()]=sha256(path)
+    git_payload = root / '.venv' / 'portable-git'
+    if git_payload.is_dir() and not git_payload.is_symlink():
+        for name in ('manifest.json', 'git.zip'):
+            path = git_payload / name
+            if path.is_file() and not path.is_symlink():
+                output[path.relative_to(root).as_posix()] = sha256(path)
     return output
 
 

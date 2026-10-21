@@ -22,7 +22,41 @@ _TASK_PLAN_SCHEMA_CONTRACT = json.dumps(
 )
 
 
-def render_initial_planner_toolkit() -> str:
+def _render_runtime_environment(environment: dict | None) -> str:
+    source = environment if isinstance(environment, dict) else {}
+    tools = source.get("tools") if isinstance(source.get("tools"), dict) else {}
+    bounded = {
+        "schema": str(source.get("schema", ""))[:80],
+        "status": str(source.get("status", "PROBED" if tools else "UNAVAILABLE"))[:80],
+        "tools": {},
+    }
+    for name in ("python", "git"):
+        fact = tools.get(name) if isinstance(tools.get(name), dict) else {}
+        bounded["tools"][name] = {
+            "status": str(fact.get("status", "MISSING"))[:40],
+            "source": str(fact.get("source", "BUNDLED"))[:40],
+            "path": str(fact.get("path", ""))[:1000],
+            "version": str(fact.get("version", ""))[:300],
+            "binary_sha256": str(fact.get("binary_sha256", ""))[:64],
+            "probe_exit_code": fact.get("probe_exit_code"),
+        }
+    return (
+        "[SMARTAGENT_ENVIRONMENT]\n"
+        + json.dumps(bounded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n[/SMARTAGENT_ENVIRONMENT]\n"
+        "Environment facts above come from direct binary probes, not payload manifests. "
+        "Before reporting a missing library, SDK, executable, or runtime as unavailable, use run_command "
+        "INSPECT/GIT_INSPECT to search the authorized project and local environment first (for example "
+        "Get-Command/Test-Path or Python import discovery). If it is absent and installation is authorized, "
+        "plan one prerequisite MUTATE action using bare python or git only when its probe status is AVAILABLE; "
+        "the Runtime resolves those names to the bundled tools. Install/download into the authorized workspace "
+        "or an approved application-local target, run an explicit VERIFY action, then retry the original operation "
+        "with a new action_id. A manifest entry, process start, download, or installer exit code alone is not "
+        "installation success. Preserve denied, network, probe, and verification failures as FAILED/BLOCKED evidence.\n"
+    )
+
+
+def render_initial_planner_toolkit(environment: dict | None = None) -> str:
     """Render the per-request capability map used for the first task plan."""
     return (
         "[SMARTAGENT_INITIAL_PLANNER_TOOLKIT]\n"
@@ -65,7 +99,8 @@ def render_initial_planner_toolkit() -> str:
         "需要沿用 path/paths/project_root/output_path/expected_filename 時，明確使用 field_refs:{field:{ref_id,version}}，"
         "不要同時填該欄位的 literal。缺少引用或過期／不同欄位的引用需重答；Runtime 不會猜測省略欄位。"
         "command、decision、outcome、evidence、snapshot、verify、plan 不可透過 field_refs 沿用。\n"
-        "task_plan_schema_contract=" + _TASK_PLAN_SCHEMA_CONTRACT + "\n"
+        + _render_runtime_environment(environment)
+        + "task_plan_schema_contract=" + _TASK_PLAN_SCHEMA_CONTRACT + "\n"
         + _SHARED_TOOL_SECTION + "\n" + render_write_budget()
         + "\n[/SMARTAGENT_INITIAL_PLANNER_TOOLKIT]"
     )

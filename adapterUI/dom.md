@@ -1,6 +1,6 @@
 # DOM：完全手動取得與填寫指南
 
-適用目錄：`C:\path\to\SmartAgent`。
+適用目錄：`C:\Users\user\Desktop\remoteagent\release\SmartAgentv2_1`。
 本文件按「需要哪個 DOM」排列。DOM 設定填的是 CSS selector，不是按鈕圖示的 Unicode、圖片網址，也不一定是 HTML id。優先用穩定的 `data-testid`、`aria-label`、role 與固定 id；不要填每次重新整理都改變的亂數 id。
 
 ## 先找到要修改的檔案
@@ -17,8 +17,6 @@
 $env:PYTHONPATH = "$PWD\source"
 .\.venv\Scripts\python.exe -B -c "from agent_core.web_ui.provider_registry import provider_from_url; from agent_core.web_ui.dom_config import config_path; u=input('URL: '); p=provider_from_url(u); print(p); print(config_path(p))"
 ```
-
-四個內建網站附帶 `dom_config.default.json`（通用 selector 與原有校準驗證旗標；不含訊息 ID、對話 URL、探針與執行紀錄）。載入順序為個人 `dom_config.json` → 內建網站預設檔；Other 不使用四站預設。更新只更新預設檔，不蓋掉個人校準。要手改時先把同目錄預設檔複製為 `dom_config.json`，再改自己的檔案。網站、語系或介面版本不同仍須重驗；驗證旗標不是任何環境的通過保證。
 
 修改前備份原檔；結束正在使用它的 Agent／校準程序，改完後重新啟動。以 UTF-8 儲存，JSON 使用英文直引號，反斜線必須寫成 `\\`。不要修改 Python 程式裡的內建 selector 來代替個別網站設定。
 
@@ -148,27 +146,3 @@ Other URL 可用首頁、路徑或 hash 路由，程式會產生網址識別；�
 ```
 
 第 2～7 步的 JSON 都放在 `elements` 內，結構同 composer，名稱與驗證鍵參照各 DOM 小節；`user_content.scope` 為 `user_turn`、`assistant_content.scope` 為 `assistant_turn`，其餘為 `page`。每次修改 revision 可換成新的唯一字串。完整生命週期與檔案設定有額外相依欄位，請以現有校準輸出的結構及本文件欄位說明為準，不要直接複製另一個網站的通過紀錄。
-
-## M365 回覆外框後處理
-
-M365 與 copilot.cloud.microsoft 維持原本協議提示與回覆格式，不額外要求純文字。初始化、附著確認、一般輪次與格式修復都不附加純文字指令。
-
-送出內容前會加入獨立的 `[WEBUI_SUBMIT_ID]`／`WUS-…`／`[/WEBUI_SUBMIT_ID]` 本輪標記；每次送出（含格式修復）都不同，原始提示正文保持不變。標記唯一出現在一則 user 訊息時，可在網站改寫長提示或重用 DOM ID 的情況下綁定本輪；缺失或多則命中仍拒絕。正文裡引用的歷史標記不會取代本次標記。這是傳輸識別，不要求模型改成純文字，也不放寬 assistant 新鮮度、turn_commit 或工具授權。
-
-也支援沒有 pre/code 標籤的 `.scriptor-codeblock-virtualized` DIV 代碼框。必須找到已識別的網站提示、只有語言標題的標頭，以及唯一正文，才會重建 smartagent_tool 邊界；不依賴隨機 class 或子節點順序。未知提示、額外標頭文字、巢狀代碼框或多個正文候選不會直接放寬接受。
-
-若仍被拒絕，可查看 `localdata/logs/web_llm_scraper_debug.log` 的 `protocol_response_rejected` 紀錄，其中 `response_source.dom_filter` 會列出 `structure`、`body_candidates`、`reconstructed` 與 `reason`，不包含回覆正文。`reconstructed` 表示外框轉換完成，不表示 JSON、turn_commit 或本輪歸屬檢查已通過。常見原因：`recognized_notice_missing`（未知提示）、`unexpected_header_text`（標頭另有文字）、`ambiguous_body`（正文不唯一）、`json_body_not_found`（正文不是 JSON 開頭）。
-
-若回覆出現已識別的 Shell 程式碼框及 smartagent_tool 不支援提示，擷取器在 DOM 副本中移除該網站提示與語言標題，保留原始程式碼並重建協議邊界。未知提示、額外解說、缺少提交或無法證明為本輪的新回覆仍會拒絕。純文字與標籤合併成一行也不會放寬接受。
-
-更新後重新啟動 launch_webcopilot_chatgpt.bat；保留自己校準的 dom_config.json 與登入資料。若先前已在網頁手動要求純文字，請在對話中撤銷該要求並恢復原本協議格式；程式更新不會移除既有對話指令。此變更已有受控 DOM、解析與回復新鮮度測試；封閉環境的實際頁面需再驗證。
-
-## DOM 本輪 user 綁定診斷
-
-所有 provider 在生成送達回退、user 確認逾時及 assistant 啟動停滯時，會額外輸出 `stage=user_binding_diagnostic` 到 `localdata/logs/web_llm_scraper_debug.log`。若只有診斷讀取失敗則是 `user_binding_diagnostic_failed`；不改變原本成功／拒絕條件，也不觸發重送。
-
-更新並重新啟動後重現一次。先提供最新失敗時間的 `user_binding_diagnostic`，優先選 `trigger=assistant_start_stalled`，以 `scope_id` 與 `request_id` 對應原始失敗輪次。`prompt_kind=WEBAGENT_FINAL_RENDER` 表示回填結果輪次，不能與前一輪混用；部分非任務輪次的 request_id 為空，但 scope_id 仍會保留。
-
-報告包含預期及各候選的正規化長度、雜湊、第一個差異位置、正文 selector 命中數、節點連線狀態、文字匹配和新鮮度證據。`first_difference` 從 0 計算，null 表示正規化後相同；`first_nonwhitespace_difference=null` 代表忽略空白後相同。`content_selector_missing` 表示正文定位沒命中；`element_detached` 表示節點已離開 DOM；`no_text_match` 表示未讀到相符提示；`text_match_without_newness` 表示文字相符但缺少新增證據。這些是診斷分類，不是自動放寬條件。
-
-最多列出六個候選（末五則及最接近的一則），不包含完整提示、正文片段、網址、屬性值或例外訊息；不需要為診斷重新校準第 3、4 項。

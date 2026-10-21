@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from agent_core.workspace import normalize_chatgpt_url, normalize_workspace_path
+from agent_core.workspace import normalize_web_conversation_url, normalize_workspace_path
 
 WEBGPT_TRANSPORTS = {"WEBGPT", "WEBGPT_COPILOT"}
 
@@ -90,7 +90,7 @@ def validate_task_transport(task: Any, *, registry=None) -> TaskTransportContext
 
 def _new_chat_execution_url(linked_url: str) -> str:
     """Return the canonical linked conversation used by the execution broker."""
-    return normalize_chatgpt_url(linked_url)
+    return normalize_web_conversation_url(linked_url)
 
 
 def resolve_task_execution_chatgpt_url(task: Any, *, registry) -> str:
@@ -115,12 +115,12 @@ def resolve_task_execution_chatgpt_url(task: Any, *, registry) -> str:
     workspace = normalize_workspace_path(str(getattr(task, "workspace", "") or ""))
     env_url = str(os.environ.get("SMARTAGENT_REMOTE_EXECUTION_URL", "") or "").strip()
     if env_url:
-        return _new_chat_execution_url(normalize_chatgpt_url(env_url))
+        return _new_chat_execution_url(normalize_web_conversation_url(env_url))
     primary_path = Path(registry.path).with_name("remote_primary_binding.json")
     try:
         primary = json.loads(primary_path.read_text(encoding="utf-8"))
         if normalize_workspace_path(str(primary.get("workspace", ""))) == workspace:
-            primary_url = normalize_chatgpt_url(str(primary.get("gpt_url", "")))
+            primary_url = normalize_web_conversation_url(str(primary.get("gpt_url", "")))
             if registry.find(workspace, primary_url) is not None:
                 return _new_chat_execution_url(primary_url)
     except (OSError, ValueError, json.JSONDecodeError):
@@ -128,7 +128,7 @@ def resolve_task_execution_chatgpt_url(task: Any, *, registry) -> str:
     metadata = dict(getattr(task, "metadata", {}) or {})
     explicit = str(metadata.get("execution_chatgpt_url") or "").strip()
     if explicit:
-        explicit = normalize_chatgpt_url(explicit)
+        explicit = normalize_web_conversation_url(explicit)
         if registry.find(workspace, explicit) is not None:
             return _new_chat_execution_url(explicit)
 
@@ -139,7 +139,7 @@ def resolve_task_execution_chatgpt_url(task: Any, *, registry) -> str:
             continue
         try:
             row_workspace = normalize_workspace_path(str(row.get("workspace", "") or ""))
-            url = normalize_chatgpt_url(str(row.get("gpt_url", "") or ""))
+            url = normalize_web_conversation_url(str(row.get("gpt_url", "") or ""))
         except ValueError:
             continue
         if row_workspace != workspace:
@@ -153,7 +153,7 @@ def resolve_task_execution_chatgpt_url(task: Any, *, registry) -> str:
     if candidates:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return _new_chat_execution_url(candidates[0][1])
-    return normalize_chatgpt_url("https://chatgpt.com/")
+    return normalize_web_conversation_url("https://chatgpt.com/")
 
 
 __all__ = [

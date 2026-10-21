@@ -60,6 +60,10 @@ def status_metadata_path(root: str | Path | None = None) -> Path:
     return resolve_location("status_metadata_path", root)
 
 
+def environment_ledger_path(root: str | Path | None = None) -> Path:
+    return resolve_location("environment_ledger_path", root)
+
+
 def conversation_registry_path(root: str | Path | None = None) -> Path:
     return resolve_location("conversation_registry_path", root)
 

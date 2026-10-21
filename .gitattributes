@@ -1,2 +1,1 @@
-# Preserve release bytes: protocol/update manifests hash the exact file bytes.
-* -text
+* -text whitespace=cr-at-eol

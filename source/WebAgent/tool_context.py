@@ -66,8 +66,8 @@ class WebAgentToolContext:
         if root is None:
             return None
         text = str(command or "").strip()
-        if re.fullmatch(r"(?i)(?:call\s+)?(?:[.]\\)?InstallCheckList[.]bat\s+--json", text):
-            return ["cmd.exe", "/d", "/s", "/c", "call", str(root / "InstallCheckList.bat"), "--json"]
+        if re.fullmatch(r"(?i)(?:call\s+)?(?:[.]\\)?(?:install_smart_agent[\\/]launchers[\\/])?InstallCheckList[.]bat\s+--json", text):
+            return ["cmd.exe", "/d", "/s", "/c", "call", str(root / "install_smart_agent/launchers/InstallCheckList.bat"), "--json"]
         match = re.fullmatch(
             r"(?i)powershell(?:[.]exe)?\s+-NoLogo\s+-NoProfile\s+-ExecutionPolicy\s+Bypass\s+-File\s+install_smart_agent[\\/]install_milestones[.]ps1\s+-Action\s+Install\s+-ProjectRoot\s+[.]\s+-Milestone\s+(M[1-5])\s+-NonInteractive",
             text,
@@ -87,7 +87,7 @@ class WebAgentToolContext:
             self.last_verification_status = "FAIL"
             return (
                 "[SMARTAGENT_BOOTSTRAP_TOOL_REJECTED] Only these exact commands are allowed: "
-                "InstallCheckList.bat --json; "
+                "install_smart_agent/launchers/InstallCheckList.bat --json; "
                 "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File install_smart_agent\\install_milestones.ps1 -Action Install -ProjectRoot . -Milestone M1-M5 -NonInteractive"
             )
         timeout = min(max(int(action.get("timeout", 600) or 600), 30), 1800)

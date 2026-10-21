@@ -2,7 +2,7 @@
 setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
-call "%~dp0ensure_portable_runtime.bat"
+call "%~dp0install_smart_agent\launchers\ensure_portable_runtime.bat"
 if errorlevel 1 exit /b %ERRORLEVEL%
 set "SMARTAGENT_SOURCE=%~dp0source"
 if not exist "%SMARTAGENT_SOURCE%\agent_core\__init__.py" (
@@ -26,7 +26,7 @@ if exist "%SMARTAGENT_PYTHON%" goto run_manager
 
 echo [SmartAgent] ERROR: This SmartAgent folder is not installed yet.
 echo Missing: %SMARTAGENT_PYTHON%
-echo Run install_smart_agent.bat in this folder first.
+echo Run install_smart_agent\launchers\install_smart_agent.bat in this folder first.
 pause
 exit /b 2
 

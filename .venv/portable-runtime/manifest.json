@@ -4,13 +4,14 @@
   "architecture": "x64",
   "python_url": "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-amd64.zip",
   "python_sha256": "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297",
-  "archive_sha256": "9bb7fd13e3db9075e890fc81e1ad06302f8a5c640b17a0351efa73df4aa0e17d",
+  "archive_sha256": "45bd4d6363319950deacf0aa490eac75a1326df9fe4141d8071e1612f72225e1",
   "parts": [
     {
       "name": "runtime.zip.part000",
-      "sha256": "9bb7fd13e3db9075e890fc81e1ad06302f8a5c640b17a0351efa73df4aa0e17d",
-      "bytes": 82337275
+      "sha256": "45bd4d6363319950deacf0aa490eac75a1326df9fe4141d8071e1612f72225e1",
+      "bytes": 84151696
     }
   ],
-  "requirements_lock": "requirements-lock.json"
+  "requirements_lock": "requirements-lock.json",
+  "pip": "26.0.1"
 }

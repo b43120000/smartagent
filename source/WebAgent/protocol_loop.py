@@ -59,6 +59,10 @@ from agent_core.action_loop_state import (
 )
 from agent_core.command_operation import operation_terminal_eligible
 from agent_core.write_budget import validate_round_write_budget, write_budget_contract
+from agent_core.runtime_environment import (
+    ENVIRONMENT_LEDGER_SCHEMA,
+    planner_environment_snapshot,
+)
 
 from .protocol import (
     SUPPORTED_ACTION_TOOLS,
@@ -3515,7 +3519,16 @@ class WebAgentProtocolLoop:
             + "\n[/WEBAGENT_USER_REQUEST]\n"
             + f"[WEBAGENT_WORKSPACE]\n{self.workspace}\n[/WEBAGENT_WORKSPACE]"
         )
-        prompt += "\n" + render_initial_planner_toolkit()
+        try:
+            environment_snapshot = planner_environment_snapshot()
+        except Exception as exc:
+            environment_snapshot = {
+                "schema": ENVIRONMENT_LEDGER_SCHEMA,
+                "status": "PROBE_FAILED",
+                "tools": {},
+                "error": f"{type(exc).__name__}: {exc}"[:300],
+            }
+        prompt += "\n" + render_initial_planner_toolkit(environment_snapshot)
         if self.image_delivery_plan:
             prompt += (
                 "\n[WEBAGENT_IMAGE_DELIVERY_PLAN]\n"

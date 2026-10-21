@@ -1,6 +1,6 @@
 # SmartAgent deterministic milestone provisioning
 
-This is the mandatory Phase 1 contract after `install_smart_agent.bat` has made WebCopilot available.
+This is the mandatory Phase 1 contract after `install_smart_agent/launchers/install_smart_agent.bat` has made WebCopilot available.
 Software scripts own the installation. WebCopilot only runs the fixed loop below and assists when a milestone reports a concrete compatibility failure.
 
 ## Fixed milestones
@@ -22,14 +22,14 @@ Run all commands from the SmartAgent application root.
 
 1. Read the current live status:
 
-   `InstallCheckList.bat --json`
+   `install_smart_agent/launchers/InstallCheckList.bat --json`
 
 2. If `overall` is `PASS`, stop. Installation is complete.
 3. Otherwise read `next_milestone` and run only that milestone:
 
    `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File install_smart_agent\install_milestones.ps1 -Action Install -ProjectRoot . -Milestone Mx -NonInteractive`
 
-4. Run `InstallCheckList.bat --json` again. Never infer success from the installer exit code alone.
+4. Run `install_smart_agent/launchers/InstallCheckList.bat --json` again. Never infer success from the installer exit code alone.
 5. Repeat until `overall` is `PASS`.
 
 ## Failure and user-action policy
@@ -40,7 +40,7 @@ Run all commands from the SmartAgent application root.
 - If a milestone fails, report its exact `reason_code`, detail, command exit code, and `install_smart_agent\install_report.txt` location.
 - Compatibility work must stay inside the failing milestone and must be followed by the same checklist command.
 - If M4 reports `NEEDS_USER_ACTION` or `NEEDS_ADMINISTRATOR`, ask the user to approve the Windows elevation/security step. Never bypass it.
-- Do not enable M4 merely because another SmartAgent installation has a machine-wide authorization. ACL provisioning is opt-in through `install_smart_agent.bat -ConfigureSecurity`.
+- Do not enable M4 merely because another SmartAgent installation has a machine-wide authorization. ACL provisioning is opt-in through `install_smart_agent/launchers/install_smart_agent.bat -ConfigureSecurity`.
 - Login, 2FA, CAPTCHA, and Windows UAC remain user actions.
 - Stop after three failed attempts of the same milestone and report the blocker instead of looping indefinitely.
 

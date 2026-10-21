@@ -2,7 +2,7 @@
 # Publish only after the deployed file set has passed SHA-256 verification.
 function Test-PortableDistributionPath([string]$Relative) {
     $value=$Relative.Replace('\','/').ToLowerInvariant()
-    return $value -match '^\.venv/portable-runtime/(manifest\.json|requirements-lock\.json|licenses\.json|readme\.md|runtime\.zip(\.part[0-9]+)?)$'
+    return $value -match '^\.venv/portable-git/(manifest\.json|git\.zip)$' -or $value -match '^\.venv/portable-runtime/(manifest\.json|requirements-lock\.json|licenses\.json|readme\.md|runtime\.zip(\.part[0-9]+)?)$'
 }
 function Test-PrivateDeploymentPath([string]$Relative) {
     if (Test-PortableDistributionPath $Relative) { return $false }

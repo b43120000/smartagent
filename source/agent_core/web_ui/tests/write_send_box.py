@@ -27,7 +27,7 @@ def write_sample(page, *, text: str = SAMPLE_TEXT, replace_known_sample: bool = 
     provider = provider_from_url(page.url)
     document = load_dom_config(provider)
     if document is None:
-        raise ValueError("manual_composer_config_missing:請先執行 adapterUI.bat 的 manualAdapterUI")
+        raise ValueError("manual_composer_config_missing:請先執行 install_smart_agent/launchers/adapterUI.bat 的 manualAdapterUI")
     selector = document["elements"]["composer"]["selector"]
     composer = unique_composer(page, selector)
     # Prove the runtime factory consumes the very same saved selector.

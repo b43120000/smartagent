@@ -71,7 +71,7 @@ Telegram 與 WebCopilot 使用 `agent_core/task_continuation.py`，不是讓模�
 `python -m WebAgent.tests.validate_terminal_status_resume`：五種終態、缺失 outcome、完整通知原樣／追加需求、CRLF、巢狀 ID／標籤、非成功結案重設契約、保留舊 action、不重播、owner 與成功任務拒絕、上一個可接續任務選擇。
 
 2026-10-14 網頁 IT：以 LOCAL_TEST 模擬 Telegram 接收，貼上原中斷任務通知並追加只讀 list_directory 需求。
-來源 TASK-EXAMPLE；新 request RR-EXAMPLE／task TASK-EXAMPLE。
+來源 TASK-CFAAEC2A7D1C9A18613E；新 request RR-LOCAL_TEST-3C7C67E6F67223FB／task TASK-175E1F08363D1EECFB03。
 結果 COMPLETED／SUCCESS，2 輪、1 個實際 list_directory、0 拒絕，約 151 秒；未重跑舊 Get-Location，無寫入、刪除或附件。
 新的 parser 巢狀欄位防護在該 IT worker 載入之後修正，已由針對性 UT 及獨立重現驗證；不是額外一次網頁 IT。
 Telegram 真實網路傳送與 WebCopilot DOM 呈現未在這次 IT 驗證，不稱全面端到端覆蓋。

@@ -27,7 +27,7 @@ come from `provider_registry.py`. There is no cross-provider selector fallback.
 Gemini uses its own bootstrap/calibrated profiles and provider package; unknown
 providers remain fail-closed.
 
-`adapterUI.bat` provides a bounded calibration workflow for ChatGPT, Gemini,
+`install_smart_agent/launchers/adapterUI.bat` provides a bounded calibration workflow for ChatGPT, Gemini,
 and Claude.
 It gives a working Planner page structural Target DOM evidence (never message
 text, URLs, cookies, or browser storage), accepts only a strict CSS-selector
@@ -36,8 +36,8 @@ profile is published to `localdata/persistent/web_ui_profiles/<provider>` only
 after a live composer, send, user-turn, assistant-turn, final-content, and idle
 probe succeeds. Runtime adapters load that active data profile through this
 same boundary and fall back only to their own built-in provider profile when
-no valid active profile exists. Use `adapterUI.bat --rollback chatgpt`,
-`adapterUI.bat --rollback gemini`, or `adapterUI.bat --rollback claude` to
+no valid active profile exists. Use `install_smart_agent/launchers/adapterUI.bat --rollback chatgpt`,
+`install_smart_agent/launchers/adapterUI.bat --rollback gemini`, or `install_smart_agent/launchers/adapterUI.bat --rollback claude` to
 restore the previous validated profile.
 
 For each submit, the runtime captures a `RequestScope`, binds the newly rendered

@@ -34,10 +34,10 @@ class WebAgentBrowserClient:
         expected = str(getattr(self.scraper, "_expected_execution_url", "") or "")
         page = getattr(self.scraper, "_page", None)
         actual = str(getattr(page, "url", "") or "") if page is not None else ""
-        if not expected or not actual:
+        if not expected:
             return
-        from agent_core.conversation_identity import conversation_id
-        if conversation_id(actual) != conversation_id(expected):
+        from agent_core.conversation_identity import same_conversation
+        if not actual or not same_conversation(actual, expected):
             self._emit("browser_page_mismatch", stage=stage, expected_url=expected, actual_url=actual)
             raise RuntimeError(
                 f"remote_execution_page_changed: expected={expected}; actual={actual}; stage={stage}"

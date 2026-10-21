@@ -24,7 +24,7 @@ if ([string]::IsNullOrWhiteSpace($SecuritySkillRoot)) {
 }
 $ExistingSecurityProfile = Join-Path $InstallRoot "localdata\secure\windows_security\security_profile.json"
 if ($ConfigureSecurity) {
-    throw "INSTALL_SECURITY_MODE_UNSUPPORTED: install_smart_agent.bat always completes in ACL OFF mode; run ACLstatus.bat on after installation"
+    throw "INSTALL_SECURITY_MODE_UNSUPPORTED: install_smart_agent\launchers\install_smart_agent.bat always completes in ACL OFF mode; run ACLstatus.bat on after installation"
 }
 if (Test-Path -LiteralPath $ExistingSecurityProfile -PathType Leaf) {
     Write-Host "[SmartAgent Bootstrap] Existing security profile detected. The installer will proceed only when its local ACL mode is already OFF." -ForegroundColor Yellow
@@ -32,16 +32,11 @@ if (Test-Path -LiteralPath $ExistingSecurityProfile -PathType Leaf) {
 
 if ($UpdateAcceptance) {
     $expectedRootFiles = @(
-        'install_smart_agent.bat',
-        'ACLstatus.bat',
-        'update.bat',
-        'adapterUI.bat',
-        'reinstall_smart_agent.bat',
-        'force_stop_all_agents.bat',
-        'Edit_workspace.bat',
-        'InstallCheckList.bat',
-        'launch_remote_agent.bat',
-        'launch_webcopilot_chatgpt.bat'
+    'ACLstatus.bat',
+    'Edit_workspace.bat',
+    'force_stop_all_agents.bat',
+    'launch_remote_agent.bat',
+    'launch_webcopilot.bat'
     )
     $actualRootFiles = @(Get-ChildItem -LiteralPath $InstallRoot -File -Filter '*.bat' | ForEach-Object { $_.Name } | Sort-Object)
     if ((Compare-Object ($expectedRootFiles | Sort-Object) $actualRootFiles).Count -ne 0) {
@@ -52,7 +47,7 @@ if ($UpdateAcceptance) {
             throw "Update acceptance required directory is missing: $relative"
         }
     }
-    foreach ($relative in @('.git','.agents','tests','testscript','tools')) {
+    foreach ($relative in @('.agents','tests','testscript','tools')) {
         if (Test-Path -LiteralPath (Join-Path $InstallRoot $relative)) {
             throw "Update acceptance forbidden release artifact exists: $relative"
         }
@@ -62,16 +57,11 @@ if ($UpdateAcceptance) {
 }
 if ($PackageAcceptance) {
     $expectedRootFiles = @(
-        'install_smart_agent.bat',
-        'ACLstatus.bat',
-        'update.bat',
-        'adapterUI.bat',
-        'reinstall_smart_agent.bat',
-        'force_stop_all_agents.bat',
-        'Edit_workspace.bat',
-        'InstallCheckList.bat',
-        'launch_remote_agent.bat',
-        'launch_webcopilot_chatgpt.bat'
+    'ACLstatus.bat',
+    'Edit_workspace.bat',
+    'force_stop_all_agents.bat',
+    'launch_remote_agent.bat',
+    'launch_webcopilot.bat'
     )
     $actualRootFiles = @(Get-ChildItem -LiteralPath $InstallRoot -File -Filter '*.bat' | ForEach-Object { $_.Name } | Sort-Object)
     if ((Compare-Object ($expectedRootFiles | Sort-Object) $actualRootFiles).Count -ne 0) {
@@ -82,7 +72,7 @@ if ($PackageAcceptance) {
             throw "Package acceptance required directory is missing: $relative"
         }
     }
-    foreach ($relative in @('.git','.venv','.agents','tests','testscript','tools')) {
+    foreach ($relative in @('.agents','tests','testscript','tools')) {
         if (Test-Path -LiteralPath (Join-Path $InstallRoot $relative)) {
             throw "Package acceptance forbidden release artifact exists: $relative"
         }

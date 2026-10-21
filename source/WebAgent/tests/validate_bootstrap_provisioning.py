@@ -41,7 +41,7 @@ def main() -> int:
 
     tools = WebAgentToolContext(APP_ROOT)
     tools.enable_bootstrap_install_policy(APP_ROOT)
-    assert tools._bootstrap_command_argv("InstallCheckList.bat --json")[-1] == "--json"
+    assert tools._bootstrap_command_argv("install_smart_agent/launchers/InstallCheckList.bat --json")[-1] == "--json"
     install_argv = tools._bootstrap_command_argv(
         "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File install_smart_agent\\install_milestones.ps1 -Action Install -ProjectRoot . -Milestone M3 -NonInteractive"
     )

@@ -1,0 +1,13 @@
+/*
+!/.gitignore
+!/portable-runtime/
+!/portable-git/
+/portable-runtime/*
+!/portable-runtime/manifest.json
+!/portable-runtime/requirements-lock.json
+!/portable-runtime/LICENSES.json
+!/portable-runtime/README.md
+!/portable-runtime/runtime.zip.part[0-9][0-9][0-9]
+/portable-git/*
+!/portable-git/manifest.json
+!/portable-git/git.zip

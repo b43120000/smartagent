@@ -119,14 +119,14 @@ def _event_sink(runtime_log: RemoteRuntimeLog, task, *, root: Path, events: Remo
 
 def preserve_completed_page(page, scraper, attached_pw, expected_url: str) -> dict:
     """Release worker ownership without closing the shared WebGPT page."""
-    from agent_core.conversation_identity import conversation_id
+    from agent_core.conversation_identity import same_conversation
 
     preserved_url = str(getattr(page, "url", "") or "")
     page_closed = bool(
         getattr(page, "closed", False)
         or (callable(getattr(page, "is_closed", None)) and page.is_closed())
     )
-    if page_closed or conversation_id(preserved_url) != conversation_id(expected_url):
+    if page_closed or not same_conversation(preserved_url, expected_url):
         raise RuntimeError(
             "remote_completion_page_not_preserved: "
             f"expected={expected_url}; actual={preserved_url}"
@@ -138,6 +138,20 @@ def preserve_completed_page(page, scraper, attached_pw, expected_url: str) -> di
         "conversation_url": preserved_url,
         "remaining_owners": int(remaining_owners or 0),
     }
+
+
+def bind_resolved_execution_page(scraper, requested_url: str, execution_url: str) -> str:
+    """Validate an entry/exact target once, then pin the resolved conversation."""
+    from agent_core.conversation_identity import conversation_target_matches
+
+    requested = str(requested_url or "")
+    resolved = str(execution_url or "")
+    if not conversation_target_matches(resolved, requested):
+        raise RuntimeError(
+            f"remote_execution_page_changed: expected={requested}; actual={resolved}"
+        )
+    scraper._expected_execution_url = resolved
+    return resolved
 
 
 def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
@@ -336,20 +350,21 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             scraper = adopt_page(page, context, attached_pw)
             scraper_holder["scraper"] = scraper
             # The CDP page is shared by legacy controllers. Bind this worker to
-            # the requested conversation and fail closed if attach returned a
-            # different tab instead of silently sending there.
-            scraper._expected_execution_url = requested_execution_url
-            from agent_core.conversation_identity import conversation_id
-            if conversation_id(execution_url) != conversation_id(requested_execution_url):
+            # the resolved conversation and fail closed if attach returned a
+            # different provider/tab instead of silently sending there. A
+            # provider entry URL may resolve once to an identified conversation.
+            try:
+                execution_url = bind_resolved_execution_page(
+                    scraper, requested_execution_url, execution_url
+                )
+            except RuntimeError:
                 runtime_log.write(
                     "ERROR", component="telegram_webagent_worker",
                     stage="EXECUTION_PAGE_MISMATCH", task_id=task.task_id,
                     request_id=task.request_id, expected_url=requested_execution_url,
                     actual_url=execution_url,
                 )
-                raise RuntimeError(
-                    f"remote_execution_page_changed: expected={requested_execution_url}; actual={execution_url}"
-                )
+                raise
             control_plane = RemoteControlPlane(root)
 
             def service_priority_control():
@@ -499,7 +514,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             # browser/page remains open.  Telegram completion is emitted only
             # after this barrier succeeds.
             handoff = preserve_completed_page(
-                page, scraper, attached_pw, requested_execution_url
+                page, scraper, attached_pw, execution_url
             )
             attached_pw = None
             preserved_url = str(handoff["conversation_url"])

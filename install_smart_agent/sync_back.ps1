@@ -464,8 +464,22 @@ if ([string]::IsNullOrWhiteSpace($DestinationRoot)) {
     $DestinationRoot = Read-Host '請貼上要接收修改的開發來源 SmartAgentv1 完整路徑'
 }
 try {
-    $result = Invoke-SyncBack -InstalledRoot $InstalledRoot -DestinationRoot ($DestinationRoot.Trim().Trim('"')) -DryRun:$DryRun -NonInteractive:$NonInteractive
-    Write-Host "SMARTAGENT_SYNC_BACK_$($result.status) changed=$($result.changed)"
+    # Simple overwrite: copy all source files from the installed root to the destination,
+    # excluding personal or secure data directories.
+    $excludePatterns = @('localdata/secure/*', '.agents/attachment_content_cache/*')
+    Get-ChildItem -Path $InstalledRoot -Recurse -File | ForEach-Object {
+        $relative = $_.FullName.Substring($InstalledRoot.Length).TrimStart('\\','/')
+        $skip = $false
+        foreach ($pat in $excludePatterns) {
+            if ($relative -like $pat) { $skip = $true; break }
+        }
+        if (-not $skip) {
+            $dest = Join-Path $DestinationRoot $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+            Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+        }
+    }
+    Write-Host "[SmartAgent Sync Back] Simple source overwrite completed (personal data excluded)."
     exit 0
 } catch {
     Write-Error $_

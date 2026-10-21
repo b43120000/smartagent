@@ -61,7 +61,7 @@ $env:PYTHONPATH = "$PWD\source"
 
 Gemini 等啟用 Trusted Types 的頁面，標記面板以 DOM API 建立，不使用 `innerHTML`，也不修改網站的安全政策。
 
-資料夾內的批次檔依功能順序命名。根目錄的 `writeSendBox.bat` 是「使用既有 config，只做輸入驗證」；根目錄 `adapterUI.bat` 的選單 2 也能進入第 1 步整合流程。
+資料夾內的批次檔依功能順序命名。根目錄的 `install_smart_agent/launchers/writeSendBox.bat` 是「使用既有 config，只做輸入驗證」；根目錄 `install_smart_agent/launchers/adapterUI.bat` 的選單 2 也能進入第 1 步整合流程。
 
 ## 2～5：送出與訊息校準
 

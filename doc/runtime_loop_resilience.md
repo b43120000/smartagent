@@ -1,6 +1,6 @@
 # Action Loop 相容性與防空轉保護
 
-修改包：C:\path\to\SmartAgent。
+修改包：C:\Users\user\Desktop\remoteagent\release\SmartAgentv2_1。
 目的：可修復的模型／Runtime 格式差異不直接丟失任務；授權、實際執行與客觀終態仍必須驗證。
 本次沒有修改 E 槽開發 source、sync-back、Git checkpoint 或 Telegram 網路驗證。
 
@@ -42,8 +42,8 @@ typed_command_and_scoped_semantics、delete_result_recovery、P0/P1/P2 result_co
 
 | request | rounds | 真正 tool action | 協議拒絕 | 結果 |
 |---|---:|---:|---:|---|
-| RR-EXAMPLE | 2 | 2，同輪 inspect_directory + query_project | 0 | SUCCESS；sample_limit=3、read_range 1 行、truncated=false、cursor=null |
-| RR-EXAMPLE | 2 | 1，read_file | 0 | 正確以 COMPLETE/FAILED 結案；FILE_NOT_FOUND、executed=false，未重試／建立檔案 |
+| RR-LOCAL_TEST-4239221D134C1D16 | 2 | 2，同輪 inspect_directory + query_project | 0 | SUCCESS；sample_limit=3、read_range 1 行、truncated=false、cursor=null |
+| RR-LOCAL_TEST-F772FF6F668795BF | 2 | 1，read_file | 0 | 正確以 COMPLETE/FAILED 結案；FILE_NOT_FOUND、executed=false，未重試／建立檔案 |
 
 正向 event：EVT-695473C57FB6E3B97112；負向 event：EVT-28F1593D435792DC9D9F。
 Task state=COMPLETED 不代表所有 operation SUCCESS；負向測試 outcome=FAILED 是預期結果，不能改寫為 SUCCESS。

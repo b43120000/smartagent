@@ -1,4 +1,4 @@
-"""Opt-in real-site IT: click picker, save config, reopen through writeSendBox.bat.
+"""Opt-in real-site IT: click picker, save config, reopen through install_smart_agent/launchers/writeSendBox.bat.
 
 This writes a real provider dom_config.json. It never submits a message.
 Run: python -B -m agent_core.web_ui.tests.live_composer_it --url https://chatgpt.com/
@@ -56,7 +56,7 @@ def run(url: str, *, endpoint: str = "") -> dict:
     try:
         with driver_context(provider, endpoint) as (context, endpoint):
             existing_pages = [page for page in context.pages if page not in context._manual_it_bootstrap_pages]
-            args = ["cmd.exe", "/c", str(app_root / "adapterUI.bat"), "--manual", "--url", url,
+            args = ["cmd.exe", "/c", str(app_root / "install_smart_agent/launchers/adapterUI.bat"), "--manual", "--url", url,
                     "--cdp-endpoint", endpoint]
             # The real CLI installs the picker and owns the save/polling lifecycle.
             with context.expect_page(timeout=60000) as opened:
@@ -92,7 +92,7 @@ def run(url: str, *, endpoint: str = "") -> dict:
             report.update(config_path=str(config_path(provider)), selector=selection["selector"],
                           selected_element_matches=True, manual_batch_completed=True)
             # A separate process and fresh tab exercise the retained writer launcher.
-            args = ["cmd.exe", "/c", str(app_root / "writeSendBox.bat"), "--url", url, "--no-wait",
+            args = ["cmd.exe", "/c", str(app_root / "install_smart_agent/launchers/writeSendBox.bat"), "--url", url, "--no-wait",
                     "--screenshot", str(evidence / "02_written_sample.png"), "--cdp-endpoint", endpoint]
             completed = subprocess.run(args, cwd=app_root, env=env, capture_output=True, encoding="utf-8", timeout=240)
             (evidence / "writeSendBox.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")

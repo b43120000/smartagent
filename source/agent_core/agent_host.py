@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .workspace import AGENT_PROJECT_ROOT, normalize_chatgpt_url
+from .workspace import AGENT_PROJECT_ROOT, normalize_web_conversation_url
 from .remote_result import build_result_payload, build_result_prompt, validate_result_reply
 from .routing import CARRIER_CHATGPT_CONVERSATION, select_carrier
 from .paths import agent_host_state_path, remote_handoff_path, source_root
@@ -38,7 +38,7 @@ class IntegratedAgentHost:
 
     def __init__(self, *, workspace: str, conversation_url: str):
         self.workspace = str(Path(workspace).resolve())
-        self.conversation_url = normalize_chatgpt_url(conversation_url)
+        self.conversation_url = normalize_web_conversation_url(conversation_url)
         self._proc: subprocess.Popen | None = None
         self._log_handle = None
         self._last_handoff_task_id = ""
@@ -148,7 +148,7 @@ class IntegratedAgentHost:
         if workspace:
             self.workspace = str(Path(workspace).resolve())
         if conversation_url:
-            self.conversation_url = normalize_chatgpt_url(conversation_url)
+            self.conversation_url = normalize_web_conversation_url(conversation_url)
         self._write_state("busy" if busy else "idle", supervisor_pid=getattr(self._proc, "pid", None))
 
     def activate_context(self, *, workspace: str, conversation_url: str) -> dict[str, Any]:
@@ -156,7 +156,7 @@ class IntegratedAgentHost:
         if self._scraper is None:
             return {"activated": False, "reason": "scraper_unavailable"}
         target_workspace = str(Path(workspace).resolve())
-        target_url = normalize_chatgpt_url(conversation_url)
+        target_url = normalize_web_conversation_url(conversation_url)
         if not target_url:
             return {"activated": False, "reason": "invalid_conversation_url"}
         foreground = self._foreground_page_handle
@@ -165,7 +165,7 @@ class IntegratedAgentHost:
             if foreground is None:
                 return {"activated": False, "reason": "foreground_page_unavailable"}
             self._foreground_page_handle = foreground
-            self._foreground_url = normalize_chatgpt_url(
+            self._foreground_url = normalize_web_conversation_url(
                 getattr(foreground, "url", "") or self.conversation_url
             )
             self._foreground_workspace = self.workspace
@@ -227,7 +227,7 @@ class IntegratedAgentHost:
             }
         if self._scraper is None:
             return {"delivered": False, "reason": "scraper_unavailable"}
-        if normalize_chatgpt_url(task.conversation_url) != self.conversation_url:
+        if normalize_web_conversation_url(task.conversation_url) != self.conversation_url:
             return {"delivered": False, "reason": "conversation_binding_mismatch"}
         payload = build_result_payload(task=task, status=status, summary=summary)
         prompt = build_result_prompt(payload)
@@ -271,14 +271,14 @@ class IntegratedAgentHost:
         task_id = str(payload.get("task_id", "") or "")
         if not task_id or task_id == self._last_handoff_task_id:
             return None
-        url = normalize_chatgpt_url(payload.get("conversation_url", ""))
+        url = normalize_web_conversation_url(payload.get("conversation_url", ""))
         workspace = str(Path(payload.get("workspace", "")).resolve())
         target_scraper = scraper or self._scraper
         if target_scraper is None:
             return None
         if self._foreground_page_handle is None:
             self._foreground_page_handle = getattr(target_scraper, "_page", None)
-            self._foreground_url = normalize_chatgpt_url(
+            self._foreground_url = normalize_web_conversation_url(
                 getattr(self._foreground_page_handle, "url", "") or self.conversation_url
             )
             self._foreground_workspace = self.workspace

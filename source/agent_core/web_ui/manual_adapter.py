@@ -60,7 +60,7 @@ def save_selection(page, provider: str, selection: dict, *, root: Path | None = 
 
 
 def select_composer_on_page(page, provider: str, *, timeout: float = 900,
-                            completion_message: str = "輸入框設定已儲存。請執行 writeSendBox.bat 驗證輸入。") -> Path | None:
+                            completion_message: str = "輸入框設定已儲存。請執行 install_smart_agent/launchers/writeSendBox.bat 驗證輸入。") -> Path | None:
     install_picker(page)
     print(f"[manualAdapterUI] provider={provider}; 請在網頁右上角開始選取輸入框。", flush=True)
     deadline = time.monotonic() + timeout
@@ -99,7 +99,7 @@ def capture_composer(url: str, *, endpoint: str = "", timeout: float = 900) -> P
     with open_manual_page(url, endpoint=endpoint) as page:
         path = select_composer_on_page(page, provider_from_url(url), timeout=timeout)
         if path:
-            print("[manualAdapterUI] 下一步：開啟 writeSendBox.bat 驗證輸入。", flush=True)
+            print("[manualAdapterUI] 下一步：開啟 install_smart_agent/launchers/writeSendBox.bat 驗證輸入。", flush=True)
             page.wait_for_timeout(1500)
         return path
 

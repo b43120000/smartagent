@@ -4,8 +4,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from .workspace import normalize_workspace_path, normalize_chatgpt_url
-from .conversation_identity import conversation_id
+from .workspace import normalize_workspace_path, normalize_web_conversation_url
 from .json_state_io import read_json_retry, write_json_atomic
 from .process_file_lock import exclusive_process_lock
 from .paths import (
@@ -32,9 +31,7 @@ def normalize_skill_path(raw, *, require_exists=False):
 
 def validate(binding):
     workspace = normalize_workspace_path(binding['workspace'])
-    url = normalize_chatgpt_url(binding['gpt_url'])
-    if not conversation_id(url):
-        raise ValueError('remote_binding_requires_conversation_url')
+    url = normalize_web_conversation_url(binding['gpt_url'])
     skill_path = normalize_skill_path(binding.get('skill_path', ''))
     return {'workspace': workspace, 'gpt_url': url, 'skill_path': skill_path}
 

@@ -39,16 +39,11 @@ New-Item -ItemType Directory -Force -Path $ControlRoot,$WorkspaceRoot | Out-Null
 
 
 $PublicLaunchers = @(
-    'install_smart_agent.bat',
     'ACLstatus.bat',
-    'update.bat',
-    'adapterUI.bat',
-    'reinstall_smart_agent.bat',
-    'force_stop_all_agents.bat',
     'Edit_workspace.bat',
-    'InstallCheckList.bat',
+    'force_stop_all_agents.bat',
     'launch_remote_agent.bat',
-    'launch_webcopilot_chatgpt.bat'
+    'launch_webcopilot.bat'
 )
 
 foreach ($required in $PublicLaunchers) {

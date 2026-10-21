@@ -15,16 +15,16 @@ $errors = $null
 if (@($errors).Count -gt 0) { throw "public_layout_parser_failed:$($errors[0].Message)" }
 
 $launchers = @(
-    'install_smart_agent.bat',
+    'install_smart_agent\launchers\install_smart_agent.bat',
     'ACLstatus.bat',
     'update.bat',
-    'adapterUI.bat',
-    'reinstall_smart_agent.bat',
+    'install_smart_agent\launchers\adapterUI.bat',
+    'install_smart_agent\launchers\reinstall_smart_agent.bat',
     'force_stop_all_agents.bat',
     'Edit_workspace.bat',
-    'InstallCheckList.bat',
+    'install_smart_agent\launchers\InstallCheckList.bat',
     'launch_remote_agent.bat',
-    'launch_webcopilot_chatgpt.bat'
+    'launch_webcopilot.bat'
 )
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('smartagent-public-layout-collision-' + [Guid]::NewGuid().ToString('N'))

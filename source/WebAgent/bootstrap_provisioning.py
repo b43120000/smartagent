@@ -150,7 +150,7 @@ def run_deterministic_provisioning(
                 "[SMARTAGENT_BOOTSTRAP_REPAIR]\n"
                 "The deterministic checklist could not start. Do not inspect or scan the project and "
                 "do not call inspect_project_scope. Read only the named installer files and restore "
-                "InstallCheckList.bat plus install_smart_agent\\install_milestones.ps1. "
+                "install_smart_agent/launchers/InstallCheckList.bat plus install_smart_agent\\install_milestones.ps1. "
                 "Do not upload project snapshots or attachments.\n"
                 f"Failure detail:\n{detail}"
             )
@@ -213,7 +213,7 @@ def run_deterministic_provisioning(
             "Do not inspect or scan the project and do not call inspect_project_scope. "
             f"Read only install_smart_agent\\install_report.txt, repair only {milestone}, then run "
             f"powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File install_smart_agent\\install_milestones.ps1 -Action Install -ProjectRoot . -Milestone {milestone} -NonInteractive followed by "
-            "InstallCheckList.bat --json. Do not upload project snapshots or attachments.\n"
+            "install_smart_agent/launchers/InstallCheckList.bat --json. Do not upload project snapshots or attachments.\n"
             f"Failure detail:\n{detail[-2500:]}"
         )
         return {

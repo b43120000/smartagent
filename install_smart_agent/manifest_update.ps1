@@ -14,7 +14,9 @@ $AclSchema = 'SMARTAGENT_ACL_MODE_V1'
 $AclStateRelativePath = 'localdata\secure\windows_security\acl_mode.json'
 $UpdateManifestRelativePath = 'config\update_manifest.json'
 $MutexName = 'Local\SmartAgentManifestUpdate'
-$DevelopmentAclBypassTargets = @()
+$DevelopmentAclBypassTargets = @(
+    'C:\Users\user\Desktop\remoteagent\release\SmartAgentv2_1'
+)
 $PreservedDirectoryNames = @(
     '.git', '.venv', '.agents', '__pycache__', '.pytest_cache', 'localdata'
 )
@@ -111,7 +113,7 @@ function Convert-RelativePath([string]$RelativePath) {
 }
 function Test-PreservedDirectory([string]$RelativePath) {
     $portable=$RelativePath.Replace('\','/').ToLowerInvariant()
-    if ($portable -in @('.venv','.venv/portable-runtime')) { return $false }
+    if ($portable -in @('.venv','.venv/portable-runtime','.venv/portable-git')) { return $false }
     foreach ($segment in @($RelativePath.Replace('/', '\').TrimStart('\').Split('\'))) {
         if ($PreservedDirectoryNames -icontains $segment) { return $true }
     }

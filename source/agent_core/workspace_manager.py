@@ -766,7 +766,7 @@ def _ensure_local_webgpt_binding(workspace: str) -> int:
 
 
 def ensure_local_webgpt_startup() -> int:
-    """Interactive first-run bootstrap used by launch_webcopilot_chatgpt.bat."""
+    """Interactive first-run bootstrap used by launch_webcopilot.bat."""
     current = load_startup_preferences()
     current_workspace = str(current.get("workspace", "") or "").strip()
     current_url = str(current.get("gpt_url", "") or "").strip()

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import re
 
-from .web_ui.factory import WebUIProviderError, provider_from_url
+from .web_ui.factory import (
+    WebUIProviderError,
+    normalize_web_conversation_url,
+    provider_from_url,
+)
 
 
 _CHATGPT_RE = re.compile(r"/c/([^/?#]+)", re.IGNORECASE)
@@ -15,7 +19,7 @@ _M365_RE = re.compile(r"/chat/conversation/([^/?#]+)", re.IGNORECASE)
 
 def conversation_provider(url: str) -> str:
     try:
-        return provider_from_url(str(url or ""))
+        return provider_from_url(normalize_web_conversation_url(str(url or "")))
     except (WebUIProviderError, ValueError, TypeError):
         return ""
 
@@ -32,7 +36,6 @@ def conversation_id(url: str) -> str:
     if matcher is None:
         if provider.startswith("other_"):
             from hashlib import sha256
-            from .web_ui.factory import normalize_web_conversation_url
             try:
                 normalized = normalize_web_conversation_url(value).rstrip("/")
             except (ValueError, WebUIProviderError, TypeError):
@@ -53,4 +56,22 @@ def same_conversation(left: str, right: str) -> bool:
     return bool(left_id and right_id and left_id == right_id)
 
 
-__all__ = ["conversation_provider", "conversation_id", "same_conversation"]
+def conversation_target_matches(actual: str, requested: str) -> bool:
+    """Match a resolved page to an exact conversation or provider entry URL.
+
+    Entry URLs have no conversation ID.  They may resolve once to an identified
+    conversation for the same provider; callers must then pin that resolved URL.
+    """
+    actual_provider = conversation_provider(actual)
+    requested_provider = conversation_provider(requested)
+    if not actual_provider or actual_provider != requested_provider:
+        return False
+    actual_id = conversation_id(actual)
+    requested_id = conversation_id(requested)
+    return bool(actual_id and (not requested_id or actual_id == requested_id))
+
+
+__all__ = [
+    "conversation_provider", "conversation_id", "conversation_target_matches",
+    "same_conversation",
+]

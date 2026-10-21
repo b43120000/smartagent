@@ -1,5 +1,9 @@
 @echo off
 setlocal
+if /I "%~1"=="--launcher-self-test" (
+ echo ACLSTATUS_LAUNCHER_PARSE_OK
+ exit /b 0
+)
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 title SmartAgent ACL Mode

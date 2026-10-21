@@ -14,11 +14,11 @@ It reuses only shared infrastructure from `agent_core`:
 - `tools` for local computer operations.
 
 All WebAgent code, state, tests, and documentation live in this directory.  The
-only root-level file is `launch_webcopilot_chatgpt.bat`.
+only root-level file is `launch_webcopilot.bat`.
 
 ## Run
 
-1. Run `launch_webcopilot_chatgpt.bat` from the repository root.
+1. Run `launch_webcopilot.bat` from the repository root.
 2. Paste a normal ChatGPT `https://chatgpt.com/c/...` conversation URL into CMD
    and press Enter.
 3. WebAgent opens that exact conversation in the persistent browser, sends the

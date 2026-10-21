@@ -19,7 +19,7 @@ $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'ACL mode changes require an elevated administrator process.'
 }
-foreach ($required in @('install_smart_agent.bat','install_smart_agent\configure_security.ps1','source','localdata')) {
+foreach ($required in @('install_smart_agent\launchers\install_smart_agent.bat','install_smart_agent\configure_security.ps1','source','localdata')) {
     if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $required))) {
         throw "Invalid SmartAgent root; missing: $required"
     }
@@ -269,11 +269,11 @@ function Get-WorkspaceAccessPolicy {
 function Assert-OnEnvironmentReady {
     $executorPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $executorPython -PathType Leaf)) {
-        throw "ACL_ON_ENVIRONMENT_NOT_READY:missing=$executorPython; run install_smart_agent.bat"
+        throw "ACL_ON_ENVIRONMENT_NOT_READY:missing=$executorPython; run install_smart_agent\launchers\install_smart_agent.bat"
     }
     $protocolManifest = Join-Path $ProjectRoot 'config\protocol_manifest.json'
     if (-not (Test-Path -LiteralPath $protocolManifest -PathType Leaf)) {
-        throw "ACL_ON_ENVIRONMENT_NOT_READY:missing=$protocolManifest; run install_smart_agent.bat"
+        throw "ACL_ON_ENVIRONMENT_NOT_READY:missing=$protocolManifest; run install_smart_agent\launchers\install_smart_agent.bat"
     }
     return $executorPython
 }
@@ -408,7 +408,7 @@ if ($Mode -eq 'on') {
     $defaultExecutorPython = Assert-OnEnvironmentReady
     $accessPolicy = Get-WorkspaceAccessPolicy
     if ($profileFileExists -and -not $profileStructurallyValid) {
-        throw 'ACL_ON_SECURITY_STATE_INVALID:security_profile_invalid; use reinstall_smart_agent.bat to remove the inconsistent security state before retrying'
+        throw 'ACL_ON_SECURITY_STATE_INVALID:security_profile_invalid; use install_smart_agent\launchers\reinstall_smart_agent.bat to remove the inconsistent security state before retrying'
     }
     if ($machineAuthorizationState.state -eq 'FOREIGN') {
         throw "ACL_ON_SECURITY_STATE_CONFLICT:machine_authorization_belongs_to_another_installation:$($machineAuthorizationState.path)"

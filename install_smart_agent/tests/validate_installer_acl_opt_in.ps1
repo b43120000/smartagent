@@ -33,7 +33,7 @@ foreach ($path in @($bootstrapPath, $webdirectBootstrapPath, $milestonesPath)) {
 if ($bootstrap.Contains('$ConfigureSecurity = $true')) {
     throw 'installer_must_not_enable_security_from_profile_presence'
 }
-Assert-Contains $bootstrap 'install_smart_agent.bat always completes in ACL OFF mode' 'installer_acl_off_contract_missing'
+Assert-Contains $bootstrap 'install_smart_agent\launchers\install_smart_agent.bat always completes in ACL OFF mode' 'installer_acl_off_contract_missing'
 Assert-Contains $bootstrap 'complete_install.ps1' 'installer_local_completion_missing'
 if ($bootstrap -match '&\s+\$launcher\s+--bootstrap-provision') {
     throw 'installer_must_not_require_webgpt_for_normal_provisioning'

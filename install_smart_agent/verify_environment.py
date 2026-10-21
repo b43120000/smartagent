@@ -24,7 +24,7 @@ def main() -> int:
         "python_version": platform.python_version(),
         "python_64bit": struct.calcsize("P") * 8 == 64,
         "source_present": (root / "source" / "smart_agent.py").is_file(),
-        "launcher_present": (root / "launch_webcopilot_chatgpt.bat").is_file(),
+        "launcher_present": (root / "launch_webcopilot.bat").is_file(),
         "remote_launcher_present": (root / "launch_remote_agent.bat").is_file(),
     }
     for module in ("playwright", "qrcode"):

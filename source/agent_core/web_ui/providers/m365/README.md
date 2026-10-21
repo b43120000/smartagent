@@ -4,7 +4,7 @@ This package implements the provider-neutral WebUI contract directly through
 BaseWebUIAdapter. It never inherits another provider's adapter or borrows its DOM.
 
 The built-in `m365_bootstrap_v1` profile contains **candidate selectors**, not a
-claim of live compatibility. Use adapterUI.bat with a working planner and a
+claim of live compatibility. Use install_smart_agent/launchers/adapterUI.bat with a working planner and a
 signed-in `https://m365.cloud.microsoft/chat/conversation/<id>` target. Calibration
 publishes a versioned M365 profile only after its existing live checks pass.
 Edit_workspace can bind the URL before calibration; binding is not validation.

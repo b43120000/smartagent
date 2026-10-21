@@ -16,7 +16,7 @@ $PendingAclJournalPath = Join-Path $MachineAuthorizationRoot 'pending_acl_transa
 $DefaultExecutorUser = 'SmartAgentExecutor'
 $DefaultTaskName = 'SmartAgent Restricted Executor'
 
-foreach ($relative in @('install_smart_agent.bat','source','install_smart_agent','config','localdata')) {
+foreach ($relative in @('install_smart_agent\launchers\install_smart_agent.bat','source','install_smart_agent','config','localdata')) {
     if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $relative))) {
         throw "Refusing to reset an invalid SmartAgent root; missing: $relative"
     }
@@ -227,7 +227,7 @@ foreach ($name in @('bootstrap_state.json','provisioning_options.json','provisio
     Remove-Item -LiteralPath (Join-Path $metadataRoot $name) -Force -ErrorAction SilentlyContinue
 }
 
-$managedControls = @('install_smart_agent.bat','ACLstatus.bat','update.bat','adapterUI.bat','reinstall_smart_agent.bat','force_stop_all_agents.bat','Edit_workspace.bat','InstallCheckList.bat','launch_remote_agent.bat','launch_webcopilot_chatgpt.bat')
+$managedControls = @('install_smart_agent\launchers\install_smart_agent.bat','ACLstatus.bat','update.bat','install_smart_agent\launchers\adapterUI.bat','install_smart_agent\launchers\reinstall_smart_agent.bat','force_stop_all_agents.bat','Edit_workspace.bat','install_smart_agent\launchers\InstallCheckList.bat','launch_remote_agent.bat','launch_webcopilot.bat')
 foreach ($name in $managedControls) {
     $path = Join-Path $ControlRoot $name
     if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }

@@ -23,7 +23,7 @@ STOP_FLAG_NAME = "force_stop_all_agents.flag"
 LAUNCHER_NAMES = frozenset({
     "launch_smart_agent.bat",
     "launch_remote_agent.bat",
-    "launch_webcopilot_chatgpt.bat",
+    "launch_webcopilot.bat",
     "adapterui.bat",
     "launch_web_copilot.bat",
     "remoteagent.bat",

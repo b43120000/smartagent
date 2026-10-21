@@ -155,7 +155,7 @@ function New-Result([string]$Id, [string]$Status, [string]$ReasonCode, [string]$
     $repairCommand = if ($Status -in @("PASS", "SKIPPED")) {
         $null
     } elseif ($Id -eq "M0") {
-        "install_smart_agent.bat"
+        "install_smart_agent\launchers\install_smart_agent.bat"
     } else {
         "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File install_smart_agent\install_milestones.ps1 -Action Install -ProjectRoot . -Milestone $Id -NonInteractive"
     }
@@ -209,7 +209,7 @@ function Get-MilestoneResult([string]$Id) {
     switch ($Id) {
         "M0" {
             if (-not [Environment]::Is64BitOperatingSystem) { return New-Result $Id "FAIL" "WINDOWS_64BIT_REQUIRED" "SmartAgent requires 64-bit Windows." }
-            foreach ($path in @("source\WebAgent\controller.py", "launch_webcopilot_chatgpt.bat", "install_smart_agent\verify_webdirect_bootstrap.py")) {
+            foreach ($path in @("source\WebAgent\controller.py", "launch_webcopilot.bat", "install_smart_agent\verify_webdirect_bootstrap.py")) {
                 if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $path))) { return New-Result $Id "FAIL" "BOOTSTRAP_SOURCE_MISSING" "Missing $path" }
             }
             if (-not (Test-Path -LiteralPath $VenvPython)) { return New-Result $Id "PENDING" "VENV_MISSING" "The bootstrap virtual environment is missing." }
@@ -221,7 +221,7 @@ function Get-MilestoneResult([string]$Id) {
                 if (-not (Test-SamePath ([string]$bootstrapState.project_root) $ProjectRoot)) { throw "root" }
                 if (-not (Test-SamePath ([string]$bootstrapState.venv_python) $VenvPython)) { throw "python" }
             } catch {
-                return New-Result $Id "NEEDS_USER_ACTION" "BOOTSTRAP_ATTESTATION_MISSING" "The pre-WebGPT bootstrap did not leave a valid verification record. Re-run install_smart_agent.bat."
+                return New-Result $Id "NEEDS_USER_ACTION" "BOOTSTRAP_ATTESTATION_MISSING" "The pre-WebGPT bootstrap did not leave a valid verification record. Re-run install_smart_agent\launchers\install_smart_agent.bat."
             }
             return New-Result $Id "PASS" "OK" "WebDirect was verified before WebGPT startup."
         }
@@ -245,7 +245,7 @@ function Get-MilestoneResult([string]$Id) {
             return New-Result $Id "PASS" "OK" "Playwright Chromium launch was verified before WebGPT startup."
         }
         "M3" {
-            $launcher = Join-Path $ProjectRoot "launch_webcopilot_chatgpt.bat"
+            $launcher = Join-Path $ProjectRoot "launch_webcopilot.bat"
             $probe = "import agent_core.runtime_cleanup, WebAgent.controller"
             if (-not (Test-Path -LiteralPath $launcher -PathType Leaf) -or -not (Test-Python @("-c", $probe))) {
                 return New-Result $Id "PENDING" "LIGHTWEIGHT_RUNTIME_NOT_READY" "The WebGPT launcher or lightweight runtime imports are not ready."
@@ -285,7 +285,7 @@ function Get-MilestoneResult([string]$Id) {
                     throw "machine_authorization"
                 }
             } catch {
-                return New-Result $Id "FAIL" "MACHINE_AUTHORIZATION_INVALID" "The machine-wide restricted-executor authorization pointer is invalid. Run reinstall_smart_agent.bat to revoke it before reinstalling."
+                return New-Result $Id "FAIL" "MACHINE_AUTHORIZATION_INVALID" "The machine-wide restricted-executor authorization pointer is invalid. Run install_smart_agent\launchers\reinstall_smart_agent.bat to revoke it before reinstalling."
             }
             if (-not (Test-Path -LiteralPath $profilePath -PathType Leaf)) {
                 if (-not [bool]$options.configure_security) { return New-Result $Id "SKIPPED" "DISABLED_BY_OPTION" "Restricted executor security was not requested." }
@@ -378,7 +378,7 @@ function Get-MilestoneResult([string]$Id) {
             } catch { return New-Result $Id "PENDING" "PROVISIONING_NOT_COMPLETED" "Provisioning state must be finalized again." }
             if (Test-Path -LiteralPath (Join-Path $InstallerDir "deploy_public_layout.ps1")) {
                 $controlRoot = Join-Path (Get-PublicDesktopRoot) "SmartAgent"
-                foreach ($launcher in @("install_smart_agent.bat", "ACLstatus.bat", "adapterUI.bat", "reinstall_smart_agent.bat", "force_stop_all_agents.bat", "Edit_workspace.bat", "InstallCheckList.bat", "launch_remote_agent.bat", "launch_webcopilot_chatgpt.bat")) {
+                foreach ($launcher in @("install_smart_agent\launchers\install_smart_agent.bat", "ACLstatus.bat", "install_smart_agent\launchers\adapterUI.bat", "install_smart_agent\launchers\reinstall_smart_agent.bat", "force_stop_all_agents.bat", "Edit_workspace.bat", "install_smart_agent\launchers\InstallCheckList.bat", "launch_remote_agent.bat", "launch_webcopilot.bat")) {
                     $required = Join-Path $controlRoot $launcher
                     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { return New-Result $Id "PENDING" "PUBLIC_LAYOUT_MISSING" "Public desktop controls must contain all nine SmartAgentv1 launchers." }
                 }
@@ -455,7 +455,7 @@ function Install-Milestone([string]$Id) {
         Write-InstallLog "[$Id] Installing $($MilestoneNames[$Id])..."
         switch ($Id) {
             "M0" {
-                throw "NEEDS_USER_ACTION: M0 must run before WebGPT. Re-run install_smart_agent.bat."
+                throw "NEEDS_USER_ACTION: M0 must run before WebGPT. Re-run install_smart_agent\launchers\install_smart_agent.bat."
             }
             "M1" {
                 Invoke-Checked $VenvPython @("-m", "pip", "install", "--upgrade", "pip") "pip update failed"

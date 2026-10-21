@@ -15,12 +15,16 @@ class PublishPrivacyTests(unittest.TestCase):
             root=Path(folder)
             allowed=['adapterUI/dom.md','source/agent_core/web_ui/dom_config.py',
                      'source/agent_core/web_ui/providers/m365/dom_config.default.json',
+                     '.venv/portable-git/manifest.json','.venv/portable-git/git.zip',
                      '.venv/portable-runtime/manifest.json','.venv/portable-runtime/runtime.zip.part000']
-            private=['config/debug_config.json','config/browser_session.json',
+            private=['doc/portable_git_handoff.md','source/run_t16_c_diag.py',
+                     'source/agent_core/web_ui/providers/gemini/dom_config - copy.json',
+                     'config/debug_config.json','config/browser_session.json',
                      'source/agent_core/web_ui/providers/m365/dom_config.json',
                      'source/agent_core/web_ui/providers/other/other_fixture/dom_config.json',
                      'source/agent_core/web_ui/providers/m365/dom_config.history/old.json',
                      'localdata/logs/private.json','.agents/session.json',
+                     '.venv/git/cmd/git.exe','.venv/portable-git/private.txt',
                      '.venv/Lib/site-packages/private.py','.venv/Scripts/python.exe']
             for relative in allowed+private:
                 path=root/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'fixture')

@@ -2,11 +2,11 @@
 
 目前完成第一個元件：輸入框（composer）。尚未標註送出、訊息、回答與生成狀態。
 
-整合入口：安裝根目錄 `adapterUI/1.writeSendBox.bat`。只貼一次 URL，在同一頁完成手動點選、儲存及自動驗證。根目錄 `adapterUI.bat` 的選單 2 也使用這個整合流程；以下獨立標記流程可用 `adapterUI.bat --manual` 呼叫。第 2～5 步入口與驗收方式見 `adapterUI/README.md`。
+整合入口：安裝根目錄 `adapterUI/1.writeSendBox.bat`。只貼一次 URL，在同一頁完成手動點選、儲存及自動驗證。根目錄 `install_smart_agent/launchers/adapterUI.bat` 的選單 2 也使用這個整合流程；以下獨立標記流程可用 `install_smart_agent/launchers/adapterUI.bat --manual` 呼叫。第 2～5 步入口與驗收方式見 `adapterUI/README.md`。
 
 ## 人工標記
 
-1. 開啟安裝根目錄的 `adapterUI.bat --manual`。
+1. 開啟安裝根目錄的 `install_smart_agent/launchers/adapterUI.bat --manual`。
 2. 在視窗貼上 ChatGPT、Gemini、Claude 或 M365 URL。
 3. 網頁開啟後，必要時完成登入。右上角按「開始選取」。
 4. 點一下訊息輸入框，確認綠框範圍，再按「儲存輸入框」。
@@ -22,7 +22,7 @@
 
 ## 獨立輸入框測試
 
-開啟安裝根目錄的 `writeSendBox.bat`，貼上同一 provider 的 URL。工具會：
+開啟安裝根目錄的 `install_smart_agent/launchers/writeSendBox.bat`，貼上同一 provider 的 URL。工具會：
 
 1. 重新開啟網頁並讀取該 provider 的 config。
 2. 確認 runtime adapter 也載入同一個輸入框 selector。
@@ -46,7 +46,7 @@ $env:PYTHONPATH = "$PWD\source"
 
 元件測試使用攔截的測試頁面及暫存 config，不改動真實 provider 設定。
 
-真實網站 IT（會更新該 provider 的真實輸入框 config，並以 `writeSendBox.bat` 重新開啟真實網頁）：
+真實網站 IT（會更新該 provider 的真實輸入框 config，並以 `install_smart_agent/launchers/writeSendBox.bat` 重新開啟真實網頁）：
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m agent_core.web_ui.tests.live_composer_it --url https://chatgpt.com/
@@ -61,4 +61,4 @@ CLI 入口：
 .\writeSendBox.bat --url https://chatgpt.com/
 ```
 
-兩個 Python 入口皆接受 `--cdp-endpoint`。`writeSendBox.bat` 額外接受 `--no-wait`（驗證後關頁）與 `--screenshot <path>`。自動化測試可設 `SMARTAGENT_TEST_NO_PAUSE=1` 跳過批次檔最後的 pause。
+兩個 Python 入口皆接受 `--cdp-endpoint`。`install_smart_agent/launchers/writeSendBox.bat` 額外接受 `--no-wait`（驗證後關頁）與 `--screenshot <path>`。自動化測試可設 `SMARTAGENT_TEST_NO_PAUSE=1` 跳過批次檔最後的 pause。

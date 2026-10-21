@@ -164,7 +164,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Desktop/control layout deployment failed." }
     $script:State.validation_passed = $true; Save-InstallState
     Write-InstallLog "[完成] SmartAgent 執行環境與本機自測全部通過。" "Green"
-    Write-Host "首次執行 launch_webcopilot_chatgpt.bat 時，Chromium 會開啟 ChatGPT。" -ForegroundColor Yellow
+    Write-Host "首次執行 launch_webcopilot.bat 時，Chromium 會開啟 ChatGPT。" -ForegroundColor Yellow
     Write-Host "請親自登入 ChatGPT；帳密、2FA、CAPTCHA 不會由安裝器處理。" -ForegroundColor Yellow
     Write-Host "安裝報告：$ReportPath" -ForegroundColor Gray
     exit 0

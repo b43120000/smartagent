@@ -131,15 +131,19 @@ def bootstrap_attachment_baseline(adapter):
     return dict(draft='', input_files=baseline)
 
 
-def wait_file_reply(adapter,scope,marker,*,stage=14,timeout=180):
+def wait_file_reply(adapter,scope,marker,*,stage=14,timeout=180,allow_file_only=False):
     """Recover a native reply-render failure with bounded reads, never another submit."""
     page=adapter.page;url=page.url;deadline=time.monotonic()+timeout;reloads=0;last_reload=0
     original_user_id=adapter.durable_turn_id(scope.user_turn) if scope.user_turn else ''
     load_errors={'Unable to load this response','\u7121\u6cd5\u8f09\u5165\u9019\u5247\u56de\u8986'}
     while time.monotonic()<deadline:
         try:
-            turn,text,samples=wait_owned_response(adapter,scope,marker,quiet_seconds=5,timeout=min(12,max(1,deadline-time.monotonic())))
-            return turn,text,samples,reloads
+            turn,text,samples=wait_owned_response(adapter,scope,'' if allow_file_only else marker,quiet_seconds=5,timeout=min(12,max(1,deadline-time.monotonic())))
+            # A native artifact-only answer can prove file reading through its
+            # downloaded bytes. Explicit render failures still use bounded reads.
+            preview=text+'\n'+(turn.raw_text if allow_file_only else '')
+            if not {line.strip() for line in preview.splitlines()}.intersection(load_errors):
+                return turn,text,samples,reloads
         except TimeoutError:
             if time.monotonic()>=deadline:raise
         turn=adapter.latest_owned_assistant(scope)
@@ -261,6 +265,12 @@ def run_stage(page,stage,folder):
     show(page,stage);status(page,'preflight','附件已就緒；正在送出一次測試，確認模型讀取附件並產生可下載檔案。')
     raw=('Read the attached text file. Reply with its exact first line, then create a downloadable plain text file named result.txt'
          ' containing exactly that first line and a newline. Use your native file creation tool. Do not show code or a data URL. No explanation.')
+    if provider=='chatgpt':
+        raw=('Use Python/code interpreter to read the uploaded text file from disk and copy its exact bytes into '
+             '/mnt/data/result.txt. Do not use Canvas or a text-document artifact. In the final answer, print '
+             'the first line you read, followed by a native sandbox download link to result.txt. '
+             'If code execution or the uploaded file is unavailable, state that limitation; do not create an empty '
+             'file or invent a link. No explanation or code in the final answer.')
     # Do not expose marker in prompt: proving the answer knows it proves file reading.
     prompt=adapter.prepare_transport_prompt(raw)
     probe=dict(prompt=prompt,marker=marker)
@@ -271,8 +281,7 @@ def run_stage(page,stage,folder):
         scope=begin_request(page,probe)
     finally:
         adapter.set_automation_submit(False)
-    turn,text,_samples,reply_reloads=wait_file_reply(adapter,scope,marker,stage=stage,timeout=180)
-    if marker not in text:raise AssertionError('model_did_not_read_attachment')
+    turn,text,_samples,reply_reloads=wait_file_reply(adapter,scope,marker,stage=stage,timeout=180,allow_file_only=True)
     if stage==14:
         selector=select(page,stage)
         # Candidate download mapping remains relative to the owned fresh answer.
@@ -285,7 +294,7 @@ def run_stage(page,stage,folder):
     if actual!=marker+'\n':raise AssertionError('download_content_mismatch')
     if stage==14:save_files(provider,dict(download=selector,download_verified=True))
     else:save_files(provider,dict(roundtrip=True))
-    return dict(model_read_attachment=True,download_content_verified=True,submitted_once=True,automatic_resubmit=False,reply_reload_count=reply_reloads,download=result)
+    return dict(model_read_attachment=True,attachment_read_proof='downloaded_exact_bytes',marker_in_response=marker in text,download_content_verified=True,submitted_once=True,automatic_resubmit=False,reply_reload_count=reply_reloads,download=result)
 
 
 def run(stage,url,*,endpoint='',no_wait=False):

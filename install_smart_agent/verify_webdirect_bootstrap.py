@@ -22,7 +22,7 @@ def main() -> int:
         "python_311_plus": sys.version_info >= (3, 11),
         "python_64bit": struct.calcsize("P") * 8 == 64,
         "protocol_manifest": (root / "config" / "protocol_manifest.json").is_file(),
-        "webdirect_launcher": (root / "launch_webcopilot_chatgpt.bat").is_file(),
+        "webdirect_launcher": (root / "launch_webcopilot.bat").is_file(),
     }
     for module in (
         "playwright",

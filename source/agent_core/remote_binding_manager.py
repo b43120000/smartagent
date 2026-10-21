@@ -68,7 +68,7 @@ class RemoteBindingManager:
         return "\n".join((
             "目前允許讀寫的 Workspaces：", workspaces, "",
             "目前唯讀路徑：", read_only, "",
-            "請修改以下三個欄位後，將整段訊息直接送出：",
+            "支援 ChatGPT、Gemini、Claude、M365 與 Other HTTP(S) URL。Other 網站需先完成 DOM 校準。\n請修改以下三個欄位後，將整段訊息直接送出：",
             "",
             UPDATE_OPEN,
             f"transaction_id={transaction_id}",

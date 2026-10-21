@@ -14,7 +14,7 @@ def main():
  with zipfile.ZipFile(embed) as z:z.extractall(stage/'.venv'/'Scripts')
  exe=stage/'.venv'/'Scripts'/'python.exe'; subprocess.check_call([str(exe),'-I','-m','ensurepip']) if False else None
  req=[root/'install_smart_agent'/'requirements.txt',root/'install_smart_agent'/'requirements-webdirect.txt']
- subprocess.check_call([sys.executable,'-m','pip','download','--only-binary=:all:','--platform','win_amd64','--python-version','3.13','--implementation','cp','--abi','cp313','--dest',str(wheel),*sum((['-r',str(x)] for x in req),[])])
+ subprocess.check_call([sys.executable,'-m','pip','download','--only-binary=:all:','--platform','win_amd64','--python-version','3.13','--implementation','cp','--abi','cp313','--dest',str(wheel),'pip==26.0.1',*sum((['-r',str(x)] for x in req),[])])
  site=stage/'.venv'/'Lib'/'site-packages';site.mkdir(parents=True)
  for whl in wheel.glob('*.whl'):
   with zipfile.ZipFile(whl) as z:z.extractall(site)
@@ -32,6 +32,6 @@ def main():
  if not lock: raise SystemExit('wheel resolution produced no locked artifacts')
  (out/'requirements-lock.json').write_text(json.dumps(lock,indent=2),encoding='utf-8')
  (out/'LICENSES.json').write_text(json.dumps({'python':{'license':'PSF','url':'https://docs.python.org/3/license.html'},'wheels':[x['name'] for x in lock],'notice':'Wheel METADATA and license files are retained in extracted *.dist-info directories.'},indent=2),encoding='utf-8')
- (out/'README.md').write_text('Immutable offline Windows embedded-Python runtime payload. Run ensure_portable_runtime.bat to validate and extract it.\n',encoding='utf-8')
+ (out/'README.md').write_text('Immutable offline Windows embedded-Python runtime payload. Run install_smart_agent/launchers/ensure_portable_runtime.bat to validate and extract it.\n',encoding='utf-8')
  (out/'manifest.json').write_text(json.dumps({'schema':'SMARTAGENT_PORTABLE_RUNTIME_V1','python':'3.13.16','architecture':'x64','python_url':URL,'python_sha256':SHA,'archive_sha256':digest(archive),'parts':parts,'requirements_lock':'requirements-lock.json'},indent=2),encoding='utf-8')
 if __name__=='__main__':main()

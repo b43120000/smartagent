@@ -62,6 +62,7 @@ def build_location_metadata(root: str | Path | None = None) -> dict[str, Any]:
         "remote_binding_external_update_path": str(runtime / "remote_binding_external_update.json"),
         "startup_preferences_path": str(metadata / "startup_preferences.json"),
         "status_metadata_path": str(metadata / "status_metadata.json"),
+        "environment_ledger_path": str(metadata / "environment_ledger.json"),
         "conversation_registry_path": str(bindings / "conversations.json"),
         "workspace_registry_path": str(bindings / "workspaces.json"),
         "telegram_config_path": str(secure / "telegram.enc"),

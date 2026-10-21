@@ -87,7 +87,7 @@ function Ensure-DefaultAclOffMode {
     $modePath = Join-Path $securityRoot "acl_mode.json"
     if ((Test-Path -LiteralPath $profilePath -PathType Leaf) -and
         -not (Test-Path -LiteralPath $modePath -PathType Leaf)) {
-        throw "INSTALL_SECURITY_STATE_INCOMPLETE: security profile exists without an ACL mode record; run ACLstatus.bat off or reinstall_smart_agent.bat"
+        throw "INSTALL_SECURITY_STATE_INCOMPLETE: security profile exists without an ACL mode record; run ACLstatus.bat off or install_smart_agent\launchers\reinstall_smart_agent.bat"
     }
     if (Test-Path -LiteralPath $modePath -PathType Leaf) {
         try {
@@ -220,7 +220,7 @@ try {
         })
     }
     if (-not $ValidateOnly -and $LaunchProvisioning) {
-        $launcher = Join-Path $ProjectRoot "launch_webcopilot_chatgpt.bat"
+        $launcher = Join-Path $ProjectRoot "launch_webcopilot.bat"
         Write-Host "[SmartAgent Bootstrap] Launching WebCopilot provisioning..." -ForegroundColor Cyan
         Start-Process -FilePath $launcher -ArgumentList @("--bootstrap-provision") -WorkingDirectory $ProjectRoot
     }

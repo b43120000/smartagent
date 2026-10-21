@@ -108,6 +108,8 @@ def run_bounded_process(
         write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="STARTING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid(), stdout_path=str(stdout_path), stderr_path=str(stderr_path))
     process_started = False
     try:
+        from .runtime_environment import build_runtime_environment
+        child_environment = build_runtime_environment()
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
             process = subprocess.Popen(
                 command,
@@ -115,6 +117,7 @@ def run_bounded_process(
                 shell=shell,
                 stdout=stdout_handle,
                 stderr=stderr_handle,
+                env=child_environment,
             )
             process_started = True
             if telemetry_root and telemetry_task:

@@ -2,7 +2,7 @@
 
 紀錄日期：2026-10-16
 
-實作與驗證目標環境：`C:\path\to\SmartAgent`
+實作與驗證目標環境：`C:\Users\user\Desktop\remoteagent\release\SmartAgentv2_1`
 
 狀態：規劃紀錄，尚未依本表實作或驗收。既有功能是否涵蓋部分項目，須在實作前檢查，不重複建造。
 
@@ -12,8 +12,8 @@
 
 | Request ID | 規劃回覆 | 接受 | 拒絕 | 拒絕率 | 最後狀態 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| RR-EXAMPLE | 9 | 6 | 3 | 33.3% | COMPLETED |
-| RR-EXAMPLE | 23 | 11 | 12 | 52.2% | CANCELLED／中斷 |
+| RR-TELEGRAM-271150CF4C32DFD9 | 9 | 6 | 3 | 33.3% | COMPLETED |
+| RR-TELEGRAM-467CB6333FF0314A | 23 | 11 | 12 | 52.2% | CANCELLED／中斷 |
 
 第一筆拒絕：寫入 4260 字元超過 4096 上限、condition ID 分類不符、PARTIAL 缺少 Runtime 接受的客觀阻塞，各一次。
 

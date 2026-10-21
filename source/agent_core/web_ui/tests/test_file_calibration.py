@@ -134,6 +134,43 @@ class FileTests(DialogueTests):
         result=file_runtime.download_owned(adapter,scope,self.root/'overlay-download.txt')
         self.assertEqual(Path(result['path']).read_text(encoding='utf-8'),'DOWNLOAD_OWNED\n')
 
+    def test_file_only_reply_proves_reading_only_after_exact_download(self):
+        for wrong_bytes in (False,True):
+            with self.subTest(wrong_bytes=wrong_bytes):
+                self.page.set_content(FILE_HTML)
+                save_files('chatgpt',dict(entry='#entry',entry_verified=True,input='#file',upload_verified=True,
+                    chip='.fixture-chip',busy='[aria-busy=true]',error='[role=alert]',remove='button',
+                    attachment_probe={'completion':'busy_idle'},attachment_inventory_verified=True,attachment_verified=True,
+                    download='a.result-download',download_verified=True))
+                self.page.evaluate(r"""bad=>{const button=document.querySelector('#send'),send=button.onclick;
+                    button.onclick=()=>{send();const body=document.querySelector('main article:last-child .markdown');
+                    const link=body.querySelector('a');link.textContent='result.txt';body.replaceChildren(link);
+                    if(bad)link.href=URL.createObjectURL(new Blob(['WRONG\n'],{type:'text/plain'}));};} """,wrong_bytes)
+                if wrong_bytes:
+                    with self.assertRaisesRegex(AssertionError,'download_content_mismatch'):
+                        flow.run_stage(self.page,15,self.folder)
+                else:
+                    result=flow.run_stage(self.page,15,self.folder)
+                    self.assertTrue(result['download_content_verified'])
+                    self.assertFalse(result['marker_in_response'])
+                    self.assertEqual(result['attachment_read_proof'],'downloaded_exact_bytes')
+                self.assertEqual(self.page.evaluate('window.submits'),1)
+
+    def test_file_only_mode_does_not_skip_explicit_render_error(self):
+        from dataclasses import replace
+        self.page.evaluate("fileText='Unable to load this response'")
+        adapter=create_web_ui_for_page(self.page)
+        scope=flow.begin_request(self.page,dict(prompt=adapter.prepare_transport_prompt('render test'),marker='HIDDEN'))
+        self.page.locator('a.result-download').last.evaluate('el=>el.style.display="block"')
+        turn=adapter.latest_owned_assistant(scope)
+        restored=replace(turn,raw_text='result.txt')
+        with patch.object(flow,'wait_owned_response',side_effect=[(turn,'',[]),(restored,'',[])]):
+            with patch.object(self.page,'reload') as reload:
+                result=flow.wait_file_reply(adapter,scope,'HIDDEN',stage=15,timeout=20,allow_file_only=True)
+        self.assertEqual(result[3],1)
+        self.assertEqual(reload.call_count,1)
+        self.assertEqual(self.page.evaluate('window.submits'),1)
+
     def test_native_reply_render_reload_keeps_marker_and_submit_identity(self):
         self.page.evaluate("fileText='Unable to load this response'")
         adapter=create_web_ui_for_page(self.page)
