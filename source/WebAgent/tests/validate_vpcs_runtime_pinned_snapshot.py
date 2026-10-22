@@ -99,6 +99,29 @@ def run():
         assert resolved["status"] == "OK" and "return 99" in resolved["content"], resolved
         assert resolved["file_sha256"] == fresh["file"]["sha256"], resolved
 
+        # An explicit INDEX_ONLY sync is still allowed to publish a new
+        # snapshot after a pinned read detects stale content.
+        source.write_text("def answer():\\n    return 123\\n".replace("\\\\n", "\\n"), encoding="utf-8")
+        blocked = _tool(agent, root, [
+            {"operation": "read_context_ref", "context_ref": fresh["context_ref"]}
+        ], snapshot_b, handle)
+        assert _result(blocked)["error"] == "project_snapshot_stale:sample.py", blocked
+        assert load_current_project_snapshot(root)["snapshot_id"] == snapshot_b
+        synced = decode_result(execute_tool({
+            "tool": "project_sync", "strategy": "INDEX_ONLY",
+            "project_root": str(root),
+        }, agent))
+        assert synced["status"] == "READY", synced
+        snapshot_c = synced["snapshot_id"]
+        assert snapshot_c != snapshot_b
+        current_metadata = _result(_tool(agent, root, [
+            {"operation": "get_file_metadata", "path": "sample.py"}
+        ], snapshot_c, handle))
+        current_read = _result(_tool(agent, root, [
+            {"operation": "read_context_ref", "context_ref": current_metadata["context_ref"]}
+        ], snapshot_c, handle))
+        assert current_read["status"] == "OK" and "return 123" in current_read["content"], current_read
+
     print("VPCS_RUNTIME_PINNED_SNAPSHOT_PASS")
 
 
