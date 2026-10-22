@@ -601,6 +601,13 @@ def query_project_with_runtime_index(
     """Execute against an exact-root, Runtime-owned INDEX_ONLY context."""
     root = Path(workspace).expanduser().resolve()
     normalized, shorthand_count = normalize_project_queries(queries)
+    # A context_ref is an immutable snapshot-bound locator. Its query must not
+    # silently switch snapshots after detecting a stale file. Treat a batch
+    # containing such a read atomically: callers can send unpinned discovery
+    # queries separately if they want automatic index recovery.
+    pinned_snapshot_query = any(
+        query["operation"] == "read_context_ref" for query in normalized
+    )
     requested_snapshot = str(requested_snapshot_id or "")
     requested_handle = str(requested_project_handle or "")
     current = load_current_project_snapshot(root)
@@ -622,7 +629,8 @@ def query_project_with_runtime_index(
         request_id=request_id,
         action_id=action_id,
     )
-    if _recoverable_snapshot_result(payload):
+    stale_index = _recoverable_snapshot_result(payload)
+    if stale_index and not pinned_snapshot_query:
         capsule = build_project_capsule(root)
         effective_snapshot = str(capsule["snapshot_id"])
         recovery = "INDEX_REBUILT_ONCE"
@@ -639,6 +647,11 @@ def query_project_with_runtime_index(
             payload["status"] = "INCOMPLETE"
             payload["error"] = "project_access_index_rebuild_exhausted"
             recovery = "INDEX_REBUILD_EXHAUSTED"
+    elif stale_index and pinned_snapshot_query:
+        # Preserve the original project_snapshot_stale diagnostic and the
+        # current snapshot. The planner must explicitly sync and request a
+        # fresh reference rather than replay an old pointer on new content.
+        recovery = "PINNED_SNAPSHOT_NO_REBUILD"
 
     payload["project_root"] = str(root)
     payload["index_context"] = {
@@ -649,6 +662,7 @@ def query_project_with_runtime_index(
         "requested_project_handle": requested_handle,
         "effective_project_handle": _project_handle(root),
         "model_identity_authoritative": False,
+        "snapshot_policy": "PINNED" if pinned_snapshot_query else "AUTO_RECOVER",
         "recovery_action": recovery,
         "normalized_query_count": shorthand_count,
     }
