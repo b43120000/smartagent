@@ -99,6 +99,17 @@ class M365UIAdapter(BaseWebUIAdapter):
                 and super().page_reachable())
 
     def install_input_bridge(self, *, reset_legacy=False):
+        if reset_legacy:
+            state = self.page.evaluate("""() => ({
+                installed: !!window.__webAgentDirectBridgeInstalled,
+                version: Number(window.__webAgentDirectBridgeVersion || 0),
+                queued: (window.__webAgentDirectQueue || []).length
+            })""")
+            if state.get('installed') and int(state.get('version') or 0) < self.bridge_version:
+                if state.get('queued') or self.composer_snapshot().semantic_text.strip():
+                    raise RuntimeError(
+                        'M365_INPUT_BRIDGE_UPGRADE_PENDING_INPUT: unsent draft or queued request preserved; '
+                        'save/re-enter it before manually reloading the page')
         selectors = json.dumps({"composer": self.profile.composer_selector, "send": self.profile.send_selector})
         self.page.context.add_init_script("window.__m365Selectors = " + selectors + ";")
         self.page.evaluate("selectors => { window.__m365Selectors = selectors; }", json.loads(selectors))

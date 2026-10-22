@@ -3,11 +3,8 @@ import hashlib
 from ...contracts import ComposerSnapshot, ComposerValidation, normalize_ui_text, ui_text_matches
 
 
-def read_composer_snapshot(composer):
-    if composer is None:
-        return ComposerSnapshot(primary_text="", semantic_text="")
-    primary = str(composer.evaluate("el => 'value' in el ? el.value : (el.innerText || el.textContent || '')") or "")
-    semantic = str(composer.evaluate(r"""el => {
+# Shared by trusted-human capture and software composer verification.
+READ_COMPOSER_TEXT_JS = r"""el => {
         if ('value' in el) return el.value || '';
         const clone = el.cloneNode(true);
         // Lexical appends an aria-hidden text span containing U+200B/U+200C.
@@ -19,7 +16,13 @@ def read_composer_snapshot(composer):
             if (block.nextSibling) block.append('\n');
         }
         return clone.textContent || '';
-    }""") or "")
+    }"""
+
+def read_composer_snapshot(composer):
+    if composer is None:
+        return ComposerSnapshot(primary_text="", semantic_text="")
+    primary = str(composer.evaluate("el => 'value' in el ? el.value : (el.innerText || el.textContent || '')") or "")
+    semantic = str(composer.evaluate(READ_COMPOSER_TEXT_JS) or "")
     return ComposerSnapshot(primary_text=primary, semantic_text=semantic)
 
 

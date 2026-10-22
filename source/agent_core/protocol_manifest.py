@@ -146,6 +146,7 @@ CORE_FILES = (
     'source/agent_core/web_ui/providers/m365/profiles.py',
     'source/agent_core/web_ui/providers/m365/adapter.py',
     'source/agent_core/web_ui/providers/m365/composer.py',
+    'source/agent_core/web_ui/providers/m365/bridge.py',
     'source/agent_core/request_ownership.py',
     'source/agent_core/task_state.py',
     'source/agent_core/tool_capabilities.py',
