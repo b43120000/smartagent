@@ -101,7 +101,7 @@ def run():
 
         # An explicit INDEX_ONLY sync is still allowed to publish a new
         # snapshot after a pinned read detects stale content.
-        source.write_text("def answer():\\n    return 123\\n".replace("\\\\n", "\\n"), encoding="utf-8")
+        source.write_text("def answer():\n    return 123\n", encoding="utf-8")
         blocked = _tool(agent, root, [
             {"operation": "read_context_ref", "context_ref": fresh["context_ref"]}
         ], snapshot_b, handle)
