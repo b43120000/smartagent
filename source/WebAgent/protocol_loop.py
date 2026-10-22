@@ -918,7 +918,11 @@ class WebAgentProtocolLoop:
     def _run_command_verification_detail(action: dict) -> str:
         """Describe a malformed verification contract without calling it missing."""
         from agent_core.command_operation import normalize_command_operation
-        observation = normalize_command_operation(action.get('operation')) in {'INSPECT','GIT_INSPECT'}
+        try:
+            operation = normalize_command_operation(action.get('operation'))
+        except (ValueError, TypeError) as exc:
+            return 'invalid=operation:' + str(exc)
+        observation = operation in {'INSPECT','GIT_INSPECT'}
         negative_assertion = WebAgentProtocolLoop._valid_expected_failure_contract(action)
         issues: list[str] = []
         if not observation and not str(action.get("success_criteria", "") or "").strip():
@@ -2055,7 +2059,7 @@ class WebAgentProtocolLoop:
                     return [], [{'reason':'command_repair_target_not_pending','detail':ref}]
                 original = saved['action']
                 for name,value in call.items():
-                    if name not in {'verify','success_criteria'} and value != original.get(name):
+                    if name not in ({'verify','success_criteria'} | set(saved.get('required_fields', []))) and value != original.get(name):
                         return [], [{'reason':'command_repair_identity_changed','detail':name,
                             'suggestion':'命令、operation、目錄或依賴改變時，使用新 action_id 與 replaces_action_id；不得沿用舊驗證。'}]
                 materialized = {**deepcopy(original), **deepcopy(call)}
@@ -2072,7 +2076,7 @@ class WebAgentProtocolLoop:
         deferred_diagnostics = [item for repair in getattr(self,'current_action_repairs',[])
             for item in repair.get('diagnostics',[])]
         repair_sources = diagnostics + deferred_diagnostics
-        repair_diagnostic = any(item.get('reason') in {'run_command_verification_contract_required','wrong_field_type'}
+        repair_diagnostic = any(item.get('reason') in {'run_command_verification_contract_required','wrong_field_type','run_command_operation_invalid'}
             for item in repair_sources)
         if repair_diagnostic:
             for action in merged:
@@ -2086,7 +2090,7 @@ class WebAgentProtocolLoop:
                     detail = self._run_command_verification_detail(action)
                 except (ValueError,TypeError):
                     continue
-                for field in ('verify','success_criteria'):
+                for field in ('operation','verify','success_criteria'):
                     if field in detail or (field in action and not isinstance(action[field], (list,dict) if field=='verify' else str)):
                         fields.append(field)
                 if not fields: continue
@@ -2097,12 +2101,12 @@ class WebAgentProtocolLoop:
                 self.deferred_action_repairs[ref] = {'action_id':ref,'tool':'run_command',
                     'status':'REPAIR_REQUIRED','executed':False,'action':deepcopy(action),'diagnostics':repair_sources}
                 for diagnostic in repair_sources:
-                    if diagnostic.get('reason') in {'run_command_verification_contract_required','wrong_field_type'}:
+                    if diagnostic.get('reason') in {'run_command_verification_contract_required','wrong_field_type','run_command_operation_invalid'}:
                         diagnostic.setdefault('command_field_repairs',[]).append({
                             'action_id':ref,'tool':'run_command','required_fields':fields,
                             'reply_example':{'tool':'run_command','action_id':ref,**{field:
                                 ([{'action':'run_command','command':'<read-only verification command>','expect_exit_code':0}]
-                                 if field=='verify' else '<describe the expected observable result>') for field in fields}},
+                                 if field=='verify' else ('INSPECT|MUTATE|BUILD|TEST|VERIFY|GIT_INSPECT|GIT_MUTATE|PROCESS|TRANSFER|GENERAL' if field=='operation' else '<describe the expected observable result>')) for field in fields}},
                             'rule':'Only patch these fields. Runtime restores the pending action and revalidates it; it has NOT executed.'})
         self.pending_command_field_repairs = pending
         return admitted, diagnostics
