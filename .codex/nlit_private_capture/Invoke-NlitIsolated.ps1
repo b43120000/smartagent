@@ -116,8 +116,9 @@ if ($Mode -eq 'RunCase') {
                              [StringComparison]::OrdinalIgnoreCase)) {
         Fail 'CASE_FILE_OUTSIDE_PRIVATE_DIR'
     }
-    & $py (Join-Path $ObserverDir 'submit_private_case.py') (
-        @('--test-workspace', $TestWorkspace, '--private-root', $PrivateDir,
-          '--case-file', $case, '--case-id', $NewCaseId))
+    $submitArgs = @((Join-Path $ObserverDir 'submit_private_case.py'),
+        '--test-workspace', $TestWorkspace, '--private-root', $PrivateDir,
+        '--case-file', $case, '--case-id', $NewCaseId)
+    & $py @submitArgs
     exit $LASTEXITCODE
 }
