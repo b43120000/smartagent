@@ -119,7 +119,7 @@ def _enabled_request(text: str, kw: dict) -> dict | None:
 
 
 def patch_protocol_loop(cls) -> bool:
-    key = "protocol"
+    key = ("protocol", cls)
     if key in _PATCHED:
         return True
     original = cls._run_impl
@@ -141,7 +141,7 @@ def patch_protocol_loop(cls) -> bool:
 
 
 def patch_browser_client(cls) -> bool:
-    key = "browser_client"
+    key = ("browser_client", cls)
     if key in _PATCHED:
         return True
     original = cls.ask
@@ -157,7 +157,7 @@ def patch_browser_client(cls) -> bool:
             return original(self, prompt, *args, **kwargs)
         try:
             number = int(expected.get("turn_id"))
-            if number < 2:
+            if number < 1:
                 return original(self, prompt, *args, **kwargs)
             folder = _identity_dir(request["root"], request) / ("round-%04d" % number)
             folder.mkdir(mode=0o700, exist_ok=True)
@@ -188,7 +188,7 @@ def patch_browser_client(cls) -> bool:
 
 
 def patch_scraper(cls) -> bool:
-    key = "scraper"
+    key = ("scraper", cls)
     if key in _PATCHED:
         return True
     original_write = cls._write_prompt_to_composer
@@ -239,4 +239,7 @@ def patch_available_modules() -> bool:
         cls = getattr(module, class_name, None) if module else None
         if cls is not None:
             patch(cls)
-    return len(_PATCHED) == 3
+    return all(
+        any(key[0] == family for key in _PATCHED)
+        for family in ("protocol", "browser_client", "scraper")
+    )
