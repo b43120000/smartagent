@@ -566,6 +566,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             original_request=loop.task_request, base=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
             conclusion=terminal_payload['summary'], task_id=task.task_id, request_id=task.request_id,
             state='COMPLETED', outcome=loop.terminal_outcome,
+            terminal_acceptance=loop.terminal_acceptance,
             source_task_id=(loop.continuation_source or {}).get('task_id', ''))
         final_content = terminal_payload["summary"]
         if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
@@ -584,6 +585,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "task_epoch": task.task_epoch,
                 "intent_digest": loop.intent_digest,
                 "action_result_ledger": dict(loop.action_result_ledger),
+                "condition_result_ledger": dict(loop.condition_result_ledger),
                 "uploaded_attachments": list(loop.sent_attachment_paths),
                 "outbound_artifacts": terminal_payload["artifacts"],
                 "artifact_rejections": terminal_payload["artifact_rejections"],
@@ -672,11 +674,22 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                      and acceptance.get('decision') == 'INTERRUPT'
                      and acceptance.get('runtime_state') == 'INTERRUPTED'))
         )
+        # The Planner produced its final prose before Runtime accepted the
+        # interruption; append the accepted receipt from Runtime rather than
+        # interpreting the model's earlier UNVERIFIED claim as authoritative.
+        conclusion = failure_payload['error']
+        if protocol_only_interruption and acceptance.get('admission_status') == 'ACCEPTED':
+            expected_prefix = ('WebAgent 已接受中斷終態，receipt_id='
+                               + str(acceptance.get('receipt_id', '')) + '：')
+            if str(exc).startswith(expected_prefix):
+                conclusion = str(exc)[len(expected_prefix):]
         failure_payload['summary'] = render_task_reply(
             original_request=getattr(locals().get('loop'), 'task_request', task.request),
             base=str(getattr(progress, 'base_evaluation', '') or ''),
-            conclusion=failure_payload['error'], task_id=task.task_id, request_id=task.request_id,
-            state='INTERRUPTED' if protocol_only_interruption else 'FAILED')
+            conclusion=conclusion, task_id=task.task_id, request_id=task.request_id,
+            state='INTERRUPTED' if protocol_only_interruption else 'FAILED',
+            outcome=loop_outcome if protocol_only_interruption else '',
+            terminal_acceptance=acceptance if protocol_only_interruption else None)
         if protocol_only_interruption:
             interrupted = queue.interrupt_running(
                 task.task_id,
@@ -684,6 +697,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 result={
                     **failure_payload,
                     "action_result_ledger": dict(getattr(loop, "action_result_ledger", {}) or {}),
+                    "condition_result_ledger": dict(getattr(loop, "condition_result_ledger", {}) or {}),
                 },
             )
             if interrupted is not None:
