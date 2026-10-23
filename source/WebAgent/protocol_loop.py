@@ -1932,6 +1932,35 @@ class WebAgentProtocolLoop:
             separators=(",", ":"),
         )
 
+    def _accepted_terminal_receipt(self, *, runtime_state: str) -> dict:
+        """Create an auditable receipt only after a terminal turn is admitted.
+
+        The receipt attests admission, NOT that a failed/unknown predicate passed.
+        """
+        progress = self.progress_ledger
+        refs = [str(item) for item in list(progress.evidence_refs or [])]
+        payload = {
+            "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
+            "admission_status": "ACCEPTED",
+            "request_id": self.run_id,
+            "task_id": self.task_id,
+            "task_epoch": self.task_epoch,
+            "round": self.turn_id,
+            "ack_id": self.accepted_ack_ids[-1] if self.accepted_ack_ids else "",
+            "decision": progress.decision,
+            "task_outcome": progress.outcome,
+            "runtime_state": runtime_state,
+            "matched_condition_id": progress.matched_condition_id,
+            "evidence_refs": refs,
+            "evidence_verdict": self._terminal_evidence_verdict(
+                refs, matched_condition=progress.matched_condition),
+        }
+        signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        payload["receipt_id"] = "TERM-" + hashlib.sha256(signed.encode('utf-8')).hexdigest()[:20].upper()
+        self.terminal_acceptance = payload
+        self._emit("runtime_terminal_accepted", **payload)
+        return payload
+
     def _bind_terminal_result_evidence(
         self,
         progress_action: dict,
@@ -3954,12 +3983,15 @@ class WebAgentProtocolLoop:
                 content = self.progress_ledger.decision_reason
                 if len(actions) == 1 and actions[0].get("tool") == "final_response":
                     content = str(actions[0].get("content", "") or content)
+                self.terminal_outcome = self.progress_ledger.outcome
+                self.protocol_state = "INTERRUPTED"
                 set_runtime_state(
                     self.task_id,
                     "INTERRUPTED",
                     reason=self.progress_ledger.decision_reason,
                     root=self.progress_root,
                 )
+                self._accepted_terminal_receipt(runtime_state="INTERRUPTED")
                 from agent_core.request_ownership import release_active_request
                 release_active_request(self.run_id)
                 self._emit(
@@ -3995,6 +4027,7 @@ class WebAgentProtocolLoop:
                     state="COMPLETED",
                 )
                 set_runtime_state(self.task_id, "COMPLETED", root=self.progress_root)
+                self._accepted_terminal_receipt(runtime_state="COMPLETED")
                 from agent_core.request_ownership import release_active_request
                 release_active_request(self.run_id)
                 self._emit(
