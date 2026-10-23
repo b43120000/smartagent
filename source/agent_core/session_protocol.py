@@ -207,7 +207,22 @@ class SessionProtocol:
             f"[/{SESSION_ATTACH_MARKER}]"
         )
 
-    def parse_protocol_ready(self, text: str, *, session_id: str, allow_smart_quotes: bool = False) -> bool:
+    def parse_protocol_ready(
+        self,
+        text: str,
+        *,
+        session_id: str,
+        allow_smart_quotes: bool = False,
+        allow_marker_only: bool = False,
+    ) -> bool:
+        """Accept exact marker-only acknowledgement only when bootstrap opts in.
+
+        A bare marker cannot attest the protocol hash/session identity. Callers
+        must record the weaker readiness mode. Full identity and session-attach
+        checks remain unchanged; prose containing the marker is not readiness.
+        """
+        if allow_marker_only and str(text or "").strip() == f"[{PROTOCOL_READY_MARKER}]":
+            return True
         payload = _extract_marker_payload(text, PROTOCOL_READY_MARKER, allow_smart_quotes=allow_smart_quotes)
         if payload is None and _allow_missing_readiness_closing_marker(self.debug_config_path):
             payload = _extract_unclosed_marker_payload(text, PROTOCOL_READY_MARKER)
