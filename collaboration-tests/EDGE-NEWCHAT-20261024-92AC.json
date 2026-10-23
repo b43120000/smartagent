@@ -1,0 +1,14 @@
+{
+  "test_id": "EDGE-NEWCHAT-20261024-92AC",
+  "status": "PASS",
+  "method": "isolated Edge browser automation",
+  "checks": {
+    "created_in_requested_project": true,
+    "new_url_obtained": true,
+    "unique_ack_read_from_visible_page": true,
+    "title_confirmed_via_app": true,
+    "conversation_readable_via_app": true
+  },
+  "privacy": "Conversation URLs, identifiers, project identifiers, local endpoints and browser profile paths are omitted.",
+  "scope": "Channel test only; product deployment and product tests not performed."
+}
