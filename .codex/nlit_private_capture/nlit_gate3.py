@@ -43,7 +43,7 @@ def disjoint(a: Path, b: Path):
 
 
 def verify_base(args):
-    from agent_core.paths import install_root
+    from agent_core.paths import install_root, telegram_config_path, telegram_pairing_path
     test = canon(args.test_install)
     prod = canon(args.production_install)
     work = canon(args.test_workspace)
@@ -54,6 +54,8 @@ def verify_base(args):
     obs = canon(args.observer_dir)
     if not equal(install_root(), test):
         die("PYTHON_RUNNING_OUTSIDE_TEST_INSTALL")
+    if telegram_config_path(test).is_file() or telegram_pairing_path(test).is_file():
+        die("TEST_INSTALL_HAS_TELEGRAM_CREDENTIALS_OR_PAIRING")
     for a in (test, work, appdata, private, obs):
         for b in (prod, prod_work, prod_appdata):
             disjoint(a, b)
