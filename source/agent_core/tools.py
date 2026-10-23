@@ -1208,7 +1208,8 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                                           'NOT_FOUND' if fact.get('value') is False else 'UNKNOWN'},
                 'observation':fact, 'predicate':predicate, 'evaluation':verdict}
         executed = True  # The authorized, bounded stat probe was attempted.
-        data = {'observations':[fact], 'verification_status':verification,
+        data = {'observations':[fact], 'execution_finality':'COMPLETED',
+                'verification_status':verification,
                 'expectation_status':verification if predicate is not None else '',
                 'comparison':verdict['comparison'],
                 'terminal_eligible':confirmed and verification not in {'FAIL','UNKNOWN','SPEC_INVALID'},
