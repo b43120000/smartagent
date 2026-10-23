@@ -122,7 +122,7 @@ def run() -> dict:
     for short_reply, accepted in (
         (PROTOCOL_READY_MARKER, False),
         (f"[{PROTOCOL_READY_MARKER}]", True),
-        (f"\\n  [{PROTOCOL_READY_MARKER}]\\n", True),
+        (f"\n  [{PROTOCOL_READY_MARKER}]\n", True),
     ):
         with tempfile.TemporaryDirectory(prefix="webagent-short-ready-") as temp:
             root = Path(temp)
