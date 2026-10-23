@@ -26,7 +26,7 @@ def business_payload(result):
     return value if isinstance(value,dict) else None
 
 
-def structured_outcome(tool, payload):
+def structured_outcome(tool, payload, *, expected_outcome=None):
     if not isinstance(payload,dict):
         return 'UNKNOWN','INVALID_BUSINESS_RESULT',False,{}
     business=str(payload.get('status','')).upper()
@@ -57,6 +57,23 @@ def structured_outcome(tool, payload):
             reason='PROJECT_QUERIED' if status=='SUCCEEDED' else 'PROJECT_QUERY_INCOMPLETE'; executed=bool(rows)
             data.update(successful_query_count=good,failed_query_count=len(rows)-good,
                 terminal_eligible=status=='SUCCEEDED',query_error=payload.get('error',''))
+        if expected_outcome is not None:
+            # Never relabel the raw query result: only the Runtime-owned
+            # verification layer may mark an expected negative observation
+            # as a passed assertion. This remains fail-closed for incomplete
+            # or unexpected results.
+            from .query_expected_outcome import evaluate_query_expected_outcome
+            assertion = evaluate_query_expected_outcome(expected_outcome, payload)
+            data.update(assertion)
+            if assertion['expectation_status'] == 'PASS':
+                status, reason, executed = 'SUCCEEDED', 'QUERY_NEGATIVE_ASSERTION_PASSED', True
+                data['execution_status'] = 'SUCCEEDED'
+            elif assertion['expectation_status'] == 'FAIL':
+                status, reason, executed = 'FAILED', 'QUERY_NEGATIVE_ASSERTION_FAILED', True
+                data['execution_status'] = 'SUCCEEDED'
+            else:
+                status, reason, executed = 'UNKNOWN', 'QUERY_ASSERTION_EVIDENCE_INCOMPLETE', False
+                data['execution_status'] = 'UNKNOWN'
         data.update(snapshot_id=payload.get('snapshot_id',''),project_handle=payload.get('project_handle',''))
     elif tool=='project_sync':
         if business=='READY': status,reason,executed='SUCCEEDED','PROJECT_INDEX_OR_SYNC_READY',True
