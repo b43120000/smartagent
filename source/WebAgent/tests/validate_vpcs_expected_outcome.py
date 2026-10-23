@@ -175,5 +175,79 @@ def run():
     print("VPCS_EXPECTED_OUTCOME_PASS")
 
 
+def validate_protocol_terminal():
+    """Use real WebAgent admission, execution, ledger and terminal verdict."""
+    from WebAgent.tests.validate_progress_terminal_lifecycle import response
+
+    with tempfile.TemporaryDirectory(prefix="vpcs-expect-protocol-") as directory:
+        root = Path(directory).resolve()
+        source = root / "sample.py"
+        source.write_text("def answer():\\n    return 42\\n", encoding="utf-8")
+        capsule = build_project_capsule(root)
+        seed = query(WebAgentToolContext(root), root, {
+            "operation": "get_file_metadata", "path": "sample.py",
+        }, snapshot_id=capsule["snapshot_id"])
+        ref = json.loads(seed)["results"][0]["context_ref"]
+        source.write_text("def answer():\\n    return 99\\n", encoding="utf-8")
+        turns = []
+        contract = {
+            "success": [STALE_CONDITION],
+            "failure": ["Pinned reference unexpectedly returned source or another error"],
+            "in_progress": ["Pinned reference has not been checked"],
+            "interrupted": ["Local query runtime unavailable"],
+        }
+        def planner(prompt, expected, attachments):
+            turns.append(prompt)
+            if len(turns) == 1:
+                return response({
+                    "tool": "report_progress", "action_id": "P-VPCS-START",
+                    "base_evaluation": "Validate expected stale context without changing source",
+                    "total_steps": 1, "current_step": 0.5,
+                    "steps": [{"step": 1, "desc": "Check immutable reference", "status": "IN_PROGRESS"}],
+                    "current_focus": "Check pinned read", "next_action": "query_project",
+                    "completion_contract": contract, "decision": "CONTINUE",
+                    "outcome": "PENDING", "matched_condition": contract["in_progress"][0],
+                    "evidence_refs": ["REQUEST_ACCEPTED"],
+                    "decision_reason": "No observed result yet",
+                }, {
+                    "tool": "query_project", "action_id": "VPCS-PROTOCOL-NEG",
+                    "project_root": str(root),
+                    "snapshot_id": capsule["snapshot_id"],
+                    "queries": [{"operation": "read_context_ref", "context_ref": ref}],
+                    "expected_outcome": {
+                        "query_index": 1, "status": "ERROR",
+                        "error": "project_snapshot_stale:sample.py",
+                    },
+                    "condition_id": STALE_CONDITION,
+                })
+            assert len(turns) == 2, prompt
+            assert "VPCS-PROTOCOL-NEG" in loop.action_result_ledger
+            assert loop.action_result_ledger["VPCS-PROTOCOL-NEG"]["expectation_status"] == "PASS"
+            return response({
+                "tool": "report_progress", "action_id": "P-VPCS-END",
+                "decision": "COMPLETE", "outcome": "SUCCESS",
+                "current_step": 1,
+                "steps": [{"step": 1, "desc": "Check immutable reference", "status": "COMPLETED"}],
+                "current_focus": "Negative assertion observed",
+                "next_action": "final_response",
+                "matched_condition": STALE_CONDITION,
+                "evidence_refs": ["VPCS-PROTOCOL-NEG"],
+                "decision_reason": "Runtime accepted the exact predeclared stale error",
+            }, {
+                "tool": "final_response", "action_id": "FINAL-VPCS-EXPECTED",
+                "content": "VPCS_EXPECTED_TERMINAL_PASS",
+            })
+
+        loop = WebAgentProtocolLoop(root, planner, progress_root=root, max_turns=8)
+        final = loop.run("Check pinned query negative expectation\\n" + str(root),
+                         trusted_authorized_paths=[str(root)])
+        assert final == "VPCS_EXPECTED_TERMINAL_PASS", final
+        assert loop.terminal_outcome == "SUCCESS", loop.terminal_outcome
+        assert len(turns) == 2, turns
+        assert load_current_project_snapshot(root)["snapshot_id"] == capsule["snapshot_id"]
+        print("VPCS_EXPECTED_PROTOCOL_TERMINAL_PASS")
+
+
 if __name__ == "__main__":
     run()
+    validate_protocol_terminal()
