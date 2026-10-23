@@ -1,0 +1,47 @@
+{
+  "schema": "SA_NLIT_CHATGPT_HANDOFF_ACK_V1",
+  "task_id": "SA-NLIT-20261024",
+  "round": 3,
+  "handoff_ack": "HANDOFF-R2-7C6A",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "observed_head": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+  "read_files": [
+    {
+      "commit": "ffd727e7ff4fc1a511a041064240efab29bcba5d",
+      "path": "collaboration/SA-NLIT-20261024/round-001/handoff.json",
+      "blob": "3ec4ab30d633bda6867c0f3df9721f09eecc6dbe"
+    },
+    {
+      "commit": "5f706a47559c121e4f0a30f515c1601267326490",
+      "path": "collaboration/SA-NLIT-20261024/round-002/evidence_summary.json"
+    },
+    {
+      "commit": "a0e3f9812df76967b698f1a2ca25d97520a74f70",
+      "path": "collaboration/SA-NLIT-20261024/round-002/bundled_python_import_fix.md",
+      "blob": "51d14247a2d0f3a2f937a1e375b2677273a792b8"
+    },
+    {
+      "commit": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+      "path": ".codex/nlit_private_capture/Enable-NlitIsolatedPython-v2.ps1",
+      "blob": "4fc49e324c95dca66de8b6e490b853f825e9b115"
+    },
+    {
+      "commit": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+      "path": ".codex/nlit_private_capture/adapter_manifest.json",
+      "blob": "7bc3ec7d3d1c2692af7d19607395699fd64d4d73"
+    },
+    {
+      "commit": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+      "path": ".codex/nlit_private_capture/Enable-NlitIsolatedPython.ps1",
+      "blob": "d7114a7b5a09c68c2abe70baed08a42130887868"
+    }
+  ],
+  "handoff_constraints": [
+    "No main changes or merge",
+    "Append only from verified branch HEAD",
+    "No historical case reruns or fabricated PASS",
+    "Private local identifiers and original prompts remain local",
+    "No browser/supervisor/local task initiated by this acknowledgment"
+  ],
+  "status": "SOURCE_READ_ACKNOWLEDGED; NO_LOCAL_EXECUTION_CLAIM"
+}
