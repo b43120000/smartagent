@@ -28,7 +28,7 @@ TRANSITIONS = {
 }
 
 DISCOVERY_TOOLS = {
-    "list_directory", "inspect_directory", "find_file", "read_file",
+    "list_directory", "inspect_directory", "find_file", "read_file", "observe_fact",
     "inspect_project_scope", "inspect_project_working_set", "query_project", "inspect_project_ledger",
     "query_project_history", "project_sync", "inspect_semantic_map",
     "extract_project_dependencies", "compare_project_snapshot", "web_search",
