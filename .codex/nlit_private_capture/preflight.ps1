@@ -50,10 +50,12 @@ foreach ($p in @($prod,$prodWork,$test,$testWork,$obs,$private)) { NoLinks $p }
 foreach ($a in @($test,$testWork,$obs,$private)) {
  foreach ($b in @($prod,$prodWork)) { BlockAlias $a $b }
 }
-foreach ($pair in @(@($test,$testWork),@($test,$obs),@($test,$private),
-                     @($testWork,$obs),@($testWork,$private),@($obs,$private))) {
- BlockAlias $pair[0] $pair[1]
-}
+BlockAlias $test $testWork
+BlockAlias $test $obs
+BlockAlias $test $private
+BlockAlias $testWork $obs
+BlockAlias $testWork $private
+BlockAlias $obs $private
 $prodWriter=[IO.Path]::GetFullPath((Join-Path $prodWork '.agents\chunked_writes'))
 $testWriter=[IO.Path]::GetFullPath((Join-Path $testWork '.agents\chunked_writes'))
 BlockAlias $testWriter $prodWriter
@@ -109,7 +111,8 @@ try {
 } finally { $env:PYTHONPATH=$oldPath }
 function SessionPort([string]$Install) {
  $file=Join-Path $Install 'config\browser_session.json'
- if (!(Test-Path -LiteralPath $file -PathType Leaf)) { Fail 'BROWSER_PREFERENCES_MISSING' }
+ # Mirrors browser_preferences.load_browser_preferences() defaults.
+ if (!(Test-Path -LiteralPath $file -PathType Leaf)) { return 12801 }
  $p=Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json
  $instance=[int]$p.instance
  if ($instance -lt 1 -or $instance -gt 5) { Fail 'BROWSER_INSTANCE_INVALID' }
