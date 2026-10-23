@@ -60,6 +60,7 @@ embedded inside ordinary conversation text as readiness.
 From a checkout of this branch:
 
 ```powershell
+$env:PYTHONPATH = "source"
 python source/WebAgent/tests/validate_shared_marker_only_readiness.py
 python source/WebAgent/tests/validate_startup_protocol_flow.py
 python source/WebAgent/tests/validate_readiness_missing_closing_marker_switch.py
