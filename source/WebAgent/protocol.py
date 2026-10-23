@@ -69,6 +69,7 @@ def render_initial_planner_toolkit(environment: dict | None = None) -> str:
           "verify 索引從 1 起，且 success_criteria 必須逐字對應 completion_contract.success 的測試達標條件。"
           "此欄位只接受 FAIL；預期正常 PASS 時不提供 expected_verification，只提供 verify。"
           "Runtime 保存原 SUCCEEDED/FAIL，另外計算 expectation_status；不可為通過測試改寫檔案或事後補此欄位。\n"
+        "對檔案存在／不存在的客觀判斷可使用 observe_fact(path)，需要驗證時須在執行前綁定 completion_contract.success 的 condition_id，並提供 predicate={field:file.exists,operator:equals,expected:true/false}；觀測的 false 是事實而非工具失敗。權限拒絕與 UNKNOWN 不等於檔案不存在。"
         "缺少 Runtime 能讀取的資料時，使用 CONTINUE 並選擇精確讀取 action；"
         "不能把 NEED_MORE_CONTEXT 直接當成 INTERRUPT。若真正需要使用者選擇，"
         "在 report_progress 提供 context_request={kind:USER_INPUT,detail:具體問題}；"
