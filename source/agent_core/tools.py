@@ -1174,6 +1174,57 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
     p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
     tool = str(tool_call.get('tool', ''))
+    if tool == "observe_fact":
+        # This read-only tool observes a filesystem fact inside the existing
+        # authorization boundary. It never guesses absence from access errors.
+        from .evidence_foundation import (
+            EvidenceSpecError, validate_observe_fact_action,
+            probe_file_exists, evaluate_predicate,
+        )
+        from .tool_result_contract import encode_result, attach_runtime_result
+        try:
+            predicate = validate_observe_fact_action(tool_call)
+        except EvidenceSpecError as exc:
+            return encode_result('REJECTED', 'EVIDENCE_SPEC_INVALID',
+                tool=tool, executed=False, detail=str(exc),
+                data={'verification_status':'SPEC_INVALID','terminal_eligible':False})
+        try:
+            security = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+            path = security.require_read(tool_call["path"], require_absolute=True,
+                                         allow_root=False, forbid_glob=True)
+        except (PathSecurityError, ValueError, PermissionError, OSError) as exc:
+            return encode_result('REJECTED', 'EVIDENCE_SCOPE_REJECTED',
+                tool=tool, executed=False, detail=str(exc),
+                data={'verification_status':'UNVERIFIED','terminal_eligible':False})
+        fact = probe_file_exists(path, raw_ref=str(tool_call.get('action_id', '')))
+        confirmed = fact['observation_status'] == 'CONFIRMED'
+        verdict = (evaluate_predicate(predicate, fact) if predicate is not None
+                   else {'verification_status':'UNVERIFIED', 'comparison':'NOT_REQUESTED'})
+        verification = verdict['verification_status']
+        body = {'schema':'SMARTAGENT_FACT_OBSERVATION_RESULT_V1',
+                'status':'READY' if confirmed else 'INCOMPLETE',
+                'raw_evidence': {'source':'filesystem.stat',
+                                 'result':'FOUND' if fact.get('value') is True else
+                                          'NOT_FOUND' if fact.get('value') is False else 'UNKNOWN'},
+                'observation':fact, 'predicate':predicate, 'evaluation':verdict}
+        executed = True  # The authorized, bounded stat probe was attempted.
+        data = {'observations':[fact], 'verification_status':verification,
+                'expectation_status':verification if predicate is not None else '',
+                'comparison':verdict['comparison'],
+                'terminal_eligible':confirmed and verification not in {'FAIL','UNKNOWN','SPEC_INVALID'},
+                'observation_status':fact['observation_status']}
+        status = 'SUCCEEDED' if confirmed else 'UNKNOWN'
+        reason = ('FACT_OBSERVED' if confirmed and predicate is None else
+                  'FACT_PREDICATE_PASSED' if verification=='PASS' else
+                  'FACT_PREDICATE_FAILED' if verification=='FAIL' else
+                  'FACT_OBSERVATION_UNKNOWN')
+        return attach_runtime_result(
+            json.dumps(body, ensure_ascii=False, separators=(',', ':')),
+            status, reason, tool=tool, executed=executed, data=data,
+            requested_path=tool_call['path'], resolved_path=str(path),
+            action_id=tool_call.get('action_id', ''),
+            request_id=getattr(agent, 'current_request_id', '') if agent else '',
+            task_id=getattr(agent, 'current_task_id', '') if agent else '')
     # Validate negative assertions before any query, including direct calls
     # that bypass the WebAgent envelope validator. A malformed expectation
     # must never execute and cannot be retroactively attached to a result.
@@ -1285,6 +1336,17 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 data={'verification_status':'UNVERIFIED','terminal_eligible':False,'machine_actions_executed':False}
             elif text.startswith(('[執行引擎失敗]','[LOCAL_AI_EVIDENCE_FAIL]')):
                 status,reason,executed='FAILED','EXECUTOR_RESPONSE_FAILED',True
+    # Populate normalized observations from trusted producer receipts. These
+    # enrich Planner evidence but never change existing query/command outcomes.
+    if tool in {'query_project', 'run_command'}:
+        from .evidence_foundation import adapt_project_query, adapt_command_outcome
+        raw_ref = str(tool_call.get('action_id', '') or '')
+        if tool == 'query_project':
+            facts = adapt_project_query(business_payload(result), raw_ref=raw_ref)
+        else:
+            facts = adapt_command_outcome({'tool':tool, 'data':data}, raw_ref=raw_ref)
+        if facts:
+            data = {**data, 'observations': facts}
     # The final Runtime trailer is authoritative even if transcript text contains
     # lookalike status markers. JSON results keep their old business fields.
     attached = attach_runtime_result(result, status, reason, tool=tool, executed=executed, data=data,
