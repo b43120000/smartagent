@@ -1966,6 +1966,41 @@ class WebAgentProtocolLoop:
         self._emit("runtime_terminal_accepted", **payload)
         return payload
 
+    @staticmethod
+    def _read_only_unexecuted_repairs(repairs) -> bool:
+        """Only optional, unexecuted reads may be left behind on blocked terminal."""
+        from agent_core.action_dependencies import OBSERVATION_TOOLS
+        for item in repairs:
+            if not isinstance(item, dict) or item.get('executed') is True:
+                return False
+            action = item.get('action') if isinstance(item.get('action'), dict) else item
+            if str(action.get('tool','')) not in OBSERVATION_TOOLS:
+                return False
+        return True
+
+    def _failed_predeclared_fact(self, progress: dict) -> bool:
+        """Evidence-backed FAILED exception; cannot use an unrelated error."""
+        if (str(progress.get('decision','')).upper() != 'COMPLETE'
+                or str(progress.get('outcome','')).upper() != 'FAILED'):
+            return False
+        contract = dict(getattr(self.progress_ledger, 'completion_contract', {}) or {})
+        supplied = progress.get('completion_contract')
+        if isinstance(supplied, dict):
+            contract['success'] = list(contract.get('success') or []) + list(supplied.get('success') or [])
+        allowed = set(str(x) for x in contract.get('success') or [])
+        allowed.update(item['condition_id'] for item in completion_condition_choices(
+            contract, 'success'))
+        refs = [str(ref) for ref in list(progress.get('evidence_refs') or [])]
+        if not refs or self._terminal_evidence_verdict(refs) != 'FAIL':
+            return False
+        return any((entry.get('tool') == 'observe_fact'
+            and entry.get('evidence_status','ACTIVE') == 'ACTIVE'
+            and str(entry.get('request_id',self.run_id)) == self.run_id
+            and str(entry.get('task_epoch',self.task_epoch)) == self.task_epoch
+            and str(entry.get('expectation_status','')).upper() == 'FAIL'
+            and str(entry.get('condition_id','')) in allowed)
+            for ref in refs for entry in [self.action_result_ledger.get(ref) or {}])
+
     def _bind_terminal_result_evidence(
         self,
         progress_action: dict,
@@ -2594,7 +2629,9 @@ class WebAgentProtocolLoop:
         held = {str(item.get('action_id', '')): item for item in self.pending_progress_repair_actions
                 if str(item.get('action_id', '')) not in self.action_ledger}
         submitted = [item for item in actions if item.get('tool') != 'report_progress']
-        if held and str(progress_actions[0].get('decision', '')).upper() != 'INTERRUPT':
+        if (held and str(progress_actions[0].get('decision', '')).upper() != 'INTERRUPT'
+                and not (self._failed_predeclared_fact(progress_actions[0])
+                         and self._read_only_unexecuted_repairs(held.values()))):
             by_id = {str(item.get('action_id', '')): item for item in submitted}
             if set(by_id) != set(held) or any(semantic_action_signature(by_id[key]) != semantic_action_signature(value) for key, value in held.items()):
                 return [], [{'marker':'[WEBAGENT_ACTION_REPAIR_REJECTED]',
@@ -2895,7 +2932,9 @@ class WebAgentProtocolLoop:
             return [], [diagnostic]
         decision = normalized_progress["decision"]
         outcome = normalized_progress["outcome"]
-        if decision == 'COMPLETE' and getattr(self,'deferred_action_repairs',{}):
+        if (decision == 'COMPLETE' and getattr(self,'deferred_action_repairs',{})
+                and not (self._failed_predeclared_fact(normalized_progress)
+                    and self._read_only_unexecuted_repairs(self.deferred_action_repairs.values()))):
             return [], [{'marker':'[WEBAGENT_ACTION_REPAIR_REQUIRED]', 'reason':'unresolved_action_repairs',
                 'detail':json.dumps(list(self.deferred_action_repairs.values()),ensure_ascii=False),
                 'suggestion':'終態正規化不會解除未執行操作；先補齊 deferred action，不能用 FAILED/PARTIAL 繞過。'}]
@@ -2924,7 +2963,10 @@ class WebAgentProtocolLoop:
                             or (typed.get('data') or {}).get('transaction_state') == 'OPEN'):
                         unsafe.append(ref)
                 if (request.get('blocking_action_id') not in refs or unsafe
-                        or getattr(self, 'deferred_action_repairs', {})):
+                        or not self._read_only_unexecuted_repairs(
+                            getattr(self, 'deferred_action_repairs', {}).values())
+                        or not self._read_only_unexecuted_repairs(
+                            getattr(self, 'pending_progress_repair_actions', []))):
                     return [], [{
                         'marker':'[WEBAGENT_CONTEXT_ACQUISITION_REQUIRED]',
                         'reason':'objective_unknown_interrupt_not_safe_or_unbound',
