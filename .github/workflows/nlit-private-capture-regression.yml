@@ -35,10 +35,12 @@ jobs:
         run: |
           python -m compileall -q .codex/nlit_private_capture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $tokens = $null; $errors = $null
-          $scriptPath = Join-Path (Get-Location) '.codex/nlit_private_capture/Invoke-NlitIsolated.ps1'
-          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$errors) | Out-Null
-          if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_.ErrorId }; exit 1 }
+          foreach ($scriptName in @('Invoke-NlitIsolated.ps1','preflight.ps1','Enable-NlitIsolatedPython.ps1')) {
+            $tokens = $null; $errors = $null
+            $scriptPath = Join-Path (Get-Location) ('.codex/nlit_private_capture/' + $scriptName)
+            [System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_.ErrorId }; exit 1 }
+          }
           $env:PYTHONPATH = 'source;.codex/nlit_private_capture'
           $env:SMARTAGENT_REMOTE_WORKER = '1'
           $env:SMARTAGENT_NLIT_CAPTURE_ENABLED = '1'
