@@ -1,0 +1,10 @@
+{
+  "task_id": "SA-NLIT-20261024",
+  "round": 2,
+  "writer": "ChatGPT",
+  "report_commit": "5f706a47559c121e4f0a30f515c1601267326490",
+  "ack_nonce": "NLIT-R2-ACK-4C910E",
+  "product_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "status": "ACKNOWLEDGED",
+  "evidence_kind": "ALLOWLIST_TECHNICAL_SUMMARY_NOT_EXACT_PLANNER_INPUT"
+}
