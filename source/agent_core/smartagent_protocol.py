@@ -165,6 +165,10 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"action_id": str, "write_id": str},
         "optional": {},
     },
+    "observe_fact": {
+        "required": {"path": str},
+        "optional": {"predicate": dict, "condition_id": str},
+    },
     "list_directory": {
         "required": {},
         "optional": {"path": str},
@@ -872,6 +876,17 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                     + json.dumps(invalid_indexes, separators=(",", ":"))
                 ),
                 suggestion=PROJECT_EVIDENCE_ACTION_CONTRACT,
+                block_index=block_index,
+            )
+
+    if tool == "observe_fact":
+        from .evidence_foundation import validate_observe_fact_action, EvidenceSpecError
+        try:
+            validate_observe_fact_action(call)
+        except EvidenceSpecError as exc:
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]", str(exc), tool=tool,
+                suggestion="observe_fact requires an absolute authorized path; predicate is predeclared, typed and condition-bound.",
                 block_index=block_index,
             )
 
