@@ -1072,7 +1072,16 @@ class WebAgentProtocolLoop:
                 # A completed checker may return a negative result. That is a
                 # verification failure, not failure to execute the checker.
                 execution='SUCCEEDED'
-            if isinstance(observed, dict) and observed.get('verification_status') in {'PASS','FAIL','UNVERIFIED','SPEC_INVALID'}:
+            from agent_core.tool_result_contract import completed_unknown_fact_observation
+            completed_unknown_fact = (tool == 'observe_fact' and
+                completed_unknown_fact_observation(tool_outcome, action.get('action_id', '')))
+            admitted_verification = {'PASS','FAIL','UNVERIFIED','SPEC_INVALID'}
+            if completed_unknown_fact:
+                # A finished canonical probe can prove the observation is
+                # indeterminate, not that a file is absent. Store that UNKNOWN
+                # explicitly without admitting UNKNOWN claims from other tools.
+                admitted_verification.add('UNKNOWN')
+            if isinstance(observed, dict) and observed.get('verification_status') in admitted_verification:
                 verification = observed['verification_status']
                 expectation = observed.get('expectation_status', '')
             elif execution != 'SUCCEEDED':
@@ -1498,13 +1507,27 @@ class WebAgentProtocolLoop:
             ledger_entry.get("verification_status", "UNKNOWN") or "UNKNOWN"
         ).upper()
         expectation_status = str(ledger_entry.get("expectation_status", "") or "").upper()
+        from agent_core.tool_result_contract import completed_unknown_fact_observation
+        completed_unknown_fact = (action.get('tool') == 'observe_fact'
+            and completed_unknown_fact_observation(producer, action_id)
+            and bool(condition_id) and action.get('predicate') is not None)
+        if completed_unknown_fact:
+            # Only Runtime-owned, actually attempted UNKNOWN observations are
+            # condition observations. A missing/rejected action is not one.
+            observed_status = "UNKNOWN"
+            expectation_status = "UNKNOWN"
         status = expectation_status if expectation_status in {"PASS", "FAIL", "SPEC_INVALID"} else observed_status
+        fact_data = (producer.get('data') or {}) if action.get('tool') == 'observe_fact' else {}
+        ledger_entry['observation_status'] = str(fact_data.get('observation_status', '') or '')
+        ledger_entry['comparison'] = str(fact_data.get('comparison', '') or '')
+        ledger_entry['execution_finality'] = str(fact_data.get('execution_finality', '') or '')
+        ledger_entry['expectation_status'] = expectation_status
         ledger_entry["condition_id"] = condition_id
         ledger_entry["verifies_action_id"] = verifies_action_id
         ledger_entry["effective_verification_status"] = status
         ledger_entry["effective_expectation_status"] = expectation_status
         ledger_entry.setdefault("verification_history", [])
-        if status in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}:
+        if status in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"} or completed_unknown_fact:
             verification_id = "VER-" + uuid.uuid4().hex[:12].upper()
             prior_id = str(target.get("effective_verification_id", "") or "") if target else ""
             record = {
@@ -1513,6 +1536,9 @@ class WebAgentProtocolLoop:
                 "status": status,
                 "observed_verification_status": observed_status,
                 "expectation_status": expectation_status,
+                "observation_status": ledger_entry["observation_status"],
+                "comparison": ledger_entry["comparison"],
+                "execution_finality": ledger_entry["execution_finality"],
                 "round": self.turn_id,
                 "condition_id": condition_id,
                 "supersedes_verification_id": prior_id,
@@ -1577,6 +1603,9 @@ class WebAgentProtocolLoop:
                 "verification_status": status,
                 "observed_verification_status": observed_status,
                 "expectation_status": expectation_status,
+                "observation_status": ledger_entry["observation_status"],
+                "comparison": ledger_entry["comparison"],
+                "execution_finality": ledger_entry["execution_finality"],
                 "effective_verification_status": status,
                 "execution_status": str(
                     ledger_entry.get("execution_status", "UNKNOWN") or "UNKNOWN"
@@ -1958,6 +1987,8 @@ class WebAgentProtocolLoop:
             "matched_condition_id": progress.matched_condition_id,
             "evidence_refs": refs,
             "evidence_verdict": self._terminal_evidence_verdict(
+                refs, matched_condition=progress.matched_condition),
+            "verification_status": self._effective_verification_status(
                 refs, matched_condition=progress.matched_condition),
         }
         signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
