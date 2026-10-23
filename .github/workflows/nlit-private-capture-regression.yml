@@ -1,0 +1,46 @@
+name: NLIT Private Capture Regression
+
+on:
+  push:
+    branches:
+      - fix/nlit-evidence-20261024-r1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture-and-evidence:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: source
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test private capture without browser, CDP or runtime
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = ".codex/nlit_private_capture"
+          python -m unittest discover -s .codex/nlit_private_capture -p test_private_capture.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install existing protocol test dependencies
+        run: python -m pip install -r install_smart_agent/requirements-webdirect.txt
+      - name: Existing evidence and startup regression tests
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "source"
+          python source/WebAgent/tests/validate_evidence_terminal_boundaries.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python source/WebAgent/tests/validate_runtime_evidence_foundation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python source/WebAgent/tests/validate_vpcs_expected_outcome.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python source/WebAgent/tests/validate_startup_protocol_flow.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "from agent_core.protocol_manifest import validate_protocol_manifest; r=validate_protocol_manifest('.'); print(r); assert r['hash_verification']=='PASS'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
