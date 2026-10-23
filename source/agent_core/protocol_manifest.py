@@ -36,6 +36,7 @@ CORE_FILES = (
     'source/agent_core/web_ui/file_config.py',
     'source/agent_core/web_ui/attachment_probe.py',
     'source/agent_core/session_protocol.py',
+    'source/agent_core/conversation_registry.py',
     'source/WebAgent/session.py',
     'install_smart_agent/launchers/adapterUI.bat',
     'install_smart_agent/launchers/writeSendBox.bat',
