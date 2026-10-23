@@ -21,8 +21,8 @@
     },
     {
       "path": "collaboration/SA-NLIT-20261024/round-003/v2_adapter_windows_runbook.md",
-      "commit": "5961d26b044ec6d0206a322663d6c939fdf645e9",
-      "status": "GITHUB_WRITTEN"
+      "commit": "785c5779266939e4bf76eb7c60c57243986a7192",
+      "status": "GITHUB_WRITTEN_AND_LOCAL_FIXTURE_HASH_GUARD_PINNED"
     },
     {
       "path": ".codex/nlit_private_capture/adapter_manifest.json",
@@ -66,5 +66,6 @@
     "17/17 historical next-Planner input traces remain missing; 15 terminal receipts are not PASS."
   ],
   "next_custodian": "Codex: local deployment and evidence only, following pinned v2 runbook; ChatGPT: analysis/product-source owner",
-  "safety_policy": "No main change or merge, no public local paths or browser identifiers, no revised acceptance semantics, no historical rerun"
+  "safety_policy": "No main change or merge, no public local paths or browser identifiers, no revised acceptance semantics, no historical rerun",
+  "observed_head_before_delivery_update": "785c5779266939e4bf76eb7c60c57243986a7192"
 }
