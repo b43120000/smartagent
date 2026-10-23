@@ -116,9 +116,11 @@ class TestPrivateCapture(unittest.TestCase):
         self.invoke(request="Some other unrelated production task.")
         self.assertEqual(self.traces(), [])
 
-    def test_turn_one_is_not_captured(self):
+    def test_turn_one_is_recorded_as_initial_planner_round(self):
         self.invoke(turn=1)
-        self.assertEqual(self.traces(), [])
+        [folder] = self.traces()
+        self.assertEqual(folder.name, "round-0001")
+        self.assertFalse((folder / "round-0002").exists())
 
     def test_no_user_turn_is_never_claimed_as_confirmed(self):
         self.invoke(client=FakeUnconfirmedBrowser())
