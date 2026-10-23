@@ -90,6 +90,7 @@ def ensure_webagent_session(
     )
     if session.parse_session_ready(response, session_id=decision.session_id, handshake_id=handshake_id, allow_smart_quotes=claude_quotes):
         state = session.armed_state(session_id=decision.session_id)
+        state["readiness_mode"] = "FULL_IDENTITY"
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
         print(f"[{display_name}] 協議附著成功。", flush=True)
         return {"mode": decision.action, "reason": decision.reason, "state": state}
