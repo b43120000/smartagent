@@ -146,6 +146,10 @@ try {
   return
  }
  if ($Mode -eq 'OpenBrowser') {
+  $ownedBefore=EdgeOwned $false
+  if (!$ownedBefore -and (Test-Path -LiteralPath $Profile)) {
+   Block 'ORPHANED_TEST_BROWSER_PROFILE_REQUIRES_MANUAL_TRIAGE'
+  }
   Preflight
   PythonGate 'open-browser'
   if (!(EdgeOwned $true)) { Block 'BROWSER_OWNERSHIP_FAILED' }
