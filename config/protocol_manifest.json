@@ -135,7 +135,7 @@
     "source/agent_core/tools.py": "f9a8beeab3792d353eb96c76a794778889e17ee1bf6082f52eb134902c207e29",
     "source/agent_core/typed_field_values.py": "afea71946afe45888279c54829c4f337b1b3d9914ce6aa1167a9c7353c9ce3e5",
     "source/agent_core/ui_calibration.py": "5069f742bd8027c67163cab80171316e583ad6b1ac1bcba6ddaab80c91be1e16",
-    "source/agent_core/web_runtime.py": "e7308f08b9760685a1f5559713292a969f309998471f5f3b89031dd22fc415de",
+    "source/agent_core/web_runtime.py": "cce7fa24b41d094a6a0dffa486868c211b956987f2b9f50f5cedcb9812017765",
     "source/agent_core/web_ui/__init__.py": "6ec6879a99313157a0400ee00dbf1ec598ef7b8c036094a9fc1adbce475ad69d",
     "source/agent_core/web_ui/attachment_probe.py": "fa112c12c8889d51f89408819173afcd310deba373f6d1f893af803fd4280b6b",
     "source/agent_core/web_ui/base_adapter.py": "6c797b0cf819e1d1127188ba7bcfa6add051524c15a6fa6f217eb64a9352e366",
