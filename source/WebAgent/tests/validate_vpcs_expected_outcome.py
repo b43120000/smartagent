@@ -125,6 +125,19 @@ def run():
         # signature, never an allowed exactly-once cache replay.
         from agent_core.action_loop_state import semantic_action_signature
         assert semantic_action_signature(action) != semantic_action_signature(unmarked)
+        from WebAgent.protocol_loop import action_signature
+        replay = WebAgentProtocolLoop(root, lambda *_args, **_kwargs: "")
+        replay.action_ledger["VPCS-STALE"] = {
+            "signature": action_signature(unmarked),
+            "result": ctx.execute(unmarked),
+            "action": dict(unmarked),
+        }
+        try:
+            replay._execute_action(action)
+        except RuntimeError as exc:
+            assert "action_id payload mismatch" in str(exc), exc
+        else:
+            raise AssertionError("A predeclared assertion was retroactively attached to a cached action")
 
         # Unsupported or underspecified expectations fail before execution.
         for invalid in (
