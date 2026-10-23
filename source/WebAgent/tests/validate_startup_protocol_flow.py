@@ -119,7 +119,11 @@ def run() -> dict:
         assert stages == ["協議初始化", "協議附著確認"]
 
     marker_only_results = {}
-    for short_reply in (PROTOCOL_READY_MARKER, f"[{PROTOCOL_READY_MARKER}]"):
+    for short_reply, accepted in (
+        (PROTOCOL_READY_MARKER, False),
+        (f"[{PROTOCOL_READY_MARKER}]", True),
+        (f"\n  [{PROTOCOL_READY_MARKER}]\n", True),
+    ):
         with tempfile.TemporaryDirectory(prefix="webagent-short-ready-") as temp:
             root = Path(temp)
 
@@ -128,19 +132,30 @@ def run() -> dict:
                 assert prompt.startswith(f"[{PROTOCOL_BOOTSTRAP_MARKER}]")
                 return short_reply
 
-            try:
-                ensure_webagent_session(
+            if accepted:
+                result = ensure_webagent_session(
                     workspace=str(root),
                     gpt_url="https://chatgpt.com/c/webagent-short-ready-test",
                     state_dir=root / "state",
                     send_prompt=short_send_prompt,
                     allow_scoped_marker_only_bootstrap=True,
                 )
-            except RuntimeError as exc:
-                assert "matching WEBAGENT protocol readiness" in str(exc)
+                assert result["state"]["armed"] is True
+                assert result["state"]["readiness_mode"] == "MARKER_ONLY"
             else:
-                raise AssertionError("marker-only reply bypassed mandatory identity")
-            marker_only_results[short_reply] = True
+                try:
+                    ensure_webagent_session(
+                        workspace=str(root),
+                        gpt_url="https://chatgpt.com/c/webagent-short-ready-test",
+                        state_dir=root / "state",
+                        send_prompt=short_send_prompt,
+                        allow_scoped_marker_only_bootstrap=True,
+                    )
+                except RuntimeError as exc:
+                    assert "matching WEBAGENT protocol readiness" in str(exc)
+                else:
+                    raise AssertionError("Bare unbracketed marker must not count")
+            marker_only_results[short_reply] = accepted
 
     with tempfile.TemporaryDirectory(prefix="webagent-short-ready-negative-") as temp:
         root = Path(temp)
@@ -161,23 +176,21 @@ def run() -> dict:
         else:
             raise AssertionError("marker-only compatibility accepted trailing text")
 
-    with tempfile.TemporaryDirectory(prefix="webagent-short-ready-default-off-") as temp:
+    # All Web UI providers now share the default exact-marker bootstrap
+    # compatibility, independently of the legacy flag.
+    with tempfile.TemporaryDirectory(prefix="webagent-short-ready-default-") as temp:
         root = Path(temp)
 
-        def default_off_send_prompt(prompt: str, *, stage: str, **_kwargs) -> str:
+        def default_send_prompt(prompt: str, *, stage: str, **_kwargs) -> str:
             return f"[{PROTOCOL_READY_MARKER}]"
 
-        try:
-            ensure_webagent_session(
-                workspace=str(root),
-                gpt_url="https://chatgpt.com/c/webagent-short-ready-default-off",
-                state_dir=root / "state",
-                send_prompt=default_off_send_prompt,
-            )
-        except RuntimeError as exc:
-            assert "matching WEBAGENT protocol readiness" in str(exc)
-        else:
-            raise AssertionError("marker-only compatibility was enabled implicitly")
+        accepted = ensure_webagent_session(
+            workspace=str(root),
+            gpt_url="https://chatgpt.com/c/webagent-short-ready-default",
+            state_dir=root / "state",
+            send_prompt=default_send_prompt,
+        )
+        assert accepted["state"]["readiness_mode"] == "MARKER_ONLY"
 
     return {
         "webagent_owned_sender": True,
@@ -185,9 +198,9 @@ def run() -> dict:
         "rate_delay_is_observable": True,
         "bootstrap_sent": True,
         "session_attach_sent": True,
-        "marker_only_rejected_even_with_legacy_flag": marker_only_results,
+        "marker_only_exact_bracketed_accepted": marker_only_results,
         "marker_only_with_extra_text_rejected": True,
-        "marker_only_default_is_fail_closed": True,
+        "marker_only_default_enabled_across_providers": True,
         "local_agent_started": False,
     }
 
