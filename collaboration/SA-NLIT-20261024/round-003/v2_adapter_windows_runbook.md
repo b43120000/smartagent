@@ -35,6 +35,8 @@ if ((Get-FileHash -LiteralPath $Adapter -Algorithm SHA256).Hash.ToLowerInvariant
 }
 if ((Get-Item -LiteralPath $Adapter).Length -ne 6660) { throw 'NLIT_V2_ADAPTER_BYTES_MISMATCH' }
 if (!(Test-Path -LiteralPath $TestAdapter -PathType Leaf)) { throw 'NLIT_V2_TEST_SCRIPT_MISSING' }
+if ((Get-FileHash -LiteralPath $TestAdapter -Algorithm SHA256).Hash.ToLowerInvariant() -ne '458b9434ee548a8d2a2b562c23d21f55ff57b67bd79dca188c645daa726a5631') { throw 'NLIT_V2_TEST_SHA256_MISMATCH' }
+if ((Get-Item -LiteralPath $TestAdapter).Length -ne 3557) { throw 'NLIT_V2_TEST_BYTES_MISMATCH' }
 # BeforeStart requires a fresh independent TestWorkspace and an unchanged five-file manifest.
 & (Join-Path $ObserverDir 'preflight.ps1') -ProductionInstall $ProductionInstall -ProductionWorkspace $ProductionWorkspace -TestInstall $TestInstall -TestWorkspace $TestWorkspace -ObserverDir $ObserverDir -PrivateCaptureRoot $PrivateRoot -ArtifactManifest (Join-Path $ObserverDir 'artifact_manifest.json') -GitExe $GitExe -Phase BeforeStart
 if (!$?) { throw 'NLIT_BEFORESTART_PREFLIGHT_FAILED' }
