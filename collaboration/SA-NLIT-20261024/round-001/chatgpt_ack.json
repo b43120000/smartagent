@@ -1,0 +1,41 @@
+{
+  "task_id": "SA-NLIT-20261024",
+  "round": 1,
+  "writer": "ChatGPT",
+  "report_commit": "ffd727e7ff4fc1a511a041064240efab29bcba5d",
+  "ack_nonce": "NLIT-R1-ACK-8F62D1",
+  "product_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "observed_classification": {
+    "PASS": [],
+    "FAIL": [
+      "IT22",
+      "IT23-B"
+    ],
+    "UNKNOWN": [
+      "ALL submitted requests: exact next-Planner input absent",
+      "Loaded process commit not independently attested"
+    ],
+    "UNREVIEWED": [
+      "IT07",
+      "IT08",
+      "IT09",
+      "IT10",
+      "IT11",
+      "IT12",
+      "IT13",
+      "IT14",
+      "IT15",
+      "IT16",
+      "IT17",
+      "IT18",
+      "IT20",
+      "IT21",
+      "IT23-A"
+    ],
+    "BLOCKED": [
+      "IT19"
+    ],
+    "note": "FAIL denotes recorded execution obstruction, not a concluded product RCA. Status axes overlap; do not add these counts as mutually exclusive cases."
+  },
+  "status": "ACKNOWLEDGED"
+}
