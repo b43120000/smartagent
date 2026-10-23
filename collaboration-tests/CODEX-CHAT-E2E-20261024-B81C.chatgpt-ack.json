@@ -1,0 +1,9 @@
+{
+  "test_id": "CODEX-CHAT-E2E-20261024-B81C",
+  "round": 2,
+  "acknowledged_report_commit": "89dd3ea6d7bf2943c996635592a8ea0a74795747",
+  "report_nonce": "CODEX-VERIFY-6C31",
+  "observed_verification_result": "PASS",
+  "observed_local_package_commit": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "status": "ACKNOWLEDGED"
+}
