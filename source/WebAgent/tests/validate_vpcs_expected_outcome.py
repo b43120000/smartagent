@@ -197,7 +197,9 @@ def validate_protocol_terminal():
         source = root / "sample.py"
         source.write_text("def answer():\n    return 42\n", encoding="utf-8")
         capsule = build_project_capsule(root)
-        seed = query(WebAgentToolContext(root), root, {
+        bootstrap_ctx = WebAgentToolContext(root)
+        bootstrap_ctx.begin_run("VPCS-EXPECTED-SEED", "Read test project " + str(root), [str(root)])
+        seed = query(bootstrap_ctx, root, {
             "operation": "get_file_metadata", "path": "sample.py",
         }, snapshot_id=capsule["snapshot_id"])
         ref = json.loads(seed)["results"][0]["context_ref"]
