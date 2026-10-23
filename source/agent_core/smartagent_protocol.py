@@ -52,7 +52,8 @@ Operation selection is deterministic:
 - Known symbol -> read_symbol, with path when known.
 - Known workspace-relative file path -> read_range; do not use search_text to ask for that file's content.
 - When read_range returns truncated=true and next_cursor, continue the same path from next_cursor until truncated=false.
-Before modifying an existing source/text file, obtain snapshot-bound read_range/read_symbol evidence and file_sha256. Do not use run_command, read_file, or attachments as a shortcut for project source evidence.
+Before modifying an existing source/text file, obtain snapshot-bound read_range/read_symbol evidence and file_sha256.
+Pinned negative tests may declare query_project expected_outcome={query_index:1,status:"ERROR",error:"project_snapshot_stale:<path>" or "context_ref_snapshot_mismatch"} plus condition_id matching completion_contract.success. Original ERROR must remain; only Runtime evaluates the expectation. Do not use run_command, read_file, or attachments as a shortcut for project source evidence.
 Edit-plan requirements:
 - exact_replace requires path, base_sha256, modification_intent, mode="exact_replace", exact old, and new.
 - whole_file is only for bounded small files and requires path, base_sha256, modification_intent, mode="whole_file", and complete content.
@@ -214,7 +215,8 @@ TOOL_ENVELOPE_SCHEMAS = {
     },
     "query_project": {
         "required": {"project_root": str, "queries": list},
-        "optional": {"workspace": str, "snapshot_id": str, "project_handle": str, "max_bytes": int},
+        "optional": {"workspace": str, "snapshot_id": str, "project_handle": str, "max_bytes": int,
+                     "expected_outcome": dict, "condition_id": str},
     },
     "inspect_project_ledger": {
         "required": {},
@@ -870,6 +872,18 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                     + json.dumps(invalid_indexes, separators=(",", ":"))
                 ),
                 suggestion=PROJECT_EVIDENCE_ACTION_CONTRACT,
+                block_index=block_index,
+            )
+
+    if tool == "query_project" and "expected_outcome" in call:
+        from .query_expected_outcome import validate_query_expected_outcome, QueryExpectationError
+        try:
+            validate_query_expected_outcome(call)
+        except QueryExpectationError as exc:
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]",
+                str(exc), tool=tool,
+                suggestion="負向查詢必須事前宣告 condition_id 與精確預期錯誤；僅支援單一 read_context_ref。",
                 block_index=block_index,
             )
 
