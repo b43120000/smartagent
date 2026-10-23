@@ -1,0 +1,28 @@
+{
+  "schema": "SMARTAGENT_NLIT_BUNDLED_PYTHON_ADAPTER_ARTIFACT_V1",
+  "task_id": "SA-NLIT-20261024",
+  "round": 2,
+  "product_head_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "issue": "Python 3.13.16 bundled _pth isolated=1 ignore_environment=1; PYTHONPATH does not provide observer import.",
+  "existing_five_artifacts_manifest_commit": "5c541bf467cad53c401aff2cdf25421b5a624f79",
+  "existing_five_artifacts_source_commit": "7e19ee5181712f38f8cf3aef6375e510bef15046",
+  "existing_five_artifacts_preserved": true,
+  "artifact": {
+    "file": "Enable-NlitIsolatedPython.ps1",
+    "path": ".codex/nlit_private_capture/Enable-NlitIsolatedPython.ps1",
+    "source_commit": "6d35134920a89da0232366e1d95b7151a9492be6",
+    "git_blob_sha": "d7114a7b5a09c68c2abe70baed08a42130887868",
+    "sha256": "ff0626d81527a6a6834f99bbafd0caa632a1cfcf5f26b62232021636cc083fba",
+    "bytes": 6310,
+    "encoding": "UTF-8 without BOM",
+    "line_endings": "exact source bytes"
+  },
+  "enabled_scope": "Only independent test installation .venv/Scripts/python313._pth",
+  "restore_policy": "Restore only after dedicated test processes stop; compare both original and enabled SHA256; leave audit backup for provenance.",
+  "validation_not_performed": [
+    "No execution against user Python yet",
+    "No live browser/worker",
+    "No original NL-IT rerun"
+  ],
+  "status": "PINNED_SOURCE_AWAITING_LOCAL_PROBE"
+}
