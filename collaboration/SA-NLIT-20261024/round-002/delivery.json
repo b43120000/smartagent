@@ -1,0 +1,203 @@
+{
+  "schema": "SA_NLIT_DELIVERY_V2",
+  "task_id": "SA-NLIT-20261024",
+  "round": 2,
+  "writer": "ChatGPT",
+  "purpose": "GitHub-readable correction: evidence conclusion, scoped private capture and IT19 isolation execution plan.",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "baseline_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "product_head_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "source_revision_notes": "No product implementation or manifest files changed since baseline. Branch contains collaboration documents and a Codex-authored optional local observer under .codex/nlit_private_capture, not validated as product code or deployed.",
+  "current_branch_head_at_authoring": "14e0dfb088c7e5ff5078d94a79b94a73252cd0ae",
+  "report_commit": "5f706a47559c121e4f0a30f515c1601267326490",
+  "ack_commit": "b6ab7c7874668180c97c5916a9f0af65fc8c85bd",
+  "ack_nonce": "NLIT-R2-ACK-4C910E",
+  "producer_evidence_commit": "a8a5fba86e8cc1e179488a0e461de547ffe97625",
+  "pr": null,
+  "main_modified": false,
+  "merge_performed": false,
+  "product_changes_applied": false,
+  "implemented_product_fixes": [],
+  "proposed_but_not_implemented_product_fixes": [],
+  "observer_code_status": "CODEX_ADDED_LOCAL_OPT_IN_OBSERVER_FILES; UNREVIEWED_FOR_FUNCTIONAL_COMPLETENESS, UNDEPLOYED, UNTESTED",
+  "observed_evidence": {
+    "submitted_original_requests": 17,
+    "selected_producer_records": 207,
+    "accepted_terminal_receipts": 15,
+    "exact_next_planner_inputs_observed": 0,
+    "exact_next_planner_input_classification": "17/17 PLANNER_DELIVERY_NOT_OBSERVED",
+    "exact_local_runtime_log_byte_hashes": "17 available, hashes listed in round-002/evidence_summary.json; private bytes remain local",
+    "loaded_process_sha": "UNVERIFIED",
+    "completed_historical_batch_will_not_rerun": true,
+    "it07": "Producer admission rejection expected_failure_not_bound_to_success_contract is supported; rejected observe_fact not executed. No predicate PASS.",
+    "it12": "Actual observe_fact verified file.exists equals true PASS; no observed Runtime rejection of fabricated reference because Planner did not submit it.",
+    "it17": "query_project returned project.query_status OK and snapshot_id with CONFIRMED structured observations; distinct Predicate PASS absent, verification UNKNOWN.",
+    "it18": "write_file performed verified internal readback, 25 bytes, SHA256 df104ba662411e698e8ff77d3e82a3a06ee755bb422113388e11bb44b4e021df; independent read_file denied EVIDENCE_ROUTE_REQUIRED; query_project read_range returned matching SHA and OK, but accepted terminal is COMPLETE/PARTIAL, NOT full success.",
+    "it19": "UNSENT_BLOCKED; same active workspace has shared writer transaction store with constructor cleanup/recovery, therefore no live test under this workspace.",
+    "it21": "Original file.exists expected=false against observed true resulted FACT_PREDICATE_FAILED/MISMATCH; no evidence later rebinding converted FAIL to PASS.",
+    "it22": "After two Runtime tools, observe_fact yielded UNKNOWN/REPLAN_REQUIRED; later composer pre-write failure. Never classify as no tools executed or as accepted terminal PASS.",
+    "it23b": "Composer unrelated draft unconfirmed; no producer tool-started or terminal acceptance for independent B request.",
+    "journal": "Only current QUARANTINED metadata remains; cannot bind its operation to IT22/IT23-B solely from timestamp or PID; no draft clear or retry.",
+    "action_results_caveat": "Some action_results_raw.txt files were persisted task snapshots, not the actual next-turn Planner tool input.",
+    "acceptance_verdict": "NOT_ACCEPTED_MORE_EVIDENCE_REQUIRED"
+  },
+  "confirmed_rca": [
+    "Runtime evidence distinguishes observed raw fact, bound Predicate, action loop, and terminal admission; success receipt is not E2E proof.",
+    "IT18 unsuccessful independent read_file is a different condition from write_file's own verified readback; the final accepted outcome remains PARTIAL.",
+    "IT19 workspace-global ChunkedWriteManager active-store constructor scans recovery/cleanup; test isolation cannot be claimed just by creating a new task ID.",
+    "IT22/IT23-B composer safeguards fail-closed; original helper root causes and draft ownership unproven."
+  ],
+  "hypotheses_or_environment_causes": [
+    "Composer helper prewrite timeout and unrelated draft ownership not established from current non-task-bound journal.",
+    "Running process build is not independently verified to be baseline SHA.",
+    "Whether the existing opt-in external collector is triggered by the exact production call path has not been locally demonstrated.",
+    "No request-scoped exact Planner input could be recovered for the 17 historical requests."
+  ],
+  "cannot_complete_in_this_chat": {
+    "reason": "GitHub source tools can inspect and commit files but cannot attach to the user-owned Windows runtime, directly verify browser submit/response, run the LOCAL_TEST supervisor or prove a separate writer workspace. Actual deployment/execution/collector proof must be performed by Codex in the local environment.",
+    "absence_of_live_run_is_not_failure_of_product": true,
+    "actual_e2e_acceptance": "NOT_RUN",
+    "user_action_required": "No new general authorization needed; only user-controlled safe cutover when existing Agent is idle, preserving active data and existing browser drafts."
+  },
+  "bounded_private_capture_plan": {
+    "owner_implementation": "ChatGPT",
+    "owner_local_deploy_and_evidence": "Codex",
+    "code_entrypoints": [
+      "WebAgentProtocolLoop._run_impl(request, request_id, task_id, task_epoch) establishes task identity",
+      "WebAgentProtocolLoop._with_commit + [WEBAGENT_TOOL_RESULTS] constructs next Planner prompt",
+      "WebAgentBrowserClient.ask forwards prompt and protocol_expected to scraper.ask",
+      "WebLLMScraper.ask prepares final transport prompt, validates composer, performs submit, confirms new user turn, returns correlated assistant response"
+    ],
+    "available_experimental_observer": [
+      ".codex/nlit_private_capture/private_capture.py",
+      ".codex/nlit_private_capture/sitecustomize.py"
+    ],
+    "observer_use_rule": "Not treated as working until a fresh isolated test proves the import hook, request gating, identity binding and actual input-stage/result correlation. A collector file existing in GitHub does NOT demonstrate successful capture.",
+    "privacy_safeguards": [
+      "Explicit opt-in per fresh request only via unguessable locally supplied nonce and bound request_id/task_id/task_epoch; no global prompt/response recording",
+      "Store original exact UTF-8 prompt/response bytes in a local-only ACL-restricted directory outside Git checkout, logs, artifact packages and sync roots; never upload bytes or absolute local paths",
+      "Fail closed on inconsistent request identity, target scope, duplicate round or unexpected transcript capture; do not change Planner text, tool decisions or browser submit/retry semantics",
+      "Capture failure => NOT_OBSERVED; a hash of a constructed prompt by itself is NOT submitted delivery proof",
+      "Do not emit raw prompts, drafts, user identifiers, browser URLs/CDP endpoints or response body to GitHub; publish only allowlisted hashes, byte sizes, event stage IDs and verification booleans"
+    ],
+    "minimal_private_record_fields": [
+      "run_id/request_id",
+      "task_id",
+      "task_epoch",
+      "round",
+      "result_id",
+      "stage",
+      "timestamp",
+      "prepared_final_prompt_sha256",
+      "prepared_final_prompt_bytes",
+      "composer_writer_verified",
+      "submit_click_returned",
+      "user_turn_bound",
+      "model_response_correlated",
+      "model_response_sha256",
+      "model_response_bytes",
+      "capture_complete"
+    ],
+    "evidence_state_machine": [
+      "PREPARED_NOT_SUBMITTED: write exact bytes at final transformed input boundary, hash locally",
+      "COMPOSER_VERIFIED: the production composer-integrity check succeeded; no send claim",
+      "SUBMIT_ATTEMPTED: production submit path invoked; still not delivery proof",
+      "USER_TURN_CONFIRMED: production page scope binds a fresh user turn to this request (mandatory)",
+      "RESPONSE_CORRELATED: same ask returned fresh model response; retain exact response only in private store",
+      "E2E_CAPTURE_PASS: every required stage, matching IDs, digest and request scope present; otherwise NOT_OBSERVED or FAILED"
+    ],
+    "runnable_test_interface": {
+      "mechanism": "An approved isolated LOCAL_TEST task through RemoteAgent.local_telegram_sender, with a separately started independent supervisor and dedicated workspace/installation; optional sidecar collector loaded only into authorized test worker.",
+      "example_command_template": "python -m RemoteAgent.local_telegram_sender --workspace <DEDICATED_WORKSPACE> --request \"<NEW_CASE_ID AND PRIVATE_OPT_IN_TOKEN>\" --timeout 900",
+      "note": "Template only: the sender's module ROOT is its own install and requires the dedicated supervisor already RUNNING. The same production supervisor with --workspace changed is insufficient to prove writer/process isolation.",
+      "bootstrap_requirements": [
+        "Codex confirms dedicated installation root is not the live Agent installation and has isolated runtime/localdata/logs/RemoteTaskQueue, private browser/automation ownership, and no active writer",
+        "Collector activation confined to dedicated worker; prove absent from unrelated requests and all earlier historical requests",
+        "Use new unique Task/Request/Case identifiers; no original IT07-IT23 reruns",
+        "Perform a safe, read-only new case with at least two genuine Planner turns and one canonical Runtime action",
+        "Verify stored final composer bytes, production-confirmed user-turn and corresponding response correlation; hash and report only allowlisted metadata"
+      ],
+      "external_collector_limitation": "A pure outside tailer of existing logs cannot prove exact model-visible prompt submission when product logs omit it. An opt-in observer at existing final-composer/confirmed-user-turn boundaries is required; do not infer from round ledger or reconstructed prompt."
+    }
+  },
+  "it19_isolated_entrypoint_plan": {
+    "owner_implementation": "ChatGPT",
+    "owner_local_execution": "Codex",
+    "hard_gate": "No IT19 request is sent until source/physical state root separation and no foreign open transaction are independently demonstrated.",
+    "why_workspace_override_alone_fails": "Local sender's --workspace is a task authorization parameter. Supervisor queue, worker root/state store and loaded process are separate; changing only --workspace in existing active supervisor does not isolate its process/journal/active writer.",
+    "requirements": [
+      "Use a separate TEST INSTALLATION of this branch and a dedicated, fresh authorized WORKSPACE; never point it to live workspace or .agents/chunked_writes",
+      "Use test-owned supervisor, queue, event store, logs, files and browser profile/process/conversation; do not attach to an in-use shared CDP tab or active production writer",
+      "Attest workspace path canonical disjointness and staging/transaction directory inode or Windows resolved volume/path disjointness before constructing tools",
+      "Verify no uncommitted or open transaction from production can be enumerated, recovered, expired, aborted or committed by test instance; verify separate root after startup and before dispatch",
+      "Execute through formal Gateway -> LOCAL_TEST Telegram receiver -> supervisor -> worker -> Planner -> Runtime, never invoke ChunkedWriteManager directly as a substitute for IT",
+      "Targeted test only with new case/request IDs and authorized fixture paths in dedicated TEST workspace",
+      "Collect before/after hashes and lists of writer manifests both test and production without ever mutating production root",
+      "If any binding or process isolation is uncertain, keep IT19 BLOCKED and write the failed preflight evidence"
+    ],
+    "status": "DESIGNED_NOT_PROVEN_OR_EXECUTED"
+  },
+  "deployment_and_regression_steps": [
+    "Do not touch in-use baseline process. Wait for supervised safe idle shutdown/cutover; preserve unrelated draft, untracked fixture and Codex private logs.",
+    "Codex verify current branch HEAD and checkout cleanliness. Any future product code edits performed and committed by ChatGPT only; Codex only deploy/test/capture.",
+    "For source edits, ChatGPT must use official manifest generation from exact code tree (agent_core.protocol_manifest.write_protocol_manifest + install_smart_agent/build_update_manifest.py); validate hash_verification=PASS, not BYPASSED.",
+    "Run existing evidence-terminal/runtime-foundation/vpcs/startup regressions on isolated installation; preserve stdout, stderr and exit codes.",
+    "Run new targeted isolated LOCAL_TEST cases for private input capture and IT19 state separation with fresh IDs, never historical batch restarts.",
+    "Codex report sanitized receipt/producer/collector evidence and test SHA in new GitHub handoff; private exact content stays local.",
+    "When Codex usage drops to about 5%, safely conclude local run, write private local checkpoint and resume once using next available replenishment window; do not abandon or restart partially executed requests."
+  ],
+  "verification_performed": [
+    "GitHub read exact 5f706a47559c121e4f0a30f515c1601267326490 evidence_summary.json with 17 per-request byte SHA entries",
+    "GitHub read exact a8a5fba86e8cc1e179488a0e461de547ffe97625 producer_events.json, 207 selected records",
+    "Read and verify existing round-002 ACK b6ab7c7874668180c97c5916a9f0af65fc8c85bd and round-001 delivery.json",
+    "GitHub source inspection of formal protocol loop, browser sender/composer and local sender/worker",
+    "Recognized concurrent Codex-authored .codex capture files but no claim of running them"
+  ],
+  "validation_not_performed": [
+    "No local Python tests, browser submission, real Planner response, process-binary SHA verification or IT19 workspace isolation execution performed by ChatGPT",
+    "No source modification/official regenerated manifest because product head unchanged",
+    "No original historical IT cases rerun; no unsafe transaction recovery or clearing foreign draft"
+  ],
+  "unresolved_blockers": [
+    "17/17 original exact post-tool Planner input captures unavailable, no retroactive PASS possible",
+    "New opt-in request-scoped capture remains unvalidated against real submit/user-turn and model response",
+    "Current workspace-global transaction writer store not proven safely isolated for IT19",
+    "Composer helper causality for IT22/IT23-B and QUARANTINED journal ownership remain UNKNOWN",
+    "IT18 original independent read_file rejected; overall accepted PARTIAL",
+    "Loaded process SHA UNVERIFIED"
+  ],
+  "next_owner": {
+    "product_rca_and_implementation": "ChatGPT",
+    "local_deployment_execution_and_evidence": "Codex"
+  },
+  "next_steps": [
+    {
+      "owner": "Codex",
+      "action": "On a dedicated stopped/isolated test installation verify observer hook loads only for fresh opt-in requests, correlation IDs and ACL private store; report code-path or test failure without modifying product source.",
+      "pass_condition": "Private real user-turn + response correlation and exact final-composer bytes from NEW request, not historical reconstruction."
+    },
+    {
+      "owner": "ChatGPT",
+      "action": "If observer cannot capture safely, revise bounded opt-in instrumentation in product entrypoints on this same branch and write required focused tests; preserve fail-closed and official manifest generation.",
+      "pass_condition": "Schema/unit/focused regression PASS before Codex redeployment."
+    },
+    {
+      "owner": "Codex",
+      "action": "Provision separate test installation and true workspace/supervisor/browser writer roots and run only isolated preflight for IT19; report whether ChunkedWriteManager can observe foreign manifests.",
+      "pass_condition": "Zero shared writer store paths/transactions and no production mutation."
+    },
+    {
+      "owner": "ChatGPT",
+      "action": "Fix any confirmed IT19 isolation launch or scope defect only if Codex preflight proves an actual product shortfall; keep shared production state fail-closed.",
+      "pass_condition": "Targeted isolation and existing evidence regressions PASS."
+    },
+    {
+      "owner": "Codex",
+      "action": "Execute only authorized NEW targeted case IDs after preflights, collect original private prompt/response evidence and sanitized machine-readable status.",
+      "pass_condition": "Each case joins Runtime tool, action loop, bound Planner input, model response and accepted terminal without illegal evidence promotion."
+    }
+  ],
+  "overall_status": "DOCUMENTED_NOT_ACCEPTED_PENDING_LOCAL_VERIFICATION",
+  "delivered_at": "2026-10-24",
+  "note": "Document is authoritative GitHub handoff. Chat reply is advisory; no requirement to read chat content-reference."
+}
