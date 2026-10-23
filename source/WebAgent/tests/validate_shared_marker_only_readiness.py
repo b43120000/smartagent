@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 
 from agent_core.session_protocol import SessionProtocol
+from agent_core.conversation_registry import ConversationRegistry
+from WebAgent.protocol import WEBAGENT_PROTOCOL_NAME
 from WebAgent.session import ensure_webagent_session
 
 
@@ -87,8 +89,16 @@ def check_all_providers() -> None:
             assert first["mode"] == "BOOTSTRAP", (provider, first)
             assert first["state"]["armed"] is True
             assert first["state"]["readiness_mode"] == "MARKER_ONLY"
+            registry = ConversationRegistry(root / "state" / "conversations.json")
+            registry.load()
+            persisted = registry.get_protocol_state(str(root), url, WEBAGENT_PROTOCOL_NAME)
+            assert persisted["readiness_mode"] == "MARKER_ONLY", (provider, persisted)
             second = ensure_webagent_session(**options)
             assert second["mode"] == "SESSION_ATTACH", (provider, second)
+            assert second["state"]["readiness_mode"] == "FULL_IDENTITY"
+            registry.load()
+            persisted = registry.get_protocol_state(str(root), url, WEBAGENT_PROTOCOL_NAME)
+            assert persisted["readiness_mode"] == "FULL_IDENTITY", (provider, persisted)
             assert calls == ["協議初始化", "協議附著確認"], (provider, calls)
 
             # A short session-attach marker must NOT satisfy its nonce.
