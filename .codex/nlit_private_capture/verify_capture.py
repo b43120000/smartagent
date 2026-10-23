@@ -75,6 +75,21 @@ def analyze_round(directory: Path) -> dict:
                     checks.append("POST_TOOL_RESULTS_ENVELOPE_MISSING")
             except OSError:
                 checks.append("POST_TOOL_INPUT_FILE_MISSING")
+        # Only a post-tool round with an actual model response, tied to the
+        # exact RESULT_ID and a production-confirmed user turn, can pass.
+        if not checks:
+            kinds = [e.get("kind") for e in evs]
+            ordered = (
+                "PREPARED_NOT_SUBMITTED",
+                "COMPOSER_WRITER_VERIFIED",
+                "SEND_READY_VERIFIED",
+                "SUBMIT_CLICK_RETURNED_NOT_DELIVERY_PROOF",
+                "USER_TURN_CONFIRMED_BY_PRODUCTION_SCRAPER",
+                "MODEL_RESPONSE_RETURNED",
+            )
+            positions = [kinds.index(k) for k in ordered]
+            if positions != sorted(positions) or len(positions) != len(set(positions)):
+                checks.append("STAGE_ORDER_INCONSISTENT")
         if not checks:
             status = "MODEL_RESPONSE_CORRELATED"
     except Exception:
@@ -92,12 +107,16 @@ def main() -> int:
     counts: dict[str, int] = {}
     failed_checks: dict[str, int] = {}
     next_turns = 0
+    corroborated_post_tool_turns = 0
     for d in sorted(root.glob("request-*/round-*")):
         if not d.is_dir():
             continue
-        if d.name >= "round-0002":
+        is_post_tool = d.name >= "round-0002"
+        if is_post_tool:
             next_turns += 1
         outcome = analyze_round(d)
+        if is_post_tool and outcome["status"] == "MODEL_RESPONSE_CORRELATED":
+            corroborated_post_tool_turns += 1
         counts[outcome["status"]] = counts.get(outcome["status"], 0) + 1
         for check in outcome["failed_checks"]:
             failed_checks[check] = failed_checks.get(check, 0) + 1
@@ -105,12 +124,13 @@ def main() -> int:
         "schema": "SMARTAGENT_NLIT_CAPTURE_AUDIT_V1",
         "total_capture_rounds": sum(counts.values()),
         "post_tool_rounds_inspected": next_turns,
+        "post_tool_rounds_correlated": corroborated_post_tool_turns,
         "round_status_counts": counts,
         "negative_gate_counts": failed_checks,
         "original_historical_case_pass_inferred": False,
         "semantic_predicate_pass_inferred": False,
     }, sort_keys=True))
-    return 0 if next_turns and counts.get("MODEL_RESPONSE_CORRELATED") else 2
+    return 0 if corroborated_post_tool_turns else 2
 
 
 if __name__ == "__main__":
