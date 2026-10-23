@@ -127,6 +127,25 @@ def check():
             "request_id": loop.run_id, "task_epoch": loop.task_epoch,
             "evidence_status": "ACTIVE"}
         assert loop._terminal_evidence_verdict([negative["action_id"]]) == "FAIL"
+        # A confirmed failure tied to a predeclared success condition is
+        # terminal evidence, even if an unrelated preflight read was rejected.
+        condition = "The observed file is absent"
+        from agent_core.task_progress import condition_id_for
+        bound_id = condition_id_for("success", condition)
+        loop.action_result_ledger[negative["action_id"]]["condition_id"] = bound_id
+        loop.progress_ledger = SimpleNamespace(completion_contract={"success": [condition]})
+        proposed = {"decision": "COMPLETE", "outcome": "FAILED",
+                    "evidence_refs": [negative["action_id"]]}
+        assert loop._failed_predeclared_fact(proposed)
+        assert loop._read_only_unexecuted_repairs([{
+            "action": {"tool": "list_directory", "path": str(root)},
+            "executed": False}])
+        assert not loop._read_only_unexecuted_repairs([{
+            "action": {"tool": "write_file", "path": str(root / "x")},
+            "executed": False}])
+        loop.action_result_ledger[negative["action_id"]]["condition_id"] = "UNBOUND"
+        assert not loop._failed_predeclared_fact(proposed)
+        loop.action_result_ledger[negative["action_id"]]["condition_id"] = bound_id
         loop.progress_ledger = SimpleNamespace(
             decision="COMPLETE", outcome="FAILED", matched_condition="failure",
             matched_condition_id="COND-FAILURE-TEST",
