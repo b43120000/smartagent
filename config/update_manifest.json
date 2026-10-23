@@ -274,7 +274,7 @@
     "source/WebAgent/tests/validate_unsafe_composer_verification_bypass.py": "1fabf627b08873286cb8557fd34e7cc466e84b729e738858c1d4ffccecae559e",
     "source/WebAgent/tests/validate_upload_matrix.py": "ea29889d8fc646a3c92a264e8974e2a4312fd45d639ae8a2c5af514f73603a49",
     "source/WebAgent/tests/validate_vpcs_context_reference.py": "dd55a6683f9706a7421b98cbd1371f528d7fccd36d1693d7666de26a696fb12e",
-    "source/WebAgent/tests/validate_vpcs_expected_outcome.py": "714340626f143545199549d37b293a066aad753912c890fbbeb5ca159c2a781f",
+    "source/WebAgent/tests/validate_vpcs_expected_outcome.py": "977ae88de33851bf12e4248860a6b906222376bfd56181b75d2c0bd0a8df4a72",
     "source/WebAgent/tests/validate_vpcs_runtime_pinned_snapshot.py": "6cd46c3f48898fc7a63f9d0ac6fc306c5d3e38b7beaff8e63de06300acf89e12",
     "source/WebAgent/tests/validate_web_search_matrix.py": "e4aeb0bee91fa3b3b942d7f821356a6f0dfa0027093f72ff0cd38b630e10375f",
     "source/WebAgent/tests/validate_web_ui_contract.py": "e942d9142b0218a6aba249429a2a20d628dadf89cb17d24bd33dd23ea506bc8b",
