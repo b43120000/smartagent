@@ -1225,6 +1225,11 @@ class WebAgentProtocolLoop:
         statuses = [self._entry_verification_status(item) for item in entries]
         statuses = [item for item in statuses if item in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}]
         if not statuses:
+            # A referenced UNKNOWN observation is authoritative uncertainty.
+            # An unrelated earlier last_verification_status=PASS must never
+            # mask its lack of confirmable evidence.
+            if entries or refs:
+                return "UNKNOWN"
             return str(self.tools.last_verification_status or "UNKNOWN").upper()
         if "FAIL" in statuses:
             return "FAIL"
@@ -2915,6 +2920,7 @@ class WebAgentProtocolLoop:
                         continue
                     typed = decode_result(str((self.action_ledger.get(ref) or {}).get('result', ''))) or {}
                     if (str(entry.get('execution_status','UNKNOWN')).upper() not in {'SUCCEEDED','REJECTED'}
+                            or entry.get('terminal_eligible') is False
                             or (typed.get('data') or {}).get('transaction_state') == 'OPEN'):
                         unsafe.append(ref)
                 if (request.get('blocking_action_id') not in refs or unsafe
@@ -3991,7 +3997,7 @@ class WebAgentProtocolLoop:
                     reason=self.progress_ledger.decision_reason,
                     root=self.progress_root,
                 )
-                self._accepted_terminal_receipt(runtime_state="INTERRUPTED")
+                terminal_receipt = self._accepted_terminal_receipt(runtime_state="INTERRUPTED")
                 from agent_core.request_ownership import release_active_request
                 release_active_request(self.run_id)
                 self._emit(
@@ -4002,7 +4008,8 @@ class WebAgentProtocolLoop:
                     matched_condition=self.progress_ledger.matched_condition,
                     evidence_refs=self.progress_ledger.evidence_refs,
                 )
-                raise RuntimeError("WebAgent 模型決策中斷：" + content)
+                raise RuntimeError("WebAgent 已接受中斷終態，receipt_id="
+                    + terminal_receipt["receipt_id"] + "：" + content)
 
             if len(actions) == 1 and actions[0].get("tool") == "final_response":
                 if float(self.progress_ledger.current_step) < float(self.progress_ledger.total_steps):
