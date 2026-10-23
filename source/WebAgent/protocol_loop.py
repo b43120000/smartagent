@@ -2869,6 +2869,35 @@ class WebAgentProtocolLoop:
             from agent_core.context_acquisition import context_interrupt_allowed
             capabilities = self._context_capabilities()
             request = normalized_progress.get('context_request') or {}
+            objective_unknown = next((item for item in capabilities.get('objective_blockers', [])
+                if item.get('reason') == 'FACT_OBSERVATION_INDETERMINATE'
+                and item.get('action_id') == request.get('blocking_action_id')), None)
+            if request.get('kind') == 'BLOCKED' and objective_unknown:
+                # This exception is solely for the exact, completed read.
+                # Never use UNKNOWN fact to conceal unresolved side effects.
+                refs = set(normalized_progress.get('evidence_refs') or [])
+                from agent_core.action_loop_state import MUTATION_TOOLS, DELIVERY_TOOLS
+                from agent_core.tool_result_contract import decode_result
+                unsafe = []
+                for ref, entry in self.action_result_ledger.items():
+                    if entry.get('evidence_status', 'ACTIVE') != 'ACTIVE':
+                        continue
+                    if entry.get('tool') not in MUTATION_TOOLS | DELIVERY_TOOLS:
+                        continue
+                    typed = decode_result(str((self.action_ledger.get(ref) or {}).get('result', ''))) or {}
+                    if (str(entry.get('execution_status','UNKNOWN')).upper() not in {'SUCCEEDED','REJECTED'}
+                            or (typed.get('data') or {}).get('transaction_state') == 'OPEN'):
+                        unsafe.append(ref)
+                if (request.get('blocking_action_id') not in refs or unsafe
+                        or getattr(self, 'deferred_action_repairs', {})):
+                    return [], [{
+                        'marker':'[WEBAGENT_CONTEXT_ACQUISITION_REQUIRED]',
+                        'reason':'objective_unknown_interrupt_not_safe_or_unbound',
+                        'detail':json.dumps({'blocking_action_id':request.get('blocking_action_id'),
+                            'evidence_refs':sorted(refs), 'unresolved_side_effects':unsafe},
+                            ensure_ascii=False, separators=(',', ':')),
+                        'suggestion':'必須引用同一 request 的 UNKNOWN observe_fact，且不得有未決副作用。',
+                    }]
             if not context_interrupt_allowed(request, capabilities):
                 self._emit('context_acquisition_required', request_id=self.run_id,
                            state='NOT_REQUESTED', context_request=request)
@@ -3090,6 +3119,23 @@ class WebAgentProtocolLoop:
                 "detail": f"model_outcome=FAILED;runtime_evidence={terminal_evidence_verdict}",
                 "suggestion": "FAILED 必須引用 execution_status=FAILED 或 verification_status=FAIL 的 action evidence；否則繼續取得客觀結果。",
             }]
+        if decision == 'COMPLETE' and outcome == 'FAILED':
+            # A wrong factual expectation is only an admissible FAILED reason
+            # if it was bound to a declared success condition before the probe.
+            cited = [(ref, self.action_result_ledger.get(ref) or {})
+                     for ref in evidence_refs]
+            if any(entry.get('tool') == 'observe_fact' for _, entry in cited):
+                supported = any(
+                    entry.get('tool') == 'observe_fact'
+                    and entry.get('evidence_status','ACTIVE') == 'ACTIVE'
+                    and str(entry.get('expectation_status','')).upper() == 'FAIL'
+                    and str(entry.get('condition_id','')) in allowed_expected_failure_conditions
+                    for _, entry in cited)
+                if not supported:
+                    return [], [{'marker':'[WEBAGENT_PROGRESS_REJECTED]',
+                        'reason':'failed_fact_unbound_to_declared_success_condition',
+                        'detail':'Referenced failed fact does not match a predeclared success condition.',
+                        'suggestion':'引用原始事前綁定的 observe_fact FAIL，不得用不相關工具失敗代替。'}]
         context = V8RequestContext(
             self.run_id,
             self.task_id or self.run_id,
