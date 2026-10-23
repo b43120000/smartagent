@@ -28,10 +28,10 @@
     {
       "file": "Invoke-NlitGate3.ps1",
       "path": ".codex/nlit_private_capture/Invoke-NlitGate3.ps1",
-      "source_commit": "5ff104c79c4782bea782c972908c051ad8735609",
-      "git_blob_sha": "a7b1106b4125b6bf201ff2c369562640b3af5ca5",
-      "sha256": "7cef5e60d2066f2e6d6cd91d3ea7af51607e9a87b0d95c97a1eaf65143226f8e",
-      "bytes": 10606,
+      "source_commit": "5ecb5fb2c352ca044fee69faf45949f56ac59b2e",
+      "git_blob_sha": "24b8feb87800071d891f3a59b0b82377b2d95f94",
+      "sha256": "cfd13eed0c42e15479cb9ce7ebf0d05046fa8b1962efe29fbd1db2be775e8d91",
+      "bytes": 18489,
       "encoding": "UTF-8 without BOM"
     }
   ],
