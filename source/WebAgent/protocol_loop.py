@@ -280,6 +280,7 @@ class WebAgentProtocolLoop:
         self.continuation_source = None
         self.continuation_mode = ""
         self.terminal_outcome = "UNKNOWN"
+        self.terminal_acceptance: dict = {}
         self.tools.configure_project_sync_transport(
             lambda prompt, attachments: self.planner(prompt, None, attachments)
         )
@@ -1618,6 +1619,17 @@ class WebAgentProtocolLoop:
                     required_action='commit_file_write',required_fields=['write_id'],supported_verify_actions=['commit_file_write'],
                     next_actions=[{'tool':'commit_file_write','write_id':write_id}])
                 break
+            from agent_core.tool_result_contract import completed_unknown_fact_observation
+            if completed_unknown_fact_observation(outcome, ref):
+                # This read has completed. An indeterminate fact is not an
+                # unfinished command, and MUST NOT demand a substitute tool.
+                requirement.update(reason_code='FACT_OBSERVATION_INDETERMINATE',
+                    blocking_action_id=ref, owner='runtime',
+                    missing_condition='已完成 observe_fact，但檔案存在性無法確認',
+                    required_action='', required_fields=[], supported_verify_actions=[],
+                    supported_verify_checks=[], next_actions=[],
+                    release_condition='NEW_CONFIRMABLE_FACT_OR_OBJECTIVE_INTERRUPTION')
+                break
             if status in {'QUEUED','RUNNING','PARTIAL','UNKNOWN'}:
                 requirement.update(reason_code=status+'_NOT_COMPLETE',blocking_action_id=ref,
                     missing_condition='等待實際交付確認' if status=='QUEUED' else '確認實際執行狀態；禁止盲目重送原 action',
@@ -1669,6 +1681,17 @@ class WebAgentProtocolLoop:
             }
             self.pending_verification_requirement = dict(requirement)
         detail = json.dumps(requirement, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if requirement.get('reason_code') == 'FACT_OBSERVATION_INDETERMINATE':
+            return {
+                "marker": "[WEBAGENT_VERIFICATION_REQUIRED]",
+                "reason": reason, "detail": detail,
+                "suggestion": (
+                    "observe_fact 已完成，但 Observation/Predicate 是 UNKNOWN，不能宣告 SUCCESS。"
+                    "若還有合法觀測方法，可提出不同的 Action；若原始任務禁止替代工具，"
+                    "可使用 decision=INTERRUPT、outcome=UNKNOWN、context_request.kind=BLOCKED，"
+                    "引用 blocking_action_id 和該 observe_fact evidence_ref，禁止盲目重送。"
+                ),
+            }
         return {
             "marker": "[WEBAGENT_VERIFICATION_REQUIRED]",
             "reason": reason,
@@ -3421,6 +3444,7 @@ class WebAgentProtocolLoop:
         )
         self.turn_id = 0
         self.terminal_outcome = "UNKNOWN"
+        self.terminal_acceptance = {}
         self.execution_state = "NOT_STARTED"
         self.terminal_candidate = {}
         last_no_action_decision_signature: str | None = None
