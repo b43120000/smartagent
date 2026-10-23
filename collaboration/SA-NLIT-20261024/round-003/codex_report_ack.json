@@ -1,0 +1,7 @@
+{
+  "task_id": "SA-NLIT-20261024",
+  "round": 3,
+  "writer": "ChatGPT",
+  "report_commit": "c481bb39fa55c60200d4f14a8e1dfef19fe5de3e",
+  "observed_handoff_status": "BLOCKED_MANUAL_LOGIN_NO_NEW_TASK_IN_FLIGHT"
+}
