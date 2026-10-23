@@ -19,19 +19,19 @@
     {
       "file": "nlit_gate3.py",
       "path": ".codex/nlit_private_capture/nlit_gate3.py",
-      "source_commit": "3a159d3aba8309c3273c4787872a79f396bbe8cc",
-      "git_blob_sha": "4c98606bb4c8c362a0ced63fe95f61fef821ac3a",
-      "sha256": "48858555201049c2cbfb35e5a560d44f10fed43cbe7b83cae6d52fc238230db7",
-      "bytes": 10206,
+      "source_commit": "1713e6d1ac0db3dec8170150c85d3f2b9743cd97",
+      "git_blob_sha": "dbd153f420958d726bfaeb6b82d19302418c2b0f",
+      "sha256": "951a5eda538daecdb9a80221f0b4f918b65a8a3579d942967f3aee7f69b8fdcd",
+      "bytes": 11685,
       "encoding": "UTF-8 without BOM"
     },
     {
       "file": "Invoke-NlitGate3.ps1",
       "path": ".codex/nlit_private_capture/Invoke-NlitGate3.ps1",
-      "source_commit": "617bfff229f9d82586fbd5bb2d8b1369255a5d69",
-      "git_blob_sha": "504570a16c425d93754c3c4d60ebb822e345e255",
-      "sha256": "e1315eeb7b1be6376d793b3bd126e1d50be2c7834683d6ff65832f0f9b717e65",
-      "bytes": 10444,
+      "source_commit": "5ff104c79c4782bea782c972908c051ad8735609",
+      "git_blob_sha": "a7b1106b4125b6bf201ff2c369562640b3af5ca5",
+      "sha256": "7cef5e60d2066f2e6d6cd91d3ea7af51607e9a87b0d95c97a1eaf65143226f8e",
+      "bytes": 10606,
       "encoding": "UTF-8 without BOM"
     }
   ],
