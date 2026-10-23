@@ -17,6 +17,39 @@ Scope: **do not change the tri-valued predicate evaluator** and do not merge thi
 4. A `COMPLETE/FAILED` terminal with referenced `observe_fact` evidence must cite FAIL from a probe bound to an accepted `completion_contract.success` condition before the probe. An unrelated action failure cannot impersonate a failed fact assertion. Existing generic FAILED terminal checks remain.
 5. Following an accepted terminal turn, Runtime emits `runtime_terminal_accepted` with a receipt: request/task/epoch, round, ACK, outcome, condition ID, evidence refs and evidence verdict. `COMPLETE/FAILED` keeps its red failed-verification outcome; a genuine accepted `INTERRUPT/UNKNOWN` is routed by Telegram as `TASK_INTERRUPTED`, not a generic tool/runtime crash. The receipt is an **admission receipt**, never proof of Predicate PASS.
 
+## Evidence Foundation stabilization (no Tri-One refactor)
+
+This change is limited to the existing Evidence Foundation implementation on
+`fix/evidence-terminal-boundary`. The older three-entrypoint unification work
+(Tri-One / LocalAgent / WebCopilot parity) is deliberately deferred. No new
+transport protocol, second terminal validator or separate reporting pipeline is
+introduced.
+
+**Condition Ledger:** A canonical, executed `observe_fact` whose immutable
+predicate yields UNKNOWN now records `status=UNKNOWN`,
+`verification_status=UNKNOWN`, `expectation_status=UNKNOWN`,
+`observation_status=UNKNOWN`, `comparison=NOT_EVALUATED`, and
+`execution_finality=COMPLETED`, including an UNKNOWN verification-history
+entry. The observation has no Boolean value, cannot satisfy SUCCESS, and does
+not borrow the previous `last_verification_status=PASS`. A rejected/nonexecuted
+or unrelated tool result must not manufacture an UNKNOWN predicate history.
+
+**Terminal Receipt display:** Runtime adds `verification_status` to its
+existing `SMARTAGENT_TERMINAL_ACCEPTANCE_V1` receipt. The current shared
+`render_task_reply` accepts an **optional** already-approved Receipt; its
+renderer only displays receipts matching the current task/request identity,
+with valid schema, admitted decision/outcome, and correctly shaped receipt ID.
+Telegram passes that receipt to the existing renderer for accepted FAILED and
+INTERRUPT/UNKNOWN outcomes and persists the Condition Ledger in its task-result
+payload. The adapter does not decide the predicate, manufacture a receipt, or
+upgrade a FAILED/UNKNOWN result to SUCCESS. No WebCopilot controller or
+LocalAgent integration changes are included in this stabilization.
+
+**Status semantics:** `execution_finality=COMPLETED` means the authorized
+probe ended; `Predicate UNKNOWN` means its observation did not establish the
+claim. `Terminal ACCEPTED` authorizes a legitimate FAILED/INTERRUPTED end; it
+is **not** an assertion of successful predicate verification.
+
 ## Test matrix
 
 | Case | Execution | Observation | Predicate | Allowed terminal |
@@ -39,7 +72,7 @@ python source/WebAgent/tests/validate_startup_protocol_flow.py
 python -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
 ```
 
-Expected new marker: `EVIDENCE_TERMINAL_BOUNDARIES_PASS`.
+Expected new marker: `EVIDENCE_TERMINAL_BOUNDARIES_PASS`. These tests now also cover the Condition Ledger's persisted UNKNOWN, stale PASS isolation, unexecuted UNKNOWN rejection, and accepted terminal-receipt presentation. A successful script run is not a substitute for real Telegram/WebCopilot E2E checks.
 
 ### Real Web UI / Telegram E2E before merge
 
