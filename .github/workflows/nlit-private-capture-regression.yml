@@ -26,10 +26,26 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHONPATH = ".codex/nlit_private_capture"
-          python -m unittest discover -s .codex/nlit_private_capture -p test_private_capture.py -v
+          python -m unittest discover -s .codex/nlit_private_capture -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install existing protocol test dependencies
         run: python -m pip install -r install_smart_agent/requirements-webdirect.txt
+      - name: Offline observer static checks and production import hook
+        shell: pwsh
+        run: |
+          python -m compileall -q .codex/nlit_private_capture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tokens = $null; $errors = $null
+          $scriptPath = Join-Path (Get-Location) '.codex/nlit_private_capture/Invoke-NlitIsolated.ps1'
+          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Host $_.ErrorId }; exit 1 }
+          $env:PYTHONPATH = 'source;.codex/nlit_private_capture'
+          $env:SMARTAGENT_REMOTE_WORKER = '1'
+          $env:SMARTAGENT_NLIT_CAPTURE_ENABLED = '1'
+          $env:SMARTAGENT_NLIT_PRIVATE_ACL_CONFIRMED = 'YES'
+          python -c "from WebAgent.protocol_loop import WebAgentProtocolLoop; from WebAgent.browser_client import WebAgentBrowserClient; from agent_core.web_runtime import WebLLMScraper; import private_capture; assert all(hasattr(m,'__wrapped__') for m in (WebAgentProtocolLoop._run_impl, WebAgentBrowserClient.ask, WebLLMScraper._write_prompt_to_composer, WebLLMScraper._log_stage)); print('NLIT_REAL_WORKER_HOOK_IMPORT_PASS')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Existing evidence and startup regression tests
         shell: pwsh
         run: |
