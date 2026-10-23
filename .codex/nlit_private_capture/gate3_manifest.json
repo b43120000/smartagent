@@ -19,10 +19,10 @@
     {
       "file": "nlit_gate3.py",
       "path": ".codex/nlit_private_capture/nlit_gate3.py",
-      "source_commit": "e68931443e3ce4b5da9102fb25aec005575e5f4b",
-      "git_blob_sha": "85d799e1cf933a8ce342da2fb2e01915f738b2b0",
-      "sha256": "6987d5e98a1d3d03f638b5ecc5b28eb289a00204b4fedfaf0ee75704dde4bf1f",
-      "bytes": 10011,
+      "source_commit": "3a159d3aba8309c3273c4787872a79f396bbe8cc",
+      "git_blob_sha": "4c98606bb4c8c362a0ced63fe95f61fef821ac3a",
+      "sha256": "48858555201049c2cbfb35e5a560d44f10fed43cbe7b83cae6d52fc238230db7",
+      "bytes": 10206,
       "encoding": "UTF-8 without BOM"
     },
     {
@@ -51,5 +51,9 @@
     "local_binding": "NOT_RUN",
     "local_supervisor": "NOT_RUN",
     "new_case": "NOT_RUN"
+  },
+  "runbook": {
+    "path": "collaboration/SA-NLIT-20261024/round-003/gate3_operator_runbook.md",
+    "source_commit": "94dba4ab80cf321b06e6ed4386b0df9acc4a00b3"
   }
 }
