@@ -136,8 +136,8 @@ def run():
         ):
             permitted, _ = validate_tool_envelope(invalid)
             assert not permitted, invalid
-            _, rejected = unpack(ctx.execute(invalid))
-            assert rejected["status"] == "REJECTED" and not rejected["executed"], rejected
+            rejected = decode_result(ctx.execute(invalid))
+            assert rejected and rejected["status"] == "REJECTED" and not rejected["executed"], rejected
 
         # Explicit sync is still the only publication point for the new
         # snapshot after a pinned stale read.
