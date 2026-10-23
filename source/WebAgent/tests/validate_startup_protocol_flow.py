@@ -74,6 +74,95 @@ def marker_reply(prompt: str) -> str:
     return f"[{marker}]\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n[/{marker}]"
 
 
+def validate_bootstrap_format_repair() -> None:
+    """Exercise real session admission with fake model replies (no browser)."""
+    from types import SimpleNamespace
+    from agent_core.session_protocol import SessionProtocol
+    from agent_core.web_runtime import WebLLMScraper
+
+    protocol = SessionProtocol("web_agent_direct", 9, "test-only protocol body")
+    session_id = "SES-BOOTSTRAP-CHECK"
+    initial_prompt = protocol.bootstrap_prompt(session_id=session_id)
+    repair_prompt = protocol.protocol_ready_repair_prompt(session_id=session_id)
+    fake_scraper = SimpleNamespace(web_file_capabilities=lambda: {
+        "schema": "WEB_UI_FILE_CAPABILITIES_V1", "provider": "chatgpt",
+        "browser_upload": True, "browser_download": True, "reason": "test",
+    })
+    for handshake in (initial_prompt, repair_prompt,
+                      protocol.session_attach_prompt(session_id=session_id)):
+        prepared = WebLLMScraper._web_file_planner_prompt(fake_scraper, handshake)
+        assert "[WEB_UI_FILE_CAPABILITIES]" in prepared
+        if "Reply with exactly this readiness block" in prepared:
+            assert prepared.index("[/WEB_UI_FILE_CAPABILITIES]") < prepared.rindex(
+                "Reply with exactly this readiness block"
+            )
+        else:
+            assert prepared.index("[/WEB_UI_FILE_CAPABILITIES]") < prepared.rindex(
+                "If the exact protocol_name/version/hash"
+            )
+        assert prepared.rstrip().endswith(handshake.rstrip().splitlines()[-1])
+    assert "turn_commit output rules do not apply" in initial_prompt
+    assert "Never stop after the opening marker" in initial_prompt
+
+    with tempfile.TemporaryDirectory(prefix="webagent-bootstrap-repair-") as root:
+        calls = []
+        expected_identity = {}
+        def malformed_then_repair(prompt: str, *, stage: str) -> str:
+            calls.append(stage)
+            if len(calls) == 1:
+                expected_identity.update(json.loads(prompt.splitlines()[1]))
+                return "[AGENT_PROTOCOL_READY]"
+            assert stage == "協議初始化格式修復"
+            assert "[AGENT_PROTOCOL_READINESS_REPAIR]" in prompt
+            assert json.dumps(expected_identity, separators=(",", ":")) in prompt
+            return ("[AGENT_PROTOCOL_READY]\n"
+                    + json.dumps(expected_identity, separators=(",", ":"))
+                    + "\n[/AGENT_PROTOCOL_READY]")
+        result = ensure_webagent_session(
+            workspace=root, gpt_url="https://chatgpt.com/c/bootstrap-repair-test",
+            state_dir=Path(root) / "state", send_prompt=malformed_then_repair,
+        )
+        assert result["state"]["armed"] is True
+        assert result["state"]["readiness_mode"] == "FULL_IDENTITY"
+        assert calls == ["協議初始化", "協議初始化格式修復"]
+
+    with tempfile.TemporaryDirectory(prefix="webagent-bootstrap-wrong-id-") as root:
+        calls = []
+        def incorrect_identity(prompt: str, *, stage: str) -> str:
+            calls.append(stage)
+            identity = json.loads(prompt.splitlines()[1])
+            identity["protocol_hash"] = "wrong"
+            return ("[AGENT_PROTOCOL_READY]\n"
+                    + json.dumps(identity, separators=(",", ":"))
+                    + "\n[/AGENT_PROTOCOL_READY]")
+        try:
+            ensure_webagent_session(
+                workspace=root, gpt_url="https://chatgpt.com/c/bootstrap-wrong-id",
+                state_dir=Path(root) / "state", send_prompt=incorrect_identity,
+            )
+        except RuntimeError as exc:
+            assert "READY_IDENTITY_MISMATCH" in str(exc)
+        else:
+            raise AssertionError("Wrong bootstrap identity was accepted")
+        assert calls == ["協議初始化"], calls
+
+    with tempfile.TemporaryDirectory(prefix="webagent-bootstrap-exhausted-") as root:
+        calls = []
+        def always_marker_only(prompt: str, *, stage: str) -> str:
+            calls.append(stage)
+            return "[AGENT_PROTOCOL_READY]"
+        try:
+            ensure_webagent_session(
+                workspace=root, gpt_url="https://chatgpt.com/c/bootstrap-exhausted",
+                state_dir=Path(root) / "state", send_prompt=always_marker_only,
+            )
+        except RuntimeError as exc:
+            assert "READY_CLOSING_MARKER_MISSING" in str(exc)
+        else:
+            raise AssertionError("Marker-only recovery bypassed readiness")
+        assert calls == ["協議初始化", "協議初始化格式修復"], calls
+
+
 def run() -> dict:
     fake_time = [0.0]
 
@@ -124,8 +213,11 @@ def run() -> dict:
             root = Path(temp)
 
             def short_send_prompt(prompt: str, *, stage: str, **_kwargs) -> str:
-                assert stage == "協議初始化"
-                assert prompt.startswith(f"[{PROTOCOL_BOOTSTRAP_MARKER}]")
+                if stage == "協議初始化":
+                    assert prompt.startswith(f"[{PROTOCOL_BOOTSTRAP_MARKER}]")
+                else:
+                    assert stage == "協議初始化格式修復"
+                    assert prompt.startswith("[AGENT_PROTOCOL_READINESS_REPAIR]")
                 return short_reply
 
             try:
@@ -178,6 +270,8 @@ def run() -> dict:
             assert "matching WEBAGENT protocol readiness" in str(exc)
         else:
             raise AssertionError("marker-only compatibility was enabled implicitly")
+
+    validate_bootstrap_format_repair()
 
     return {
         "webagent_owned_sender": True,

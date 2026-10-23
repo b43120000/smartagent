@@ -52,6 +52,42 @@ def ensure_webagent_session(
         full_identity_ready = session.parse_protocol_ready(
             response, session_id=decision.session_id, allow_smart_quotes=claude_quotes
         )
+        # The browser must finish its UI/response stability gate before this
+        # parser runs. Correct an incomplete FORMAT at most once, without
+        # replaying the full bootstrap or executing any task action.
+        # An otherwise complete identity mismatch is never retried.
+        if not full_identity_ready:
+            reason_code = session.protocol_ready_failure_reason(
+                response, session_id=decision.session_id,
+                allow_smart_quotes=claude_quotes,
+            )
+            print(
+                f"[{display_name}] Bootstrap readiness 未通過；"
+                f"reason={reason_code} response_chars={len(str(response or ''))}.",
+                flush=True,
+            )
+            if reason_code in {
+                "READY_MARKER_MISSING", "READY_CLOSING_MARKER_MISSING",
+                "READY_PAYLOAD_INVALID",
+            }:
+                repaired = send_prompt(
+                    session.protocol_ready_repair_prompt(session_id=decision.session_id),
+                    stage="協議初始化格式修復",
+                )
+                full_identity_ready = session.parse_protocol_ready(
+                    repaired, session_id=decision.session_id,
+                    allow_smart_quotes=claude_quotes,
+                )
+                if not full_identity_ready:
+                    reason_code = session.protocol_ready_failure_reason(
+                        repaired, session_id=decision.session_id,
+                        allow_smart_quotes=claude_quotes,
+                    )
+                    print(
+                        f"[{display_name}] Bootstrap readiness 格式修復仍未通過；"
+                        f"reason={reason_code} response_chars={len(str(repaired or ''))}.",
+                        flush=True,
+                    )
         # The legacy marker-only flag is retained for call compatibility only.
         # A complete matching identity is mandatory, including for Claude.
         if not full_identity_ready:
@@ -61,7 +97,10 @@ def ensure_webagent_session(
                 WEBAGENT_PROTOCOL_NAME,
                 session.failed_state(session_id=decision.session_id),
             )
-            raise RuntimeError("WebGPT 未回傳 matching WEBAGENT protocol readiness")
+            raise RuntimeError(
+                "WebGPT 未回傳 matching WEBAGENT protocol readiness; reason="
+                + reason_code
+            )
         state = session.armed_state(session_id=decision.session_id)
         state["readiness_mode"] = "FULL_IDENTITY"
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)

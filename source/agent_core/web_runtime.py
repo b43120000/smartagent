@@ -4818,7 +4818,19 @@ class WebLLMScraper:
 
     def _web_file_planner_prompt(self, prompt: str) -> str:
         from .web_ui.file_config import render_web_file_capabilities
-        return prompt + render_web_file_capabilities(self.web_file_capabilities())
+        capabilities = render_web_file_capabilities(self.web_file_capabilities())
+        # Put the capability note BEFORE a handshake's final output directive.
+        # Appending it after readiness caused a competing trailing instruction.
+        handshake_markers = (
+            "[AGENT_PROTOCOL_BOOTSTRAP]\n",
+            "[AGENT_SESSION_ATTACH]\n",
+            "[AGENT_PROTOCOL_READINESS_REPAIR]\n",
+        )
+        anchor = "\nDo not execute a tool and do not answer the end user in this handshake."
+        if prompt.startswith(handshake_markers) and anchor in prompt:
+            before, after = prompt.split(anchor, 1)
+            return before + capabilities + anchor + after
+        return prompt + capabilities
 
     def _require_web_file_transfer(self, direction: str) -> None:
         capabilities = self.web_file_capabilities()

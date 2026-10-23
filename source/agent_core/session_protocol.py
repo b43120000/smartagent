@@ -180,11 +180,56 @@ class SessionProtocol:
             "----- BEGIN CANONICAL PROTOCOL -----\n"
             f"{self.protocol_body}\n"
             "----- END CANONICAL PROTOCOL -----\n\n"
+            "INITIALIZATION HANDSHAKE ONLY: normal smartagent_tool, report_progress,\n"
+            "and turn_commit output rules do not apply to this one reply.\n"
             "Do not execute a tool and do not answer the end user in this handshake.\n"
+            "Copy the entire readiness block, including the JSON identity and closing\n"
+            "marker. Never stop after the opening marker.\n"
             "Reply with exactly this readiness block and nothing else:\n"
             f"{ready}\n"
             f"[/{PROTOCOL_BOOTSTRAP_MARKER}]"
         )
+
+    def protocol_ready_repair_prompt(self, *, session_id: str) -> str:
+        """Bounded format-only correction; cannot grant protocol readiness."""
+        identity = {
+            "protocol_name": self.identity.protocol_name,
+            "protocol_version": self.identity.protocol_version,
+            "protocol_hash": self.identity.protocol_hash,
+            "session_id": session_id,
+        }
+        return (
+            "[AGENT_PROTOCOL_READINESS_REPAIR]\n"
+            f"{json.dumps(identity, ensure_ascii=False, separators=(',', ':'))}\n"
+            "The canonical protocol was already sent in the preceding bootstrap.\n"
+            "This is one format-only correction, not a new task or a new session.\n"
+            "Do not execute a tool and do not answer the end user in this handshake.\n"
+            "Do not use smartagent_tool, report_progress, or turn_commit.\n"
+            "Reply with exactly this readiness block and nothing else:\n"
+            f"{_marker_block(PROTOCOL_READY_MARKER, identity)}\n"
+            "[/AGENT_PROTOCOL_READINESS_REPAIR]"
+        )
+
+    def protocol_ready_failure_reason(
+        self, text: str, *, session_id: str, allow_smart_quotes: bool = False,
+    ) -> str:
+        """Diagnostic only; parse_protocol_ready remains the sole acceptance gate."""
+        source = str(text or "")
+        if f"[{PROTOCOL_READY_MARKER}]" not in source:
+            return "READY_MARKER_MISSING"
+        if (f"[/{PROTOCOL_READY_MARKER}]" not in source
+                and not _allow_missing_readiness_closing_marker(self.debug_config_path)):
+            return "READY_CLOSING_MARKER_MISSING"
+        payload = _extract_marker_payload(
+            source, PROTOCOL_READY_MARKER, allow_smart_quotes=allow_smart_quotes,
+        )
+        if payload is None and _allow_missing_readiness_closing_marker(self.debug_config_path):
+            payload = _extract_unclosed_marker_payload(source, PROTOCOL_READY_MARKER)
+        if payload is None:
+            return "READY_PAYLOAD_INVALID"
+        if not self._matches(payload, session_id=session_id):
+            return "READY_IDENTITY_MISMATCH"
+        return "READY_VALID"
 
     def session_attach_prompt(self, *, session_id: str, handshake_id: str = '') -> str:
         payload = {
