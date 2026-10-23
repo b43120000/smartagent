@@ -64,6 +64,7 @@ CAPABILITY_GAPS = MappingProxyType({
 })
 
 _TOOL_PURPOSES = MappingProxyType({
+    "observe_fact": "Observe an exact authorized file.exists fact; compare a predeclared typed predicate without treating absence as failure.",
     "list_directory": "List entries at one exact authorized directory without widening scope.",
     "find_file": "Find matching files below one authorized root.",
     "read_file": "Read one targeted authorized file and return bounded content or a result reference.",
