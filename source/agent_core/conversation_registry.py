@@ -82,6 +82,11 @@ def _normalize_protocol_state(raw: object) -> dict:
         "last_protocol_check": float(raw.get("last_protocol_check", 0.0) or 0.0),
         "last_session_attach": float(raw.get("last_session_attach", 0.0) or 0.0),
     }
+    # A bare bootstrap acknowledgement cannot attest hash/session values.
+    # Preserve the reduced assurance level across process restarts.
+    readiness_mode = raw.get("readiness_mode", "")
+    if readiness_mode in {"FULL_IDENTITY", "MARKER_ONLY"}:
+        result["readiness_mode"] = readiness_mode
     return result
 
 
