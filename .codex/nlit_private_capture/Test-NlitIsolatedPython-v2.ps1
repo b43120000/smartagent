@@ -38,7 +38,7 @@ try {
 
   $output = @(& $adapter -Mode Probe -TestInstall $test -ProductionInstall $prod -ObserverDir $obs -BackupDir $backup 2>&1)
   Assert (($output -join "`n") -match 'NLIT_PYTHON_PTH_PROBE_PASS') 'probe_marker'
-  Assert ([Linq.Enumerable]::SequenceEqual([byte[]]([IO.File]::ReadAllBytes($pth)),[byte[]]$original)) 'probe_did_not_change_pth'
+  Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($pth)) -ceq [Convert]::ToBase64String($original)) 'probe_did_not_change_pth'
   Assert (-not (Test-Path -LiteralPath (Join-Path $backup 'nlit_python313._pth.original.bin'))) 'probe_no_backup'
   Assert (-not (Test-Path -LiteralPath (Join-Path $backup 'nlit_python313._pth.state.json'))) 'probe_no_state'
   Write-Output 'NLIT_STRICTMODE_FILEINFO_DIRECTORYINFO_PASS'
