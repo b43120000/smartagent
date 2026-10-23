@@ -1,0 +1,70 @@
+{
+  "schema": "SA_NLIT_ROUND_003_SOURCE_DELIVERY_V1",
+  "task_id": "SA-NLIT-20261024",
+  "handoff_ack": "HANDOFF-R2-7C6A",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "branch_base_head": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+  "observed_head_before_delivery": "6e79cec059793dc96d1a5511ad69c2bf41003302",
+  "product_test_baseline_head": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "changes": [
+    {
+      "path": "collaboration/SA-NLIT-20261024/round-003/chatgpt_handoff_ack.json",
+      "commit": "3cd94da51f452da70f2e3be9e815c476ad5446f5",
+      "status": "GITHUB_WRITTEN"
+    },
+    {
+      "path": ".codex/nlit_private_capture/Test-NlitIsolatedPython-v2.ps1",
+      "source_commit": "568ff5efac2204de2d20ec6dc21a7525c1a7da55",
+      "sha256": "458b9434ee548a8d2a2b562c23d21f55ff57b67bd79dca188c645daa726a5631",
+      "bytes": 3557,
+      "status": "SOURCE_CREATED_LOCAL_EXECUTION_NOT_RUN"
+    },
+    {
+      "path": "collaboration/SA-NLIT-20261024/round-003/v2_adapter_windows_runbook.md",
+      "commit": "5961d26b044ec6d0206a322663d6c939fdf645e9",
+      "status": "GITHUB_WRITTEN"
+    },
+    {
+      "path": ".codex/nlit_private_capture/adapter_manifest.json",
+      "commit": "6e79cec059793dc96d1a5511ad69c2bf41003302",
+      "status": "V2_SOURCE_PINNED"
+    }
+  ],
+  "adapter": {
+    "path": ".codex/nlit_private_capture/Enable-NlitIsolatedPython-v2.ps1",
+    "source_commit": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+    "git_blob_sha": "4fc49e324c95dca66de8b6e490b853f825e9b115",
+    "sha256": "487dd90395a21ffda8556fe50595018db84d35e42b970de64bb2080fdee9cb8f",
+    "bytes": 6660,
+    "changed_this_round": false
+  },
+  "source_review": {
+    "comparison_to_e5": "ahead 5 commits, no divergence at review point",
+    "source_file_changes": "4 paths: round-003 ACK/runbook, adapter_manifest, StrictMode regression fixture",
+    "original_five_artifacts_manifest": "PRESERVED",
+    "product_source": "UNCHANGED",
+    "main_write_or_merge": false,
+    "historical_IT_restart": false
+  },
+  "validation": {
+    "github_source_blob_and_size_check": "PASS",
+    "sha256_algorithm_selftest_abc_and_prior_v1_manifest": "PASS",
+    "Windows_StrictMode_fixture": "NOT_RUN",
+    "Windows_Probe": "NOT_RUN",
+    "Windows_Enable": "NOT_RUN",
+    "Windows_Verify": "NOT_RUN",
+    "fresh_worker_auto_hook": "NOT_RUN",
+    "independent_browser_supervisor_workspace_proof": "NOT_RUN",
+    "new_real_runtime_IT": "NOT_RUN",
+    "exact_next_planner_payload_real_delivery": "NOT_OBSERVED"
+  },
+  "blockers": [
+    "Codex-local Windows interpreter/PowerShell and independent browser/supervisor are not accessible from this GitHub source review; source existence is not a local PASS.",
+    "No tested worker auto-hook: block any new targeted IT until a real isolated worker auto-hook PASS is recorded.",
+    "IT19 stays UNSENT/BLOCKED until independent transaction store/writer/workspace/browser ownership are proven.",
+    "IT22 prewrite fail and IT23B unrelated draft provenance remain unresolved: do not clear or blindly retry.",
+    "17/17 historical next-Planner input traces remain missing; 15 terminal receipts are not PASS."
+  ],
+  "next_custodian": "Codex: local deployment and evidence only, following pinned v2 runbook; ChatGPT: analysis/product-source owner",
+  "safety_policy": "No main change or merge, no public local paths or browser identifiers, no revised acceptance semantics, no historical rerun"
+}
