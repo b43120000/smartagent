@@ -49,12 +49,17 @@ def ensure_webagent_session(
             session.bootstrap_prompt(session_id=decision.session_id),
             stage="協議初始化",
         )
-        full_identity_ready = session.parse_protocol_ready(
-            response, session_id=decision.session_id, allow_smart_quotes=claude_quotes
+        # Every Web UI provider (including user-configured Other URL) shares
+        # this bootstrap parser. Accept either a complete matching identity
+        # or an *entire reply* consisting of the single readiness marker.
+        # The latter proves only acknowledgement, not identity: preserve that
+        # distinction in the stored state and keep session-attach strict.
+        marker_only_ready = str(response or "").strip() == f"[{PROTOCOL_READY_MARKER}]"
+        ready = session.parse_protocol_ready(
+            response, session_id=decision.session_id,
+            allow_smart_quotes=claude_quotes, allow_marker_only=True,
         )
-        # The legacy marker-only flag is retained for call compatibility only.
-        # A complete matching identity is mandatory, including for Claude.
-        if not full_identity_ready:
+        if not ready:
             registry.set_protocol_state(
                 workspace,
                 gpt_url,
@@ -63,9 +68,12 @@ def ensure_webagent_session(
             )
             raise RuntimeError("WebGPT 未回傳 matching WEBAGENT protocol readiness")
         state = session.armed_state(session_id=decision.session_id)
-        state["readiness_mode"] = "FULL_IDENTITY"
+        state["readiness_mode"] = "MARKER_ONLY" if marker_only_ready else "FULL_IDENTITY"
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
-        print(f"[{display_name}] 協議初始化成功，ChatGPT 已回傳 matching readiness。", flush=True)
+        print(
+            f"[{display_name}] 協議初始化成功，readiness_mode={state['readiness_mode']}。",
+            flush=True,
+        )
         return {"mode": BOOTSTRAP, "reason": reason, "state": state}
 
     if decision.action == BOOTSTRAP:
