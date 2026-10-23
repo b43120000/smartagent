@@ -164,6 +164,30 @@ def command_open_browser(args):
         endpoint, created = ensure_agent_browser(pw, headless=False)
         if endpoint != "http://127.0.0.1:12815":
             die("BROWSER_ENDPOINT_NOT_OFFICIAL_EDGE5")
+        # Race guard: re-attest the actual listener *before* touching CDP.
+        # The PowerShell controller checks both before and after this method.
+        import subprocess
+        ps_guard = (
+            "$ErrorActionPreference='Stop'; "
+            "$ls=@(Get-NetTCPConnection -State Listen -LocalPort 12815 -ErrorAction Stop); "
+            "if($ls.Count -lt 1){exit 21}; "
+            "$ids=@($ls | Select-Object -ExpandProperty OwningProcess -Unique); "
+            "if($ids.Count -ne 1){exit 22}; "
+            "$proc=Get-CimInstance Win32_Process -Filter ('ProcessId='+[int]$ids[0]); "
+            "if($null -eq $proc -or $proc.Name -ine 'msedge.exe'){exit 23}; "
+            "$cmd=[string]$proc.CommandLine; "
+            "$profile=$env:NLIT_GATE3_EXPECTED_PROFILE; "
+            "if($cmd.IndexOf($profile,[StringComparison]::OrdinalIgnoreCase) -lt 0 "
+            "-or $cmd.IndexOf('--remote-debugging-port=12815',[StringComparison]::OrdinalIgnoreCase) -lt 0){exit 24}; "
+            "foreach($entry in $ls){if($entry.LocalAddress -notin @('127.0.0.1','::1')){exit 25}}"
+        )
+        child_env = dict(os.environ, NLIT_GATE3_EXPECTED_PROFILE=str(profile))
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_guard],
+            capture_output=True, text=True, timeout=15, env=child_env, check=False,
+        )
+        if result.returncode != 0:
+            die("EDGE5_PREATTACH_OWNER_NOT_VERIFIED")
         browser = pw.chromium.connect_over_cdp(endpoint)
         if not browser.contexts:
             die("NEW_EDGE5_CONTEXT_MISSING")
