@@ -1174,6 +1174,21 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
     p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
     tool = str(tool_call.get('tool', ''))
+    # Validate negative assertions before any query, including direct calls
+    # that bypass the WebAgent envelope validator. A malformed expectation
+    # must never execute and cannot be retroactively attached to a result.
+    expected_outcome = None
+    if tool == "query_project" and "expected_outcome" in tool_call:
+        from .query_expected_outcome import validate_query_expected_outcome, QueryExpectationError
+        try:
+            expected_outcome = validate_query_expected_outcome(tool_call)
+        except QueryExpectationError as exc:
+            from .tool_result_contract import encode_result
+            return encode_result(
+                'REJECTED', 'QUERY_EXPECTATION_INVALID', tool=tool, executed=False,
+                detail=str(exc),
+                data={'expectation_status':'SPEC_INVALID','terminal_eligible':False},
+            )
     if 'field_refs' in tool_call:
         from .tool_result_contract import encode_result
         return encode_result('REJECTED', 'UNEXPANDED_REQUEST_CONTEXT_REFERENCE',
@@ -1229,7 +1244,9 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         if (original_tool != tool and not alias) or stale_action or stale_request:
             status, reason, executed, data = 'UNKNOWN', 'RESULT_IDENTITY_MISMATCH', False, {}
     elif tool in P1_TOOLS:
-        status, reason, executed, data = structured_outcome(tool, business_payload(result))
+        status, reason, executed, data = structured_outcome(
+            tool, business_payload(result), expected_outcome=expected_outcome,
+        )
     else:
         text = str(result)
         data = {}

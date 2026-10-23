@@ -2,7 +2,7 @@
 
 The single development and execution checkout is `C:\Users\user\Desktop\remoteagent\release\SmartAgentv2_1`.
 Its canonical remote is `https://github.com/b43120000/smartagent.git`; use `main` for the integrated runtime.
-`feat/versioned-project-context` remains a separate, unmerged feature branch.
+The VPCS MVP is integrated into `main` through PR #7. After verifying the merged `main` locally, use its commit as the baseline for `feat/runtime-evidence-foundation`.
 
 The former publication checkout `E:\card\release\SmartAgentv2` is archived. Its original files and branches remain available locally, but its push URL is disabled. This workflow supersedes the older two-checkout transfer plans in this directory.
 

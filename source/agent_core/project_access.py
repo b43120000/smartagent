@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 from .project_artifact_policy import SOURCE_CODE, TEXT_DATA_CONFIG
+from .project_context_ref import make_context_ref, parse_context_ref, ContextReferenceError
 from .project_ledger import append_project_event, changed_files_between
 from .project_sync import (
     inspect_project_scope,
@@ -30,7 +31,7 @@ MAX_FILE_READ_BYTES = 10 * 1024 * 1024
 MAX_SEARCH_SCAN_BYTES = 64 * 1024 * 1024
 SUPPORTED_QUERY_OPERATIONS = {
     "list_tree", "search_text", "read_range", "read_symbol",
-    "find_references", "get_build_configuration", "get_file_metadata",
+    "find_references", "get_build_configuration", "get_file_metadata", "read_context_ref",
 }
 VENDOR_PARTS = {"third_party", "third-party", "vendor", "vendors", "external", "externals"}
 IMPORTANT_NAMES = {
@@ -150,7 +151,7 @@ def build_project_capsule(workspace: str | Path) -> dict:
             "default_response_bytes": DEFAULT_QUERY_MAX_BYTES,
             "operations": [
                 "list_tree", "search_text", "read_range", "read_symbol",
-                "find_references", "get_build_configuration", "get_file_metadata",
+                "find_references", "get_build_configuration", "get_file_metadata", "read_context_ref",
             ],
             "queries_must_be_objects": True,
             "operation_selection": {
@@ -158,6 +159,7 @@ def build_project_capsule(workspace: str | Path) -> dict:
                 "known_symbol": "read_symbol",
                 "known_workspace_relative_path": "read_range",
             },
+            "context_ref": "use get_file_metadata to obtain a version-bound context_ref; resolve with read_context_ref",
             "pagination": "continue read_range on the same path from next_cursor until truncated=false",
             "source_edit_prerequisite": (
                 "obtain snapshot-bound read_range/read_symbol evidence and file_sha256 "
@@ -430,12 +432,40 @@ def _build_configuration(root: Path, snapshot: Mapping[str, object], query: Mapp
     return {"operation": "get_build_configuration", "status": "OK", "items": items, "truncated": len(snapshot.get("build_files", []) or []) > limit}
 
 
-def _metadata(snapshot: Mapping[str, object], query: Mapping[str, object]) -> dict:
+def _metadata(root: Path, snapshot: Mapping[str, object], query: Mapping[str, object]) -> dict:
     rel = _relative_path(query.get("path", ""))
     record = _records_by_path(snapshot).get(rel)
     if not record:
         raise ProjectAccessError(f"project_query_file_not_indexed:{rel}")
-    return {"operation": "get_file_metadata", "status": "OK", "file": record}
+    # Only issue references for readable text. Metadata alone is not an
+    # authorization grant to retrieve arbitrary project artifacts.
+    result = {"operation": "get_file_metadata", "status": "OK", "file": record}
+    if record.get("artifact_class") in {SOURCE_CODE, TEXT_DATA_CONFIG} and int(record.get("size_bytes", 0) or 0) <= MAX_FILE_READ_BYTES:
+        result["context_ref"] = make_context_ref(
+            _project_handle(root), str(snapshot["snapshot_id"]), rel, str(record["sha256"])
+        )
+    return result
+
+
+def _read_context_ref(root: Path, snapshot: Mapping[str, object], query: Mapping[str, object]) -> dict:
+    try:
+        rel, expected_hash = parse_context_ref(
+            str(query.get("context_ref", "") or ""),
+            _project_handle(root), str(snapshot["snapshot_id"]),
+        )
+    except ContextReferenceError as exc:
+        raise ProjectAccessError(str(exc)) from exc
+    record = _records_by_path(snapshot).get(rel)
+    if not record or str(record.get("sha256", "")) != expected_hash:
+        raise ProjectAccessError(f"context_ref_stale:{rel}")
+    result = _range_result(root, snapshot, {
+        "path": rel,
+        "start_line": query.get("start_line", 1),
+        "end_line": query.get("end_line", 120),
+    })
+    result["operation"] = "read_context_ref"
+    result["context_ref"] = str(query["context_ref"])
+    return result
 
 
 def _execute_query(root: Path, snapshot: Mapping[str, object], query: Mapping[str, object]) -> dict:
@@ -453,7 +483,9 @@ def _execute_query(root: Path, snapshot: Mapping[str, object], query: Mapping[st
     if operation == "get_build_configuration":
         return _build_configuration(root, snapshot, query)
     if operation == "get_file_metadata":
-        return _metadata(snapshot, query)
+        return _metadata(root, snapshot, query)
+    if operation == "read_context_ref":
+        return _read_context_ref(root, snapshot, query)
     raise ProjectAccessError(f"project_query_operation_unsupported:{operation}")
 
 
@@ -569,6 +601,13 @@ def query_project_with_runtime_index(
     """Execute against an exact-root, Runtime-owned INDEX_ONLY context."""
     root = Path(workspace).expanduser().resolve()
     normalized, shorthand_count = normalize_project_queries(queries)
+    # A context_ref is an immutable snapshot-bound locator. Its query must not
+    # silently switch snapshots after detecting a stale file. Treat a batch
+    # containing such a read atomically: callers can send unpinned discovery
+    # queries separately if they want automatic index recovery.
+    pinned_snapshot_query = any(
+        query["operation"] == "read_context_ref" for query in normalized
+    )
     requested_snapshot = str(requested_snapshot_id or "")
     requested_handle = str(requested_project_handle or "")
     current = load_current_project_snapshot(root)
@@ -590,7 +629,8 @@ def query_project_with_runtime_index(
         request_id=request_id,
         action_id=action_id,
     )
-    if _recoverable_snapshot_result(payload):
+    stale_index = _recoverable_snapshot_result(payload)
+    if stale_index and not pinned_snapshot_query:
         capsule = build_project_capsule(root)
         effective_snapshot = str(capsule["snapshot_id"])
         recovery = "INDEX_REBUILT_ONCE"
@@ -607,6 +647,11 @@ def query_project_with_runtime_index(
             payload["status"] = "INCOMPLETE"
             payload["error"] = "project_access_index_rebuild_exhausted"
             recovery = "INDEX_REBUILD_EXHAUSTED"
+    elif stale_index and pinned_snapshot_query:
+        # Preserve the original project_snapshot_stale diagnostic and the
+        # current snapshot. The planner must explicitly sync and request a
+        # fresh reference rather than replay an old pointer on new content.
+        recovery = "PINNED_SNAPSHOT_NO_REBUILD"
 
     payload["project_root"] = str(root)
     payload["index_context"] = {
@@ -617,6 +662,7 @@ def query_project_with_runtime_index(
         "requested_project_handle": requested_handle,
         "effective_project_handle": _project_handle(root),
         "model_identity_authoritative": False,
+        "snapshot_policy": "PINNED" if pinned_snapshot_query else "AUTO_RECOVER",
         "recovery_action": recovery,
         "normalized_query_count": shorthand_count,
     }

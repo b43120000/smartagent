@@ -2874,7 +2874,8 @@ class WebAgentProtocolLoop:
             str(item).strip() for item in success_conditions if str(item).strip()
         } | success_condition_ids
         for action in operational:
-            if action.get("expected_failure") is None and action.get('expected_verification') is None:
+            if (action.get("expected_failure") is None and action.get('expected_verification') is None
+                and action.get("expected_outcome") is None):
                 continue
             declared_condition = str(action.get("condition_id", "") or "").strip()
             success_criteria = str(action.get("success_criteria", "") or "").strip()
@@ -2893,7 +2894,7 @@ class WebAgentProtocolLoop:
                         "allowed_success_condition_ids": sorted(success_condition_ids),
                     }, ensure_ascii=False, separators=(",", ":")),
                     "suggestion": (
-                        "expected_failure／expected_verification 必須在執行前綁定 completion_contract.success 中的精確條件文字，"
+                        "expected_failure／expected_verification／expected_outcome 必須在執行前綁定 completion_contract.success 中的精確條件文字，"
                         "或其 Runtime condition_id；不得用事後新增或不相干條件包裝一般失敗。"
                     ),
                 }]
