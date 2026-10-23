@@ -1,0 +1,45 @@
+{
+  "schema": "SMARTAGENT_NLIT_OBSERVER_ARTIFACTS_V1",
+  "task_id": "SA-NLIT-20261024",
+  "round": 2,
+  "product_baseline_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "observer_source_commit": "7e19ee5181712f38f8cf3aef6375e510bef15046",
+  "offline_install_rule": "Store ONLY these downloaded files plus this manifest in a private test observer directory outside both source checkouts and workspaces. Exact UTF-8 bytes/no BOM, verify SHA256, never reinterpret GitHub blob SHA as SHA256.",
+  "artifacts": [
+    {
+      "file": "private_capture.py",
+      "github_path": ".codex/nlit_private_capture/private_capture.py",
+      "sha256": "d536e8a63ff65db8f5570d1d0ff4b0646e0df7a032170a7d43d724de5b54ce44",
+      "bytes": 9563,
+      "github_blob_sha": "f79b8e926f647a06b5383c6f678f426c84128f1f"
+    },
+    {
+      "file": "sitecustomize.py",
+      "github_path": ".codex/nlit_private_capture/sitecustomize.py",
+      "sha256": "7ccb8da5424af5a1f525a8e60c502b6b6196def90b9a5e07b48e4d9cfb59cc00",
+      "bytes": 1539,
+      "github_blob_sha": "e9a1c73cffcc795d9476726819045725bfbaeb8c"
+    },
+    {
+      "file": "test_private_capture.py",
+      "github_path": ".codex/nlit_private_capture/test_private_capture.py",
+      "sha256": "d7579fa9b8d4b373b12e8ba18e8278eb3abbe4971a526e3157a360b95fb5822a",
+      "bytes": 5728,
+      "github_blob_sha": "e21497e71ef90d1a84e354416d5043fff2bc09c0"
+    },
+    {
+      "file": "verify_capture.py",
+      "github_path": ".codex/nlit_private_capture/verify_capture.py",
+      "sha256": "a529e5c3a227a067f0f443ae5d84e0fc5fe12420dbf2365bca7ee960a3f09df0",
+      "bytes": 5995,
+      "github_blob_sha": "84bd26ef4f502e31c3063f816186a62d2fa8a25d"
+    },
+    {
+      "file": "preflight.ps1",
+      "github_path": ".codex/nlit_private_capture/preflight.ps1",
+      "sha256": "3fd9f21279b4b09482cff29463c1095c467760f3b22eb7711c2cef0861710d03",
+      "bytes": 6923,
+      "github_blob_sha": "cbe3f8e0ec945140a07a00a75d959ba5abcc1dcc"
+    }
+  ]
+}
