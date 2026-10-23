@@ -561,6 +561,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         )
         terminal_payload["plan_id"] = plan_id
         terminal_payload['task_outcome'] = loop.terminal_outcome
+        terminal_payload['terminal_acceptance'] = dict(getattr(loop, 'terminal_acceptance', {}) or {})
         terminal_payload['summary'] = render_task_reply(
             original_request=loop.task_request, base=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
             conclusion=terminal_payload['summary'], task_id=task.task_id, request_id=task.request_id,
@@ -587,6 +588,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "outbound_artifacts": terminal_payload["artifacts"],
                 "artifact_rejections": terminal_payload["artifact_rejections"],
                 "task_outcome": loop.terminal_outcome,
+                "terminal_acceptance": dict(getattr(loop, 'terminal_acceptance', {}) or {}),
                 "verification_status": loop.tools.last_verification_status,
                 "execution_state": loop.execution_state,
                 "protocol_state": loop.protocol_state,
@@ -653,16 +655,22 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         loop_protocol = getattr(loop, "protocol_state", "UNKNOWN") if "loop" in locals() else "UNKNOWN"
         loop_outcome = getattr(loop, "terminal_outcome", "UNKNOWN") if "loop" in locals() else "UNKNOWN"
         loop_candidate = dict(getattr(loop, "terminal_candidate", {}) or {}) if "loop" in locals() else {}
+        acceptance = dict(getattr(loop, 'terminal_acceptance', {}) or {}) if "loop" in locals() else {}
         failure_payload = {
             "error": f"{type(exc).__name__}: {exc}",
             "execution_state": loop_execution,
             "protocol_state": loop_protocol,
             "task_outcome": loop_outcome,
             "terminal_candidate": loop_candidate,
+            "terminal_acceptance": acceptance,
         }
         protocol_only_interruption = (
             loop_protocol == "INTERRUPTED"
-            and loop_execution == "SUCCEEDED"
+            and (loop_execution == "SUCCEEDED"
+                 or (acceptance.get('schema') == 'SMARTAGENT_TERMINAL_ACCEPTANCE_V1'
+                     and acceptance.get('admission_status') == 'ACCEPTED'
+                     and acceptance.get('decision') == 'INTERRUPT'
+                     and acceptance.get('runtime_state') == 'INTERRUPTED'))
         )
         failure_payload['summary'] = render_task_reply(
             original_request=getattr(locals().get('loop'), 'task_request', task.request),
