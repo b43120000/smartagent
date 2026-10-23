@@ -1,0 +1,219 @@
+{
+  "schema": "SMARTAGENT_NLIT_CHATGPT_DELIVERY_V1",
+  "task_id": "SA-NLIT-20261024",
+  "round": 1,
+  "writer": "ChatGPT",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "baseline_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "product_head_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "product_code_revision_note": "The newest source-code revision remains baseline 309305b2; subsequent commits on this branch are documentation-only. product_head_sha is the last source-changing commit, not the latest branch ref.",
+  "branch_head_before_delivery": "330767ec44e62a65a2f28ac7c225ee5c038f552a",
+  "pr": null,
+  "merge_performed": false,
+  "product_code_changed": false,
+  "product_fix_status": "NOT_APPLIED_PENDING_CAUSAL_EVIDENCE",
+  "acknowledged_report_commit": "ffd727e7ff4fc1a511a041064240efab29bcba5d",
+  "ack_nonce": "NLIT-R1-ACK-8F62D1",
+  "supplement_source_commit": "a8a5fba86e8cc1e179488a0e461de547ffe97625",
+  "producer_evidence": {
+    "path": "collaboration/SA-NLIT-20261024/round-001/producer_events.json",
+    "record_count": 207,
+    "submitted_request_count": 17,
+    "selected_tool_started": 36,
+    "selected_tool_completed": 36,
+    "selected_action_evidence_recorded": 36,
+    "selected_action_loop_state_updated": 35,
+    "selected_protocol_rejected": 14,
+    "selected_runtime_terminal_accepted": 15,
+    "selected_execution_failed": 5,
+    "evidence_kind": "SELECTED_PRODUCER_LOG_RECORDS_NOT_EXACT_PLANNER_INPUT",
+    "exact_next_planner_inputs_captured": 0
+  },
+  "changed_files": [
+    "collaboration/SA-NLIT-20261024/round-001/chatgpt_ack.json",
+    "collaboration/SA-NLIT-20261024/round-001/rca_and_plan.md",
+    "collaboration/SA-NLIT-20261024/round-001/delivery.json"
+  ],
+  "codex_concurrent_commits_preserved": [
+    "ffd727e7ff4fc1a511a041064240efab29bcba5d",
+    "a8a5fba86e8cc1e179488a0e461de547ffe97625"
+  ],
+  "handoff_files": [
+    "collaboration/SA-NLIT-20261024/round-001/handoff.json",
+    "collaboration/SA-NLIT-20261024/round-001/producer_events.json",
+    "collaboration/SA-NLIT-20261024/round-001/chatgpt_ack.json",
+    "collaboration/SA-NLIT-20261024/round-001/rca_and_plan.md",
+    "collaboration/SA-NLIT-20261024/round-001/delivery.json"
+  ],
+  "classification": {
+    "original_handoff_pass": [],
+    "original_handoff_execution_fail": [
+      "IT22",
+      "IT23-B"
+    ],
+    "original_handoff_blocked": [
+      "IT19"
+    ],
+    "confirmed_partial": [
+      "IT18"
+    ],
+    "completed_terminal_receipts": 15,
+    "unknown_exact_next_planner_delivery": "17/17",
+    "case_verdict_overall": "NOT_ACCEPTED_MORE_EVIDENCE_REQUIRED",
+    "important_axes": "Transport completed, Runtime terminal accepted, tool executed, observed fact, predicate verified, and exact next-Planner delivery are independent.",
+    "IT22_corrected_from_producer": "Runtime executed inspect_project_ledger and observe_fact (UNKNOWN/REPLAN_REQUIRED) before composer-prewrite transport failure; no terminal acceptance and no replay semantics verdict",
+    "IT23_B_from_producer": "Only EXECUTION_FAILED selected; no tool or accepted receipt"
+  },
+  "confirmed_rca": [
+    {
+      "area": "IT19",
+      "type": "SOURCE_CONFIRMED_SAFETY_BLOCK",
+      "detail": "Current ChunkedWriteManager uses workspace-global .agents/chunked_writes and performs constructor cleanup/recovery; active workspace isolation is not established. It remains UNSENT/BLOCKED; no corruption proven."
+    },
+    {
+      "area": "IT07",
+      "type": "SOURCE_CONFIRMED_ADMISSION_REJECTION",
+      "detail": "Producer protocol_rejected confirms expected_failure_not_bound_to_success_contract for invalid condition; original action not executed. No predicate PASS/FAIL inferred."
+    },
+    {
+      "area": "IT18",
+      "type": "SOURCE_CONFIRMED_TERMINAL_CONTRADICTION",
+      "detail": "read_file REJECTED EVIDENCE_ROUTE_REQUIRED; query_project accepted as alternate info, but SUCCESS rejected due to FAIL verification; formally accepted COMPLETE/PARTIAL."
+    },
+    {
+      "area": "IT22",
+      "type": "SOURCE_CONFIRMED_TRANSPORT_FAILURE_AFTER_ACTIONS",
+      "detail": "Producer evidence shows two tools (ledger and UNKNOWN observe_fact), then invalid_progress_payload and later WEB_COMPOSER_PREWRITE_FAILED."
+    },
+    {
+      "area": "IT23-B",
+      "type": "SOURCE_CONFIRMED_TRANSPORT_FAILURE",
+      "detail": "composer_unrelated_draft_present with no accepted receipt; avoid clearing or re-sending draft."
+    },
+    {
+      "area": "all",
+      "type": "EVIDENCE_GAP",
+      "detail": "No exact observed submitted next-Planner input is captured. Selected producer events, persisted task snapshots and rendered/model text do not substitute."
+    }
+  ],
+  "unconfirmed_hypotheses": [
+    "IT22 composer helper root cause (state/timeout/ownership) unknown.",
+    "IT23-B unrelated draft owner/source unknown.",
+    "IT19 separately isolated writer root feasibility through authorized public endpoint unknown.",
+    "IT18 full authorized readback route vs evidence policy requires untruncated raw details.",
+    "Loaded process SHA and current in-memory build are UNVERIFIED."
+  ],
+  "regression_impacted": [
+    {
+      "cases": [
+        "IT07",
+        "IT09",
+        "IT10",
+        "IT12",
+        "IT13",
+        "IT14",
+        "IT21",
+        "IT23-A"
+      ],
+      "expected": "negative/unknown/evidence-forgery boundaries remain fail-closed; no action or condition rebinding"
+    },
+    {
+      "cases": [
+        "IT18"
+      ],
+      "expected": "no green PASS for accepted COMPLETE/PARTIAL without independent readback"
+    },
+    {
+      "cases": [
+        "IT19"
+      ],
+      "expected": "must remain BLOCKED until physically isolated transaction workspace and no foreign cleanup"
+    },
+    {
+      "cases": [
+        "IT22",
+        "IT23-B"
+      ],
+      "expected": "safe composer cannot send/clear/retry unconfirmed draft; targeted separate new-request transport retest once safe"
+    },
+    {
+      "cases": [
+        "IT07",
+        "IT08",
+        "IT09",
+        "IT10",
+        "IT11",
+        "IT12",
+        "IT13",
+        "IT14",
+        "IT15",
+        "IT16",
+        "IT17",
+        "IT18",
+        "IT20",
+        "IT21",
+        "IT22",
+        "IT23-A",
+        "IT23-B"
+      ],
+      "expected": "exact post-tool Planner input must be correlated or marked PLANNER_DELIVERY_NOT_OBSERVED"
+    }
+  ],
+  "deployment_environment_steps": [
+    "Do not alter in-use live agent or detached tracked-clean existing baseline. Preserve untracked fixture and historical case outputs.",
+    "Codex read-only inspect per-request local planner input evidence; if no capture exists, record PLANNER_DELIVERY_NOT_OBSERVED and avoid retroactive reconstruction as delivery proof.",
+    "For any future product retest, use separately isolated installation/workspace and attest loaded process SHA and writer-state owner before dispatch.",
+    "IT19 may run only after independent writer transaction state root isolation is proven through normal public Gateway; otherwise BLOCKED.",
+    "Inspect composer journals privately and preserve unrelated drafts. Never blind retry, clear or resend unverified text.",
+    "Only if future product source changes: run official protocol_manifest.write_protocol_manifest and install_smart_agent/build_update_manifest.py; require validate_protocol_manifest hash_verification=PASS and inspect complete generated diff.",
+    "Run applicable Windows focused regressions with captured exit codes before acceptance, then independent real natural-language IT via formal LOCAL_TEST receiver/Planner/Runtime and local-only full evidence capture."
+  ],
+  "verification_performed": [
+    {
+      "check": "specified handoff GitHub read and nonce/product/source SHA consistency",
+      "result": "PASS"
+    },
+    {
+      "check": "supplement producer_events GitHub read and 17-case/207-record selected provenance",
+      "result": "PASS"
+    },
+    {
+      "check": "baseline relevant source inspection via GitHub",
+      "result": "PASS"
+    },
+    {
+      "check": "chatgpt_ack.json written in this repair branch",
+      "result": "PASS",
+      "commit": "62dd9cf5cc5777367d63558eae288a105af9c05b"
+    },
+    {
+      "check": "RCA initial document created",
+      "result": "PASS",
+      "commit": "9f3d4af83570c48eb84be569bbb02787d49a6990"
+    },
+    {
+      "check": "RCA updated with producer evidence, retaining Codex concurrent producer commit",
+      "result": "PASS",
+      "commit": "330767ec44e62a65a2f28ac7c225ee5c038f552a"
+    }
+  ],
+  "verification_not_performed": [
+    "No local process, real browser UI, CDP, composer journal, task execution or actual next-turn Planner input inspected by ChatGPT.",
+    "No local tests or new GitHub Actions run on fix/nlit-evidence-20261024-r1.",
+    "No code/manifest modified, official manifest regeneration not applicable in this docs-only delivery.",
+    "No IT01–IT06 rerun and no IT07–IT23 historical replay.",
+    "No IT19 unsafe writer action performed; no IT22/IT23-B blind retry."
+  ],
+  "unresolved": [
+    "17/17 exact next-Planner input captures missing",
+    "Some raw evidence excerpts truncated=true; raw event selection is not a complete Planner transcript",
+    "IT19 transaction store isolation unproven and case unsent",
+    "IT18 full content read-back success not accepted",
+    "IT22 safe composer prewrite obstruction root cause unresolved",
+    "IT23-B unrelated draft origin and safe owner/operation state unresolved",
+    "Loaded process SHA UNVERIFIED"
+  ],
+  "next_owner": "Codex",
+  "next_handoff": "New sanitized round-002 evidence report stacked on same branch; private raw evidence, local paths, URLs, CDP identifiers and tool transcripts stay local. No historical cases automatically rerun.",
+  "status": "NOT_ACCEPTED_MORE_EVIDENCE_REQUIRED"
+}
