@@ -29,7 +29,7 @@ _CATEGORY_MEMBERS = {
     DETERMINISTIC_LOCAL: {
         "run_command", "read_file", "write_file", "delete_path", "begin_file_write",
         "write_file_chunk", "commit_file_write", "abort_file_write",
-        "list_directory", "inspect_directory", "find_file",
+        "list_directory", "inspect_directory", "find_file", "observe_fact",
         "inspect_project_scope", "inspect_project_working_set", "compare_project_snapshot",
         "inspect_semantic_map", "update_semantic_map", "update_semantic_map_file",
         "extract_project_dependencies", "build_project_bundle",
