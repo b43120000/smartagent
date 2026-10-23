@@ -1,28 +1,51 @@
 {
-  "schema": "SMARTAGENT_NLIT_BUNDLED_PYTHON_ADAPTER_ARTIFACT_V1",
+  "schema": "SMARTAGENT_NLIT_BUNDLED_PYTHON_ADAPTER_ARTIFACT_V2",
   "task_id": "SA-NLIT-20261024",
-  "round": 2,
-  "product_head_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
-  "issue": "Python 3.13.16 bundled _pth isolated=1 ignore_environment=1; PYTHONPATH does not provide observer import.",
+  "round": 3,
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "product_baseline_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "handoff_original_head": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+  "reason": "StrictMode FileInfo.Parent rejected in read-only Probe; e5 uses FileInfo.Directory and DirectoryInfo.Parent. Bundled Python 3.13 isolates sys.path from PYTHONPATH; _pth opt-in is test-only.",
   "existing_five_artifacts_manifest_commit": "5c541bf467cad53c401aff2cdf25421b5a624f79",
   "existing_five_artifacts_source_commit": "7e19ee5181712f38f8cf3aef6375e510bef15046",
   "existing_five_artifacts_preserved": true,
-  "artifact": {
-    "file": "Enable-NlitIsolatedPython.ps1",
+  "superseded_v1": {
     "path": ".codex/nlit_private_capture/Enable-NlitIsolatedPython.ps1",
     "source_commit": "6d35134920a89da0232366e1d95b7151a9492be6",
     "git_blob_sha": "d7114a7b5a09c68c2abe70baed08a42130887868",
     "sha256": "ff0626d81527a6a6834f99bbafd0caa632a1cfcf5f26b62232021636cc083fba",
     "bytes": 6310,
-    "encoding": "UTF-8 without BOM",
-    "line_endings": "exact source bytes"
+    "do_not_deploy": true
   },
-  "enabled_scope": "Only independent test installation .venv/Scripts/python313._pth",
-  "restore_policy": "Restore only after dedicated test processes stop; compare both original and enabled SHA256; leave audit backup for provenance.",
-  "validation_not_performed": [
-    "No execution against user Python yet",
-    "No live browser/worker",
-    "No original NL-IT rerun"
+  "artifact": {
+    "file": "Enable-NlitIsolatedPython-v2.ps1",
+    "path": ".codex/nlit_private_capture/Enable-NlitIsolatedPython-v2.ps1",
+    "source_commit": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+    "git_blob_sha": "4fc49e324c95dca66de8b6e490b853f825e9b115",
+    "sha256": "487dd90395a21ffda8556fe50595018db84d35e42b970de64bb2080fdee9cb8f",
+    "bytes": 6660,
+    "encoding": "UTF-8 without BOM; exact GitHub source bytes",
+    "only_mutation": "independent TEST installation .venv/Scripts/python313._pth after explicit Enable"
+  },
+  "regression_fixture": {
+    "path": ".codex/nlit_private_capture/Test-NlitIsolatedPython-v2.ps1",
+    "source_commit": "568ff5efac2204de2d20ec6dc21a7525c1a7da55",
+    "git_blob_sha": "ee287f81d869f04dda07ffb991ce6c00ba06ae2d",
+    "sha256": "458b9434ee548a8d2a2b562c23d21f55ff57b67bd79dca188c645daa726a5631",
+    "bytes": 3557,
+    "mode": "synthetic temporary fixture; non-deployment",
+    "real_windows_execution": "NOT_RUN"
+  },
+  "runbook": {
+    "path": "collaboration/SA-NLIT-20261024/round-003/v2_adapter_windows_runbook.md",
+    "source_commit": "5961d26b044ec6d0206a322663d6c939fdf645e9"
+  },
+  "security_constraints": [
+    "Do not run old Enable-NlitIsolatedPython.ps1 or Install-OfflineObserverPath.ps1",
+    "No changes to production/original product source, main branch, historical cases, acceptance criteria, or original five-file manifest",
+    "Do not publish private paths/CDP/profile/login/prompt/response/nonce",
+    "Probe/Enable/Verify/auto-hook/Restore need actual local evidence before marking PASS",
+    "Never clear unrelated draft or blindly retry uncertain submission"
   ],
-  "status": "PINNED_SOURCE_AWAITING_LOCAL_PROBE"
+  "status": "V2_SOURCE_PINNED; WINDOWS_STRICTMODE_AND_AUTO_HOOK_NOT_YET_EXECUTED"
 }
