@@ -90,7 +90,7 @@ $pth=$pthFiles[0].FullName
 if (($pthFiles[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
  Block 'PTH_REPARSE_POINT'
 }
-$utf8=New-Object System.Text.UTF8Encoding($false,$true)
+$utf8=[System.Text.UTF8Encoding]::new($false,$true)
 $oldBytes=[IO.File]::ReadAllBytes($pth)
 try { $oldText=$utf8.GetString($oldBytes) }
 catch { Block 'PTH_NOT_UTF8' }
