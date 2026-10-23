@@ -84,17 +84,33 @@ def validate_bootstrap_format_repair() -> None:
     session_id = "SES-BOOTSTRAP-CHECK"
     initial_prompt = protocol.bootstrap_prompt(session_id=session_id)
     repair_prompt = protocol.protocol_ready_repair_prompt(session_id=session_id)
+    compact_prompt = protocol.protocol_ready_compact_challenge_prompt(session_id=session_id)
+    assert protocol.parse_protocol_ready_compact(
+        protocol.protocol_ready_compact_identity_line(session_id=session_id),
+        session_id=session_id,
+    )
+    assert not protocol.parse_protocol_ready_compact(
+        "[AGENT_PROTOCOL_READY]", session_id=session_id,
+    )
+    assert not protocol.parse_protocol_ready_compact(
+        protocol.protocol_ready_compact_identity_line(session_id="SES-WRONG"),
+        session_id=session_id,
+    )
     fake_scraper = SimpleNamespace(web_file_capabilities=lambda: {
         "schema": "WEB_UI_FILE_CAPABILITIES_V1", "provider": "chatgpt",
         "browser_upload": True, "browser_download": True, "reason": "test",
     })
-    for handshake in (initial_prompt, repair_prompt,
+    for handshake in (initial_prompt, repair_prompt, compact_prompt,
                       protocol.session_attach_prompt(session_id=session_id)):
         prepared = WebLLMScraper._web_file_planner_prompt(fake_scraper, handshake)
         assert "[WEB_UI_FILE_CAPABILITIES]" in prepared
         if "Reply with exactly this readiness block" in prepared:
             assert prepared.index("[/WEB_UI_FILE_CAPABILITIES]") < prepared.rindex(
                 "Reply with exactly this readiness block"
+            )
+        elif "Reply with exactly this one line" in prepared:
+            assert prepared.index("[/WEB_UI_FILE_CAPABILITIES]") < prepared.rindex(
+                "Reply with exactly this one line"
             )
         else:
             assert prepared.index("[/WEB_UI_FILE_CAPABILITIES]") < prepared.rindex(
@@ -125,6 +141,38 @@ def validate_bootstrap_format_repair() -> None:
         assert result["state"]["armed"] is True
         assert result["state"]["readiness_mode"] == "FULL_IDENTITY"
         assert calls == ["協議初始化", "協議初始化格式修復"]
+
+    with tempfile.TemporaryDirectory(prefix="webagent-bootstrap-compact-success-") as root:
+        calls = []
+        initial_identity = {}
+        def compact_after_two_markers(prompt: str, *, stage: str) -> str:
+            calls.append(stage)
+            if len(calls) == 1:
+                initial_identity.update(json.loads(prompt.splitlines()[1]))
+                return "[AGENT_PROTOCOL_READY]"
+            if len(calls) == 2:
+                return "[AGENT_PROTOCOL_READY]"
+            assert stage == "協議初始化精簡身分確認"
+            assert "[AGENT_PROTOCOL_IDENTITY_CHALLENGE]" in prompt
+            expected = (
+                f"READY_IDENTITY_V1|{initial_identity['protocol_name']}|"
+                f"{initial_identity['protocol_version']}|"
+                f"{initial_identity['protocol_hash']}|{initial_identity['session_id']}"
+            )
+            assert prompt.rstrip().endswith(expected)
+            return expected
+        result = ensure_webagent_session(
+            workspace=root,
+            gpt_url="https://chatgpt.com/c/bootstrap-compact-success",
+            state_dir=Path(root) / "state",
+            send_prompt=compact_after_two_markers,
+        )
+        assert result["state"]["armed"] is True
+        assert result["state"]["readiness_mode"] == "COMPACT_FULL_IDENTITY"
+        assert result["state"]["readiness_identity_verified"] is True
+        assert calls == [
+            "協議初始化", "協議初始化格式修復", "協議初始化精簡身分確認"
+        ]
 
     with tempfile.TemporaryDirectory(prefix="webagent-bootstrap-wrong-id-") as root:
         calls = []
@@ -157,10 +205,12 @@ def validate_bootstrap_format_repair() -> None:
                 state_dir=Path(root) / "state", send_prompt=always_marker_only,
             )
         except RuntimeError as exc:
-            assert "READY_CLOSING_MARKER_MISSING" in str(exc)
+            assert "READY_COMPACT_IDENTITY_MISMATCH" in str(exc)
         else:
             raise AssertionError("Marker-only recovery bypassed readiness")
-        assert calls == ["協議初始化", "協議初始化格式修復"], calls
+        assert calls == [
+            "協議初始化", "協議初始化格式修復", "協議初始化精簡身分確認"
+        ], calls
 
 
 def run() -> dict:
@@ -215,9 +265,11 @@ def run() -> dict:
             def short_send_prompt(prompt: str, *, stage: str, **_kwargs) -> str:
                 if stage == "協議初始化":
                     assert prompt.startswith(f"[{PROTOCOL_BOOTSTRAP_MARKER}]")
-                else:
-                    assert stage == "協議初始化格式修復"
+                elif stage == "協議初始化格式修復":
                     assert prompt.startswith("[AGENT_PROTOCOL_READINESS_REPAIR]")
+                else:
+                    assert stage == "協議初始化精簡身分確認"
+                    assert prompt.startswith("[AGENT_PROTOCOL_IDENTITY_CHALLENGE]")
                 return short_reply
 
             try:

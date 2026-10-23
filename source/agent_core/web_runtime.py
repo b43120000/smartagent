@@ -4825,6 +4825,7 @@ class WebLLMScraper:
             "[AGENT_PROTOCOL_BOOTSTRAP]\n",
             "[AGENT_SESSION_ATTACH]\n",
             "[AGENT_PROTOCOL_READINESS_REPAIR]\n",
+            "[AGENT_PROTOCOL_IDENTITY_CHALLENGE]\n",
         )
         anchor = "\nDo not execute a tool and do not answer the end user in this handshake."
         if prompt.startswith(handshake_markers) and anchor in prompt:

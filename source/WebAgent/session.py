@@ -52,6 +52,8 @@ def ensure_webagent_session(
         full_identity_ready = session.parse_protocol_ready(
             response, session_id=decision.session_id, allow_smart_quotes=claude_quotes
         )
+        first_marker_only = str(response or "").strip() == f"[{PROTOCOL_READY_MARKER}]"
+        compact_identity_ready = False
         # The browser must finish its UI/response stability gate before this
         # parser runs. Correct an incomplete FORMAT at most once, without
         # replaying the full bootstrap or executing any task action.
@@ -88,9 +90,31 @@ def ensure_webagent_session(
                         f"reason={reason_code} response_chars={len(str(repaired or ''))}.",
                         flush=True,
                     )
+                    # Two distinct, completed exact marker-only responses
+                    # trigger ONE short identity challenge. Marker-only itself
+                    # never authorizes ARMED or bypasses any identity field.
+                    if (first_marker_only
+                            and str(repaired or "").strip() == f"[{PROTOCOL_READY_MARKER}]"):
+                        challenge_reply = send_prompt(
+                            session.protocol_ready_compact_challenge_prompt(
+                                session_id=decision.session_id
+                            ),
+                            stage="協議初始化精簡身分確認",
+                        )
+                        compact_identity_ready = session.parse_protocol_ready_compact(
+                            challenge_reply, session_id=decision.session_id,
+                        )
+                        print(
+                            f"[{display_name}] Bootstrap compact identity "
+                            f"{'MATCHED' if compact_identity_ready else 'REJECTED'}; "
+                            f"response_chars={len(str(challenge_reply or ''))}.",
+                            flush=True,
+                        )
+                        if not compact_identity_ready:
+                            reason_code = "READY_COMPACT_IDENTITY_MISMATCH"
         # The legacy marker-only flag is retained for call compatibility only.
         # A complete matching identity is mandatory, including for Claude.
-        if not full_identity_ready:
+        if not (full_identity_ready or compact_identity_ready):
             registry.set_protocol_state(
                 workspace,
                 gpt_url,
@@ -102,9 +126,16 @@ def ensure_webagent_session(
                 + reason_code
             )
         state = session.armed_state(session_id=decision.session_id)
-        state["readiness_mode"] = "FULL_IDENTITY"
+        state["readiness_mode"] = (
+            "COMPACT_FULL_IDENTITY" if compact_identity_ready else "FULL_IDENTITY"
+        )
+        state["readiness_identity_verified"] = True
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
-        print(f"[{display_name}] 協議初始化成功，ChatGPT 已回傳 matching readiness。", flush=True)
+        print(
+            f"[{display_name}] 協議初始化成功，mode={state['readiness_mode']} "
+            "matching protocol and session identity.",
+            flush=True,
+        )
         return {"mode": BOOTSTRAP, "reason": reason, "state": state}
 
     if decision.action == BOOTSTRAP:

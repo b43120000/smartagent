@@ -72,6 +72,9 @@ def _empty_record(workspace: str, gpt_url: str) -> dict:
 def _normalize_protocol_state(raw: object) -> dict:
     if not isinstance(raw, dict):
         return {}
+    mode = str(raw.get("readiness_mode", "") or "")
+    if mode not in {"FULL_IDENTITY", "COMPACT_FULL_IDENTITY"}:
+        mode = ""
     result = {
         "protocol_name": str(raw.get("protocol_name", "") or ""),
         "protocol_version": int(raw.get("protocol_version", 0) or 0),
@@ -81,6 +84,11 @@ def _normalize_protocol_state(raw: object) -> dict:
         "session_state": str(raw.get("session_state", "") or ""),
         "last_protocol_check": float(raw.get("last_protocol_check", 0.0) or 0.0),
         "last_session_attach": float(raw.get("last_session_attach", 0.0) or 0.0),
+        "readiness_mode": mode,
+        "readiness_identity_verified": (
+            mode in {"FULL_IDENTITY", "COMPACT_FULL_IDENTITY"}
+            and raw.get("readiness_identity_verified") is True
+        ),
     }
     return result
 

@@ -210,6 +210,31 @@ class SessionProtocol:
             "[/AGENT_PROTOCOL_READINESS_REPAIR]"
         )
 
+    def protocol_ready_compact_identity_line(self, *, session_id: str) -> str:
+        """Exact, session-bound identity echo; marker-only can never pass."""
+        return (
+            f"READY_IDENTITY_V1|{self.identity.protocol_name}|"
+            f"{self.identity.protocol_version}|{self.identity.protocol_hash}|{session_id}"
+        )
+
+    def protocol_ready_compact_challenge_prompt(self, *, session_id: str) -> str:
+        """Last bounded fallback after TWO incomplete marker-only responses."""
+        line = self.protocol_ready_compact_identity_line(session_id=session_id)
+        return (
+            "[AGENT_PROTOCOL_IDENTITY_CHALLENGE]\n"
+            "The preceding bootstrap and its format repair returned only an opening marker.\n"
+            "This is NOT a task; no action, smartagent_tool, JSON or markdown is allowed.\n"
+            "Do not execute a tool and do not answer the end user in this handshake.\n"
+            "Reply with exactly this one line and nothing else:\n"
+            f"{line}"
+        )
+
+    def parse_protocol_ready_compact(self, response: str, *, session_id: str) -> bool:
+        """A complete, exact identity is required even in compact form."""
+        return str(response or "").strip() == self.protocol_ready_compact_identity_line(
+            session_id=session_id
+        )
+
     def protocol_ready_failure_reason(
         self, text: str, *, session_id: str, allow_smart_quotes: bool = False,
     ) -> str:
