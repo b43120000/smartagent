@@ -1,0 +1,32 @@
+{
+  "test_id": "CODEX-CHAT-E2E-20261024-B81C",
+  "synthetic": true,
+  "echo_nonce": "RPT-ACK-4D62",
+  "baseline_short": "d3963f5",
+  "observed_default_branch": "main",
+  "observed_base_sha": "98f8940625f525f1f7000e20b932c4a846c438e2",
+  "failed_case_ids": [
+    "IMAGE-02"
+  ],
+  "blocked_case_ids": [
+    "TG-03"
+  ],
+  "rca_status": "NOT_ESTABLISHED_SYNTHETIC_REPORT",
+  "cases": [
+    {
+      "id": "LINK-01",
+      "status": "PASS"
+    },
+    {
+      "id": "IMAGE-02",
+      "status": "FAIL",
+      "expected": "one download action",
+      "actual": "no download action"
+    },
+    {
+      "id": "TG-03",
+      "status": "BLOCKED",
+      "reason": "awaiting IMAGE-02"
+    }
+  ]
+}
