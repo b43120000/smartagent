@@ -1,0 +1,779 @@
+{
+  "task_id": "SA-NLIT-20261024",
+  "round": 2,
+  "writer": "Codex",
+  "product_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "previous_report_commit": "ffd727e7ff4fc1a511a041064240efab29bcba5d",
+  "producer_evidence_commit": "a8a5fba86e8cc1e179488a0e461de547ffe97625",
+  "ack_nonce": "NLIT-R2-ACK-4C910E",
+  "handoff_status": "MORE_EVIDENCE_AND_CAPTURE_IMPLEMENTATION_REQUESTED",
+  "cases": [
+    {
+      "case_id": "IT07",
+      "task_id": "TASK-E1627B1C66F306EB4BA9",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "f986ac8c59cd4cb8b1073e756d4d9a65d4f13d237abbe92ae235d4f5bd9a406b",
+      "full_local_file_available": true,
+      "actions": [
+        {
+          "timestamp": 1792772279.0661333,
+          "round": 3,
+          "action_id": "it07-list-fixture-03",
+          "tool": "list_directory",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "DIRECTORY_LISTED",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        },
+        {
+          "timestamp": 1792772606.7293813,
+          "round": 6,
+          "action_id": "it07-inspect-ledger-06",
+          "tool": "inspect_project_ledger",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "PROJECT_LEDGER_READ",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        }
+      ],
+      "rejections": [
+        {
+          "round": 1,
+          "diagnostics": [
+            {
+              "marker": "[WEBAGENT_EXPECTED_FAILURE_REJECTED]",
+              "reason": "expected_failure_not_bound_to_success_contract"
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "diagnostics": [
+            {
+              "marker": "[WEBAGENT_CONTEXT_ACQUISITION_REQUIRED]",
+              "reason": "missing_context_requires_runtime_read"
+            }
+          ]
+        },
+        {
+          "round": 4,
+          "diagnostics": [
+            {
+              "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+              "reason": "partial_not_supported_or_recoverable_work"
+            }
+          ]
+        },
+        {
+          "round": 5,
+          "diagnostics": [
+            {
+              "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+              "reason": "failure_not_supported_by_runtime_evidence"
+            }
+          ]
+        }
+      ],
+      "tool_facts": [
+        {
+          "action_id": "it07-list-fixture-03",
+          "tool": "list_directory",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "DIRECTORY_LISTED",
+            "executed": true
+          },
+          "verification": {
+            "terminal_eligible": true
+          },
+          "observations": [],
+          "predicate": {},
+          "evaluation": {}
+        },
+        {
+          "action_id": "it07-inspect-ledger-06",
+          "tool": "inspect_project_ledger",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "PROJECT_LEDGER_READ",
+            "executed": true
+          },
+          "verification": {},
+          "observations": [],
+          "predicate": {},
+          "evaluation": {}
+        }
+      ]
+    },
+    {
+      "case_id": "IT08",
+      "task_id": "TASK-1D0CC03F0FBCEF193707",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "aa9be3b23615492c5f4834a1e19e5c1b447900373c69755066aaa4ee2f6e17a0",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT09",
+      "task_id": "TASK-9D4D1FFCFC60847EAF24",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "15396c8438c17236965b447eb50f55423f8604c6d3196a4cdd52ff65873d433b",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT10",
+      "task_id": "TASK-DF0C939324642518688C",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "e7c582c8f6f4fc196540773de98c9a8fa5de1fb598c8c383c39aff9cbfca3597",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT11",
+      "task_id": "TASK-271CFFF2319B4DB53B25",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "b4943d0ac9fc36c2509dfe5383d5f135df54b713a482e57e40b770b302e64b74",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT12",
+      "task_id": "TASK-A3A4300614CA0CF1DFE0",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "b310940a08f91a68b3a6abe5462b547e133680c7e7f2a14940e26588d0c3fab0",
+      "full_local_file_available": true,
+      "actions": [
+        {
+          "timestamp": 1792775288.8525844,
+          "round": 1,
+          "action_id": "it12-list-fixture-01",
+          "tool": "list_directory",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "DIRECTORY_LISTED",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        },
+        {
+          "timestamp": 1792775366.1929977,
+          "round": 2,
+          "action_id": "it12-observe-present-02",
+          "tool": "observe_fact",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "PASS",
+          "expectation_status": "PASS",
+          "result_status": "SUCCEEDED",
+          "result_reason": "FACT_PREDICATE_PASSED",
+          "terminal_eligible": true,
+          "evidence_state": "SUFFICIENT"
+        }
+      ],
+      "rejections": [],
+      "tool_facts": [
+        {
+          "action_id": "it12-list-fixture-01",
+          "tool": "list_directory",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "DIRECTORY_LISTED",
+            "executed": true
+          },
+          "verification": {
+            "terminal_eligible": true
+          },
+          "observations": [],
+          "predicate": {},
+          "evaluation": {}
+        },
+        {
+          "action_id": "it12-observe-present-02",
+          "tool": "observe_fact",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "FACT_PREDICATE_PASSED",
+            "executed": true
+          },
+          "verification": {
+            "verification_status": "PASS",
+            "terminal_eligible": true,
+            "comparison": "MATCH",
+            "execution_finality": "COMPLETED"
+          },
+          "observations": [
+            {
+              "schema": "SMARTAGENT_EVIDENCE_V1",
+              "field": "file.exists",
+              "observation_status": "CONFIRMED",
+              "source": "filesystem.stat",
+              "observed_at": "2026-10-23T17:09:24.453650+00:00",
+              "freshness": "CURRENT",
+              "raw_evidence_ref": "it12-observe-present-02",
+              "value": true
+            }
+          ],
+          "predicate": {
+            "field": "file.exists",
+            "operator": "equals",
+            "expected": true
+          },
+          "evaluation": {
+            "verification_status": "PASS",
+            "comparison": "MATCH"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "IT13",
+      "task_id": "TASK-DDA4F80E6007C81009B0",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "4af19c27619ce870979d0b1f0a9e395f9f8eb59c0fba65eb6611a9a302b10c21",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT14",
+      "task_id": "TASK-68E461663616C7239011",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "4500eb0e7bcbe0d903694311a0e1de6de2dfc49f8819c36276be6ce2ef4dd6f4",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT15",
+      "task_id": "TASK-1A6A5680586FE3593B40",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "184011261f096d2af66aed13d1278943dd595898b2ee47eccadad580effea617",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT16",
+      "task_id": "TASK-5767082AA46C112A6F65",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "e5e3df73e4e1cb564ff6f6ee625f47d4e9de0bea560c04ba7d2d3b74164da00a",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT17",
+      "task_id": "TASK-E10B08FA8962F1E6CD66",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "ecf104381764c474214bf90bbce2d9a6a14e8eb71b469b4d985460f105b8108d",
+      "full_local_file_available": true,
+      "actions": [
+        {
+          "timestamp": 1792777877.2122447,
+          "round": 1,
+          "action_id": "it17-query-visible-code-01",
+          "tool": "query_project",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "PROJECT_QUERIED",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        }
+      ],
+      "rejections": [],
+      "tool_facts": [
+        {
+          "action_id": "it17-query-visible-code-01",
+          "tool": "query_project",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "PROJECT_QUERIED",
+            "executed": true
+          },
+          "verification": {
+            "terminal_eligible": true
+          },
+          "observations": [
+            {
+              "schema": "SMARTAGENT_EVIDENCE_V1",
+              "field": "project.snapshot_id",
+              "observation_status": "CONFIRMED",
+              "source": "query_project",
+              "observed_at": "2026-10-23T17:51:14.543636+00:00",
+              "freshness": "CURRENT",
+              "raw_evidence_ref": "it17-query-visible-code-01",
+              "value": "2a6ed928cfcb9658cdb69639d912d8a92103b8e41a74d3357d7c609c84770737"
+            },
+            {
+              "schema": "SMARTAGENT_EVIDENCE_V1",
+              "field": "project.query_status",
+              "observation_status": "CONFIRMED",
+              "source": "query_project",
+              "observed_at": "2026-10-23T17:51:14.543664+00:00",
+              "freshness": "CURRENT",
+              "raw_evidence_ref": "it17-query-visible-code-01",
+              "value": "OK"
+            }
+          ],
+          "predicate": {},
+          "evaluation": {},
+          "bounded_query_results": [
+            {
+              "operation": "read_range",
+              "status": "OK",
+              "path": "visible_code.py",
+              "start_line": 1,
+              "end_line": 1,
+              "total_lines": 1,
+              "file_sha256": "f773fdd628010e8c4d24b8821409d560095216dfae53983e6b431199f45cf593",
+              "truncated": false
+            }
+          ],
+          "snapshot_id": "2a6ed928cfcb9658cdb69639d912d8a92103b8e41a74d3357d7c609c84770737"
+        }
+      ]
+    },
+    {
+      "case_id": "IT18",
+      "task_id": "TASK-27EDCBE4297EED1EA971",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "450d21c346a8d6855df9c69561dfbe14cc34b97f4faf4431f8a4ca65fa023cb6",
+      "full_local_file_available": true,
+      "actions": [
+        {
+          "timestamp": 1792778160.2349887,
+          "round": 1,
+          "action_id": "it18-write-target-01",
+          "tool": "write_file",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "PASS",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "FILE_WRITTEN_VERIFIED",
+          "terminal_eligible": true,
+          "evidence_state": "SUFFICIENT"
+        },
+        {
+          "timestamp": 1792778163.8118582,
+          "round": 1,
+          "action_id": "it18-readback-target-02",
+          "tool": "read_file",
+          "executed": false,
+          "execution_status": "FAILED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "REJECTED",
+          "result_reason": "EVIDENCE_ROUTE_REQUIRED",
+          "terminal_eligible": false,
+          "evidence_state": "CONTRADICTED"
+        },
+        {
+          "timestamp": 1792778255.7805417,
+          "round": 2,
+          "action_id": "it18-query-readback-03",
+          "tool": "query_project",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "PROJECT_QUERIED",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        }
+      ],
+      "rejections": [
+        {
+          "round": 3,
+          "diagnostics": [
+            {
+              "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+              "reason": "success_contradicts_runtime_verification"
+            }
+          ]
+        }
+      ],
+      "tool_facts": [
+        {
+          "action_id": "it18-write-target-01",
+          "tool": "write_file",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "FILE_WRITTEN_VERIFIED",
+            "executed": true
+          },
+          "verification": {
+            "file_saved": true,
+            "readback_checked": true,
+            "bytes_written": 25,
+            "readback_bytes": 25,
+            "expected_bytes": 25,
+            "sha256": "df104ba662411e698e8ff77d3e82a3a06ee755bb422113388e11bb44b4e021df",
+            "verification_status": "PASS",
+            "possible_partial_write": false,
+            "terminal_eligible": true
+          },
+          "observations": [],
+          "predicate": {},
+          "evaluation": {}
+        },
+        {
+          "action_id": "it18-readback-target-02",
+          "tool": "read_file",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "REJECTED",
+            "reason": "EVIDENCE_ROUTE_REQUIRED",
+            "executed": false
+          },
+          "verification": {
+            "content_read": false
+          },
+          "observations": [],
+          "predicate": {},
+          "evaluation": {},
+          "route_reason": "web_planner_project_read_requires_query_project"
+        },
+        {
+          "action_id": "it18-query-readback-03",
+          "tool": "query_project",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "PROJECT_QUERIED",
+            "executed": true
+          },
+          "verification": {
+            "terminal_eligible": true
+          },
+          "observations": [
+            {
+              "schema": "SMARTAGENT_EVIDENCE_V1",
+              "field": "project.snapshot_id",
+              "observation_status": "CONFIRMED",
+              "source": "query_project",
+              "observed_at": "2026-10-23T17:57:33.839556+00:00",
+              "freshness": "CURRENT",
+              "raw_evidence_ref": "it18-query-readback-03",
+              "value": "54915c53f4f2b5578ff2071eb109d9f9e82c2bae6ccd7b3b01584038d7bb6333"
+            },
+            {
+              "schema": "SMARTAGENT_EVIDENCE_V1",
+              "field": "project.query_status",
+              "observation_status": "CONFIRMED",
+              "source": "query_project",
+              "observed_at": "2026-10-23T17:57:33.839574+00:00",
+              "freshness": "CURRENT",
+              "raw_evidence_ref": "it18-query-readback-03",
+              "value": "OK"
+            }
+          ],
+          "predicate": {},
+          "evaluation": {},
+          "bounded_query_results": [
+            {
+              "operation": "read_range",
+              "status": "OK",
+              "path": "write_readback.txt",
+              "start_line": 1,
+              "end_line": 1,
+              "total_lines": 1,
+              "file_sha256": "df104ba662411e698e8ff77d3e82a3a06ee755bb422113388e11bb44b4e021df",
+              "truncated": false
+            }
+          ],
+          "snapshot_id": "54915c53f4f2b5578ff2071eb109d9f9e82c2bae6ccd7b3b01584038d7bb6333"
+        }
+      ]
+    },
+    {
+      "case_id": "IT20",
+      "task_id": "TASK-78AF408F26430935696D",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "32a3973c5598eaf8db6e4b0474dc7c7f32ea6b5d989b0dbb403b48c4645e6d4e",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT21",
+      "task_id": "TASK-30486D112802DFD9A61F",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "e75c0f9220fb1ea7cf247c8a9176a7831dd5232177cc742a1f4a5f824a795047",
+      "full_local_file_available": true,
+      "actions": [
+        {
+          "timestamp": 1792779143.3103833,
+          "round": 1,
+          "action_id": "it21-inspect-condition-ledger-01",
+          "tool": "inspect_project_ledger",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "PROJECT_LEDGER_READ",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        },
+        {
+          "timestamp": 1792779219.9305694,
+          "round": 2,
+          "action_id": "it21-observe-contradiction-01",
+          "tool": "observe_fact",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "FAIL",
+          "expectation_status": "FAIL",
+          "result_status": "SUCCEEDED",
+          "result_reason": "FACT_PREDICATE_FAILED",
+          "terminal_eligible": false,
+          "evidence_state": "CONTRADICTED"
+        },
+        {
+          "timestamp": 1792779358.5599864,
+          "round": 4,
+          "action_id": "it21-list-fixture-after-fail-02",
+          "tool": "list_directory",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "DIRECTORY_LISTED",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        }
+      ],
+      "rejections": [
+        {
+          "round": 3,
+          "diagnostics": [
+            {
+              "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+              "reason": "invalid_progress_payload"
+            }
+          ]
+        }
+      ],
+      "tool_facts": [
+        {
+          "action_id": "it21-inspect-condition-ledger-01",
+          "tool": "inspect_project_ledger",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "PROJECT_LEDGER_READ",
+            "executed": true
+          },
+          "verification": {},
+          "observations": [],
+          "predicate": {},
+          "evaluation": {}
+        },
+        {
+          "action_id": "it21-observe-contradiction-01",
+          "tool": "observe_fact",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "FACT_PREDICATE_FAILED",
+            "executed": true
+          },
+          "verification": {
+            "verification_status": "FAIL",
+            "terminal_eligible": false,
+            "comparison": "MISMATCH",
+            "execution_finality": "COMPLETED"
+          },
+          "observations": [
+            {
+              "schema": "SMARTAGENT_EVIDENCE_V1",
+              "field": "file.exists",
+              "observation_status": "CONFIRMED",
+              "source": "filesystem.stat",
+              "observed_at": "2026-10-23T18:13:38.046427+00:00",
+              "freshness": "CURRENT",
+              "raw_evidence_ref": "it21-observe-contradiction-01",
+              "value": true
+            }
+          ],
+          "predicate": {
+            "field": "file.exists",
+            "operator": "equals",
+            "expected": false
+          },
+          "evaluation": {
+            "verification_status": "FAIL",
+            "comparison": "MISMATCH"
+          }
+        },
+        {
+          "action_id": "it21-list-fixture-after-fail-02",
+          "tool": "list_directory",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "DIRECTORY_LISTED",
+            "executed": true
+          },
+          "verification": {
+            "terminal_eligible": true
+          },
+          "observations": [],
+          "predicate": {},
+          "evaluation": {}
+        }
+      ]
+    },
+    {
+      "case_id": "IT22",
+      "task_id": "TASK-0E4E2D90B6FDC5E4CA58",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "32c311059942e4ed3c0bccc145aaed8a682a51b01951560b9cd2eb0ba0fd6489",
+      "full_local_file_available": true,
+      "actions": [
+        {
+          "timestamp": 1792779650.199981,
+          "round": 1,
+          "action_id": "it22-inspect-ledger-01",
+          "tool": "inspect_project_ledger",
+          "executed": true,
+          "execution_status": "SUCCEEDED",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "",
+          "result_status": "SUCCEEDED",
+          "result_reason": "PROJECT_LEDGER_READ",
+          "terminal_eligible": true,
+          "evidence_state": "AVAILABLE"
+        },
+        {
+          "timestamp": 1792779717.4990075,
+          "round": 2,
+          "action_id": "it22-observe-probe-01",
+          "tool": "observe_fact",
+          "executed": true,
+          "execution_status": "UNKNOWN",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "UNKNOWN",
+          "result_status": "UNKNOWN",
+          "result_reason": "FACT_OBSERVATION_UNKNOWN",
+          "terminal_eligible": false,
+          "evidence_state": "OBSERVATION_UNKNOWN"
+        }
+      ],
+      "rejections": [
+        {
+          "round": 3,
+          "diagnostics": [
+            {
+              "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+              "reason": "invalid_progress_payload"
+            }
+          ]
+        }
+      ],
+      "tool_facts": [
+        {
+          "action_id": "it22-inspect-ledger-01",
+          "tool": "inspect_project_ledger",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "SUCCEEDED",
+            "reason": "PROJECT_LEDGER_READ",
+            "executed": true
+          },
+          "verification": {},
+          "observations": [],
+          "predicate": {},
+          "evaluation": {}
+        },
+        {
+          "action_id": "it22-observe-probe-01",
+          "tool": "observe_fact",
+          "result": {
+            "schema": "SMARTAGENT_TOOL_RESULT_V1",
+            "status": "UNKNOWN",
+            "reason": "FACT_OBSERVATION_UNKNOWN",
+            "executed": true
+          },
+          "verification": {
+            "verification_status": "UNKNOWN",
+            "terminal_eligible": false,
+            "comparison": "NOT_EVALUATED",
+            "execution_finality": "COMPLETED"
+          },
+          "observations": [
+            {
+              "schema": "SMARTAGENT_EVIDENCE_V1",
+              "field": "file.exists",
+              "observation_status": "UNKNOWN",
+              "source": "filesystem.stat",
+              "observed_at": "2026-10-23T18:21:54.939220+00:00",
+              "freshness": "UNKNOWN",
+              "raw_evidence_ref": "it22-observe-probe-01"
+            }
+          ],
+          "predicate": {
+            "field": "file.exists",
+            "operator": "equals",
+            "expected": false
+          },
+          "evaluation": {
+            "verification_status": "UNKNOWN",
+            "comparison": "NOT_EVALUATED"
+          }
+        }
+      ]
+    },
+    {
+      "case_id": "IT23-A",
+      "task_id": "TASK-43B3F43EB0169CDFC98F",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "6256287956e93a95368566026cf885c7dbd185b79cf67099ebabdf83b7ab9054",
+      "full_local_file_available": true
+    },
+    {
+      "case_id": "IT23-B",
+      "task_id": "TASK-FF52CEB69017383EDC16",
+      "exact_next_planner_input": "PLANNER_DELIVERY_NOT_OBSERVED",
+      "byte_sha256": "488591dbca29a0d8fd48feacfe4065ff57f02a7baf19f50e9d32cfab572903a7",
+      "full_local_file_available": true,
+      "actions": [],
+      "rejections": [],
+      "tool_facts": []
+    }
+  ],
+  "recent_journal_metadata": [
+    {
+      "operation_id": "a8b1aa784b1d466d89dfa9d9efe38cd5",
+      "state": "QUARANTINED",
+      "started_at": 1792780364.706478,
+      "owner_pid": 14448,
+      "reason": "writer_exception_or_cancelled",
+      "prompt_chars": 2128
+    }
+  ],
+  "limits": [
+    "This is an allowlisted technical summary. No prompts, response prose, full logs, draft text, conversation URLs, local paths or browser identifiers are published. Complete originals remain local.",
+    "All original requests remain terminal; no historical batch rerun; product source unchanged and no deployment.",
+    "Journal metadata is current snapshot; NOT_PROVEN task binding. IT22 prior journal may have been replaced. mutation_possible and owner-to-request correlation NOT_OBSERVED; no current journal proves origin of unrelated draft.",
+    "Exact next-Planner payload not recovered from saved request files/stages; no reconstruction or retroactive PASS. Original loaded process SHA remains UNVERIFIED.",
+    "Round001 local_raw_sha256 used decoded text; this round byte_sha256 hashes exact runtime log file bytes.",
+    "IT19 remains BLOCKED under current shared workspace; no transaction created/aborted/committed."
+  ],
+  "requested_next_step": [
+    "ACK exact new report commit and nonce; read prior complete sanitized producer records at specified commit.",
+    "Deliver delivery.json even if product unchanged; include full product head and remaining blockers.",
+    "To meet unchanged acceptance, provide bounded opt-in private request-scoped exact Planner payload plus actual submission/response correlation capture, and safe dedicated workspace/installation launch plan for IT19. Codex owns external collector/harness and deployment; ChatGPT owns any product edits.",
+    "Keep all safeguards, no draft clearing, no main writes or merge; every new targeted validation must use new IDs and preserve original reports."
+  ]
+}
