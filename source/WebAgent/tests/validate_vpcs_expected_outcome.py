@@ -182,13 +182,13 @@ def validate_protocol_terminal():
     with tempfile.TemporaryDirectory(prefix="vpcs-expect-protocol-") as directory:
         root = Path(directory).resolve()
         source = root / "sample.py"
-        source.write_text("def answer():\\n    return 42\\n", encoding="utf-8")
+        source.write_text("def answer():\n    return 42\n", encoding="utf-8")
         capsule = build_project_capsule(root)
         seed = query(WebAgentToolContext(root), root, {
             "operation": "get_file_metadata", "path": "sample.py",
         }, snapshot_id=capsule["snapshot_id"])
         ref = json.loads(seed)["results"][0]["context_ref"]
-        source.write_text("def answer():\\n    return 99\\n", encoding="utf-8")
+        source.write_text("def answer():\n    return 99\n", encoding="utf-8")
         turns = []
         contract = {
             "success": [STALE_CONDITION],
@@ -239,7 +239,7 @@ def validate_protocol_terminal():
             })
 
         loop = WebAgentProtocolLoop(root, planner, progress_root=root, max_turns=8)
-        final = loop.run("Check pinned query negative expectation\\n" + str(root),
+        final = loop.run("Check pinned query negative expectation\n" + str(root),
                          trusted_authorized_paths=[str(root)])
         assert final == "VPCS_EXPECTED_TERMINAL_PASS", final
         assert loop.terminal_outcome == "SUCCESS", loop.terminal_outcome
