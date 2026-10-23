@@ -1,0 +1,25 @@
+{
+  "schema": "CODEX_CHAT_COLLAB_VERIFICATION_V1",
+  "test_id": "CODEX-CHAT-E2E-20261024-B81C",
+  "round": 2,
+  "synthetic": true,
+  "verification_nonce": "CODEX-VERIFY-6C31",
+  "verified_chatgpt_commit": "cb0d3c97d25c0f94d95246b09fda87e80cb232ed",
+  "verified_result_path": "collaboration-tests/CODEX-CHAT-E2E-20261024-B81C.json",
+  "checks": {
+    "test_id": true,
+    "echo_nonce": true,
+    "failed_case_ids": true,
+    "blocked_case_ids": true,
+    "baseline_echo": true,
+    "synthetic_rca_boundary": true
+  },
+  "result": "PASS",
+  "next_action": "Read this file from GitHub and write an acknowledgement file; no source-code changes.",
+  "local_package": {
+    "commit": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+    "remote_tracking_ref": "origin/fix/evidence-terminal-boundary",
+    "status": "detached HEAD with one untracked fixture directory",
+    "note": "Observed metadata only. This synthetic test did not deploy or run product tests."
+  }
+}
