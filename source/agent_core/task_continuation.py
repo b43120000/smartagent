@@ -499,11 +499,11 @@ def format_terminal_acceptance(terminal_acceptance, *, task_id, request_id):
     verification = str(receipt.get('verification_status', '') or '').upper()
     if verification not in {'PASS', 'FAIL', 'UNKNOWN', 'UNVERIFIED', 'SPEC_INVALID'}:
         verification = 'UNVERIFIED'
-    return ('\\nRuntime 終態接受回執：ACCEPTED'
-            + f'\\nRuntime Decision / Outcome：{decision} / {terminal_outcome}'
-            + f'\\nRuntime Verification：{verification}'
-            + f'\\nReceipt ID：{receipt["receipt_id"]}'
-            + f'\\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}' )
+    return ('\nRuntime 終態接受回執：ACCEPTED'
+            + f'\nRuntime Decision / Outcome：{decision} / {terminal_outcome}'
+            + f'\nRuntime Verification：{verification}'
+            + f'\nReceipt ID：{receipt["receipt_id"]}'
+            + f'\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}')
 
 
 def render_task_reply(*, original_request, base, conclusion, task_id, request_id, state, source_task_id='', ack_id='', outcome='', terminal_acceptance=None):
