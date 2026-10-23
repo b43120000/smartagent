@@ -167,8 +167,8 @@
     "Loaded process SHA UNVERIFIED"
   ],
   "next_owner": {
-    "product_rca_and_implementation": "ChatGPT",
-    "local_deployment_execution_and_evidence": "Codex"
+    "implementation": "ChatGPT",
+    "local_execution_testing_evidence": "Codex"
   },
   "next_steps": [
     {
@@ -199,5 +199,39 @@
   ],
   "overall_status": "DOCUMENTED_NOT_ACCEPTED_PENDING_LOCAL_VERIFICATION",
   "delivered_at": "2026-10-24",
-  "note": "Document is authoritative GitHub handoff. Chat reply is advisory; no requirement to read chat content-reference."
+  "note": "Document is authoritative GitHub handoff. Chat reply is advisory; no requirement to read chat content-reference.",
+  "bundled_python_isolated_import_fix": {
+    "root_cause": "Confirmed by Codex isolated=1, ignore_environment=1, no_site=0 and Scripts/python313._pth. PYTHONPATH is ignored, causing private_capture ModuleNotFoundError before tests.",
+    "product_sha_unchanged": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+    "original_five_observer_artifacts_unchanged": true,
+    "original_manifest_commit": "5c541bf467cad53c401aff2cdf25421b5a624f79",
+    "adapter_path": ".codex/nlit_private_capture/Enable-NlitIsolatedPython.ps1",
+    "adapter_exact_source_commit": "6d35134920a89da0232366e1d95b7151a9492be6",
+    "adapter_sha256": "ff0626d81527a6a6834f99bbafd0caa632a1cfcf5f26b62232021636cc083fba",
+    "adapter_bytes": 6310,
+    "adapter_manifest_commit": "1549c045fcb23b4e2a890fefdb2ad9403236ee96",
+    "corrective_runbook": "collaboration/SA-NLIT-20261024/round-002/bundled_python_import_fix.md",
+    "activation_scope": "Only the detached TEST installation's .venv/Scripts/python313._pth, backed up byte-exact under local private root; original Agent and global Python untouched.",
+    "activation_order": [
+      "Verify adapter SHA256 and bytes from GitHub connector exact commit",
+      "Backup private original byte contents and original SHA256",
+      "Probe, Enable, Verify in a new offline interpreter process",
+      "Require auto-hook on actual WebAgent protocol_loop/browser_client/web_runtime classes without calling patch_available_modules manually",
+      "Only after full separated process/browser/writer preflight run new request-specific LOCAL_TEST case",
+      "Restore exact original pth only after dedicated test workers have stopped"
+    ],
+    "safety": "No blind retry after a partial patch; no original 17 rerun; no composer draft clearing; no shared writer cleanup; do not treat startup import as Planner delivery proof.",
+    "offline_python_313_real_hook_status": "PENDING_CODEX_LOCAL_EXECUTION",
+    "github_ci_non_embedded_hook_status": "PASS",
+    "github_ci_proof_limit": "Windows GitHub Actions used regular Python; CI imported real classes but did not test user's embedded Python313 _pth behavior or live browser.",
+    "verified_static_source_syntax": "CI_PARSE_OF_ADAPTER_ON_WINDOWS_PASS",
+    "product_manifest_rewrite": "NONE"
+  },
+  "observer_deployment_status": "BLOCKED_WAITING_BUNDLED_PYTHON_PTH_ENABLE_AND_AUTO_HOOK_PROBE",
+  "round002_source_files_modified": false,
+  "deliverables_addendum": [
+    ".codex/nlit_private_capture/Enable-NlitIsolatedPython.ps1",
+    ".codex/nlit_private_capture/adapter_manifest.json",
+    "collaboration/SA-NLIT-20261024/round-002/bundled_python_import_fix.md"
+  ]
 }
