@@ -1,0 +1,51 @@
+{
+  "task_id": "SA-NLIT-20261024",
+  "round": 3,
+  "writer": "Codex",
+  "product_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "source_delivery_commit": "fbd2b8b883d8dc08980dad7483421ad75ffe5412",
+  "gate3_runbook_read_commit": "3d1a3af872ba6aca085835fef58ebfbd654b5f5e",
+  "v2_adapter_source": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+  "strictmode_fixture_source": "568ff5efac2204de2d20ec6dc21a7525c1a7da55",
+  "gate3_python_source": "3a159d3aba8309c3273c4787872a79f396bbe8cc",
+  "gate3_powershell_source": "617bfff229f9d82586fbd5bb2d8b1369255a5d69",
+  "gates": {
+    "artifact_hash_and_bytes": "PASS",
+    "strictmode_fixture": "PASS",
+    "readonly_probe": "PASS",
+    "before_start_preflight": "PASS",
+    "test_python_enable": "PASS",
+    "test_python_verify": "PASS",
+    "fresh_real_product_auto_hooks": "PASS",
+    "gate3_inspect": "PASS",
+    "isolated_browser_launch_and_owner": "PASS",
+    "manual_browser_login": "BLOCKED",
+    "test_workspace_binding": "NOT_RUN",
+    "test_supervisor": "NOT_STARTED",
+    "new_runtime_case": "NOT_SUBMITTED",
+    "exact_post_tool_real_delivery": "NOT_OBSERVED"
+  },
+  "assertions": {
+    "strictmode_success_markers": 4,
+    "real_product_wrapped_methods": 4,
+    "manual_patch_call_used": false,
+    "gate3_launch_exit_code": 0,
+    "isolated_browser_owner_profile_port_match": true,
+    "first_browser_setup_confirmation_visible": true,
+    "first_browser_setup_confirmation_accepted": false,
+    "production_changed": false,
+    "main_modified": false,
+    "merge_performed": false,
+    "historical_requests_replayed": 0
+  },
+  "limits": [
+    "Fixture and auto-hook checks are not real Planner IT acceptance.",
+    "Original 17 request Planner inputs remain NOT_OBSERVED;15 receipts are not case PASS.",
+    "Historical IT19 remains UNSENT/BLOCKED; no transaction touched.",
+    "Current browser requires human first-run setup/login and a fresh test-only conversation before Bind or supervisor startup."
+  ],
+  "handoff_status": "BLOCKED_MANUAL_LOGIN_NO_NEW_TASK_IN_FLIGHT",
+  "next_owner": "User: authenticate dedicated test browser and provide fresh test-only conversation; then Codex executes existing Gate3, ChatGPT retains analysis/source ownership.",
+  "next_step": "Preserve isolated browser, private backup/state and exact artifacts; never re-Enable over existing state, clear drafts, copy credentials or bypass login."
+}
