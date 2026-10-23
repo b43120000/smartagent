@@ -140,6 +140,40 @@ def outcome_committable(tool, outcome, action_id=''):
     return True
 
 
+def completed_unknown_fact_observation(outcome, action_id=''):
+    """A trusted, completed stat probe can yield an UNKNOWN *fact*.
+
+    A generic UNKNOWN execution (notably a mutation or queued operation) is
+    never completion evidence. Require the canonical producer receipt and an
+    unknown, value-less observation; model prose cannot assert this flag.
+    """
+    if not isinstance(outcome, dict) or not (
+        outcome.get('tool') == 'observe_fact'
+        and outcome.get('status') == 'UNKNOWN'
+        and outcome.get('reason') == 'FACT_OBSERVATION_UNKNOWN'
+        and outcome.get('executed') is True
+    ):
+        return False
+    if action_id and outcome.get('action_id') != action_id:
+        return False
+    data = outcome.get('data')
+    if not isinstance(data, dict) or data.get('execution_finality') != 'COMPLETED':
+        return False
+    if data.get('observation_status') != 'UNKNOWN' or data.get('verification_status') != 'UNKNOWN':
+        return False
+    observations = data.get('observations')
+    if not isinstance(observations, list) or len(observations) != 1:
+        return False
+    fact = observations[0]
+    return (isinstance(fact, dict)
+            and fact.get('schema') == 'SMARTAGENT_EVIDENCE_V1'
+            and fact.get('field') == 'file.exists'
+            and fact.get('source') == 'filesystem.stat'
+            and fact.get('observation_status') == 'UNKNOWN'
+            and fact.get('freshness') == 'UNKNOWN'
+            and 'value' not in fact)
+
+
 def outcome_terminal_eligible(tool, outcome, action_id=''):
     """Action completion is not Task completion (e.g. accepted write chunk)."""
     return outcome_committable(tool, outcome, action_id) and (outcome.get('data') or {}).get('terminal_eligible') is not False
