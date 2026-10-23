@@ -1,0 +1,55 @@
+{
+  "schema": "SA_NLIT_GATE3_ARTIFACT_PIN_V1",
+  "task_id": "SA-NLIT-20261024",
+  "scope": "Round003 Gate3 TEST-only browser/workspace/worker binding",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "product_baseline_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "preserves": {
+    "original_five_artifact_manifest_commit": "5c541bf467cad53c401aff2cdf25421b5a624f79",
+    "original_five_source_commit": "7e19ee5181712f38f8cf3aef6375e510bef15046",
+    "v2_adapter_source_commit": "e5d8c82a84b8a4a6f66a75946ea54ac0bcb4a3b9",
+    "v2_adapter_sha256": "487dd90395a21ffda8556fe50595018db84d35e42b970de64bb2080fdee9cb8f",
+    "v2_adapter_bytes": 6660,
+    "adapter_manifest_pin_commit": "6e79cec059793dc96d1a5511ad69c2bf41003302",
+    "prior_fixture_commit": "568ff5efac2204de2d20ec6dc21a7525c1a7da55",
+    "prior_fixture_sha256": "458b9434ee548a8d2a2b562c23d21f55ff57b67bd79dca188c645daa726a5631",
+    "prior_fixture_bytes": 3557
+  },
+  "artifacts": [
+    {
+      "file": "nlit_gate3.py",
+      "path": ".codex/nlit_private_capture/nlit_gate3.py",
+      "source_commit": "e68931443e3ce4b5da9102fb25aec005575e5f4b",
+      "git_blob_sha": "85d799e1cf933a8ce342da2fb2e01915f738b2b0",
+      "sha256": "6987d5e98a1d3d03f638b5ecc5b28eb289a00204b4fedfaf0ee75704dde4bf1f",
+      "bytes": 10011,
+      "encoding": "UTF-8 without BOM"
+    },
+    {
+      "file": "Invoke-NlitGate3.ps1",
+      "path": ".codex/nlit_private_capture/Invoke-NlitGate3.ps1",
+      "source_commit": "617bfff229f9d82586fbd5bb2d8b1369255a5d69",
+      "git_blob_sha": "504570a16c425d93754c3c4d60ebb822e345e255",
+      "sha256": "e1315eeb7b1be6376d793b3bd126e1d50be2c7834683d6ff65832f0f9b717e65",
+      "bytes": 10444,
+      "encoding": "UTF-8 without BOM"
+    }
+  ],
+  "deployment": "External observer directory only; no source checkout changes to baseline product; no GitHub credentials or prompt data",
+  "frontend_constraints": [
+    "No browser assumed authenticated without explicit manual confirmation",
+    "New Edge5 owner by PID, command line, user-data-dir and loopback port",
+    "Official remote_workspace cmd_set (registry + primary binding) targets TEST only",
+    "Official local_telegram_sender.send_and_wait with explicit TEST root/workspace, no request text in CLI",
+    "V2 _pth must Verify before Gate3; no fallback to PYTHONPATH",
+    "Legacy Invoke-NlitIsolated StartSupervisor is not used: it runs BeforeStart after a browser is open and would block",
+    "StrictMode/bundled import already reported PASS by Codex; Gate3 remains local NOT_RUN"
+  ],
+  "acceptance_status": {
+    "github_sources": "STAGED_AWAITING_LOCAL_VERIFICATION",
+    "local_browser": "NOT_RUN",
+    "local_binding": "NOT_RUN",
+    "local_supervisor": "NOT_RUN",
+    "new_case": "NOT_RUN"
+  }
+}
