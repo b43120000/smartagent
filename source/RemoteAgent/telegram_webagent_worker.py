@@ -618,8 +618,17 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         print(f"[RemoteAgent] 任務完成，等待 Telegram 回傳: {task.request_id}", flush=True)
         return 0
     except BaseException as exc:
+        # A Runtime PAUSED checkpoint is not a terminal failed task.
+        checkpoint_progress = read_progress(task.task_id, root=root)
+        has_pause_checkpoint = bool(
+            checkpoint_progress is not None
+            and checkpoint_progress.runtime_state == "PAUSED"
+        )
         try:
-            continuation_store.finish(task.task_id, 'INTERRUPTED', f'{type(exc).__name__}: {exc}')
+            continuation_store.finish(
+                task.task_id, 'PAUSED' if has_pause_checkpoint else 'INTERRUPTED',
+                f'{type(exc).__name__}: {exc}'
+            )
         except Exception as persistence_error:
             runtime_log.write('ERROR', component='telegram_webagent_worker', stage='CONTINUATION_FINISH_FAILED',
                 task_id=task.task_id, error=str(persistence_error))
@@ -690,6 +699,30 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             state='INTERRUPTED' if protocol_only_interruption else 'FAILED',
             outcome=loop_outcome if protocol_only_interruption else '',
             terminal_acceptance=acceptance if protocol_only_interruption else None)
+        # Keep Queue, Progress, continuation and sender observations
+        # consistent. No acceptance receipt exists for this checkpoint.
+        if has_pause_checkpoint and not acceptance:
+            paused = queue.pause_running(
+                task.task_id,
+                failure_payload["error"],
+                result={
+                    **failure_payload,
+                    "action_result_ledger": dict(getattr(loop, "action_result_ledger", {}) or {}),
+                    "condition_result_ledger": dict(getattr(loop, "condition_result_ledger", {}) or {}),
+                },
+            )
+            if paused is not None:
+                events.emit(
+                    "TASK_PAUSED", paused, status="PAUSED",
+                    payload={**failure_payload, "pause_is_nonterminal": True},
+                )
+            runtime_log.write(
+                "STATUS", component="telegram_webagent_worker",
+                stage="TASK_PAUSED", task_id=task.task_id,
+                request_id=task.request_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return 0  # Worker exited cleanly; task remains nonterminal PAUSED.
         if protocol_only_interruption:
             interrupted = queue.interrupt_running(
                 task.task_id,
