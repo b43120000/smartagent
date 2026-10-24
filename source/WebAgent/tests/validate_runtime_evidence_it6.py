@@ -37,6 +37,7 @@ def test_direct_condition_admission() -> None:
         target = root / "present.txt"
         target.write_text("exists", encoding="utf-8")
         ctx = WebAgentToolContext(root)
+        ctx.current_task_epoch = "IT6-EPOCH-1"
         ctx.begin_run("IT6-REQUEST", "Check " + str(target), [str(target)])
         predicate = {"field": "file.exists", "operator": "equals", "expected": True}
         valid_text = "IT6-success-file-exists"
@@ -70,6 +71,7 @@ def test_direct_condition_admission() -> None:
         else:
             raise AssertionError("Foreign request tried to register success conditions")
         # New request must not inherit an old task's valid binding.
+        ctx.current_task_epoch = "IT6-EPOCH-2"
         ctx.begin_run("IT6-NEXT", "Check " + str(target), [str(target)])
         outcome = decode_result(ctx.execute(action))
         assert outcome["status"] == "REJECTED" and outcome["executed"] is False, outcome
