@@ -3813,8 +3813,11 @@ class WebAgentProtocolLoop:
 
         for _ in range(self.max_turns):
             self._check_cancelled()
-            if (self._bounded_repair.rejected_turns >= 3
-                    and time.monotonic() - self._request_started_monotonic >= 600):
+            from agent_core.bounded_repair import repair_deadline_expired
+            if repair_deadline_expired(
+                self._bounded_repair.rejected_turns,
+                time.monotonic() - self._request_started_monotonic,
+            ):
                 reason = "bounded_repair:request_elapsed_soft_deadline"
                 set_runtime_state(self.task_id, "PAUSED", reason=reason,
                                   root=self.progress_root)
