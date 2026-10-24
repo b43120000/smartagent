@@ -4138,6 +4138,13 @@ class WebAgentProtocolLoop:
                         round_id=self.turn_id, root=self.progress_root) or self.progress_ledger
                 self.deferred_progress_repair = {}
                 self.last_deferred_read_signature = None
+            # Admission is request-scoped. Install only the accepted,
+            # Runtime-recorded progress clauses (never raw Planner action
+            # fields), after progress persistence but before any Tool Action.
+            self.tools.bind_runtime_completion_contract(
+                self.progress_ledger.completion_contract,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
             if len(actions) == 1:
                 NarrativeDecisionBridge.mark_terminal_result(
                     action_id=str(progress_action.get("action_id", "")),
