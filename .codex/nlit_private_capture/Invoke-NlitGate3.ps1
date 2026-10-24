@@ -59,14 +59,25 @@ $FiveManifest=Join-Path $ObserverDir 'artifact_manifest.json'
 $V2Manifest=Join-Path $ObserverDir 'adapter_manifest.json'
 $Gate3Manifest=Join-Path $ObserverDir 'gate3_manifest.json'
 $NonceFile=Join-Path $PrivateRoot 'gate3_capture_nonce.txt'
-$Profile=Join-Path $TestAppData 'WebLLMScraper\edge_5'
+$Profile=Join-Path $TestAppData 'WebLLMScraper\edge_1'
 $Launcher=Join-Path $TestInstall 'launch_remote_agent.bat'
 foreach($f in @($Py,$Helper,$Adapter,$FiveManifest,$V2Manifest,$Gate3Manifest,$Launcher)) {
  if (!(Test-Path -LiteralPath $f -PathType Leaf)) { Block 'REQUIRED_FILE_MISSING' }
  NoReparse $f
 }
 $pinnedGate=Get-Content -LiteralPath $Gate3Manifest -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($pinnedGate.schema -ne 'SA_NLIT_GATE3_ARTIFACT_PIN_V1') { Block 'GATE3_MANIFEST_SCHEMA_MISMATCH' }
+if ($pinnedGate.schema -ne 'SA_NLIT_GATE3_ARTIFACT_PIN_V2') { Block 'GATE3_MANIFEST_SCHEMA_MISMATCH' }
+$browserPin=$pinnedGate.browser
+if (([string]$browserPin.name) -ne 'edge' -or ([int]$browserPin.instance) -ne 1 -or
+    ([int]$browserPin.port) -ne 12811 -or ([string]$browserPin.profile) -ne 'edge_1') {
+ Block 'GATE3_BROWSER_PIN_NOT_OFFICIAL_EDGE1'
+}
+$pinNames=@($pinnedGate.artifacts | ForEach-Object { [string]$_.file })
+if ($pinNames.Count -ne 2 -or
+    $pinNames -notcontains 'nlit_gate3.py' -or
+    $pinNames -notcontains 'Invoke-NlitGate3.ps1') {
+ Block 'GATE3_MANIFEST_EXPECTED_TWO_HELPERS'
+}
 foreach($entry in $pinnedGate.artifacts) {
  $fname=[string]$entry.file
  if ($fname -notmatch '^[A-Za-z0-9_-]+[.](py|ps1)$') { Block 'GATE3_ARTIFACT_NAME_INVALID' }
@@ -121,19 +132,19 @@ function PythonGate([string]$Operation) {
 }
 function EdgeOwned([bool]$RequireRunning) {
  if (!(Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) { Block 'PORT_PROBE_UNAVAILABLE' }
- $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 12815 -ErrorAction SilentlyContinue)
+ $listeners=@(Get-NetTCPConnection -State Listen -LocalPort 12811 -ErrorAction SilentlyContinue)
  if ($listeners.Count -eq 0) {
-  if ($RequireRunning) { Block 'TEST_EDGE5_NOT_RUNNING' }
+  if ($RequireRunning) { Block 'TEST_EDGE1_NOT_RUNNING' }
   return $false
  }
  $owners=@($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
- if ($owners.Count -ne 1 -or [int]$owners[0] -le 0) { Block 'EDGE5_MULTIPLE_OWNERS' }
+ if ($owners.Count -ne 1 -or [int]$owners[0] -le 0) { Block 'EDGE1_MULTIPLE_OWNERS' }
  $entry=Get-CimInstance Win32_Process -Filter ('ProcessId='+[int]$owners[0]) -ErrorAction Stop
- if ($null -eq $entry) { Block 'EDGE5_OWNER_MISSING' }
+ if ($null -eq $entry) { Block 'EDGE1_OWNER_MISSING' }
  $cmd=[string]$entry.CommandLine
  if ($entry.Name -ine 'msedge.exe' -or
      $cmd.IndexOf($Profile,[StringComparison]::OrdinalIgnoreCase) -lt 0 -or
-     $cmd.IndexOf('--remote-debugging-port=12815',[StringComparison]::OrdinalIgnoreCase) -lt 0) {
+     $cmd.IndexOf('--remote-debugging-port=12811',[StringComparison]::OrdinalIgnoreCase) -lt 0) {
   Block 'FOREIGN_CDP_PROFILE_OR_PROCESS'
  }
  foreach($item in $listeners) {
@@ -164,7 +175,7 @@ try {
   Preflight
   PythonGate 'open-browser'
   if (!(EdgeOwned $true)) { Block 'BROWSER_OWNERSHIP_FAILED' }
-  Write-Output 'NLIT_GATE3_TEST_EDGE5_OPEN; LOGIN_NOT_ATTESTED'
+  Write-Output 'NLIT_GATE3_TEST_EDGE1_OPEN; LOGIN_NOT_ATTESTED'
   return
  }
  if ($Mode -eq 'Bind') {
