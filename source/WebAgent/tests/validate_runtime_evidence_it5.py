@@ -43,6 +43,7 @@ def test_path_prose_does_not_expand_scope() -> None:
     p = r"C:\fixture\present.txt"
     assert extract_authorized_paths(f + " 的結構化狀態") == [f]
     assert extract_authorized_paths(p + " 的 file.exists equals true") == [p]
+    assert extract_authorized_paths(p + " 的事前 file.exists equals true 成功條件") == [p]
     assert extract_authorized_paths('"' + f + ' name"') == [f + " name"]
     assert extract_authorized_paths(r"C:\fixture\name with spaces.txt") == [r"C:\fixture\name with spaces.txt"]
     # Do not discard ADS-looking substrings to fabricate a permitted path.
