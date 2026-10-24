@@ -166,6 +166,8 @@ IT08/09/10/12/13/14、IT18、IT20 等已觀測核心行為不再 Live 重跑，�
 
 ```text
 請在受授權的 {F} 測試範圍內透過 Runtime 正式 run_command 執行一個不改檔案、不連網的短命令，正常結束時 exit code 必須為 7（例如 Python 以 sys.exit(7) 退出）。請記錄 Runtime-owned 的 process_state、exit_code、execution_status、是否存在 process.exit_code structured observation，以及 Planner 下一輪實際接到的資料。不能根據 stdout 的「PASS」推定 exit code 或成功條件；如 run_command 不被授權則保存原始拒絕。
+
+IT4 額外要求（不變更原始目標）：在正式 run_command 執行前，就在 action 內設定 expected_failure={"exit_codes":[7]}，若此工具契約需要 operation，使用符合原子化命令語意的 TEST，並提供事前的 success_criteria 與合法 verify。請分開回報「Python 子程序原始 exit_code=7」、「PowerShell launcher status」、「原始 execution_status=FAILED」與「預期失敗 expectation_status=PASS」（只有真實符合才是 PASS）。如果未能執行或原生退出碼仍是 1，就照實回報，不能以後續獨立 VERIFY 的 PASS 補造原命令結果。
 ```
 
 **IT4 驗收附註：** 初始 plan 必須先定義 objective expected failure（預期 exit_codes=[7]）及合法 command verification，不得事後根據 exit code 改寫期待；Codex 記錄 exit code 7 與 Shell/child 來源、Runtime 原始 status、Repair Budget、elapsed 及 finality。
