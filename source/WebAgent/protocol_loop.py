@@ -3500,14 +3500,15 @@ class WebAgentProtocolLoop:
             **evidence,
         }
         self.execution_state = evidence["execution_status"]
-        stagnation = self._semantic_stagnation.observe(action, evidence)
-        if stagnation["blocker_reason"]:
-            self._emit("semantic_stagnation_observed",
-                request_id=self.run_id, round=self.turn_id, **stagnation)
-        if stagnation["status"] == "EXHAUSTED":
-            # Do not throw inside an action handler: that would reclassify an
-            # already observed rejected tool as a new unknown tool exception.
-            self._stagnation_pending = stagnation
+        stagnation_guard = getattr(self, "_semantic_stagnation", None)
+        if stagnation_guard is not None:
+            stagnation = stagnation_guard.observe(action, evidence)
+            if stagnation["blocker_reason"]:
+                self._emit("semantic_stagnation_observed",
+                    request_id=self.run_id, round=self.turn_id, **stagnation)
+            if stagnation["status"] == "EXHAUSTED":
+                # Never reclassify an already attempted tool as UNKNOWN.
+                self._stagnation_pending = stagnation
         if self.continuation_store:
             self.continuation_store.snapshot(self)
         return str(result)
