@@ -103,6 +103,9 @@ Round2 **核心行為符合預期、不列入本輪重測**：IT08、IT09、IT10
 
 ## 4. 原始 Revision 3 Case Body（指定 10 個主 ITEM；全文保留）
 
+**註：** 下列每項附帶的「上一批觀測／共通 Gate」等文字為歷史測試備註；Round3 的實際 preflight 僅依本版第 0、2 節，**不是**要求另開 Edge1、Gate3 Browser、ChatGPT 新對話或修改綁定。只有 `原始自然語言測試內容（Revision 3）` 的 code block 是要逐筆送入 SmartAgent 的 Case Body。
+
+
 ### item IT07 — Condition ID 不符／不可偷偷換綁定（唯讀）
 
 - **歷史備註（源自前一批測試文件）：** 原 admission rejection 有紀錄；實際下一輪 Planner 輸入未觀測。
