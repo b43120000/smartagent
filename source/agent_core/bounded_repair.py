@@ -119,10 +119,10 @@ class SemanticStagnationGuard:
             if not raw and isinstance(action.get("paths"), list) and action["paths"]:
                 raw = action["paths"][0]
             raw = str(raw or "").strip()
-            root = re.sub(r"\\s+內$", "", raw).replace("/", "\\\\").casefold()
+            root = re.sub(r"\s+內$", "", raw).replace("/", "\\").casefold()
             # Only correlate full paths; never treat an ambiguous relative
             # selector or empty scope as proof of one shared root.
-            if root and (root.startswith("/") or re.match(r"^[a-z]:\\\\", root)):
+            if root and (root.startswith("\\") or re.match(r"^[a-z]:\\", root)):
                 token = hashlib.sha256(root.encode("utf-8")).hexdigest()[:16]
                 blocker = "PROJECT_ROOT_PRECONDITION_UNSATISFIED:" + token
         if verification == "PASS" or not blocker:
