@@ -64,6 +64,14 @@ class BoundedRepairBudget:
             "terminal_outcome_inferred": False,
         }
 
+def repair_deadline_expired(
+    rejected_turns: int, elapsed_seconds: float,
+    *, min_rejections: int = 3, limit_seconds: float = 600,
+) -> bool:
+    """Soft deadline evaluated between Planner rounds, never during a tool."""
+    return rejected_turns >= min_rejections and elapsed_seconds >= limit_seconds
+
+
 class SemanticStagnationGuard:
     """Detect repeated unsuccessful remediation, even when actions have new IDs.
 
