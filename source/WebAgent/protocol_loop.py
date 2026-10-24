@@ -3669,7 +3669,10 @@ class WebAgentProtocolLoop:
         self.tools.last_verification_status = None
         self.pending_verification_requirement = {}
         from agent_core.blocker_recovery import BlockerRecovery
+        from agent_core.bounded_repair import BoundedRepairBudget
         self._blocker_recovery = BlockerRecovery()
+        # A new request must not inherit the previous request's repair budget.
+        self._bounded_repair = BoundedRepairBudget()
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         authorized = resolve_authorized_paths(
