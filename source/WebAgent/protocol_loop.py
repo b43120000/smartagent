@@ -2017,6 +2017,28 @@ class WebAgentProtocolLoop:
         """
         progress = self.progress_ledger
         refs = [str(item) for item in list(progress.evidence_refs or [])]
+        # Receipt identity audit is separate from terminal admission. This
+        # compares actual unredacted request-bound ledger data BEFORE report
+        # aliasing; a repeated alias in a sanitized report is not proof of
+        # cross-task contamination.
+        action_refs = [ref for ref in refs if ref not in
+                       {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}]
+        unknown_refs = [ref for ref in action_refs
+                        if ref not in self.action_result_ledger]
+        foreign_refs = [
+            ref for ref in action_refs
+            if ref in self.action_result_ledger and
+            (self.action_result_ledger[ref].get("request_id", self.run_id) != self.run_id
+             or self.action_result_ledger[ref].get("task_epoch", self.task_epoch) != self.task_epoch)
+        ]
+        self._emit("terminal_evidence_identity_audit",
+            request_id=self.run_id, task_id=self.task_id, round=self.turn_id,
+            action_ref_count=len(action_refs),
+            unknown_ref_count=len(unknown_refs),
+            foreign_ref_count=len(foreign_refs),
+            identity_status=("SUSPECT" if unknown_refs or foreign_refs else "SCOPED"),
+            # No raw identifiers, paths, tokens, or receipt rewrites.
+        )
         payload = {
             "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
             "admission_status": "ACCEPTED",
