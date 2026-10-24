@@ -18,18 +18,20 @@ Round2 **核心行為符合預期、不列入本輪重測**：IT08、IT09、IT10
 
 | 順序 | ITEM | 為何仍需驗證 | 起始 |
 |---:|---|---|---|
-| 01 | IT07 | 原非法 Condition ID 沒有被證明實際提交至 Tool Admission | NOT_RUN |
-| 02 | IT11 | Round2 只帶入上一筆 Receipt ID，未帶入真實 PREV_ACTION_ID／PREV_CONDITION_ID | NOT_RUN |
-| 03 | IT15 | Receipt 已觀測，但精確 Transport / Planner delivery correlation 不足 | NOT_RUN |
-| 04 | IT16 | 原先 900 秒超時、修復反覆拒絕；驗證 exit=7 + Typed Path、Scope、Bounded Repair | NOT_RUN |
-| 05 | IT17 | Round2 未送測 | NOT_RUN |
-| 06 | IT18 | Round2 未送測；僅在新 fixture 做允許的寫入 | NOT_RUN |
-| 07 | IT20 | Round2 未送測 | NOT_RUN |
-| 08 | IT21 | Round2 未送測 | NOT_RUN |
-| 09 | IT22 | Round2 未送測 | NOT_RUN |
-| 10 | IT23-A | Round2 未送測；第一筆 LOCAL_TEST Receiver request | NOT_RUN |
-| 11 | IT23-B | Round2 未送測；A 完全終結、封存後的第二筆 request | NOT_RUN |
+| 01 | IT15 | 先取得新任務可核對的 Action／Condition／Receipt，並重驗 Transport / Planner delivery correlation | NOT_RUN |
+| 02 | IT11 | 將 IT15 真實 PREV_ACTION_ID／PREV_CONDITION_ID／PREV_RECEIPT_ID 帶入，驗證跨任務隔離 | NOT_RUN |
+| 03 | IT07 | 原非法 Condition ID 沒有被證明實際提交至 Tool Admission | NOT_RUN |
+| 04 | IT17 | Round2 未送測 | NOT_RUN |
+| 05 | IT18 | Round2 未送測；僅在新 fixture 做允許的寫入 | NOT_RUN |
+| 06 | IT20 | Round2 未送測 | NOT_RUN |
+| 07 | IT21 | Round2 未送測 | NOT_RUN |
+| 08 | IT22 | Round2 未送測 | NOT_RUN |
+| 09 | IT23-A | Round2 未送測；第一筆 LOCAL_TEST Receiver request | NOT_RUN |
+| 10 | IT23-B | Round2 未送測；A 完全終結、封存後的第二筆 request | NOT_RUN |
+| 11 | IT16 | 最後執行：Round2 原 900 秒超時，驗證 Typed Path、Scope、Bounded Repair 與 exit=7 | NOT_RUN |
 | — | IT19 | 交易 writer/store 隔離未證明，**不送出** | SAFETY_BLOCKED |
+
+**順序理由：** IT15 優先建立新的真實 ID 供 IT11 使用；IT16 曾在 Round2 阻擋所有後續項目，故移至最後，避免再次因一筆超時而影響其餘測項。
 
 合計 **10 個主 ITEM、11 筆新請求**；IT01–IT06 是歷史，不重送；IT12-ST 是選配不在本批。IT23-A/B 兩筆**不同 Request/Task ID**，不代表兩個 ChatGPT 對話。
 
@@ -38,7 +40,7 @@ Round2 **核心行為符合預期、不列入本輪重測**：IT08、IT09、IT10
 1. 在已授權、現有 SmartAgent 上只做唯讀 preflight：確認版本、request queue、舊 IT16 既有 request 真實終態、正式 Receiver、唯一目前擁有者、授權 workspace、manifest/工具版本及測試 fixture。**不做 Edge1 / Gate3 Browser 初始化；不開 ChatGPT 對話、不改 URL**。
 2. 建立唯一新的 RUN_ID 及上述 Round3 Markdown；先把全部 ITEM 記 `NOT_RUN`（IT19 `SAFETY_BLOCKED`）。先記錄 `prior_IT16_state` 及來源類型和真正的終態回執，否則停止。
 3. 準備經授權的**全新、與 Round2 不同**測試 fixture `{F}`，包含 Case Body 必要的檔案／缺失父目錄；所有產線/user資料保持不變；IT18 的 `write_readback.txt` 必須尚不存在，禁止覆寫。
-4. 依清單序列提交一筆**完整原始 Case Body**；只替換 `{F}` 及 IT11 的真實 `PREV_ACTION_ID`／`PREV_CONDITION_ID`／`PREV_RECEIPT_ID`。若 ID 無法真實取得，IT11 記 `PREV_ID_NOT_AVAILABLE`，不發出未替換 placeholder 的不完整案例、不可憑空捏造。
+4. 依上表順序提交一筆**完整原始 Case Body**；只替換 `{F}` 及 IT11 的真實 `PREV_ACTION_ID`／`PREV_CONDITION_ID`／`PREV_RECEIPT_ID`。若 ID 無法真實取得，IT11 記 `PREV_ID_NOT_AVAILABLE`，不發出未替換 placeholder 的不完整案例、不可憑空捏造。
 5. 每筆等待 Runtime 真正 terminal event / terminal receipt，分別記：Raw Tool Result、Normalized Observation、Predicate Verification、Condition Ledger/Blocker、Action Loop Transition、Planner decision、**精確下一輪 Planner input correlation**（無法觀測就明確記錄）、Transport ACK、時間戳記和 Round count。
 6. 任何 Tool FAIL／Predicate FAIL／Expected negative result 不等於 Harness Failure。只有單筆完整正式終態且存證成功，確認安全、沒有待處理提交或其他 active task，才繼續下一個案例。若 timeout / pending / writer unknown / 驗證失敗且無安全途徑，保存現場並停止**後續派送**，不盲目重試。
 7. **IT16 額外追蹤**：raw Path 提取是否混入「測試範圍內透過 Runtime」等敘述；被拒絕次數與相同 blocker semantic key；有無成功真正執行 `run_command` 並觀測 Runtime-owned exit_code=7；起訖時間；是否在合理 deadline 內有可信 terminal。不要為達標而放寬 Scope。請保留 invalid admission 與真正 Tool execution 差異。
