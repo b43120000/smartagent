@@ -10,6 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from agent_core.tool_result_contract import decode_result, attach_runtime_result
+from agent_core.path_security import canonicalize_path, PathSecurityError
 from agent_core.evidence_identity_audit import audit_terminal_references
 from agent_core.task_state import (
     TASK_PAUSED, TASK_RUNNING, RemoteTaskQueue, TaskRecord, TaskStateStore
@@ -60,8 +61,34 @@ def test_path_prose_does_not_expand_scope() -> None:
     assert extract_authorized_paths('"' + f + ' name"') == [f + " name"]
     assert extract_authorized_paths(r"C:\fixture\name with spaces.txt") == [r"C:\fixture\name with spaces.txt"]
     # Do not discard ADS-looking substrings to fabricate a permitted path.
-    dangerous = extract_authorized_paths(r"C:\fixture\file.txt:secret")
-    assert dangerous and ":secret" in dangerous[0]
+    ads_raw = r"C:\fixture\file.txt:secret"
+    dangerous = extract_authorized_paths(ads_raw)
+    assert dangerous == [ads_raw], {
+        "source": ads_raw, "expected": [ads_raw], "actual": dangerous,
+    }
+    try:
+        canonicalize_path(dangerous[0])
+    except PathSecurityError as exc:
+        assert exc.code == "alternate_data_stream_forbidden", exc.code
+    else:
+        raise AssertionError("ADS path was unexpectedly accepted")
+
+    # The ADS stream must not swallow the next independent Windows path.
+    second = r"C:\fixture\present.txt"
+    actual = extract_authorized_paths(ads_raw + " " + second)
+    assert actual == [ads_raw, second], {
+        "source": ads_raw + " " + second, "actual": actual,
+    }
+    # Prose boundary must not silently discard a colon found later in the
+    # same request span (a conservative rejection rather than scope widening).
+    disguised = extract_authorized_paths(second + " 的結構化狀態:stream")
+    assert disguised and ":" in disguised[0][2:], disguised
+    try:
+        canonicalize_path(disguised[0])
+    except PathSecurityError as exc:
+        assert exc.code == "alternate_data_stream_forbidden", exc.code
+    else:
+        raise AssertionError("Disguised ADS path was unexpectedly accepted")
 
 
 def test_identity_missing_is_not_scoped() -> None:
