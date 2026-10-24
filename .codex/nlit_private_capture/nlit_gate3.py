@@ -73,9 +73,11 @@ def verify_base(args):
     from agent_core.browser_preferences import browser_launch_selection, load_browser_preferences
     selected = load_browser_preferences()
     b = browser_launch_selection(selected)
-    if selected != {"browser": "edge", "instance": 5} or b["port"] != 12815:
-        die("NOT_OFFICIAL_EDGE5_SELECTION")
+    if selected != {"browser": "edge", "instance": 1} or b["port"] != 12811:
+        die("NOT_OFFICIAL_EDGE1_SELECTION")
     profile = Path(b["profile_dir"]).resolve()
+    if b.get("profile") != "edge_1" or not equal(profile, appdata / "WebLLMScraper" / "edge_1"):
+        die("BROWSER_PROFILE_NOT_TEST_EDGE1")
     if not children_or_equal(profile, appdata):
         die("BROWSER_PROFILE_OUTSIDE_TEST_APPDATA")
     from agent_core.shared_browser import shared_browser_enabled
@@ -162,14 +164,14 @@ def command_open_browser(args):
     from agent_core.web_ui.manual_browser import ensure_agent_browser
     with sync_playwright() as pw:
         endpoint, created = ensure_agent_browser(pw, headless=False)
-        if endpoint != "http://127.0.0.1:12815":
-            die("BROWSER_ENDPOINT_NOT_OFFICIAL_EDGE5")
+        if endpoint != "http://127.0.0.1:12811":
+            die("BROWSER_ENDPOINT_NOT_OFFICIAL_EDGE1")
         # Race guard: re-attest the actual listener *before* touching CDP.
         # The PowerShell controller checks both before and after this method.
         import subprocess
         ps_guard = (
             "$ErrorActionPreference='Stop'; "
-            "$ls=@(Get-NetTCPConnection -State Listen -LocalPort 12815 -ErrorAction Stop); "
+            "$ls=@(Get-NetTCPConnection -State Listen -LocalPort 12811 -ErrorAction Stop); "
             "if($ls.Count -lt 1){exit 21}; "
             "$ids=@($ls | Select-Object -ExpandProperty OwningProcess -Unique); "
             "if($ids.Count -ne 1){exit 22}; "
@@ -178,7 +180,7 @@ def command_open_browser(args):
             "$cmd=[string]$proc.CommandLine; "
             "$profile=$env:NLIT_GATE3_EXPECTED_PROFILE; "
             "if($cmd.IndexOf($profile,[StringComparison]::OrdinalIgnoreCase) -lt 0 "
-            "-or $cmd.IndexOf('--remote-debugging-port=12815',[StringComparison]::OrdinalIgnoreCase) -lt 0){exit 24}; "
+            "-or $cmd.IndexOf('--remote-debugging-port=12811',[StringComparison]::OrdinalIgnoreCase) -lt 0){exit 24}; "
             "foreach($entry in $ls){if($entry.LocalAddress -notin @('127.0.0.1','::1')){exit 25}}"
         )
         child_env = dict(os.environ, NLIT_GATE3_EXPECTED_PROFILE=str(profile))
@@ -187,10 +189,10 @@ def command_open_browser(args):
             capture_output=True, text=True, timeout=15, env=child_env, check=False,
         )
         if result.returncode != 0:
-            die("EDGE5_PREATTACH_OWNER_NOT_VERIFIED")
+            die("EDGE1_PREATTACH_OWNER_NOT_VERIFIED")
         browser = pw.chromium.connect_over_cdp(endpoint)
         if not browser.contexts:
-            die("NEW_EDGE5_CONTEXT_MISSING")
+            die("NEW_EDGE1_CONTEXT_MISSING")
         page = browser.contexts[0].new_page()
         page.goto("https://chatgpt.com/", wait_until="commit", timeout=60000)
         page.bring_to_front()
