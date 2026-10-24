@@ -1,0 +1,55 @@
+{
+  "task_id": "SA-NLIT-20261024",
+  "round": 4,
+  "writer": "ChatGPT",
+  "repo": "b43120000/smartagent",
+  "branch": "fix/nlit-evidence-20261024-r1",
+  "product_baseline_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+  "round003_report_commit": "c481bb39fa55c60200d4f14a8e1dfef19fe5de3e",
+  "git_source_head_after_manifest": "083283f31b4da9b683c2891e7a02f4ae7c55d544",
+  "helper_pins": [
+    {
+      "path": ".codex/nlit_private_capture/nlit_gate3.py",
+      "source_commit": "4925f59839dd059fbc70a63548bca1bca057bc3b",
+      "sha256": "bc52f2c61374aab490e4cf0b3115cb4b29715802b2bf735597ed5d21f7f01b4c",
+      "bytes": 11828
+    },
+    {
+      "path": ".codex/nlit_private_capture/Invoke-NlitGate3.ps1",
+      "source_commit": "36d24d6e4fef4b7c4a8e1d9f87a22b704647e2ef",
+      "sha256": "189a196c7ef2dddb64dc38a1e39215b50b177123ea277bd4d0278afa7dee9a0b",
+      "bytes": 11872
+    }
+  ],
+  "manifest": {
+    "path": ".codex/nlit_private_capture/gate3_manifest.json",
+    "commit": "083283f31b4da9b683c2891e7a02f4ae7c55d544",
+    "schema": "SA_NLIT_GATE3_ARTIFACT_PIN_V2"
+  },
+  "runbook": {
+    "path": "collaboration/SA-NLIT-20261024/round-004/gate3_edge1_operator_runbook.md",
+    "commit": "c55bbc36b2c897a78ff62887b0f9ebca35b43e3c"
+  },
+  "official_browser": {
+    "browser": "edge",
+    "instance": 1,
+    "port": 12811,
+    "profile": "edge_1",
+    "appdata": "TEST_APPDATA",
+    "old_test_edge5": "PRESERVE_UNTOUCHED",
+    "collaboration_browser_port": 12941
+  },
+  "scope_check": "compare 114f1fe..083283: ONLY nlit_gate3.py, Invoke-NlitGate3.ps1, gate3_manifest.json, round004 runbook",
+  "round003_observed": {
+    "auto_hooks": "PASS",
+    "manual_login": "BLOCKED",
+    "new_task": "NOT_SUBMITTED"
+  },
+  "round004_local_status": "NOT_RUN; AWAITING CODEX TEST PREF SAVE / STAGING / READBACK; HUMAN LOGIN GATE",
+  "handoff_status": "BLOCKED_MANUAL_LOGIN_NO_NEW_TASK_IN_FLIGHT",
+  "forbidden": [
+    "no changes to main, 5 immutable collector files/manifest, or product 309305b2 baseline",
+    "no closing existing TEST Edge5 or touching collaboration browser 12941",
+    "no draft cleanup, no old IT07-IT23 replay, no new request, no auto login"
+  ]
+}
