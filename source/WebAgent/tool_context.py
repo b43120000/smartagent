@@ -42,6 +42,9 @@ class WebAgentToolContext:
         self.current_intent_digest = ""
         self.current_request_text = ""
         self._v8_admitted_actions: dict[str, dict] = {}
+        # Runtime-owned, request/epoch-bound admission snapshot.
+        # The model cannot register a success condition through a tool action.
+        self._runtime_completion_binding: dict = {}
         self._protocol_turn_seq = 0
         self.last_verification_status: str | None = None
         self._project_sync_transport = None
@@ -130,12 +133,39 @@ class WebAgentToolContext:
         self.current_task_epoch = str(getattr(self, "current_task_epoch", "") or run_id)
         self._protocol_turn_seq = 0
         self._v8_admitted_actions.clear()
+        self._runtime_completion_binding = {}
         self.last_verification_status = None
         self._authorized_local_paths = list(dict.fromkeys(str(x) for x in authorized_paths if str(x)))
         self._pending_attachments.clear()
         self._attachment_sha_ledger.clear()
         self._outbound_artifacts.clear()
         self._outbound_artifact_sha_ledger.clear()
+
+    def bind_runtime_completion_contract(
+        self, contract: dict, *, request_id: str, task_epoch: str,
+    ) -> None:
+        """Install validated Progress success clauses for tool admission.
+
+        Only the local Protocol Loop / trusted test harness calls this method;
+        model-supplied tool arguments never update the admission registry.
+        The binding is invalidated by begin_run and cannot cross task epochs.
+        """
+        if (not request_id or not task_epoch
+                or request_id != self.current_request_id
+                or task_epoch != self.current_task_epoch):
+            raise ValueError("completion_binding_request_identity_mismatch")
+        if not isinstance(contract, dict):
+            raise ValueError("completion_binding_contract_invalid")
+        from agent_core.task_progress import completion_condition_choices
+        choices = completion_condition_choices(contract, "success")
+        values = set()
+        for item in choices:
+            values.add(item["condition_id"])
+            values.add(item["condition_text"])
+        self._runtime_completion_binding = {
+            "request_id": request_id, "task_epoch": task_epoch,
+            "success_conditions": frozenset(values),
+        }
 
     def preview_tool_scope(self, action: dict) -> dict:
         return preview_tool_scope(action, self)
