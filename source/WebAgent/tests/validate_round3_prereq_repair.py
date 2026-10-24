@@ -6,7 +6,7 @@ No filesystem writes, browser changes, or model calls.
 from __future__ import annotations
 
 from agent_core.bounded_repair import BoundedRepairBudget
-from agent_core.prerequisite_resolution import assess_prerequisites
+from agent_core.prerequisite_resolution import assess_prerequisites, render_prerequisites
 from WebAgent.protocol_loop import extract_authorized_paths
 
 
@@ -41,6 +41,11 @@ def run():
     assert checks["working_directory"]["status"] == "NEEDS_RUNTIME_CONFIRMATION"
     missing = assess_prerequisites("run_command with unknown tool", [], {})
     assert {x["id"]: x["status"] for x in missing["checks"]}["python_capability"] == "REQUIRES_ACTUAL_PROBE"
+    # Plain natural-language requests must not be sent a needless host-preflight prompt.
+    assert render_prerequisites("你好", [], {}) == ""
+    assert "SMARTAGENT_PREREQUISITE_RESOLUTION" in render_prerequisites(
+        "run_command executes a bounded test", [fixture], env
+    )
 
     budget = BoundedRepairBudget(max_without_evidence=3, max_total=10, max_same_reason=8)
     for i in range(2):
