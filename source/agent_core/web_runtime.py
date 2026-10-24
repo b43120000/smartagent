@@ -18,6 +18,7 @@ agent_core/web_runtime.py
   print(reply)
   scraper.close()
 """
+from agent_core import path_integrity_trace as PIT
 
 import time
 import uuid
@@ -5053,6 +5054,7 @@ class WebLLMScraper:
             stage = "composer"
             self._set_request_state("PREPARING_COMPOSER")
             composer_claimed = True
+            PIT.record("09_composer_input", prompt)
             mutated = self._write_prompt_to_composer(prompt)
             # Even if the exact prompt was already present from a prior partial
             # attempt, this call now owns that draft and must not blind-retry it.

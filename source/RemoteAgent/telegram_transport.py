@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 """Telegram Bot API transport. Disabled until explicit local configuration."""
+from agent_core import path_integrity_trace as PIT
 
 import json
 import mimetypes
@@ -287,7 +288,11 @@ class TelegramUpdateAdapter:
         if not self.is_authorized(user_id=user_id, chat_id=chat_id):
             return None, "sender_not_allowed"
         attachments = self._attachments(message)
-        text = str(message.get("text") or message.get("caption") or "").strip()
+        raw_text = str(message.get("text") or message.get("caption") or "")
+        PIT.begin(raw_text, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
+        PIT.record("02_telegram_message_text", raw_text, extra={"update_id": update_id, "message_id": message.get("message_id"), "entities": message.get("entities", []), "caption_entities": message.get("caption_entities", [])})
+        text = raw_text.strip()
+        PIT.record("03_receiver_normalized", text, evidence_status="NORMALIZED_INPUT")
         if not text and not attachments:
             return None, "empty_message"
         if not text: text = "請處理附件"

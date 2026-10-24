@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Shared deterministic tool execution and verification primitives."""
+from agent_core import path_integrity_trace as PIT
 import json
 import os
 import re
@@ -1195,6 +1196,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     if tool == "observe_fact":
         # This read-only tool observes a filesystem fact inside the existing
         # authorization boundary. It never guesses absence from access errors.
+        PIT.record("14_observe_fact_action", tool_call, evidence_status="ACTION_VALUE", extra={"action_id": tool_call.get("action_id")})
         from .evidence_foundation import (
             EvidenceSpecError, validate_observe_fact_action,
             probe_file_exists, evaluate_predicate,

@@ -7,6 +7,7 @@ The Telegram receiver and durable queue remain transport owners.  This worker
 only owns one request-scoped WebGPT protocol loop and writes the terminal result
 back to the transport-neutral RemoteEvent outbox.
 """
+from agent_core import path_integrity_trace as PIT
 
 import argparse
 import os
@@ -175,6 +176,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     queue = RemoteTaskQueue(TaskStateStore(remote_tasks_path(root)))
     events = RemoteEventStore(remote_events_path(root))
     task = queue.adopt_dispatched(task_id, token, worker_pid=os.getpid())
+    PIT.begin(task.request, request_id=task.request_id, task_id=task.task_id, transport=str((task.metadata or {}).get("transport", "")))
+    PIT.record("06_worker_input", task.request)
     from agent_core.task_continuation import TaskContinuationStore, task_owner, render_task_reply
     continuation_store = TaskContinuationStore(root)
     continuation_store.register_task(task)

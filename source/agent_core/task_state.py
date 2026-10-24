@@ -16,6 +16,7 @@ Safety invariants:
 - corrupted task state fails closed instead of pretending the store is empty.
 """
 from __future__ import annotations
+from agent_core import path_integrity_trace as PIT
 
 import hashlib
 import json
@@ -350,6 +351,8 @@ class RemoteTaskQueue:
                     metadata={**meta, "source_text": text, "delivery_state": "PENDING"},
                 )
                 self.store.put(task, persist=True)
+                PIT.begin(text, request_id=task.request_id, task_id=task.task_id, transport=str(meta.get("transport", "")))
+                PIT.record("05_task_store", task.request)
                 return task, True
 
     def active(self) -> TaskRecord | None:
