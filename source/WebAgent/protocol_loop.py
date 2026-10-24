@@ -201,11 +201,13 @@ def extract_authorized_paths(request: str) -> list[str]:
         hidden_colon = text.find(":", match.end(), hard_end)
         # Do not let prose/quote parsing erase a possible ADS suffix.  Preserve
         # the colon so canonical path security rejects the candidate.
-        end = (
-            hidden_colon + 1
-            if hidden_colon >= 0
-            else _authorized_path_end(text, match.start(), match.end())
-        )
+        parsed_end = _authorized_path_end(text, match.start(), match.end())
+        # Keep the full ADS-looking candidate when it falls inside the normal
+        # lexical span (e.g. file.txt:secret), so downstream authorization can
+        # reject the original evidence without truncating the stream name.
+        # If prose parsing ends before a hidden colon, retain at least that
+        # colon: descriptions must never erase an ADS warning and grant scope.
+        end = max(parsed_end, hidden_colon + 1) if hidden_colon >= 0 else parsed_end
         candidate = text[match.start():end].strip().rstrip(" \t.,;，；。")
         consumed_until = max(end, match.end())
         if candidate and candidate not in paths:
