@@ -86,6 +86,7 @@ _PATH_PROSE_BOUNDARY_RE = re.compile(
     r"|再(?:去|執行|看|讀|修改|處理)|是否(?:不存在|存在|為)"
     r"|\s*的\s*(?=(?:(?:事前\s+)?file\.exists|結構化(?:狀態|查詢)|查詢結果|狀態|驗證結果)(?=\s|$|[,，；。;]))"
     r"|內(?=\s*[,，；。;]|\s+(?:使用|透過|執行|查詢|讀取|建立|檢查|確認|請))"
+    r"|驗證以下(?:我指定的)?(?:原始)?\s*Predicate(?=\s*[：:])"
     r"|(?:測試)?範圍內(?:透過|使用|執行)|(?:此|該)?(?:測試)?範圍內透過))"
 )
 _PATH_TASK_SUFFIX_RE = re.compile(r"\s+(?:第一層內容|建立\s+[^\\/\s]+\.[A-Za-z0-9]{1,10}|建立\s+[^\\/\s]+\s+(?:測試)?資料夾)$")
@@ -302,6 +303,8 @@ class WebAgentProtocolLoop:
         self.sent_attachment_paths: list[str] = []
         self.action_ledger: dict[str, dict] = {}
         self.action_result_ledger: dict[str, dict] = {}
+        # A pre-execution envelope rejection is protocol evidence, never a Tool result.
+        self._protocol_spec_rejection: dict[str, object] = {}
         self.condition_result_ledger: dict[str, dict] = {}
         self.v8_admitted_actions: dict[str, dict] = {}
         self.pending_progress_repair_actions: list[dict] = []
@@ -363,6 +366,48 @@ class WebAgentProtocolLoop:
                 "SmartAgent 修復回合已達安全上限；保留既有證據並暫停。"
                 + reason
             )
+
+    def _record_preexecution_predicate_rejection(self, calls, diagnostics) -> None:
+        """Remember only a Runtime-verified, nonexecuted invalid fact Predicate.
+
+        This records no filesystem fact, Tool result, or success evidence. An
+        unrelated model statement or invalid action cannot create the blocker.
+        """
+        if (self.action_ledger or self.action_result_ledger or self.continuation_source
+                or self.pending_result_recovery):
+            return
+        actions = [item for item in calls if item.get('tool') not in
+                   {'report_progress', 'turn_commit'}]
+        if len(actions) != 1 or actions[0].get('tool') != 'observe_fact':
+            return
+        action = actions[0]
+        action_id = str(action.get('action_id', '') or '')
+        predicate = action.get('predicate')
+        if (not action_id or not isinstance(predicate, dict)
+                or predicate.get('field') != 'file.exists'):
+            return
+        valid, diagnostic = validate_tool_envelope(action)
+        reason = 'evidence_file_exists_boolean_required'
+        if valid or not isinstance(diagnostic, dict) or diagnostic.get('reason') != reason:
+            return
+        if not any(item.get('reason') == reason for item in diagnostics):
+            return
+        self._protocol_spec_rejection = {
+            'action_id': action_id, 'reason': reason,
+            'request_id': self.run_id, 'task_epoch': self.task_epoch,
+            'executed': False, 'verification_status': 'SPEC_INVALID',
+        }
+
+    def _safe_protocol_spec_rejection(self) -> dict:
+        """Restrict protocol-blocked interruption to an action-free request."""
+        record = dict(getattr(self, '_protocol_spec_rejection', {}) or {})
+        if (not record or record.get('request_id') != self.run_id
+                or record.get('task_epoch') != self.task_epoch
+                or record.get('executed') is not False
+                or self.action_ledger or self.action_result_ledger
+                or self.continuation_source or self.pending_result_recovery):
+            return {}
+        return record
 
     def _restore_continuation(self):
         import copy
@@ -591,6 +636,14 @@ class WebAgentProtocolLoop:
         # widen discovery to any parent or unrelated configured workspace.
         caps['discovery_paths'] = list(self.authorized_paths) or [str(self.workspace)]
         caps['target_path_confirmed'] = bool(self.authorized_paths)
+        spec = self._safe_protocol_spec_rejection()
+        if spec:
+            caps['objective_blockers'].append({
+                'action_id': spec['action_id'],
+                'reason': 'PREDICATE_SPEC_INVALID',
+                'executed': False,
+                'evidence_ref': 'PROTOCOL_SPEC_REJECTION',
+            })
         return caps
 
     def _write_continuation_context(self) -> str:
@@ -634,6 +687,8 @@ class WebAgentProtocolLoop:
     def _runtime_evidence_refs(self) -> set[str]:
         refs = {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}
         refs.update(str(action_id) for action_id in self.action_result_ledger)
+        if self._safe_protocol_spec_rejection():
+            refs.add('PROTOCOL_SPEC_REJECTION')
         return refs
 
     def _progress_repair_diagnostic(self, payload, error):
@@ -672,7 +727,9 @@ class WebAgentProtocolLoop:
         if len(all_refs) > 24:
             recent_ids = {str(item.get("action_id", "")) for item in evidence[-16:]}
             progress_cited = set(getattr(self.progress_ledger, "evidence_refs", []) or [])
-            filtered_refs = sorted({"REQUEST_ACCEPTED", "RUNTIME_STATUS"} | recent_ids | progress_cited)
+            filtered_refs = sorted({"REQUEST_ACCEPTED", "RUNTIME_STATUS"}
+                                   | ({"PROTOCOL_SPEC_REJECTION"} if self._safe_protocol_spec_rejection() else set())
+                                   | recent_ids | progress_cited)
         else:
             filtered_refs = sorted(all_refs)
         payload = {
@@ -683,6 +740,10 @@ class WebAgentProtocolLoop:
             "protocol_state": self.protocol_state,
             "action_evidence": evidence[-16:],
             "condition_evidence": list(self.condition_result_ledger.values())[-16:],
+            "protocol_admission_evidence": (
+                [self._safe_protocol_spec_rejection()]
+                if self._safe_protocol_spec_rejection() else []
+            ),
         }
         return (
             "[RUNTIME_EVIDENCE]\n"
@@ -3035,6 +3096,16 @@ class WebAgentProtocolLoop:
             from agent_core.context_acquisition import context_interrupt_allowed
             capabilities = self._context_capabilities()
             request = normalized_progress.get('context_request') or {}
+            spec = self._safe_protocol_spec_rejection()
+            if (spec and request.get('kind') == 'BLOCKED'
+                    and request.get('blocking_action_id') == spec['action_id']):
+                if 'PROTOCOL_SPEC_REJECTION' not in normalized_progress.get('evidence_refs', []):
+                    return [], [{
+                        'marker': '[WEBAGENT_CONTEXT_ACQUISITION_REQUIRED]',
+                        'reason': 'spec_invalid_protocol_evidence_ref_required',
+                        'suggestion': '引用本 Request 的 PROTOCOL_SPEC_REJECTION；'
+                                      '它只支持 INTERRUPT/UNKNOWN，不能支持 SUCCESS。',
+                    }]
             objective_unknown = next((item for item in capabilities.get('objective_blockers', [])
                 if item.get('reason') == 'FACT_OBSERVATION_INDETERMINATE'
                 and item.get('action_id') == request.get('blocking_action_id')), None)
@@ -3557,6 +3628,7 @@ class WebAgentProtocolLoop:
         """Run one request and always release its browser ownership on failure."""
         self.continuation_source = None
         self.continuation_mode = ""
+        self._protocol_spec_rejection = {}
         registered = False
         try:
             if self.continuation_store:
@@ -3935,6 +4007,7 @@ class WebAgentProtocolLoop:
             else:
                 actions, ack_diagnostics = self._accept_ack(calls, expected)
             if ack_diagnostics:
+                self._record_preexecution_predicate_rejection(calls, ack_diagnostics)
                 self.protocol_state = "REJECTED"
                 if self.pending_action_repair and not any(
                     item.get("repair_scope") == "ACTION_BATCH"
