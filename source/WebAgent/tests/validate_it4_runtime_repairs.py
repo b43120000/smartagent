@@ -13,6 +13,7 @@ from agent_core.bounded_repair import (BoundedRepairBudget, SemanticStagnationGu
 from agent_core.evidence_identity_audit import audit_terminal_references
 from agent_core.prerequisite_resolution import assess_prerequisites
 from agent_core.tools import _powershell_with_native_exit_propagation
+from WebAgent.protocol_loop import WebAgentProtocolLoop
 
 
 def test_native_exit() -> None:
@@ -69,6 +70,16 @@ def test_repair_and_scope() -> None:
     })["status"] == "CONTINUE"
 
 
+def test_legacy_scope_denial_normalized() -> None:
+    result = WebAgentProtocolLoop._classify_action_evidence(
+        {"tool": "inspect_directory", "paths": []},
+        '[TOOL_SCOPE_REJECTED] {"scope_allowed":false}',
+    )
+    assert result["result_reason"] == "TOOL_SCOPE_REJECTED"
+    assert result["execution_status"] == "FAILED"
+    assert result["executed"] is False
+
+
 def test_project_prerequisite() -> None:
     advice = assess_prerequisites(
         "請使用正式 query_project 讀取專案索引與 snapshot_id",
@@ -101,5 +112,6 @@ if __name__ == "__main__":
     test_native_exit()
     test_repair_and_scope()
     test_project_prerequisite()
+    test_legacy_scope_denial_normalized()
     test_receipt_reference_audit()
     print("PASS: IT4 focused regression suite")
