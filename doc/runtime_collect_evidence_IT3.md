@@ -10,7 +10,8 @@
 - 原始 Case Body 逐字引用於 `a0d1215a1b75d9e393825b2f772ba44ba896e280` 的 `doc/runtime_collect_evidence_IT.md`。原 IT 編號不改；Round3 允許執行項目僅本表。
 - 產品目標 baseline `309305b2eeeb79aed0925dc4dfee45af5193f8b5`；本次 Codex 部署時須記錄**實際本地 runtime package 使用的 commit/SHA**，以實際版本資訊為準。Git 分支代表候選修復版，**不能僅因文件來源與 branch 一致就宣稱執行版本一致**。
 - Round2 截止 `IT16=RUNNING/WAIT_TIMEOUT`，**在送出任何 Round3 請求前，Codex 必須唯讀追查該原 request 是否已有後續正式 terminal / 是否仍 running、pending、UNKNOWN**。未釐清則 `UNRESOLVED_PRIOR_REQUEST`，停止送測。不重播舊 request、不清已 quarantined journal／draft、不取消他人任務。
-- 不變更 main、產品程式、session/binding/browser 狀態、不新增 ChatGPT 對話、不修改舊 raw evidence；若無正式 TEST receiver、授權 workspace、dry/safe fixture、可信 task ownership，留 `BLOCKED`，不能模擬成功。
+- **候選包部署與測項執行分開：** Codex 可先在核准的 TEST 執行包部署此修復分支的**指定 commit**，在確認沒有 active/pending/未明任務後，依原有產品程序讓 Supervisor/Worker 載入該版本，並記錄 Git SHA、實際 loaded worker SHA 及啟動命令。部署不得改動 main、基準 `309305b`、其他執行中實例或使用者檔案；**正式送測後不修改產品程式**。若有未明任務、共享 writer 或無法安全更新的狀態，標 `DEPLOYMENT_BLOCKED`，不得強制切換。
+- 部署與執行都不得額外開啟 Edge/ChatGPT 對話、不改 conversation URL/session binding/browser profile、不修改舊 raw evidence；若無正式 TEST receiver、授權 workspace、safe fixture、可信 task ownership，留 `BLOCKED`，不能模擬成功。
 
 ## 1. Round3 執行清單
 
@@ -37,7 +38,7 @@ Round2 **核心行為符合預期、不列入本輪重測**：IT08、IT09、IT10
 
 ## 2. Codex 執行與紀錄規則
 
-1. 在已授權、現有 SmartAgent 上只做唯讀 preflight：確認版本、request queue、舊 IT16 既有 request 真實終態、正式 Receiver、唯一目前擁有者、授權 workspace、manifest/工具版本及測試 fixture。**不做 Edge1 / Gate3 Browser 初始化；不開 ChatGPT 對話、不改 URL**。
+1. **部署前先唯讀 preflight**：確認現有 request queue、Round2 舊 IT16 request 真實終態、Supervisor/Worker、writer/草稿歸屬；任何未明 active/pending 即停止。若安全，Codex 先將指定候選 commit 部署至授權 TEST 執行包並核對實際 loaded source SHA，再確認正式 Receiver、唯一目前擁有者、授權 workspace、manifest/工具版本及測試 fixture。**不做 Edge1 / Gate3 Browser 初始化；不開 ChatGPT 新對話、不改 URL**。
 2. 建立唯一新的 RUN_ID 及上述 Round3 Markdown；先把全部 ITEM 記 `NOT_RUN`（IT19 `SAFETY_BLOCKED`）。先記錄 `prior_IT16_state` 及來源類型和真正的終態回執，否則停止。
 3. 準備經授權的**全新、與 Round2 不同**測試 fixture `{F}`，包含 Case Body 必要的檔案／缺失父目錄；所有產線/user資料保持不變；IT18 的 `write_readback.txt` 必須尚不存在，禁止覆寫。
 4. 依上表順序提交一筆**完整原始 Case Body**；只替換 `{F}` 及 IT11 的真實 `PREV_ACTION_ID`／`PREV_CONDITION_ID`／`PREV_RECEIPT_ID`。若 ID 無法真實取得，IT11 記 `PREV_ID_NOT_AVAILABLE`，不發出未替換 placeholder 的不完整案例、不可憑空捏造。
