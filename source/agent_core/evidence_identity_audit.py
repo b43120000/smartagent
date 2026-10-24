@@ -44,5 +44,8 @@ def audit_terminal_references(
         "unknown_ref_count": len(unknown),
         "foreign_ref_count": len(foreign),
         "incomplete_ref_count": len(incomplete),
-        "identity_status": status,
+        # Preserve v1 consumers of SCOPED/SUSPECT; expose the specific
+        # provenance problem separately without silently treating it as valid.
+        "identity_status": "SCOPED" if status == "SCOPED" else "SUSPECT",
+        "identity_reason": status,
     }
