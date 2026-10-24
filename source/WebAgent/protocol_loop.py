@@ -318,6 +318,9 @@ class WebAgentProtocolLoop:
         self.action_loop_state = build_action_loop_state()
         from agent_core.bounded_repair import BoundedRepairBudget
         self._bounded_repair = BoundedRepairBudget()
+        from agent_core.bounded_repair import SemanticStagnationGuard
+        self._semantic_stagnation = SemanticStagnationGuard()
+        self._stagnation_pending = None
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None:
@@ -3488,6 +3491,14 @@ class WebAgentProtocolLoop:
             **evidence,
         }
         self.execution_state = evidence["execution_status"]
+        stagnation = self._semantic_stagnation.observe(action, evidence)
+        if stagnation["blocker_reason"]:
+            self._emit("semantic_stagnation_observed",
+                request_id=self.run_id, round=self.turn_id, **stagnation)
+        if stagnation["status"] == "EXHAUSTED":
+            # Do not throw inside an action handler: that would reclassify an
+            # already observed rejected tool as a new unknown tool exception.
+            self._stagnation_pending = stagnation
         if self.continuation_store:
             self.continuation_store.snapshot(self)
         return str(result)
@@ -3671,8 +3682,11 @@ class WebAgentProtocolLoop:
         from agent_core.blocker_recovery import BlockerRecovery
         from agent_core.bounded_repair import BoundedRepairBudget
         self._blocker_recovery = BlockerRecovery()
-        # A new request must not inherit the previous request's repair budget.
+        # Each request owns a fresh repair and no-progress budget.
         self._bounded_repair = BoundedRepairBudget()
+        from agent_core.bounded_repair import SemanticStagnationGuard
+        self._semantic_stagnation = SemanticStagnationGuard()
+        self._stagnation_pending = None
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         authorized = resolve_authorized_paths(
@@ -3788,6 +3802,14 @@ class WebAgentProtocolLoop:
 
         for _ in range(self.max_turns):
             self._check_cancelled()
+            if self._stagnation_pending:
+                reason = "semantic_stagnation:repeated_authorization_or_preflight_blocker"
+                set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                                  root=self.progress_root)
+                self._emit("protocol_loop_paused", request_id=self.run_id,
+                    round=self.turn_id, reason=reason,
+                    stagnation=self._stagnation_pending)
+                raise RuntimeError("Repeated prerequisite/scope denial; paused without replay. " + reason)
             expected = self._new_commit()
             expected["protocol_mode"] = ACTION_EXECUTION_MODE
             expected["narrative_recovery_context"] = self._narrative_recovery_context(prompt)
