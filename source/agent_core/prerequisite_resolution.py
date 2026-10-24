@@ -19,7 +19,7 @@ _COMMAND_INTENT = re.compile(
     re.IGNORECASE,
 )
 _PROJECT_INTENT = re.compile(
-    r"\\b(?:query_project|project_sync|inspect_project_scope|snapshot_id|project_root|index_only)\\b"
+    r"\b(?:query_project|project_sync|inspect_project_scope|snapshot_id|project_root|index_only)\b"
     r"|(?:專案(?:查詢|索引|快照)|專案根目錄|專案範圍|索引查詢)",
     re.IGNORECASE,
 )
