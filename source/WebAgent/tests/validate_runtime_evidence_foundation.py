@@ -93,6 +93,10 @@ def run():
         root = Path(directory).resolve()
         ctx = WebAgentToolContext(root)
         ctx.begin_run("EVIDENCE-001", "Inspect authorized project " + str(root), [str(root)])
+        ctx.bind_runtime_completion_contract(
+            {"success": ["The target file must not exist"]},
+            request_id="EVIDENCE-001", task_epoch="EVIDENCE-001",
+        )
         missing = root / "not_here.txt"
         base = {
             "tool":"observe_fact", "action_id":"EVIDENCE-MISSING",
