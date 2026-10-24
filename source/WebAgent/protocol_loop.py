@@ -316,10 +316,46 @@ class WebAgentProtocolLoop:
         self.terminal_candidate: dict = {}
         self.request_context = None
         self.action_loop_state = build_action_loop_state()
+        from agent_core.bounded_repair import BoundedRepairBudget
+        self._bounded_repair = BoundedRepairBudget()
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None:
             self.cancel_check()
+
+    def _admit_bounded_repair(self, diagnostics) -> None:
+        # Never treat an Action ID/prose change as progress. Only Runtime
+        # records marked executed are considered a new evidence generation.
+        evidence_generation = sum(
+            1 for entry in self.action_result_ledger.values()
+            if entry.get("executed") is True
+        )
+        budget = self._bounded_repair.observe(
+            diagnostics, evidence_generation=evidence_generation
+        )
+        self._emit(
+            "bounded_repair_observed",
+            request_id=self.run_id,
+            round=self.turn_id,
+            **budget,
+        )
+        if budget["status"] == "EXHAUSTED":
+            reason = "bounded_repair_exhausted_without_sufficient_new_evidence"
+            set_runtime_state(
+                self.task_id, "PAUSED", reason=reason, root=self.progress_root
+            )
+            self._emit(
+                "protocol_loop_paused",
+                request_id=self.run_id,
+                round=self.turn_id,
+                reason=reason,
+                repair_budget=budget,
+            )
+            # PAUSED is not a completed task and creates no success receipt.
+            raise RuntimeError(
+                "SmartAgent 修復回合已達安全上限；保留既有證據並暫停。"
+                + reason
+            )
 
     def _restore_continuation(self):
         import copy
@@ -3718,6 +3754,10 @@ class WebAgentProtocolLoop:
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
         prompt += "\n" + render_initial_planner_toolkit(environment_snapshot)
+        from agent_core.prerequisite_resolution import render_prerequisites
+        prompt += "\n" + render_prerequisites(
+            request, self.authorized_paths, environment_snapshot
+        )
         if self.image_delivery_plan:
             prompt += (
                 "\n[WEBAGENT_IMAGE_DELIVERY_PLAN]\n"
@@ -3818,6 +3858,7 @@ class WebAgentProtocolLoop:
                     )
                 last_rejected_exchange_signature = rejection_signature
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
+                self._admit_bounded_repair(diagnostics)
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
@@ -3873,6 +3914,7 @@ class WebAgentProtocolLoop:
                     round=self.turn_id,
                     diagnostics=ack_diagnostics,
                 )
+                self._admit_bounded_repair(ack_diagnostics)
                 from agent_core.task_progress import record_progress_repair
                 progress_diagnostic = next((row for row in ack_diagnostics if row.get('reason')=='invalid_progress_payload' and row.get('field_issues')), None)
                 if progress_diagnostic:
