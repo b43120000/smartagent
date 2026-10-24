@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Independent WebAgent protocol/result/ACK loop."""
 from __future__ import annotations
+from agent_core import path_integrity_trace as PIT
 
 import hashlib
 import json
@@ -491,6 +492,10 @@ class WebAgentProtocolLoop:
     def _emit(self, event: str, **fields) -> None:
         if getattr(self, '_action_admission_probe', False):
             return
+        if event == "tool_completed":
+            PIT.record("15_runtime_tool_result", fields.get("result", ""), evidence_status="RUNTIME_OBSERVATION", extra={"action_id": fields.get("action_id"), "round": fields.get("round")})
+        elif event == "runtime_terminal_accepted":
+            PIT.record("16_terminal_receipt", fields, evidence_status="RUNTIME_OBSERVATION")
         if self.event_sink is not None:
             self.event_sink(event, **fields)
         if (self.continuation_store and self.progress_ledger and
@@ -3727,6 +3732,8 @@ class WebAgentProtocolLoop:
         from agent_core.request_ownership import digest_intent
         self.task_id = str(task_id or self.run_id)
         self.task_epoch = str(task_epoch or self.run_id)
+        PIT.begin(request, request_id=self.run_id, task_id=self.task_id)
+        PIT.record("07_loop_input", request)
         self.intent_digest = digest_intent(request)
         self.task_request = request
         self.protocol_state = "ACTIVE"
@@ -3853,6 +3860,10 @@ class WebAgentProtocolLoop:
             + "\n[/WEBAGENT_USER_REQUEST]\n"
             + f"[WEBAGENT_WORKSPACE]\n{self.workspace}\n[/WEBAGENT_WORKSPACE]"
         )
+        if PIT.context():
+            start = prompt.index("[WEBAGENT_USER_REQUEST]\n") + len("[WEBAGENT_USER_REQUEST]\n")
+            end = prompt.rindex("\n[/WEBAGENT_USER_REQUEST]")
+            PIT.record("08_user_request_block", prompt[start:end])
         try:
             environment_snapshot = planner_environment_snapshot()
         except Exception as exc:
@@ -3939,6 +3950,7 @@ class WebAgentProtocolLoop:
             transport_started_at = time.time()
             try:
                 response = self.planner(self._with_commit(prompt, expected), expected, attachments)
+                PIT.record("11_planner_response", response, evidence_status="ACTION_VALUE", extra={"round": self.turn_id})
             except BaseException as exc:
                 self.protocol_state = "INTERRUPTED"
                 self._emit(

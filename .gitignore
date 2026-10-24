@@ -50,3 +50,7 @@
 /install_smart_agent/install_report.txt
 /install_smart_agent/install-state.json
 /doc/portable_git_handoff.md
+
+# Explicit IT10 diagnostics are private and never release content.
+**/it10-path-*.jsonl
+**/it10_path_trace_private/

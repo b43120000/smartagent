@@ -21,6 +21,7 @@ PROTOCOL_VERSION = 9
 # Keep this list small and explicit: these files define the wire/tool and
 # project-sync behavior that must be identical in every process/package.
 CORE_FILES = (
+    'source/agent_core/path_integrity_trace.py',
     'install_smart_agent/git_release.ps1',
     'install_smart_agent/build_portable_git.py',
     'install_smart_agent/ensure_environment.ps1',

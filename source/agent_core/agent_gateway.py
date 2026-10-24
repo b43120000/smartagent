@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 """Unified durable ingress gateway for WebCopilot and RemoteAgent transports."""
+from agent_core import path_integrity_trace as PIT
 
 import hashlib
 from dataclasses import dataclass
@@ -58,6 +59,8 @@ class AgentIngressGateway:
             self._log("ERROR", message, stage="AUTHORIZATION", error="authorized_workspace_unavailable")
             raise ValueError("authorized_workspace_unavailable")
 
+        PIT.begin(message.text, request_id=self._request_id(message), transport=message.transport)
+        PIT.record("04_gateway_input", message.text)
         text = str(message.text or "").strip()
         if not text:
             raise ValueError("empty_transport_message")

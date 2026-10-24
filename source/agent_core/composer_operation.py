@@ -1,5 +1,6 @@
 """Bound one CDP composer operation; never submit or restart a browser."""
 from __future__ import annotations
+from agent_core import path_integrity_trace as PIT
 
 import hashlib
 import json
@@ -94,6 +95,9 @@ def stop_owned_helper(process):
 
 def run_helper(payload, timeout_sec, cancel_check=None):
     payload = {**payload, 'connect_timeout_ms': max(500, min(12000, int((timeout_sec - 2) * 1000)))}
+    trace_context = PIT.context()
+    if trace_context:
+        payload['path_trace_context'] = trace_context
     command=[sys.executable,'-B','-m','agent_core.composer_operation']
     process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,creationflags=(subprocess.CREATE_NO_WINDOW | 0x4) if os.name=='nt' else 0)
@@ -419,6 +423,7 @@ def _recover_page(scraper,record):
 
 
 def _write_staged_prompt(scraper,prompt,record,journal):
+    PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
     scraper._focus_composer_dom()
     for start in range(0,len(prompt),4096):
@@ -442,6 +447,7 @@ def _write_staged_prompt(scraper,prompt,record,journal):
             normalized_sha256=hashlib.sha256(scraper._normalize_composer_text(prefix).encode()).hexdigest())
         record['pending_prefix']=checkpoint;write_json_atomic(journal,record)
         scraper._check_cancel_requested('composer_chunk')
+        PIT.record('09_keyboard_insert_text', prompt[start:end], extra={'chunk_start': start, 'chunk_end': end})
         scraper._page.keyboard.insert_text(prompt[start:end])
         deadline=time.monotonic()+2
         while not scraper._composer_matches_prompt(prefix):
@@ -453,6 +459,7 @@ def _write_staged_prompt(scraper,prompt,record,journal):
 
 def helper_main():
     payload=json.loads(sys.stdin.buffer.read())
+    PIT.restore(payload.get('path_trace_context'))
     # The parent owns the whole-operation deadline, including connect, DOM
     # calls and Playwright teardown. No timers run on a blocked sync thread.
     from playwright.sync_api import sync_playwright

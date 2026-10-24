@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 """Filesystem result sink for the local Telegram simulation sender."""
+from agent_core import path_integrity_trace as PIT
 
 import json
 import os
@@ -50,6 +51,7 @@ class LocalTestDeliveryAdapter:
                 with outbox.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                     handle.flush()
+            PIT.record("16_local_outbox_delivery", record, evidence_status="RUNTIME_OBSERVATION")
             return {"delivered": True, "reply": str(outbox)}
         except Exception as exc:
             return {"delivered": False, "reason": f"{type(exc).__name__}: {exc}"}

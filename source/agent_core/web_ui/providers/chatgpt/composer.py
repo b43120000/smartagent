@@ -6,6 +6,7 @@ turns the volatile DOM back into prompt text before the send state machine
 decides whether submission is safe.
 """
 from __future__ import annotations
+from agent_core import path_integrity_trace as PIT
 
 import hashlib
 import re
@@ -143,6 +144,8 @@ def read_composer_snapshot(locator) -> ComposerSnapshot:
     if not isinstance(value, dict):
         text = str(value or "")
         return ComposerSnapshot(primary_text=text, semantic_text=text)
+    PIT.record("09_composer_primary", str(value.get("primary") or ""), evidence_status="RENDERED_DOM")
+    PIT.record("09_composer_semantic", str(value.get("semantic") or ""), evidence_status="RENDERED_DOM")
     return ComposerSnapshot(
         primary_text=str(value.get("primary") or ""),
         semantic_text=str(value.get("semantic") or ""),

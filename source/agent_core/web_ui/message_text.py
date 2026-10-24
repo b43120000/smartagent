@@ -1,4 +1,5 @@
 """Read message content without duplicated accessibility-only labels."""
+from agent_core import path_integrity_trace as PIT
 
 def read_message_text(element) -> str:
     value = element.evaluate(r"""el => {
@@ -13,6 +14,7 @@ def read_message_text(element) -> str:
     # Non-browser contract doubles may not implement this read-only evaluation.
     if value is None:
         value = element.inner_text()
+    PIT.record_user_dom(element, str(value))
     return str(value).replace('\r\n', '\n').strip()
 
 
