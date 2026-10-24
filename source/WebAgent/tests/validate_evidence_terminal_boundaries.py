@@ -31,6 +31,10 @@ def check():
         root = Path(tmp).resolve()
         tools = WebAgentToolContext(root)
         tools.begin_run("BOUNDARY-REQUEST", "Verify " + str(root), [str(root)])
+        tools.bind_runtime_completion_contract(
+            {"success": ["predeclared"]},
+            request_id="BOUNDARY-REQUEST", task_epoch="BOUNDARY-REQUEST",
+        )
 
         # The parent is missing, so stat is completed but file existence
         # cannot be confirmed. The canonical tool must not coerce to False.
