@@ -68,8 +68,23 @@ def decode_result(result):
         if payload['status'] == 'SUCCEEDED' and not payload['executed']:
             return {'status':'UNKNOWN', 'reason':'SUCCESS_WITHOUT_EXECUTION', 'executed':False}
         return payload
-    if re.match(r'^\[(?:SECURITY_\w+_REJECTED|TOOL_SCOPE_REJECTED|SECURITY_CONFIRMATION_REQUIRED)\]', text):
-        return {'status':'REJECTED', 'reason':rejection_reason(text), 'executed':False, 'detail':text}
+    # A structured Runtime envelope above is authoritative.  For legacy
+    # denials, retain the marker identity; a scope denial is not a delete
+    # preflight failure.
+    legacy = re.match(
+        r'^\\[(?P<marker>SECURITY_\\w+_REJECTED|TOOL_SCOPE_REJECTED|SECURITY_CONFIRMATION_REQUIRED)\\]',
+        text,
+    )
+    if legacy:
+        marker = legacy.group('marker')
+        reason = (
+            'TOOL_SCOPE_REJECTED' if marker == 'TOOL_SCOPE_REJECTED'
+            else 'SECURITY_CONFIRMATION_REQUIRED' if marker == 'SECURITY_CONFIRMATION_REQUIRED'
+            else rejection_reason(text)
+        )
+        if reason == 'DELETE_PREFLIGHT_REJECTED' and marker != 'SECURITY_DELETE_REJECTED':
+            reason = marker
+        return {'status': 'REJECTED', 'reason': reason, 'executed': False, 'detail': text}
     if text.startswith('[SECURITY_DELETE_SUCCESS]') and isinstance(payload, dict) and payload.get('status') == 'DELETED':
         return {'status':'SUCCEEDED', 'reason':'DELETED', 'executed':True, 'data':payload}
     return None
