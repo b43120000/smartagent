@@ -84,7 +84,7 @@ _PATH_PROSE_BOUNDARY_RE = re.compile(
     # never guess a shortened path from a genuine path containing spaces.
     r"\s+(?=(?:然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後"
     r"|再(?:去|執行|看|讀|修改|處理)|是否(?:不存在|存在|為)"
-    r"|\s*的\s+(?=(?:file\.exists|結構化(?:狀態|查詢)|查詢結果|狀態|驗證結果)(?:\b|\s|$))"
+    r"|\s*的\s+(?=(?:(?:事前\s+)?file\.exists|結構化(?:狀態|查詢)|查詢結果|狀態|驗證結果)(?:\b|\s|$))"
     r"|(?:測試)?範圍內(?:透過|使用|執行)|(?:此|該)?(?:測試)?範圍內透過))"
 )
 _PATH_TASK_SUFFIX_RE = re.compile(r"\s+(?:第一層內容|建立\s+[^\\/\s]+\.[A-Za-z0-9]{1,10}|建立\s+[^\\/\s]+\s+(?:測試)?資料夾)$")
