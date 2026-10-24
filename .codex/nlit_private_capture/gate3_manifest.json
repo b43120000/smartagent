@@ -1,7 +1,7 @@
 {
-  "schema": "SA_NLIT_GATE3_ARTIFACT_PIN_V1",
+  "schema": "SA_NLIT_GATE3_ARTIFACT_PIN_V2",
   "task_id": "SA-NLIT-20261024",
-  "scope": "Round003 Gate3 TEST-only browser/workspace/worker binding",
+  "scope": "round004 Edge1 official instance / TEST-only browser, workspace and worker controls",
   "branch": "fix/nlit-evidence-20261024-r1",
   "product_baseline_sha": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
   "preserves": {
@@ -19,41 +19,65 @@
     {
       "file": "nlit_gate3.py",
       "path": ".codex/nlit_private_capture/nlit_gate3.py",
-      "source_commit": "1713e6d1ac0db3dec8170150c85d3f2b9743cd97",
-      "git_blob_sha": "dbd153f420958d726bfaeb6b82d19302418c2b0f",
-      "sha256": "951a5eda538daecdb9a80221f0b4f918b65a8a3579d942967f3aee7f69b8fdcd",
-      "bytes": 11685,
+      "source_commit": "4925f59839dd059fbc70a63548bca1bca057bc3b",
+      "git_blob_sha": "60381680cc4da530202083b2c67bc0059bc8d120",
+      "sha256": "bc52f2c61374aab490e4cf0b3115cb4b29715802b2bf735597ed5d21f7f01b4c",
+      "bytes": 11828,
       "encoding": "UTF-8 without BOM"
     },
     {
       "file": "Invoke-NlitGate3.ps1",
       "path": ".codex/nlit_private_capture/Invoke-NlitGate3.ps1",
-      "source_commit": "5ecb5fb2c352ca044fee69faf45949f56ac59b2e",
-      "git_blob_sha": "24b8feb87800071d891f3a59b0b82377b2d95f94",
-      "sha256": "cfd13eed0c42e15479cb9ce7ebf0d05046fa8b1962efe29fbd1db2be775e8d91",
-      "bytes": 18489,
+      "source_commit": "36d24d6e4fef4b7c4a8e1d9f87a22b704647e2ef",
+      "git_blob_sha": "b3ebf05c42afa8d9d50b5c14abe427c87511bddd",
+      "sha256": "189a196c7ef2dddb64dc38a1e39215b50b177123ea277bd4d0278afa7dee9a0b",
+      "bytes": 11872,
       "encoding": "UTF-8 without BOM"
     }
   ],
   "deployment": "External observer directory only; no source checkout changes to baseline product; no GitHub credentials or prompt data",
   "frontend_constraints": [
-    "No browser assumed authenticated without explicit manual confirmation",
-    "New Edge5 owner by PID, command line, user-data-dir and loopback port",
-    "Official remote_workspace cmd_set (registry + primary binding) targets TEST only",
-    "Official local_telegram_sender.send_and_wait with explicit TEST root/workspace, no request text in CLI",
-    "V2 _pth must Verify before Gate3; no fallback to PYTHONPATH",
-    "Legacy Invoke-NlitIsolated StartSupervisor is not used: it runs BeforeStart after a browser is open and would block",
-    "StrictMode/bundled import already reported PASS by Codex; Gate3 remains local NOT_RUN"
+    "Official TEST-only save_browser_preferences('edge',1) and TEST browser_session.json backup required before Gate3 Inspect",
+    "Official Edge1 PID, msedge command line, TEST edge_1 user-data-dir and loopback port 12811 ownership attested before CDP attach",
+    "Legacy TEST Edge5/12815 remains open and untouched; collaboration CDP 12941 is separate and untouched",
+    "Official remote_workspace cmd_set binds only a fresh user-authenticated TEST conversation after explicit human confirmation",
+    "Official local_telegram_sender.send_and_wait with explicit TEST root/workspace; no request text on CLI",
+    "V2 _pth must Verify before Gate3; never re-Enable over prior enabled state or use PYTHONPATH fallback",
+    "Original five-file artifact_manifest.json and preflight.ps1 remain unchanged; preflight uses updated officially selected TEST browser port",
+    "No source/artifact pins imply local runtime PASS, manual login is mandatory"
   ],
   "acceptance_status": {
-    "github_sources": "STAGED_AWAITING_LOCAL_VERIFICATION",
-    "local_browser": "NOT_RUN",
+    "github_sources": "GITHUB_PIN_STAGED_AWAITING_CODEX_READBACK",
+    "round003_auto_hooks": "PASS_OBSERVED_HISTORIC",
+    "round003_edge5_launch": "PASS_OBSERVED_HISTORIC_PRESERVE",
+    "round004_test_browser_preference": "CODEX_PENDING",
+    "round004_inspect": "NOT_RUN",
+    "round004_edge1_browser": "NOT_RUN",
+    "manual_login": "BLOCKED",
     "local_binding": "NOT_RUN",
-    "local_supervisor": "NOT_RUN",
-    "new_case": "NOT_RUN"
+    "local_supervisor": "NOT_STARTED",
+    "new_case": "NOT_SUBMITTED",
+    "exact_post_tool_real_delivery": "NOT_OBSERVED",
+    "handoff_status": "BLOCKED_MANUAL_LOGIN_NO_NEW_TASK_IN_FLIGHT"
   },
   "runbook": {
-    "path": "collaboration/SA-NLIT-20261024/round-003/gate3_operator_runbook.md",
-    "source_commit": "94dba4ab80cf321b06e6ed4386b0df9acc4a00b3"
+    "path": "collaboration/SA-NLIT-20261024/round-004/gate3_edge1_operator_runbook.md",
+    "source_commit": "c55bbc36b2c897a78ff62887b0f9ebca35b43e3c",
+    "supersedes_browser_parameters_of": "collaboration/SA-NLIT-20261024/round-003/gate3_operator_runbook.md"
+  },
+  "browser": {
+    "name": "edge",
+    "instance": 1,
+    "port": 12811,
+    "endpoint": "http://127.0.0.1:12811",
+    "profile": "edge_1",
+    "profile_root": "TEST_APPDATA/WebLLMScraper/edge_1",
+    "legacy_preservation": "Do not close, migrate, clear or authenticate historical isolated Edge5/12815; it is unrelated to this Edge1 acceptance; collaboration 12941 is separate"
+  },
+  "source_evidence": {
+    "round003_report_commit": "c481bb39fa55c60200d4f14a8e1dfef19fe5de3e",
+    "original_product_commit": "309305b2eeeb79aed0925dc4dfee45af5193f8b5",
+    "original_five_artifact_manifest_unchanged": true,
+    "old_test_edge5_must_remain_untouched": true
   }
 }
