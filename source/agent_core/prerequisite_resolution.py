@@ -88,6 +88,11 @@ def render_prerequisites(
     environment_snapshot: Mapping[str, object] | None = None,
 ) -> str:
     assessment = assess_prerequisites(request, authorized_paths, environment_snapshot)
+    # Do not inflate response-only conversations with irrelevant host checks.
+    # Their terminal semantics remain the responsibility of the existing
+    # progress and safety contracts, not this advisory assessment.
+    if assessment["request_class"] == "OTHER" and not assessment["exact_authorized_path_count"]:
+        return ""
     return (
         "[SMARTAGENT_PREREQUISITE_RESOLUTION]\n"
         + json.dumps(assessment, ensure_ascii=False, separators=(",", ":"))
