@@ -15,6 +15,14 @@
 - 若 URL 尚未包含 IT5，標 `CHAT_EXPORT_INCOMPLETE` 並明確記錄時間／檔案 hash，不可用模型回覆自行拼造。
 - IT19 交易 writer/state isolation 尚未完成，**SAFETY_BLOCKED，不執行**。
 
+### IT5 修復重測（第一次 Gate FAIL 後的第 2 次 Attempt）
+
+- 初次測試以 `a375fec9eccbb9a14819160d7c7d1e6a058314fd` 載入，10 支 Regression 是 **9 PASS / 1 FAIL**、0/11 Live；FAIL 發生在 `test_path_prose_does_not_expand_scope` 的 `的結構化狀態`。請保留初次 report、raw log 和 SHA256，**不可覆寫後聲稱第一次也 PASS**。
+- 重測必須先 checkout 交接 prompt 指定的新完整 IT5 修復 SHA，核對新的 `protocol_loop.py`／`validate_runtime_evidence_it5.py` blob，以及 Supervisor/Worker loaded SHA。先將舊 report 與 export 的完整原檔、hash 封存至 `testIT5/native_evidence/attempt1_regression_blocked/`，再以新的 Run ID 產生或更新 IT5 頂層最終彙整報告，明確列出 Attempt 1／Attempt 2 的版本、結果與差異。
+- **Protocol Manifest:** 初次報告有四個本地 manifest entry 的 hash 與新版 source 不同。它不是程式已經載入錯誤 SHA 的證據，但屬於部署一致性風險。Codex 先使用 `agent_core.protocol_manifest` 的正式 `build_protocol_manifest / validate_protocol_manifest` 在 TEST 複本比對，保留現有 manifest 的備份與 SHA256。僅在核對新 Source SHA、排除不明本機客製變更並確定可安全部署時，才透過官方 `write_protocol_manifest` 生成**授權 TEST 執行包**的 manifest，再立即重新驗證；**不可**手動填 hash、放寬 validator、覆寫不明客製 manifest、修改 main 或直接把 hash mismatch 視為 PASS。無法證明則 `MANIFEST_BLOCKED`，不進入 Live。
+- 本次增量修正僅限「未加空白的 `的結構化狀態`／`的事前 file.exists` 路徑邊界」及具體回歸檢查。舊 IT4 Scope Result、原生退出碼、Evidence 身分、PAUSED 語意不應在重測時被額外修補或重新定義。
+
+
 ## 1. 本地部署與安全 preflight
 
 1. 只在已授權 TEST 包，且所有舊 Task/Writer/Request Ownership 均已查明、無 active 或 pending 的情況下，部署**固定** IT5 Commit。原 baseline、main、其它專案、舊報告不更動。
