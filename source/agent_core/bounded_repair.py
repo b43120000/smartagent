@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping
+import hashlib
+import re
 
 
 class BoundedRepairBudget:
@@ -103,6 +105,26 @@ class SemanticStagnationGuard:
         blocker = reason if reason in scope_blockers and status in {
             "REJECTED", "FAILED", "UNKNOWN"
         } else ""
+        # Multiple project-discovery tools may report distinct surface errors
+        # for the *same* unavailable root. Correlate only identical, explicitly
+        # named roots. This is an advisory pause threshold, not an authorization
+        # decision and never authorizes a parent directory or a retry.
+        tool = str(action.get("tool", "") or "")
+        if tool in {"inspect_project_scope", "list_directory", "inspect_directory",
+                    "query_project", "read_file"} and reason in {
+                    "TOOL_SCOPE_REJECTED", "PREFLIGHT_REJECTED",
+                    "DIRECTORY_NOT_FOUND", "DIRECTORY_INSPECTION_INCOMPLETE",
+                    "FILE_NOT_FOUND"} and status in {"REJECTED", "FAILED", "UNKNOWN"}:
+            raw = action.get("workspace") or action.get("project_root") or action.get("path")
+            if not raw and isinstance(action.get("paths"), list) and action["paths"]:
+                raw = action["paths"][0]
+            raw = str(raw or "").strip()
+            root = re.sub(r"\\s+內$", "", raw).replace("/", "\\\\").casefold()
+            # Only correlate full paths; never treat an ambiguous relative
+            # selector or empty scope as proof of one shared root.
+            if root and (root.startswith("/") or re.match(r"^[a-z]:\\\\", root)):
+                token = hashlib.sha256(root.encode("utf-8")).hexdigest()[:16]
+                blocker = "PROJECT_ROOT_PRECONDITION_UNSATISFIED:" + token
         if verification == "PASS" or not blocker:
             self._last_blocker = ""
             self._consecutive = 0
