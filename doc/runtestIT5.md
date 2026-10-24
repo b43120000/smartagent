@@ -45,7 +45,7 @@ python source/WebAgent/tests/validate_round3_prereq_repair.py
 - IT4 原失敗的 `test_legacy_scope_denial_normalized`；
 - Legacy Scope Marker／Structured Runtime Envelope 正確優先序；
 - IT07/IT17 路徑後接自然語言不污染 path，也不能放寬 ADS／Traversal；
-- Evidence 缺 Request/Epoch → `INCOMPLETE`，不能 `SCOPED`；
+- Evidence 缺 Request/Epoch → `identity_status=SUSPECT`、`identity_reason=INCOMPLETE`，不能 `SCOPED`；
 - Queue `PAUSED` 為非終態、不生 Terminal Receipt、不重播；
 - IT16 原生 exit 7、FAIL/UNKNOWN/Receipt 安全 Regression 不退化。
 
