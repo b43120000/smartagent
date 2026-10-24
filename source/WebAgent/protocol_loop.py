@@ -4081,6 +4081,21 @@ class WebAgentProtocolLoop:
                     )
                 last_rejected_exchange_signature = rejection_signature
                 repair_note = ""
+                spec = self._safe_protocol_spec_rejection()
+                if spec:
+                    repair_note += (
+                        "\\n[PROTOCOL_SPEC_REJECTION]\\n"
+                        + json.dumps(spec, ensure_ascii=False, separators=(',', ':'))
+                        + "\\n此非法 Predicate 已由 Runtime 在 Tool Envelope Admission 階段拒絕，"
+                          "未執行觀測，不能宣稱 Predicate PASS 或 FAIL。"
+                          "若原始使用者要求禁止修正 Predicate 或使用替代工具，"
+                          "可在下一輪選擇 report_progress decision=INTERRUPT、outcome=UNKNOWN，"
+                          "並用 context_request={kind:BLOCKED,detail:具體規格拒絕,"
+                          "blocking_action_id:上述 action_id}，"
+                          "evidence_refs 引用 PROTOCOL_SPEC_REJECTION；"
+                          "Runtime 會重新檢查同 Request/Epoch、無已執行操作及待決副作用。"
+                          "不要用 read_file 等替代操作繞過原始限制。"
+                    )
                 field_repairs = [repair for diagnostic in ack_diagnostics for repair in diagnostic.get('command_field_repairs',[])]
                 if field_repairs:
                     repair_note += '\n[COMMAND_FIELD_REPAIR]\n' + json.dumps(field_repairs,ensure_ascii=False) + '\n[/COMMAND_FIELD_REPAIR]\n只回覆同一 tool/action_id 與 required_fields；不必重寫 command、operation、working_directory。仍需 report_progress 與 turn_commit。'
