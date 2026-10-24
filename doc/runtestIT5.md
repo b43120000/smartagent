@@ -23,6 +23,16 @@
 - 本次增量修正僅限「未加空白的 `的結構化狀態`／`的事前 file.exists` 路徑邊界」及具體回歸檢查。舊 IT4 Scope Result、原生退出碼、Evidence 身分、PAUSED 語意不應在重測時被額外修補或重新定義。
 
 
+
+### IT5 Attempt 3 — ADS 檔名保真與安全拒絕（Attempt 2 結果保留）
+
+- Attempt 2 的完整產品 SHA `9b9b7a1e0bbc5b003a9cdd53f564826a0e01cb9d` 已正式驗證：Regression `9 PASS / 1 FAIL`、0/11 Live。唯一未通過腳本 `validate_runtime_evidence_it5.py` 在 `test_path_prose_does_not_expand_scope` 的 ADS Assertion（舊 line 64）失敗；原始 Traceback 沒有列出 `dangerous` 值。**前面的中文敘述 Assertions 沒有失敗，不等於整個函式已 PASS。** Identity、Queue PAUSED 在 Attempt 2 的獨立函式回歸 PASS，但不能取代整支腳本通過。
+- Attempt 3 使用交接 prompt 指定的**下一個固定 Commit SHA**（不是 main 或浮動 branch HEAD），先把 Attempt 2 的 report、export、Regression log、原始 blob/hash、Manifest 比對結果保留在 `testIT5/native_evidence/attempt2_9b9b7a1/`，並核對先前 Attempt 1 未遭覆寫。
+- ADS 修復驗證重點：`C:\\fixture\\file.txt:secret` 的擷取保留**完整** `:secret`，再由 `canonicalize_path` 真正拒絕為 `alternate_data_stream_forbidden`；相鄰兩個 Windows Path 不合併；當冒號位於自然語言描述後，也不能因分界剪裁而產生可被放行的路徑。不得以修改 Assertion 成寬鬆條件來取得 PASS。
+- Attempt 3 首先核對路徑解析的具體 Regression（包含失敗時輸出 actual 值），然後跑**全部十支必要 Regression**；特別要確認 Evidence Identity、Queue PAUSED 真正經主腳本依序通過，以及 IT4 Native Exit 7、Legacy Scope、舊 ADS/Traversal、安全 Admission Regression 不退化。
+- 因為源碼已有新增 commit，授權 TEST 包需重新核對 Source blobs 與官方 `agent_core.protocol_manifest.validate_protocol_manifest`。若 manifest 顯示舊 SHA，僅能在保留備份、核對 Source、隔離複本先驗證後使用正式 `write_protocol_manifest` 更新 TEST Manifest，不得手動改雜湊或繞過。
+- 新一次的實際 Regression 全部 PASS 才能依本文件第 3–5 節從**本地模擬 Telegram 的 send_and_wait** 逐筆執行 11 筆 Live；仍需輸出 Runtime 報告與真正的 ChatGPT 原始對話。分享匯出只有兩則訊息時維持 `CHAT_EXPORT_INCOMPLETE`，不填造回合。
+
 ## 1. 本地部署與安全 preflight
 
 1. 只在已授權 TEST 包，且所有舊 Task/Writer/Request Ownership 均已查明、無 active 或 pending 的情況下，部署**固定** IT5 Commit。原 baseline、main、其它專案、舊報告不更動。
