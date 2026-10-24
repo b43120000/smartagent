@@ -79,7 +79,12 @@ WEBAGENT_STAGED_PROTOCOL = str(os.environ.get("SMARTAGENT_STAGED_PROTOCOL", "on"
 _WINDOWS_PATH_START_RE = re.compile(r"(?<![A-Za-z0-9])(?P<drive>[A-Za-z]:[\\/])")
 _PATH_SENTENCE_BOUNDARY_RE = re.compile(r"[，；。]|[,;](?=\s|$)|[\r\n]")
 _PATH_PROSE_BOUNDARY_RE = re.compile(
-    r"\s+(?=(?:然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後|再(?:去|執行|看|讀|修改|處理)))"
+    # An unquoted path cannot consume a following natural-language predicate
+    # or task instruction. Keep explicit quotes intact in _authorized_path_end;
+    # never guess a shortened path from a genuine path containing spaces.
+    r"\s+(?=(?:然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後"
+    r"|再(?:去|執行|看|讀|修改|處理)|是否(?:不存在|存在|為)"
+    r"|(?:測試)?範圍內(?:透過|使用|執行)|(?:此|該)?(?:測試)?範圍內透過))"
 )
 _PATH_TASK_SUFFIX_RE = re.compile(r"\s+(?:第一層內容|建立\s+[^\\/\s]+\.[A-Za-z0-9]{1,10}|建立\s+[^\\/\s]+\s+(?:測試)?資料夾)$")
 _PATH_ATTACHED_PROSE_BOUNDARY_RE = re.compile(
