@@ -272,7 +272,7 @@ def send_and_wait(
         if current is not None and current.state == "PAUSED":
             delivery.retry_ready(transports={"LOCAL_TEST"})
             _print_new_events(outbox, seen)
-            print("\\n[RemoteAgent Test] task_state=PAUSED (nonterminal; no receipt)", flush=True)
+            print("\n[RemoteAgent Test] task_state=PAUSED (nonterminal; no receipt)", flush=True)
             if result_sink is not None:
                 result_sink.update({
                     "observed_task_state": "PAUSED",
