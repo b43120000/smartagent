@@ -41,9 +41,22 @@ def test_legacy_scope_and_envelope_priority() -> None:
 def test_path_prose_does_not_expand_scope() -> None:
     f = r"C:\fixture\visible_code.py"
     p = r"C:\fixture\present.txt"
-    assert extract_authorized_paths(f + " 的結構化狀態") == [f]
-    assert extract_authorized_paths(p + " 的 file.exists equals true") == [p]
-    assert extract_authorized_paths(p + " 的事前 file.exists equals true 成功條件") == [p]
+    examples = [
+        (f + " 的結構化狀態", [f]),
+        (f + " 的結構化查詢", [f]),
+        (p + " 的 file.exists equals true", [p]),
+        (p + " 的file.exists equals true", [p]),
+        (p + " 的事前 file.exists equals true 成功條件", [p]),
+        # A legitimate unquoted file name can contain spaces and Chinese.
+        # An extension after the phrase must not be silently truncated.
+        (f + " 的結構化狀態.json", [f + " 的結構化狀態.json"]),
+        (r"C:\\fixture\\name with spaces.txt", [r"C:\\fixture\\name with spaces.txt"]),
+    ]
+    for raw, expected in examples:
+        actual = extract_authorized_paths(raw)
+        assert actual == expected, {
+            "source": raw, "expected": expected, "actual": actual,
+        }
     assert extract_authorized_paths('"' + f + ' name"') == [f + " name"]
     assert extract_authorized_paths(r"C:\fixture\name with spaces.txt") == [r"C:\fixture\name with spaces.txt"]
     # Do not discard ADS-looking substrings to fabricate a permitted path.
