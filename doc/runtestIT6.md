@@ -1,12 +1,13 @@
-# SmartAgent runtestIT6 — Historical PASS Carry-forward + Open Case Verification
+# SmartAgent runtestIT6 — Historical PASS Carry-forward + Full Pending Live Coverage
 
-> **Codex 逐項執行規格。** 固定產品基準 IT5 Attempt 3：`1360057a633db588abb533dde1d54c3d48e70f77`；IT6 分支 `fix/runtime-evidence-it6-20261025`；執行固定的 **IT6 最終完整 SHA** 由主對話交接提示提供，不得用 main、浮動 HEAD 或未驗證的本機修改。此文件列的是歷史測項去重與尚待測試，不是宣稱 IT01–IT23 已全部具備語意 PASS。
+> **Codex 逐項執行規格。** 固定產品基準 IT5 Attempt 3：`1360057a633db588abb533dde1d54c3d48e70f77`；IT6 分支 `fix/runtime-evidence-it6-20261025`；執行固定的 **IT6 最終完整 SHA** 由主對話交接提示提供，不得用 main、浮動 HEAD 或未驗證的本機修改。此文件列的是歷史測項去重與尚待測試，不是宣稱 IT01–IT23 已全部具備語意 PASS。**只有全部 11 支必要 Regression PASS 是驗收流程的強制 PASS Gate；Live 的單項驗收 FAIL 不得中止待測名單盤點與後續安全可派送測項。**
 
 ## 0. 三條不可混淆的統計規則
 
 1. **歷史確實已過的 ITEM 永久 carry forward，不重新派 Live。** 每一筆必存 `item_id / original_run_id / original_evidence_path / product_sha / raw_sha256 / verified_assertion / pass_scope`。若舊測證明的是子條件（如 exit 7 或 identity），只沿用該已證實的子條件，不自動擴張成整項語意 PASS。
 2. `COMPLETED`、有 Receipt、一般 Regression PASS、工具 `executed=true` 或模型自述成功，都不是「整項 IT PASS」的充分證據。歷史明確負向測試在預期 `FAIL/REJECTED/UNKNOWN` 且依驗收準則正確執行時，可以判為該項 `PASS`，但需保留 Native Evidence 和預期條件。缺乏測項證據就記 `OPEN_HISTORY_AUDIT`，不是新 FAIL，也不是假造 PASS。
-3. **僅未達標的項目保留在 IT6 待測池。** Codex 先稽核 IT1–IT23 所有歷史，將有可核對的 `HISTORICAL_PASS` 項目從派送隊列移除；仍未達標、缺必要證據或有當前 FAIL 的項目才用 LOCAL_TEST 新 Request。禁止把旧 SHA 的 PASS 偷換成最新 SHA 的實測結果；新的回歸必須另外驗證沒有退化。
+3. **僅未達標的項目保留在 IT6 待測池。** Codex 先稽核 IT01–IT23 所有歷史，將有可核對的 `HISTORICAL_PASS` 項目從派送隊列移除；仍未達標、缺必要證據或有當前 FAIL 的項目才用 LOCAL_TEST 新 Request。禁止把舊 SHA 的 PASS 偷換成最新 SHA 的實測結果；新的回歸必須另外驗證沒有退化。
+4. **Live 採完整待測名單覆蓋、單項 Fail-Continue。** 必須逐項處理所有未正式 PASS 的 IT ITEM（IT17 POSITIVE/NEGATIVE、IT23 A/B 要各自判定），每項無論 PASS／FAIL／OPEN／PAUSED／BLOCKED／SOURCE_BODY_REQUIRED，都留下原因和證據，不能因先前一項 FAIL 而直接省略其餘項目。只有具體安全不可派送時才不送新 Request，仍須完成全名單分類；不可用跳過冒充已實測。
 
 ### 輸出路徑與防覆寫
 
@@ -48,12 +49,12 @@
 
 **IT23 原測項含 A、B 兩筆獨立 Request；整項是否 PASS 必須各自有證據，不得只取其一。IT17 的 POSITIVE 與 NEGATIVE 也是兩個獨立要件。**
 
-## 2. TEST 部署 Gate 與非終態保護
+## 2. TEST 部署安全檢查與非終態保護（不作為 Live 單項 PASS Gate）
 
 - 固定 checkout IT6 SHA，保留原始 IT5、Manifest、Browser／URL／binding 和所有 Raw Evidence；先驗證 `git diff`、Source Blob SHA、官方 Protocol Manifest。Manifest 只能依專案 `agent_core.protocol_manifest.write_protocol_manifest` 在已核准 TEST 複本和授權 TEST 包建立、再 `validate_protocol_manifest`，不能手填 hash 或繞過。
-- **IT5 Attempt3 的 IT17-POSITIVE 是 PAUSED 非終態，而且沒有 Receipt。** 首先查詢本機 Queue/Progress/Continuation/Writer 狀態：若仍有這筆 PAUSED 或其他不明任務，Codex **不可**直接刪除、cancel、resume、requeue、改 Task ID、清 Journal、複製成新 Request 或以修版本為名強制啟動併行 Live。保存現況後回報 `BLOCKED_EXISTING_PAUSED_TASK`，等使用者明確授權處置。離線稽核可以繼續，但部署/Live 不能跨過未授權變更。
+- **IT5 Attempt3 的 IT17-POSITIVE 是 PAUSED 非終態，而且沒有 Receipt。** 首先查詢本機 Queue/Progress/Continuation/Writer 狀態：Codex **不可**直接刪除、cancel、resume、requeue、改 Task ID、清 Journal、複製成新 Request 或以修版本為名強制啟動併行 Live。先保存現況並回報 `BLOCKED_EXISTING_PAUSED_TASK`。這不是整份 Live 測項驗收的 Fail-Fast 規則：繼續盤點完整待測名單。只有具體證實新 TEST 部署／Request 與該任務、Writer、Journal、Queue 均安全隔離，才可派送不受影響的新 Case；否則逐項標記 `BLOCKED_EXISTING_PAUSED_TASK / NOT_DISPATCHED`，不可強行跨過未授權變更。
 - 只使用既有授權的 TEST 包和既有 ChatGPT Browser／Conversation binding；不得新開 Edge／ChatGPT 對話、切 browser profile、修改分享連結或影響 production instance。
-- 如果 TEST 單例已有 active/pending/unknown writer 或無法核對真正 Loaded Supervisor/Worker SHA，`PRECHECK_BLOCKED`。不得以 Worker --help 冒充實際 Live Worker 版本。
+- 如果 TEST 單例已有 active/pending/unknown writer 或無法核對真正 Loaded Supervisor/Worker SHA，受影響 Live Case 標 `PRECHECK_BLOCKED / NOT_DISPATCHED` 並保留證據；仍須完成全名單報表分類，不可把沒有派送的測項宣稱 FAIL 或 PASS。不得以 Worker --help 冒充實際 Live Worker 版本。
 - IT19 持續 `SAFETY_BLOCKED`，沒有 writer isolation 的獨立安全授權前**絕不派送**。
 
 ## 3. Deterministic Regression Gate — 先跑完，不算 23 個 Live Item
@@ -80,7 +81,7 @@ python source/WebAgent/tests/validate_typed_command_and_scoped_semantics.py
 python source/WebAgent/tests/validate_round3_prereq_repair.py
 ```
 
-**11 個必須 Regression Script 全部 PASS 才可進入 Live。** 任何 FAIL 就以 `REGRESSION_BLOCKED` 停下，不修改 Source、不替測試放寬 assertion。IT07 本輪新增的具體直接 Admission Regression 不可被舊版 generic `ACTION_SCOPED_ADMISSION_PASS` 替代。
+**11 個必須 Regression Script 全部 PASS 才可進入 Live。這是 IT6 唯一以測試 PASS/FAIL 決定是否允許進入下一階段的強制 Gate。** 任一 Regression FAIL 就以 `REGRESSION_BLOCKED` 停下 Live 派送，不修改 Source、不替測試放寬 assertion；仍須在報表列出 IT01–IT23 清單與未執行原因。IT07 本輪新增的具體直接 Admission Regression 不可被舊版 generic `ACTION_SCOPED_ADMISSION_PASS` 替代。
 
 ## 4. LIVE 唯一入口：本地模擬 Telegram 送測
 
@@ -111,9 +112,19 @@ rc = send_and_wait(
 
 - 每次只派**一個**新 Request，核對當輪真實 `request_id/task_id/task_epoch`，不能直接呼叫 WebAgentProtocolLoop 或手工生成假的 Runtime Tool Result／Receipt。
 - 明確保留 `raw input → accepted/rejected action → tool executed → raw/result envelope → predicate → condition ledger → exact next Planner input → actual terminal` 的完整對應；`CAPTURE_INCOMPLETE` 不是成功，也不自動代表真的遺失工具結果。
-- 等前一筆安全終態封存、或遇 PAUSED 時**立即停止後續派送**。不因 sender 900 秒 timeout 自動重播。PAUSED 的 sender exit=3 不能當正式 FAILED／SUCCESS。
-- Live 依序先做 IT17-POSITIVE 與 IT07-PROTOCOL 兩個 P0 修復驗收；再做 IT17-NEGATIVE。完成 P0 後依歷史 ledger 的 `OPEN` ITEM 繼續；若缺原始完整 Case Body，標 `SOURCE_BODY_REQUIRED`，不能自行編造測項。
+- 每次新派送前確認前一筆 Request 已安全終態封存、無未完成 side effect 且無共享 Writer/Queue 衝突。**單項 Live 驗收 FAIL／合法 REJECTED／UNKNOWN 不是中止後續安全可執行測項的理由**；先記錄再繼續下一項。若前筆 PAUSED、timeout 或非終態導致無法安全派送下一筆，保留原狀，將受影響後續項目標 `BLOCKED_NONTERMINAL / NOT_DISPATCHED`，但仍逐項盤點完整名單、輸出 Report。不得併發派送、擅自 resume/cancel 或因 sender 900 秒 timeout 自動重播。PAUSED 的 sender exit=3 不能當正式 FAILED／SUCCESS。
+- Live 依序先做 IT17-POSITIVE 與 IT07-PROTOCOL 兩個 P0 修復驗收；再做 IT17-NEGATIVE。**P0 任一個 FAIL 仍繼續其他安全可執行的 P0／OPEN 項目，不以 P0 全部 PASS 作為 Live 後續 Gate。** 之後依歷史 ledger 的 `OPEN` ITEM 處理完整名單；若缺原始完整 Case Body，標 `SOURCE_BODY_REQUIRED`，不能自行編造測項。
 - 上述「歷史已通過」只保留既有證據、**不需再讓 Planner 重做**。可透過 Regression 驗證底層沒有退化。
+
+### 4.1 Live 完整待測名單與單項 Fail-Continue（必須執行）
+
+1. **先產生完整 Case Inventory：** IT01–IT23 全列；歷史整項 PASS 標 `HISTORICAL_PASS_CARRIED / NOT_DISPATCHED`；尚未正式 PASS 者列為待處理。IT17-POSITIVE、IT17-NEGATIVE、IT23-A、IT23-B 需保留各自 Case 狀態，IT ITEM 最終狀態不得僅以一個子案例判斷。IT19 固定 `SAFETY_BLOCKED / NOT_DISPATCHED`，除非另有獨立明確安全授權。
+2. **只依 Regression 設硬性 PASS Gate：** 11 支 Regression 全 PASS 後才啟動 Live 逐項處理。Live 的單一 FAIL、預期之外的 REJECTED/UNKNOWN、沒有成功 Receipt、或某一 P0 FAIL 均只影響該案例結果，**不得作為整輪 Fail-Fast 條件**。
+3. **每項評估並寫入 Report：** 若安全且有完整原始 Body，使用 `local_telegram_sender.send_and_wait()` 單筆送測；驗收 PASS 則 `NEW_CASE_PASS`、不符驗收則 `FAILED`（以 Raw Evidence／驗收條件裁決，不以 sender exit code 或模型自述代替）；資料不足則 `OPEN / CAPTURE_INCOMPLETE`；缺 Body 則 `SOURCE_BODY_REQUIRED / NOT_DISPATCHED`。明確負向案例的正確拒絕可為 **Case PASS**，不是自動 FAIL。
+4. **一項 FAIL 後繼續下一項：** 例如六個 Pending Case 中第二項驗收 FAIL，先記錄 failure、Traceback、Raw Evidence 和 reason，並在確認該 Request 已安全封存後派送第三至第六項。每個可安全執行的 Case 最多本輪一次新 Request，不因 FAIL 自動重試或重播。
+5. **安全界線只限制不安全的派送，不抹掉清單：** 若某個 PAUSED／timeout／unknown writer／未完成 side effect／Scope 越界／Manifest 不符／錯誤 SUCCESS Admission 使後續 Request 無法安全隔離，絕不可強制清理或併行；記錄當下 Blocker 與受影響範圍。繼續逐項評估所有剩餘 Case：可證明獨立且安全的仍執行，不能證明安全的各自標 `PAUSED` 或 `OPEN / NOT_DISPATCHED / BLOCKED_<REASON>`，明確保留未實測狀態。這是 dispatch safety，不是把單項 Live FAIL 升格為 Regression Gate。
+6. **覆蓋率必須可稽核：** 最後分別統計 `total_items=23`、`pending_cases`、`live_dispatched`、`historical_skipped`、`source_body_missing`、`safety_not_dispatched`、`live_pass`、`live_fail`、`live_open_or_paused`。每項都應有一筆 ledger row，沒有新 Request 的要註明 `NOT_DISPATCHED` 及原因；禁止將 `NOT_DISPATCHED` 計為實際 Live 覆蓋成功。
+7. **下一輪待測：** 本輪結束另在 Report 列出 `NEXT_ROUND_PENDING`（所有未具正式整項 PASS 的 IT ITEM 與子案例、失敗／缺證／Blocked 原因），已確認的歷史 PASS 與本輪新 PASS 不再送測；若 Regression 日後發現退化，須重新開啟受影響項目。
 
 ## 5. P0 本輪指定新 Live Body（按優先序）
 
@@ -143,7 +154,7 @@ rc = send_and_wait(
 
 ## 6. 其他 OPEN ITEM：先歷史比對再決定派送
 
-按 IT 編號升序逐項處理（排除 IT19 和前述 P0），並記錄 `REUSED_HISTORICAL_PASS / LIVE_REQUIRED / SOURCE_BODY_REQUIRED / BLOCKED`。IT03–IT06、IT08–IT10、IT12–IT14 的原始測項若不在指定 Git 規格中，**由 Codex 在受限 TEST 歷史報告／原始用戶請求中準確找出並附來源 Hash；找不到則不送測**。既有原始 Request Body 應逐字引用，不得憑此文件的摘要生成新的測試。
+按 IT 編號升序**處理完整待測清單**（IT19 照樣列入 Inventory、但不派送；P0 已先處理），並記錄 `REUSED_HISTORICAL_PASS / LIVE_REQUIRED / NEW_CASE_PASS / FAILED / SOURCE_BODY_REQUIRED / BLOCKED / NOT_DISPATCHED`。任一項一般 Live FAIL 不影響後續安全可執行項目；不可只測到第一個 FAIL 就結束。IT03–IT06、IT08–IT10、IT12–IT14 的原始測項若不在指定 Git 規格中，**由 Codex 在受限 TEST 歷史報告／原始用戶請求中準確找出並附來源 Hash；找不到則不送測**。既有原始 Request Body 應逐字引用，不得憑此文件的摘要生成新的測試。
 
 下列為 Git 已知的 Revision 3 測項 Body；如果歷史回顧顯示已經完整 PASS，直接保留，不必再派送：
 
@@ -193,17 +204,21 @@ IT23-A／IT23-B 各自提交一次，需證明不同 Request/Epoch/Outbox，且�
 寫入 `C:\Users\user\Desktop\remoteagent\release\testreport\testIT6\runtime_collect_evidence_IT_roundresult6.md`，必須包含：
 
 - IT6 產品固定 Git SHA、真正 Supervisor 與每一筆 Live Worker 的 Source Blob、Manifest hash；
-- IT01–IT23 每項 final classification、歷史 carry-forward 來源和 hash、需要新測／跳過的理由；不要把 Regression Script PASS 換算成 23 項全部 PASS；
+- **IT01–IT23 完整逐項結果表**：每項 `item_id / subcase / historical_pass_evidence / planned_live / dispatch_status / request_id / task_id / task_epoch / final_classification / acceptance_assertion / actual_observation / failure_or_blocker_reason / evidence_path / raw_sha256 / next_round_pending`；歷史 carry-forward 來源和 hash、需要新測／跳過的理由。每項都須有記錄，不能把 Regression Script PASS 換算成 23 項全部 PASS；
 - 11 個 Regression Script 各自 exit / PASS / log hash；新 Direct Admission 的合法/非法控制組 Raw Envelope；
 - 每次新 Telegram Request 的 Planner 輪數、真正 Tool Result、Raw/Normalized、Predicate、Condition Ledger、Scope、Repair、Queue/Progress、Receipt、Outbox／Next Planner exact delivery；
 - IT17 Project Root 的 `extracted_authorized_paths` 與工具實際使用的 Root 是否一致，避免只看表面成功；所有 UNKNOWN／PAUSED 仍未結案。
-- 最終總數 `HISTORICAL_PASS_CARRIED / NEW_CASE_PASS / OPEN / FAILED / PAUSED / SAFETY_BLOCKED / SOURCE_BODY_REQUIRED`；必須合計 23，IT23 的 A/B 另列子請求。
+- 最終總數 `HISTORICAL_PASS_CARRIED / NEW_CASE_PASS / OPEN / FAILED / PAUSED / SAFETY_BLOCKED / SOURCE_BODY_REQUIRED`；**以互斥 IT ITEM 最終分類合計必須為 23**，IT17 POSITIVE/NEGATIVE 與 IT23 A/B 另列子請求，不重複灌入 23 項統計。另列 `DISPATCHED / NOT_DISPATCHED`、實際 Live PASS/FAIL 數、未實測及阻擋原因與 `NEXT_ROUND_PENDING` 完整清單；不得把未派送標為已測過。
 - 詳細原始證據存在 `C:\Users\user\Desktop\remoteagent\release\testreport\testIT6\native_evidence\`，包含 sha256 索引。若 Report 原檔大，不得以聊天節錄冒稱已交付完整位元組。
 
 **成品 2 — ChatGPT 原始對話**
 
 執行使用者指定的本機程式 `C:\Users\user\Desktop\remoteagent\release\getData\get_chatgpt.py`，取得指定分享頁 `https://chatgpt.com/share/6adcb6d4-0bd8-83ee-9fb1-c68070f1b441`；先讀該程式真正支援的 CLI，不發明參數，不改變 ChatGPT 對話/binding。將真實輸出保存於 `C:\Users\user\Desktop\remoteagent\release\testreport\testIT6\chatgpt_conversation_IT6.md`（或保留原格式並於 manifest 說明）。必須記錄匯出時間、檔案 bytes/SHA256、真實訊息數、實際 IT6 Request IDs 可關聯數。若仍只有 USER1＋ASSISTANT1 的兩則分享訊息，**CHAT_EXPORT_INCOMPLETE**；不得用 Runtime 報告偽裝成 ChatGPT 對話。
 
-## 8. 停止／交接
+## 8. 測試完成條件／安全交接
 
-遇任何 Regression FAIL、未處置的 IT5 PAUSED、版本／Manifest 不符、未經授權 Root、未完成且可重放的 side effect、跨 Task Foreign Evidence 或錯誤的 SUCCESS Admission，停止並保存。此次不自行修 Source、不 merge/main、不啟動 IT7、不擅自 Resume/Cancel IT5 任務。由主對話做 RCA 與下一步決策。
+**Regression FAIL 是唯一的測試驗收硬性停止條件：** 11 支任一 FAIL，記 `REGRESSION_BLOCKED`、不進入 Live；仍交付 Regression 原始失敗與 IT01–IT23 的未執行 Inventory。**Live 不採 Fail-Fast：** 任一案例 PASS/FAIL/REJECTED/UNKNOWN 均記錄實際結果，對其餘安全可派送項目繼續測試；必須處理到整個待測名單每項都已實際驗證或有明確 `NOT_DISPATCHED` 原因。
+
+未處置的 IT5 PAUSED、版本／Manifest 不符、未經授權 Root、未完成且可重放的 side effect、跨 Task Foreign Evidence 或錯誤的 SUCCESS Admission **不允許強行危險派送**：先保全證據，判斷每一後續 Case 能否安全獨立派送；不能時逐項標明 `BLOCKED_<REASON> / NOT_DISPATCHED`，禁止假報已執行或把它算成 FAIL。每次單 Request，不併行、不清除／重播舊 Action。即使 Live 沒能派送完，也必須交付包含完整清單、成功與不成功及未執行原因的 Report。
+
+此次只修改／遵守測試規格，不自行修 Source、不 merge/main、不啟動 IT7、不擅自 Resume/Cancel IT5 任務。由主對話做 RCA 與下一步決策。
