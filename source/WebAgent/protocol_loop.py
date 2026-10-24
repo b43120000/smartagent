@@ -3709,6 +3709,7 @@ class WebAgentProtocolLoop:
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
+        self._request_started_monotonic = time.monotonic()
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         authorized = resolve_authorized_paths(
@@ -3824,6 +3825,17 @@ class WebAgentProtocolLoop:
 
         for _ in range(self.max_turns):
             self._check_cancelled()
+            if (self._bounded_repair.rejected_turns >= 3
+                    and time.monotonic() - self._request_started_monotonic >= 600):
+                reason = "bounded_repair:request_elapsed_soft_deadline"
+                set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                                  root=self.progress_root)
+                self._emit("protocol_loop_paused", request_id=self.run_id,
+                    round=self.turn_id, reason=reason,
+                    rejected_turns=self._bounded_repair.rejected_turns)
+                # This checkpoint never kills an in-flight process or declares
+                # the task terminal, and cannot create a fake success receipt.
+                raise RuntimeError("Repair elapsed budget exhausted; task safely paused. " + reason)
             if self._stagnation_pending:
                 reason = "semantic_stagnation:repeated_authorization_or_preflight_blocker"
                 set_runtime_state(self.task_id, "PAUSED", reason=reason,
