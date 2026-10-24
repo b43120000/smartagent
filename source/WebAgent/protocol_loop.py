@@ -1160,7 +1160,12 @@ class WebAgentProtocolLoop:
             "evidence_state": evidence_state,
             "terminal_eligible": terminal_eligible,
             'result_status': tool_outcome['status'] if tool_outcome else ('UNKNOWN' if tool == 'delete_path' else execution),
-            'result_reason': (tool_outcome or {}).get('reason', ''),
+            # Some scoped inspection tools still return the legacy textual
+            # rejection marker rather than a structured result envelope.
+            # Preserve that denial reason for the bounded semantic guard;
+            # this never changes authorization, executed or PASS/FAIL.
+            'result_reason': (tool_outcome or {}).get('reason', '')
+                or ('TOOL_SCOPE_REJECTED' if '[TOOL_SCOPE_REJECTED]' in text else ''),
             'executed': (tool_outcome or {}).get('executed', execution == 'SUCCEEDED'),
         }
 
