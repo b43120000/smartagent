@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from WebAgent.protocol_loop import extract_authorized_paths
 from WebAgent.tool_context import WebAgentToolContext
 from agent_core.tool_result_contract import decode_result
+from agent_core.bounded_repair import SemanticStagnationGuard
 
 
 def test_project_root_suffix() -> None:
@@ -82,7 +83,34 @@ def test_direct_condition_admission() -> None:
         assert outcome["reason"] == "CONDITION_NOT_REGISTERED", outcome
 
 
+def test_project_root_cross_tool_blockers_pause_not_success() -> None:
+    guard = SemanticStagnationGuard(max_same_blocker=4)
+    root = r"C:\fixture\positive_project"
+    samples = [
+        ({"tool": "inspect_project_scope", "workspace": root}, "TOOL_SCOPE_REJECTED", "REJECTED"),
+        ({"tool": "list_directory", "path": root + " 內"}, "DIRECTORY_NOT_FOUND", "FAILED"),
+        ({"tool": "query_project", "project_root": root}, "PREFLIGHT_REJECTED", "REJECTED"),
+        ({"tool": "read_file", "path": root + " 內"}, "FILE_NOT_FOUND", "FAILED"),
+    ]
+    for index, (action, reason, status) in enumerate(samples):
+        actual = guard.observe(action, {
+            "result_reason": reason, "result_status": status,
+            "verification_status": "UNKNOWN",
+        })
+        assert actual["consecutive_same_blocker"] == index + 1, actual
+        assert actual["status"] == ("EXHAUSTED" if index == 3 else "CONTINUE"), actual
+        assert actual["terminal_outcome_inferred"] is False
+        assert actual["authorization_changed"] is False
+    # An unrelated project root must not inherit a previous blocker streak.
+    other = guard.observe({"tool": "list_directory", "path": r"C:\fixture\other"}, {
+        "result_reason": "DIRECTORY_NOT_FOUND", "result_status": "FAILED",
+        "verification_status": "UNKNOWN",
+    })
+    assert other["consecutive_same_blocker"] == 1, other
+
+
 if __name__ == "__main__":
     test_project_root_suffix()
     test_direct_condition_admission()
+    test_project_root_cross_tool_blockers_pause_not_success()
     print("RUNTIME_EVIDENCE_IT6_REGRESSION_PASS")
