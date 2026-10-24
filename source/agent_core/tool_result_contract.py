@@ -72,7 +72,7 @@ def decode_result(result):
     # denials, retain the marker identity; a scope denial is not a delete
     # preflight failure.
     legacy = re.match(
-        r'^\\[(?P<marker>SECURITY_\\w+_REJECTED|TOOL_SCOPE_REJECTED|SECURITY_CONFIRMATION_REQUIRED)\\]',
+        r'^\[(?P<marker>SECURITY_\w+_REJECTED|TOOL_SCOPE_REJECTED|SECURITY_CONFIRMATION_REQUIRED)\]',
         text,
     )
     if legacy:
