@@ -4141,10 +4141,12 @@ class WebAgentProtocolLoop:
             # Admission is request-scoped. Install only the accepted,
             # Runtime-recorded progress clauses (never raw Planner action
             # fields), after progress persistence but before any Tool Action.
-            self.tools.bind_runtime_completion_contract(
-                self.progress_ledger.completion_contract,
-                request_id=self.run_id, task_epoch=self.task_epoch,
-            )
+            bind_completion = getattr(self.tools, "bind_runtime_completion_contract", None)
+            if bind_completion is not None:
+                bind_completion(
+                    self.progress_ledger.completion_contract,
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                )
             if len(actions) == 1:
                 NarrativeDecisionBridge.mark_terminal_result(
                     action_id=str(progress_action.get("action_id", "")),
