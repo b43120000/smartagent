@@ -59,3 +59,52 @@ class BoundedRepairBudget:
             "action_replay_allowed": False,
             "terminal_outcome_inferred": False,
         }
+
+class SemanticStagnationGuard:
+    """Detect repeated unsuccessful remediation, even when actions have new IDs.
+
+    Count a repeated normalized blocker reason across tools, rather than treating
+    executed=True, a new action ID or a timestamp-only response as advancement.
+    An actually verified PASS resets the consecutive blocker streak. This is
+    deliberately limited to denial/rejection cases; an expected negative
+    predicate FAIL is not an error-repair loop.
+    """
+
+    def __init__(self, max_same_blocker: int = 4):
+        if max_same_blocker < 2:
+            raise ValueError("semantic_stagnation_limit_invalid")
+        self.max_same_blocker = max_same_blocker
+        self._last_blocker = ""
+        self._consecutive = 0
+
+    def observe(self, action: Mapping[str, object],
+                evidence: Mapping[str, object]) -> dict[str, object]:
+        reason = str(evidence.get("result_reason", "") or "").upper()
+        verification = str(evidence.get("verification_status", "") or "").upper()
+        status = str(evidence.get("result_status", "") or "").upper()
+        # A negative predicate FAIL/UNKNOWN may be the correct expected fact.
+        scope_blockers = {
+            "TOOL_SCOPE_REJECTED", "PREFLIGHT_REJECTED",
+            "WORKING_DIRECTORY_REJECTED", "COMMAND_REJECTED",
+            "PATH_NOT_AUTHORIZED", "ACTION_DEPENDENCY_UNSATISFIED",
+        }
+        blocker = reason if reason in scope_blockers and status in {
+            "REJECTED", "FAILED", "UNKNOWN"
+        } else ""
+        if verification == "PASS" or not blocker:
+            self._last_blocker = ""
+            self._consecutive = 0
+        else:
+            self._consecutive = self._consecutive + 1 if blocker == self._last_blocker else 1
+            self._last_blocker = blocker
+        exhausted = bool(blocker and self._consecutive >= self.max_same_blocker)
+        return {
+            "schema": "SMARTAGENT_SEMANTIC_STAGNATION_V1",
+            "status": "EXHAUSTED" if exhausted else "CONTINUE",
+            "blocker_reason": blocker,
+            "consecutive_same_blocker": self._consecutive,
+            "limit": self.max_same_blocker,
+            "request_action_tool": str(action.get("tool", "") or ""),
+            "authorization_changed": False,
+            "terminal_outcome_inferred": False,
+        }
