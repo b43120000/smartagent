@@ -24,6 +24,10 @@ class BoundedRepairBudget:
         self._total = 0
         self._reasons: Counter[str] = Counter()
 
+    @property
+    def rejected_turns(self) -> int:
+        return self._total
+
     def observe(self, diagnostics: Iterable[Mapping[str, object]],
                 *, evidence_generation: int) -> dict[str, object]:
         """Count one rejected turn, not the number of error fields within it."""
