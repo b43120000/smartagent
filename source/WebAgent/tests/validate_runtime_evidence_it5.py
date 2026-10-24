@@ -59,11 +59,12 @@ def test_identity_missing_is_not_scoped() -> None:
     }
     assert audit_terminal_references(["same"], ledger, "RR", "E")["identity_status"] == "SCOPED"
     incomplete = audit_terminal_references(["missing_epoch"], ledger, "RR", "E")
-    assert incomplete["identity_status"] == "INCOMPLETE", incomplete
+    assert incomplete["identity_status"] == "SUSPECT", incomplete
+    assert incomplete["identity_reason"] == "INCOMPLETE", incomplete
     assert incomplete["incomplete_ref_count"] == 1
-    assert audit_terminal_references(["other"], ledger, "RR", "E")["identity_status"] == "FOREIGN"
-    assert audit_terminal_references(["unknown"], ledger, "RR", "E")["identity_status"] == "UNKNOWN_REF"
-    assert audit_terminal_references(["same", "missing_epoch"], ledger, "RR", "E")["identity_status"] == "INCOMPLETE"
+    assert audit_terminal_references(["other"], ledger, "RR", "E")["identity_reason"] == "FOREIGN"
+    assert audit_terminal_references(["unknown"], ledger, "RR", "E")["identity_reason"] == "UNKNOWN_REF"
+    assert audit_terminal_references(["same", "missing_epoch"], ledger, "RR", "E")["identity_reason"] == "INCOMPLETE"
 
 
 def test_queue_paused_is_not_terminal_or_replayable() -> None:
