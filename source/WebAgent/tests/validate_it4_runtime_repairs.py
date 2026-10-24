@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 
-from agent_core.bounded_repair import BoundedRepairBudget, SemanticStagnationGuard
+from agent_core.bounded_repair import (BoundedRepairBudget, SemanticStagnationGuard, repair_deadline_expired)
 from agent_core.evidence_identity_audit import audit_terminal_references
 from agent_core.prerequisite_resolution import assess_prerequisites
 from agent_core.tools import _powershell_with_native_exit_propagation
@@ -57,6 +57,9 @@ def test_repair_and_scope() -> None:
     last = guard.observe(action, error)
     assert last["status"] == "EXHAUSTED"
     assert last["authorization_changed"] is False
+    assert not repair_deadline_expired(2, 1000)
+    assert not repair_deadline_expired(3, 599.9)
+    assert repair_deadline_expired(3, 600)
     # An expected negative predicate must never be counted as infrastructure denial.
     assert guard.observe({"tool": "observe_fact"}, {
         "result_reason": "FACT_PREDICATE_FAILED",
