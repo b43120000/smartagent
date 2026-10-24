@@ -195,6 +195,24 @@ def _queue_agent_attachments(agent, paths, trace_id: str):
             raise
         return agent.queue_attachments(paths)
 
+def _powershell_with_native_exit_propagation(command: str) -> str:
+    """Preserve the native subprocess exit status across PowerShell -Command.
+
+    Only the original command is authorized; this is a runtime-owned reporting
+    epilogue, not permission to run an additional requested operation.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return command
+    return (
+        "$global:LASTEXITCODE = $null; & {\n"
+        + command + "\n"
+        + "}; $smartagent_command_ok = $?; "
+        + "if ($null -ne $global:LASTEXITCODE) "
+        + "{ exit [int]$global:LASTEXITCODE }; "
+        + "if ($smartagent_command_ok) { exit 0 } else { exit 1 }"
+    )
+
+
 def _run_powershell_capture(
     command: str,
     timeout: int = 30,
@@ -213,7 +231,7 @@ def _run_powershell_capture(
             "error": f"SECURITY_COMMAND_REJECTED:{exc}", "security_rejected": True,
         }
     payload = run_bounded_process(
-        ["powershell", "-NoProfile", "-Command", command],
+        ["powershell", "-NoProfile", "-Command", _powershell_with_native_exit_propagation(command)],
         cwd=cwd,
         timeout=timeout,
         capture_root=capture_root,
