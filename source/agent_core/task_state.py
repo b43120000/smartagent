@@ -632,6 +632,32 @@ class RemoteTaskQueue:
         self._finish_source_plan(saved, "CANCELLED")
         return saved
 
+    def pause_running(
+        self, task_id: str, reason: str, *, result: Any = None,
+    ) -> TaskRecord | None:
+        """Atomically checkpoint an actually RUNNING task as nonterminal PAUSED.
+
+        Never create a terminal receipt, mark completed_at or auto-requeue.
+        Resume requires a separately authorized, request-bound recovery path.
+        """
+        with self._lock:
+            with self.store.process_lock():
+                self.store.load()
+                task = self.store.get(task_id)
+                if task is None or task.state != TASK_RUNNING:
+                    return None
+                task.state = TASK_PAUSED
+                task.completed_at = None
+                task.error = str(reason or "")
+                task.metadata["paused_at"] = time.time()
+                task.metadata["pause_reason"] = str(reason or "")
+                task.metadata["delivery_state"] = "READY"
+                if result is not None:
+                    task.result_ledger["paused"] = result
+                saved = self.store.put(task, persist=True)
+        # No _finish_source_plan here: PAUSED is nonterminal.
+        return saved
+
     def fail_running(self, task_id: str, error: str) -> TaskRecord | None:
         """Atomically fail only a task that is still RUNNING."""
         with self._lock:
