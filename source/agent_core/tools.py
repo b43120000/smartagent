@@ -1206,6 +1206,20 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             return encode_result('REJECTED', 'EVIDENCE_SPEC_INVALID',
                 tool=tool, executed=False, detail=str(exc),
                 data={'verification_status':'SPEC_INVALID','terminal_eligible':False})
+        if predicate is not None:
+            binding = getattr(agent, "_runtime_completion_binding", None)
+            condition_id = str(tool_call.get("condition_id", "") or "").strip()
+            if (not isinstance(binding, dict)
+                    or not binding.get("request_id")
+                    or binding.get("request_id") != getattr(agent, "current_request_id", "")
+                    or binding.get("task_epoch") != getattr(agent, "current_task_epoch", "")
+                    or condition_id not in binding.get("success_conditions", ())):
+                # A valid filesystem predicate is NOT a valid task condition
+                # unless Runtime already registered it in this request/epoch.
+                # Do not attempt stat or emit FACT_PREDICATE_PASSED.
+                return encode_result('REJECTED', 'CONDITION_NOT_REGISTERED',
+                    tool=tool, executed=False, detail='condition_id_not_bound_to_request_success_contract',
+                    data={'verification_status':'SPEC_INVALID','terminal_eligible':False})
         try:
             security = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
             path = security.require_read(tool_call["path"], require_absolute=True,
