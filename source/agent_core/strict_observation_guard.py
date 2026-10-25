@@ -34,3 +34,23 @@ def forbidden_strict_actions(request: str, operational: list[dict]) -> list[str]
         for action in operational
         if str(action.get("tool", "") or "") not in {"observe_fact", "final_response"}
     ]
+
+def strict_observation_action_diagnostic(request: str, operational: list[dict]) -> dict | None:
+    """Return the same fail-closed admission error before any Tool execution."""
+    forbidden = forbidden_strict_actions(request, operational)
+    if not forbidden:
+        return None
+    import json
+    return {
+        "marker": "[WEBAGENT_STRICT_OBSERVATION_REJECTED]",
+        "reason": "strict_observation_extra_action_forbidden",
+        "detail": "forbidden_tools=" + json.dumps(forbidden, separators=(",", ":")),
+        "suggestion": (
+            "原始 Request 僅允許指定次數的 canonical observe_fact，不可用 read_file／"
+            "inspect_project_ledger 等占位或補救工具換取 condition_id。"
+            "首輪只提交 report_progress 登記兩個 success conditions，"
+            "加 turn_commit(action_count=1)；Runtime 發行正式 condition_id 後"
+            "才依序執行兩次 canonical observe_fact，不得修改 Predicate。"
+        ),
+    }
+

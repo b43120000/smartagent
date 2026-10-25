@@ -2438,6 +2438,15 @@ class WebAgentProtocolLoop:
             normalized = validate_model_progress(progress[0], self.progress_ledger)
         except TaskProgressError:
             return self._accept_v8_ack(calls, expected)
+        # Exclusive-action restrictions must run before a generic Progress.next_action
+        # mismatch, or the model receives misleading advice to repair an
+        # unauthorized filler tool instead of removing it.
+        from agent_core.strict_observation_guard import strict_observation_action_diagnostic
+        strict_diagnostic = strict_observation_action_diagnostic(
+            getattr(self, "task_request", ""), operational,
+        )
+        if strict_diagnostic:
+            return [], [strict_diagnostic]
         consistency = self._progress_action_consistency_diagnostic(normalized, operational)
         if consistency:
             return [], [consistency]
@@ -2849,21 +2858,12 @@ class WebAgentProtocolLoop:
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
         operational = [action for action in actions if action.get("tool") != "report_progress"]
-        from agent_core.strict_observation_guard import forbidden_strict_actions
-        forbidden_by_original_request = forbidden_strict_actions(self.task_request, operational)
-        if forbidden_by_original_request:
-            return [], [{
-                "marker": "[WEBAGENT_STRICT_OBSERVATION_REJECTED]",
-                "reason": "strict_observation_extra_action_forbidden",
-                "detail": "forbidden_tools=" + json.dumps(forbidden_by_original_request, separators=(",", ":")),
-                "suggestion": (
-                    "原始 Request 僅允許指定次數的 canonical observe_fact，不可用 read_file／inspect_project_ledger 等"
-                    "占位或補救工具換取 condition_id。若尚無正式 condition_id，第一輪只提交一個"
-                    " report_progress（登記全部 success conditions）與 turn_commit（action_count=1）；"
-                    "Runtime 接受後會在下一輪提供正式 condition_id，再各執行一次 observe_fact。"
-                    "不得改寫原始 Predicate，亦不得自行新增工具。"
-                ),
-            }]
+        from agent_core.strict_observation_guard import strict_observation_action_diagnostic
+        strict_diagnostic = strict_observation_action_diagnostic(
+            getattr(self, "task_request", ""), operational,
+        )
+        if strict_diagnostic:
+            return [], [strict_diagnostic]
         for action in operational:
             if str(action.get("tool", "") or "") != "query_project":
                 continue
@@ -3223,7 +3223,7 @@ class WebAgentProtocolLoop:
                 }]
         from agent_core.strict_observation_guard import strict_observation_only_request
         strict_first_registration = (
-            strict_observation_only_request(self.task_request)
+            strict_observation_only_request(getattr(self, "task_request", ""))
             and self.turn_id == 1
             and not operational
             and not self.action_result_ledger
@@ -4347,7 +4347,7 @@ class WebAgentProtocolLoop:
                     matched_condition=self.progress_ledger.matched_condition,
                     evidence_refs=self.progress_ledger.evidence_refs,
                 )
-                raise RuntimeError("WebAgent 已接受中斷終態，receipt_id="
+                raise RuntimeError("WebAgent 已接受中斷終態（模型決策中斷），receipt_id="
                     + terminal_receipt["receipt_id"] + "：" + content)
 
             if len(actions) == 1 and actions[0].get("tool") == "final_response":
