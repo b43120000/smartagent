@@ -323,7 +323,16 @@ def _page_snapshot(scraper,prompt):
     adapter=scraper._web_ui_adapter()
     users=adapter.observation_turns('user')
     assistants=adapter.observation_turns('assistant')
-    return dict(composer_matches=scraper._composer_matches_prompt(prompt),
+    # Persist the native Adapter verification result, never raw DOM text.
+    validation = adapter.validate_composer(prompt)
+    verification = dict(matched=bool(validation.matched),
+        matched_view=str(validation.matched_view),
+        expected_length=int(validation.expected_length),
+        observed_length=int(validation.observed_length),
+        expected_sha256=str(validation.expected_sha256),
+        observed_sha256=str(validation.observed_sha256))
+    return dict(composer_matches=bool(validation.matched),
+        composer_validation=verification,
         composer_empty=not scraper._normalize_composer_text(scraper._read_composer_text()),
         url=scraper._page.url,
         user_anchors=[[t.structural_id,t.content_digest] for t in users[-2:]],
