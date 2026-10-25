@@ -2849,6 +2849,21 @@ class WebAgentProtocolLoop:
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
         operational = [action for action in actions if action.get("tool") != "report_progress"]
+        from agent_core.strict_observation_guard import forbidden_strict_actions
+        forbidden_by_original_request = forbidden_strict_actions(self.task_request, operational)
+        if forbidden_by_original_request:
+            return [], [{
+                "marker": "[WEBAGENT_STRICT_OBSERVATION_REJECTED]",
+                "reason": "strict_observation_extra_action_forbidden",
+                "detail": "forbidden_tools=" + json.dumps(forbidden_by_original_request, separators=(",", ":")),
+                "suggestion": (
+                    "原始 Request 僅允許指定次數的 canonical observe_fact，不可用 read_file／inspect_project_ledger 等"
+                    "占位或補救工具換取 condition_id。若尚無正式 condition_id，第一輪只提交一個"
+                    " report_progress（登記全部 success conditions）與 turn_commit（action_count=1）；"
+                    "Runtime 接受後會在下一輪提供正式 condition_id，再各執行一次 observe_fact。"
+                    "不得改寫原始 Predicate，亦不得自行新增工具。"
+                ),
+            }]
         for action in operational:
             if str(action.get("tool", "") or "") != "query_project":
                 continue
@@ -3206,9 +3221,24 @@ class WebAgentProtocolLoop:
                         "或其 Runtime condition_id；不得用事後新增或不相干條件包裝一般失敗。"
                     ),
                 }]
-        action_consistency = None if getattr(self, '_single_action_probe', False) else self._progress_action_consistency_diagnostic(
-            normalized_progress, operational,
+        from agent_core.strict_observation_guard import strict_observation_only_request
+        strict_first_registration = (
+            strict_observation_only_request(self.task_request)
+            and self.turn_id == 1
+            and not operational
+            and not self.action_result_ledger
+            and not (getattr(self.progress_ledger, "completion_contract", {}) or {}).get("success")
+            and normalized_progress.get("decision") == "CONTINUE"
+            and normalized_progress.get("outcome") == "PENDING"
+            and float(normalized_progress["current_step"]) < float(normalized_progress["total_steps"])
+            and len((normalized_progress.get("completion_contract") or {}).get("success") or []) == 2
         )
+        # One initial Progress-only condition-registration exchange, not a
+        # reusable no-action loophole. Normal ACK, ledger and stagnation guards
+        # still apply, and no Runtime Tool Action is dispatched on this turn.
+        action_consistency = None if (
+            getattr(self, '_single_action_probe', False) or strict_first_registration
+        ) else self._progress_action_consistency_diagnostic(normalized_progress, operational)
         if action_consistency:
             return [], [action_consistency]
         if decision == "CONTINUE" and float(normalized_progress["current_step"]) >= float(normalized_progress["total_steps"]):
@@ -3902,6 +3932,18 @@ class WebAgentProtocolLoop:
             )
         prompt += "\n" + lazy_context_sync_prompt(request, self.workspace)
         prompt += "\n" + format_prompt_context(self.progress_ledger)
+        from agent_core.strict_observation_guard import strict_observation_only_request
+        if strict_observation_only_request(self.task_request):
+            prompt += (
+                "\n[STRICT_OBSERVATION_ONLY_REQUEST]\n"
+                "原始 Request 僅准許事前註冊成功條件與指定次數的 canonical observe_fact，禁止 read_file、"
+                "inspect_project_ledger、其他補救／占位操作。第一輪先用 report_progress 登記兩個獨立"
+                " completion_contract.success，並以 turn_commit(action_count=1) 結束本輪；"
+                "本輪沒有 operational action，正式 condition_id 由 Runtime 接受 Progress 後發行。"
+                "下一輪取得兩個正式 condition_id，再依序各使用一次 observe_fact。"
+                "任何補救工具不得自行加入；若 Runtime 不允許條件登記，保留拒絕而非改動檔案。\n"
+                "[/STRICT_OBSERVATION_ONLY_REQUEST]"
+            )
         if self.continuation_source:
             from agent_core.task_continuation import continuation_prompt
             prompt += continuation_prompt(self.continuation_source, self.continuation_mode)
