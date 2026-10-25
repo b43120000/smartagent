@@ -501,19 +501,56 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     trusted_authorized_paths = extract_authorized_paths(
                         str(plan_record.get("original_request", "") or "")
                     )
-            # Capture the loaded Worker + Planner/Composer code immediately
-            # before the request; disk HEAD alone cannot attest live bytecode.
+            # For strictly observation-only requests, the changed guard and
+            # protocol loop MUST be attested before the first Planner/Tool turn.
+            # The source hash alone cannot establish live Python code identity.
+            from agent_core.strict_observation_guard import strict_observation_only_request
+            strict_source_gate = strict_observation_only_request(task.request)
             try:
                 from agent_core.source_attestation import capture
+                verified = require_protocol_manifest(install_root())
+                if strict_source_gate and (
+                    verified.get("hash_verification") != "PASS"
+                    or verified.get("hash_mismatches")
+                ):
+                    raise RuntimeError("strict_observation_manifest_not_verified")
+                attestation = capture(role="telegram_webagent_worker", manifest_verified=
+                                      verified.get("hash_verification") == "PASS")
+                if strict_source_gate:
+                    required = {
+                        "WebAgent.protocol_loop": (
+                            "source/WebAgent/protocol_loop.py",
+                            ("WebAgentProtocolLoop.run", "WebAgentProtocolLoop._accept_v8_ack"),
+                        ),
+                        "agent_core.strict_observation_guard": (
+                            "source/agent_core/strict_observation_guard.py",
+                            ("strict_observation_only_request", "forbidden_strict_actions",
+                             "strict_observation_action_diagnostic"),
+                        ),
+                    }
+                    for module_name, (source_path, names) in required.items():
+                        record = attestation.get("modules", {}).get(module_name, {})
+                        matching = record.get("live_matches_recompiled_disk") or {}
+                        if (
+                            record.get("loaded") is not True
+                            or record.get("source_path") != source_path
+                            or not record.get("disk_sha256_at_capture")
+                            or not all(matching.get(name) is True for name in names)
+                        ):
+                            raise RuntimeError(
+                                "strict_observation_loaded_source_attestation_failed:" + module_name
+                            )
                 runtime_log.write("STATUS", component="telegram_webagent_worker",
                                   stage="source_load_attestation",
                                   task_id=task.task_id, request_id=task.request_id,
-                                  **capture(role="telegram_webagent_worker", manifest_verified=True))
+                                  **attestation)
             except Exception as exc:
                 runtime_log.write("STATUS", component="telegram_webagent_worker",
                                   stage="source_load_attestation_unavailable",
                                   task_id=task.task_id, request_id=task.request_id,
                                   error_type=type(exc).__name__)
+                if strict_source_gate:
+                    raise
             final_content = loop.run(
                 task.request,
                 request_id=task.request_id,
