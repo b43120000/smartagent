@@ -23,6 +23,8 @@ PROTOCOL_VERSION = 9
 CORE_FILES = (
     'source/agent_core/path_integrity_trace.py',
     'source/agent_core/source_attestation.py',
+    'source/agent_core/agent_gateway.py',
+    'source/RemoteAgent/remote_worker_launcher.py',
     'config/debug_config.defaults.json',
     'install_smart_agent/git_release.ps1',
     'install_smart_agent/build_portable_git.py',
