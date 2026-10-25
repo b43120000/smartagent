@@ -148,6 +148,12 @@ class AgentIngressGateway:
             ),
             "plan_execution_nonce": plan_execution_nonce,
         }
+        # Only a trusted, opted-in LOCAL_TEST ingress may hand diagnostic settings
+        # to its independently spawned Worker; never accept a handoff from user text.
+        if message.transport.upper() == "LOCAL_TEST":
+            trace_handoff = PIT.export_handoff()
+            if trace_handoff:
+                metadata["it10_trace_handoff"] = trace_handoff
         task, created = self.task_queue.enqueue_remote_request(
             request,
             origin_turn_fingerprint=message.idempotency_key,
