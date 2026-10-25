@@ -83,6 +83,86 @@ def restore(value):
         _scope.set(None)
 
 
+
+def is_it10_request(request):
+    """The marker is a diagnostic selector, never a scope grant."""
+    text = str(request or "")
+    return bool(re.search(r"(?m)^NLIT_CASE_ID=IT10[ \\t\\r]*$", text)
+                and re.search(r"(?m)^NLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E[ \\t\\r]*$", text))
+
+
+def diagnostic_status(request):
+    """Reason-only health check. Never logs trace root, credentials or request."""
+    if not is_it10_request(request):
+        return "NOT_IT10"
+    if os.environ.get("SMARTAGENT_IT10_PATH_TRACE") != "1":
+        return "FLAG_DISABLED"
+    if os.environ.get("SMARTAGENT_IT10_PATH_TRACE_PRIVATE_ACL_CONFIRMED") != "YES":
+        return "ACL_NOT_ACKNOWLEDGED"
+    run = os.environ.get("SMARTAGENT_IT10_PATH_TRACE_RUN_ID", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", run):
+        return "INVALID_RUN_ID"
+    return "READY" if _settings() else "INVALID_OR_MISSING_PRIVATE_ROOT"
+
+
+def export_handoff():
+    """Carry the trusted LOCAL_TEST sender opt-in through the durable task store.
+
+    This is a diagnostic capability only. It never authorizes a Runtime path.
+    No request body, token, or browser identity is included.
+    """
+    active = context()
+    settings = _settings()
+    if not active or not settings:
+        return {}
+    return {
+        "schema": "IT10_TRACE_HANDOFF_V1",
+        "trace_id": active["trace_id"],
+        "run_id": settings[1],
+        "private_root": str(settings[0]),
+        "issued_at": time.time(),
+    }
+
+
+def worker_env_from_handoff(task):
+    """Verify a locally issued diagnostic handoff before enabling a child process."""
+    metadata = getattr(task, "metadata", {}) or {}
+    if str(metadata.get("transport", "")).upper() != "LOCAL_TEST":
+        return {}
+    request = str(getattr(task, "request", "") or "")
+    if not is_it10_request(request):
+        return {}
+    handoff = metadata.get("it10_trace_handoff")
+    if not isinstance(handoff, dict) or handoff.get("schema") != "IT10_TRACE_HANDOFF_V1":
+        return {}
+    run_id = str(handoff.get("run_id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", run_id):
+        return {}
+    digest = hashlib.sha256(request.strip().encode("utf-8")).hexdigest()[:24]
+    if handoff.get("trace_id") != run_id + "-" + digest:
+        return {}
+    issued_at = handoff.get("issued_at")
+    if not isinstance(issued_at, (float, int)) or not 0 <= time.time() - issued_at <= 1800:
+        return {}
+    try:
+        root = Path(str(handoff.get("private_root") or ""))
+        if not root.is_absolute() or not root.is_dir():
+            return {}
+        root = root.resolve()
+        package = Path(__file__).resolve().parents[2]
+        if root.is_relative_to(package) and root.relative_to(package).parts[0] != "localdata":
+            return {}
+    except (OSError, ValueError, IndexError, RuntimeError):
+        return {}
+    return {
+        "SMARTAGENT_IT10_PATH_TRACE": "1",
+        "SMARTAGENT_IT10_PATH_TRACE_PRIVATE_ACL_CONFIRMED": "YES",
+        "SMARTAGENT_IT10_PATH_TRACE_RUN_ID": run_id,
+        "SMARTAGENT_IT10_PATH_TRACE_ROOT": str(root),
+    }
+
+
+
 def _paths(value):
     found = []
     def visit(item):
