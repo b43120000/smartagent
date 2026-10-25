@@ -17,7 +17,7 @@
     "adapterUI/7.stopButton.bat": "daed1516b14838e64c3fe26818e09d2eedb00088ac5f08f1295bf4c694d62cbb",
     "adapterUI/8.generationState.bat": "4ff66ebe6f50063a1f94446ff16f992f033ebaf53020aeb8fddfc896f87432a0",
     "adapterUI/9.blockingState.bat": "afbc2ec146f5185db50e8875d2c6c80c67c5bc13b5986ebca67e5a8ec2efe383",
-    "config/debug_config.defaults.json": "f9d435033e242e7ffba9e93ff7542d38540953cb1ce5ee69fdcf386b4517e215",
+    "config/debug_config.defaults.json": "789f845b1a55db9d1772c3b5a5fde78b070a3c9c281a69d51fb8bc55680eb68a",
     "force_stop_all_agents.bat": "dca775d4c4d3341ac1cf4e27b3e8b9a92ad046bd2b9fcd105aa62fa829b609c1",
     "install_smart_agent/acl_status.ps1": "e482c9ab33d38c39a6950312be0cd115ed012cddf323b0a1505ca6a2eb30b08c",
     "install_smart_agent/bootstrap.ps1": "ebf28b141bfd04bd61801041d3ac267abfe36e8bd02f96ce35c5f24cb824deb1",
