@@ -501,6 +501,19 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     trusted_authorized_paths = extract_authorized_paths(
                         str(plan_record.get("original_request", "") or "")
                     )
+            # Capture the loaded Worker + Planner/Composer code immediately
+            # before the request; disk HEAD alone cannot attest live bytecode.
+            try:
+                from agent_core.source_attestation import capture
+                runtime_log.write("STATUS", component="telegram_webagent_worker",
+                                  stage="source_load_attestation",
+                                  task_id=task.task_id, request_id=task.request_id,
+                                  **capture(role="telegram_webagent_worker", manifest_verified=True))
+            except Exception as exc:
+                runtime_log.write("STATUS", component="telegram_webagent_worker",
+                                  stage="source_load_attestation_unavailable",
+                                  task_id=task.task_id, request_id=task.request_id,
+                                  error_type=type(exc).__name__)
             final_content = loop.run(
                 task.request,
                 request_id=task.request_id,
