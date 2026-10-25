@@ -85,6 +85,16 @@ class RemoteWorkerLauncher:
             "--remote-cdp", self.cdp,
         ]
         env = os.environ.copy()
+        from agent_core import path_integrity_trace as PIT
+        trace_handoff_env = PIT.worker_env_from_handoff(task)
+        if trace_handoff_env:
+            env.update(trace_handoff_env)
+        if PIT.is_it10_request(getattr(task, "request", "")):
+            self._log("STATUS", stage="IT10_TRACE_WORKER_DISPATCH",
+                      task_id=task.task_id, request_id=task.request_id,
+                      handoff_applied=bool(trace_handoff_env),
+                      inherited_gate=PIT.diagnostic_status(task.request),
+                      effective_gate=("READY_HANDOFF" if trace_handoff_env else PIT.diagnostic_status(task.request)))
         env["SMARTAGENT_REMOTE_WORKER"] = "1"
         env["SMARTAGENT_ATTACH_CDP"] = "1"
         env.pop("SMARTAGENT_ISOLATED_BROWSER", None)
