@@ -87,8 +87,8 @@ def restore(value):
 def is_it10_request(request):
     """The marker is a diagnostic selector, never a scope grant."""
     text = str(request or "")
-    return bool(re.search(r"(?m)^NLIT_CASE_ID=IT10[ \\t\\r]*$", text)
-                and re.search(r"(?m)^NLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E[ \\t\\r]*$", text))
+    return bool(re.search(r"(?m)^NLIT_CASE_ID=IT10[ \t\r]*$", text)
+                and re.search(r"(?m)^NLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E[ \t\r]*$", text))
 
 
 def diagnostic_status(request):
