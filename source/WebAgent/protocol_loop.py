@@ -2096,11 +2096,20 @@ class WebAgentProtocolLoop:
         # harmless aliases. Never turn report aliases into admission evidence.
         from agent_core.evidence_identity_audit import audit_terminal_references
         identity_audit = audit_terminal_references(
-            refs, self.action_result_ledger, self.run_id, self.task_epoch
+            refs, self.action_result_ledger, self.run_id, self.task_epoch,
+            protocol_spec_rejection=self._safe_protocol_spec_rejection(),
         )
         self._emit("terminal_evidence_identity_audit",
             request_id=self.run_id, task_id=self.task_id, round=self.turn_id,
             **identity_audit)
+        # A terminal admission must never override a SUSPECT reference audit.
+        # Rejection is not an Observation; refuse UNKNOWN/foreign evidence
+        # instead of issuing an ACCEPTED receipt that masks identity failure.
+        if identity_audit["identity_status"] != "SCOPED":
+            raise RuntimeError(
+                "terminal_reference_identity_not_scoped:"
+                + str(identity_audit["identity_reason"])
+            )
         payload = {
             "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
             "admission_status": "ACCEPTED",
