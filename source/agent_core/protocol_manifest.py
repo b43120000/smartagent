@@ -160,6 +160,7 @@ CORE_FILES = (
     'source/agent_core/task_progress.py',
     'source/agent_core/action_loop_state.py',
     'source/agent_core/action_dependencies.py',
+    'source/agent_core/strict_observation_guard.py',
     'source/agent_core/request_context.py',
     'source/agent_core/typed_field_values.py',
     'source/agent_core/plan_ledger.py',
