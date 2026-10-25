@@ -177,6 +177,12 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     events = RemoteEventStore(remote_events_path(root))
     task = queue.adopt_dispatched(task_id, token, worker_pid=os.getpid())
     PIT.begin(task.request, request_id=task.request_id, task_id=task.task_id, transport=str((task.metadata or {}).get("transport", "")))
+    if PIT.is_it10_request(task.request):
+        runtime_log.write("STATUS", component="telegram_webagent_worker",
+                          stage="it10_trace_gate", task_id=task.task_id,
+                          request_id=task.request_id,
+                          gate=PIT.diagnostic_status(task.request),
+                          context_active=bool(PIT.context()), pid=os.getpid())
     PIT.record("06_worker_input", task.request)
     from agent_core.task_continuation import TaskContinuationStore, task_owner, render_task_reply
     continuation_store = TaskContinuationStore(root)
