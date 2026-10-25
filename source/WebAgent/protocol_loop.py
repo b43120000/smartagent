@@ -3224,9 +3224,14 @@ class WebAgentProtocolLoop:
         from agent_core.strict_observation_guard import strict_observation_only_request
         strict_first_registration = (
             strict_observation_only_request(getattr(self, "task_request", ""))
-            and self.turn_id == 1
+            # Earlier REJECTED attempts are not successful condition
+            # registration.  Only the first actually admitted ACK may register
+            # these two success clauses without an operational Tool Action.
+            and not getattr(self, "accepted_ack_ids", [])
             and not operational
+            and not self.action_ledger
             and not self.action_result_ledger
+            and not self.condition_result_ledger
             and not (getattr(self.progress_ledger, "completion_contract", {}) or {}).get("success")
             and normalized_progress.get("decision") == "CONTINUE"
             and normalized_progress.get("outcome") == "PENDING"
@@ -3358,7 +3363,10 @@ class WebAgentProtocolLoop:
             self.pending_verification_requirement = {}
         if (
             self.pending_verification_requirement
-            and verification_status in {"UNVERIFIED", "SPEC_INVALID"}
+            # UNKNOWN is not a completed verification: an outstanding
+            # structured verification requirement also blocks progress-only
+            # replies with no verifying Tool Action.
+            and verification_status not in {"PASS", "FAIL"}
             and decision == "CONTINUE"
             and not (operational and all(is_observation(item) for item in operational))
             and not (self._has_structured_verification_action(operational)
@@ -3423,9 +3431,9 @@ class WebAgentProtocolLoop:
                         'suggestion':'引用原始事前綁定的 observe_fact FAIL，不得用不相關工具失敗代替。'}]
         context = V8RequestContext(
             self.run_id,
-            self.task_id or self.run_id,
-            self.task_epoch or self.run_id,
-            self.intent_digest,
+            getattr(self, "task_id", "") or self.run_id,
+            getattr(self, "task_epoch", "") or self.run_id,
+            getattr(self, "intent_digest", ""),
         )
         admitted: dict[str, dict] = {}
         diagnostics: list[dict] = []
