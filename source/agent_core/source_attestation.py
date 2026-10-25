@@ -73,7 +73,7 @@ def capture(*, role, manifest_verified):
         if module is None and name == "RemoteAgent.telegram_webagent_worker":
             # python -m runs the Worker as __main__, not under its import name.
             candidate = sys.modules.get("__main__")
-            candidate_path = str(getattr(candidate, "__file__", "") or "").replace("\\\\", "/")
+            candidate_path = str(getattr(candidate, "__file__", "") or "").replace("\\", "/")
             if candidate_path.endswith("/RemoteAgent/telegram_webagent_worker.py"):
                 module = candidate
         if module is None:
