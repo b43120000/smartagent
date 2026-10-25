@@ -1,0 +1,4204 @@
+{
+  "task_id": "TASK-B8AF86EACD931098346D",
+  "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+  "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+  "transport": "LOCAL_TEST",
+  "manual_run_marker": "IT10-REAL-20261025-01",
+  "evidence_scope": "IT10-STRICT-20261025-RUN01",
+  "product_commit": "0186a51bb4e2fa249b137a83a01b89b7b4829603",
+  "writer_multiplier": 1.5,
+  "sender_start_taipei": "2026-10-25T16:16:42.769244+08:00",
+  "sender_end_taipei": "2026-10-25T16:20:21.787760+08:00",
+  "original_marker_preserved": true,
+  "not_real_telegram_api": true,
+  "terminal_state": "INTERRUPTED",
+  "sender_exit_code": 1,
+  "test_acceptance": "NOT_AUTOMATICALLY_ADJUDICATED",
+  "request_body": {
+    "request_utf8_sha256": "7fad2e6350c8570c340f9379584edd957ff26ffeb9f5060f609cd0fc485dcb5f",
+    "codepoints": 1168,
+    "utf8_bytes": 1818,
+    "same_body_as_prior_manual_request": true,
+    "new_transport": "LOCAL_TEST",
+    "new_identity_required": true,
+    "manual_marker_reused_per_user_request": true,
+    "path": "E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt"
+  },
+  "writer_operations": [
+    {
+      "operation_id": "b910842787dd415e83fa2070533d31a3",
+      "owner_pid": 31716,
+      "prompt_codepoints": 2128,
+      "prompt_utf8_bytes": 2128,
+      "expected_prompt_raw_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+      "pending_prefix": {
+        "chars": 2128,
+        "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+        "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+      },
+      "confirmed_prefix": {
+        "chars": 2128,
+        "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+        "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+      },
+      "observed_states": [
+        "IN_FLIGHT",
+        "COMPLETE",
+        "SUBMIT_RESERVED",
+        "SUBMIT_ATTEMPTED",
+        "DELIVERED"
+      ],
+      "snapshot_count": 8,
+      "first_capture": 1792916214.6033745,
+      "last_capture": 1792916236.87145,
+      "final_record": {
+        "operation_id": "b910842787dd415e83fa2070533d31a3",
+        "state": "DELIVERED",
+        "url": "[REDACTED_PRIVATE]",
+        "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+        "prompt_chars": 2128,
+        "prompt_bytes": 2128,
+        "started_at": 1792916214.4982896,
+        "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+        "owner_pid": 31716,
+        "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+        "baseline": {
+          "composer_matches": false,
+          "composer_empty": true,
+          "url": "[REDACTED_PRIVATE]",
+          "user_anchors": [
+            [
+              "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+              "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+            ],
+            [
+              "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+              "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+            ]
+          ],
+          "assistant_anchors": [
+            [
+              "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+              "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+            ],
+            [
+              "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+              "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+            ]
+          ],
+          "user_native_ids": [
+            "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+            "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+          ],
+          "assistant_native_ids": [
+            "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+            "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+          ],
+          "user_count": 5,
+          "assistant_count": 5,
+          "generation_active": false
+        },
+        "pending_prefix": {
+          "chars": 2128,
+          "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+          "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+        },
+        "confirmed_prefix": {
+          "chars": 2128,
+          "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+          "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+        },
+        "result": {
+          "status": "VERIFIED_SAFE_TO_SUBMIT",
+          "observation": {
+            "composer_matches": true,
+            "composer_empty": false,
+            "url": "[REDACTED_PRIVATE]",
+            "user_anchors": [
+              [
+                "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+              ],
+              [
+                "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+              ]
+            ],
+            "assistant_anchors": [
+              [
+                "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+              ],
+              [
+                "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+              ]
+            ],
+            "user_native_ids": [
+              "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+              "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+            ],
+            "assistant_native_ids": [
+              "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+              "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+            ],
+            "user_count": 5,
+            "assistant_count": 5,
+            "generation_active": false
+          },
+          "elapsed_sec": 7.176,
+          "operation_id": "b910842787dd415e83fa2070533d31a3"
+        },
+        "delivery_confirmed_at": 1792916236.732335
+      },
+      "snapshots": [
+        {
+          "captured_at": 1792916214.6033745,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "ac478d8a4c3c07274a1635153b8609b47bbfa9ec1a196cfd9b94b6e6a8719539",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99"
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916216.1102076,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "e9a53ea346170176572515de8915e122c63d2197b05536e3a7e0a07a74c43fe0",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                  "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                ],
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                  "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                ],
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916216.472179,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "2af51ffe40ef8f0e329d79a6cab7b4a2b2cc844849e8e719d8c89e3ea32e8441",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                  "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                ],
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                  "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                ],
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916219.6508398,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "13c92128283567cd02f43620c1cf7c6380f3e675d66db61bab9d2da5d9652cb0",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                  "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                ],
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                  "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                ],
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "confirmed_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916221.7793515,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "9e28cfdf3ff4286b22751ed3ceddc24d3cf9c10ccf1d8286636d5d417226589c",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "COMPLETE",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                  "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                ],
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                  "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                ],
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "confirmed_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                    "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                  ],
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                    "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                  ],
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 7.176,
+              "operation_id": "b910842787dd415e83fa2070533d31a3"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916232.9027276,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "88860328851f99a1185d4c85779931ad93585ea66b7fd948f497ed6d9a9fede7",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "SUBMIT_RESERVED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                  "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                ],
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                  "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                ],
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "confirmed_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                    "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                  ],
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                    "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                  ],
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 7.176,
+              "operation_id": "b910842787dd415e83fa2070533d31a3"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916235.2556658,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "f838841437cf65f62d8cba7a69df04aa229c8df1af2ce1f203384eda1f09c123",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "SUBMIT_ATTEMPTED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                  "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                ],
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                  "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                ],
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "confirmed_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                    "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                  ],
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                    "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                  ],
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 7.176,
+              "operation_id": "b910842787dd415e83fa2070533d31a3"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916236.87145,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "bfb4f53f0eca5e5f1ebe9b209ce1253512f339db4d3d5f5922c6952074aa2d50",
+          "record": {
+            "operation_id": "b910842787dd415e83fa2070533d31a3",
+            "state": "DELIVERED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+            "prompt_chars": 2128,
+            "prompt_bytes": 2128,
+            "started_at": 1792916214.4982896,
+            "submit_id": "WUS-58FCB2FBF89C43FAA1CA390A6428E510",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "3a9f93332845142815703932b66d0e164d80ca4eaeac4383262657bc202e0f99",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                  "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                ],
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                  "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                ],
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "confirmed_prefix": {
+              "chars": 2128,
+              "sha256": "88b542f464e19cf27d1ee7f78b0cf7e6e062854f316eb3e23f16e474597085d0",
+              "normalized_sha256": "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6f605c9a5020ce53b0ed144f17786258f3499826f80ca8ecfca8ebf82340d678",
+                    "f57557111cc863bfbaf656b389f6fd9d77ec99aca7c0b924fda75e95336a307a"
+                  ],
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "ac9543ed8bb986554e18d9cc1552ca3095878ddd31baaf2cbd15ca2472420d75",
+                    "2f383399da8ad30632a019aa600aff8f18e0fe461d4c95c2e720537db3fa2edd"
+                  ],
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7c86370f50bfa697",
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 7.176,
+              "operation_id": "b910842787dd415e83fa2070533d31a3"
+            },
+            "delivery_confirmed_at": 1792916236.732335
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        }
+      ]
+    },
+    {
+      "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+      "owner_pid": 31716,
+      "prompt_codepoints": 35105,
+      "prompt_utf8_bytes": 40249,
+      "expected_prompt_raw_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+      "pending_prefix": {
+        "chars": 35105,
+        "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+        "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+      },
+      "confirmed_prefix": {
+        "chars": 35105,
+        "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+        "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+      },
+      "observed_states": [
+        "IN_FLIGHT",
+        "COMPLETE",
+        "SUBMIT_RESERVED",
+        "SUBMIT_ATTEMPTED",
+        "DELIVERED"
+      ],
+      "snapshot_count": 23,
+      "first_capture": 1792916252.67651,
+      "last_capture": 1792916301.684241,
+      "final_record": {
+        "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+        "state": "DELIVERED",
+        "url": "[REDACTED_PRIVATE]",
+        "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+        "prompt_chars": 35105,
+        "prompt_bytes": 40249,
+        "started_at": 1792916252.5293164,
+        "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+        "owner_pid": 31716,
+        "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+        "baseline": {
+          "composer_matches": false,
+          "composer_empty": true,
+          "url": "[REDACTED_PRIVATE]",
+          "user_anchors": [
+            [
+              "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+              "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+            ],
+            [
+              "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+              "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            ]
+          ],
+          "assistant_anchors": [
+            [
+              "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+              "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+            ],
+            [
+              "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+              "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+            ]
+          ],
+          "user_native_ids": [
+            "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+            "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+          ],
+          "assistant_native_ids": [
+            "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+            "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+          ],
+          "user_count": 5,
+          "assistant_count": 5,
+          "generation_active": false
+        },
+        "pending_prefix": {
+          "chars": 35105,
+          "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+          "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+        },
+        "confirmed_prefix": {
+          "chars": 35105,
+          "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+          "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+        },
+        "result": {
+          "status": "VERIFIED_SAFE_TO_SUBMIT",
+          "observation": {
+            "composer_matches": true,
+            "composer_empty": false,
+            "url": "[REDACTED_PRIVATE]",
+            "user_anchors": [
+              [
+                "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+              ],
+              [
+                "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+              ]
+            ],
+            "assistant_anchors": [
+              [
+                "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+              ],
+              [
+                "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+              ]
+            ],
+            "user_native_ids": [
+              "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+              "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+            ],
+            "assistant_native_ids": [
+              "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+              "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+            ],
+            "user_count": 5,
+            "assistant_count": 5,
+            "generation_active": false
+          },
+          "elapsed_sec": 33.615,
+          "operation_id": "7996f1674f0a4b00894623ca2d8a4a71"
+        },
+        "delivery_confirmed_at": 1792916301.4766197
+      },
+      "snapshots": [
+        {
+          "captured_at": 1792916252.67651,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "68301a0eaeb2208054fb565637a2fcbb35095db327a07c3d5d22244a90e1381a",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3"
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916254.028323,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "64a59878c8d44a2d7a18be1b8c52ca511bb538952d1681a8333ae30db54e361d",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916254.250526,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "876fa83a6dbd495d1fd1949b22d401a293b22b44f0c96994885da21bb8cd8ff6",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 4096,
+              "sha256": "5cc1f788df7b6aeeb1a6480edebcf0e2fadd98c73d875e9263f1f19caaa27992",
+              "normalized_sha256": "623b5990343ae1a002f4126422392ecbf536f77a204d54e035a7d6737c08ce39"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916263.7487586,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "531141115d5c681ad6cd3794ead3852ee6cefe700d14ee1b76b2a656e3d1c669",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 4096,
+              "sha256": "5cc1f788df7b6aeeb1a6480edebcf0e2fadd98c73d875e9263f1f19caaa27992",
+              "normalized_sha256": "623b5990343ae1a002f4126422392ecbf536f77a204d54e035a7d6737c08ce39"
+            },
+            "confirmed_prefix": {
+              "chars": 4096,
+              "sha256": "5cc1f788df7b6aeeb1a6480edebcf0e2fadd98c73d875e9263f1f19caaa27992",
+              "normalized_sha256": "623b5990343ae1a002f4126422392ecbf536f77a204d54e035a7d6737c08ce39"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916263.980595,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "1885ba7e998ff52e99b7990b535b44cd37637f7e92f79ed737b303fd7438886f",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 8192,
+              "sha256": "1aa35908c2413335b09d485a45a9ab710f75ae0c4079bd4a890d31aef72aa349",
+              "normalized_sha256": "df212fa6592b245dec2c746ac9c13a6d22d884cc760fff6d735b1ea470463944"
+            },
+            "confirmed_prefix": {
+              "chars": 4096,
+              "sha256": "5cc1f788df7b6aeeb1a6480edebcf0e2fadd98c73d875e9263f1f19caaa27992",
+              "normalized_sha256": "623b5990343ae1a002f4126422392ecbf536f77a204d54e035a7d6737c08ce39"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916266.11569,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "3597b4837528d553e4f9391ff4caa8599acfe35b0ba698fc63fe7f3cfd25c777",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 8192,
+              "sha256": "1aa35908c2413335b09d485a45a9ab710f75ae0c4079bd4a890d31aef72aa349",
+              "normalized_sha256": "df212fa6592b245dec2c746ac9c13a6d22d884cc760fff6d735b1ea470463944"
+            },
+            "confirmed_prefix": {
+              "chars": 8192,
+              "sha256": "1aa35908c2413335b09d485a45a9ab710f75ae0c4079bd4a890d31aef72aa349",
+              "normalized_sha256": "df212fa6592b245dec2c746ac9c13a6d22d884cc760fff6d735b1ea470463944"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916266.351421,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "170cd5a5727b1cc74df5f03b998bffd78b1728eff676e5bff610fd6bd5549801",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 12288,
+              "sha256": "b95c7bad2aebfa769b32fc5caaf14b4ae001269af6dfb6d53e8ef79e2f68b844",
+              "normalized_sha256": "913fdc6a5a7f5b6d0c9aef60b7e354ab88334f656f85e7dc9d73848b2c709e20"
+            },
+            "confirmed_prefix": {
+              "chars": 8192,
+              "sha256": "1aa35908c2413335b09d485a45a9ab710f75ae0c4079bd4a890d31aef72aa349",
+              "normalized_sha256": "df212fa6592b245dec2c746ac9c13a6d22d884cc760fff6d735b1ea470463944"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916268.2823858,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "7cf5a993b2b65eb840944de5d1e44cac10e0af945eef02c0f62bc469e1c0c7ae",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 16384,
+              "sha256": "5dc47fb8b311ba4d66b6e764d710f759a14a2959699f13206fad01c1573fd7e5",
+              "normalized_sha256": "6a6f3aaf27466bdf50a5b155594f40d71d5020d7fc9c0cb48ba431efd9883964"
+            },
+            "confirmed_prefix": {
+              "chars": 12288,
+              "sha256": "b95c7bad2aebfa769b32fc5caaf14b4ae001269af6dfb6d53e8ef79e2f68b844",
+              "normalized_sha256": "913fdc6a5a7f5b6d0c9aef60b7e354ab88334f656f85e7dc9d73848b2c709e20"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916270.1849597,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "c578486e09b1342bf88a200370c3f0b8db0d4a225b8d0bfc87bac8655acaeb7b",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 16384,
+              "sha256": "5dc47fb8b311ba4d66b6e764d710f759a14a2959699f13206fad01c1573fd7e5",
+              "normalized_sha256": "6a6f3aaf27466bdf50a5b155594f40d71d5020d7fc9c0cb48ba431efd9883964"
+            },
+            "confirmed_prefix": {
+              "chars": 16384,
+              "sha256": "5dc47fb8b311ba4d66b6e764d710f759a14a2959699f13206fad01c1573fd7e5",
+              "normalized_sha256": "6a6f3aaf27466bdf50a5b155594f40d71d5020d7fc9c0cb48ba431efd9883964"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916270.4169154,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "d2244b88939ac4a67ba35b53ab2325be3beba9d573728bf7c7db8ed38fcf0163",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20480,
+              "sha256": "b1aff739fe186b4eafc07d5019ba02f831bf122e5b279c6f1b77d261cb86021d",
+              "normalized_sha256": "a169d8086ac52a92e1fe568df13de8ccfb2f9653c470547881336aeb162888a8"
+            },
+            "confirmed_prefix": {
+              "chars": 16384,
+              "sha256": "5dc47fb8b311ba4d66b6e764d710f759a14a2959699f13206fad01c1573fd7e5",
+              "normalized_sha256": "6a6f3aaf27466bdf50a5b155594f40d71d5020d7fc9c0cb48ba431efd9883964"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916273.5898082,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "b5fd1a1ad111aadad58f1374830a7c032cc1b8e8f2a6fa0f7bccffcda18cd76f",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20480,
+              "sha256": "b1aff739fe186b4eafc07d5019ba02f831bf122e5b279c6f1b77d261cb86021d",
+              "normalized_sha256": "a169d8086ac52a92e1fe568df13de8ccfb2f9653c470547881336aeb162888a8"
+            },
+            "confirmed_prefix": {
+              "chars": 20480,
+              "sha256": "b1aff739fe186b4eafc07d5019ba02f831bf122e5b279c6f1b77d261cb86021d",
+              "normalized_sha256": "a169d8086ac52a92e1fe568df13de8ccfb2f9653c470547881336aeb162888a8"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916273.8643792,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "c21abb0050e610668f5ea427ad9d1f45be46e2657b6465d14d14f4038420931a",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 24576,
+              "sha256": "971df82c26dca6feac170cf23cd6186da472367423fccb38e553fadf86eb9ba4",
+              "normalized_sha256": "28bb533fee6d2d90bb45f35f0e33be2fd831c2ef0c44ab03b01f4e043b69dd3c"
+            },
+            "confirmed_prefix": {
+              "chars": 20480,
+              "sha256": "b1aff739fe186b4eafc07d5019ba02f831bf122e5b279c6f1b77d261cb86021d",
+              "normalized_sha256": "a169d8086ac52a92e1fe568df13de8ccfb2f9653c470547881336aeb162888a8"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916275.3331425,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "40f9a8d9360514510d49c205dc6a5211e53a3c2f93f7b870f27266b696ad40d6",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 24576,
+              "sha256": "971df82c26dca6feac170cf23cd6186da472367423fccb38e553fadf86eb9ba4",
+              "normalized_sha256": "28bb533fee6d2d90bb45f35f0e33be2fd831c2ef0c44ab03b01f4e043b69dd3c"
+            },
+            "confirmed_prefix": {
+              "chars": 24576,
+              "sha256": "971df82c26dca6feac170cf23cd6186da472367423fccb38e553fadf86eb9ba4",
+              "normalized_sha256": "28bb533fee6d2d90bb45f35f0e33be2fd831c2ef0c44ab03b01f4e043b69dd3c"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916275.5516772,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "da1b75500ff3444135c55182d363ca19e946ca94701b62fe4807a0d9a9cdb31d",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 28672,
+              "sha256": "c4990b7bbcf6b6b68f88e5098c817f550a58d3cac03d4ef15d2420f824577d33",
+              "normalized_sha256": "c189d5e681d20d35987a9992d7fc6c2cb7a5fd16973f9b86fe9235f1ec8e97a8"
+            },
+            "confirmed_prefix": {
+              "chars": 24576,
+              "sha256": "971df82c26dca6feac170cf23cd6186da472367423fccb38e553fadf86eb9ba4",
+              "normalized_sha256": "28bb533fee6d2d90bb45f35f0e33be2fd831c2ef0c44ab03b01f4e043b69dd3c"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916277.535309,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "cfe9bcaea24b6c448b0c8e553ad7122790acc200729378392624eb9333879dce",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 28672,
+              "sha256": "c4990b7bbcf6b6b68f88e5098c817f550a58d3cac03d4ef15d2420f824577d33",
+              "normalized_sha256": "c189d5e681d20d35987a9992d7fc6c2cb7a5fd16973f9b86fe9235f1ec8e97a8"
+            },
+            "confirmed_prefix": {
+              "chars": 28672,
+              "sha256": "c4990b7bbcf6b6b68f88e5098c817f550a58d3cac03d4ef15d2420f824577d33",
+              "normalized_sha256": "c189d5e681d20d35987a9992d7fc6c2cb7a5fd16973f9b86fe9235f1ec8e97a8"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916277.7407284,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "0a35bf96a14bb8188fb5e97398c6bc6da3d5079d13708f465a7faa2769ca8940",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 32768,
+              "sha256": "357efcb0164b0cfbf51ae1e9e228d142dc6c920ce80166b04b4bbf49637ee97b",
+              "normalized_sha256": "59ff8bee39e62d207fb110fc545d29256dd2ddd0b6291a389f0f73b94eee5e87"
+            },
+            "confirmed_prefix": {
+              "chars": 28672,
+              "sha256": "c4990b7bbcf6b6b68f88e5098c817f550a58d3cac03d4ef15d2420f824577d33",
+              "normalized_sha256": "c189d5e681d20d35987a9992d7fc6c2cb7a5fd16973f9b86fe9235f1ec8e97a8"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916280.7913406,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "d5c4fec6b096811a652049f7589bce0bd1ce6baa6afb6beeecada080a3fa9bc6",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 32768,
+              "sha256": "357efcb0164b0cfbf51ae1e9e228d142dc6c920ce80166b04b4bbf49637ee97b",
+              "normalized_sha256": "59ff8bee39e62d207fb110fc545d29256dd2ddd0b6291a389f0f73b94eee5e87"
+            },
+            "confirmed_prefix": {
+              "chars": 32768,
+              "sha256": "357efcb0164b0cfbf51ae1e9e228d142dc6c920ce80166b04b4bbf49637ee97b",
+              "normalized_sha256": "59ff8bee39e62d207fb110fc545d29256dd2ddd0b6291a389f0f73b94eee5e87"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916281.0240343,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "5003cbaffecd3dfd26f84825224fa929e242176a6ea245c6676d2edc658a720a",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "confirmed_prefix": {
+              "chars": 32768,
+              "sha256": "357efcb0164b0cfbf51ae1e9e228d142dc6c920ce80166b04b4bbf49637ee97b",
+              "normalized_sha256": "59ff8bee39e62d207fb110fc545d29256dd2ddd0b6291a389f0f73b94eee5e87"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916283.5418296,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "7d129a96de7f38ecc3155a2e5be6636178ba6575123f37c1a4b66ff762c6fbb3",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "confirmed_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916286.257663,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "5faa314087e7317b94cd31708742556b91fb6c0fc5885b06838ddfeebf6e262b",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "COMPLETE",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "confirmed_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ],
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ],
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 33.615,
+              "operation_id": "7996f1674f0a4b00894623ca2d8a4a71"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916298.288338,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "d232082cff3d81e67daa3e454e1b880331d4ed5ae9fe4377d6208fd3eb1f8e7b",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "SUBMIT_RESERVED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "confirmed_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ],
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ],
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 33.615,
+              "operation_id": "7996f1674f0a4b00894623ca2d8a4a71"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916300.1784434,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "b73ae9d8d99af8d081eb99cffcbc882e5d9aa5c8d8f829ef0d3822f322019fce",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "SUBMIT_ATTEMPTED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "confirmed_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ],
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ],
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 33.615,
+              "operation_id": "7996f1674f0a4b00894623ca2d8a4a71"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916301.684241,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "1ce55b9e40aaff2076a1516e37bd839c39d7460171480ca3f8b79cad76867b46",
+          "record": {
+            "operation_id": "7996f1674f0a4b00894623ca2d8a4a71",
+            "state": "DELIVERED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+            "prompt_chars": 35105,
+            "prompt_bytes": 40249,
+            "started_at": 1792916252.5293164,
+            "submit_id": "WUS-6611E263E6CC4329A69CE7187C2E0259",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "a152df11e12e960a175ef3f66136df253618ff2c31bd318ed05bcf79615294a3",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                  "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                ],
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                  "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                ],
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "confirmed_prefix": {
+              "chars": 35105,
+              "sha256": "9cd49a4534d64d2f72667a6bb37b594aaf6ff0f61cb431cb25826fb1b9a81d5a",
+              "normalized_sha256": "8f7bb465299275b48ab0628d2cb78413bf81b336f9550649264fd935df0eaf02"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "6fabfff04a5020419dea14e762d935b0942ecf966afa1ca4181878043b03ab53",
+                    "2b85716659a0bda607580d44d5c4a407a6b8b630bb21ef399e7ae72d3846062e"
+                  ],
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "974e443def974e45209f6e8e2b2102aa2fef4c1dd499416807fabbbc5084798e",
+                    "d423e620cb3d540a0594b3a233c775e193faeede4ec3b5b4daa9438439ef1edf"
+                  ],
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_7cf7fe478b95edbf",
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 33.615,
+              "operation_id": "7996f1674f0a4b00894623ca2d8a4a71"
+            },
+            "delivery_confirmed_at": 1792916301.4766197
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        }
+      ]
+    },
+    {
+      "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+      "owner_pid": 31716,
+      "prompt_codepoints": 20042,
+      "prompt_utf8_bytes": 23746,
+      "expected_prompt_raw_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+      "pending_prefix": {
+        "chars": 20042,
+        "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+        "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+      },
+      "confirmed_prefix": {
+        "chars": 20042,
+        "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+        "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+      },
+      "observed_states": [
+        "IN_FLIGHT",
+        "COMPLETE",
+        "SUBMIT_RESERVED",
+        "SUBMIT_ATTEMPTED",
+        "DELIVERED"
+      ],
+      "snapshot_count": 14,
+      "first_capture": 1792916341.844612,
+      "last_capture": 1792916375.3267112,
+      "final_record": {
+        "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+        "state": "DELIVERED",
+        "url": "[REDACTED_PRIVATE]",
+        "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+        "prompt_chars": 20042,
+        "prompt_bytes": 23746,
+        "started_at": 1792916341.7298453,
+        "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+        "owner_pid": 31716,
+        "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+        "baseline": {
+          "composer_matches": false,
+          "composer_empty": true,
+          "url": "[REDACTED_PRIVATE]",
+          "user_anchors": [
+            [
+              "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+              "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+            ],
+            [
+              "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+              "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+            ]
+          ],
+          "assistant_anchors": [
+            [
+              "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+              "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+            ],
+            [
+              "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+              "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+            ]
+          ],
+          "user_native_ids": [
+            "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+            "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+          ],
+          "assistant_native_ids": [
+            "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+            "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+          ],
+          "user_count": 5,
+          "assistant_count": 5,
+          "generation_active": false
+        },
+        "pending_prefix": {
+          "chars": 20042,
+          "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+          "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+        },
+        "confirmed_prefix": {
+          "chars": 20042,
+          "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+          "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+        },
+        "result": {
+          "status": "VERIFIED_SAFE_TO_SUBMIT",
+          "observation": {
+            "composer_matches": true,
+            "composer_empty": false,
+            "url": "[REDACTED_PRIVATE]",
+            "user_anchors": [
+              [
+                "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+              ],
+              [
+                "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+              ]
+            ],
+            "assistant_anchors": [
+              [
+                "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+              ],
+              [
+                "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+              ]
+            ],
+            "user_native_ids": [
+              "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+              "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+            ],
+            "assistant_native_ids": [
+              "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+              "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+            ],
+            "user_count": 5,
+            "assistant_count": 5,
+            "generation_active": false
+          },
+          "elapsed_sec": 18.671,
+          "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9"
+        },
+        "delivery_confirmed_at": 1792916375.266396
+      },
+      "snapshots": [
+        {
+          "captured_at": 1792916341.844612,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "f236c4ec269a3a0de248ebc2d9659b68ef620a35cbed449cccdf50cf014aed5c",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7"
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916343.1517787,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "5c27238d0ae721fd713d00ecd6554e4f905019f58a0524ade91d9db0968c2dc7",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916343.4047637,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "a8ba805b1247c87cb1de6f55cf5d24372739aecde6cd1ba44496530431eb3a4f",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 4096,
+              "sha256": "80bad920421f023516b24f6a26586da74b73ba1860066d66c72e295f60ed6327",
+              "normalized_sha256": "25790c4618153b76b7e5a6cfaf7bce0acfc4e84682cf0897ceb05755e28c567c"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916347.505312,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "48a54d7123a75e48ba7d564f433bd684eef5d6288a840b2e3e2402dae8adadd7",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 4096,
+              "sha256": "80bad920421f023516b24f6a26586da74b73ba1860066d66c72e295f60ed6327",
+              "normalized_sha256": "25790c4618153b76b7e5a6cfaf7bce0acfc4e84682cf0897ceb05755e28c567c"
+            },
+            "confirmed_prefix": {
+              "chars": 4096,
+              "sha256": "80bad920421f023516b24f6a26586da74b73ba1860066d66c72e295f60ed6327",
+              "normalized_sha256": "25790c4618153b76b7e5a6cfaf7bce0acfc4e84682cf0897ceb05755e28c567c"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916347.7315998,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "82bd8e0f934de489110c11ec6ae4992bcc2d1f34b3dbea866bb1c34c1c155f49",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 8192,
+              "sha256": "4962c458405536f6db1483ab8bffe609a3fc0b70c98640d20c0a597fb92e7edb",
+              "normalized_sha256": "96136c420d6c1d5f2e503e837d0f98fca3c572932c0037b41a698e8545725cb1"
+            },
+            "confirmed_prefix": {
+              "chars": 4096,
+              "sha256": "80bad920421f023516b24f6a26586da74b73ba1860066d66c72e295f60ed6327",
+              "normalized_sha256": "25790c4618153b76b7e5a6cfaf7bce0acfc4e84682cf0897ceb05755e28c567c"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916347.9537525,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "0188db996dc3ee51a043e511af10cfd80c174e0d6d5ff9568658020a1b5a01dc",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 12288,
+              "sha256": "7484e1cb3580d51c97d0f0650f31efcce1fd6a565c0303d02d5cb6e15be5777c",
+              "normalized_sha256": "7581a2f675ae179587fd98af73d46c5804549128849f380e4c108a08bf4d2b55"
+            },
+            "confirmed_prefix": {
+              "chars": 8192,
+              "sha256": "4962c458405536f6db1483ab8bffe609a3fc0b70c98640d20c0a597fb92e7edb",
+              "normalized_sha256": "96136c420d6c1d5f2e503e837d0f98fca3c572932c0037b41a698e8545725cb1"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916350.2801068,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "9494b98b37d2504caae91e70eaa7903798d258bd68bbcdf50f2c02fb4b162077",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 12288,
+              "sha256": "7484e1cb3580d51c97d0f0650f31efcce1fd6a565c0303d02d5cb6e15be5777c",
+              "normalized_sha256": "7581a2f675ae179587fd98af73d46c5804549128849f380e4c108a08bf4d2b55"
+            },
+            "confirmed_prefix": {
+              "chars": 12288,
+              "sha256": "7484e1cb3580d51c97d0f0650f31efcce1fd6a565c0303d02d5cb6e15be5777c",
+              "normalized_sha256": "7581a2f675ae179587fd98af73d46c5804549128849f380e4c108a08bf4d2b55"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916350.5085483,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "6fd7a517c1a2f1eed23c6d67e7595bcaa902833456366f05269d1059941ad8d0",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 16384,
+              "sha256": "b36d1d090230e6db359946d2d35167aa5f87123c2739fc3b65cbda68cc2cf86e",
+              "normalized_sha256": "5fec0b7a849d0854046724a759d89002c1b103be05002139ba66978049c47004"
+            },
+            "confirmed_prefix": {
+              "chars": 12288,
+              "sha256": "7484e1cb3580d51c97d0f0650f31efcce1fd6a565c0303d02d5cb6e15be5777c",
+              "normalized_sha256": "7581a2f675ae179587fd98af73d46c5804549128849f380e4c108a08bf4d2b55"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916353.140223,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "3aa2b73a181ca584530d7d3baf2a4c15c61db8efa35f9fb4ab3c79c4826b28a5",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "confirmed_prefix": {
+              "chars": 16384,
+              "sha256": "b36d1d090230e6db359946d2d35167aa5f87123c2739fc3b65cbda68cc2cf86e",
+              "normalized_sha256": "5fec0b7a849d0854046724a759d89002c1b103be05002139ba66978049c47004"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916358.3280804,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "f9d4f1aef06b5d2be905173e560fdf22d85bb848e47bcd4c3a026aa4cf0a42cb",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "IN_FLIGHT",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "confirmed_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916360.466229,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "5d9dd58807e0d870e38f48ae94adcb07b102010a632a948da15478bfec9968a5",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "COMPLETE",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "confirmed_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ],
+                  [
+                    "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                    "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ],
+                  [
+                    "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                    "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                  "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 18.671,
+              "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916371.717127,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "6f846c94958adf7e7a0304e653a7989fbc40ce761df3c47679807588d8904364",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "SUBMIT_RESERVED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "confirmed_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ],
+                  [
+                    "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                    "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ],
+                  [
+                    "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                    "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                  "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 18.671,
+              "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916373.8521228,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "1775ec544617f910ba6e0a0b5cf86f7f610a9de5e39cca0f6e03c2c60733f7f8",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "SUBMIT_ATTEMPTED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "confirmed_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ],
+                  [
+                    "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                    "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ],
+                  [
+                    "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                    "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                  "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 18.671,
+              "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9"
+            }
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        },
+        {
+          "captured_at": 1792916375.3267112,
+          "source": "package/localdata/runtime/composer_operations/f40ac777cce59eef3c9ec97110a9094fd3c641a1fedf9656b66dfda4d1ba4cb7.json",
+          "source_bytes_sha256": "f597230d0f2177f979d939ce34f8c8c90ed0ee63dbc9bb8dd728942adf5c2794",
+          "record": {
+            "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9",
+            "state": "DELIVERED",
+            "url": "[REDACTED_PRIVATE]",
+            "prompt_sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+            "prompt_chars": 20042,
+            "prompt_bytes": 23746,
+            "started_at": 1792916341.7298453,
+            "submit_id": "WUS-125FB37FC44E4D0DA8B77F58782A8B6F",
+            "owner_pid": 31716,
+            "logical_prompt_sha256": "6adc0f1ac8d7a29e472aa5d2939d76a28e2d87d3df37d667cd6f7f5b416b94a7",
+            "baseline": {
+              "composer_matches": false,
+              "composer_empty": true,
+              "url": "[REDACTED_PRIVATE]",
+              "user_anchors": [
+                [
+                  "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                  "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                ],
+                [
+                  "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                  "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                ]
+              ],
+              "assistant_anchors": [
+                [
+                  "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                  "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                ],
+                [
+                  "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                  "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                ]
+              ],
+              "user_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+              ],
+              "assistant_native_ids": [
+                "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+              ],
+              "user_count": 5,
+              "assistant_count": 5,
+              "generation_active": false
+            },
+            "pending_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "confirmed_prefix": {
+              "chars": 20042,
+              "sha256": "b83d465f9695d3be65c4a96b4798feb8f7ec0d1a2b3a7ce56800f4a6ddad8017",
+              "normalized_sha256": "2eb89a2e706a67e0fdf8e93875824ca9080d14f8c2b84eeb57880fa36a53c331"
+            },
+            "result": {
+              "status": "VERIFIED_SAFE_TO_SUBMIT",
+              "observation": {
+                "composer_matches": true,
+                "composer_empty": false,
+                "url": "[REDACTED_PRIVATE]",
+                "user_anchors": [
+                  [
+                    "7dbf113586fe0a02233e7f20ff574dd3d7da9b22eb230100c7ead1fe5aecbf3f",
+                    "b2e60a21162b55fbce2b4b4faa5b9adeca49f029649aa721af4d580792c56376"
+                  ],
+                  [
+                    "446ca97202cb1330210f98be5736e2e2497646d04829ce5531dac17777f5773a",
+                    "7b9faa59273b99f6fd61eb08c50fb81a6e6eb8385a8d77192bad9f41c61b077e"
+                  ]
+                ],
+                "assistant_anchors": [
+                  [
+                    "0c6c6fe74b8717148ce34bcdc5587add69dbb1bcdd327cc6de854eea23b59a2b",
+                    "bce4022408f2f504549ae2501904caf6e37bd4fe6f01089a9908eec3ecf9665c"
+                  ],
+                  [
+                    "5eb9e242473a6c0a46d700cddf12a72a2526bf1bb946f05af74aa8a5884190fd",
+                    "5ddfaee9fae237dcc486bd46c81b59ee0281602dac53018cb5bc9eadf3233c44"
+                  ]
+                ],
+                "user_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14",
+                  "PRIVATE_MESSAGE_ALIAS_e3b0c44298fc1c14"
+                ],
+                "assistant_native_ids": [
+                  "PRIVATE_MESSAGE_ALIAS_b776c851b0512952",
+                  "PRIVATE_MESSAGE_ALIAS_2e755f73e5dc60bf"
+                ],
+                "user_count": 5,
+                "assistant_count": 5,
+                "generation_active": false
+              },
+              "elapsed_sec": 18.671,
+              "operation_id": "dd972ba2bd334ea8a380d3a49c1999f9"
+            },
+            "delivery_confirmed_at": 1792916375.266396
+          },
+          "config_at_capture": {
+            "protocol_readiness": {
+              "allow_missing_closing_marker": true
+            },
+            "composer_verification": {
+              "unsafe_force_pass": false
+            }
+          },
+          "config_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd"
+        }
+      ]
+    }
+  ],
+  "writer_timeout_debug": [
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353579,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:16:54",
+      "text": "[2026-10-25 16:16:54] [MainThread] service=chatgpt stage=composer_bounded_begin | prompt_len=2128 timeout_sec=45.0",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353619,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:32",
+      "text": "[2026-10-25 16:17:32] [MainThread] service=chatgpt stage=composer_bounded_begin | prompt_len=35105 timeout_sec=60.0",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353674,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:19:01",
+      "text": "[2026-10-25 16:19:01] [MainThread] service=chatgpt stage=composer_bounded_begin | prompt_len=20042 timeout_sec=45.0",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    }
+  ],
+  "chunk_confirmations": [
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353580,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:16:59",
+      "text": "[2026-10-25 16:16:59] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=2128/2128",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353620,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:43",
+      "text": "[2026-10-25 16:17:43] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=4096/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353621,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:45",
+      "text": "[2026-10-25 16:17:45] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=8192/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353622,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:48",
+      "text": "[2026-10-25 16:17:48] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=12288/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353623,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:50",
+      "text": "[2026-10-25 16:17:50] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=16384/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353624,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:53",
+      "text": "[2026-10-25 16:17:53] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=20480/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353625,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:55",
+      "text": "[2026-10-25 16:17:55] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=24576/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353626,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:17:57",
+      "text": "[2026-10-25 16:17:57] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=28672/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353627,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:18:00",
+      "text": "[2026-10-25 16:18:00] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=32768/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353628,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:18:03",
+      "text": "[2026-10-25 16:18:03] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=35105/35105",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353675,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:19:07",
+      "text": "[2026-10-25 16:19:07] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=4096/20042",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353676,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:19:07",
+      "text": "[2026-10-25 16:19:07] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=8192/20042",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353677,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:19:10",
+      "text": "[2026-10-25 16:19:10] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=12288/20042",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353678,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:19:12",
+      "text": "[2026-10-25 16:19:12] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=16384/20042",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    },
+    {
+      "source": {
+        "file": "package/localdata/logs/web_llm_scraper_debug.log",
+        "line": 353679,
+        "json_pointer": null
+      },
+      "at_taipei": "2026-10-25 16:19:18",
+      "text": "[2026-10-25 16:19:18] [MainThread] service=chatgpt stage=composer_chunk_verified | chars=20042/20042",
+      "attribution": "bound-page/time-window correlation; log lacks task PID/ID"
+    }
+  ],
+  "expected_budget_formula": "max(30.0, (len(prompt)/4096.0)*3.5+10.0)*1.5",
+  "observation_budget_formula": "max(8.0, (len(prompt)/4096.0)*1.5+4.0)",
+  "insert_call_or_insert_return_not_write_proof": true,
+  "snapshot_sampling_interval_sec": 0.2,
+  "sampling_limit": "Short-lived state may be missed; missing snapshot is not evidence transition never occurred",
+  "raw_composer_actual_text": "MISSING unless explicitly present in runtime Path Trace; expected/pending/confirmed hashes are not relabeled as raw DOM hashes",
+  "source_inventory": {
+    "private-evidence/worker_runtime.jsonl": {
+      "bytes": 43889,
+      "sha256": "2b421f46dbf8d82e32b3b87bfe90c969dfba007e21700b27a498cb688cbbd6d9"
+    },
+    "private-evidence/writer_snapshots.jsonl": {
+      "bytes": 130108,
+      "sha256": "f9a102ad18bb880d38303b43938bd877430d5fde4944a21b8bdcdb4fea0833d1"
+    },
+    "package/localdata/logs/web_llm_scraper_debug.log": {
+      "bytes": 113343447,
+      "sha256": "760a9cadc7afdf43cd90d0975f93b6af72e6721634d743299cb46d50d8416bdf"
+    },
+    "private-evidence/it10-path-IT10-STRICT-20261025-RUN01-7fad2e6350c8570c340f9379-27760.jsonl": {
+      "bytes": 29358,
+      "sha256": "d39590783aa55490ae4a7980bf7e6492cf24da4e7c43a233a9de022736036075"
+    },
+    "package/source/agent_core/web_runtime.py": {
+      "bytes": 307825,
+      "sha256": "b7722f4474e6f68901cb8e9010ab80866e85dbef9c349c23703b2caa4818dfc6"
+    },
+    "private-evidence/outbox.jsonl": {
+      "bytes": 15091,
+      "sha256": "3b557ae0d56b9dc63b0969655cee9656358c37b09c1fd7f5a4a151a818f25843"
+    },
+    "private-evidence/task.json": {
+      "bytes": 23821,
+      "sha256": "846c985f1964b512a0d4536abe8422b192b3460a6aaa4b0a8623010531628de7"
+    },
+    "private-evidence/continuation.json": {
+      "bytes": 20951,
+      "sha256": "054c8d23e7fe9bf6a6c163a4e0d206fc2fb7cf0f4e8c729c769e9d0cded99774"
+    },
+    "private-evidence/events.json": {
+      "bytes": 11649,
+      "sha256": "23af1c8a6468c2a8e7e58d92b7fe48891f787f5e8812c5ac9285a6916ac17d46"
+    },
+    "private-evidence/config_verified.json": {
+      "bytes": 786,
+      "sha256": "919038190f8c0de33bbc82967e97887bb404b8f82c730c1f98e4d1f905be4ed8"
+    },
+    "private-evidence/sender_result.json": {
+      "bytes": 956,
+      "sha256": "a4c2e53e6053381ad4cfbbd7462a6298588c7dff4701a72783c8d00f8b2cd233"
+    }
+  }
+}

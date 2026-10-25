@@ -1,0 +1,91 @@
+{
+  "task_id": "TASK-B8AF86EACD931098346D",
+  "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+  "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+  "transport": "LOCAL_TEST",
+  "manual_run_marker": "IT10-REAL-20261025-01",
+  "evidence_scope": "IT10-STRICT-20261025-RUN01",
+  "product_commit": "0186a51bb4e2fa249b137a83a01b89b7b4829603",
+  "writer_multiplier": 1.5,
+  "sender_start_taipei": "2026-10-25T16:16:42.769244+08:00",
+  "sender_end_taipei": "2026-10-25T16:20:21.787760+08:00",
+  "original_marker_preserved": true,
+  "not_real_telegram_api": true,
+  "terminal_state": "INTERRUPTED",
+  "sender_exit_code": 1,
+  "test_acceptance": "NOT_AUTOMATICALLY_ADJUDICATED",
+  "actual_reader_path": "package/config/debug_config.json",
+  "reader_function": "agent_core.web_runtime._unsafe_force_composer_verify_pass",
+  "reader_code_path": "package/source/agent_core/web_runtime.py",
+  "reader_result": false,
+  "written_at_taipei": "2026-10-25T16:16:42.709364+08:00",
+  "config_before_sha256": "695ffd77c3cf39e32e41dfc5ec8b7349d04e9e9eabec206cc73a6489414fadf6",
+  "config_after_write_sha256": "b78391d442fe9de990b9c8824ecc328e6c6086aa2ea8706ca5ce16c6160c32fd",
+  "observed_config": {
+    "protocol_readiness": {
+      "allow_missing_closing_marker": true
+    },
+    "composer_verification": {
+      "unsafe_force_pass": false
+    }
+  },
+  "after_task_config": {
+    "protocol_readiness": {
+      "allow_missing_closing_marker": true
+    },
+    "composer_verification": {
+      "unsafe_force_pass": false
+    }
+  },
+  "sender_after_task_reader_return": false,
+  "all_captured_writer_snapshots_config_false": true,
+  "worker_each_read_trace": "MISSING: no instrumentation of every worker config file read; caller actual reader and snapshots retained",
+  "config_file_not_published": true,
+  "other_config_keys_preserved": true,
+  "source_inventory": {
+    "private-evidence/worker_runtime.jsonl": {
+      "bytes": 43889,
+      "sha256": "2b421f46dbf8d82e32b3b87bfe90c969dfba007e21700b27a498cb688cbbd6d9"
+    },
+    "private-evidence/writer_snapshots.jsonl": {
+      "bytes": 130108,
+      "sha256": "f9a102ad18bb880d38303b43938bd877430d5fde4944a21b8bdcdb4fea0833d1"
+    },
+    "package/localdata/logs/web_llm_scraper_debug.log": {
+      "bytes": 113343447,
+      "sha256": "760a9cadc7afdf43cd90d0975f93b6af72e6721634d743299cb46d50d8416bdf"
+    },
+    "private-evidence/it10-path-IT10-STRICT-20261025-RUN01-7fad2e6350c8570c340f9379-27760.jsonl": {
+      "bytes": 29358,
+      "sha256": "d39590783aa55490ae4a7980bf7e6492cf24da4e7c43a233a9de022736036075"
+    },
+    "package/source/agent_core/web_runtime.py": {
+      "bytes": 307825,
+      "sha256": "b7722f4474e6f68901cb8e9010ab80866e85dbef9c349c23703b2caa4818dfc6"
+    },
+    "private-evidence/outbox.jsonl": {
+      "bytes": 15091,
+      "sha256": "3b557ae0d56b9dc63b0969655cee9656358c37b09c1fd7f5a4a151a818f25843"
+    },
+    "private-evidence/task.json": {
+      "bytes": 23821,
+      "sha256": "846c985f1964b512a0d4536abe8422b192b3460a6aaa4b0a8623010531628de7"
+    },
+    "private-evidence/continuation.json": {
+      "bytes": 20951,
+      "sha256": "054c8d23e7fe9bf6a6c163a4e0d206fc2fb7cf0f4e8c729c769e9d0cded99774"
+    },
+    "private-evidence/events.json": {
+      "bytes": 11649,
+      "sha256": "23af1c8a6468c2a8e7e58d92b7fe48891f787f5e8812c5ac9285a6916ac17d46"
+    },
+    "private-evidence/config_verified.json": {
+      "bytes": 786,
+      "sha256": "919038190f8c0de33bbc82967e97887bb404b8f82c730c1f98e4d1f905be4ed8"
+    },
+    "private-evidence/sender_result.json": {
+      "bytes": 956,
+      "sha256": "a4c2e53e6053381ad4cfbbd7462a6298588c7dff4701a72783c8d00f8b2cd233"
+    }
+  }
+}

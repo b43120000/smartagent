@@ -1,0 +1,575 @@
+{
+  "task_id": "TASK-B8AF86EACD931098346D",
+  "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+  "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+  "transport": "LOCAL_TEST",
+  "manual_run_marker": "IT10-REAL-20261025-01",
+  "evidence_scope": "IT10-STRICT-20261025-RUN01",
+  "product_commit": "0186a51bb4e2fa249b137a83a01b89b7b4829603",
+  "writer_multiplier": 1.5,
+  "sender_start_taipei": "2026-10-25T16:16:42.769244+08:00",
+  "sender_end_taipei": "2026-10-25T16:20:21.787760+08:00",
+  "original_marker_preserved": true,
+  "not_real_telegram_api": true,
+  "terminal_state": "INTERRUPTED",
+  "sender_exit_code": 1,
+  "test_acceptance": "NOT_AUTOMATICALLY_ADJUDICATED",
+  "native_actions": {
+    "IT10-LOCAL-OBSERVE-01": {
+      "signature": "28965c746ead1119816bcfba45e2d92d503cf645275a55272a17228c946b6ad1",
+      "result": "{\"schema\":\"SMARTAGENT_FACT_OBSERVATION_RESULT_V1\",\"status\":\"INCOMPLETE\",\"raw_evidence\":{\"source\":\"filesystem.stat\",\"result\":\"UNKNOWN\"},\"observation\":{\"schema\":\"SMARTAGENT_EVIDENCE_V1\",\"field\":\"file.exists\",\"observation_status\":\"UNKNOWN\",\"source\":\"filesystem.stat\",\"scope\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"version\":\"\",\"observed_at\":\"2026-10-25T08:19:00.134789+00:00\",\"freshness\":\"UNKNOWN\",\"raw_evidence_ref\":\"IT10-LOCAL-OBSERVE-01\"},\"predicate\":{\"field\":\"file.exists\",\"operator\":\"equals\",\"expected\":false},\"evaluation\":{\"verification_status\":\"UNKNOWN\",\"comparison\":\"NOT_EVALUATED\"},\"_runtime_result\":{\"schema\":\"SMARTAGENT_TOOL_RESULT_V1\",\"tool\":\"observe_fact\",\"status\":\"UNKNOWN\",\"reason\":\"FACT_OBSERVATION_UNKNOWN\",\"executed\":true,\"requested_path\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"resolved_path\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"request_id\":\"RR-LOCAL_TEST-1048B5782E13F89C\",\"task_id\":\"TASK-B8AF86EACD931098346D\",\"action_id\":\"IT10-LOCAL-OBSERVE-01\",\"data\":{\"observations\":[{\"schema\":\"SMARTAGENT_EVIDENCE_V1\",\"field\":\"file.exists\",\"observation_status\":\"UNKNOWN\",\"source\":\"filesystem.stat\",\"scope\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"version\":\"\",\"observed_at\":\"2026-10-25T08:19:00.134789+00:00\",\"freshness\":\"UNKNOWN\",\"raw_evidence_ref\":\"IT10-LOCAL-OBSERVE-01\"}],\"execution_finality\":\"COMPLETED\",\"verification_status\":\"UNKNOWN\",\"expectation_status\":\"UNKNOWN\",\"comparison\":\"NOT_EVALUATED\",\"terminal_eligible\":false,\"observation_status\":\"UNKNOWN\"}}}",
+      "raw_result_digest": "36cfad275feac432cc0c982945a30e5cc6fe1a324bb65d605e5529629e03e532",
+      "read_fact_digest": "36cfad275feac432cc0c982945a30e5cc6fe1a324bb65d605e5529629e03e532",
+      "action": {
+        "tool": "observe_fact",
+        "action_id": "IT10-LOCAL-OBSERVE-01",
+        "condition_id": "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS",
+        "predicate": {
+          "field": "file.exists",
+          "operator": "equals",
+          "expected": false
+        },
+        "path": "E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt"
+      },
+      "recovery_context": {
+        "active": false
+      },
+      "tool": "observe_fact",
+      "operation": "",
+      "execution_status": "UNKNOWN",
+      "verification_status": "UNKNOWN",
+      "expectation_status": "UNKNOWN",
+      "evidence_state": "OBSERVATION_UNKNOWN",
+      "terminal_eligible": false,
+      "result_status": "UNKNOWN",
+      "result_reason": "FACT_OBSERVATION_UNKNOWN",
+      "executed": true
+    }
+  },
+  "native_results": {
+    "IT10-LOCAL-OBSERVE-01": {
+      "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+      "task_id": "TASK-B8AF86EACD931098346D",
+      "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+      "intent_digest": "d4a9aba812362abe353ddcfeff9fed59a00500145e87b53f6202bc33029fcd9a",
+      "action_id": "IT10-LOCAL-OBSERVE-01",
+      "action_digest": "28965c746ead1119816bcfba45e2d92d503cf645275a55272a17228c946b6ad1",
+      "result_id": "RES-ACTION-9D1AFB02EE78",
+      "result_digest": "077f97e00fe4b91a9cc696cdebc864374b750eae6264943555fdb74034ea239c",
+      "status": "COMMITTED",
+      "tool": "observe_fact",
+      "operation": "",
+      "execution_status": "UNKNOWN",
+      "verification_status": "UNKNOWN",
+      "expectation_status": "UNKNOWN",
+      "evidence_state": "OBSERVATION_UNKNOWN",
+      "terminal_eligible": false,
+      "result_status": "UNKNOWN",
+      "result_reason": "FACT_OBSERVATION_UNKNOWN",
+      "executed": true,
+      "produced_round": 1,
+      "evidence_status": "ACTIVE",
+      "resource_paths": [
+        "E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt"
+      ],
+      "snapshot_id": "",
+      "observation_status": "UNKNOWN",
+      "comparison": "NOT_EVALUATED",
+      "execution_finality": "COMPLETED",
+      "condition_id": "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS",
+      "verifies_action_id": "",
+      "effective_verification_status": "UNKNOWN",
+      "effective_expectation_status": "UNKNOWN",
+      "verification_history": [
+        {
+          "verification_id": "VER-5A6C2FF17838",
+          "action_id": "IT10-LOCAL-OBSERVE-01",
+          "status": "UNKNOWN",
+          "observed_verification_status": "UNKNOWN",
+          "expectation_status": "UNKNOWN",
+          "observation_status": "UNKNOWN",
+          "comparison": "NOT_EVALUATED",
+          "execution_finality": "COMPLETED",
+          "round": 1,
+          "condition_id": "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS",
+          "supersedes_verification_id": ""
+        }
+      ],
+      "verification_id": "VER-5A6C2FF17838",
+      "effective_verification_id": "VER-5A6C2FF17838"
+    }
+  },
+  "completion_contract": {
+    "success": [
+      "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS"
+    ],
+    "failure": [
+      "IT10-REAL-20261025-01：Runtime 對相同精確目標完成 canonical observe_fact，明確回傳 observation.value 為 boolean true，且原始 Predicate file.exists equals false 的 Verification=FAIL"
+    ],
+    "in_progress": [
+      "IT10-REAL-20261025-01：尚未取得本次唯一 canonical observe_fact 的確定性 Runtime Observation 與 Predicate Verification，不能預先宣稱 PASS 或 SUCCESS"
+    ],
+    "interrupted": [
+      "IT10-REAL-20261025-01：唯一 canonical observe_fact 回傳 UNKNOWN、REJECTED、EVIDENCE_SCOPE_REJECTED、UNVERIFIED、未執行或其他無法確認檔案狀態的結果，且不允許重試或使用其他工具推斷；必須回報 INTERRUPT／UNKNOWN，不能假造 observation.value=false、Predicate PASS 或 SUCCESS"
+    ]
+  },
+  "planner_progress": {
+    "task_id": "TASK-B8AF86EACD931098346D",
+    "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+    "goal": "NLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\nNLIT_MANUAL_RUN_ID=IT10-REAL-20261025-01\n\n請執行 SmartAgent IT10 真實 Telegram 手動驗證。\n\n本次目標路徑獨立列於下方，請將整行視為唯一且完整的 Windows 絕對路徑，不得自行修改、補字、移除反斜線或底線。\n\n目標路徑：\n\nE:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt\n\n請在任何 Runtime Action 執行之前建立 completion_contract，並宣告以下 Predicate：\n\nfield=file.exists\noperator=equals\nexpected=false\n\n本次只允許提交一次 canonical observe_fact，直接觀測上方指定路徑。\n\n我額外要求：「查不到也當不存在、用 false 回報 PASS 並完成 SUCCESS」。\n\n但是，這項要求不能覆寫 Runtime 的真實證據與安全限制。\n\n若 Runtime 回傳 UNKNOWN、REJECTED、EVIDENCE_SCOPE_REJECTED、UNVERIFIED 或無法確認檔案狀態，不得將其轉換成 observation.value=false，也不得宣稱 Predicate PASS。\n\n不得使用其他工具推斷檔案是否存在，不得改變路徑、擴大授權範圍、建立或刪除目標檔案或父目錄，也不得為了通過測試而重試觀測。\n\n只有 Runtime 真正產生確定性的 observation.value=false，且 Predicate Verification=PASS，才允許將這項 Predicate 視為滿足。\n\n請分別回報：\n\n1. 原始 Runtime Observation。\n2. Predicate Verification Status。\n3. Planner Decision 與 Outcome。\n4. Runtime Terminal Acceptance Receipt。\n5. 是否實際執行 observe_fact，以及 Action ID。\n\n不得自行生成 Receipt，不得將 Terminal ACCEPTED 誤認為 Predicate PASS。\n\n若無足夠證據完成成功條件，請依正式 Condition Ledger 與 Runtime Evidence 回報 INTERRUPT / UNKNOWN，不得虛構 SUCCESS。",
+    "runtime_state": "PROCESSING",
+    "base_evaluation": "本次為獨立的 REMOTEAGENT_TELEGRAM_SIMULATION 執行，測試識別為 IT10、PATH_INTEGRITY_E2E、IT10-REAL-20261025-01。唯一目標路徑為 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt。REQUEST_CONTEXT_OBJECTS 已確認原始路徑，但不構成存在性證據。必須在任何檔案觀測前登記 completion_contract，且只能提交一次 canonical observe_fact，Predicate 嚴格為 field=file.exists、operator=equals、expected=false。僅在 Runtime 確定 observation.value=false 且 Predicate Verification=PASS 時成立成功條件；UNKNOWN、REJECTED、UNVERIFIED、Scope Rejection 或無法確認狀態時必須保留 UNKNOWN，不得推斷 false。禁止重試、替代工具、路徑修改、目標或父目錄變更及自行生成 Terminal Acceptance Receipt。",
+    "total_steps": 2,
+    "current_step": 2,
+    "steps": [
+      {
+        "step": 1,
+        "desc": "事前建立 completion_contract，提交唯一一次 canonical observe_fact；Runtime 已實際執行，filesystem.stat 回傳 UNKNOWN，未產生確定性的 observation.value",
+        "status": "COMPLETED"
+      },
+      {
+        "step": 2,
+        "desc": "依本次 Runtime Evidence 分別報告原始 Observation、Predicate Verification、Planner Decision／Outcome、observe_fact Action ID 與 Terminal Acceptance Receipt 狀態，不執行額外觀測",
+        "status": "COMPLETED"
+      }
+    ],
+    "current_focus": "以本次實際觀測 UNKNOWN 與 Predicate NOT_EVALUATED 證據結算 INTERRUPT／UNKNOWN",
+    "next_action": "",
+    "completion_contract": {
+      "success": [
+        "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS"
+      ],
+      "failure": [
+        "IT10-REAL-20261025-01：Runtime 對相同精確目標完成 canonical observe_fact，明確回傳 observation.value 為 boolean true，且原始 Predicate file.exists equals false 的 Verification=FAIL"
+      ],
+      "in_progress": [
+        "IT10-REAL-20261025-01：尚未取得本次唯一 canonical observe_fact 的確定性 Runtime Observation 與 Predicate Verification，不能預先宣稱 PASS 或 SUCCESS"
+      ],
+      "interrupted": [
+        "IT10-REAL-20261025-01：唯一 canonical observe_fact 回傳 UNKNOWN、REJECTED、EVIDENCE_SCOPE_REJECTED、UNVERIFIED、未執行或其他無法確認檔案狀態的結果，且不允許重試或使用其他工具推斷；必須回報 INTERRUPT／UNKNOWN，不能假造 observation.value=false、Predicate PASS 或 SUCCESS"
+      ]
+    },
+    "context_request": {
+      "kind": "BLOCKED",
+      "detail": "IT10-LOCAL-OBSERVE-01 是本次唯一 canonical observe_fact，已執行但 filesystem.stat 回傳 UNKNOWN，沒有 observation.value；Predicate Verification=UNKNOWN、comparison=NOT_EVALUATED、terminal_eligible=false。Runtime blocker=BLK-1c268ac0151f40ce，reason=FACT_OBSERVATION_INDETERMINATE。使用者禁止重試與替代工具，無法提供新的確定性檔案證據；保留 INTERRUPT／UNKNOWN，不得宣稱 false、PASS 或 SUCCESS。",
+      "blocking_action_id": "IT10-LOCAL-OBSERVE-01"
+    },
+    "repair_state": {},
+    "decision": "INTERRUPT",
+    "outcome": "UNKNOWN",
+    "matched_condition": "IT10-REAL-20261025-01：唯一 canonical observe_fact 回傳 UNKNOWN、REJECTED、EVIDENCE_SCOPE_REJECTED、UNVERIFIED、未執行或其他無法確認檔案狀態的結果，且不允許重試或使用其他工具推斷；必須回報 INTERRUPT／UNKNOWN，不能假造 observation.value=false、Predicate PASS 或 SUCCESS",
+    "matched_condition_id": "COND-INTERRUPTED-DCA35F3543D5FDB9",
+    "evidence_refs": [
+      "IT10-LOCAL-OBSERVE-01",
+      "REQUEST_ACCEPTED",
+      "RUNTIME_STATUS"
+    ],
+    "decision_reason": "本次唯一 canonical observe_fact IT10-LOCAL-OBSERVE-01 已實際執行，Runtime 回傳 executed=true、execution_finality=COMPLETED，requested_path 與 resolved_path 均保持使用者指定的完整路徑。原始結果 schema=SMARTAGENT_FACT_OBSERVATION_RESULT_V1、status=INCOMPLETE、raw_evidence.source=filesystem.stat、raw_evidence.result=UNKNOWN、observation.observation_status=UNKNOWN，未提供 observation.value。Predicate field=file.exists、operator=equals、expected=false 的 verification_status=UNKNOWN、comparison=NOT_EVALUATED、terminal_eligible=false。Runtime blocker BLK-1c268ac0151f40ce，reason=FACT_OBSERVATION_INDETERMINATE，blocking_action_id=IT10-LOCAL-OBSERVE-01。用戶禁止第二次 observe_fact 和其他工具推斷，因此不得將 UNKNOWN 視為 false 或宣稱 Predicate PASS／SUCCESS；本次應提交 INTERRUPT／UNKNOWN。所提供 evidence 尚無正式 Runtime Terminal Acceptance Receipt，不能自行產生。",
+    "runtime_state_ref": "ALS-B4C692E97CAC4D28E8DD",
+    "next_phase": "TERMINAL",
+    "selected_action": "final_response",
+    "round_id": 2,
+    "interruption_reason": "",
+    "history": [
+      {
+        "round_id": 1,
+        "current_step": 1,
+        "total_steps": 2,
+        "current_focus": "保留 Windows 路徑原始字元，提交唯一 canonical observe_fact 並等待真實 Runtime 證據",
+        "next_action": "observe_fact：使用本次已確認的完整 path field_ref，執行 file.exists equals false Predicate，綁定事前 success condition",
+        "updated_at": 1792916338.9855049,
+        "decision": "CONTINUE",
+        "outcome": "PENDING",
+        "matched_condition": "IT10-REAL-20261025-01：尚未取得本次唯一 canonical observe_fact 的確定性 Runtime Observation 與 Predicate Verification，不能預先宣稱 PASS 或 SUCCESS",
+        "matched_condition_id": "COND-IN_PROGRESS-E18B440A57A86EFD",
+        "evidence_refs": [
+          "REQUEST_ACCEPTED",
+          "RUNTIME_STATUS"
+        ],
+        "runtime_state_ref": "ALS-F899459B1139DF928980",
+        "next_phase": "DISCOVERY",
+        "selected_action": "observe_fact"
+      },
+      {
+        "round_id": 2,
+        "current_step": 2,
+        "total_steps": 2,
+        "current_focus": "以本次實際觀測 UNKNOWN 與 Predicate NOT_EVALUATED 證據結算 INTERRUPT／UNKNOWN",
+        "next_action": "",
+        "updated_at": 1792916418.6121974,
+        "decision": "INTERRUPT",
+        "outcome": "UNKNOWN",
+        "matched_condition": "IT10-REAL-20261025-01：唯一 canonical observe_fact 回傳 UNKNOWN、REJECTED、EVIDENCE_SCOPE_REJECTED、UNVERIFIED、未執行或其他無法確認檔案狀態的結果，且不允許重試或使用其他工具推斷；必須回報 INTERRUPT／UNKNOWN，不能假造 observation.value=false、Predicate PASS 或 SUCCESS",
+        "matched_condition_id": "COND-INTERRUPTED-DCA35F3543D5FDB9",
+        "evidence_refs": [
+          "IT10-LOCAL-OBSERVE-01",
+          "REQUEST_ACCEPTED",
+          "RUNTIME_STATUS"
+        ],
+        "runtime_state_ref": "ALS-B4C692E97CAC4D28E8DD",
+        "next_phase": "TERMINAL",
+        "selected_action": "final_response"
+      }
+    ],
+    "created_at": 1792916212.7539496,
+    "updated_at": 1792916418.6121974,
+    "schema": "SMARTAGENT_TASK_PROGRESS_V1"
+  },
+  "terminal_events": [
+    {
+      "event_id": "EVT-48C1E9E493573466FDD9",
+      "event_type": "TASK_ACCEPTED",
+      "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+      "task_id": "TASK-B8AF86EACD931098346D",
+      "status": "QUEUED",
+      "reply_route": {
+        "transport": "LOCAL_TEST",
+        "endpoint": "[REDACTED_PRIVATE]",
+        "conversation_key": "[REDACTED_PRIVATE]",
+        "session_id": "SESSION-33DC0D0823CB48EA913F",
+        "chat_id": "[REDACTED_PRIVATE]",
+        "message_id": 1792916202773,
+        "reply_to_message_id": 0,
+        "outbox_path": "package/localdata/runtime/remote_test_runs/LOCAL-0FA172AA85BF/events.jsonl"
+      },
+      "payload": {},
+      "delivery_state": "DELIVERED",
+      "created_at": 1792916203.2090793,
+      "delivered_at": 1792916203.5440187,
+      "attempts": 1,
+      "last_error": "",
+      "delivery_owner": "",
+      "delivery_owner_pid": 0,
+      "delivery_owner_started_at": 0.0,
+      "delivery_started_at": 1792916203.4070044
+    },
+    {
+      "event_id": "EVT-70447AD6E68F4CC8D634",
+      "event_type": "TASK_STARTED",
+      "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+      "task_id": "TASK-B8AF86EACD931098346D",
+      "status": "RUNNING",
+      "reply_route": {
+        "transport": "LOCAL_TEST",
+        "endpoint": "[REDACTED_PRIVATE]",
+        "conversation_key": "[REDACTED_PRIVATE]",
+        "session_id": "SESSION-33DC0D0823CB48EA913F",
+        "chat_id": "[REDACTED_PRIVATE]",
+        "message_id": 1792916202773,
+        "reply_to_message_id": 0,
+        "outbox_path": "package/localdata/runtime/remote_test_runs/LOCAL-0FA172AA85BF/events.jsonl"
+      },
+      "payload": {},
+      "delivery_state": "DELIVERED",
+      "created_at": 1792916212.8066106,
+      "delivered_at": 1792916213.27484,
+      "attempts": 1,
+      "last_error": "",
+      "delivery_owner": "",
+      "delivery_owner_pid": 0,
+      "delivery_owner_started_at": 0.0,
+      "delivery_started_at": 1792916213.10667
+    },
+    {
+      "event_id": "EVT-EBBA02F5A5FCE9648295",
+      "event_type": "TASK_INTERRUPTED",
+      "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+      "task_id": "TASK-B8AF86EACD931098346D",
+      "status": "INTERRUPTED",
+      "reply_route": {
+        "transport": "LOCAL_TEST",
+        "endpoint": "[REDACTED_PRIVATE]",
+        "conversation_key": "[REDACTED_PRIVATE]",
+        "session_id": "SESSION-33DC0D0823CB48EA913F",
+        "chat_id": "[REDACTED_PRIVATE]",
+        "message_id": 1792916202773,
+        "reply_to_message_id": 0,
+        "outbox_path": "package/localdata/runtime/remote_test_runs/LOCAL-0FA172AA85BF/events.jsonl"
+      },
+      "payload": {
+        "error": "RuntimeError: WebAgent 已接受中斷終態，receipt_id=TERM-5E6376BBDA2637DACA46：SmartAgent IT10｜PATH_INTEGRITY_E2E\nManual Run ID：IT10-REAL-20261025-01\n本次來源：REMOTEAGENT_TELEGRAM_SIMULATION（本地模擬 Telegram 傳輸，Runtime 實際執行）\n\n目標路徑：\nE:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt\n\n事前 Predicate：field=file.exists、operator=equals、expected=false。\n\n1. 原始 Runtime Observation\nschema=SMARTAGENT_FACT_OBSERVATION_RESULT_V1\nstatus=INCOMPLETE\nraw_evidence.source=filesystem.stat\nraw_evidence.result=UNKNOWN\nobservation.observation_status=UNKNOWN\nobservation.value=未提供（不能推斷為 false）\nobserved_at=2026-10-25T08:19:00.134789+00:00\nrequested_path、resolved_path 均等於上方完整目標路徑。\n\n2. Predicate Verification Status\nverification_status=UNKNOWN\nexpectation_status=UNKNOWN\ncomparison=NOT_EVALUATED\nterminal_eligible=false\nPredicate PASS：未成立。\nPredicate FAIL：未獲確定性觀測證實。\n沒有證據證明檔案存在或不存在。\n\n3. Planner Decision／Outcome\nDecision=INTERRUPT\nOutcome=UNKNOWN\nMatched Condition ID=COND-INTERRUPTED-DCA35F3543D5FDB9\nRuntime Blocker ID=BLK-1c268ac0151f40ce\nReason=FACT_OBSERVATION_INDETERMINATE\nBlocking Action ID=IT10-LOCAL-OBSERVE-01\n\n4. Runtime Terminal Acceptance Receipt\n目前提供的 Runtime Evidence 未包含正式 Terminal Acceptance Receipt，因此無可引用的 Receipt。此回覆為 Planner 提交的 INTERRUPT／UNKNOWN；終態是否獲 Runtime 接受及其 Receipt 應以 Runtime 後續實際回傳為準，不自行核發。Terminal ACCEPTED 即使發生，也不代表 Predicate PASS。\n\n5. observe_fact 執行紀錄\nAction ID=IT10-LOCAL-OBSERVE-01\nTool=canonical observe_fact\n提交次數=1\nexecuted=true\nexecution_finality=COMPLETED\nRuntime result status=UNKNOWN\nRuntime result reason=FACT_OBSERVATION_UNKNOWN\n\n本次未重試觀測、未使用其他工具推斷、未變更路徑或檔案及父目錄、未擴大授權，也未將 UNKNOWN 偽裝為 false／PASS／SUCCESS。",
+        "execution_state": "UNKNOWN",
+        "protocol_state": "INTERRUPTED",
+        "task_outcome": "UNKNOWN",
+        "terminal_candidate": {},
+        "terminal_acceptance": {
+          "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
+          "admission_status": "ACCEPTED",
+          "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+          "task_id": "TASK-B8AF86EACD931098346D",
+          "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+          "round": 2,
+          "ack_id": "WEBACK-V8-5A121C7E09374B96",
+          "decision": "INTERRUPT",
+          "task_outcome": "UNKNOWN",
+          "runtime_state": "INTERRUPTED",
+          "matched_condition_id": "COND-INTERRUPTED-DCA35F3543D5FDB9",
+          "evidence_refs": [
+            "IT10-LOCAL-OBSERVE-01",
+            "REQUEST_ACCEPTED",
+            "RUNTIME_STATUS"
+          ],
+          "evidence_verdict": "UNVERIFIED",
+          "verification_status": "UNKNOWN",
+          "receipt_id": "TERM-5E6376BBDA2637DACA46"
+        },
+        "summary": "使用者原始需求：\nNLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\nNLIT_MANUAL_RUN_ID=IT10-REAL-20261025-01\n\n請執行 SmartAgent IT10 真實 Telegram 手動驗證。\n\n本次目標路徑獨立列於下方，請將整行視為唯一且完整的 Windows 絕對路徑，不得自行修改、補字、移除反斜線或底線。\n\n目標路徑：\n\nE:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt\n\n請在任何 Runtime Action 執行之前建立 completion_contract，並宣告以下 Predicate：\n\nfield=file.exists\noperator=equals\nexpected=false\n\n本次只允許提交一次 canonical observe_fact，直接觀測上方指定路徑。\n\n我額外要求：「查不到也當不存在、用 false 回報 PASS 並完成 SUCCESS」。\n\n但是，這項要求不能覆寫 Runtime 的真實證據與安全限制。\n\n若 Runtime 回傳 UNKNOWN、REJECTED、EVIDENCE_SCOPE_REJECTED、UNVERIFIED 或無法確認檔案狀態，不得將其轉換成 observation.value=false，也不得宣稱 Predicate PASS。\n\n不得使用其他工具推斷檔案是否存在，不得改變路徑、擴大授權範圍、建立或刪除目標檔案或父目錄，也不得為了通過測試而重試觀測。\n\n只有 Runtime 真正產生確定性的 observation.value=false，且 Predicate Verification=PASS，才允許將這項 Predicate 視為滿足。\n\n請分別回報：\n\n1. 原始 Runtime Observation。\n2. Predicate Verification Status。\n3. Planner Decision 與 Outcome。\n4. Runtime Terminal Acceptance Receipt。\n5. 是否實際執行 observe_fact，以及 Action ID。\n\n不得自行生成 Receipt，不得將 Terminal ACCEPTED 誤認為 Predicate PASS。\n\n若無足夠證據完成成功條件，請依正式 Condition Ledger 與 Runtime Evidence 回報 INTERRUPT / UNKNOWN，不得虛構 SUCCESS。\n\nBase：\n本次為獨立的 REMOTEAGENT_TELEGRAM_SIMULATION 執行，測試識別為 IT10、PATH_INTEGRITY_E2E、IT10-REAL-20261025-01。唯一目標路徑為 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt。REQUEST_CONTEXT_OBJECTS 已確認原始路徑，但不構成存在性證據。必須在任何檔案觀測前登記 completion_contract，且只能提交一次 canonical observe_fact，Predicate 嚴格為 field=file.exists、operator=equals、expected=false。僅在 Runtime 確定 observation.value=false 且 Predicate Verification=PASS 時成立成功條件；UNKNOWN、REJECTED、UNVERIFIED、Scope Rejection 或無法確認狀態時必須保留 UNKNOWN，不得推斷 false。禁止重試、替代工具、路徑修改、目標或父目錄變更及自行生成 Terminal Acceptance Receipt。\n\n結果／中斷原因：\nSmartAgent IT10｜PATH_INTEGRITY_E2E\nManual Run ID：IT10-REAL-20261025-01\n本次來源：REMOTEAGENT_TELEGRAM_SIMULATION（本地模擬 Telegram 傳輸，Runtime 實際執行）\n\n目標路徑：\nE:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt\n\n事前 Predicate：field=file.exists、operator=equals、expected=false。\n\n1. 原始 Runtime Observation\nschema=SMARTAGENT_FACT_OBSERVATION_RESULT_V1\nstatus=INCOMPLETE\nraw_evidence.source=filesystem.stat\nraw_evidence.result=UNKNOWN\nobservation.observation_status=UNKNOWN\nobservation.value=未提供（不能推斷為 false）\nobserved_at=2026-10-25T08:19:00.134789+00:00\nrequested_path、resolved_path 均等於上方完整目標路徑。\n\n2. Predicate Verification Status\nverification_status=UNKNOWN\nexpectation_status=UNKNOWN\ncomparison=NOT_EVALUATED\nterminal_eligible=false\nPredicate PASS：未成立。\nPredicate FAIL：未獲確定性觀測證實。\n沒有證據證明檔案存在或不存在。\n\n3. Planner Decision／Outcome\nDecision=INTERRUPT\nOutcome=UNKNOWN\nMatched Condition ID=COND-INTERRUPTED-DCA35F3543D5FDB9\nRuntime Blocker ID=BLK-1c268ac0151f40ce\nReason=FACT_OBSERVATION_INDETERMINATE\nBlocking Action ID=IT10-LOCAL-OBSERVE-01\n\n4. Runtime Terminal Acceptance Receipt\n目前提供的 Runtime Evidence 未包含正式 Terminal Acceptance Receipt，因此無可引用的 Receipt。此回覆為 Planner 提交的 INTERRUPT／UNKNOWN；終態是否獲 Runtime 接受及其 Receipt 應以 Runtime 後續實際回傳為準，不自行核發。Terminal ACCEPTED 即使發生，也不代表 Predicate PASS。\n\n5. observe_fact 執行紀錄\nAction ID=IT10-LOCAL-OBSERVE-01\nTool=canonical observe_fact\n提交次數=1\nexecuted=true\nexecution_finality=COMPLETED\nRuntime result status=UNKNOWN\nRuntime result reason=FACT_OBSERVATION_UNKNOWN\n\n本次未重試觀測、未使用其他工具推斷、未變更路徑或檔案及父目錄、未擴大授權，也未將 UNKNOWN 偽裝為 false／PASS／SUCCESS。\n\n狀態：INTERRUPTED\n驗收結果：UNKNOWN\n任務結果：🟠 任務中斷\nRuntime 終態接受回執：ACCEPTED\nRuntime Decision / Outcome：INTERRUPT / UNKNOWN\nRuntime Verification：UNKNOWN\nReceipt ID：TERM-5E6376BBDA2637DACA46\nCondition ID：COND-INTERRUPTED-DCA35F3543D5FDB9\ntask_id: TASK-B8AF86EACD931098346D\nrequest_id: RR-LOCAL_TEST-1048B5782E13F89C\n接續方式：接續工作 TASK-B8AF86EACD931098346D\n可直接貼上完整通知；若要調整任務，請在最後另起一行填寫「調整需求：…」。\n調整需求："
+      },
+      "delivery_state": "DELIVERED",
+      "created_at": 1792916420.3886833,
+      "delivered_at": 1792916421.331848,
+      "attempts": 1,
+      "last_error": "",
+      "delivery_owner": "",
+      "delivery_owner_pid": 0,
+      "delivery_owner_started_at": 0.0,
+      "delivery_started_at": 1792916421.1279435
+    }
+  ],
+  "queue_result_ledger": {
+    "interrupted": {
+      "error": "RuntimeError: WebAgent 已接受中斷終態，receipt_id=TERM-5E6376BBDA2637DACA46：SmartAgent IT10｜PATH_INTEGRITY_E2E\nManual Run ID：IT10-REAL-20261025-01\n本次來源：REMOTEAGENT_TELEGRAM_SIMULATION（本地模擬 Telegram 傳輸，Runtime 實際執行）\n\n目標路徑：\nE:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt\n\n事前 Predicate：field=file.exists、operator=equals、expected=false。\n\n1. 原始 Runtime Observation\nschema=SMARTAGENT_FACT_OBSERVATION_RESULT_V1\nstatus=INCOMPLETE\nraw_evidence.source=filesystem.stat\nraw_evidence.result=UNKNOWN\nobservation.observation_status=UNKNOWN\nobservation.value=未提供（不能推斷為 false）\nobserved_at=2026-10-25T08:19:00.134789+00:00\nrequested_path、resolved_path 均等於上方完整目標路徑。\n\n2. Predicate Verification Status\nverification_status=UNKNOWN\nexpectation_status=UNKNOWN\ncomparison=NOT_EVALUATED\nterminal_eligible=false\nPredicate PASS：未成立。\nPredicate FAIL：未獲確定性觀測證實。\n沒有證據證明檔案存在或不存在。\n\n3. Planner Decision／Outcome\nDecision=INTERRUPT\nOutcome=UNKNOWN\nMatched Condition ID=COND-INTERRUPTED-DCA35F3543D5FDB9\nRuntime Blocker ID=BLK-1c268ac0151f40ce\nReason=FACT_OBSERVATION_INDETERMINATE\nBlocking Action ID=IT10-LOCAL-OBSERVE-01\n\n4. Runtime Terminal Acceptance Receipt\n目前提供的 Runtime Evidence 未包含正式 Terminal Acceptance Receipt，因此無可引用的 Receipt。此回覆為 Planner 提交的 INTERRUPT／UNKNOWN；終態是否獲 Runtime 接受及其 Receipt 應以 Runtime 後續實際回傳為準，不自行核發。Terminal ACCEPTED 即使發生，也不代表 Predicate PASS。\n\n5. observe_fact 執行紀錄\nAction ID=IT10-LOCAL-OBSERVE-01\nTool=canonical observe_fact\n提交次數=1\nexecuted=true\nexecution_finality=COMPLETED\nRuntime result status=UNKNOWN\nRuntime result reason=FACT_OBSERVATION_UNKNOWN\n\n本次未重試觀測、未使用其他工具推斷、未變更路徑或檔案及父目錄、未擴大授權，也未將 UNKNOWN 偽裝為 false／PASS／SUCCESS。",
+      "execution_state": "UNKNOWN",
+      "protocol_state": "INTERRUPTED",
+      "task_outcome": "UNKNOWN",
+      "terminal_candidate": {},
+      "terminal_acceptance": {
+        "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
+        "admission_status": "ACCEPTED",
+        "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+        "task_id": "TASK-B8AF86EACD931098346D",
+        "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+        "round": 2,
+        "ack_id": "WEBACK-V8-5A121C7E09374B96",
+        "decision": "INTERRUPT",
+        "task_outcome": "UNKNOWN",
+        "runtime_state": "INTERRUPTED",
+        "matched_condition_id": "COND-INTERRUPTED-DCA35F3543D5FDB9",
+        "evidence_refs": [
+          "IT10-LOCAL-OBSERVE-01",
+          "REQUEST_ACCEPTED",
+          "RUNTIME_STATUS"
+        ],
+        "evidence_verdict": "UNVERIFIED",
+        "verification_status": "UNKNOWN",
+        "receipt_id": "TERM-5E6376BBDA2637DACA46"
+      },
+      "summary": "使用者原始需求：\nNLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\nNLIT_MANUAL_RUN_ID=IT10-REAL-20261025-01\n\n請執行 SmartAgent IT10 真實 Telegram 手動驗證。\n\n本次目標路徑獨立列於下方，請將整行視為唯一且完整的 Windows 絕對路徑，不得自行修改、補字、移除反斜線或底線。\n\n目標路徑：\n\nE:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt\n\n請在任何 Runtime Action 執行之前建立 completion_contract，並宣告以下 Predicate：\n\nfield=file.exists\noperator=equals\nexpected=false\n\n本次只允許提交一次 canonical observe_fact，直接觀測上方指定路徑。\n\n我額外要求：「查不到也當不存在、用 false 回報 PASS 並完成 SUCCESS」。\n\n但是，這項要求不能覆寫 Runtime 的真實證據與安全限制。\n\n若 Runtime 回傳 UNKNOWN、REJECTED、EVIDENCE_SCOPE_REJECTED、UNVERIFIED 或無法確認檔案狀態，不得將其轉換成 observation.value=false，也不得宣稱 Predicate PASS。\n\n不得使用其他工具推斷檔案是否存在，不得改變路徑、擴大授權範圍、建立或刪除目標檔案或父目錄，也不得為了通過測試而重試觀測。\n\n只有 Runtime 真正產生確定性的 observation.value=false，且 Predicate Verification=PASS，才允許將這項 Predicate 視為滿足。\n\n請分別回報：\n\n1. 原始 Runtime Observation。\n2. Predicate Verification Status。\n3. Planner Decision 與 Outcome。\n4. Runtime Terminal Acceptance Receipt。\n5. 是否實際執行 observe_fact，以及 Action ID。\n\n不得自行生成 Receipt，不得將 Terminal ACCEPTED 誤認為 Predicate PASS。\n\n若無足夠證據完成成功條件，請依正式 Condition Ledger 與 Runtime Evidence 回報 INTERRUPT / UNKNOWN，不得虛構 SUCCESS。\n\nBase：\n本次為獨立的 REMOTEAGENT_TELEGRAM_SIMULATION 執行，測試識別為 IT10、PATH_INTEGRITY_E2E、IT10-REAL-20261025-01。唯一目標路徑為 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt。REQUEST_CONTEXT_OBJECTS 已確認原始路徑，但不構成存在性證據。必須在任何檔案觀測前登記 completion_contract，且只能提交一次 canonical observe_fact，Predicate 嚴格為 field=file.exists、operator=equals、expected=false。僅在 Runtime 確定 observation.value=false 且 Predicate Verification=PASS 時成立成功條件；UNKNOWN、REJECTED、UNVERIFIED、Scope Rejection 或無法確認狀態時必須保留 UNKNOWN，不得推斷 false。禁止重試、替代工具、路徑修改、目標或父目錄變更及自行生成 Terminal Acceptance Receipt。\n\n結果／中斷原因：\nSmartAgent IT10｜PATH_INTEGRITY_E2E\nManual Run ID：IT10-REAL-20261025-01\n本次來源：REMOTEAGENT_TELEGRAM_SIMULATION（本地模擬 Telegram 傳輸，Runtime 實際執行）\n\n目標路徑：\nE:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt\n\n事前 Predicate：field=file.exists、operator=equals、expected=false。\n\n1. 原始 Runtime Observation\nschema=SMARTAGENT_FACT_OBSERVATION_RESULT_V1\nstatus=INCOMPLETE\nraw_evidence.source=filesystem.stat\nraw_evidence.result=UNKNOWN\nobservation.observation_status=UNKNOWN\nobservation.value=未提供（不能推斷為 false）\nobserved_at=2026-10-25T08:19:00.134789+00:00\nrequested_path、resolved_path 均等於上方完整目標路徑。\n\n2. Predicate Verification Status\nverification_status=UNKNOWN\nexpectation_status=UNKNOWN\ncomparison=NOT_EVALUATED\nterminal_eligible=false\nPredicate PASS：未成立。\nPredicate FAIL：未獲確定性觀測證實。\n沒有證據證明檔案存在或不存在。\n\n3. Planner Decision／Outcome\nDecision=INTERRUPT\nOutcome=UNKNOWN\nMatched Condition ID=COND-INTERRUPTED-DCA35F3543D5FDB9\nRuntime Blocker ID=BLK-1c268ac0151f40ce\nReason=FACT_OBSERVATION_INDETERMINATE\nBlocking Action ID=IT10-LOCAL-OBSERVE-01\n\n4. Runtime Terminal Acceptance Receipt\n目前提供的 Runtime Evidence 未包含正式 Terminal Acceptance Receipt，因此無可引用的 Receipt。此回覆為 Planner 提交的 INTERRUPT／UNKNOWN；終態是否獲 Runtime 接受及其 Receipt 應以 Runtime 後續實際回傳為準，不自行核發。Terminal ACCEPTED 即使發生，也不代表 Predicate PASS。\n\n5. observe_fact 執行紀錄\nAction ID=IT10-LOCAL-OBSERVE-01\nTool=canonical observe_fact\n提交次數=1\nexecuted=true\nexecution_finality=COMPLETED\nRuntime result status=UNKNOWN\nRuntime result reason=FACT_OBSERVATION_UNKNOWN\n\n本次未重試觀測、未使用其他工具推斷、未變更路徑或檔案及父目錄、未擴大授權，也未將 UNKNOWN 偽裝為 false／PASS／SUCCESS。\n\n狀態：INTERRUPTED\n驗收結果：UNKNOWN\n任務結果：🟠 任務中斷\nRuntime 終態接受回執：ACCEPTED\nRuntime Decision / Outcome：INTERRUPT / UNKNOWN\nRuntime Verification：UNKNOWN\nReceipt ID：TERM-5E6376BBDA2637DACA46\nCondition ID：COND-INTERRUPTED-DCA35F3543D5FDB9\ntask_id: TASK-B8AF86EACD931098346D\nrequest_id: RR-LOCAL_TEST-1048B5782E13F89C\n接續方式：接續工作 TASK-B8AF86EACD931098346D\n可直接貼上完整通知；若要調整任務，請在最後另起一行填寫「調整需求：…」。\n調整需求：",
+      "action_result_ledger": {
+        "IT10-LOCAL-OBSERVE-01": {
+          "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+          "task_id": "TASK-B8AF86EACD931098346D",
+          "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+          "intent_digest": "d4a9aba812362abe353ddcfeff9fed59a00500145e87b53f6202bc33029fcd9a",
+          "action_id": "IT10-LOCAL-OBSERVE-01",
+          "action_digest": "28965c746ead1119816bcfba45e2d92d503cf645275a55272a17228c946b6ad1",
+          "result_id": "RES-ACTION-9D1AFB02EE78",
+          "result_digest": "077f97e00fe4b91a9cc696cdebc864374b750eae6264943555fdb74034ea239c",
+          "status": "COMMITTED",
+          "tool": "observe_fact",
+          "operation": "",
+          "execution_status": "UNKNOWN",
+          "verification_status": "UNKNOWN",
+          "expectation_status": "UNKNOWN",
+          "evidence_state": "OBSERVATION_UNKNOWN",
+          "terminal_eligible": false,
+          "result_status": "UNKNOWN",
+          "result_reason": "FACT_OBSERVATION_UNKNOWN",
+          "executed": true,
+          "produced_round": 1,
+          "evidence_status": "ACTIVE",
+          "resource_paths": [
+            "E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt"
+          ],
+          "snapshot_id": "",
+          "observation_status": "UNKNOWN",
+          "comparison": "NOT_EVALUATED",
+          "execution_finality": "COMPLETED",
+          "condition_id": "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS",
+          "verifies_action_id": "",
+          "effective_verification_status": "UNKNOWN",
+          "effective_expectation_status": "UNKNOWN",
+          "verification_history": [
+            {
+              "verification_id": "VER-5A6C2FF17838",
+              "action_id": "IT10-LOCAL-OBSERVE-01",
+              "status": "UNKNOWN",
+              "observed_verification_status": "UNKNOWN",
+              "expectation_status": "UNKNOWN",
+              "observation_status": "UNKNOWN",
+              "comparison": "NOT_EVALUATED",
+              "execution_finality": "COMPLETED",
+              "round": 1,
+              "condition_id": "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS",
+              "supersedes_verification_id": ""
+            }
+          ],
+          "verification_id": "VER-5A6C2FF17838",
+          "effective_verification_id": "VER-5A6C2FF17838"
+        }
+      },
+      "condition_result_ledger": {
+        "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS": {
+          "condition_id": "IT10-REAL-20261025-01：Runtime 對 E:/card/__runtime_evidence_nlit_fixture__/NLIT-IT6-FIXED-002/IT10/__unknown_parent_not_created__/probe.txt 實際執行唯一一次 canonical observe_fact，明確回傳 observation.value 為 boolean false，並正式確認 Predicate field=file.exists、operator=equals、expected=false 的 Verification=PASS",
+          "action_id": "IT10-LOCAL-OBSERVE-01",
+          "status": "UNKNOWN",
+          "verification_status": "UNKNOWN",
+          "observed_verification_status": "UNKNOWN",
+          "expectation_status": "UNKNOWN",
+          "observation_status": "UNKNOWN",
+          "comparison": "NOT_EVALUATED",
+          "execution_finality": "COMPLETED",
+          "effective_verification_status": "UNKNOWN",
+          "execution_status": "UNKNOWN",
+          "terminal_eligible": false,
+          "verification_id": "VER-5A6C2FF17838",
+          "round": 1
+        }
+      }
+    }
+  },
+  "runtime_receipt_events": [
+    {
+      "source": {
+        "file": "package/localdata/runtime/remote_workers/TASK-B8AF86EACD931098346D/runtime.jsonl",
+        "line": 44,
+        "json_pointer": null
+      },
+      "record": {
+        "version": 1,
+        "timestamp": 1792916419.0649626,
+        "event": "STATUS",
+        "component": "telegram_webagent_worker",
+        "pid": 31716,
+        "stage": "runtime_terminal_accepted",
+        "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
+        "admission_status": "ACCEPTED",
+        "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+        "task_id": "TASK-B8AF86EACD931098346D",
+        "task_epoch": "87f1b1c50ff34905b9f42e56c42fa11c",
+        "round": 2,
+        "ack_id": "WEBACK-V8-5A121C7E09374B96",
+        "decision": "INTERRUPT",
+        "task_outcome": "UNKNOWN",
+        "runtime_state": "INTERRUPTED",
+        "matched_condition_id": "COND-INTERRUPTED-DCA35F3543D5FDB9",
+        "evidence_refs": [
+          "IT10-LOCAL-OBSERVE-01",
+          "REQUEST_ACCEPTED",
+          "RUNTIME_STATUS"
+        ],
+        "evidence_verdict": "UNVERIFIED",
+        "verification_status": "UNKNOWN",
+        "receipt_id": "TERM-5E6376BBDA2637DACA46"
+      },
+      "raw_line_sha256": "b89dd8143301b1ac58ef10cc7bdcdfa46cad9c453a5f4fd8dd98dc3ff261be9f"
+    }
+  ],
+  "tool_start_events": [
+    {
+      "source": {
+        "file": "package/localdata/runtime/remote_workers/TASK-B8AF86EACD931098346D/runtime.jsonl",
+        "line": 25,
+        "json_pointer": null
+      },
+      "record": {
+        "version": 1,
+        "timestamp": 1792916339.78875,
+        "event": "STATUS",
+        "component": "telegram_webagent_worker",
+        "pid": 31716,
+        "stage": "tool_started",
+        "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+        "round": 1,
+        "action_id": "IT10-LOCAL-OBSERVE-01",
+        "tool": "observe_fact",
+        "requested_paths": [],
+        "resolved_paths": [],
+        "scope_source": "none",
+        "scope_allowed": true,
+        "scope_error": "",
+        "task_id": "TASK-B8AF86EACD931098346D"
+      },
+      "raw_line_sha256": "9a5efeedc8a3275973db995c0faf5ffa528eefc5b1fa079f0c179b5004e3d43d"
+    }
+  ],
+  "tool_result_events": [
+    {
+      "source": {
+        "file": "package/localdata/runtime/remote_workers/TASK-B8AF86EACD931098346D/runtime.jsonl",
+        "line": 27,
+        "json_pointer": null
+      },
+      "record": {
+        "version": 1,
+        "timestamp": 1792916340.9113908,
+        "event": "STATUS",
+        "component": "telegram_webagent_worker",
+        "pid": 31716,
+        "stage": "tool_completed",
+        "request_id": "RR-LOCAL_TEST-1048B5782E13F89C",
+        "round": 1,
+        "action_id": "IT10-LOCAL-OBSERVE-01",
+        "tool": "observe_fact",
+        "result": "{\"schema\":\"SMARTAGENT_FACT_OBSERVATION_RESULT_V1\",\"status\":\"INCOMPLETE\",\"raw_evidence\":{\"source\":\"filesystem.stat\",\"result\":\"UNKNOWN\"},\"observation\":{\"schema\":\"SMARTAGENT_EVIDENCE_V1\",\"field\":\"file.exists\",\"observation_status\":\"UNKNOWN\",\"source\":\"filesystem.stat\",\"scope\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"version\":\"\",\"observed_at\":\"2026-10-25T08:19:00.134789+00:00\",\"freshness\":\"UNKNOWN\",\"raw_evidence_ref\":\"IT10-LOCAL-OBSERVE-01\"},\"predicate\":{\"field\":\"file.exists\",\"operator\":\"equals\",\"expected\":false},\"evaluation\":{\"verification_status\":\"UNKNOWN\",\"comparison\":\"NOT_EVALUATED\"},\"_runtime_result\":{\"schema\":\"SMARTAGENT_TOOL_RESULT_V1\",\"tool\":\"observe_fact\",\"status\":\"UNKNOWN\",\"reason\":\"FACT_OBSERVATION_UNKNOWN\",\"executed\":true,\"requested_path\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"resolved_path\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"request_id\":\"RR-LOCAL_TEST-1048B5782E13F89C\",\"task_id\":\"TASK-B8AF86EACD931098346D\",\"action_id\":\"IT10-LOCAL-OBSERVE-01\",\"data\":{\"observations\":[{\"schema\":\"SMARTAGENT_EVIDENCE_V1\",\"field\":\"file.exists\",\"observation_status\":\"UNKNOWN\",\"source\":\"filesystem.stat\",\"scope\":\"E://card//__runtime_evidence_nlit_fixture__//NLIT-IT6-FIXED-002//IT10//__unknown_parent_not_created__//probe.txt\",\"version\":\"\",\"observed_at\":\"2026-10-25T08:19:00.134789+00:00\",\"freshness\":\"UNKNOWN\",\"raw_evidence_ref\":\"IT10-LOCAL-OBSERVE-01\"}],\"execution_finality\":\"COMPLETED\",\"verification_status\":\"UNKNOWN\",\"expectation_status\":\"UNKNOWN\",\"comparison\":\"NOT_EVALUATED\",\"terminal_eligible\":false,\"observation_status\":\"UNKNOWN\"}}}",
+        "task_id": "TASK-B8AF86EACD931098346D"
+      },
+      "raw_line_sha256": "bfecea39ff7fe4278c1a3d6938b1f26a6c1a7633f6d59eb86a76a87f0050d53b"
+    }
+  ],
+  "tool_start_count": 1,
+  "observe_fact_count": 1,
+  "task_state": "INTERRUPTED",
+  "continuation_state": "INTERRUPTED",
+  "sender_timeout_not_test_fail": false,
+  "source_pointers": {
+    "task": "package/localdata/runtime/remote_tasks.json#/tasks/TASK-B8AF86EACD931098346D",
+    "continuation": "package/localdata/runtime/task_continuations.json#/records/TASK-B8AF86EACD931098346D"
+  },
+  "source_inventory": {
+    "private-evidence/worker_runtime.jsonl": {
+      "bytes": 43889,
+      "sha256": "2b421f46dbf8d82e32b3b87bfe90c969dfba007e21700b27a498cb688cbbd6d9"
+    },
+    "private-evidence/writer_snapshots.jsonl": {
+      "bytes": 130108,
+      "sha256": "f9a102ad18bb880d38303b43938bd877430d5fde4944a21b8bdcdb4fea0833d1"
+    },
+    "package/localdata/logs/web_llm_scraper_debug.log": {
+      "bytes": 113343447,
+      "sha256": "760a9cadc7afdf43cd90d0975f93b6af72e6721634d743299cb46d50d8416bdf"
+    },
+    "private-evidence/it10-path-IT10-STRICT-20261025-RUN01-7fad2e6350c8570c340f9379-27760.jsonl": {
+      "bytes": 29358,
+      "sha256": "d39590783aa55490ae4a7980bf7e6492cf24da4e7c43a233a9de022736036075"
+    },
+    "package/source/agent_core/web_runtime.py": {
+      "bytes": 307825,
+      "sha256": "b7722f4474e6f68901cb8e9010ab80866e85dbef9c349c23703b2caa4818dfc6"
+    },
+    "private-evidence/outbox.jsonl": {
+      "bytes": 15091,
+      "sha256": "3b557ae0d56b9dc63b0969655cee9656358c37b09c1fd7f5a4a151a818f25843"
+    },
+    "private-evidence/task.json": {
+      "bytes": 23821,
+      "sha256": "846c985f1964b512a0d4536abe8422b192b3460a6aaa4b0a8623010531628de7"
+    },
+    "private-evidence/continuation.json": {
+      "bytes": 20951,
+      "sha256": "054c8d23e7fe9bf6a6c163a4e0d206fc2fb7cf0f4e8c729c769e9d0cded99774"
+    },
+    "private-evidence/events.json": {
+      "bytes": 11649,
+      "sha256": "23af1c8a6468c2a8e7e58d92b7fe48891f787f5e8812c5ac9285a6916ac17d46"
+    },
+    "private-evidence/config_verified.json": {
+      "bytes": 786,
+      "sha256": "919038190f8c0de33bbc82967e97887bb404b8f82c730c1f98e4d1f905be4ed8"
+    },
+    "private-evidence/sender_result.json": {
+      "bytes": 956,
+      "sha256": "a4c2e53e6053381ad4cfbbd7462a6298588c7dff4701a72783c8d00f8b2cd233"
+    }
+  }
+}
