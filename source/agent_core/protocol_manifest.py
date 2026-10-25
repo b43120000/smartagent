@@ -22,6 +22,8 @@ PROTOCOL_VERSION = 9
 # project-sync behavior that must be identical in every process/package.
 CORE_FILES = (
     'source/agent_core/path_integrity_trace.py',
+    'source/agent_core/source_attestation.py',
+    'config/debug_config.defaults.json',
     'install_smart_agent/git_release.ps1',
     'install_smart_agent/build_portable_git.py',
     'install_smart_agent/ensure_environment.ps1',
