@@ -160,6 +160,15 @@ class RemoteWorkerLauncher:
     def dispatch_available(self) -> list[dict]:
         from agent_core.protocol_manifest import require_protocol_manifest
         require_protocol_manifest(install_root())
+        if not getattr(self, "_source_attested", False):
+            try:
+                from agent_core.source_attestation import capture
+                self._log("STATUS", stage="source_load_attestation",
+                          **capture(role="supervisor_dispatch", manifest_verified=True))
+            except Exception as exc:
+                self._log("STATUS", stage="source_load_attestation_unavailable",
+                          error_type=type(exc).__name__)
+            self._source_attested = True
         launched = []
         self.reconcile_workers()
         while len(self.queue.running()) < self.max_workers:
