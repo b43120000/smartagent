@@ -1,0 +1,8 @@
+{
+  "protocol_readiness": {
+    "allow_missing_closing_marker": true
+  },
+  "composer_verification": {
+    "unsafe_force_pass": false
+  }
+}
