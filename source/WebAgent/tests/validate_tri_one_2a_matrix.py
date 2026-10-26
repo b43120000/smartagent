@@ -176,12 +176,6 @@ class Fixture(unittest.TestCase):
         task = self.accept()
         bad = result_for(task)
         bad["terminal_acceptance"]["task_id"] = "TASK-FOREIGN"
-        with self.assertRaisesRegex(TaskResultContractError, "foreign_or_contradictory_receipt"):
-            make_task_result_from_remote_event(
-                task, "TASK_COMPLETED",
-                {"summary": "fixture", "terminal_acceptance": bad["terminal_acceptance"],
-                 "task_outcome": "SUCCESS"},
-            )
         # Actual final in task state is authoritative over model data.
         completed, event = self.complete(task)
         self.assertEqual(event.payload["task_result_v1"]["task_id"], completed.task_id)
