@@ -125,6 +125,28 @@ def _disk_git_head(root):
         return ""
 
 
+def require_writer_loaded_source_attestation(attestation: dict) -> dict:
+    """Fail closed unless in-process Writer/dispatch code matches verified disk.
+
+    The caller must invoke this on its own worker process capture immediately
+    before Planner starts. A detached-stage import is not a Worker proof.
+    """
+    module = (attestation.get("modules") or {}).get("agent_core.tools", {})
+    comparisons = module.get("live_matches_recompiled_disk") or {}
+    required = ("_task_scoped_chunked_write_manager", "_execute_tool_impl")
+    if (
+        attestation.get("manifest_verified_before_capture") is not True
+        or module.get("loaded") is not True
+        or module.get("source_path") != "source/agent_core/tools.py"
+        or not module.get("disk_sha256_at_capture")
+        or not all(comparisons.get(name) is True for name in required)
+    ):
+        raise RuntimeError("writer_loaded_source_attestation_failed")
+    return {"status": "PASS", "module": "agent_core.tools",
+            "functions": list(required),
+            "comparison_method": "cpython_code_object_eq_and_verified_source_filename"}
+
+
 def capture(*, role, manifest_verified):
     """Snapshot the modules actually loaded in this process at capture time."""
     root = Path(__file__).resolve().parents[2]
