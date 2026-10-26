@@ -156,6 +156,7 @@ CORE_FILES = (
     'source/agent_core/web_ui/providers/m365/bridge.py',
     'source/agent_core/request_ownership.py',
     'source/agent_core/task_state.py',
+    'source/agent_core/tri_one_task_result.py',
     'source/agent_core/tool_capabilities.py',
     'source/agent_core/task_progress.py',
     'source/agent_core/action_loop_state.py',
