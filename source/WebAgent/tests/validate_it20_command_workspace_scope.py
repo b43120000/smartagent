@@ -8,7 +8,11 @@ import tempfile
 
 from agent_core.path_security import PathSecurityError
 from agent_core.security_context import SecurityContext
-from agent_core.tools import _bounded_path_independent_wait, resolve_command_working_directory
+from agent_core.tools import (
+    _bounded_path_independent_wait,
+    _path_independent_command_must_use_bound_workspace,
+    resolve_command_working_directory,
+)
 from agent_core.source_attestation import _compared_code_identity
 import agent_core.tools as tools_module
 
@@ -49,6 +53,18 @@ def main():
             assert _bounded_path_independent_wait(cmd)
             assert resolve_command_working_directory(None, context, agent, command=cmd) == workspace
             assert resolve_command_working_directory(str(workspace), context, agent, command=cmd) == workspace
+            assert _path_independent_command_must_use_bound_workspace(cmd)
+            must_reject(
+                lambda cmd=cmd: resolve_command_working_directory(str(fixture), context, agent, command=cmd),
+                'path_independent_command_cwd_outside_bound_workspace',
+            )
+        for command in ('(Get-Location).Path', 'Get-Location', 'pwd', '$pwd.Path'):
+            assert _path_independent_command_must_use_bound_workspace(command)
+            assert resolve_command_working_directory(None, context, agent, command=command) == workspace
+            must_reject(
+                lambda command=command: resolve_command_working_directory(str(fixture), context, agent, command=command),
+                'path_independent_command_cwd_outside_bound_workspace',
+            )
         for cmd in (
             "python -c \"__import__('os').system('dir')\"",
             "python -c \"__import__('time').sleep(30)\"",
@@ -65,9 +81,17 @@ def main():
             lambda: resolve_command_working_directory(str(subdir), context, agent, command=waits[0]),
             "command_working_directory_outside_request_scope",
         )
+        # A fixture can even be in the general software writable policy.
+        # This must never relocate a path-independent wait or cwd check.
+        broad_context = SecurityContext.for_workspace(workspace, write_roots=(fixture,))
+        for command in (*waits, '(Get-Location).Path', 'Start-Sleep -Seconds 11'):
+            must_reject(
+                lambda command=command: resolve_command_working_directory(str(fixture), broad_context, agent, command=command),
+                'path_independent_command_cwd_outside_bound_workspace',
+            )
         must_reject(
             lambda: resolve_command_working_directory(str(fixture), context, agent, command=waits[0]),
-            "path_outside_authorized_roots",
+            'path_outside_authorized_roots',
         )
 
 
