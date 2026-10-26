@@ -129,7 +129,7 @@
     "source/agent_core/session_summary.py": "502cc3a0f8fe2486f27e0fca322f1ff8496ad82618b7012bbace6176d473e81b",
     "source/agent_core/shared_browser.py": "d7ab2854a900bbafc577f8b336998cc53b3084e683cc49385b909cc6d0e4da10",
     "source/agent_core/smartagent_protocol.py": "d5d15968a7222b9a3e7a23446d92dc2583118ed1f50e0eb8edcc27296f1761f7",
-    "source/agent_core/source_attestation.py": "2bfe55621103e79071b5785df9db896494ee3317f7c923e7ecbaf658b0e9b3cd",
+    "source/agent_core/source_attestation.py": "8f135006724a0c352bc9127bcac30af455eb0a12d59bf1e63c379007fb2f8848",
     "source/agent_core/stage_result.py": "6e37aee642656c69bd9b86eda896c2c8d465c75228788ffea95c9410cd696906",
     "source/agent_core/strict_observation_guard.py": "9388d38dcd8546ffb8d98c90110fb92bd9e0530dc8f4605e1edbcba936fc81ad",
     "source/agent_core/task_plan.py": "eee662fe3729f602f91cb6a7d895510046c8518e4089de7e26b02e1b2198e471",
