@@ -306,6 +306,8 @@ class WebAgentProtocolLoop:
         self.action_result_ledger: dict[str, dict] = {}
         # A pre-execution envelope rejection is protocol evidence, never a Tool result.
         self._protocol_spec_rejection: dict[str, object] = {}
+        # Native pre-execution bound-cwd rejection: not a ToolResult or terminal fact.
+        self._pending_bound_cwd_repair: dict[str, object] = {}
         self.condition_result_ledger: dict[str, dict] = {}
         self.v8_admitted_actions: dict[str, dict] = {}
         self.pending_progress_repair_actions: list[dict] = []
@@ -659,6 +661,44 @@ class WebAgentProtocolLoop:
             "rule": "Continue only remaining content; OPEN is not a completed file. Do not replay accepted chunks.",
         }, ensure_ascii=False, sort_keys=True) + "\n[/RUNTIME_WRITE_CONTINUATION]"
 
+    def _bound_cwd_command_contract(self, command: str = 'Start-Sleep -Seconds 4') -> dict:
+        """Runtime-owned, no-execution scope preview for path-free commands.
+
+        Explicit file fixtures remain under their own request authorization.
+        The already-bound execution workspace is not a second fixture grant.
+        """
+        from agent_core.tools import _path_independent_command_must_use_bound_workspace
+        if not _path_independent_command_must_use_bound_workspace(command):
+            return {}
+        requested = {
+            'tool': 'run_command', 'command': command,
+            'working_directory': str(self.workspace),
+        }
+        preview = self.tools.preview_tool_scope(requested)
+        return {
+            'schema': 'SMARTAGENT_BOUND_COMMAND_WORKSPACE_V1',
+            'command': command,
+            'bound_workspace': str(self.workspace),
+            'bound_workspace_admitted': bool(preview.get('allowed')),
+            'bound_workspace_error': str(preview.get('error', '') or ''),
+            'separate_original_file_scope': list(self.authorized_paths),
+            'scope_rule': (
+                'A literal bounded path-free wait or exact cwd-only query must run '
+                'in the existing bound_workspace; a request-mentioned fixture '
+                'is a file/data reference, not an implicit command cwd grant. '
+                'No command or fixture was accessed by this preview.'
+            ),
+            'not_an_action_or_completed_evidence': True,
+        }
+
+    def _bound_cwd_command_guidance(self, command: str = 'Start-Sleep -Seconds 4') -> str:
+        contract = self._bound_cwd_command_contract(command)
+        return (
+            '[RUNTIME_BOUND_COMMAND_WORKSPACE]\n'
+            + json.dumps(contract, ensure_ascii=False, separators=(',', ':'))
+            + '\n[/RUNTIME_BOUND_COMMAND_WORKSPACE]'
+        ) if contract else ''
+
     def _with_commit(self, prompt: str, expected: dict) -> str:
         trace = (
             "[WEBAGENT_REQUEST_TRACE]\n"
@@ -673,6 +713,7 @@ class WebAgentProtocolLoop:
             + str(prompt).rstrip()
             + "\n\n"
             + self._runtime_evidence_context()
+            + ('\n' + self._bound_cwd_command_guidance() if ('run_command' in str(getattr(self, 'task_request', '') or '').lower() and ( '等待' in str(getattr(self, 'task_request', '') or '') or 'sleep' in str(getattr(self, 'task_request', '') or '').lower() )) else '')
             + ('\n[REQUEST_CONTEXT_OBJECTS]\n'+json.dumps(self.request_context.catalog(),ensure_ascii=False)
                +'\n[/REQUEST_CONTEXT_OBJECTS]' if self.request_context else '')
             + "\n"
@@ -3052,8 +3093,36 @@ class WebAgentProtocolLoop:
                     }]
                 cwd_scope = self.tools.preview_tool_scope(action)
                 if not cwd_scope.get('allowed',True):
-                    return [], [{'reason':'run_command_working_directory_rejected','detail':cwd_scope.get('error',''),
-                        'suggestion':'提供本 request 授權範圍內的絕對目錄 working_directory。'}]
+                    from agent_core.tools import _path_independent_command_must_use_bound_workspace
+                    command = str(action.get('command', '') or '')
+                    scope_error = str(cwd_scope.get('error', '') or '')
+                    eligible = (
+                        scope_error.startswith('path_independent_command_cwd_outside_bound_workspace:')
+                        and _path_independent_command_must_use_bound_workspace(command)
+                    )
+                    alternative = self._bound_cwd_command_contract(command) if eligible else {}
+                    if eligible and alternative.get('bound_workspace_admitted'):
+                        self._pending_bound_cwd_repair = {
+                            'action_id': str(action.get('action_id', '') or ''),
+                            'command': command,
+                            'attempted_cwd': str(action.get('working_directory', '') or ''),
+                            'bound_workspace': str(self.workspace),
+                            'reason': scope_error,
+                            'request_id': self.run_id,
+                        }
+                        suggestion = (
+                            'Runtime confirms this path-independent command is admitted at the '
+                            'already-bound working_directory=' + str(self.workspace)
+                            + '. Retry with the SAME command and explicitly this bound cwd '
+                            'in a new canonical action; this is not access to or rebinding '
+                            'of the historical file fixture. Do not execute at the rejected '
+                            'directory. Original file-target permissions remain unchanged. '
+                            'Pre-execution rejection is NOT_STARTED, not completed evidence.'
+                        )
+                    else:
+                        suggestion = '提供本 request 授權範圍內的絕對目錄 working_directory。'
+                    return [], [{'reason':'run_command_working_directory_rejected',
+                        'detail':scope_error, 'suggestion':suggestion}]
                 shell_detail = self._run_command_shell_mismatch_detail(action)
                 if shell_detail:
                     return [], [{
@@ -3168,6 +3237,28 @@ class WebAgentProtocolLoop:
                             ensure_ascii=False, separators=(',', ':')),
                         'suggestion':'必須引用同一 request 的 UNKNOWN observe_fact，且不得有未決副作用。',
                     }]
+            repair = dict(getattr(self, '_pending_bound_cwd_repair', {}) or {})
+            if (repair.get('request_id') == self.run_id
+                    and request.get('kind') == 'BLOCKED'
+                    and request.get('blocking_action_id') == repair.get('action_id')
+                    and self._bound_cwd_command_contract(str(repair.get('command', ''))).get('bound_workspace_admitted')):
+                # Do not turn an admission-only rejection into a fictitious ToolResult,
+                # or force unrelated fixture reads that cannot alter command scope.
+                return [], [{
+                    'marker': '[WEBAGENT_BOUND_COMMAND_WORKSPACE_RECOVERY]',
+                    'reason': 'path_independent_command_bound_workspace_already_available',
+                    'detail': json.dumps(repair, ensure_ascii=False, separators=(',', ':')),
+                    'suggestion': (
+                        'A no-file-access command may use the existing bound workspace '
+                        + str(self.workspace)
+                        + ' without changing the C fixture data-scope permission. '
+                        'Use CONTINUE and a fresh canonical run_command at exactly '
+                        'this bound workspace, or request explicit USER_INPUT if the '
+                        'original requirement genuinely requires C as the execution cwd. '
+                        'Do not repeat directory reads as they cannot authorize cwd, '
+                        'do not claim a rejected command was executed.'
+                    ),
+                }]
             if not context_interrupt_allowed(request, capabilities):
                 self._emit('context_acquisition_required', request_id=self.run_id,
                            state='NOT_REQUESTED', context_request=request)
