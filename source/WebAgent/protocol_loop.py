@@ -89,7 +89,7 @@ _PATH_PROSE_BOUNDARY_RE = re.compile(
     r"|內(?=\s*[,，；。;]|\s+(?:使用|透過|執行|查詢|讀取|建立|檢查|確認|請))"
     r"|驗證以下(?:我指定的)?(?:原始)?\s*Predicate(?=\s*[：:])"
     r"|(?:測試)?範圍內(?:透過|使用|執行)|(?:此|該)?(?:測試)?範圍內透過"
-    r"|進行\s+staging(?=\s|$|[,，；。;]))"
+    r"|進行\s+staging(?=\s|$|[,，；。;])))"
 )
 _PATH_TASK_SUFFIX_RE = re.compile(r"\s+(?:第一層內容|建立\s+[^\\/\s]+\.[A-Za-z0-9]{1,10}|建立\s+[^\\/\s]+\s+(?:測試)?資料夾)$")
 _PATH_ATTACHED_PROSE_BOUNDARY_RE = re.compile(
