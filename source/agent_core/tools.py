@@ -103,7 +103,7 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
     if tool == 'run_command':
         try:
             context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
-            cwd = resolve_command_working_directory(tool_call.get('working_directory'), context, agent)
+            cwd = resolve_command_working_directory(tool_call.get('working_directory'), context, agent, command=tool_call.get('command', ''))
             info.update(requested_paths=[tool_call.get('working_directory') or str(context.workspace_root)],
                 resolved_paths=[str(cwd)],scope_source='working_directory' if 'working_directory' in tool_call else 'workspace_default')
         except (PathSecurityError, ValueError, OSError) as exc:
@@ -1108,7 +1108,25 @@ def _project_query_workspace(tool_call: dict, agent) -> str:
             raise ValueError("query_project_root_conflict:target_outside_workspace")
     return str(target)
 
-def resolve_command_working_directory(value, security_context: SecurityContext | None, agent=None) -> Path:
+def _bounded_path_independent_wait(command: object) -> bool:
+    """Only literal short sleeps, no file path or other side-effect language.
+
+    This is not a grant to any request-mentioned historical fixture root.
+    Unrecognized commands retain the original explicit-request cwd constraint.
+    """
+    value = str(command or '').strip()
+    ps = re.fullmatch(r'(?i)Start-Sleep\s+-(Seconds|Milliseconds)\s+(\d{1,4}(?:\.\d{1,3})?)', value)
+    if ps:
+        duration = float(ps.group(2)) / (1000 if ps.group(1).lower() == 'milliseconds' else 1)
+        return 0 < duration <= 10
+    py = re.fullmatch(
+        r'''(?i)(?:python(?:\.exe)?|py(?:\.exe)?)\s+-c\s+(["'])\s*__import__\((["'])time\2\)\.sleep\((\d{1,2}(?:\.\d{1,3})?)\)\s*\1''',
+        value,
+    )
+    return bool(py and 0 < float(py.group(3)) <= 10)
+
+
+def resolve_command_working_directory(value, security_context: SecurityContext | None, agent=None, *, command: object = None) -> Path:
     context = security_context or SecurityContext.for_workspace(Path.cwd())
     if value is not None and (not isinstance(value, (str,Path)) or not str(value).strip()):
         raise PathSecurityError('command_working_directory_invalid')
@@ -1118,7 +1136,12 @@ def resolve_command_working_directory(value, security_context: SecurityContext |
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
     if requested and not any(is_within(cwd, root) for root in requested):
-        raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
+        # An unrelated original fixture path is not itself a command target.
+        # Exception is ONLY a literal bounded path-free wait in the already
+        # authorized default workspace; do not authorize the fixture or
+        # arbitrary commands/working-directory changes.
+        if cwd != context.workspace_root or not _bounded_path_independent_wait(command):
+            raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
     return cwd
 
 
@@ -1418,7 +1441,7 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
     if tool == "run_command":
         workspace = security_context.workspace_root
         try:
-            cwd = resolve_command_working_directory(tool_call.get('working_directory'), security_context, agent)
+            cwd = resolve_command_working_directory(tool_call.get('working_directory'), security_context, agent, command=tool_call.get('command', ''))
             approval_manifest = _execution_approval_manifest(tool_call, agent, security_context, cwd)
         except PathSecurityError as exc:
             from .tool_result_contract import encode_result
