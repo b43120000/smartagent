@@ -90,7 +90,7 @@ def validate_run_command_contract_is_required_before_execution() -> None:
         loop = configured_loop(Path(temp))
         calls = [
             progress("P-RUN"),
-            {"tool": "run_command", "action_id": "A-COMMIT", "command": "git status --short"},
+            {"tool": "run_command", "action_id": "A-COMMIT", "operation": "GENERAL", "command": "git status --short"},
             {"tool": "turn_commit", "action_count": 2},
         ]
         accepted, diagnostics = loop._accept_ack(calls, {"ack_web_ack_id": ""})
