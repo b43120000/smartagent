@@ -114,6 +114,9 @@ def validate_execution_and_verification_are_separate() -> None:
         "expectation_status": "",
         "evidence_state": "UNVERIFIED",
         "terminal_eligible": False,
+        "result_status": "SUCCEEDED",
+        "result_reason": "",
+        "executed": True,
     }
     contradicted = WebAgentProtocolLoop._classify_action_evidence(
         action, "[COMMAND_RESULT]\nexit_code: 0\nVERIFICATION_STATUS: FAIL",
