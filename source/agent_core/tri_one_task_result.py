@@ -362,6 +362,7 @@ def make_task_result_from_remote_event(task: object, event_type: str,
         "TASK_COMPLETED": "COMPLETED",
         "TASK_FAILED": "FAILED",
         "TASK_INTERRUPTED": "INTERRUPTED",
+        "TASK_PAUSED": "PAUSED",
     }
     state = state_by_event.get(event_type)
     if not state:
@@ -371,7 +372,8 @@ def make_task_result_from_remote_event(task: object, event_type: str,
     metadata = metadata if isinstance(metadata, Mapping) else {}
     result_ledger = getattr(task, "result_ledger", {})
     result_ledger = result_ledger if isinstance(result_ledger, Mapping) else {}
-    final = result_ledger.get("final", {})
+    source_key = "paused" if state == "PAUSED" else ("interrupted" if state == "INTERRUPTED" else "final")
+    final = result_ledger.get(source_key, {})
     final = final if isinstance(final, Mapping) else {}
     event_payload = payload if isinstance(payload, Mapping) else {}
     route = getattr(task, "reply_route", None)
@@ -381,12 +383,23 @@ def make_task_result_from_remote_event(task: object, event_type: str,
         raise TaskResultContractError("missing_trusted_reply_route")
     transport = route.get("transport") or metadata.get("transport") or ""
     source_interface = _normalize_source_interface(transport)
-    outcome = str(
-        final.get("task_outcome") or event_payload.get("task_outcome")
-        or ("FAILED" if event_type == "TASK_FAILED" else "UNKNOWN")
-    ).strip().upper()
+    # A PAUSED checkpoint is not a terminal completion. Disregard any
+    # model-supplied SUCCESS outcome when publishing its status event.
+    outcome = (
+        "UNKNOWN" if state == "PAUSED" else str(
+            final.get("task_outcome") or event_payload.get("task_outcome")
+            or ("FAILED" if event_type == "TASK_FAILED" else "UNKNOWN")
+        ).strip().upper()
+    )
     if outcome not in OUTCOMES:
         outcome = "UNKNOWN"
+    task_state = str(getattr(task, "state", "") or "").upper()
+    if task_state and task_state != state and not (task_state == "CANCELLED" and state == "INTERRUPTED"):
+        raise TaskResultContractError("event_task_state_mismatch")
+    source_digest = str(final.get("intent_digest") or "").strip()
+    meta_digest = str(metadata.get("intent_digest") or "").strip()
+    if source_digest and meta_digest and source_digest != meta_digest:
+        raise TaskResultContractError("intent_digest_mismatch")
     receipt = final.get("terminal_acceptance") or event_payload.get("terminal_acceptance") or {}
     if not isinstance(receipt, Mapping):
         raise TaskResultContractError("invalid_terminal_receipt")
@@ -422,7 +435,7 @@ def make_task_result_from_remote_event(task: object, event_type: str,
         else "NOT_ATTESTED"
     )
     completed_at = getattr(task, "completed_at", None)
-    return make_task_result(
+    result = make_task_result(
         request_id=str(getattr(task, "request_id", "") or ""),
         task_id=str(getattr(task, "task_id", "") or ""),
         task_epoch=str(getattr(task, "task_epoch", "") or ""),
@@ -440,6 +453,13 @@ def make_task_result_from_remote_event(task: object, event_type: str,
         source_commit=source_commit,
         created_at=completed_at,
     )
+    plan_id = str(final.get("plan_id") or event_payload.get("plan_id") or "").strip()
+    source_plan_id = str(metadata.get("source_plan_id") or final.get("source_plan_id") or "").strip()
+    if plan_id:
+        result["plan_id"] = plan_id
+    if source_plan_id:
+        result["source_plan_id"] = source_plan_id
+    return validate_task_result(result)
 
 
 def make_task_result_from_webagent_loop(loop: object, answer_text: str, *,
