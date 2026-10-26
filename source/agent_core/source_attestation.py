@@ -44,11 +44,11 @@ def _loaded_fingerprint(module, name):
     return hashlib.sha256(marshal.dumps(code)).hexdigest()
 
 
-def _recompiled_disk_fingerprint(source: Path, function: str):
-    """Fingerprint a named function compiled fresh from verified disk source.
+def _recompiled_disk_code(source: Path, function: str):
+    """Compile verified disk source and locate the exact named code object.
 
-    This is a bounded comparison, not proof that every function in a module
-    matches the on-disk source or that the Git HEAD was loaded.
+    The compiler may embed a different filename than the module import path.
+    Raw marshal fingerprints include that metadata: they are diagnostic only.
     """
     code = compile(source.read_bytes(), str(source), "exec", dont_inherit=True)
     for part in function.split("."):
@@ -58,7 +58,43 @@ def _recompiled_disk_fingerprint(source: Path, function: str):
         ), None)
         if code is None:
             return None
-    return hashlib.sha256(marshal.dumps(code)).hexdigest()
+    return code
+
+
+def _loaded_code(module, function: str):
+    target = module
+    for part in function.split("."):
+        target = getattr(target, part, None)
+        if target is None:
+            return None
+    return getattr(target, "__code__", None)
+
+
+def _compared_code_identity(module, source: Path, function: str) -> dict:
+    """Require native code-object equality AND an independently verified path.
+
+    CPython code equality compares bytecode and constants (including nested
+    code objects) without confusing compiler filename metadata with semantics.
+    A disk Git HEAD is never substituted for the actual loaded code object.
+    """
+    live_code = _loaded_code(module, function)
+    disk_code = _recompiled_disk_code(source, function)
+    if live_code is None or disk_code is None:
+        return {"code_objects_equal": False, "filename_verified": False,
+                "first_line_equal": False, "qualname_equal": False,
+                "live_code_sha256": None, "disk_code_sha256": None}
+    filename_verified = (
+        Path(live_code.co_filename).resolve() == source
+        and Path(disk_code.co_filename).resolve() == source
+    )
+    return {
+        "code_objects_equal": live_code == disk_code,
+        "filename_verified": filename_verified,
+        "first_line_equal": live_code.co_firstlineno == disk_code.co_firstlineno,
+        "qualname_equal": live_code.co_qualname == disk_code.co_qualname,
+        "live_code_sha256": hashlib.sha256(marshal.dumps(live_code)).hexdigest(),
+        "disk_code_sha256": hashlib.sha256(marshal.dumps(disk_code)).hexdigest(),
+    }
 
 
 def _disk_git_head(root):
@@ -117,18 +153,31 @@ def capture(*, role, manifest_verified):
             if (digest := _loaded_fingerprint(module, function)) is not None
         }
         if name in {"WebAgent.protocol_loop", "agent_core.strict_observation_guard"}:
-            live = entry["live_code_sha256"]
-            recompiled = {}
+            # R012 raw marshal hashes are diagnostics, not semantic equivalence
+            # tests. A real code-object or independently verified path mismatch
+            # remains fail-closed before Planner or Tool.
+            comparisons = {}
             for function in functions:
                 try:
-                    recompiled[function] = (
-                        _recompiled_disk_fingerprint(source, function) if source else None
+                    comparisons[function] = (
+                        _compared_code_identity(module, source, function) if source else {}
                     )
-                except (OSError, SyntaxError, ValueError):
-                    recompiled[function] = None
-            entry["recompiled_disk_code_sha256"] = recompiled
+                except (OSError, SyntaxError, ValueError, TypeError):
+                    comparisons[function] = {}
+            entry["code_identity_comparisons"] = comparisons
+            entry["comparison_method"] = "cpython_code_object_eq_and_verified_source_filename"
+            entry["raw_marshal_hash_is_diagnostic_only"] = True
+            entry["recompiled_disk_code_sha256"] = {
+                function: comparisons[function].get("disk_code_sha256")
+                for function in functions
+            }
             entry["live_matches_recompiled_disk"] = {
-                function: bool(live.get(function) and live[function] == recompiled.get(function))
+                function: bool(
+                    comparisons[function].get("code_objects_equal") is True
+                    and comparisons[function].get("filename_verified") is True
+                    and comparisons[function].get("first_line_equal") is True
+                    and comparisons[function].get("qualname_equal") is True
+                )
                 for function in functions
             }
         modules[name] = entry
