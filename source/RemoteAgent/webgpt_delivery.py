@@ -17,6 +17,7 @@ class WebGPTDeliveryAdapter:
         if et=='TASK_STARTED': return f"[REMOTE_AGENT_ACK]\n{marker} event=TASK_STARTED request_id={rid} task_id={tid} status={status}\n{label} 已開始執行。"
         if et=='TASK_COMPLETED': return f"[REMOTE_AGENT_RESULT]\n{marker} request_id={rid} task_id={tid} status={status}\nsummary={str(payload.get('summary',''))}"
         if et=='TASK_FAILED': return f"[REMOTE_AGENT_RESULT]\n{marker} request_id={rid} task_id={tid} status={status}\nsummary={str(payload.get('error',''))}"
+        if et=='TASK_PAUSED': return f"[REMOTE_AGENT_STATUS]\\n{marker} event=TASK_PAUSED request_id={rid} task_id={tid} status=PAUSED outcome=UNKNOWN\\nsummary={str(payload.get('summary') or payload.get('error') or 'Task is paused; not completed')}"
         if et=='TASK_INTERRUPTED': return f"[REMOTE_AGENT_RESULT]\n{marker} request_id={rid} task_id={tid} status={status}\nsummary={label} 任務中斷，v1 不會自動重跑。"
         return f"{label} {marker} event={et} request_id={rid} task_id={tid} status={status}。"
     def deliver_event(self,route:dict,event:dict)->dict:
