@@ -47,6 +47,37 @@ def _atomic_json(path: Path, payload: dict) -> None:
 
 
 class ChunkedWriteManager:
+    @staticmethod
+    def abort_archived_open_session(
+        manifest_path: Path, *, request_id: str, manifest_sha256: str,
+        staging_sha256: str, archive_path: str,
+    ) -> dict:
+        """Abort a stopped, archived OPEN session without constructor recovery.
+
+        Only the explicit administrative force-stop path calls this after
+        verifying ownership, canonical paths, durable archive and dead PIDs.
+        Never recover COMMITTING or infer a destination commit here.
+        """
+        with _PROCESS_LOCK:
+            raw = manifest_path.read_bytes()
+            if _sha(raw) != manifest_sha256:
+                raise ChunkedWriteError("force_stop_manifest_changed_after_archive")
+            manifest = json.loads(raw.decode("utf-8"))
+            state = manifest.get("state")
+            retry_abort = state == "ABORTED" and manifest.get("abort_reason") == "FORCE_STOP_ALL_AGENTS"
+            if (state != "OPEN" and not retry_abort) or manifest.get("request_id") != request_id:
+                raise ChunkedWriteError("force_stop_writer_identity_or_state_changed")
+            staging = Path(manifest["staging_path"])
+            if _sha(staging.read_bytes()) != staging_sha256:
+                raise ChunkedWriteError("force_stop_staging_changed_after_archive")
+            if not retry_abort:
+                manifest.update(state="ABORTED", abort_reason="FORCE_STOP_ALL_AGENTS",
+                                force_stop_archive=archive_path, updated_at=time.time())
+                _atomic_json(manifest_path, manifest)
+            staging.unlink()  # Original bytes remain in the verified archive.
+            return {"write_id": manifest["write_id"], "state": "ABORTED",
+                    "destination_modified": False, "archive": archive_path}
+
     def __init__(
         self,
         state_root: str | Path,

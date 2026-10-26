@@ -59,10 +59,10 @@ echo [SmartAgent] Stopping LocalAgent, WebAgent, RemoteAgent, monitors and worke
 "%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%~dp0." %EXCLUDE_PID_ARGS%
 set "STOP_EXIT=%errorlevel%"
 if "%STOP_EXIT%"=="0" (
-    echo [SmartAgent] All discovered Agent connections and process trees are stopped.
+    echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
 ) else (
     echo [SmartAgent] Force stop completed with errors. exit_code=%STOP_EXIT%
 )
 
-rem if not defined NO_PAUSE pause
-rem endlocal & exit /b %STOP_EXIT%
+if not defined NO_PAUSE pause
+endlocal & exit /b %STOP_EXIT%

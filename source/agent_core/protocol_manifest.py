@@ -190,6 +190,7 @@ CORE_FILES = (
     'source/agent_core/aggregated_verification.py',
     'source/agent_core/runtime_cleanup.py',
     'source/agent_core/force_stop_all_agents.py',
+    'source/agent_core/force_stop_cleanup.py',
     'source/agent_core/remote_clean_start.py',
     'source/agent_core/host_supervisor.py',
     'source/agent_core/remote_execution_coordinator.py',

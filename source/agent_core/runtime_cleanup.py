@@ -317,6 +317,14 @@ class RuntimeCleanupManager:
         return count
 
     def prepare(self) -> str:
+        from .paths import runtime_root
+        with exclusive_process_lock(
+            runtime_root(self.root) / "force_stop_cleanup.lock",
+            timeout_sec=2.0, label="startup/force-stop barrier",
+        ):
+            return self._prepare_without_force_stop_lock()
+
+    def _prepare_without_force_stop_lock(self) -> str:
         # Validate the tracked v8 source tree before publishing PREPARED or
         # launching a monitor.  Otherwise a manifest failure in the child host
         # leaves a healthy monitor guarding a generation that can never attach.
@@ -545,6 +553,14 @@ class RuntimeLifecycle:
         return lifecycle
 
     def attach(self) -> None:
+        from .paths import runtime_root
+        with exclusive_process_lock(
+            runtime_root(self.manager.root) / "force_stop_cleanup.lock",
+            timeout_sec=2.0, label="attach/force-stop barrier",
+        ):
+            return self._attach_without_force_stop_lock()
+
+    def _attach_without_force_stop_lock(self) -> None:
         state = self.manager.read_state()
         if str(state.get("generation_id", "")) != self.generation_id:
             raise RuntimeError("runtime_generation_not_prepared")

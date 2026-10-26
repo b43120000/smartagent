@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -14,6 +15,8 @@ from typing import Any
 from .conversation_ownership import ConversationOwnershipRegistry
 from .protocol_manifest import validate_protocol_manifest, write_protocol_manifest
 from .paths import force_stop_flag_path, webgpt_submit_lock_path
+from .paths import runtime_root
+from .process_file_lock import exclusive_process_lock
 from .remote_clean_start import remote_clean_start
 from .runtime_cleanup import INTERFACES, RuntimeCleanupManager
 from .webgpt_rate_governor import WebGPTRateGovernor
@@ -29,6 +32,7 @@ LAUNCHER_NAMES = frozenset({
     "remoteagent.bat",
 })
 AGENT_COMMAND_MARKERS = (
+    "-m agent_core.runtime_cleanup prepare",
     "-m agent_core.host_supervisor",
     "-m agent_core.runtime_monitor",
     "-m remoteagent.telegram_webagent_worker",
@@ -62,7 +66,7 @@ def _powershell_process_inventory() -> list[dict[str, Any]]:
         )
     raw = str(result.stdout or "").lstrip("\ufeff").strip()
     if not raw:
-        return []
+        raise RuntimeError("agent_process_inventory_empty_refusing_cleanup")
     decoded = json.loads(raw)
     rows = decoded if isinstance(decoded, list) else [decoded]
     return [dict(row) for row in rows if isinstance(row, dict)]
@@ -94,7 +98,9 @@ def discover_agent_pids(
     for pid, row in rows.items():
         command = str(row.get("CommandLine") or "").replace("/", "\\").lower()
         executable = str(row.get("ExecutablePath") or "").replace("/", "\\").lower()
-        belongs_to_checkout = root_text in command or executable.startswith(root_text + "\\")
+        belongs_to_checkout = bool(re.search(
+            r"(?:^|[\s\"'=])" + re.escape(root_text) + r"(?=[\\\s\"']|$)", command
+        )) or executable.startswith(root_text + "\\")
         if belongs_to_checkout and any(marker in command for marker in AGENT_COMMAND_MARKERS):
             seeds.add(pid)
 
@@ -210,6 +216,18 @@ def _sync_startup_contract(root: Path) -> dict[str, Any]:
 def force_stop_all(
     root: str | Path, *, dry_run: bool = False, exclude_pids: set[int] | None = None
 ) -> dict[str, Any]:
+    if dry_run:
+        return _force_stop_all_locked(root, dry_run=True, exclude_pids=exclude_pids)
+    with exclusive_process_lock(
+        runtime_root(root) / "force_stop_cleanup.lock",
+        timeout_sec=5.0, label="force-stop/startup barrier",
+    ):
+        return _force_stop_all_locked(root, exclude_pids=exclude_pids)
+
+
+def _force_stop_all_locked(
+    root: str | Path, *, dry_run: bool = False, exclude_pids: set[int] | None = None
+) -> dict[str, Any]:
     project = Path(root).resolve()
     excluded = {os.getpid(), *(int(pid) for pid in (exclude_pids or set()) if int(pid) > 0)}
     inventory = _powershell_process_inventory()
@@ -227,13 +245,6 @@ def force_stop_all(
         encoding="utf-8",
     )
     result["shutdown_requested"] = _request_orderly_shutdown(project)
-    try:
-        result["remote_clean_start"] = remote_clean_start(
-            project, reason="FORCE_STOP_ALL_AGENTS"
-        )
-    except (OSError, RuntimeError, ValueError) as exc:
-        result["remote_clean_start"] = {"error": f"{type(exc).__name__}: {exc}"}
-
     stopped: list[int] = []
     failed: list[int] = []
     for pid in discovered["root_pids"]:
@@ -250,9 +261,8 @@ def force_stop_all(
         (second_stopped if _taskkill_tree(pid) else second_failed).append(pid)
     if second["root_pids"]:
         time.sleep(0.5)
-    final = discover_agent_pids(
-        _powershell_process_inventory(), project, exclude_pids=excluded
-    )
+    final_inventory = _powershell_process_inventory()
+    final = discover_agent_pids(final_inventory, project, exclude_pids=excluded)
     remaining = set(final["selected_pids"])
     exited_during_stop = sorted(
         pid for pid in {*failed, *second_failed} if pid not in remaining
@@ -266,6 +276,22 @@ def force_stop_all(
     ]
     result["exited_during_stop_pids"] = exited_during_stop
     result["remaining_agent_pids"] = final["selected_pids"]
+    # Includes explicitly excluded live Agents: their work must not be cancelled.
+    from .force_stop_cleanup import cleanup_stopped_work
+    result["work_cleanup"] = cleanup_stopped_work(project, final_inventory, _barrier_held=True)
+    if not result["work_cleanup"].get("success"):
+        result["success"] = False
+        result["startup_contract"] = {"status": "SKIPPED", "reason": "work_cleanup_blocked"}
+        return result
+    if result["work_cleanup"].get("success"):
+        try:
+            # All incomplete tasks are now terminal; this only clears remaining
+            # control/approval/ownership reservations, never raw metadata PIDs.
+            result["remote_clean_start"] = remote_clean_start(
+                project, reason="FORCE_STOP_ALL_AGENTS"
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            result["remote_clean_start"] = {"error": f"{type(exc).__name__}: {exc}"}
     result["runtime_states_finalized"] = _finalize_runtime_states(project)
     submit_lock = webgpt_submit_lock_path(project)
     result["submit_lock_recovered"] = RuntimeCleanupManager.recover_stale_owned_file(
@@ -287,7 +313,9 @@ def force_stop_all(
     process_clean = not final["selected_pids"]
     lock_clean = not result["submit_lock_remaining"]
     result["startup_contract"] = {"status": "SKIPPED"}
-    if process_clean and runtime_clean and rate_clean and lock_clean:
+    work_clean = result["work_cleanup"].get("success") is True
+    controls_clean = "error" not in result.get("remote_clean_start", {"error": "not_run"})
+    if process_clean and runtime_clean and rate_clean and lock_clean and work_clean and controls_clean:
         try:
             result["startup_contract"] = {
                 "status": "PASS",
@@ -303,8 +331,16 @@ def force_stop_all(
         and runtime_clean
         and rate_clean
         and lock_clean
+        and work_clean
+        and controls_clean
         and result["startup_contract"].get("status") == "PASS"
     )
+    # Still inside the startup barrier: include excluded/blocked new launchers.
+    last = discover_agent_pids(_powershell_process_inventory(), project, exclude_pids={os.getpid()})
+    result["remaining_agent_pids"] = last["selected_pids"]
+    if last["selected_pids"]:
+        result["success"] = False
+        result["late_start_detected"] = True
     return result
 
 

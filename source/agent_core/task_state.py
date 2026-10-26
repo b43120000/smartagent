@@ -101,6 +101,57 @@ class TaskStateStore:
         self.records: dict[str, TaskRecord] = {}
         self.loaded = False
 
+    def cancel_after_force_stop(
+        self, task_ids: Iterable[str], *, expected_sha256: str, archive_path: str,
+    ) -> list[str]:
+        """Explicit administrative cancellation; preserve all raw foreign fields.
+
+        Caller must archive first and prove owned workers stopped. Normal
+        restart/recovery deliberately does not call this API.
+        """
+        wanted = set(task_ids)
+        active = {TASK_QUEUED, TASK_RUNNING, TASK_PAUSING, TASK_PAUSED, TASK_RESUMING}
+        with self._lock, self.process_lock():
+            raw = self.path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != expected_sha256:
+                raise TaskStateError("force_stop_task_store_changed_after_archive")
+            payload = json.loads(raw.decode("utf-8-sig"))
+            self.load()  # Fail closed on invalid records before changing anything.
+            changed = []
+            now = time.time()
+            for task_id in sorted(wanted):
+                row = payload["tasks"][task_id]
+                if row["state"] not in active:
+                    raise TaskStateError("force_stop_task_state_changed_after_archive")
+                previous = row["state"]
+                row.update(state=TASK_CANCELLED, completed_at=now, updated_at=now,
+                           error="FORCE_STOP_ALL_AGENTS")
+                row.setdefault("metadata", {}).update(
+                    cancel_requested=True, cancel_reason="FORCE_STOP_ALL_AGENTS",
+                    delivery_state="PAUSED",
+                    force_stop={"previous_state": previous, "archive": archive_path,
+                                "at": now, "runtime_success_inferred": False,
+                                "cleanup_complete": False},
+                )
+                changed.append(task_id)
+            if changed:
+                write_json_atomic(self.path, payload)
+                self.load()
+            return changed
+
+    def finish_force_stop(self, task_ids: Iterable[str]) -> None:
+        """Mark administrative dependencies reconciled; enables crash retry."""
+        with self._lock, self.process_lock():
+            payload = read_json_retry(self.path)
+            for task_id in task_ids:
+                row = payload["tasks"][task_id]
+                marker = row.get("metadata", {}).get("force_stop")
+                if row.get("state") != TASK_CANCELLED or not isinstance(marker, dict):
+                    raise TaskStateError("force_stop_reconciliation_task_changed")
+                marker.update(cleanup_complete=True, cleanup_finished_at=time.time())
+            write_json_atomic(self.path, payload)
+            self.load()
+
     @contextmanager
     def process_lock(self, timeout_sec: float = 10.0):
         """Serialize transactions with a crash-safe kernel lock."""
