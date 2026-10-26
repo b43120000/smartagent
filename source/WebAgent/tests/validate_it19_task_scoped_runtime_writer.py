@@ -150,7 +150,7 @@ def main():
 
         # No cleanup/recovery/commit on the historical workspace-wide root.
         assert {k:v for k,v in inventory(original).items()
-                if not k.startswith("tasks/")} == original_before
+                if not k.replace(chr(92), "/").startswith("tasks/")} == original_before
         assert a_manager._load_manifest(a_id)["state"] == "OPEN"
         assert a_stage.read_bytes() == a_bytes and not a_dest.exists()
 
