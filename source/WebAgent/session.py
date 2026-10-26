@@ -49,29 +49,91 @@ def ensure_webagent_session(
             session.bootstrap_prompt(session_id=decision.session_id),
             stage="協議初始化",
         )
-        # Every Web UI provider (including user-configured Other URL) shares
-        # this bootstrap parser. Accept either a complete matching identity
-        # or an *entire reply* consisting of the single readiness marker.
-        # The latter proves only acknowledgement, not identity: preserve that
-        # distinction in the stored state and keep session-attach strict.
-        marker_only_ready = str(response or "").strip() == f"[{PROTOCOL_READY_MARKER}]"
-        ready = session.parse_protocol_ready(
-            response, session_id=decision.session_id,
-            allow_smart_quotes=claude_quotes, allow_marker_only=True,
+        full_identity_ready = session.parse_protocol_ready(
+            response, session_id=decision.session_id, allow_smart_quotes=claude_quotes
         )
-        if not ready:
+        first_marker_only = str(response or "").strip() == f"[{PROTOCOL_READY_MARKER}]"
+        compact_identity_ready = False
+        # The browser must finish its UI/response stability gate before this
+        # parser runs. Correct an incomplete FORMAT at most once, without
+        # replaying the full bootstrap or executing any task action.
+        # An otherwise complete identity mismatch is never retried.
+        if not full_identity_ready:
+            reason_code = session.protocol_ready_failure_reason(
+                response, session_id=decision.session_id,
+                allow_smart_quotes=claude_quotes,
+            )
+            print(
+                f"[{display_name}] Bootstrap readiness 未通過；"
+                f"reason={reason_code} response_chars={len(str(response or ''))}.",
+                flush=True,
+            )
+            if reason_code in {
+                "READY_MARKER_MISSING", "READY_CLOSING_MARKER_MISSING",
+                "READY_PAYLOAD_INVALID",
+            }:
+                repaired = send_prompt(
+                    session.protocol_ready_repair_prompt(session_id=decision.session_id),
+                    stage="協議初始化格式修復",
+                )
+                full_identity_ready = session.parse_protocol_ready(
+                    repaired, session_id=decision.session_id,
+                    allow_smart_quotes=claude_quotes,
+                )
+                if not full_identity_ready:
+                    reason_code = session.protocol_ready_failure_reason(
+                        repaired, session_id=decision.session_id,
+                        allow_smart_quotes=claude_quotes,
+                    )
+                    print(
+                        f"[{display_name}] Bootstrap readiness 格式修復仍未通過；"
+                        f"reason={reason_code} response_chars={len(str(repaired or ''))}.",
+                        flush=True,
+                    )
+                    # Two distinct, completed exact marker-only responses
+                    # trigger ONE short identity challenge. Marker-only itself
+                    # never authorizes ARMED or bypasses any identity field.
+                    if (first_marker_only
+                            and str(repaired or "").strip() == f"[{PROTOCOL_READY_MARKER}]"):
+                        challenge_reply = send_prompt(
+                            session.protocol_ready_compact_challenge_prompt(
+                                session_id=decision.session_id
+                            ),
+                            stage="協議初始化精簡身分確認",
+                        )
+                        compact_identity_ready = session.parse_protocol_ready_compact(
+                            challenge_reply, session_id=decision.session_id,
+                        )
+                        print(
+                            f"[{display_name}] Bootstrap compact identity "
+                            f"{'MATCHED' if compact_identity_ready else 'REJECTED'}; "
+                            f"response_chars={len(str(challenge_reply or ''))}.",
+                            flush=True,
+                        )
+                        if not compact_identity_ready:
+                            reason_code = "READY_COMPACT_IDENTITY_MISMATCH"
+        # The legacy marker-only flag is retained for call compatibility only.
+        # A complete matching identity is mandatory, including for Claude.
+        if not (full_identity_ready or compact_identity_ready):
             registry.set_protocol_state(
                 workspace,
                 gpt_url,
                 WEBAGENT_PROTOCOL_NAME,
                 session.failed_state(session_id=decision.session_id),
             )
-            raise RuntimeError("WebGPT 未回傳 matching WEBAGENT protocol readiness")
+            raise RuntimeError(
+                "WebGPT 未回傳 matching WEBAGENT protocol readiness; reason="
+                + reason_code
+            )
         state = session.armed_state(session_id=decision.session_id)
-        state["readiness_mode"] = "MARKER_ONLY" if marker_only_ready else "FULL_IDENTITY"
+        state["readiness_mode"] = (
+            "COMPACT_FULL_IDENTITY" if compact_identity_ready else "FULL_IDENTITY"
+        )
+        state["readiness_identity_verified"] = True
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
         print(
-            f"[{display_name}] 協議初始化成功，readiness_mode={state['readiness_mode']}。",
+            f"[{display_name}] 協議初始化成功，mode={state['readiness_mode']} "
+            "matching protocol and session identity.",
             flush=True,
         )
         return {"mode": BOOTSTRAP, "reason": reason, "state": state}
@@ -90,7 +152,6 @@ def ensure_webagent_session(
     )
     if session.parse_session_ready(response, session_id=decision.session_id, handshake_id=handshake_id, allow_smart_quotes=claude_quotes):
         state = session.armed_state(session_id=decision.session_id)
-        state["readiness_mode"] = "FULL_IDENTITY"
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
         print(f"[{display_name}] 協議附著成功。", flush=True)
         return {"mode": decision.action, "reason": decision.reason, "state": state}

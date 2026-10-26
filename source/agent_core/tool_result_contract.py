@@ -68,8 +68,23 @@ def decode_result(result):
         if payload['status'] == 'SUCCEEDED' and not payload['executed']:
             return {'status':'UNKNOWN', 'reason':'SUCCESS_WITHOUT_EXECUTION', 'executed':False}
         return payload
-    if re.match(r'^\[(?:SECURITY_\w+_REJECTED|TOOL_SCOPE_REJECTED|SECURITY_CONFIRMATION_REQUIRED)\]', text):
-        return {'status':'REJECTED', 'reason':rejection_reason(text), 'executed':False, 'detail':text}
+    # A structured Runtime envelope above is authoritative.  For legacy
+    # denials, retain the marker identity; a scope denial is not a delete
+    # preflight failure.
+    legacy = re.match(
+        r'^\[(?P<marker>SECURITY_\w+_REJECTED|TOOL_SCOPE_REJECTED|SECURITY_CONFIRMATION_REQUIRED)\]',
+        text,
+    )
+    if legacy:
+        marker = legacy.group('marker')
+        reason = (
+            'TOOL_SCOPE_REJECTED' if marker == 'TOOL_SCOPE_REJECTED'
+            else 'SECURITY_CONFIRMATION_REQUIRED' if marker == 'SECURITY_CONFIRMATION_REQUIRED'
+            else rejection_reason(text)
+        )
+        if reason == 'DELETE_PREFLIGHT_REJECTED' and marker != 'SECURITY_DELETE_REJECTED':
+            reason = marker
+        return {'status': 'REJECTED', 'reason': reason, 'executed': False, 'detail': text}
     if text.startswith('[SECURITY_DELETE_SUCCESS]') and isinstance(payload, dict) and payload.get('status') == 'DELETED':
         return {'status':'SUCCEEDED', 'reason':'DELETED', 'executed':True, 'data':payload}
     return None
@@ -138,6 +153,40 @@ def outcome_committable(tool, outcome, action_id=''):
     if tool in {'run_command','web_edit_file'} and verification != 'PASS':
         return False
     return True
+
+
+def completed_unknown_fact_observation(outcome, action_id=''):
+    """A trusted, completed stat probe can yield an UNKNOWN *fact*.
+
+    A generic UNKNOWN execution (notably a mutation or queued operation) is
+    never completion evidence. Require the canonical producer receipt and an
+    unknown, value-less observation; model prose cannot assert this flag.
+    """
+    if not isinstance(outcome, dict) or not (
+        outcome.get('tool') == 'observe_fact'
+        and outcome.get('status') == 'UNKNOWN'
+        and outcome.get('reason') == 'FACT_OBSERVATION_UNKNOWN'
+        and outcome.get('executed') is True
+    ):
+        return False
+    if action_id and outcome.get('action_id') != action_id:
+        return False
+    data = outcome.get('data')
+    if not isinstance(data, dict) or data.get('execution_finality') != 'COMPLETED':
+        return False
+    if data.get('observation_status') != 'UNKNOWN' or data.get('verification_status') != 'UNKNOWN':
+        return False
+    observations = data.get('observations')
+    if not isinstance(observations, list) or len(observations) != 1:
+        return False
+    fact = observations[0]
+    return (isinstance(fact, dict)
+            and fact.get('schema') == 'SMARTAGENT_EVIDENCE_V1'
+            and fact.get('field') == 'file.exists'
+            and fact.get('source') == 'filesystem.stat'
+            and fact.get('observation_status') == 'UNKNOWN'
+            and fact.get('freshness') == 'UNKNOWN'
+            and 'value' not in fact)
 
 
 def outcome_terminal_eligible(tool, outcome, action_id=''):

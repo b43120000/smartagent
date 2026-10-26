@@ -24,7 +24,7 @@ PROTOCOL_VERSION = 8
 MODEL_ACTION_FIELDS = {"tool", "action_id"}
 MODEL_COMMIT_FIELDS = {"tool", "action_count"}
 TOOL_REQUIRED_FIELDS = {
-    "run_command": {"command", "operation"}, "read_file": {"path"},
+    "run_command": {"command", "operation"}, "observe_fact": {"path"}, "read_file": {"path"},
     "write_file": {"path", "content"},
     "delete_path": {"path", "recursive", "reason"},
     "begin_file_write": {"write_id", "path", "encoding", "overwrite"},

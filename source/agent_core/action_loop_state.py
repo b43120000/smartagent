@@ -28,7 +28,7 @@ TRANSITIONS = {
 }
 
 DISCOVERY_TOOLS = {
-    "list_directory", "inspect_directory", "find_file", "read_file",
+    "list_directory", "inspect_directory", "find_file", "read_file", "observe_fact",
     "inspect_project_scope", "inspect_project_working_set", "query_project", "inspect_project_ledger",
     "query_project_history", "project_sync", "inspect_semantic_map",
     "extract_project_dependencies", "compare_project_snapshot", "web_search",
@@ -125,6 +125,8 @@ def action_lifecycle(
     verification = str(verification_status or "UNKNOWN").upper()
     evidence = str(evidence_state or "MISSING").upper()
     expectation = str(expectation_status or "").upper()
+    if evidence == 'OBSERVATION_UNKNOWN':
+        return 'OBSERVATION_UNKNOWN'
     if execution in {'REJECTED','QUEUED','RUNNING','PARTIAL','UNKNOWN'}:
         return {'REJECTED':'REJECTED','QUEUED':'QUEUED','RUNNING':'RUNNING',
                 'PARTIAL':'PARTIAL','UNKNOWN':'EXECUTION_UNKNOWN'}[execution]
@@ -202,6 +204,10 @@ def classify_evidence_state(
         return 'AVAILABLE', []
     if execution in {'QUEUED','RUNNING','PARTIAL'}:
         return 'PENDING', [f'{execution}: receipt/start/partial work is not final completion']
+    if execution == 'UNKNOWN' and tool == 'observe_fact':
+        from .tool_result_contract import decode_result, completed_unknown_fact_observation
+        if completed_unknown_fact_observation(decode_result(result), (action or {}).get('action_id', '')):
+            return 'OBSERVATION_UNKNOWN', ['completed filesystem observation could not establish a fact']
     if execution == 'UNKNOWN' and action:
         return 'MISSING', ['execution outcome is unknown; inspect before any retry']
     if expectation == "PASS":
@@ -359,6 +365,13 @@ def build_action_loop_state(
         transition = 'WAIT_RUNTIME'
         allowed = sorted(DISCOVERY_TOOLS | VERIFY_TOOLS | {'run_command','final_response'})
         blocked_signatures = [semantic_action_signature(action)]
+    elif action and evidence_state == 'OBSERVATION_UNKNOWN':
+        # A completed read with an indeterminate fact is not a pending action.
+        # Replanning is optional; an objectively BLOCKED interruption may be
+        # admitted by the separate context/terminal gate.
+        transition = 'REPLAN_REQUIRED'
+        allowed = ['observe_fact', 'final_response']
+        blocked_signatures = [semantic_action_signature(action)]
     elif action and evidence_state in {'MISSING','REJECTED'}:
         transition = "REPLAN_REQUIRED"
         allowed = ["propose_task_plan", "repair_task_plan", "query_project", "read_file", "list_directory", "find_file", "inspect_directory", "run_command"]
@@ -377,7 +390,13 @@ def build_action_loop_state(
     blockers = []
     if transition in {'PREREQUISITE_REQUIRED','VERIFY_REQUIRED','REPLAN_REQUIRED'} or evidence_state == 'PENDING':
         pending_kind = str(execution_status or '').upper()
-        if tool in {'begin_file_write','write_file_chunk'}:
+        from .tool_result_contract import decode_result
+        declined = decode_result(result) or {}
+        if (tool == "begin_file_write" and str(execution_status or "").upper() in {"FAILED", "REJECTED"}
+                and declined.get("reason") == "incomplete_declared_expectations"
+                and declined.get("executed") is False):
+            release_kind = "NEW_SCHEMA_VALID_BEGIN_ACTION"
+        elif tool in {'begin_file_write','write_file_chunk'}:
             release_kind = 'FILE_COMMITTED'
         elif pending_kind == 'RUNNING':
             release_kind = 'PROCESS_EXITED'
@@ -385,6 +404,8 @@ def build_action_loop_state(
             release_kind = 'DELIVERY_CONFIRMED'
         elif transition == 'VERIFY_REQUIRED':
             release_kind = 'SCOPED_VERIFICATION_PASS_OR_FAIL'
+        elif evidence_state == 'OBSERVATION_UNKNOWN':
+            release_kind = 'NEW_VALID_FACT_OR_OBJECTIVE_INTERRUPTION'
         elif recovery.get('active'):
             release_kind = 'RUNTIME_PREREQUISITE_SATISFIED'
         else:
@@ -396,13 +417,33 @@ def build_action_loop_state(
         if available_tools is not None:
             remedies = [item for item in remedies if item['tool'] in set(available_tools)]
         facts = {'blocking_action_id':str((action or {}).get('action_id','')),
-                 'reason':pending_kind+'_NOT_COMPLETE' if evidence_state=='PENDING' else str(recovery.get('reason') or transition),
+                 'reason':pending_kind+'_NOT_COMPLETE' if evidence_state=='PENDING' else 'FACT_OBSERVATION_INDETERMINATE' if evidence_state=='OBSERVATION_UNKNOWN' else str(recovery.get('reason') or transition),
                  'execution_status':str(execution_status or 'UNKNOWN').upper(),
                  'release_kind':release_kind,'missing':missing}
         blockers = [{'blocker_id':'BLK-'+hashlib.sha256(json.dumps(facts,sort_keys=True).encode()).hexdigest()[:16],
                      **facts,'satisfied':False,'remedies':remedies,
                      'release_conditions':[{'kind':release_kind,'owner':'runtime'}],
                      'retry_policy':'No blind replay; inspect UNKNOWN/PARTIAL outcomes first.'}]
+
+    # A schema-rejected begin has executed=False and cannot leave an OPEN
+    # transaction. Re-admit only a NEW canonical begin while the original
+    # request's scope checks still apply; never auto-execute or replay.
+    from .tool_result_contract import decode_result
+    schema_repairable_begin = False
+    for record in list(action_records or []):
+        if str((record.get("action") or {}).get("tool", "")) != "begin_file_write":
+            continue
+        if str(record.get("execution_status", "")).upper() not in {"FAILED", "REJECTED"}:
+            continue
+        outcome = decode_result(str(record.get("result", ""))) or {}
+        if (outcome.get("reason") == "incomplete_declared_expectations"
+                and outcome.get("executed") is False):
+            schema_repairable_begin = True
+            break
+    if (schema_repairable_begin and transition == "REPLAN_REQUIRED"
+            and not recovery.get("active")
+            and (available_tools is None or "begin_file_write" in set(available_tools))):
+        allowed.append("begin_file_write")
 
     states: list[dict[str, Any]] = []
     for record in list(action_records or []):
@@ -425,6 +466,7 @@ def build_action_loop_state(
                 record_expectation,
             ),
             "execution_status": record_execution,
+            "execution_finality": "COMPLETED" if record_evidence == "OBSERVATION_UNKNOWN" else "UNKNOWN" if record_execution == "UNKNOWN" else "NOT_ASSERTED",
             "verification_status": record_verification,
             "expectation_status": record_expectation,
             "evidence_state": record_evidence,
@@ -440,6 +482,7 @@ def build_action_loop_state(
         data = typed.get('data') or {}
         open_write = record_action.get('tool') in {'begin_file_write','write_file_chunk'} and data.get('transaction_state') == 'OPEN'
         pending = (record_execution in {'QUEUED','RUNNING','PARTIAL','UNKNOWN'}
+                   and record_evidence != 'OBSERVATION_UNKNOWN'
                    and not record.get('pending_resolution')
                    and not _completed_partial_query(record_action, str(record.get('result',''))))
         unverified = phase_for_action(record_action) == 'EXECUTE' and record_execution=='SUCCEEDED' and record_verification not in {'PASS','FAIL'} and not record.get('terminal_eligible',True)
@@ -492,6 +535,7 @@ def build_action_loop_state(
         "schema": ACTION_LOOP_STATE_SCHEMA,
         "phase": phase if phase in PHASES else "DISCOVERY",
         "execution_status": str(execution_status or "UNKNOWN").upper(),
+        "execution_finality": "COMPLETED" if evidence_state == "OBSERVATION_UNKNOWN" else "UNKNOWN" if str(execution_status or "UNKNOWN").upper() == "UNKNOWN" else "NOT_ASSERTED",
         "verification_status": str(verification_status or "UNKNOWN").upper(),
         "expectation_status": str(expectation_status or "").upper(),
         "evidence_state": evidence_state,

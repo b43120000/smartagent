@@ -29,7 +29,7 @@ _CATEGORY_MEMBERS = {
     DETERMINISTIC_LOCAL: {
         "run_command", "read_file", "write_file", "delete_path", "begin_file_write",
         "write_file_chunk", "commit_file_write", "abort_file_write",
-        "list_directory", "inspect_directory", "find_file",
+        "list_directory", "inspect_directory", "find_file", "observe_fact",
         "inspect_project_scope", "inspect_project_working_set", "compare_project_snapshot",
         "inspect_semantic_map", "update_semantic_map", "update_semantic_map_file",
         "extract_project_dependencies", "build_project_bundle",
@@ -64,6 +64,7 @@ CAPABILITY_GAPS = MappingProxyType({
 })
 
 _TOOL_PURPOSES = MappingProxyType({
+    "observe_fact": "Observe an exact authorized file.exists fact; compare a predeclared typed predicate without treating absence as failure.",
     "list_directory": "List entries at one exact authorized directory without widening scope.",
     "find_file": "Find matching files below one authorized root.",
     "read_file": "Read one targeted authorized file and return bounded content or a result reference.",

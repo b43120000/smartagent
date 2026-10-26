@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Independent WebAgent protocol/result/ACK loop."""
 from __future__ import annotations
+from agent_core import path_integrity_trace as PIT
 
 import hashlib
 import json
@@ -79,7 +80,16 @@ WEBAGENT_STAGED_PROTOCOL = str(os.environ.get("SMARTAGENT_STAGED_PROTOCOL", "on"
 _WINDOWS_PATH_START_RE = re.compile(r"(?<![A-Za-z0-9])(?P<drive>[A-Za-z]:[\\/])")
 _PATH_SENTENCE_BOUNDARY_RE = re.compile(r"[，；。]|[,;](?=\s|$)|[\r\n]")
 _PATH_PROSE_BOUNDARY_RE = re.compile(
-    r"\s+(?=(?:然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後|再(?:去|執行|看|讀|修改|處理)))"
+    # An unquoted path cannot consume a following natural-language predicate
+    # or task instruction. Keep explicit quotes intact in _authorized_path_end;
+    # never guess a shortened path from a genuine path containing spaces.
+    r"\s+(?=(?:然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後"
+    r"|再(?:去|執行|看|讀|修改|處理)|是否(?:不存在|存在|為)"
+    r"|\s*的\s*(?=(?:(?:事前\s+)?file\.exists|結構化(?:狀態|查詢)|查詢結果|狀態|驗證結果)(?=\s|$|[,，；。;]))"
+    r"|內(?=\s*[,，；。;]|\s+(?:使用|透過|執行|查詢|讀取|建立|檢查|確認|請))"
+    r"|驗證以下(?:我指定的)?(?:原始)?\s*Predicate(?=\s*[：:])"
+    r"|(?:測試)?範圍內(?:透過|使用|執行)|(?:此|該)?(?:測試)?範圍內透過"
+    r"|進行\s+staging(?=\s|$|[,，；。;])))"
 )
 _PATH_TASK_SUFFIX_RE = re.compile(r"\s+(?:第一層內容|建立\s+[^\\/\s]+\.[A-Za-z0-9]{1,10}|建立\s+[^\\/\s]+\s+(?:測試)?資料夾)$")
 _PATH_ATTACHED_PROSE_BOUNDARY_RE = re.compile(
@@ -195,11 +205,13 @@ def extract_authorized_paths(request: str) -> list[str]:
         hidden_colon = text.find(":", match.end(), hard_end)
         # Do not let prose/quote parsing erase a possible ADS suffix.  Preserve
         # the colon so canonical path security rejects the candidate.
-        end = (
-            hidden_colon + 1
-            if hidden_colon >= 0
-            else _authorized_path_end(text, match.start(), match.end())
-        )
+        parsed_end = _authorized_path_end(text, match.start(), match.end())
+        # Keep the full ADS-looking candidate when it falls inside the normal
+        # lexical span (e.g. file.txt:secret), so downstream authorization can
+        # reject the original evidence without truncating the stream name.
+        # If prose parsing ends before a hidden colon, retain at least that
+        # colon: descriptions must never erase an ADS warning and grant scope.
+        end = max(parsed_end, hidden_colon + 1) if hidden_colon >= 0 else parsed_end
         candidate = text[match.start():end].strip().rstrip(" \t.,;，；。")
         consumed_until = max(end, match.end())
         if candidate and candidate not in paths:
@@ -280,6 +292,7 @@ class WebAgentProtocolLoop:
         self.continuation_source = None
         self.continuation_mode = ""
         self.terminal_outcome = "UNKNOWN"
+        self.terminal_acceptance: dict = {}
         self.tools.configure_project_sync_transport(
             lambda prompt, attachments: self.planner(prompt, None, attachments)
         )
@@ -292,6 +305,10 @@ class WebAgentProtocolLoop:
         self.sent_attachment_paths: list[str] = []
         self.action_ledger: dict[str, dict] = {}
         self.action_result_ledger: dict[str, dict] = {}
+        # A pre-execution envelope rejection is protocol evidence, never a Tool result.
+        self._protocol_spec_rejection: dict[str, object] = {}
+        # Native pre-execution bound-cwd rejection: not a ToolResult or terminal fact.
+        self._pending_bound_cwd_repair: dict[str, object] = {}
         self.condition_result_ledger: dict[str, dict] = {}
         self.v8_admitted_actions: dict[str, dict] = {}
         self.pending_progress_repair_actions: list[dict] = []
@@ -310,10 +327,91 @@ class WebAgentProtocolLoop:
         self.terminal_candidate: dict = {}
         self.request_context = None
         self.action_loop_state = build_action_loop_state()
+        from agent_core.bounded_repair import BoundedRepairBudget
+        self._bounded_repair = BoundedRepairBudget()
+        from agent_core.bounded_repair import SemanticStagnationGuard
+        self._semantic_stagnation = SemanticStagnationGuard()
+        self._stagnation_pending = None
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None:
             self.cancel_check()
+
+    def _admit_bounded_repair(self, diagnostics) -> None:
+        # Never treat an Action ID/prose change as progress. Only Runtime
+        # records marked executed are considered a new evidence generation.
+        evidence_generation = sum(
+            1 for entry in self.action_result_ledger.values()
+            if entry.get("executed") is True
+        )
+        budget = self._bounded_repair.observe(
+            diagnostics, evidence_generation=evidence_generation
+        )
+        self._emit(
+            "bounded_repair_observed",
+            request_id=self.run_id,
+            round=self.turn_id,
+            **budget,
+        )
+        if budget["status"] == "EXHAUSTED":
+            reason = "bounded_repair_exhausted_without_sufficient_new_evidence"
+            set_runtime_state(
+                self.task_id, "PAUSED", reason=reason, root=self.progress_root
+            )
+            self._emit(
+                "protocol_loop_paused",
+                request_id=self.run_id,
+                round=self.turn_id,
+                reason=reason,
+                repair_budget=budget,
+            )
+            # PAUSED is not a completed task and creates no success receipt.
+            raise RuntimeError(
+                "SmartAgent 修復回合已達安全上限；保留既有證據並暫停。"
+                + reason
+            )
+
+    def _record_preexecution_predicate_rejection(self, calls, diagnostics) -> None:
+        """Remember only a Runtime-verified, nonexecuted invalid fact Predicate.
+
+        This records no filesystem fact, Tool result, or success evidence. An
+        unrelated model statement or invalid action cannot create the blocker.
+        """
+        if (self.action_ledger or self.action_result_ledger or self.continuation_source
+                or self.pending_result_recovery):
+            return
+        actions = [item for item in calls if item.get('tool') not in
+                   {'report_progress', 'turn_commit'}]
+        if len(actions) != 1 or actions[0].get('tool') != 'observe_fact':
+            return
+        action = actions[0]
+        action_id = str(action.get('action_id', '') or '')
+        predicate = action.get('predicate')
+        if (not action_id or not isinstance(predicate, dict)
+                or predicate.get('field') != 'file.exists'):
+            return
+        valid, diagnostic = validate_tool_envelope(action)
+        reason = 'evidence_file_exists_boolean_required'
+        if valid or not isinstance(diagnostic, dict) or diagnostic.get('reason') != reason:
+            return
+        if not any(item.get('reason') == reason for item in diagnostics):
+            return
+        self._protocol_spec_rejection = {
+            'action_id': action_id, 'reason': reason,
+            'request_id': self.run_id, 'task_epoch': self.task_epoch,
+            'executed': False, 'verification_status': 'SPEC_INVALID',
+        }
+
+    def _safe_protocol_spec_rejection(self) -> dict:
+        """Restrict protocol-blocked interruption to an action-free request."""
+        record = dict(getattr(self, '_protocol_spec_rejection', {}) or {})
+        if (not record or record.get('request_id') != self.run_id
+                or record.get('task_epoch') != self.task_epoch
+                or record.get('executed') is not False
+                or self.action_ledger or self.action_result_ledger
+                or self.continuation_source or self.pending_result_recovery):
+            return {}
+        return record
 
     def _restore_continuation(self):
         import copy
@@ -397,6 +495,10 @@ class WebAgentProtocolLoop:
     def _emit(self, event: str, **fields) -> None:
         if getattr(self, '_action_admission_probe', False):
             return
+        if event == "tool_completed":
+            PIT.record("15_runtime_tool_result", fields.get("result", ""), evidence_status="RUNTIME_OBSERVATION", extra={"action_id": fields.get("action_id"), "round": fields.get("round")})
+        elif event == "runtime_terminal_accepted":
+            PIT.record("16_terminal_receipt", fields, evidence_status="RUNTIME_OBSERVATION")
         if self.event_sink is not None:
             self.event_sink(event, **fields)
         if (self.continuation_store and self.progress_ledger and
@@ -542,6 +644,14 @@ class WebAgentProtocolLoop:
         # widen discovery to any parent or unrelated configured workspace.
         caps['discovery_paths'] = list(self.authorized_paths) or [str(self.workspace)]
         caps['target_path_confirmed'] = bool(self.authorized_paths)
+        spec = self._safe_protocol_spec_rejection()
+        if spec:
+            caps['objective_blockers'].append({
+                'action_id': spec['action_id'],
+                'reason': 'PREDICATE_SPEC_INVALID',
+                'executed': False,
+                'evidence_ref': 'PROTOCOL_SPEC_REJECTION',
+            })
         return caps
 
     def _write_continuation_context(self) -> str:
@@ -551,6 +661,47 @@ class WebAgentProtocolLoop:
             "budget": write_budget_contract(), "open_transactions": sessions,
             "rule": "Continue only remaining content; OPEN is not a completed file. Do not replay accepted chunks.",
         }, ensure_ascii=False, sort_keys=True) + "\n[/RUNTIME_WRITE_CONTINUATION]"
+
+    def _bound_cwd_command_contract(self, command: str = 'Start-Sleep -Seconds 4') -> dict:
+        """Runtime-owned, no-execution scope preview for path-free commands.
+
+        Explicit file fixtures remain under their own request authorization.
+        The already-bound execution workspace is not a second fixture grant.
+        """
+        from agent_core.tools import _path_independent_command_must_use_bound_workspace
+        if not _path_independent_command_must_use_bound_workspace(command):
+            return {}
+        requested = {
+            'tool': 'run_command', 'command': command,
+            'working_directory': str(self.workspace),
+        }
+        try:
+            preview = self.tools.preview_tool_scope(requested)
+        except (OSError, RuntimeError, ValueError) as exc:
+            preview = {'allowed': False, 'error': type(exc).__name__ + ':' + str(exc)}
+        return {
+            'schema': 'SMARTAGENT_BOUND_COMMAND_WORKSPACE_V1',
+            'command': command,
+            'bound_workspace': str(self.workspace),
+            'bound_workspace_admitted': bool(preview.get('allowed')),
+            'bound_workspace_error': str(preview.get('error', '') or ''),
+            'separate_original_file_scope': list(self.authorized_paths),
+            'scope_rule': (
+                'A literal bounded path-free wait or exact cwd-only query must run '
+                'in the existing bound_workspace; a request-mentioned fixture '
+                'is a file/data reference, not an implicit command cwd grant. '
+                'No command or fixture was accessed by this preview.'
+            ),
+            'not_an_action_or_completed_evidence': True,
+        }
+
+    def _bound_cwd_command_guidance(self, command: str = 'Start-Sleep -Seconds 4') -> str:
+        contract = self._bound_cwd_command_contract(command)
+        return (
+            '[RUNTIME_BOUND_COMMAND_WORKSPACE]\n'
+            + json.dumps(contract, ensure_ascii=False, separators=(',', ':'))
+            + '\n[/RUNTIME_BOUND_COMMAND_WORKSPACE]'
+        ) if contract else ''
 
     def _with_commit(self, prompt: str, expected: dict) -> str:
         trace = (
@@ -566,6 +717,7 @@ class WebAgentProtocolLoop:
             + str(prompt).rstrip()
             + "\n\n"
             + self._runtime_evidence_context()
+            + ('\n' + self._bound_cwd_command_guidance() if ('run_command' in str(getattr(self, 'task_request', '') or '').lower() and ( '等待' in str(getattr(self, 'task_request', '') or '') or 'sleep' in str(getattr(self, 'task_request', '') or '').lower() )) else '')
             + ('\n[REQUEST_CONTEXT_OBJECTS]\n'+json.dumps(self.request_context.catalog(),ensure_ascii=False)
                +'\n[/REQUEST_CONTEXT_OBJECTS]' if self.request_context else '')
             + "\n"
@@ -585,6 +737,8 @@ class WebAgentProtocolLoop:
     def _runtime_evidence_refs(self) -> set[str]:
         refs = {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}
         refs.update(str(action_id) for action_id in self.action_result_ledger)
+        if self._safe_protocol_spec_rejection():
+            refs.add('PROTOCOL_SPEC_REJECTION')
         return refs
 
     def _progress_repair_diagnostic(self, payload, error):
@@ -623,7 +777,9 @@ class WebAgentProtocolLoop:
         if len(all_refs) > 24:
             recent_ids = {str(item.get("action_id", "")) for item in evidence[-16:]}
             progress_cited = set(getattr(self.progress_ledger, "evidence_refs", []) or [])
-            filtered_refs = sorted({"REQUEST_ACCEPTED", "RUNTIME_STATUS"} | recent_ids | progress_cited)
+            filtered_refs = sorted({"REQUEST_ACCEPTED", "RUNTIME_STATUS"}
+                                   | ({"PROTOCOL_SPEC_REJECTION"} if self._safe_protocol_spec_rejection() else set())
+                                   | recent_ids | progress_cited)
         else:
             filtered_refs = sorted(all_refs)
         payload = {
@@ -634,6 +790,10 @@ class WebAgentProtocolLoop:
             "protocol_state": self.protocol_state,
             "action_evidence": evidence[-16:],
             "condition_evidence": list(self.condition_result_ledger.values())[-16:],
+            "protocol_admission_evidence": (
+                [self._safe_protocol_spec_rejection()]
+                if self._safe_protocol_spec_rejection() else []
+            ),
         }
         return (
             "[RUNTIME_EVIDENCE]\n"
@@ -1071,7 +1231,16 @@ class WebAgentProtocolLoop:
                 # A completed checker may return a negative result. That is a
                 # verification failure, not failure to execute the checker.
                 execution='SUCCEEDED'
-            if isinstance(observed, dict) and observed.get('verification_status') in {'PASS','FAIL','UNVERIFIED','SPEC_INVALID'}:
+            from agent_core.tool_result_contract import completed_unknown_fact_observation
+            completed_unknown_fact = (tool == 'observe_fact' and
+                completed_unknown_fact_observation(tool_outcome, action.get('action_id', '')))
+            admitted_verification = {'PASS','FAIL','UNVERIFIED','SPEC_INVALID'}
+            if completed_unknown_fact:
+                # A finished canonical probe can prove the observation is
+                # indeterminate, not that a file is absent. Store that UNKNOWN
+                # explicitly without admitting UNKNOWN claims from other tools.
+                admitted_verification.add('UNKNOWN')
+            if isinstance(observed, dict) and observed.get('verification_status') in admitted_verification:
                 verification = observed['verification_status']
                 expectation = observed.get('expectation_status', '')
             elif execution != 'SUCCEEDED':
@@ -1106,7 +1275,12 @@ class WebAgentProtocolLoop:
             "evidence_state": evidence_state,
             "terminal_eligible": terminal_eligible,
             'result_status': tool_outcome['status'] if tool_outcome else ('UNKNOWN' if tool == 'delete_path' else execution),
-            'result_reason': (tool_outcome or {}).get('reason', ''),
+            # Some scoped inspection tools still return the legacy textual
+            # rejection marker rather than a structured result envelope.
+            # Preserve that denial reason for the bounded semantic guard;
+            # this never changes authorization, executed or PASS/FAIL.
+            'result_reason': (tool_outcome or {}).get('reason', '')
+                or ('TOOL_SCOPE_REJECTED' if '[TOOL_SCOPE_REJECTED]' in text else ''),
             'executed': (tool_outcome or {}).get('executed', execution == 'SUCCEEDED'),
         }
 
@@ -1224,6 +1398,11 @@ class WebAgentProtocolLoop:
         statuses = [self._entry_verification_status(item) for item in entries]
         statuses = [item for item in statuses if item in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}]
         if not statuses:
+            # A referenced UNKNOWN observation is authoritative uncertainty.
+            # An unrelated earlier last_verification_status=PASS must never
+            # mask its lack of confirmable evidence.
+            if entries or refs:
+                return "UNKNOWN"
             return str(self.tools.last_verification_status or "UNKNOWN").upper()
         if "FAIL" in statuses:
             return "FAIL"
@@ -1492,13 +1671,27 @@ class WebAgentProtocolLoop:
             ledger_entry.get("verification_status", "UNKNOWN") or "UNKNOWN"
         ).upper()
         expectation_status = str(ledger_entry.get("expectation_status", "") or "").upper()
+        from agent_core.tool_result_contract import completed_unknown_fact_observation
+        completed_unknown_fact = (action.get('tool') == 'observe_fact'
+            and completed_unknown_fact_observation(producer, action_id)
+            and bool(condition_id) and action.get('predicate') is not None)
+        if completed_unknown_fact:
+            # Only Runtime-owned, actually attempted UNKNOWN observations are
+            # condition observations. A missing/rejected action is not one.
+            observed_status = "UNKNOWN"
+            expectation_status = "UNKNOWN"
         status = expectation_status if expectation_status in {"PASS", "FAIL", "SPEC_INVALID"} else observed_status
+        fact_data = (producer.get('data') or {}) if action.get('tool') == 'observe_fact' else {}
+        ledger_entry['observation_status'] = str(fact_data.get('observation_status', '') or '')
+        ledger_entry['comparison'] = str(fact_data.get('comparison', '') or '')
+        ledger_entry['execution_finality'] = str(fact_data.get('execution_finality', '') or '')
+        ledger_entry['expectation_status'] = expectation_status
         ledger_entry["condition_id"] = condition_id
         ledger_entry["verifies_action_id"] = verifies_action_id
         ledger_entry["effective_verification_status"] = status
         ledger_entry["effective_expectation_status"] = expectation_status
         ledger_entry.setdefault("verification_history", [])
-        if status in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"}:
+        if status in {"PASS", "FAIL", "UNVERIFIED", "SPEC_INVALID"} or completed_unknown_fact:
             verification_id = "VER-" + uuid.uuid4().hex[:12].upper()
             prior_id = str(target.get("effective_verification_id", "") or "") if target else ""
             record = {
@@ -1507,6 +1700,9 @@ class WebAgentProtocolLoop:
                 "status": status,
                 "observed_verification_status": observed_status,
                 "expectation_status": expectation_status,
+                "observation_status": ledger_entry["observation_status"],
+                "comparison": ledger_entry["comparison"],
+                "execution_finality": ledger_entry["execution_finality"],
                 "round": self.turn_id,
                 "condition_id": condition_id,
                 "supersedes_verification_id": prior_id,
@@ -1571,6 +1767,9 @@ class WebAgentProtocolLoop:
                 "verification_status": status,
                 "observed_verification_status": observed_status,
                 "expectation_status": expectation_status,
+                "observation_status": ledger_entry["observation_status"],
+                "comparison": ledger_entry["comparison"],
+                "execution_finality": ledger_entry["execution_finality"],
                 "effective_verification_status": status,
                 "execution_status": str(
                     ledger_entry.get("execution_status", "UNKNOWN") or "UNKNOWN"
@@ -1617,6 +1816,17 @@ class WebAgentProtocolLoop:
                     missing_condition='取得相同 write_id 的實際 commit 結果；收到 chunk 不代表目的檔案已保存',
                     required_action='commit_file_write',required_fields=['write_id'],supported_verify_actions=['commit_file_write'],
                     next_actions=[{'tool':'commit_file_write','write_id':write_id}])
+                break
+            from agent_core.tool_result_contract import completed_unknown_fact_observation
+            if completed_unknown_fact_observation(outcome, ref):
+                # This read has completed. An indeterminate fact is not an
+                # unfinished command, and MUST NOT demand a substitute tool.
+                requirement.update(reason_code='FACT_OBSERVATION_INDETERMINATE',
+                    blocking_action_id=ref, owner='runtime',
+                    missing_condition='已完成 observe_fact，但檔案存在性無法確認',
+                    required_action='', required_fields=[], supported_verify_actions=[],
+                    supported_verify_checks=[], next_actions=[],
+                    release_condition='NEW_CONFIRMABLE_FACT_OR_OBJECTIVE_INTERRUPTION')
                 break
             if status in {'QUEUED','RUNNING','PARTIAL','UNKNOWN'}:
                 requirement.update(reason_code=status+'_NOT_COMPLETE',blocking_action_id=ref,
@@ -1669,6 +1879,17 @@ class WebAgentProtocolLoop:
             }
             self.pending_verification_requirement = dict(requirement)
         detail = json.dumps(requirement, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if requirement.get('reason_code') == 'FACT_OBSERVATION_INDETERMINATE':
+            return {
+                "marker": "[WEBAGENT_VERIFICATION_REQUIRED]",
+                "reason": reason, "detail": detail,
+                "suggestion": (
+                    "observe_fact 已完成，但 Observation/Predicate 是 UNKNOWN，不能宣告 SUCCESS。"
+                    "若還有合法觀測方法，可提出不同的 Action；若原始任務禁止替代工具，"
+                    "可使用 decision=INTERRUPT、outcome=UNKNOWN、context_request.kind=BLOCKED，"
+                    "引用 blocking_action_id 和該 observe_fact evidence_ref，禁止盲目重送。"
+                ),
+            }
         return {
             "marker": "[WEBAGENT_VERIFICATION_REQUIRED]",
             "reason": reason,
@@ -1908,6 +2129,90 @@ class WebAgentProtocolLoop:
             sort_keys=True,
             separators=(",", ":"),
         )
+
+    def _accepted_terminal_receipt(self, *, runtime_state: str) -> dict:
+        """Create an auditable receipt only after a terminal turn is admitted.
+
+        The receipt attests admission, NOT that a failed/unknown predicate passed.
+        """
+        progress = self.progress_ledger
+        refs = [str(item) for item in list(progress.evidence_refs or [])]
+        # Audit the unredacted source IDs; the sanitized report may reuse
+        # harmless aliases. Never turn report aliases into admission evidence.
+        from agent_core.evidence_identity_audit import audit_terminal_references
+        identity_audit = audit_terminal_references(
+            refs, self.action_result_ledger, self.run_id, self.task_epoch,
+            protocol_spec_rejection=self._safe_protocol_spec_rejection(),
+        )
+        self._emit("terminal_evidence_identity_audit",
+            request_id=self.run_id, task_id=self.task_id, round=self.turn_id,
+            **identity_audit)
+        # A terminal admission must never override a SUSPECT reference audit.
+        # Rejection is not an Observation; refuse UNKNOWN/foreign evidence
+        # instead of issuing an ACCEPTED receipt that masks identity failure.
+        if identity_audit["identity_status"] != "SCOPED":
+            raise RuntimeError(
+                "terminal_reference_identity_not_scoped:"
+                + str(identity_audit["identity_reason"])
+            )
+        payload = {
+            "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
+            "admission_status": "ACCEPTED",
+            "request_id": self.run_id,
+            "task_id": self.task_id,
+            "task_epoch": self.task_epoch,
+            "round": self.turn_id,
+            "ack_id": self.accepted_ack_ids[-1] if self.accepted_ack_ids else "",
+            "decision": progress.decision,
+            "task_outcome": progress.outcome,
+            "runtime_state": runtime_state,
+            "matched_condition_id": progress.matched_condition_id,
+            "evidence_refs": refs,
+            "evidence_verdict": self._terminal_evidence_verdict(
+                refs, matched_condition=progress.matched_condition),
+            "verification_status": self._effective_verification_status(
+                refs, matched_condition=progress.matched_condition),
+        }
+        signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        payload["receipt_id"] = "TERM-" + hashlib.sha256(signed.encode('utf-8')).hexdigest()[:20].upper()
+        self.terminal_acceptance = payload
+        self._emit("runtime_terminal_accepted", **payload)
+        return payload
+
+    @staticmethod
+    def _read_only_unexecuted_repairs(repairs) -> bool:
+        """Only optional, unexecuted reads may be left behind on blocked terminal."""
+        from agent_core.action_dependencies import OBSERVATION_TOOLS
+        for item in repairs:
+            if not isinstance(item, dict) or item.get('executed') is True:
+                return False
+            action = item.get('action') if isinstance(item.get('action'), dict) else item
+            if str(action.get('tool','')) not in OBSERVATION_TOOLS:
+                return False
+        return True
+
+    def _failed_predeclared_fact(self, progress: dict) -> bool:
+        """Evidence-backed FAILED exception; cannot use an unrelated error."""
+        if (str(progress.get('decision','')).upper() != 'COMPLETE'
+                or str(progress.get('outcome','')).upper() != 'FAILED'):
+            return False
+        contract = dict(getattr(self.progress_ledger, 'completion_contract', {}) or {})
+        supplied = progress.get('completion_contract')
+        if isinstance(supplied, dict):
+            contract['success'] = list(contract.get('success') or []) + list(supplied.get('success') or [])
+        allowed = set(str(x) for x in contract.get('success') or [])
+        allowed.update(item['condition_id'] for item in completion_condition_choices(
+            contract, 'success'))
+        refs = [str(ref) for ref in list(progress.get('evidence_refs') or [])]
+        if not refs or self._terminal_evidence_verdict(refs) != 'FAIL':
+            return False
+        return any((entry.get('tool') == 'observe_fact'
+            and entry.get('evidence_status','ACTIVE') == 'ACTIVE'
+            and str(entry.get('request_id',self.run_id)) == self.run_id
+            and str(entry.get('task_epoch',self.task_epoch)) == self.task_epoch
+            and str(entry.get('expectation_status','')).upper() == 'FAIL'
+            and str(entry.get('condition_id','')) in allowed)
+            for ref in refs for entry in [self.action_result_ledger.get(ref) or {}])
 
     def _bind_terminal_result_evidence(
         self,
@@ -2178,6 +2483,15 @@ class WebAgentProtocolLoop:
             normalized = validate_model_progress(progress[0], self.progress_ledger)
         except TaskProgressError:
             return self._accept_v8_ack(calls, expected)
+        # Exclusive-action restrictions must run before a generic Progress.next_action
+        # mismatch, or the model receives misleading advice to repair an
+        # unauthorized filler tool instead of removing it.
+        from agent_core.strict_observation_guard import strict_observation_action_diagnostic
+        strict_diagnostic = strict_observation_action_diagnostic(
+            getattr(self, "task_request", ""), operational,
+        )
+        if strict_diagnostic:
+            return [], [strict_diagnostic]
         consistency = self._progress_action_consistency_diagnostic(normalized, operational)
         if consistency:
             return [], [consistency]
@@ -2537,7 +2851,9 @@ class WebAgentProtocolLoop:
         held = {str(item.get('action_id', '')): item for item in self.pending_progress_repair_actions
                 if str(item.get('action_id', '')) not in self.action_ledger}
         submitted = [item for item in actions if item.get('tool') != 'report_progress']
-        if held and str(progress_actions[0].get('decision', '')).upper() != 'INTERRUPT':
+        if (held and str(progress_actions[0].get('decision', '')).upper() != 'INTERRUPT'
+                and not (self._failed_predeclared_fact(progress_actions[0])
+                         and self._read_only_unexecuted_repairs(held.values()))):
             by_id = {str(item.get('action_id', '')): item for item in submitted}
             if set(by_id) != set(held) or any(semantic_action_signature(by_id[key]) != semantic_action_signature(value) for key, value in held.items()):
                 return [], [{'marker':'[WEBAGENT_ACTION_REPAIR_REJECTED]',
@@ -2587,6 +2903,12 @@ class WebAgentProtocolLoop:
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
         operational = [action for action in actions if action.get("tool") != "report_progress"]
+        from agent_core.strict_observation_guard import strict_observation_action_diagnostic
+        strict_diagnostic = strict_observation_action_diagnostic(
+            getattr(self, "task_request", ""), operational,
+        )
+        if strict_diagnostic:
+            return [], [strict_diagnostic]
         for action in operational:
             if str(action.get("tool", "") or "") != "query_project":
                 continue
@@ -2775,8 +3097,40 @@ class WebAgentProtocolLoop:
                     }]
                 cwd_scope = self.tools.preview_tool_scope(action)
                 if not cwd_scope.get('allowed',True):
-                    return [], [{'reason':'run_command_working_directory_rejected','detail':cwd_scope.get('error',''),
-                        'suggestion':'提供本 request 授權範圍內的絕對目錄 working_directory。'}]
+                    from agent_core.tools import _path_independent_command_must_use_bound_workspace
+                    command = str(action.get('command', '') or '')
+                    scope_error = str(cwd_scope.get('error', '') or '')
+                    eligible = (
+                        scope_error.startswith('path_independent_command_cwd_outside_bound_workspace:')
+                        and _path_independent_command_must_use_bound_workspace(command)
+                    )
+                    alternative = self._bound_cwd_command_contract(command) if eligible else {}
+                    if eligible and alternative.get('bound_workspace_admitted'):
+                        self._pending_bound_cwd_repair = {
+                            'action_id': str(action.get('action_id', '') or ''),
+                            'command': command,
+                            'attempted_cwd': str(action.get('working_directory', '') or ''),
+                            'bound_workspace': str(self.workspace),
+                            'reason': scope_error,
+                            'request_id': self.run_id,
+                        }
+                        suggestion = (
+                            'Runtime confirms this path-independent command is admitted at the '
+                            'already-bound working_directory=' + str(self.workspace)
+                            + '. Retry with the SAME command and explicitly this bound cwd '
+                            'in a new canonical action; this is not access to or rebinding '
+                            'of the historical file fixture. Do not execute at the rejected '
+                            'directory. Original file-target permissions remain unchanged. '
+                            'Pre-execution rejection is NOT_STARTED, not completed evidence.'
+                        )
+                    else:
+                        suggestion = '提供本 request 授權範圍內的絕對目錄 working_directory。'
+                    return [], [{'reason':'run_command_working_directory_rejected',
+                        'detail':scope_error, 'suggestion':suggestion}]
+                if (self._pending_bound_cwd_repair.get('request_id') == self.run_id
+                        and self._pending_bound_cwd_repair.get('command') == str(action.get('command', '') or '')
+                        and cwd_scope.get('resolved_paths') == [str(self.workspace)]):
+                    self._pending_bound_cwd_repair = {}
                 shell_detail = self._run_command_shell_mismatch_detail(action)
                 if shell_detail:
                     return [], [{
@@ -2838,7 +3192,9 @@ class WebAgentProtocolLoop:
             return [], [diagnostic]
         decision = normalized_progress["decision"]
         outcome = normalized_progress["outcome"]
-        if decision == 'COMPLETE' and getattr(self,'deferred_action_repairs',{}):
+        if (decision == 'COMPLETE' and getattr(self,'deferred_action_repairs',{})
+                and not (self._failed_predeclared_fact(normalized_progress)
+                    and self._read_only_unexecuted_repairs(self.deferred_action_repairs.values()))):
             return [], [{'marker':'[WEBAGENT_ACTION_REPAIR_REQUIRED]', 'reason':'unresolved_action_repairs',
                 'detail':json.dumps(list(self.deferred_action_repairs.values()),ensure_ascii=False),
                 'suggestion':'終態正規化不會解除未執行操作；先補齊 deferred action，不能用 FAILED/PARTIAL 繞過。'}]
@@ -2846,6 +3202,71 @@ class WebAgentProtocolLoop:
             from agent_core.context_acquisition import context_interrupt_allowed
             capabilities = self._context_capabilities()
             request = normalized_progress.get('context_request') or {}
+            spec = self._safe_protocol_spec_rejection()
+            if (spec and request.get('kind') == 'BLOCKED'
+                    and request.get('blocking_action_id') == spec['action_id']):
+                if 'PROTOCOL_SPEC_REJECTION' not in normalized_progress.get('evidence_refs', []):
+                    return [], [{
+                        'marker': '[WEBAGENT_CONTEXT_ACQUISITION_REQUIRED]',
+                        'reason': 'spec_invalid_protocol_evidence_ref_required',
+                        'suggestion': '引用本 Request 的 PROTOCOL_SPEC_REJECTION；'
+                                      '它只支持 INTERRUPT/UNKNOWN，不能支持 SUCCESS。',
+                    }]
+            objective_unknown = next((item for item in capabilities.get('objective_blockers', [])
+                if item.get('reason') == 'FACT_OBSERVATION_INDETERMINATE'
+                and item.get('action_id') == request.get('blocking_action_id')), None)
+            if request.get('kind') == 'BLOCKED' and objective_unknown:
+                # This exception is solely for the exact, completed read.
+                # Never use UNKNOWN fact to conceal unresolved side effects.
+                refs = set(normalized_progress.get('evidence_refs') or [])
+                from agent_core.action_loop_state import MUTATION_TOOLS, DELIVERY_TOOLS
+                from agent_core.tool_result_contract import decode_result
+                unsafe = []
+                for ref, entry in self.action_result_ledger.items():
+                    if entry.get('evidence_status', 'ACTIVE') != 'ACTIVE':
+                        continue
+                    if entry.get('tool') not in MUTATION_TOOLS | DELIVERY_TOOLS:
+                        continue
+                    typed = decode_result(str((self.action_ledger.get(ref) or {}).get('result', ''))) or {}
+                    if (str(entry.get('execution_status','UNKNOWN')).upper() not in {'SUCCEEDED','REJECTED'}
+                            or entry.get('terminal_eligible') is False
+                            or (typed.get('data') or {}).get('transaction_state') == 'OPEN'):
+                        unsafe.append(ref)
+                if (request.get('blocking_action_id') not in refs or unsafe
+                        or not self._read_only_unexecuted_repairs(
+                            getattr(self, 'deferred_action_repairs', {}).values())
+                        or not self._read_only_unexecuted_repairs(
+                            getattr(self, 'pending_progress_repair_actions', []))):
+                    return [], [{
+                        'marker':'[WEBAGENT_CONTEXT_ACQUISITION_REQUIRED]',
+                        'reason':'objective_unknown_interrupt_not_safe_or_unbound',
+                        'detail':json.dumps({'blocking_action_id':request.get('blocking_action_id'),
+                            'evidence_refs':sorted(refs), 'unresolved_side_effects':unsafe},
+                            ensure_ascii=False, separators=(',', ':')),
+                        'suggestion':'必須引用同一 request 的 UNKNOWN observe_fact，且不得有未決副作用。',
+                    }]
+            repair = dict(getattr(self, '_pending_bound_cwd_repair', {}) or {})
+            if (repair.get('request_id') == self.run_id
+                    and request.get('kind') == 'BLOCKED'
+                    and request.get('blocking_action_id') == repair.get('action_id')
+                    and self._bound_cwd_command_contract(str(repair.get('command', ''))).get('bound_workspace_admitted')):
+                # Do not turn an admission-only rejection into a fictitious ToolResult,
+                # or force unrelated fixture reads that cannot alter command scope.
+                return [], [{
+                    'marker': '[WEBAGENT_BOUND_COMMAND_WORKSPACE_RECOVERY]',
+                    'reason': 'path_independent_command_bound_workspace_already_available',
+                    'detail': json.dumps(repair, ensure_ascii=False, separators=(',', ':')),
+                    'suggestion': (
+                        'A no-file-access command may use the existing bound workspace '
+                        + str(self.workspace)
+                        + ' without changing the C fixture data-scope permission. '
+                        'Use CONTINUE and a fresh canonical run_command at exactly '
+                        'this bound workspace, or request explicit USER_INPUT if the '
+                        'original requirement genuinely requires C as the execution cwd. '
+                        'Do not repeat directory reads as they cannot authorize cwd, '
+                        'do not claim a rejected command was executed.'
+                    ),
+                }]
             if not context_interrupt_allowed(request, capabilities):
                 self._emit('context_acquisition_required', request_id=self.run_id,
                            state='NOT_REQUESTED', context_request=request)
@@ -2875,7 +3296,8 @@ class WebAgentProtocolLoop:
         } | success_condition_ids
         for action in operational:
             if (action.get("expected_failure") is None and action.get('expected_verification') is None
-                and action.get("expected_outcome") is None):
+                and action.get("expected_outcome") is None
+                and action.get("predicate") is None):
                 continue
             declared_condition = str(action.get("condition_id", "") or "").strip()
             success_criteria = str(action.get("success_criteria", "") or "").strip()
@@ -2894,13 +3316,33 @@ class WebAgentProtocolLoop:
                         "allowed_success_condition_ids": sorted(success_condition_ids),
                     }, ensure_ascii=False, separators=(",", ":")),
                     "suggestion": (
-                        "expected_failure／expected_verification／expected_outcome 必須在執行前綁定 completion_contract.success 中的精確條件文字，"
+                        "expected_failure／expected_verification／expected_outcome／predicate 必須在執行前綁定 completion_contract.success 中的精確條件文字，"
                         "或其 Runtime condition_id；不得用事後新增或不相干條件包裝一般失敗。"
                     ),
                 }]
-        action_consistency = None if getattr(self, '_single_action_probe', False) else self._progress_action_consistency_diagnostic(
-            normalized_progress, operational,
+        from agent_core.strict_observation_guard import strict_observation_only_request
+        strict_first_registration = (
+            strict_observation_only_request(getattr(self, "task_request", ""))
+            # Earlier REJECTED attempts are not successful condition
+            # registration.  Only the first actually admitted ACK may register
+            # these two success clauses without an operational Tool Action.
+            and not getattr(self, "accepted_ack_ids", [])
+            and not operational
+            and not self.action_ledger
+            and not self.action_result_ledger
+            and not self.condition_result_ledger
+            and not (getattr(self.progress_ledger, "completion_contract", {}) or {}).get("success")
+            and normalized_progress.get("decision") == "CONTINUE"
+            and normalized_progress.get("outcome") == "PENDING"
+            and float(normalized_progress["current_step"]) < float(normalized_progress["total_steps"])
+            and len((normalized_progress.get("completion_contract") or {}).get("success") or []) == 2
         )
+        # One initial Progress-only condition-registration exchange, not a
+        # reusable no-action loophole. Normal ACK, ledger and stagnation guards
+        # still apply, and no Runtime Tool Action is dispatched on this turn.
+        action_consistency = None if (
+            getattr(self, '_single_action_probe', False) or strict_first_registration
+        ) else self._progress_action_consistency_diagnostic(normalized_progress, operational)
         if action_consistency:
             return [], [action_consistency]
         if decision == "CONTINUE" and float(normalized_progress["current_step"]) >= float(normalized_progress["total_steps"]):
@@ -3020,7 +3462,10 @@ class WebAgentProtocolLoop:
             self.pending_verification_requirement = {}
         if (
             self.pending_verification_requirement
-            and verification_status in {"UNVERIFIED", "SPEC_INVALID"}
+            # UNKNOWN is not a completed verification: an outstanding
+            # structured verification requirement also blocks progress-only
+            # replies with no verifying Tool Action.
+            and verification_status not in {"PASS", "FAIL"}
             and decision == "CONTINUE"
             and not (operational and all(is_observation(item) for item in operational))
             and not (self._has_structured_verification_action(operational)
@@ -3066,11 +3511,28 @@ class WebAgentProtocolLoop:
                 "detail": f"model_outcome=FAILED;runtime_evidence={terminal_evidence_verdict}",
                 "suggestion": "FAILED 必須引用 execution_status=FAILED 或 verification_status=FAIL 的 action evidence；否則繼續取得客觀結果。",
             }]
+        if decision == 'COMPLETE' and outcome == 'FAILED':
+            # A wrong factual expectation is only an admissible FAILED reason
+            # if it was bound to a declared success condition before the probe.
+            cited = [(ref, self.action_result_ledger.get(ref) or {})
+                     for ref in evidence_refs]
+            if any(entry.get('tool') == 'observe_fact' for _, entry in cited):
+                supported = any(
+                    entry.get('tool') == 'observe_fact'
+                    and entry.get('evidence_status','ACTIVE') == 'ACTIVE'
+                    and str(entry.get('expectation_status','')).upper() == 'FAIL'
+                    and str(entry.get('condition_id','')) in allowed_expected_failure_conditions
+                    for _, entry in cited)
+                if not supported:
+                    return [], [{'marker':'[WEBAGENT_PROGRESS_REJECTED]',
+                        'reason':'failed_fact_unbound_to_declared_success_condition',
+                        'detail':'Referenced failed fact does not match a predeclared success condition.',
+                        'suggestion':'引用原始事前綁定的 observe_fact FAIL，不得用不相關工具失敗代替。'}]
         context = V8RequestContext(
             self.run_id,
-            self.task_id or self.run_id,
-            self.task_epoch or self.run_id,
-            self.intent_digest,
+            getattr(self, "task_id", "") or self.run_id,
+            getattr(self, "task_epoch", "") or self.run_id,
+            getattr(self, "intent_digest", ""),
         )
         admitted: dict[str, dict] = {}
         diagnostics: list[dict] = []
@@ -3269,6 +3731,15 @@ class WebAgentProtocolLoop:
             **evidence,
         }
         self.execution_state = evidence["execution_status"]
+        stagnation_guard = getattr(self, "_semantic_stagnation", None)
+        if stagnation_guard is not None:
+            stagnation = stagnation_guard.observe(action, evidence)
+            if stagnation["blocker_reason"]:
+                self._emit("semantic_stagnation_observed",
+                    request_id=self.run_id, round=self.turn_id, **stagnation)
+            if stagnation["status"] == "EXHAUSTED":
+                # Never reclassify an already attempted tool as UNKNOWN.
+                self._stagnation_pending = stagnation
         if self.continuation_store:
             self.continuation_store.snapshot(self)
         return str(result)
@@ -3308,6 +3779,7 @@ class WebAgentProtocolLoop:
         """Run one request and always release its browser ownership on failure."""
         self.continuation_source = None
         self.continuation_mode = ""
+        self._protocol_spec_rejection = {}
         registered = False
         try:
             if self.continuation_store:
@@ -3406,6 +3878,8 @@ class WebAgentProtocolLoop:
         from agent_core.request_ownership import digest_intent
         self.task_id = str(task_id or self.run_id)
         self.task_epoch = str(task_epoch or self.run_id)
+        PIT.begin(request, request_id=self.run_id, task_id=self.task_id)
+        PIT.record("07_loop_input", request)
         self.intent_digest = digest_intent(request)
         self.task_request = request
         self.protocol_state = "ACTIVE"
@@ -3420,6 +3894,7 @@ class WebAgentProtocolLoop:
         )
         self.turn_id = 0
         self.terminal_outcome = "UNKNOWN"
+        self.terminal_acceptance = {}
         self.execution_state = "NOT_STARTED"
         self.terminal_candidate = {}
         last_no_action_decision_signature: str | None = None
@@ -3449,7 +3924,14 @@ class WebAgentProtocolLoop:
         self.tools.last_verification_status = None
         self.pending_verification_requirement = {}
         from agent_core.blocker_recovery import BlockerRecovery
+        from agent_core.bounded_repair import BoundedRepairBudget
         self._blocker_recovery = BlockerRecovery()
+        # Each request owns a fresh repair and no-progress budget.
+        self._bounded_repair = BoundedRepairBudget()
+        from agent_core.bounded_repair import SemanticStagnationGuard
+        self._semantic_stagnation = SemanticStagnationGuard()
+        self._stagnation_pending = None
+        self._request_started_monotonic = time.monotonic()
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         authorized = resolve_authorized_paths(
@@ -3524,6 +4006,10 @@ class WebAgentProtocolLoop:
             + "\n[/WEBAGENT_USER_REQUEST]\n"
             + f"[WEBAGENT_WORKSPACE]\n{self.workspace}\n[/WEBAGENT_WORKSPACE]"
         )
+        if PIT.context():
+            start = prompt.index("[WEBAGENT_USER_REQUEST]\n") + len("[WEBAGENT_USER_REQUEST]\n")
+            end = prompt.rindex("\n[/WEBAGENT_USER_REQUEST]")
+            PIT.record("08_user_request_block", prompt[start:end])
         try:
             environment_snapshot = planner_environment_snapshot()
         except Exception as exc:
@@ -3534,6 +4020,10 @@ class WebAgentProtocolLoop:
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
         prompt += "\n" + render_initial_planner_toolkit(environment_snapshot)
+        from agent_core.prerequisite_resolution import render_prerequisites
+        prompt += "\n" + render_prerequisites(
+            request, self.authorized_paths, environment_snapshot
+        )
         if self.image_delivery_plan:
             prompt += (
                 "\n[WEBAGENT_IMAGE_DELIVERY_PLAN]\n"
@@ -3549,6 +4039,18 @@ class WebAgentProtocolLoop:
             )
         prompt += "\n" + lazy_context_sync_prompt(request, self.workspace)
         prompt += "\n" + format_prompt_context(self.progress_ledger)
+        from agent_core.strict_observation_guard import strict_observation_only_request
+        if strict_observation_only_request(self.task_request):
+            prompt += (
+                "\n[STRICT_OBSERVATION_ONLY_REQUEST]\n"
+                "原始 Request 僅准許事前註冊成功條件與指定次數的 canonical observe_fact，禁止 read_file、"
+                "inspect_project_ledger、其他補救／占位操作。第一輪先用 report_progress 登記兩個獨立"
+                " completion_contract.success，並以 turn_commit(action_count=1) 結束本輪；"
+                "本輪沒有 operational action，正式 condition_id 由 Runtime 接受 Progress 後發行。"
+                "下一輪取得兩個正式 condition_id，再依序各使用一次 observe_fact。"
+                "任何補救工具不得自行加入；若 Runtime 不允許條件登記，保留拒絕而非改動檔案。\n"
+                "[/STRICT_OBSERVATION_ONLY_REQUEST]"
+            )
         if self.continuation_source:
             from agent_core.task_continuation import continuation_prompt
             prompt += continuation_prompt(self.continuation_source, self.continuation_mode)
@@ -3561,6 +4063,28 @@ class WebAgentProtocolLoop:
 
         for _ in range(self.max_turns):
             self._check_cancelled()
+            from agent_core.bounded_repair import repair_deadline_expired
+            if repair_deadline_expired(
+                self._bounded_repair.rejected_turns,
+                time.monotonic() - self._request_started_monotonic,
+            ):
+                reason = "bounded_repair:request_elapsed_soft_deadline"
+                set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                                  root=self.progress_root)
+                self._emit("protocol_loop_paused", request_id=self.run_id,
+                    round=self.turn_id, reason=reason,
+                    rejected_turns=self._bounded_repair.rejected_turns)
+                # This checkpoint never kills an in-flight process or declares
+                # the task terminal, and cannot create a fake success receipt.
+                raise RuntimeError("Repair elapsed budget exhausted; task safely paused. " + reason)
+            if self._stagnation_pending:
+                reason = "semantic_stagnation:repeated_authorization_or_preflight_blocker"
+                set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                                  root=self.progress_root)
+                self._emit("protocol_loop_paused", request_id=self.run_id,
+                    round=self.turn_id, reason=reason,
+                    stagnation=self._stagnation_pending)
+                raise RuntimeError("Repeated prerequisite/scope denial; paused without replay. " + reason)
             expected = self._new_commit()
             expected["protocol_mode"] = ACTION_EXECUTION_MODE
             expected["narrative_recovery_context"] = self._narrative_recovery_context(prompt)
@@ -3584,6 +4108,7 @@ class WebAgentProtocolLoop:
             transport_started_at = time.time()
             try:
                 response = self.planner(self._with_commit(prompt, expected), expected, attachments)
+                PIT.record("11_planner_response", response, evidence_status="ACTION_VALUE", extra={"round": self.turn_id})
             except BaseException as exc:
                 self.protocol_state = "INTERRUPTED"
                 self._emit(
@@ -3634,6 +4159,7 @@ class WebAgentProtocolLoop:
                     )
                 last_rejected_exchange_signature = rejection_signature
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
+                self._admit_bounded_repair(diagnostics)
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
@@ -3651,6 +4177,7 @@ class WebAgentProtocolLoop:
             else:
                 actions, ack_diagnostics = self._accept_ack(calls, expected)
             if ack_diagnostics:
+                self._record_preexecution_predicate_rejection(calls, ack_diagnostics)
                 self.protocol_state = "REJECTED"
                 if self.pending_action_repair and not any(
                     item.get("repair_scope") == "ACTION_BATCH"
@@ -3689,6 +4216,7 @@ class WebAgentProtocolLoop:
                     round=self.turn_id,
                     diagnostics=ack_diagnostics,
                 )
+                self._admit_bounded_repair(ack_diagnostics)
                 from agent_core.task_progress import record_progress_repair
                 progress_diagnostic = next((row for row in ack_diagnostics if row.get('reason')=='invalid_progress_payload' and row.get('field_issues')), None)
                 if progress_diagnostic:
@@ -3723,6 +4251,21 @@ class WebAgentProtocolLoop:
                     )
                 last_rejected_exchange_signature = rejection_signature
                 repair_note = ""
+                spec = self._safe_protocol_spec_rejection()
+                if spec:
+                    repair_note += (
+                        "\\n[PROTOCOL_SPEC_REJECTION]\\n"
+                        + json.dumps(spec, ensure_ascii=False, separators=(',', ':'))
+                        + "\\n此非法 Predicate 已由 Runtime 在 Tool Envelope Admission 階段拒絕，"
+                          "未執行觀測，不能宣稱 Predicate PASS 或 FAIL。"
+                          "若原始使用者要求禁止修正 Predicate 或使用替代工具，"
+                          "可在下一輪選擇 report_progress decision=INTERRUPT、outcome=UNKNOWN，"
+                          "並用 context_request={kind:BLOCKED,detail:具體規格拒絕,"
+                          "blocking_action_id:上述 action_id}，"
+                          "evidence_refs 引用 PROTOCOL_SPEC_REJECTION；"
+                          "Runtime 會重新檢查同 Request/Epoch、無已執行操作及待決副作用。"
+                          "不要用 read_file 等替代操作繞過原始限制。"
+                    )
                 field_repairs = [repair for diagnostic in ack_diagnostics for repair in diagnostic.get('command_field_repairs',[])]
                 if field_repairs:
                     repair_note += '\n[COMMAND_FIELD_REPAIR]\n' + json.dumps(field_repairs,ensure_ascii=False) + '\n[/COMMAND_FIELD_REPAIR]\n只回覆同一 tool/action_id 與 required_fields；不必重寫 command、operation、working_directory。仍需 report_progress 與 turn_commit。'
@@ -3853,6 +4396,15 @@ class WebAgentProtocolLoop:
                         round_id=self.turn_id, root=self.progress_root) or self.progress_ledger
                 self.deferred_progress_repair = {}
                 self.last_deferred_read_signature = None
+            # Admission is request-scoped. Install only the accepted,
+            # Runtime-recorded progress clauses (never raw Planner action
+            # fields), after progress persistence but before any Tool Action.
+            bind_completion = getattr(self.tools, "bind_runtime_completion_contract", None)
+            if bind_completion is not None:
+                bind_completion(
+                    self.progress_ledger.completion_contract,
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                )
             if len(actions) == 1:
                 NarrativeDecisionBridge.mark_terminal_result(
                     action_id=str(progress_action.get("action_id", "")),
@@ -3883,12 +4435,15 @@ class WebAgentProtocolLoop:
                 content = self.progress_ledger.decision_reason
                 if len(actions) == 1 and actions[0].get("tool") == "final_response":
                     content = str(actions[0].get("content", "") or content)
+                self.terminal_outcome = self.progress_ledger.outcome
+                self.protocol_state = "INTERRUPTED"
                 set_runtime_state(
                     self.task_id,
                     "INTERRUPTED",
                     reason=self.progress_ledger.decision_reason,
                     root=self.progress_root,
                 )
+                terminal_receipt = self._accepted_terminal_receipt(runtime_state="INTERRUPTED")
                 from agent_core.request_ownership import release_active_request
                 release_active_request(self.run_id)
                 self._emit(
@@ -3899,7 +4454,8 @@ class WebAgentProtocolLoop:
                     matched_condition=self.progress_ledger.matched_condition,
                     evidence_refs=self.progress_ledger.evidence_refs,
                 )
-                raise RuntimeError("WebAgent 模型決策中斷：" + content)
+                raise RuntimeError("WebAgent 已接受中斷終態（模型決策中斷），receipt_id="
+                    + terminal_receipt["receipt_id"] + "：" + content)
 
             if len(actions) == 1 and actions[0].get("tool") == "final_response":
                 if float(self.progress_ledger.current_step) < float(self.progress_ledger.total_steps):
@@ -3924,6 +4480,7 @@ class WebAgentProtocolLoop:
                     state="COMPLETED",
                 )
                 set_runtime_state(self.task_id, "COMPLETED", root=self.progress_root)
+                self._accepted_terminal_receipt(runtime_state="COMPLETED")
                 from agent_core.request_ownership import release_active_request
                 release_active_request(self.run_id)
                 self._emit(

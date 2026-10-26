@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 """Inject one offline Telegram-shaped update into the live RemoteAgent path."""
+from agent_core import path_integrity_trace as PIT
 
 import argparse
 import json
@@ -185,6 +186,8 @@ def send_and_wait(
         print("請先重新啟動 launch_remote_agent.bat，看到 WAITING_SIGNAL 後再執行本腳本。", flush=True)
         return 2
 
+    PIT.begin(request, transport="LOCAL_TEST")
+    PIT.record("01_sender_input", request)
     run_token = "LOCAL-" + uuid.uuid4().hex[:12].upper()
     run_dir = remote_test_runs_root(root) / run_token
     outbox = run_dir / "events.jsonl"
@@ -269,6 +272,17 @@ def send_and_wait(
         with queue.store.process_lock():
             queue.store.load()
             current = queue.store.get(task.task_id)
+        if current is not None and current.state == "PAUSED":
+            delivery.retry_ready(transports={"LOCAL_TEST"})
+            _print_new_events(outbox, seen)
+            print("\n[RemoteAgent Test] task_state=PAUSED (nonterminal; no receipt)", flush=True)
+            if result_sink is not None:
+                result_sink.update({
+                    "observed_task_state": "PAUSED",
+                    "terminal_state": "",
+                    "pause_reason": str(current.error or ""),
+                })
+            return 3
         if current is not None and current.state in {"COMPLETED", "FAILED", "INTERRUPTED", "CANCELLED"}:
             delivery.retry_ready(transports={"LOCAL_TEST"})
             _print_new_events(outbox, seen)

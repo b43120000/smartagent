@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Shared deterministic tool execution and verification primitives."""
+from agent_core import path_integrity_trace as PIT
 import json
 import os
 import re
@@ -43,6 +44,61 @@ from .windows_security import restricted_executor_required
 
 _SCOPED_INSPECTION_TOOLS = {"list_directory", "inspect_directory", "inspect_project_scope", "inspect_project_working_set", "find_file"}
 _PROJECT_SCOPE_UNSUPPORTED_FIELDS = {"project_root", "path", "depth", "include_files"}
+
+def _task_scoped_chunked_write_manager(agent, security_context):
+    """Create a writer whose cleanup, recovery, and abort affect one task only.
+
+    Preserve legacy workspace/.agents/chunked_writes/{manifests,staging,ledger}.
+    Each new Runtime task receives a physical, disjoint state root instead.
+    """
+    import hashlib
+
+    task_id = str(getattr(agent, "current_task_id", "") or "").strip()
+    epoch = str(getattr(agent, "current_task_epoch", "") or "").strip()
+    request_id = str(getattr(agent, "current_request_id", "") or "").strip()
+    if not all((task_id, epoch, request_id)):
+        raise ChunkedWriteError("task_scoped_writer_identity_required")
+    if (str(getattr(security_context, "task_id", "")) != task_id or
+            str(getattr(security_context, "request_id", "")) != request_id):
+        raise ChunkedWriteError("task_scoped_writer_security_identity_mismatch")
+    workspace_source = getattr(agent, "workspace_root", None)
+    if not workspace_source:
+        raise ChunkedWriteError("task_scoped_writer_workspace_required")
+    workspace = Path(workspace_source).expanduser()
+    if not workspace.is_dir():
+        raise ChunkedWriteError("task_scoped_writer_workspace_invalid")
+    workspace = workspace.resolve()
+
+    identity = json.dumps([task_id, epoch, request_id], ensure_ascii=False,
+                          separators=(",", ":"))
+    scope = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    legacy = workspace / ".agents" / "chunked_writes"
+    state_root = legacy / "tasks" / scope
+    # Reject symlink/junction aliases on every descendant boundary.
+    for directory in (workspace / ".agents", legacy, legacy / "tasks", state_root):
+        junction = getattr(directory, "is_junction", None)
+        if directory.is_symlink() or (callable(junction) and junction()):
+            raise ChunkedWriteError("task_scoped_writer_state_root_link_rejected")
+        if directory.exists() and not directory.is_dir():
+            raise ChunkedWriteError("task_scoped_writer_state_root_not_directory")
+    if not state_root.resolve().is_relative_to(workspace):
+        raise ChunkedWriteError("task_scoped_writer_state_root_outside_workspace")
+
+    roots = list(security_context.write_roots)
+    key = (str(state_root), identity, tuple(str(root) for root in roots))
+    cached = getattr(agent, "_chunked_write_manager", None)
+    if cached is not None and getattr(agent, "_chunked_write_scope_key", None) == key:
+        if Path(cached.state_root).resolve() != state_root.resolve():
+            raise ChunkedWriteError("task_scoped_writer_cached_root_mismatch")
+        return cached
+
+    # Never use a cached workspace-wide manager from another request.
+    manager = ChunkedWriteManager(state_root, roots)
+    agent._chunked_write_manager = manager
+    agent._chunked_write_scope_key = key
+    return manager
+
+
 READ_FILE_TEXT_MAX_BYTES = 1_000_000
 
 
@@ -102,7 +158,7 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
     if tool == 'run_command':
         try:
             context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
-            cwd = resolve_command_working_directory(tool_call.get('working_directory'), context, agent)
+            cwd = resolve_command_working_directory(tool_call.get('working_directory'), context, agent, command=tool_call.get('command', ''))
             info.update(requested_paths=[tool_call.get('working_directory') or str(context.workspace_root)],
                 resolved_paths=[str(cwd)],scope_source='working_directory' if 'working_directory' in tool_call else 'workspace_default')
         except (PathSecurityError, ValueError, OSError) as exc:
@@ -195,6 +251,24 @@ def _queue_agent_attachments(agent, paths, trace_id: str):
             raise
         return agent.queue_attachments(paths)
 
+def _powershell_with_native_exit_propagation(command: str) -> str:
+    """Preserve the native subprocess exit status across PowerShell -Command.
+
+    Only the original command is authorized; this is a runtime-owned reporting
+    epilogue, not permission to run an additional requested operation.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return command
+    return (
+        "$global:LASTEXITCODE = $null; & {\n"
+        + command + "\n"
+        + "}; $smartagent_command_ok = $?; "
+        + "if ($null -ne $global:LASTEXITCODE) "
+        + "{ exit [int]$global:LASTEXITCODE }; "
+        + "if ($smartagent_command_ok) { exit 0 } else { exit 1 }"
+    )
+
+
 def _run_powershell_capture(
     command: str,
     timeout: int = 30,
@@ -213,7 +287,7 @@ def _run_powershell_capture(
             "error": f"SECURITY_COMMAND_REJECTED:{exc}", "security_rejected": True,
         }
     payload = run_bounded_process(
-        ["powershell", "-NoProfile", "-Command", command],
+        ["powershell", "-NoProfile", "-Command", _powershell_with_native_exit_propagation(command)],
         cwd=cwd,
         timeout=timeout,
         capture_root=capture_root,
@@ -1089,17 +1163,63 @@ def _project_query_workspace(tool_call: dict, agent) -> str:
             raise ValueError("query_project_root_conflict:target_outside_workspace")
     return str(target)
 
-def resolve_command_working_directory(value, security_context: SecurityContext | None, agent=None) -> Path:
+def _bounded_path_independent_wait(command: object) -> bool:
+    """Only literal short sleeps, no file path or other side-effect language.
+
+    This is not a grant to any request-mentioned historical fixture root.
+    Unrecognized commands retain the original explicit-request cwd constraint.
+    """
+    value = str(command or '').strip()
+    ps = re.fullmatch(r'(?i)Start-Sleep\s+-(Seconds|Milliseconds)\s+(\d{1,4}(?:\.\d{1,3})?)', value)
+    if ps:
+        duration = float(ps.group(2)) / (1000 if ps.group(1).lower() == 'milliseconds' else 1)
+        return 0 < duration <= 10
+    py = re.fullmatch(
+        r'''(?i)(?:python(?:\.exe)?|py(?:\.exe)?)\s+-c\s+(["'])\s*__import__\((["'])time\2\)\.sleep\((\d{1,2}(?:\.\d{1,3})?)\)\s*\1''',
+        value,
+    )
+    return bool(py and 0 < float(py.group(3)) <= 10)
+
+
+def _path_independent_command_must_use_bound_workspace(command: object) -> bool:
+    """Keep cwd-only inspections and sleeps at the binding's original root.
+
+    Explicit request paths are file-scope hints, not a grant to relocate
+    a command that has no intrinsic path target to a historical fixture.
+    Other commands retain their existing authorization semantics.
+    """
+    value = str(command or '').strip()
+    if _bounded_path_independent_wait(value):
+        return True
+    if value.casefold() in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}:
+        return True
+    # Out-of-budget/compound sleeps are NOT authorized at a foreign cwd either.
+    if re.match(r'(?i)^Start-Sleep(?:\s|$)', value):
+        return True
+    if re.match(r'(?i)^(?:python(?:\.exe)?|py(?:\.exe)?)\s+-c\s+', value) and re.search(r'(?i)(?:time\s*\.\s*sleep|__import__\s*\(\s*["\x27]time["\x27]\s*\)\s*\.\s*sleep)\s*\(', value):
+        return True
+    return False
+
+
+def resolve_command_working_directory(value, security_context: SecurityContext | None, agent=None, *, command: object = None) -> Path:
     context = security_context or SecurityContext.for_workspace(Path.cwd())
     if value is not None and (not isinstance(value, (str,Path)) or not str(value).strip()):
         raise PathSecurityError('command_working_directory_invalid')
     cwd = context.require_write(value or context.workspace_root, require_absolute=True, forbid_glob=True)
     if not cwd.is_dir():
         raise PathSecurityError('command_working_directory_not_directory:' + str(cwd))
+    is_bound_command = _path_independent_command_must_use_bound_workspace(command)
+    if is_bound_command and cwd != context.workspace_root:
+        raise PathSecurityError('path_independent_command_cwd_outside_bound_workspace:' + str(cwd))
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
     if requested and not any(is_within(cwd, root) for root in requested):
-        raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
+        # An unrelated original fixture path is not itself a command target.
+        # Exception is ONLY a literal bounded path-free wait in the already
+        # authorized default workspace; do not authorize the fixture or
+        # arbitrary commands/working-directory changes.
+        if cwd != context.workspace_root or not (_bounded_path_independent_wait(command) or str(command or '').strip().casefold() in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}):
+            raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
     return cwd
 
 
@@ -1174,6 +1294,73 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
     p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
     tool = str(tool_call.get('tool', ''))
+    if tool == "observe_fact":
+        # This read-only tool observes a filesystem fact inside the existing
+        # authorization boundary. It never guesses absence from access errors.
+        PIT.record("14_observe_fact_action", tool_call, evidence_status="ACTION_VALUE", extra={"action_id": tool_call.get("action_id")})
+        from .evidence_foundation import (
+            EvidenceSpecError, validate_observe_fact_action,
+            probe_file_exists, evaluate_predicate,
+        )
+        from .tool_result_contract import encode_result, attach_runtime_result
+        try:
+            predicate = validate_observe_fact_action(tool_call)
+        except EvidenceSpecError as exc:
+            return encode_result('REJECTED', 'EVIDENCE_SPEC_INVALID',
+                tool=tool, executed=False, detail=str(exc),
+                data={'verification_status':'SPEC_INVALID','terminal_eligible':False})
+        if predicate is not None:
+            binding = getattr(agent, "_runtime_completion_binding", None)
+            condition_id = str(tool_call.get("condition_id", "") or "").strip()
+            if (not isinstance(binding, dict)
+                    or not binding.get("request_id")
+                    or binding.get("request_id") != getattr(agent, "current_request_id", "")
+                    or binding.get("task_epoch") != getattr(agent, "current_task_epoch", "")
+                    or condition_id not in binding.get("success_conditions", ())):
+                # A valid filesystem predicate is NOT a valid task condition
+                # unless Runtime already registered it in this request/epoch.
+                # Do not attempt stat or emit FACT_PREDICATE_PASSED.
+                return encode_result('REJECTED', 'CONDITION_NOT_REGISTERED',
+                    tool=tool, executed=False, detail='condition_id_not_bound_to_request_success_contract',
+                    data={'verification_status':'SPEC_INVALID','terminal_eligible':False})
+        try:
+            security = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+            path = security.require_read(tool_call["path"], require_absolute=True,
+                                         allow_root=False, forbid_glob=True)
+        except (PathSecurityError, ValueError, PermissionError, OSError) as exc:
+            return encode_result('REJECTED', 'EVIDENCE_SCOPE_REJECTED',
+                tool=tool, executed=False, detail=str(exc),
+                data={'verification_status':'UNVERIFIED','terminal_eligible':False})
+        fact = probe_file_exists(path, raw_ref=str(tool_call.get('action_id', '')))
+        confirmed = fact['observation_status'] == 'CONFIRMED'
+        verdict = (evaluate_predicate(predicate, fact) if predicate is not None
+                   else {'verification_status':'UNVERIFIED', 'comparison':'NOT_REQUESTED'})
+        verification = verdict['verification_status']
+        body = {'schema':'SMARTAGENT_FACT_OBSERVATION_RESULT_V1',
+                'status':'READY' if confirmed else 'INCOMPLETE',
+                'raw_evidence': {'source':'filesystem.stat',
+                                 'result':'FOUND' if fact.get('value') is True else
+                                          'NOT_FOUND' if fact.get('value') is False else 'UNKNOWN'},
+                'observation':fact, 'predicate':predicate, 'evaluation':verdict}
+        executed = True  # The authorized, bounded stat probe was attempted.
+        data = {'observations':[fact], 'execution_finality':'COMPLETED',
+                'verification_status':verification,
+                'expectation_status':verification if predicate is not None else '',
+                'comparison':verdict['comparison'],
+                'terminal_eligible':confirmed and verification not in {'FAIL','UNKNOWN','SPEC_INVALID'},
+                'observation_status':fact['observation_status']}
+        status = 'SUCCEEDED' if confirmed else 'UNKNOWN'
+        reason = ('FACT_OBSERVED' if confirmed and predicate is None else
+                  'FACT_PREDICATE_PASSED' if verification=='PASS' else
+                  'FACT_PREDICATE_FAILED' if verification=='FAIL' else
+                  'FACT_OBSERVATION_UNKNOWN')
+        return attach_runtime_result(
+            json.dumps(body, ensure_ascii=False, separators=(',', ':')),
+            status, reason, tool=tool, executed=executed, data=data,
+            requested_path=tool_call['path'], resolved_path=str(path),
+            action_id=tool_call.get('action_id', ''),
+            request_id=getattr(agent, 'current_request_id', '') if agent else '',
+            task_id=getattr(agent, 'current_task_id', '') if agent else '')
     # Validate negative assertions before any query, including direct calls
     # that bypass the WebAgent envelope validator. A malformed expectation
     # must never execute and cannot be retroactively attached to a result.
@@ -1285,6 +1472,17 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 data={'verification_status':'UNVERIFIED','terminal_eligible':False,'machine_actions_executed':False}
             elif text.startswith(('[執行引擎失敗]','[LOCAL_AI_EVIDENCE_FAIL]')):
                 status,reason,executed='FAILED','EXECUTOR_RESPONSE_FAILED',True
+    # Populate normalized observations from trusted producer receipts. These
+    # enrich Planner evidence but never change existing query/command outcomes.
+    if tool in {'query_project', 'run_command'}:
+        from .evidence_foundation import adapt_project_query, adapt_command_outcome
+        raw_ref = str(tool_call.get('action_id', '') or '')
+        if tool == 'query_project':
+            facts = adapt_project_query(business_payload(result), raw_ref=raw_ref)
+        else:
+            facts = adapt_command_outcome({'tool':tool, 'data':data}, raw_ref=raw_ref)
+        if facts:
+            data = {**data, 'observations': facts}
     # The final Runtime trailer is authoritative even if transcript text contains
     # lookalike status markers. JSON results keep their old business fields.
     attached = attach_runtime_result(result, status, reason, tool=tool, executed=executed, data=data,
@@ -1321,7 +1519,7 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
     if tool == "run_command":
         workspace = security_context.workspace_root
         try:
-            cwd = resolve_command_working_directory(tool_call.get('working_directory'), security_context, agent)
+            cwd = resolve_command_working_directory(tool_call.get('working_directory'), security_context, agent, command=tool_call.get('command', ''))
             approval_manifest = _execution_approval_manifest(tool_call, agent, security_context, cwd)
         except PathSecurityError as exc:
             from .tool_result_contract import encode_result
@@ -1448,12 +1646,15 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
                 "status": "FAILED", "execution_status": "FAILED",
                 "error_code": "agent_instance_missing", "data": {},
             })
-        manager = getattr(agent, "_chunked_write_manager", None)
-        if manager is None:
-            workspace = Path(getattr(agent, "workspace_root", None) or Path.cwd()).resolve()
-            roots = list(security_context.write_roots)
-            manager = ChunkedWriteManager(workspace / ".agents" / "chunked_writes", roots)
-            agent._chunked_write_manager = manager
+        # Active-task initialization must not inspect or mutate a foreign
+        # workspace-wide writer store, even during automatic recovery.
+        try:
+            manager = _task_scoped_chunked_write_manager(agent, security_context)
+        except ChunkedWriteError as exc:
+            return '[CHUNKED_WRITE_FAILED] ' + json.dumps({
+                "status": "REJECTED", "execution_status": "REJECTED",
+                "error_code": str(exc), "data": {},
+            }, ensure_ascii=False, sort_keys=True)
         try:
             if tool == "begin_file_write":
                 result = manager.begin(

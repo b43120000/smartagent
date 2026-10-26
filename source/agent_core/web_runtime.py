@@ -18,6 +18,7 @@ agent_core/web_runtime.py
   print(reply)
   scraper.close()
 """
+from agent_core import path_integrity_trace as PIT
 
 import time
 import uuid
@@ -1372,7 +1373,9 @@ class WebLLMScraper:
 
     def _composer_matches_prompt(self, prompt: str) -> bool:
         """Require full content equality while ignoring only rich-link DOM boundary spaces."""
-        return bool(self._web_ui_adapter().validate_composer(prompt).matched)
+        validation = self._web_ui_adapter().validate_composer(prompt)
+        self._last_composer_validation = validation
+        return bool(validation.matched)
 
     def _composer_verification_passes(self, prompt: str) -> bool:
         """Apply the explicit unsafe override only at post-write send gates."""
@@ -1382,7 +1385,20 @@ class WebLLMScraper:
                 f"prompt_len={len(prompt)}",
             )
             return True
-        return self._composer_matches_prompt(prompt)
+        self._last_composer_validation = None
+        matched = self._composer_matches_prompt(prompt)
+        verification = getattr(self, "_last_composer_validation", None)
+        if verification is not None:
+            # Only fingerprints and the Adapter match view enter the debug log.
+            self._log_stage("composer_strict_validation", json.dumps({
+                "matched": bool(verification.matched),
+                "matched_view": str(verification.matched_view),
+                "expected_length": int(verification.expected_length),
+                "observed_length": int(verification.observed_length),
+                "expected_sha256": str(verification.expected_sha256),
+                "observed_sha256": str(verification.observed_sha256),
+            }, ensure_ascii=False))
+        return matched
 
     @staticmethod
     def _composer_diff_fragment(value: str, *, limit: int = 160) -> dict:
@@ -1513,7 +1529,7 @@ class WebLLMScraper:
         from .paths import runtime_root
         self._composer_io_unconfirmed = True
         self._composer_operation_url = self._page.url
-        timeout_sec = max(30.0, (len(prompt) / 4096.0) * 3.5 + 10.0)
+        timeout_sec = max(30.0, (len(prompt) / 4096.0) * 3.5 + 10.0) * 1.5
         observation_timeout_sec = max(8.0, (len(prompt) / 4096.0) * 1.5 + 4.0)
         self._log_stage("composer_bounded_begin", f"prompt_len={len(prompt)} timeout_sec={timeout_sec:.1f}")
         try:
@@ -4818,7 +4834,20 @@ class WebLLMScraper:
 
     def _web_file_planner_prompt(self, prompt: str) -> str:
         from .web_ui.file_config import render_web_file_capabilities
-        return prompt + render_web_file_capabilities(self.web_file_capabilities())
+        capabilities = render_web_file_capabilities(self.web_file_capabilities())
+        # Put the capability note BEFORE a handshake's final output directive.
+        # Appending it after readiness caused a competing trailing instruction.
+        handshake_markers = (
+            "[AGENT_PROTOCOL_BOOTSTRAP]\n",
+            "[AGENT_SESSION_ATTACH]\n",
+            "[AGENT_PROTOCOL_READINESS_REPAIR]\n",
+            "[AGENT_PROTOCOL_IDENTITY_CHALLENGE]\n",
+        )
+        anchor = "\nDo not execute a tool and do not answer the end user in this handshake."
+        if prompt.startswith(handshake_markers) and anchor in prompt:
+            before, after = prompt.split(anchor, 1)
+            return before + capabilities + anchor + after
+        return prompt + capabilities
 
     def _require_web_file_transfer(self, direction: str) -> None:
         capabilities = self.web_file_capabilities()
@@ -5040,6 +5069,7 @@ class WebLLMScraper:
             stage = "composer"
             self._set_request_state("PREPARING_COMPOSER")
             composer_claimed = True
+            PIT.record("09_composer_input", prompt)
             mutated = self._write_prompt_to_composer(prompt)
             # Even if the exact prompt was already present from a prior partial
             # attempt, this call now owns that draft and must not blind-retry it.

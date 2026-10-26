@@ -476,11 +476,42 @@ def unresolved_continuation_result(record):
     return execution in {'UNKNOWN','PARTIAL'} and record.get('pending_resolution') != 'SCOPED_VERIFICATION_OBTAINED'
 
 
-def render_task_reply(*, original_request, base, conclusion, task_id, request_id, state, source_task_id='', ack_id='', outcome=''):
+def format_terminal_acceptance(terminal_acceptance, *, task_id, request_id):
+    """Render only an already admitted, identity-matching Runtime receipt.
+
+    This is presentation, not terminal authorization. Transport adapters must
+    never synthesize an ACCEPTED receipt from Planner final_response text.
+    """
+    if not isinstance(terminal_acceptance, dict):
+        return ''
+    receipt = terminal_acceptance
+    if (receipt.get('schema') != 'SMARTAGENT_TERMINAL_ACCEPTANCE_V1'
+            or receipt.get('admission_status') != 'ACCEPTED'
+            or receipt.get('task_id') != task_id
+            or receipt.get('request_id') != request_id
+            or not re.fullmatch(r'TERM-[0-9A-F]{20}', str(receipt.get('receipt_id', '')))):
+        return ''
+    decision = str(receipt.get('decision', '') or '').upper()
+    terminal_outcome = str(receipt.get('task_outcome', '') or '').upper()
+    if not ((decision == 'COMPLETE' and terminal_outcome in {'SUCCESS', 'FAILED', 'PARTIAL'})
+            or (decision == 'INTERRUPT' and terminal_outcome in {'FAILED', 'UNKNOWN'})):
+        return ''
+    verification = str(receipt.get('verification_status', '') or '').upper()
+    if verification not in {'PASS', 'FAIL', 'UNKNOWN', 'UNVERIFIED', 'SPEC_INVALID'}:
+        verification = 'UNVERIFIED'
+    return ('\nRuntime 終態接受回執：ACCEPTED'
+            + f'\nRuntime Decision / Outcome：{decision} / {terminal_outcome}'
+            + f'\nRuntime Verification：{verification}'
+            + f'\nReceipt ID：{receipt["receipt_id"]}'
+            + f'\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}')
+
+
+def render_task_reply(*, original_request, base, conclusion, task_id, request_id, state, source_task_id='', ack_id='', outcome='', terminal_acceptance=None):
     return (f'使用者原始需求：\n{original_request}\n\nBase：\n{base or "（尚無已接受的評估）"}'
             f'\n\n結果／中斷原因：\n{conclusion}\n\n狀態：{state}'
             + (f'\n驗收結果：{outcome}' if outcome else '')
             + f'\n任務結果：{terminal_heading(state, outcome)}'
+            + format_terminal_acceptance(terminal_acceptance, task_id=task_id, request_id=request_id)
             + f'\ntask_id: {task_id}\nrequest_id: {request_id}'
             + (f'\nack_id: {ack_id}' if ack_id else '')
             + (f'\nsource_task_id: {source_task_id}' if source_task_id else '')

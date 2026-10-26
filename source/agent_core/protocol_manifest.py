@@ -21,6 +21,11 @@ PROTOCOL_VERSION = 9
 # Keep this list small and explicit: these files define the wire/tool and
 # project-sync behavior that must be identical in every process/package.
 CORE_FILES = (
+    'source/agent_core/path_integrity_trace.py',
+    'source/agent_core/source_attestation.py',
+    'source/agent_core/agent_gateway.py',
+    'source/RemoteAgent/remote_worker_launcher.py',
+    'config/debug_config.defaults.json',
     'install_smart_agent/git_release.ps1',
     'install_smart_agent/build_portable_git.py',
     'install_smart_agent/ensure_environment.ps1',
@@ -36,7 +41,6 @@ CORE_FILES = (
     'source/agent_core/web_ui/file_config.py',
     'source/agent_core/web_ui/attachment_probe.py',
     'source/agent_core/session_protocol.py',
-    'source/agent_core/conversation_registry.py',
     'source/WebAgent/session.py',
     'install_smart_agent/launchers/adapterUI.bat',
     'install_smart_agent/launchers/writeSendBox.bat',
@@ -93,6 +97,7 @@ CORE_FILES = (
     'source/agent_core/tool_result_contract.py',
     'source/agent_core/tool_result_policy.py',
     'source/agent_core/query_expected_outcome.py',
+    'source/agent_core/evidence_foundation.py',
     'source/agent_core/result_exchange.py',
     'source/agent_core/session_summary.py',
     'source/agent_core/progress_recovery.py',
@@ -155,6 +160,7 @@ CORE_FILES = (
     'source/agent_core/task_progress.py',
     'source/agent_core/action_loop_state.py',
     'source/agent_core/action_dependencies.py',
+    'source/agent_core/strict_observation_guard.py',
     'source/agent_core/request_context.py',
     'source/agent_core/typed_field_values.py',
     'source/agent_core/plan_ledger.py',

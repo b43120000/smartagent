@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 OBSERVATION_TOOLS = frozenset({
-    'read_file', 'list_directory', 'find_file', 'inspect_directory',
+    'read_file', 'list_directory', 'find_file', 'inspect_directory', 'observe_fact',
     'query_project', 'inspect_project_scope', 'inspect_project_working_set',
     'inspect_semantic_map', 'inspect_project_ledger', 'query_project_history',
     'compare_project_snapshot', 'extract_project_dependencies',

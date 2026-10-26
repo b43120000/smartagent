@@ -7,6 +7,7 @@ The Telegram receiver and durable queue remain transport owners.  This worker
 only owns one request-scoped WebGPT protocol loop and writes the terminal result
 back to the transport-neutral RemoteEvent outbox.
 """
+from agent_core import path_integrity_trace as PIT
 
 import argparse
 import os
@@ -175,6 +176,14 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     queue = RemoteTaskQueue(TaskStateStore(remote_tasks_path(root)))
     events = RemoteEventStore(remote_events_path(root))
     task = queue.adopt_dispatched(task_id, token, worker_pid=os.getpid())
+    PIT.begin(task.request, request_id=task.request_id, task_id=task.task_id, transport=str((task.metadata or {}).get("transport", "")))
+    if PIT.is_it10_request(task.request):
+        runtime_log.write("STATUS", component="telegram_webagent_worker",
+                          stage="it10_trace_gate", task_id=task.task_id,
+                          request_id=task.request_id,
+                          gate=PIT.diagnostic_status(task.request),
+                          context_active=bool(PIT.context()), pid=os.getpid())
+    PIT.record("06_worker_input", task.request)
     from agent_core.task_continuation import TaskContinuationStore, task_owner, render_task_reply
     continuation_store = TaskContinuationStore(root)
     continuation_store.register_task(task)
@@ -492,6 +501,61 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     trusted_authorized_paths = extract_authorized_paths(
                         str(plan_record.get("original_request", "") or "")
                     )
+            # For strictly observation-only requests, the changed guard and
+            # protocol loop MUST be attested before the first Planner/Tool turn.
+            # The source hash alone cannot establish live Python code identity.
+            from agent_core.strict_observation_guard import strict_observation_only_request
+            strict_source_gate = strict_observation_only_request(task.request)
+            try:
+                from agent_core.source_attestation import capture
+                verified = require_protocol_manifest(install_root())
+                if strict_source_gate and (
+                    verified.get("hash_verification") != "PASS"
+                    or verified.get("hash_mismatches")
+                ):
+                    raise RuntimeError("strict_observation_manifest_not_verified")
+                attestation = capture(role="telegram_webagent_worker", manifest_verified=
+                                      verified.get("hash_verification") == "PASS")
+                # Require the Worker process's own actual loaded code proof,
+                # not Git HEAD or an independently staged import.
+                from agent_core.source_attestation import require_writer_loaded_source_attestation
+                require_writer_loaded_source_attestation(attestation)
+                if strict_source_gate:
+                    required = {
+                        "WebAgent.protocol_loop": (
+                            "source/WebAgent/protocol_loop.py",
+                            ("WebAgentProtocolLoop.run", "WebAgentProtocolLoop._accept_v8_ack"),
+                        ),
+                        "agent_core.strict_observation_guard": (
+                            "source/agent_core/strict_observation_guard.py",
+                            ("strict_observation_only_request", "forbidden_strict_actions",
+                             "strict_observation_action_diagnostic"),
+                        ),
+                    }
+                    for module_name, (source_path, names) in required.items():
+                        record = attestation.get("modules", {}).get(module_name, {})
+                        matching = record.get("live_matches_recompiled_disk") or {}
+                        if (
+                            record.get("loaded") is not True
+                            or record.get("source_path") != source_path
+                            or not record.get("disk_sha256_at_capture")
+                            or not all(matching.get(name) is True for name in names)
+                        ):
+                            raise RuntimeError(
+                                "strict_observation_loaded_source_attestation_failed:" + module_name
+                            )
+                runtime_log.write("STATUS", component="telegram_webagent_worker",
+                                  stage="source_load_attestation",
+                                  task_id=task.task_id, request_id=task.request_id,
+                                  **attestation)
+            except Exception as exc:
+                runtime_log.write("STATUS", component="telegram_webagent_worker",
+                                  stage="source_load_attestation_unavailable",
+                                  task_id=task.task_id, request_id=task.request_id,
+                                  error_type=type(exc).__name__)
+                # Attestation must fail closed for every task: otherwise a
+                # source mismatch could reach chunked write Tool execution.
+                raise
             final_content = loop.run(
                 task.request,
                 request_id=task.request_id,
@@ -561,10 +625,12 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         )
         terminal_payload["plan_id"] = plan_id
         terminal_payload['task_outcome'] = loop.terminal_outcome
+        terminal_payload['terminal_acceptance'] = dict(getattr(loop, 'terminal_acceptance', {}) or {})
         terminal_payload['summary'] = render_task_reply(
             original_request=loop.task_request, base=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
             conclusion=terminal_payload['summary'], task_id=task.task_id, request_id=task.request_id,
             state='COMPLETED', outcome=loop.terminal_outcome,
+            terminal_acceptance=loop.terminal_acceptance,
             source_task_id=(loop.continuation_source or {}).get('task_id', ''))
         final_content = terminal_payload["summary"]
         if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
@@ -583,10 +649,12 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "task_epoch": task.task_epoch,
                 "intent_digest": loop.intent_digest,
                 "action_result_ledger": dict(loop.action_result_ledger),
+                "condition_result_ledger": dict(loop.condition_result_ledger),
                 "uploaded_attachments": list(loop.sent_attachment_paths),
                 "outbound_artifacts": terminal_payload["artifacts"],
                 "artifact_rejections": terminal_payload["artifact_rejections"],
                 "task_outcome": loop.terminal_outcome,
+                "terminal_acceptance": dict(getattr(loop, 'terminal_acceptance', {}) or {}),
                 "verification_status": loop.tools.last_verification_status,
                 "execution_state": loop.execution_state,
                 "protocol_state": loop.protocol_state,
@@ -614,8 +682,17 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         print(f"[RemoteAgent] 任務完成，等待 Telegram 回傳: {task.request_id}", flush=True)
         return 0
     except BaseException as exc:
+        # A Runtime PAUSED checkpoint is not a terminal failed task.
+        checkpoint_progress = read_progress(task.task_id, root=root)
+        has_pause_checkpoint = bool(
+            checkpoint_progress is not None
+            and checkpoint_progress.runtime_state == "PAUSED"
+        )
         try:
-            continuation_store.finish(task.task_id, 'INTERRUPTED', f'{type(exc).__name__}: {exc}')
+            continuation_store.finish(
+                task.task_id, 'PAUSED' if has_pause_checkpoint else 'INTERRUPTED',
+                f'{type(exc).__name__}: {exc}'
+            )
         except Exception as persistence_error:
             runtime_log.write('ERROR', component='telegram_webagent_worker', stage='CONTINUATION_FINISH_FAILED',
                 task_id=task.task_id, error=str(persistence_error))
@@ -653,22 +730,63 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         loop_protocol = getattr(loop, "protocol_state", "UNKNOWN") if "loop" in locals() else "UNKNOWN"
         loop_outcome = getattr(loop, "terminal_outcome", "UNKNOWN") if "loop" in locals() else "UNKNOWN"
         loop_candidate = dict(getattr(loop, "terminal_candidate", {}) or {}) if "loop" in locals() else {}
+        acceptance = dict(getattr(loop, 'terminal_acceptance', {}) or {}) if "loop" in locals() else {}
         failure_payload = {
             "error": f"{type(exc).__name__}: {exc}",
             "execution_state": loop_execution,
             "protocol_state": loop_protocol,
             "task_outcome": loop_outcome,
             "terminal_candidate": loop_candidate,
+            "terminal_acceptance": acceptance,
         }
         protocol_only_interruption = (
             loop_protocol == "INTERRUPTED"
-            and loop_execution == "SUCCEEDED"
+            and (loop_execution == "SUCCEEDED"
+                 or (acceptance.get('schema') == 'SMARTAGENT_TERMINAL_ACCEPTANCE_V1'
+                     and acceptance.get('admission_status') == 'ACCEPTED'
+                     and acceptance.get('decision') == 'INTERRUPT'
+                     and acceptance.get('runtime_state') == 'INTERRUPTED'))
         )
+        # The Planner produced its final prose before Runtime accepted the
+        # interruption; append the accepted receipt from Runtime rather than
+        # interpreting the model's earlier UNVERIFIED claim as authoritative.
+        conclusion = failure_payload['error']
+        if protocol_only_interruption and acceptance.get('admission_status') == 'ACCEPTED':
+            expected_prefix = ('WebAgent 已接受中斷終態，receipt_id='
+                               + str(acceptance.get('receipt_id', '')) + '：')
+            if str(exc).startswith(expected_prefix):
+                conclusion = str(exc)[len(expected_prefix):]
         failure_payload['summary'] = render_task_reply(
             original_request=getattr(locals().get('loop'), 'task_request', task.request),
             base=str(getattr(progress, 'base_evaluation', '') or ''),
-            conclusion=failure_payload['error'], task_id=task.task_id, request_id=task.request_id,
-            state='INTERRUPTED' if protocol_only_interruption else 'FAILED')
+            conclusion=conclusion, task_id=task.task_id, request_id=task.request_id,
+            state='INTERRUPTED' if protocol_only_interruption else 'FAILED',
+            outcome=loop_outcome if protocol_only_interruption else '',
+            terminal_acceptance=acceptance if protocol_only_interruption else None)
+        # Keep Queue, Progress, continuation and sender observations
+        # consistent. No acceptance receipt exists for this checkpoint.
+        if has_pause_checkpoint and not acceptance:
+            paused = queue.pause_running(
+                task.task_id,
+                failure_payload["error"],
+                result={
+                    **failure_payload,
+                    "action_result_ledger": dict(getattr(loop, "action_result_ledger", {}) or {}),
+                    "condition_result_ledger": dict(getattr(loop, "condition_result_ledger", {}) or {}),
+                },
+            )
+            if paused is not None:
+                events.emit(
+                    "TASK_PAUSED", paused, status="PAUSED",
+                    payload={**failure_payload, "pause_is_nonterminal": True},
+                )
+            runtime_log.write(
+                "STATUS", component="telegram_webagent_worker",
+                stage="TASK_PAUSED", task_id=task.task_id,
+                request_id=task.request_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return 0  # Worker exited cleanly; task remains nonterminal PAUSED.
         if protocol_only_interruption:
             interrupted = queue.interrupt_running(
                 task.task_id,
@@ -676,6 +794,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 result={
                     **failure_payload,
                     "action_result_ledger": dict(getattr(loop, "action_result_ledger", {}) or {}),
+                    "condition_result_ledger": dict(getattr(loop, "condition_result_ledger", {}) or {}),
                 },
             )
             if interrupted is not None:

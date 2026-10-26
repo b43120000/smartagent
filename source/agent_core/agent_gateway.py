@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 """Unified durable ingress gateway for WebCopilot and RemoteAgent transports."""
+from agent_core import path_integrity_trace as PIT
 
 import hashlib
 from dataclasses import dataclass
@@ -58,6 +59,8 @@ class AgentIngressGateway:
             self._log("ERROR", message, stage="AUTHORIZATION", error="authorized_workspace_unavailable")
             raise ValueError("authorized_workspace_unavailable")
 
+        PIT.begin(message.text, request_id=self._request_id(message), transport=message.transport)
+        PIT.record("04_gateway_input", message.text)
         text = str(message.text or "").strip()
         if not text:
             raise ValueError("empty_transport_message")
@@ -145,6 +148,12 @@ class AgentIngressGateway:
             ),
             "plan_execution_nonce": plan_execution_nonce,
         }
+        # Only a trusted, opted-in LOCAL_TEST ingress may hand diagnostic settings
+        # to its independently spawned Worker; never accept a handoff from user text.
+        if message.transport.upper() == "LOCAL_TEST":
+            trace_handoff = PIT.export_handoff()
+            if trace_handoff:
+                metadata["it10_trace_handoff"] = trace_handoff
         task, created = self.task_queue.enqueue_remote_request(
             request,
             origin_turn_fingerprint=message.idempotency_key,

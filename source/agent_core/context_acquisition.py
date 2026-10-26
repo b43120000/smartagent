@@ -30,13 +30,20 @@ def normalize_context_request(raw):
 
 def context_capabilities(paths, tools, results):
     blockers = []
+    from .tool_result_contract import decode_result, completed_unknown_fact_observation
     for action_id, entry in dict(results or {}).items():
-        # Only actual current-request execution evidence can prove a blocker.
+        # Only current, Runtime-issued receipts may justify interruption.
+        # A completed indeterminate filesystem observation is not an unfinished
+        # execution, nor does it prove a file is absent.
+        result = decode_result(entry.get('result', ''))
+        if (entry.get('evidence_status', 'ACTIVE') == 'ACTIVE'
+                and completed_unknown_fact_observation(result, action_id)):
+            blockers.append({'action_id':action_id, 'reason':'FACT_OBSERVATION_INDETERMINATE',
+                             'observation_completed':True})
+            continue
         # A missing guessed filename is not evidence that all reading is blocked.
         if str(entry.get('execution_status', '')).upper() != 'FAILED':
             continue
-        from .tool_result_contract import decode_result
-        result = decode_result(entry.get('result', ''))
         if not result and entry.get('result_reason'):
             result = {'reason':entry['result_reason']}
         if result and result.get('reason') in {'PATH_NOT_AUTHORIZED', 'ACCESS_DENIED', 'USER_APPROVAL_REQUIRED', 'USER_APPROVAL_REJECTED', 'USER_APPROVAL_CANCELLED', 'USER_APPROVAL_EXPIRED'}:

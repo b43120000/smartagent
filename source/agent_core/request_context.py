@@ -1,4 +1,5 @@
 """Versioned request-owned input literals, not execution or evidence authority."""
+from agent_core import path_integrity_trace as PIT
 from copy import deepcopy
 from pathlib import Path
 import hashlib
@@ -126,10 +127,13 @@ class RequestContextStore:
             if field in result:
                 raise RequestContextError('request_context_literal_reference_conflict')
             result[field]=value
+        PIT.record("13_field_refs_expanded", result, evidence_status="ACTION_VALUE", extra={"action_id": result.get("action_id")})
         return result
 
     def catalog(self):
-        entries=[deepcopy(history[-1]) for history in self._read()['objects'].values() if history[-1]['status']=='CONFIRMED_INPUT']
+        payload = self._read()
+        PIT.record("12_request_context", payload, evidence_status="ACTION_VALUE")
+        entries=[deepcopy(history[-1]) for history in payload['objects'].values() if history[-1]['status']=='CONFIRMED_INPUT']
         visible=[]; used=0
         for item in reversed(entries):
             size=len(json.dumps(item,ensure_ascii=False).encode('utf-8'))
