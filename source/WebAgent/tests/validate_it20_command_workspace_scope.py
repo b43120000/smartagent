@@ -9,6 +9,8 @@ import tempfile
 from agent_core.path_security import PathSecurityError
 from agent_core.security_context import SecurityContext
 from agent_core.tools import _bounded_path_independent_wait, resolve_command_working_directory
+from agent_core.source_attestation import _compared_code_identity
+import agent_core.tools as tools_module
 
 
 def must_reject(f, reason):
@@ -21,6 +23,15 @@ def must_reject(f, reason):
 
 
 def main():
+    # Native staging must import exactly the checked-out source code, not only
+    # read the Git HEAD. Compare selected actual loaded code objects to disk.
+    source = Path(tools_module.__file__).resolve()
+    for name in ("_bounded_path_independent_wait", "resolve_command_working_directory"):
+        evidence = _compared_code_identity(tools_module, source, name)
+        assert evidence["code_objects_equal"], (name, evidence)
+        assert evidence["filename_verified"], (name, evidence)
+        assert evidence["first_line_equal"], (name, evidence)
+        assert evidence["qualname_equal"], (name, evidence)
     with tempfile.TemporaryDirectory(prefix="it20-wait-") as temp:
         root = Path(temp).resolve()
         workspace, fixture = root / "authorized_workspace", root / "unrelated_fixture"
