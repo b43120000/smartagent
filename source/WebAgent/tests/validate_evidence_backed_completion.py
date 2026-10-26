@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -126,22 +127,33 @@ def validate_execution_and_verification_are_separate() -> None:
 
 
 def validate_regex_verification_and_invalid_spec_are_distinct() -> None:
-    matched = _evaluate_verification_step({
-        "action": "run_command",
-        "command": "Write-Output 0123456789abcdef0123456789abcdef01234567",
-        "expect_exit_code": 0,
-        "expect_regex": r"^[0-9a-f]{40}\r?$",
-    })
-    assert matched["spec_valid"] is True
-    assert matched["passed"] is True
-    invalid = _evaluate_verification_step({
-        "action": "run_command",
-        "command": "Write-Output ok",
-        "expect_regex": "[",
-    })
-    assert invalid["spec_valid"] is False
-    assert invalid["passed"] is False
-    assert "invalid expect_regex" in invalid["error"]
+    output = "0123456789abcdef0123456789abcdef01234567"
+    # This is a unit test for result/regex classification, not for the
+    # host-installed restricted executor. Supply deterministic process evidence.
+    with patch("agent_core.tools._run_powershell_capture", return_value={
+        "exit_code": 0, "stdout": output, "stderr": "", "timed_out": False,
+    }) as execute:
+        matched = _evaluate_verification_step({
+            "action": "run_command",
+            "command": "Write-Output " + output,
+            "expect_exit_code": 0,
+            "expect_regex": r"^[0-9a-f]{40}\\r?$",
+        })
+        assert matched["spec_valid"] is True
+        assert matched["passed"] is True
+        execute.assert_called_once()
+        assert execute.call_args.args[0] == "Write-Output " + output
+
+        invalid = _evaluate_verification_step({
+            "action": "run_command",
+            "command": "Write-Output ok",
+            "expect_regex": "[",
+        })
+        assert invalid["spec_valid"] is False
+        assert invalid["passed"] is False
+        assert "invalid expect_regex" in invalid["error"]
+        # Invalid verification syntax is rejected before any command runs.
+        assert execute.call_count == 1
 
 
 def validate_scoped_verification_supersedes_prior_failure() -> None:
@@ -270,12 +282,17 @@ def validate_expected_build_failure_supports_task_success() -> None:
             "expected_failure": {"exit_codes": [7]},
             "verify": [{"action": "run_command", "command": "exit 0"}],
         }
-        result = tool_run_command(
-            action["command"], action["operation"],
-            success_criteria=action["success_criteria"],
-            verify=action["verify"], expected_failure=action["expected_failure"],
-            condition_id=condition, capture_root=root / "capture",
-        )
+        with patch("agent_core.tools._run_powershell_capture", return_value={
+            "exit_code": 7, "stdout": "", "stderr": "", "timed_out": False,
+        }) as execute:
+            result = tool_run_command(
+                action["command"], action["operation"],
+                success_criteria=action["success_criteria"],
+                verify=action["verify"], expected_failure=action["expected_failure"],
+                condition_id=condition, capture_root=root / "capture",
+            )
+        execute.assert_called_once()
+        assert execute.call_args.args[0] == action["command"]
         assert "exit_code: 7" in result
         assert "VERIFICATION_STATUS: FAIL" in result
         assert "EXPECTATION_STATUS: PASS" in result
@@ -313,10 +330,15 @@ def validate_expected_failure_mismatch_still_blocks_success() -> None:
             "action_id": "A-WRONG-EXPECTED-FAILURE",
             "expected_failure": {"exit_codes": [9]},
         }
-        result = tool_run_command(
-            "exit 7", "BUILD", expected_failure=action["expected_failure"],
-            capture_root=Path(temp) / "capture",
-        )
+        with patch("agent_core.tools._run_powershell_capture", return_value={
+            "exit_code": 7, "stdout": "", "stderr": "", "timed_out": False,
+        }) as execute:
+            result = tool_run_command(
+                "exit 7", "BUILD", expected_failure=action["expected_failure"],
+                capture_root=Path(temp) / "capture",
+            )
+        execute.assert_called_once()
+        assert execute.call_args.args[0] == "exit 7"
         evidence = loop._classify_action_evidence(action, result)
         assert evidence["execution_status"] == "FAILED"
         assert evidence["verification_status"] == "FAIL"
