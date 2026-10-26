@@ -674,7 +674,10 @@ class WebAgentProtocolLoop:
             'tool': 'run_command', 'command': command,
             'working_directory': str(self.workspace),
         }
-        preview = self.tools.preview_tool_scope(requested)
+        try:
+            preview = self.tools.preview_tool_scope(requested)
+        except (OSError, RuntimeError, ValueError) as exc:
+            preview = {'allowed': False, 'error': type(exc).__name__ + ':' + str(exc)}
         return {
             'schema': 'SMARTAGENT_BOUND_COMMAND_WORKSPACE_V1',
             'command': command,
@@ -3123,6 +3126,10 @@ class WebAgentProtocolLoop:
                         suggestion = '提供本 request 授權範圍內的絕對目錄 working_directory。'
                     return [], [{'reason':'run_command_working_directory_rejected',
                         'detail':scope_error, 'suggestion':suggestion}]
+                if (self._pending_bound_cwd_repair.get('request_id') == self.run_id
+                        and self._pending_bound_cwd_repair.get('command') == str(action.get('command', '') or '')
+                        and cwd_scope.get('resolved_paths') == [str(self.workspace)]):
+                    self._pending_bound_cwd_repair = {}
                 shell_detail = self._run_command_shell_mismatch_detail(action)
                 if shell_detail:
                     return [], [{
