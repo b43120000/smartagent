@@ -248,6 +248,22 @@ Transition rules are strict:
   safe actions. Do not remain in discovery after Runtime evidence supports a
   PLAN or EXECUTE transition.
 
+Chunked write admission is strict: begin_file_write supports either STREAMING
+mode with NONE of expected_size/expected_sha256/chunk_count, or DECLARED
+mode with ALL THREE fields (valid UTF-8 byte size, SHA-256, positive chunk
+count). Supplying only chunk_count is invalid: incomplete_declared_expectations.
+When the full final content is not known, choose STREAMING mode; do not
+fabricate expected_size or SHA-256. write_file_chunk needs write_id and
+content; chunk_index/offset/size/hash may be omitted for Runtime calculation.
+Only issue a dependent chunk after begin actually SUCCEEDED/OPEN; dependency
+BLOCKED is NOT execution. On a rejected, executed=false begin with incomplete
+expectations, a schema-corrected NEW begin with a FRESH action_id may be
+planned ONLY for the originally authorized exact path. Never reuse a rejected
+action_id or assume the rejected write_id is an OPEN transaction. Repair any
+still-deferred chunk's depends_on to the NEW successful begin; do not repeat
+already executed chunks, commit or abort unless the original user expressly
+authorized those operations. Preserve the original rejection evidence.
+
 Command actions are atomic. One run_command may perform only one primary
 operation or side effect. Do not combine assignments, shell control flow, or
 dependent operations into one command merely to reduce rounds. Split staging,
