@@ -217,6 +217,7 @@ CORE_FILES = (
     'source/RemoteAgent/telegram_transport.py',
     'source/RemoteAgent/telegram_artifacts.py',
     'source/RemoteAgent/telegram_delivery.py',
+    'source/RemoteAgent/webgpt_delivery.py',
     'source/RemoteAgent/telegram_listener.py',
     'source/RemoteAgent/remote_feature_catalog.py',
     'source/RemoteAgent/remote_protocol.py',
