@@ -516,6 +516,20 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     raise RuntimeError("strict_observation_manifest_not_verified")
                 attestation = capture(role="telegram_webagent_worker", manifest_verified=
                                       verified.get("hash_verification") == "PASS")
+                # Every WebAgentToolContext imports agent_core.tools before
+                # this point. Always require real in-process code identity for
+                # Writer and its dispatch path before ANY Planner/Tool turn.
+                tool_module = attestation.get("modules", {}).get("agent_core.tools", {})
+                tool_matches = tool_module.get("live_matches_recompiled_disk") or {}
+                if (
+                    tool_module.get("loaded") is not True
+                    or tool_module.get("source_path") != "source/agent_core/tools.py"
+                    or not tool_module.get("disk_sha256_at_capture")
+                    or not all(tool_matches.get(name) is True for name in (
+                        "_task_scoped_chunked_write_manager", "_execute_tool_impl"
+                    ))
+                ):
+                    raise RuntimeError("writer_loaded_source_attestation_failed")
                 if strict_source_gate:
                     required = {
                         "WebAgent.protocol_loop": (
@@ -549,8 +563,9 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                                   stage="source_load_attestation_unavailable",
                                   task_id=task.task_id, request_id=task.request_id,
                                   error_type=type(exc).__name__)
-                if strict_source_gate:
-                    raise
+                # Attestation must fail closed for every task: otherwise a
+                # source mismatch could reach chunked write Tool execution.
+                raise
             final_content = loop.run(
                 task.request,
                 request_id=task.request_id,
