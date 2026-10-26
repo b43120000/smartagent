@@ -121,11 +121,6 @@ def run():
         outcome="SUCCESS",
         terminal_acceptance=case_receipt(outcome="SUCCESS", state="PAUSED"),
     ))
-    paused = build(
-        state="PAUSED",
-        outcome="UNKNOWN",
-        terminal_acceptance=case_receipt(outcome="UNKNOWN", state="PAUSED"),
-    ) if False else None
     # A paused record must never carry an accepted terminal receipt, even if
     # its outcome is UNKNOWN; validate forged stored records too.
     rejected("paused_with_terminal_receipt", lambda: validate_task_result({
