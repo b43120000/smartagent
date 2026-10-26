@@ -1,4 +1,5 @@
 """Offline-only: bound-cwd planner guidance, no command execution or live sender."""
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -68,8 +69,22 @@ def main():
             prompt = loop._with_commit("native test prompt", {
                 "run_id": "R018-TEST", "turn_id": 1, "ack_web_ack_id": ""
             })
-            assert "RUNTIME_BOUND_COMMAND_WORKSPACE" in prompt
-            assert str(workspace) in prompt and str(fixture) in prompt
+            # Prompt contains JSON, where Windows path separators are escaped.
+            # Decode the sole bounded-workspace contract; do not look for raw
+            # str(Path) substrings in its transport-encoded representation.
+            begin = "[RUNTIME_BOUND_COMMAND_WORKSPACE]\\n".replace("\\\\n", "\\n")
+            end = "\\n[/RUNTIME_BOUND_COMMAND_WORKSPACE]".replace("\\\\n", "\\n")
+            assert prompt.count(begin) == 1 and prompt.count(end) == 1, prompt
+            embedded = prompt.split(begin, 1)[1].split(end, 1)[0]
+            prompt_contract = json.loads(embedded)
+            assert prompt_contract == contract, (prompt_contract, contract)
+            assert prompt_contract["schema"] == "SMARTAGENT_BOUND_COMMAND_WORKSPACE_V1"
+            assert prompt_contract["command"] == command
+            assert prompt_contract["bound_workspace"] == str(workspace)
+            assert prompt_contract["separate_original_file_scope"] == [str(fixture)]
+            assert prompt_contract["bound_workspace_admitted"] is True
+            assert prompt_contract["bound_workspace_error"] == ""
+            assert prompt_contract["not_an_action_or_completed_evidence"] is True
             response = [initial(), bad, {"tool": "turn_commit", "action_count": 2}]
             accepted, diagnostics = loop._accept_ack(response, {"ack_web_ack_id": ""})
             assert not accepted and diagnostics, diagnostics
