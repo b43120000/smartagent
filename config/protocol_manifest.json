@@ -61,7 +61,7 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "26c1174305a722e6a08af8a3518fc22f795e541f92b40df0021ac0d7134a6e54",
     "source/WebAgent/protocol.py": "04f967ac65545b086c1e33729822e2dc805ca799c39421b0df5917304e1c01ba",
-    "source/WebAgent/protocol_loop.py": "793a22ea9f0044d5540441e4331b39650ad0da2b14a5e7c0625d7d7e2b598fa4",
+    "source/WebAgent/protocol_loop.py": "19dfd74a64444292f0e93ffc460e578ddf2c039a69813692357116aaccecdcd7",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
     "source/agent_core/action_dependencies.py": "de6728368a08527798a736c74638f63b3b553fe187642592edb6d1ed61238963",
