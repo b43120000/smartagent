@@ -206,7 +206,11 @@ class TaskResultContractTests(unittest.TestCase):
             task_result = persisted.payload["task_result_v1"]
             self.assertEqual(persisted.delivery_state, "DELIVERED")
             self.assertEqual(task_result["delivery"]["status"], "DELIVERED")
-            self.assertEqual(task_result["delivery"]["delivery_receipt_id"], event.event_id)
+            self.assertTrue(task_result["delivery"]["delivery_receipt_id"].startswith("DREC-"))
+            self.assertNotEqual(task_result["delivery"]["delivery_receipt_id"], event.event_id)
+            self.assertEqual(persisted.payload["delivery_receipt"]["schema"], "SMARTAGENT_DELIVERY_RECEIPT_V1")
+            self.assertEqual(persisted.payload["delivery_receipt"]["receipt_kind"], "RUNTIME_ADAPTER_ACK")
+            self.assertTrue(persisted.payload["delivery_receipt"]["adapter_confirmed"])
             self.assertEqual(task_result["delivery"]["attempt_count"], 1)
             self.assertEqual(task_result["outcome"], "SUCCESS")
             self.assertEqual(task_result["task_state"], "COMPLETED")
