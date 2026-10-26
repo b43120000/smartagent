@@ -30,14 +30,24 @@ def main() -> None:
         literal.mkdir()
         assert extract_authorized_paths(f"列出 {literal}") == [str(literal)]
 
-        manager = ChunkedWriteManager(root / "transactions", [directory])
-        context._chunked_write_manager = manager
         destination = directory / "probe.txt"
         chunks = ["B" * 990, "B" * 985, "B" * 1000, "B" * 1000, "B" * 1000, "B" * 25]
         expected = b"B" * 5000
-        manager.begin({"action_id": "begin", "write_id": "probe", "path": str(destination),
-                       "encoding": "utf-8", "overwrite": False, "expected_size": 5000,
-                       "expected_sha256": hashlib.sha256(expected).hexdigest(), "chunk_count": len(chunks)})
+        # Start the writer through the same task-scoped dispatcher used by
+        # context.execute(write_file_chunk); a manually injected workspace-wide
+        # manager is intentionally replaced by Runtime task-scoped initialization.
+        begin_output = context.execute({
+            "tool": "begin_file_write", "action_id": "begin", "write_id": "probe",
+            "path": str(destination), "encoding": "utf-8", "overwrite": False,
+            "expected_size": 5000,
+            "expected_sha256": hashlib.sha256(expected).hexdigest(),
+            "chunk_count": len(chunks),
+        })
+        assert begin_output.startswith("[CHUNKED_WRITE_SUCCESS] "), begin_output
+        begin_result = json.loads(begin_output.removeprefix("[CHUNKED_WRITE_SUCCESS] "))
+        assert begin_result.get("write_id") == "probe", begin_result
+        manager = context._chunked_write_manager
+        assert isinstance(manager, ChunkedWriteManager), manager
         first = manager.write_chunk({"action_id": "first", "write_id": "probe", "content": chunks[0]})
         assert first["next_offset"] == 990 and first["accepted_bytes"] == 990
         rejected = context.execute({"tool": "write_file_chunk", "action_id": "bad-offset",
