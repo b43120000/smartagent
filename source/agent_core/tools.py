@@ -1126,6 +1126,26 @@ def _bounded_path_independent_wait(command: object) -> bool:
     return bool(py and 0 < float(py.group(3)) <= 10)
 
 
+def _path_independent_command_must_use_bound_workspace(command: object) -> bool:
+    """Keep cwd-only inspections and sleeps at the binding's original root.
+
+    Explicit request paths are file-scope hints, not a grant to relocate
+    a command that has no intrinsic path target to a historical fixture.
+    Other commands retain their existing authorization semantics.
+    """
+    value = str(command or '').strip()
+    if _bounded_path_independent_wait(value):
+        return True
+    if value.casefold() in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}:
+        return True
+    # Out-of-budget/compound sleeps are NOT authorized at a foreign cwd either.
+    if re.match(r'(?i)^Start-Sleep(?:\s|$)', value):
+        return True
+    if re.match(r'(?i)^(?:python(?:\.exe)?|py(?:\.exe)?)\s+-c\s+', value) and re.search(r'(?i)(?:time\s*\.\s*sleep|__import__\s*\(\s*["\x27]time["\x27]\s*\)\s*\.\s*sleep)\s*\(', value):
+        return True
+    return False
+
+
 def resolve_command_working_directory(value, security_context: SecurityContext | None, agent=None, *, command: object = None) -> Path:
     context = security_context or SecurityContext.for_workspace(Path.cwd())
     if value is not None and (not isinstance(value, (str,Path)) or not str(value).strip()):
@@ -1133,6 +1153,9 @@ def resolve_command_working_directory(value, security_context: SecurityContext |
     cwd = context.require_write(value or context.workspace_root, require_absolute=True, forbid_glob=True)
     if not cwd.is_dir():
         raise PathSecurityError('command_working_directory_not_directory:' + str(cwd))
+    is_bound_command = _path_independent_command_must_use_bound_workspace(command)
+    if is_bound_command and cwd != context.workspace_root:
+        raise PathSecurityError('path_independent_command_cwd_outside_bound_workspace:' + str(cwd))
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
     if requested and not any(is_within(cwd, root) for root in requested):
@@ -1140,7 +1163,7 @@ def resolve_command_working_directory(value, security_context: SecurityContext |
         # Exception is ONLY a literal bounded path-free wait in the already
         # authorized default workspace; do not authorize the fixture or
         # arbitrary commands/working-directory changes.
-        if cwd != context.workspace_root or not _bounded_path_independent_wait(command):
+        if cwd != context.workspace_root or not (_bounded_path_independent_wait(command) or str(command or '').strip().casefold() in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}):
             raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
     return cwd
 
