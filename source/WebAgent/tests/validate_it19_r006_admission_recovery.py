@@ -51,7 +51,7 @@ def test_writer_schema_and_uncommitted_staging() -> None:
             assert str(exc) == "incomplete_declared_expectations", exc
         else:
             raise AssertionError("partial declared expectations wrongly accepted")
-        assert not manager.open_sessions()
+        assert not manager.open_sessions(request_id="RR-OFFLINE", run_id="RR-OFFLINE")
 
         # Streaming mode has zero expected_* fields, and does NOT imply a commit.
         began = manager.begin(dict(tool="begin_file_write", action_id="good-begin",
