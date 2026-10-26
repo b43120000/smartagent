@@ -332,6 +332,8 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     elif delivery_receipt:
         raise TaskResultContractError("unconfirmed_delivery_receipt")
 
+    if state == "PAUSED" and terminal.get("status") == "ACCEPTED":
+        raise TaskResultContractError("paused_with_terminal_receipt")
     if state != "COMPLETED" and outcome == "SUCCESS":
         raise TaskResultContractError("noncompleted_success")
     if outcome == "SUCCESS" and (
