@@ -250,6 +250,52 @@ class TaskResultContractTests(unittest.TestCase):
             self.assertEqual(event.payload["task_result_contract_status"], "ERROR")
             self.assertEqual(event.payload["task_result_contract_error"], "success_without_terminal_receipt")
 
+    def test_pause_event_is_nonterminal_and_not_success(self):
+        task = _task(outcome="UNKNOWN", receipt=False, action_ledger=False)
+        task.state = "PAUSED"
+        task.result_ledger["paused"] = {
+            "task_outcome": "SUCCESS",  # A model-supplied claim, not authority.
+            "action_result_ledger": {},
+            "terminal_acceptance": {},
+        }
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {FEATURE_FLAG: "1"}):
+            events = RemoteEventStore(Path(td) / "events.json")
+            event = events.emit("TASK_PAUSED", task, status="PAUSED",
+                                payload={"summary": "paused", "task_outcome": "SUCCESS"})
+            result = event.payload["task_result_v1"]
+            self.assertEqual(result["task_state"], "PAUSED")
+            self.assertEqual(result["outcome"], "UNKNOWN")
+            self.assertEqual(result["terminal_acceptance"]["status"], "MISSING")
+            self.assertEqual(result["delivery"]["status"], "PENDING")
+
+    def test_reconciliation_receipt_is_not_adapter_ack(self):
+        class ReconciledAdapter:
+            def reconcile_event(self, route, event):
+                return {"delivered": True, "reconciled": True}
+
+        task = _task()
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {FEATURE_FLAG: "1"}):
+            events = RemoteEventStore(Path(td) / "events.json")
+            event = events.emit("TASK_COMPLETED", task, status="COMPLETED",
+                                payload={"summary": "fixture", "task_outcome": "SUCCESS"})
+            claimed = events.claim_delivery(event.event_id, "dead-worker-owner")
+            self.assertIsNotNone(claimed)
+            events.load()
+            ev = events.events[event.event_id]
+            ev.delivery_started_at = time.time() - 3600
+            ev.delivery_owner_pid = 0
+            events.save()
+            manager = DeliveryManager(events, {"LOCAL_TEST": ReconciledAdapter()})
+            findings = manager.reconcile_delivering()
+            self.assertEqual(len(findings), 1)
+            self.assertTrue(findings[0][1]["delivered"])
+            events.load()
+            receipt = events.events[event.event_id].payload["delivery_receipt"]
+            self.assertEqual(receipt["receipt_kind"], "RECONCILED_OBSERVED")
+            self.assertFalse(receipt["adapter_confirmed"])
+            self.assertTrue(receipt["reconciled_observed"])
+            self.assertEqual(events.events[event.event_id].delivery_state, "DELIVERED")
+
     def test_direct_webagent_uses_same_contract(self):
         receipt = _receipt(
             request_id="RR-DIRECT-UT", task_id="TASK-DIRECT-UT",
