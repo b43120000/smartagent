@@ -419,6 +419,22 @@ def build_action_loop_state(
                      'release_conditions':[{'kind':release_kind,'owner':'runtime'}],
                      'retry_policy':'No blind replay; inspect UNKNOWN/PARTIAL outcomes first.'}]
 
+    # A schema-rejected begin has executed=False and cannot leave an OPEN
+    # transaction. Re-admit only a NEW canonical begin while the original
+    # request's scope checks still apply; never auto-execute or replay.
+    schema_repairable_begin = any(
+        str((record.get("action") or {}).get("tool", "")) == "begin_file_write"
+        and str(record.get("execution_status", "")).upper() in {"FAILED", "REJECTED"}
+        and (lambda typed: typed.get("reason") == "incomplete_declared_expectations"
+             and typed.get("executed") is False)(
+            __import__("agent_core.tool_result_contract", fromlist=["decode_result"])
+            .decode_result(str(record.get("result", ""))) or {}
+        )
+        for record in list(action_records or [])
+    )
+    if schema_repairable_begin and transition == "REPLAN_REQUIRED" and not recovery.get("active"):
+        allowed.append("begin_file_write")
+
     states: list[dict[str, Any]] = []
     for record in list(action_records or []):
         record_action = dict(record.get("action") or {})
