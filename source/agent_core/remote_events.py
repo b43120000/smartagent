@@ -98,10 +98,12 @@ class RemoteEventStore:
                 and str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower()
                     in {"1", "true", "yes"}
             ):
+                contract_error_type = ()
                 try:
                     from .tri_one_task_result import (
                         TaskResultContractError, make_task_result_from_remote_event,
                     )
+                    contract_error_type = TaskResultContractError
                     original_payload["task_result_v1"] = make_task_result_from_remote_event(
                         task, event_type, original_payload,
                     )
@@ -112,7 +114,7 @@ class RemoteEventStore:
                     # completed legacy task or suppress its existing delivery.
                     original_payload["task_result_contract_status"] = "ERROR"
                     original_payload["task_result_contract_error"] = (
-                        str(exc) if isinstance(exc, TaskResultContractError)
+                        str(exc) if isinstance(exc, contract_error_type)
                         else "contract_build_failed:" + type(exc).__name__
                     )
 
