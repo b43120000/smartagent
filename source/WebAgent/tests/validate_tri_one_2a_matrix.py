@@ -297,7 +297,11 @@ class Fixture(unittest.TestCase):
         self.assertIn("TASK_PAUSED", EVENT_TYPES)
         self.assertEqual(event.payload["task_result_v1"]["task_state"], "PAUSED")
         self.assertNotIn("TASK_COMPLETED", {e.event_type for e in self.events.events.values()})
-        self.assertIn("PAUSED", TelegramDeliveryAdapter.render(DeliveryManager._wire(event)))
+        rendered = TelegramDeliveryAdapter.render(DeliveryManager._wire(event))
+        self.assertIn("🟠 任務已暫停（尚未完成）", rendered)
+        self.assertIn("Pending verification; task paused", rendered)
+        self.assertNotIn("🟢 已完成", rendered)
+        self.assertEqual(event.payload["task_result_v1"]["outcome"], "UNKNOWN")
 
     def test_2a_i05_restart_delivery_idempotency(self):
         task = self.accept()
