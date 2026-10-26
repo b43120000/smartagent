@@ -132,7 +132,7 @@ class RemoteEventStore:
             self.load(); ev=self.events[event_id]
             if ev.delivery_state!=READY: return None
             ev.delivery_state=DELIVERING; ev.delivery_owner=str(owner_token); ev.delivery_owner_pid=os.getpid(); ev.delivery_owner_started_at=_process_started_at(os.getpid()); ev.delivery_started_at=time.time(); ev.attempts+=1; ev.last_error=''; self.save(); return copy.deepcopy(ev)
-    def mark_delivered(self,event_id:str):
+    def mark_delivered(self,event_id:str,*,adapter_result:dict|None=None):
         with self._lock,self.process_lock():
             self.load()
             ev=self.events[event_id]
@@ -144,10 +144,32 @@ class RemoteEventStore:
             ev.delivery_owner_started_at=0.0
             result=(ev.payload or {}).get("task_result_v1")
             if isinstance(result,dict) and isinstance(result.get("delivery"),dict):
+                transport=str((ev.reply_route or {}).get("transport","") or "").upper()
+                receipt_id="DREC-"+hashlib.sha256(
+                    f"{ev.event_id}|{transport}|{int(ev.attempts or 0)}".encode("utf-8")
+                ).hexdigest()[:24].upper()
+                adapter_summary={"schema":"SMARTAGENT_DELIVERY_RECEIPT_V1",
+                    "receipt_id":receipt_id,"event_id":ev.event_id,"transport":transport,
+                    "attempt":int(ev.attempts or 0),"receipt_kind":"RUNTIME_ADAPTER_ACK",
+                    "adapter_confirmed":True}
+                observed=dict(adapter_result or {})
+                for key in ("message_count","artifact_count"):
+                    value=observed.get(key)
+                    if type(value) is int and value >= 0:
+                        adapter_summary[key]=value
+                reply=str(observed.get("reply") or "")
+                if transport=="TELEGRAM" and reply:
+                    message_ids=[part.strip() for part in reply.split(",") if part.strip().isdigit()]
+                    adapter_summary["provider_message_id_count"]=len(message_ids)
+                    if message_ids:
+                        adapter_summary["provider_message_ids_sha256"]=hashlib.sha256(
+                            ",".join(message_ids).encode("utf-8")
+                        ).hexdigest()
+                ev.payload["delivery_receipt"]=adapter_summary
                 result["delivery"].update(
                     status="DELIVERED",
                     attempt_count=max(int(result["delivery"].get("attempt_count",0) or 0),int(ev.attempts or 0)),
-                    delivery_receipt_id=ev.event_id,
+                    delivery_receipt_id=receipt_id,
                 )
             self.save()
             return ev
@@ -210,7 +232,7 @@ class DeliveryManager:
         except Exception as exc:
             self.store.mark_failed_attempt(event.event_id,f'{type(exc).__name__}: {exc}',self.owner_token)
             return {'delivered':False,'reason':f'{type(exc).__name__}: {exc}'}
-        if result.get('delivered'): self.store.mark_delivered(event.event_id)
+        if result.get('delivered'): self.store.mark_delivered(event.event_id,adapter_result=result)
         else: self.store.mark_failed_attempt(event.event_id,str(result.get('reason','delivery_failed')),self.owner_token)
         return result
     def reconcile_delivering(self,transports:set[str]|None=None,should_continue=None):
