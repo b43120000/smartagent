@@ -390,7 +390,13 @@ def build_action_loop_state(
     blockers = []
     if transition in {'PREREQUISITE_REQUIRED','VERIFY_REQUIRED','REPLAN_REQUIRED'} or evidence_state == 'PENDING':
         pending_kind = str(execution_status or '').upper()
-        if tool in {'begin_file_write','write_file_chunk'}:
+        from .tool_result_contract import decode_result
+        declined = decode_result(result) or {}
+        if (tool == "begin_file_write" and str(execution_status or "").upper() in {"FAILED", "REJECTED"}
+                and declined.get("reason") == "incomplete_declared_expectations"
+                and declined.get("executed") is False):
+            release_kind = "NEW_SCHEMA_VALID_BEGIN_ACTION"
+        elif tool in {'begin_file_write','write_file_chunk'}:
             release_kind = 'FILE_COMMITTED'
         elif pending_kind == 'RUNNING':
             release_kind = 'PROCESS_EXITED'
@@ -422,17 +428,21 @@ def build_action_loop_state(
     # A schema-rejected begin has executed=False and cannot leave an OPEN
     # transaction. Re-admit only a NEW canonical begin while the original
     # request's scope checks still apply; never auto-execute or replay.
-    schema_repairable_begin = any(
-        str((record.get("action") or {}).get("tool", "")) == "begin_file_write"
-        and str(record.get("execution_status", "")).upper() in {"FAILED", "REJECTED"}
-        and (lambda typed: typed.get("reason") == "incomplete_declared_expectations"
-             and typed.get("executed") is False)(
-            __import__("agent_core.tool_result_contract", fromlist=["decode_result"])
-            .decode_result(str(record.get("result", ""))) or {}
-        )
-        for record in list(action_records or [])
-    )
-    if schema_repairable_begin and transition == "REPLAN_REQUIRED" and not recovery.get("active"):
+    from .tool_result_contract import decode_result
+    schema_repairable_begin = False
+    for record in list(action_records or []):
+        if str((record.get("action") or {}).get("tool", "")) != "begin_file_write":
+            continue
+        if str(record.get("execution_status", "")).upper() not in {"FAILED", "REJECTED"}:
+            continue
+        outcome = decode_result(str(record.get("result", ""))) or {}
+        if (outcome.get("reason") == "incomplete_declared_expectations"
+                and outcome.get("executed") is False):
+            schema_repairable_begin = True
+            break
+    if (schema_repairable_begin and transition == "REPLAN_REQUIRED"
+            and not recovery.get("active")
+            and (available_tools is None or "begin_file_write" in set(available_tools))):
         allowed.append("begin_file_write")
 
     states: list[dict[str, Any]] = []
