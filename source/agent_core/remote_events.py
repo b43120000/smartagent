@@ -79,10 +79,45 @@ class RemoteEventStore:
     def emit(self,event_type:str,task:Any,*,status:str,payload:dict|None=None)->RemoteEvent:
         if event_type not in EVENT_TYPES: raise ValueError(event_type)
         with self._lock,self.process_lock():
-            self.load(); discriminator=str((payload or {}).get('approval_id','')) if event_type=='SECURITY_CONFIRMATION_REQUIRED' else ''; raw=f"{event_type}|{task.task_id}|{discriminator}"; eid='EVT-'+hashlib.sha256(raw.encode()).hexdigest()[:20].upper()
-            if eid in self.events: return self.events[eid]
+            self.load()
+            original_payload = dict(payload or {})
+            discriminator = (
+                str(original_payload.get("approval_id", ""))
+                if event_type == "SECURITY_CONFIRMATION_REQUIRED" else ""
+            )
+            raw = f"{event_type}|{task.task_id}|{discriminator}"
+            eid = "EVT-" + hashlib.sha256(raw.encode()).hexdigest()[:20].upper()
+            if eid in self.events:
+                return self.events[eid]
+
+            # Default OFF: preserve the legacy wire/persisted payload byte shape.
+            # When opted in, TaskResult is an additive audit record only; it
+            # cannot manufacture terminal admission or change task outcome.
+            if (
+                event_type in {"TASK_COMPLETED", "TASK_FAILED", "TASK_INTERRUPTED"}
+                and str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower()
+                    in {"1", "true", "yes"}
+            ):
+                try:
+                    from .tri_one_task_result import (
+                        TaskResultContractError, make_task_result_from_remote_event,
+                    )
+                    original_payload["task_result_v1"] = make_task_result_from_remote_event(
+                        task, event_type, original_payload,
+                    )
+                    original_payload.pop("task_result_contract_status", None)
+                    original_payload.pop("task_result_contract_error", None)
+                except Exception as exc:
+                    # This additive audit lane must not strand an already
+                    # completed legacy task or suppress its existing delivery.
+                    original_payload["task_result_contract_status"] = "ERROR"
+                    original_payload["task_result_contract_error"] = (
+                        str(exc) if isinstance(exc, TaskResultContractError)
+                        else "contract_build_failed:" + type(exc).__name__
+                    )
+
             route=dict(getattr(task,'reply_route',{}) or getattr(task,'metadata',{}).get('reply_route',{}) or {})
-            ev=RemoteEvent(eid,event_type,str(task.request_id),str(task.task_id),str(status),route,dict(payload or {}),created_at=time.time())
+            ev=RemoteEvent(eid,event_type,str(task.request_id),str(task.task_id),str(status),route,original_payload,created_at=time.time())
             self.events[eid]=ev; self.save(); return ev
     def ready(self):
         with self._lock:
@@ -97,12 +132,43 @@ class RemoteEventStore:
             ev.delivery_state=DELIVERING; ev.delivery_owner=str(owner_token); ev.delivery_owner_pid=os.getpid(); ev.delivery_owner_started_at=_process_started_at(os.getpid()); ev.delivery_started_at=time.time(); ev.attempts+=1; ev.last_error=''; self.save(); return copy.deepcopy(ev)
     def mark_delivered(self,event_id:str):
         with self._lock,self.process_lock():
-            self.load(); ev=self.events[event_id]; ev.delivery_state=DELIVERED; ev.delivered_at=time.time(); ev.last_error=''; ev.delivery_owner=''; ev.delivery_owner_pid=0; ev.delivery_owner_started_at=0.0; self.save(); return ev
+            self.load()
+            ev=self.events[event_id]
+            ev.delivery_state=DELIVERED
+            ev.delivered_at=time.time()
+            ev.last_error=''
+            ev.delivery_owner=''
+            ev.delivery_owner_pid=0
+            ev.delivery_owner_started_at=0.0
+            result=(ev.payload or {}).get("task_result_v1")
+            if isinstance(result,dict) and isinstance(result.get("delivery"),dict):
+                result["delivery"].update(
+                    status="DELIVERED",
+                    attempt_count=max(int(result["delivery"].get("attempt_count",0) or 0),int(ev.attempts or 0)),
+                    delivery_receipt_id=ev.event_id,
+                )
+            self.save()
+            return ev
+
     def mark_failed_attempt(self,event_id:str,error:str,owner_token:str=""):
         with self._lock,self.process_lock():
-            self.load(); ev=self.events[event_id]
+            self.load()
+            ev=self.events[event_id]
             if owner_token and ev.delivery_owner!=owner_token: return copy.deepcopy(ev)
-            ev.delivery_state=READY; ev.delivery_owner=''; ev.delivery_owner_pid=0; ev.delivery_owner_started_at=0.0; ev.last_error=str(error or '')[:2000]; self.save(); return ev
+            ev.delivery_state=READY
+            ev.delivery_owner=''
+            ev.delivery_owner_pid=0
+            ev.delivery_owner_started_at=0.0
+            ev.last_error=str(error or '')[:2000]
+            result=(ev.payload or {}).get("task_result_v1")
+            if isinstance(result,dict) and isinstance(result.get("delivery"),dict):
+                result["delivery"].update(
+                    status="PENDING",
+                    attempt_count=max(int(result["delivery"].get("attempt_count",0) or 0),int(ev.attempts or 0)),
+                    delivery_receipt_id=None,
+                )
+            self.save()
+            return ev
 
     def pause_for_tasks(self, task_ids:set[str], *, reason:str) -> int:
         """Stop old task events from being retried after a runtime reset."""
