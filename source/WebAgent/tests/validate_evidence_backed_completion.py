@@ -137,7 +137,7 @@ def validate_regex_verification_and_invalid_spec_are_distinct() -> None:
             "action": "run_command",
             "command": "Write-Output " + output,
             "expect_exit_code": 0,
-            "expect_regex": r"^[0-9a-f]{40}\\r?$",
+            "expect_regex": r"^[0-9a-f]{40}\r?$",
         })
         assert matched["spec_valid"] is True
         assert matched["passed"] is True
