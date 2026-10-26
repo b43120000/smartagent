@@ -516,20 +516,10 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     raise RuntimeError("strict_observation_manifest_not_verified")
                 attestation = capture(role="telegram_webagent_worker", manifest_verified=
                                       verified.get("hash_verification") == "PASS")
-                # Every WebAgentToolContext imports agent_core.tools before
-                # this point. Always require real in-process code identity for
-                # Writer and its dispatch path before ANY Planner/Tool turn.
-                tool_module = attestation.get("modules", {}).get("agent_core.tools", {})
-                tool_matches = tool_module.get("live_matches_recompiled_disk") or {}
-                if (
-                    tool_module.get("loaded") is not True
-                    or tool_module.get("source_path") != "source/agent_core/tools.py"
-                    or not tool_module.get("disk_sha256_at_capture")
-                    or not all(tool_matches.get(name) is True for name in (
-                        "_task_scoped_chunked_write_manager", "_execute_tool_impl"
-                    ))
-                ):
-                    raise RuntimeError("writer_loaded_source_attestation_failed")
+                # Require the Worker process's own actual loaded code proof,
+                # not Git HEAD or an independently staged import.
+                from agent_core.source_attestation import require_writer_loaded_source_attestation
+                require_writer_loaded_source_attestation(attestation)
                 if strict_source_gate:
                     required = {
                         "WebAgent.protocol_loop": (
