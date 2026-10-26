@@ -8,7 +8,7 @@ from typing import Any
 from .process_file_lock import exclusive_process_lock
 from .json_state_io import read_json_retry, write_json_atomic
 
-EVENT_TYPES={"TASK_ACCEPTED","TASK_STARTED","TASK_PROGRESS","TASK_COMPLETED","TASK_FAILED","TASK_INTERRUPTED","SECURITY_CONFIRMATION_REQUIRED"}
+EVENT_TYPES={"TASK_ACCEPTED","TASK_STARTED","TASK_PROGRESS","TASK_COMPLETED","TASK_FAILED","TASK_INTERRUPTED","TASK_PAUSED","SECURITY_CONFIRMATION_REQUIRED"}
 READY="READY"; DELIVERING="DELIVERING"; DELIVERED="DELIVERED"
 DELIVERY_RECONCILE_MIN_AGE_SEC=30.0
 
@@ -94,7 +94,7 @@ class RemoteEventStore:
             # When opted in, TaskResult is an additive audit record only; it
             # cannot manufacture terminal admission or change task outcome.
             if (
-                event_type in {"TASK_COMPLETED", "TASK_FAILED", "TASK_INTERRUPTED"}
+                event_type in {"TASK_COMPLETED", "TASK_FAILED", "TASK_INTERRUPTED", "TASK_PAUSED"}
                 and str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower()
                     in {"1", "true", "yes"}
             ):
@@ -150,8 +150,13 @@ class RemoteEventStore:
                 ).hexdigest()[:24].upper()
                 adapter_summary={"schema":"SMARTAGENT_DELIVERY_RECEIPT_V1",
                     "receipt_id":receipt_id,"event_id":ev.event_id,"transport":transport,
-                    "attempt":int(ev.attempts or 0),"receipt_kind":"RUNTIME_ADAPTER_ACK",
-                    "adapter_confirmed":True}
+                    "attempt":int(ev.attempts or 0),"receipt_kind":(
+                        "RECONCILED_OBSERVED"
+                        if bool((adapter_result or {}).get("reconciled"))
+                        else "RUNTIME_ADAPTER_ACK"
+                    ),
+                    "adapter_confirmed":not bool((adapter_result or {}).get("reconciled")),
+                    "reconciled_observed":bool((adapter_result or {}).get("reconciled"))}
                 observed=dict(adapter_result or {})
                 for key in ("message_count","artifact_count"):
                     value=observed.get(key)
@@ -252,7 +257,7 @@ class DeliveryManager:
                 outcomes.append((event.event_id,{'delivered':False,'reason':'delivery_outcome_unknown','uncertain':True})); continue
             result=reconcile(event.reply_route,self._wire(event))
             if result.get('delivered'):
-                self.store.mark_delivered(event.event_id)
+                self.store.mark_delivered(event.event_id,adapter_result=result)
             elif result.get('definitive_not_delivered'):
                 self.store.mark_failed_attempt(event.event_id,'reconciled_not_delivered')
             elif result.get('retry_allowed'):
