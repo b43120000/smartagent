@@ -85,7 +85,37 @@ def main():
             assert prompt_contract["bound_workspace_admitted"] is True
             assert prompt_contract["bound_workspace_error"] == ""
             assert prompt_contract["not_an_action_or_completed_evidence"] is True
-            response = [initial(), bad, {"tool": "turn_commit", "action_count": 2}]
+            # The declared-next-action guard must remain authoritative:
+            # a Progress planning list_directory cannot admit run_command.
+            mismatch = [initial(), bad, {"tool": "turn_commit", "action_count": 2}]
+            accepted, diagnostics = loop._accept_ack(mismatch, {"ack_web_ack_id": ""})
+            assert not accepted and any(
+                row.get("reason") == "declared_next_action_mismatch"
+                and row.get("declared_next_tools") == ["list_directory"]
+                and row.get("actual_operational_tools") == ["run_command"]
+                for row in diagnostics
+            ), diagnostics
+            assert not loop.action_ledger and not loop.action_result_ledger
+            # Now genuinely declare the action that the same turn submits.
+            # This does not bypass the guard; it exercises the *next* gate,
+            # which must reject the C fixture cwd before running a command.
+            progress = initial()
+            progress["next_action"] = "run_command"
+            progress["current_focus"] = "Execute a nonwriting wait at the bound workspace"
+            progress["base_evaluation"] = "Independent wait PROCESS test without fixture access"
+            progress["steps"] = [
+                {"step": 1, "desc": "Run command and collect process evidence", "status": "IN_PROGRESS"}
+            ]
+            progress["completion_contract"] = {
+                "success": ["Waiting PROCESS exited with exit_code=0"],
+                "failure": ["Waiting PROCESS exited with nonzero status"],
+                "in_progress": ["No native process completion yet"],
+                "interrupted": ["Runtime bound-workspace scope conflict"],
+            }
+            progress["matched_condition"] = "No native process completion yet"
+            bad["success_criteria"] = progress["completion_contract"]["success"][0]
+            allowed["success_criteria"] = bad["success_criteria"]
+            response = [progress, bad, {"tool": "turn_commit", "action_count": 2}]
             accepted, diagnostics = loop._accept_ack(response, {"ack_web_ack_id": ""})
             assert not accepted and diagnostics, diagnostics
             assert any(row.get("reason") == "run_command_working_directory_rejected"
