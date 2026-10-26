@@ -44,6 +44,61 @@ from .windows_security import restricted_executor_required
 
 _SCOPED_INSPECTION_TOOLS = {"list_directory", "inspect_directory", "inspect_project_scope", "inspect_project_working_set", "find_file"}
 _PROJECT_SCOPE_UNSUPPORTED_FIELDS = {"project_root", "path", "depth", "include_files"}
+
+def _task_scoped_chunked_write_manager(agent, security_context):
+    """Create a writer whose cleanup, recovery, and abort affect one task only.
+
+    Preserve legacy workspace/.agents/chunked_writes/{manifests,staging,ledger}.
+    Each new Runtime task receives a physical, disjoint state root instead.
+    """
+    import hashlib
+
+    task_id = str(getattr(agent, "current_task_id", "") or "").strip()
+    epoch = str(getattr(agent, "current_task_epoch", "") or "").strip()
+    request_id = str(getattr(agent, "current_request_id", "") or "").strip()
+    if not all((task_id, epoch, request_id)):
+        raise ChunkedWriteError("task_scoped_writer_identity_required")
+    if (str(getattr(security_context, "task_id", "")) != task_id or
+            str(getattr(security_context, "request_id", "")) != request_id):
+        raise ChunkedWriteError("task_scoped_writer_security_identity_mismatch")
+    workspace_source = getattr(agent, "workspace_root", None)
+    if not workspace_source:
+        raise ChunkedWriteError("task_scoped_writer_workspace_required")
+    workspace = Path(workspace_source).expanduser()
+    if not workspace.is_dir():
+        raise ChunkedWriteError("task_scoped_writer_workspace_invalid")
+    workspace = workspace.resolve()
+
+    identity = json.dumps([task_id, epoch, request_id], ensure_ascii=False,
+                          separators=(",", ":"))
+    scope = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    legacy = workspace / ".agents" / "chunked_writes"
+    state_root = legacy / "tasks" / scope
+    # Reject symlink/junction aliases on every descendant boundary.
+    for directory in (workspace / ".agents", legacy, legacy / "tasks", state_root):
+        junction = getattr(directory, "is_junction", None)
+        if directory.is_symlink() or (callable(junction) and junction()):
+            raise ChunkedWriteError("task_scoped_writer_state_root_link_rejected")
+        if directory.exists() and not directory.is_dir():
+            raise ChunkedWriteError("task_scoped_writer_state_root_not_directory")
+    if not state_root.resolve().is_relative_to(workspace):
+        raise ChunkedWriteError("task_scoped_writer_state_root_outside_workspace")
+
+    roots = list(security_context.write_roots)
+    key = (str(state_root), identity, tuple(str(root) for root in roots))
+    cached = getattr(agent, "_chunked_write_manager", None)
+    if cached is not None and getattr(agent, "_chunked_write_scope_key", None) == key:
+        if Path(cached.state_root).resolve() != state_root.resolve():
+            raise ChunkedWriteError("task_scoped_writer_cached_root_mismatch")
+        return cached
+
+    # Never use a cached workspace-wide manager from another request.
+    manager = ChunkedWriteManager(state_root, roots)
+    agent._chunked_write_manager = manager
+    agent._chunked_write_scope_key = key
+    return manager
+
+
 READ_FILE_TEXT_MAX_BYTES = 1_000_000
 
 
@@ -1591,12 +1646,15 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
                 "status": "FAILED", "execution_status": "FAILED",
                 "error_code": "agent_instance_missing", "data": {},
             })
-        manager = getattr(agent, "_chunked_write_manager", None)
-        if manager is None:
-            workspace = Path(getattr(agent, "workspace_root", None) or Path.cwd()).resolve()
-            roots = list(security_context.write_roots)
-            manager = ChunkedWriteManager(workspace / ".agents" / "chunked_writes", roots)
-            agent._chunked_write_manager = manager
+        # Active-task initialization must not inspect or mutate a foreign
+        # workspace-wide writer store, even during automatic recovery.
+        try:
+            manager = _task_scoped_chunked_write_manager(agent, security_context)
+        except ChunkedWriteError as exc:
+            return '[CHUNKED_WRITE_FAILED] ' + json.dumps({
+                "status": "REJECTED", "execution_status": "REJECTED",
+                "error_code": str(exc), "data": {},
+            }, ensure_ascii=False, sort_keys=True)
         try:
             if tool == "begin_file_write":
                 result = manager.begin(
