@@ -448,6 +448,32 @@ def main(argv: list[str] | None = None) -> int:
                     outcome=loop.terminal_outcome,
                     source_task_id=(loop.continuation_source or {}).get('task_id', ''),
                 )
+                task_result_fields = {}
+                if str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower() in {"1", "true", "yes"}:
+                    contract_error_type = ()
+                    try:
+                        from agent_core.tri_one_task_result import (
+                            TaskResultContractError,
+                            make_task_result_from_webagent_loop,
+                        )
+                        contract_error_type = TaskResultContractError
+                        task_result_fields["task_result_v1"] = make_task_result_from_webagent_loop(
+                            loop,
+                            final_content,
+                            source_interface="LOCAL_TEST" if test_envelope is not None else "WEB_DIRECT",
+                        )
+                    except Exception as exc:
+                        task_result_fields["task_result_contract_status"] = "ERROR"
+                        task_result_fields["task_result_contract_error"] = (
+                            str(exc) if isinstance(exc, contract_error_type)
+                            else "contract_build_failed:" + type(exc).__name__
+                        )
+                    runtime_log.emit(
+                        "task_result_contract",
+                        request_id=loop.run_id,
+                        task_id=loop.task_id,
+                        **task_result_fields,
+                    )
                 if "smartagent_tool" in str(rendered):
                     print("[WebAgent][WARN] 最終呈現仍是 protocol envelope；不自動重送。", flush=True)
                 else:
@@ -462,6 +488,7 @@ def main(argv: list[str] | None = None) -> int:
                             "ack_ids": list(loop.accepted_ack_ids),
                             "uploaded_attachments": list(loop.sent_attachment_paths),
                             "verification_status": loop.tools.last_verification_status,
+                            **task_result_fields,
                         },
                     )
                 if lifecycle is not None:
@@ -469,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
                         "TASK_COMPLETED",
                         request_id=loop.run_id,
                         message="已完成",
+                        **task_result_fields,
                     )
                     lifecycle.emit("WAITING_WEBGPT_SIGNAL")
                 from agent_core.task_progress import delete_progress
