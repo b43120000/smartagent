@@ -56,14 +56,14 @@ def main():
             assert _path_independent_command_must_use_bound_workspace(cmd)
             must_reject(
                 lambda cmd=cmd: resolve_command_working_directory(str(fixture), context, agent, command=cmd),
-                'path_independent_command_cwd_outside_bound_workspace',
+                'path_outside_authorized_roots',
             )
         for command in ('(Get-Location).Path', 'Get-Location', 'pwd', '$pwd.Path'):
             assert _path_independent_command_must_use_bound_workspace(command)
             assert resolve_command_working_directory(None, context, agent, command=command) == workspace
             must_reject(
                 lambda command=command: resolve_command_working_directory(str(fixture), context, agent, command=command),
-                'path_independent_command_cwd_outside_bound_workspace',
+                'path_outside_authorized_roots',
             )
         for cmd in (
             "python -c \"__import__('os').system('dir')\"",
@@ -79,7 +79,7 @@ def main():
             )
         must_reject(
             lambda: resolve_command_working_directory(str(subdir), context, agent, command=waits[0]),
-            "command_working_directory_outside_request_scope",
+            'path_independent_command_cwd_outside_bound_workspace',
         )
         # A fixture can even be in the general software writable policy.
         # This must never relocate a path-independent wait or cwd check.
