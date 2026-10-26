@@ -72,8 +72,8 @@ def main():
             # Prompt contains JSON, where Windows path separators are escaped.
             # Decode the sole bounded-workspace contract; do not look for raw
             # str(Path) substrings in its transport-encoded representation.
-            begin = "[RUNTIME_BOUND_COMMAND_WORKSPACE]\\n".replace("\\\\n", "\\n")
-            end = "\\n[/RUNTIME_BOUND_COMMAND_WORKSPACE]".replace("\\\\n", "\\n")
+            begin = "[RUNTIME_BOUND_COMMAND_WORKSPACE]" + chr(10)
+            end = chr(10) + "[/RUNTIME_BOUND_COMMAND_WORKSPACE]"
             assert prompt.count(begin) == 1 and prompt.count(end) == 1, prompt
             embedded = prompt.split(begin, 1)[1].split(end, 1)[0]
             prompt_contract = json.loads(embedded)
