@@ -15,6 +15,9 @@ import time
 
 
 FUNCTIONS = {
+    # IT19: Writer is safety-critical. Capture the real Worker-imported code,
+    # not just an installed source hash or detached worktree import.
+    "agent_core.tools": ("_task_scoped_chunked_write_manager", "_execute_tool_impl"),
     "RemoteAgent.remote_worker_launcher": ("RemoteWorkerLauncher._spawn",),
     "RemoteAgent.telegram_webagent_worker": ("run_task",),
     "WebAgent.protocol_loop": ("WebAgentProtocolLoop.run", "WebAgentProtocolLoop._accept_v8_ack"),
@@ -152,7 +155,7 @@ def capture(*, role, manifest_verified):
             function: digest for function in functions
             if (digest := _loaded_fingerprint(module, function)) is not None
         }
-        if name in {"WebAgent.protocol_loop", "agent_core.strict_observation_guard"}:
+        if name in {"WebAgent.protocol_loop", "agent_core.strict_observation_guard", "agent_core.tools"}:
             # R012 raw marshal hashes are diagnostics, not semantic equivalence
             # tests. A real code-object or independently verified path mismatch
             # remains fail-closed before Planner or Tool.
