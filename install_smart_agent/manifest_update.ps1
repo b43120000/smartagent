@@ -195,6 +195,17 @@ function Get-ManifestFiles([string]$Source) {
     if ($null -eq $protocolCore -or @($protocolCore.PSObject.Properties).Count -eq 0) { throw 'protocol_manifest_core_files_missing' }
     $protocolHash = Get-Sha256 $protocolPath
     if (([string](Get-JsonProperty $fileMap 'config/protocol_manifest.json')).ToLowerInvariant() -ne $protocolHash) { throw 'update_manifest_protocol_manifest_hash_mismatch' }
+    $provenancePath = Join-Path $Source 'config\source_build_provenance.json'
+    try { $provenance = (Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8) | ConvertFrom-Json } catch { throw 'source_build_provenance_unreadable' }
+    $provenanceHash = Get-Sha256 $provenancePath
+    if ((Get-JsonProperty $provenance 'schema') -ne 'SMARTAGENT_SOURCE_BUILD_PROVENANCE_V1') { throw 'source_build_provenance_schema_invalid' }
+    if ((Get-JsonProperty $provenance 'source_tree_clean_at_build') -ne $true) { throw 'source_build_tree_not_clean' }
+    $sourceCommit = [string](Get-JsonProperty $provenance 'source_commit')
+    $sourceTreeSha = [string](Get-JsonProperty $provenance 'source_tree_sha')
+    if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}$' -or $sourceTreeSha -notmatch '^[0-9a-fA-F]{40}$') { throw 'source_build_provenance_git_identity_invalid' }
+    if (([string](Get-JsonProperty $provenance 'protocol_manifest_sha256')).ToLowerInvariant() -ne $protocolHash) { throw 'source_build_provenance_protocol_hash_mismatch' }
+    if ([long](Get-JsonProperty $provenance 'release_sequence') -ne [long](Get-JsonProperty $manifest 'release_sequence')) { throw 'source_build_provenance_sequence_mismatch' }
+    if (([string](Get-JsonProperty $fileMap 'config/source_build_provenance.json')).ToLowerInvariant() -ne $provenanceHash) { throw 'update_manifest_source_provenance_hash_mismatch' }
     $seen = @{}
     $result = New-Object System.Collections.Generic.List[object]
     foreach ($property in @($fileMap.PSObject.Properties)) {
