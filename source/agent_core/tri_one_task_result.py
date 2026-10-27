@@ -108,9 +108,19 @@ def _normalize_source_metadata(value: object) -> dict[str, Any]:
             raise TaskResultContractError("invalid_source_metadata_module_identity")
         if not isinstance(matches, Mapping) or not isinstance(functions, Mapping) or any(type(v) is not bool for v in matches.values()):
             raise TaskResultContractError("invalid_source_metadata_module_functions")
+        live_hashes = record.get("live_code_sha256", {})
+        disk_code_hashes = record.get("recompiled_disk_code_sha256", {})
+        if not isinstance(live_hashes, Mapping) or not isinstance(disk_code_hashes, Mapping):
+            raise TaskResultContractError("invalid_source_metadata_code_hashes")
+        for hashes in (live_hashes, disk_code_hashes):
+            if any(value not in (None, "") and (not isinstance(value, str) or not _HEX_SHA256.fullmatch(value)) for value in hashes.values()):
+                raise TaskResultContractError("invalid_source_metadata_code_hash")
         safe_modules[name] = {
             "source_path": path, "disk_sha256": disk_sha.lower(),
             "live_matches_recompiled_disk": dict(matches), "functions": dict(functions),
+            "live_code_sha256": dict(live_hashes),
+            "recompiled_disk_code_sha256": dict(disk_code_hashes),
+            "comparison_method": str(record.get("comparison_method") or "")[:96] or None,
         }
     if loaded == "PASS" and not safe_modules:
         raise TaskResultContractError("source_metadata_pass_without_modules")
