@@ -386,8 +386,8 @@ try {
     Commit-Stage $transferFiles $script:StageRoot $target
     Remove-StaleFiles $staleFiles $target
     Assert-FileSet $transferFiles $target 'target verification'
-    $remainingStale = @(Get-SafeTreeFiles $target | Where-Object { -not $release.Keys.ContainsKey($_.Relative.ToLowerInvariant()) })
-    if ($remainingStale.Count -gt 0) { throw ('target verification stale files remain: ' + (($remainingStale | ForEach-Object { $_.Relative }) -join ',')) }
+    $remainingOwnedStale = @($staleFiles | Where-Object { Test-Path -LiteralPath (Join-Path $target $_.Relative) -PathType Leaf })
+    if ($remainingOwnedStale.Count -gt 0) { throw ('target verification owned stale files remain: ' + (($remainingOwnedStale | ForEach-Object { $_.Relative }) -join ',')) }
     $baselineHashes = @{}
     foreach ($file in $files) { $baselineHashes[$file.Relative] = $file.Sha256 }
     Save-DeploymentBaseline $target $source $baselineHashes ([string](Get-JsonProperty $release.Manifest 'release_id')) ([long](Get-JsonProperty $release.Manifest 'release_sequence'))
