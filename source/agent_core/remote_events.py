@@ -103,9 +103,25 @@ class RemoteEventStore:
                     from .tri_one_task_result import (
                         TaskResultContractError, make_task_result_from_remote_event,
                     )
+                    from .protocol_manifest import require_protocol_manifest
+                    from .source_attestation import capture, build_task_result_source_metadata
                     contract_error_type = TaskResultContractError
+                    source_root = Path(__file__).resolve().parents[2]
+                    manifest_status = require_protocol_manifest(source_root)
+                    attestation = capture(
+                        role="task_result_producer",
+                        manifest_verified=(
+                            manifest_status.get("hash_verification") == "PASS"
+                            and not manifest_status.get("hash_mismatches")
+                        ),
+                    )
+                    source_metadata = build_task_result_source_metadata(
+                        attestation, root=source_root,
+                    )
+                    original_payload["source_metadata"] = source_metadata
                     original_payload["task_result_v1"] = make_task_result_from_remote_event(
                         task, event_type, original_payload,
+                        source_metadata=source_metadata,
                     )
                     original_payload.pop("task_result_contract_status", None)
                     original_payload.pop("task_result_contract_error", None)
