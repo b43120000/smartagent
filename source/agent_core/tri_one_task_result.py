@@ -40,6 +40,96 @@ class TaskResultContractError(ValueError):
     """Malformed, foreign, or overstated completion metadata."""
 
 
+def _empty_source_metadata(reason: str = "source_metadata_not_provided") -> dict[str, Any]:
+    return {
+        "schema": _SOURCE_METADATA_SCHEMA,
+        "loaded_code_status": "NOT_ATTESTED",
+        "source_commit_status": "NOT_ATTESTED",
+        "source_commit": "NOT_ATTESTED",
+        "source_commit_claim": None,
+        "source_commit_claim_status": "UNAVAILABLE",
+        "attestation_sha256": None,
+        "protocol_manifest_sha256": None,
+        "update_manifest_sha256": None,
+        "source_provenance_sha256": None,
+        "source_tree_sha": None,
+        "publisher_signature_status": "NOT_PROVIDED",
+        "modules": {},
+        "reason": str(reason or "source_metadata_not_provided")[:160],
+    }
+
+
+def _normalize_source_metadata(value: object) -> dict[str, Any]:
+    if value is None:
+        return _empty_source_metadata()
+    if not isinstance(value, Mapping) or value.get("schema") != _SOURCE_METADATA_SCHEMA:
+        raise TaskResultContractError("invalid_source_metadata")
+    loaded = str(value.get("loaded_code_status") or "").upper()
+    commit_status = str(value.get("source_commit_status") or "").upper()
+    if loaded not in {"PASS", "NOT_ATTESTED"} or commit_status not in {"PASS", "NOT_ATTESTED"}:
+        raise TaskResultContractError("invalid_source_metadata_status")
+    source_commit = str(value.get("source_commit") or "NOT_ATTESTED")
+    trust = str(value.get("source_commit_trust") or "").upper()
+    if commit_status == "PASS":
+        if not _HEX_SHA1.fullmatch(source_commit) or trust not in {"SIGNED_RELEASE", "MACHINE_AUTHORIZATION"}:
+            raise TaskResultContractError("source_commit_requires_trusted_metadata")
+    elif source_commit != "NOT_ATTESTED":
+        raise TaskResultContractError("source_commit_not_attested")
+    digests = {}
+    for key in ("attestation_sha256", "protocol_manifest_sha256", "update_manifest_sha256", "source_provenance_sha256"):
+        digest = value.get(key)
+        if digest in (None, ""):
+            digests[key] = None
+        elif isinstance(digest, str) and _HEX_SHA256.fullmatch(digest):
+            digests[key] = digest.lower()
+        else:
+            raise TaskResultContractError("invalid_source_metadata_digest")
+    claim = value.get("source_commit_claim")
+    if claim not in (None, "") and (not isinstance(claim, str) or not _HEX_SHA1.fullmatch(claim)):
+        raise TaskResultContractError("invalid_source_commit_claim")
+    tree = value.get("source_tree_sha")
+    if tree not in (None, "") and (not isinstance(tree, str) or not _HEX_SHA1.fullmatch(tree)):
+        raise TaskResultContractError("invalid_source_tree_sha")
+    modules = value.get("modules", {})
+    if not isinstance(modules, Mapping):
+        raise TaskResultContractError("invalid_source_metadata_modules")
+    safe_modules = {}
+    for name, record in modules.items():
+        if not isinstance(name, str) or not isinstance(record, Mapping):
+            raise TaskResultContractError("invalid_source_metadata_module")
+        path = str(record.get("source_path") or "")
+        disk_sha = str(record.get("disk_sha256") or "")
+        matches = record.get("live_matches_recompiled_disk", {})
+        functions = record.get("functions", {})
+        if not path.startswith("source/") or ".." in path.split("/") or not _HEX_SHA256.fullmatch(disk_sha):
+            raise TaskResultContractError("invalid_source_metadata_module_identity")
+        if not isinstance(matches, Mapping) or not isinstance(functions, Mapping) or any(type(v) is not bool for v in matches.values()):
+            raise TaskResultContractError("invalid_source_metadata_module_functions")
+        safe_modules[name] = {
+            "source_path": path, "disk_sha256": disk_sha.lower(),
+            "live_matches_recompiled_disk": dict(matches), "functions": dict(functions),
+        }
+    if loaded == "PASS" and not safe_modules:
+        raise TaskResultContractError("source_metadata_pass_without_modules")
+    publisher = str(value.get("publisher_signature_status") or "NOT_PROVIDED").upper()
+    if publisher not in {"NOT_PROVIDED", "VERIFIED", "INVALID"}:
+        raise TaskResultContractError("invalid_publisher_signature_status")
+    return {
+        "schema": _SOURCE_METADATA_SCHEMA,
+        "loaded_code_status": loaded,
+        "source_commit_status": commit_status,
+        "source_commit": source_commit,
+        "source_commit_claim": str(claim).lower() if claim else None,
+        "source_commit_claim_status": str(value.get("source_commit_claim_status") or "UNAVAILABLE")[:64],
+        **digests,
+        "source_tree_sha": str(tree).lower() if tree else None,
+        "publisher_signature_status": publisher,
+        "source_commit_trust": trust or None,
+        "modules": safe_modules,
+        "reason": str(value.get("reason") or "")[:160] or None,
+    }
+
+
 def enabled(env: Mapping[str, str] | None = None) -> bool:
     """Only an explicit process-level administrator flag opts in."""
     values = os.environ if env is None else env
