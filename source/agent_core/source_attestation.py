@@ -162,6 +162,55 @@ def require_writer_loaded_source_attestation(attestation: dict) -> dict:
             "comparison_method": "cpython_code_object_eq_and_verified_source_filename"}
 
 
+
+# 2A coverage is an explicit, fail-closed contract, not a claim about Git HEAD.
+# A caller may only rely on this within its *own* executing process after
+# all named modules have been loaded through the actual request path.
+TRI_ONE_REQUIRED_FUNCTIONS = {
+    name: FUNCTIONS[name]
+    for name in (
+        "agent_core.tri_one_task_result",
+        "agent_core.remote_events",
+        "agent_core.task_continuation",
+        "RemoteAgent.telegram_delivery",
+        "RemoteAgent.webgpt_delivery",
+        "WebAgent.controller",
+    )
+}
+
+
+def require_tri_one_loaded_source_attestation(attestation: dict) -> dict:
+    """Validate in-process 2A code identity without manufacturing a commit SHA.
+
+    Missing/lazy modules remain NOT_ATTESTED, including a genuine process that
+    did not use a given adapter. This proves neither full Git-tree identity
+    nor an accepted terminal receipt; downstream code must preserve those
+    independent gates.
+    """
+    if not isinstance(attestation, dict) or attestation.get(
+        "manifest_verified_before_capture"
+    ) is not True:
+        raise RuntimeError("tri_one_loaded_source_manifest_not_verified")
+    observed = attestation.get("modules") or {}
+    for name, required in TRI_ONE_REQUIRED_FUNCTIONS.items():
+        record = observed.get(name) or {}
+        expected_path = "source/" + name.replace(".", "/") + ".py"
+        matches = record.get("live_matches_recompiled_disk") or {}
+        if (
+            record.get("loaded") is not True
+            or record.get("source_path") != expected_path
+            or not record.get("disk_sha256_at_capture")
+            or not all(matches.get(function) is True for function in required)
+        ):
+            raise RuntimeError("tri_one_loaded_source_not_attested:" + name)
+    return {
+        "status": "PASS",
+        "coverage": list(TRI_ONE_REQUIRED_FUNCTIONS),
+        "comparison_method": "cpython_code_object_eq_and_verified_source_filename",
+        "source_commit": "NOT_ATTESTED",
+    }
+
+
 def capture(*, role, manifest_verified):
     """Snapshot the modules actually loaded in this process at capture time."""
     root = Path(__file__).resolve().parents[2]
