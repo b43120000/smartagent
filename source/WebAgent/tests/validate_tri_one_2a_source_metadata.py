@@ -1,5 +1,17 @@
 """TaskResult source-metadata contract regression; fixtures only, no runtime task."""
 from __future__ import annotations
+import os
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+
+from agent_core.protocol_manifest import require_protocol_manifest
+from agent_core.remote_events import RemoteEventStore
+from agent_core.source_attestation import capture, build_task_result_source_metadata
+import agent_core.remote_events as remote_events
+import agent_core.tri_one_task_result as task_result_module
+import RemoteAgent.telegram_webagent_worker as worker_module
+
 
 from agent_core.source_attestation import build_task_result_source_metadata
 from agent_core.tri_one_task_result import (
@@ -84,6 +96,47 @@ def run():
     assert missing["loaded_code_status"] == "NOT_ATTESTED"
     assert missing["source_commit"] == "NOT_ATTESTED"
     assert missing["source_commit_claim"] is None
+    root = Path(__file__).resolve().parents[3]
+    manifest_status = require_protocol_manifest(root)
+    assert manifest_status.get("hash_verification") == "PASS", manifest_status
+    assert not manifest_status.get("hash_mismatches"), manifest_status
+    attestation = capture(role="task_result_producer", manifest_verified=True)
+    source_metadata = build_task_result_source_metadata(attestation, root=root)
+    assert source_metadata["loaded_code_status"] == "PASS", source_metadata
+    assert source_metadata["source_commit"] == "NOT_ATTESTED", source_metadata
+    assert source_metadata["modules"]["agent_core.remote_events"]["live_matches_recompiled_disk"]["RemoteEventStore.emit"] is True
+
+    # Exercise the real RemoteEventStore -> TaskResult producer path with a
+    # synthetic in-memory task and a temporary outbox; no receiver or Runtime runs.
+    previous_flag = os.environ.get("TRI_ONE_TASK_RESULT_V1")
+    os.environ["TRI_ONE_TASK_RESULT_V1"] = "1"
+    try:
+        with tempfile.TemporaryDirectory(prefix="tri-one-source-meta-") as temp:
+            route = {"transport": "LOCAL_TEST", "origin": "source-metadata-fixture"}
+            task = SimpleNamespace(
+                request_id="RR-SOURCE-META-E2E", task_id="TASK-SOURCE-META-E2E",
+                task_epoch="EPOCH-SOURCE-META-E2E", state="COMPLETED",
+                completed_at="2026-10-27T00:00:00.000Z", reply_route=route,
+                metadata={"intent_digest": "DIGEST-SOURCE-META-E2E", "reply_route": route},
+                result_ledger={"final": {"intent_digest": "DIGEST-SOURCE-META-E2E", "task_outcome": "UNKNOWN", "response": "fixture"}},
+                action_ledger={},
+            )
+            event = RemoteEventStore(Path(temp) / "events.json").emit(
+                "TASK_COMPLETED", task, status="COMPLETED",
+                payload={"task_outcome": "UNKNOWN", "summary": "fixture"},
+            )
+            assert event.payload["source_metadata"]["loaded_code_status"] == "PASS"
+            assert event.payload["source_metadata"]["source_commit"] == "NOT_ATTESTED"
+            record = event.payload["task_result_v1"]
+            assert record["source_metadata"]["loaded_code_status"] == "PASS"
+            assert record["source_commit"] == "NOT_ATTESTED"
+            assert record["source_metadata"]["modules"]["agent_core.tri_one_task_result"]["live_matches_recompiled_disk"]["make_task_result_from_remote_event"] is True
+    finally:
+        if previous_flag is None:
+            os.environ.pop("TRI_ONE_TASK_RESULT_V1", None)
+        else:
+            os.environ["TRI_ONE_TASK_RESULT_V1"] = previous_flag
+
     return {"tri_one_2a_source_metadata": "PASS", "cases": 5}
 
 
