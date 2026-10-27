@@ -139,7 +139,7 @@ def run():
         else:
             os.environ["TRI_ONE_TASK_RESULT_V1"] = previous_flag
 
-    return {"tri_one_2a_source_metadata": "PASS", "cases": 5}
+    return {"tri_one_2a_source_metadata": "PASS", "cases": 8}
 
 
 if __name__ == "__main__":
