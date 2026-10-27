@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "source"))
+sys.path.insert(0, str(ROOT))
 
 from install_smart_agent.build_release import build_release
 
