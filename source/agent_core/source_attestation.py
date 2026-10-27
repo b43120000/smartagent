@@ -7,6 +7,7 @@ distinct provenance, at startup. Never store secrets or request bodies.
 from __future__ import annotations
 
 import hashlib
+import json
 import marshal
 import os
 from pathlib import Path
@@ -37,6 +38,9 @@ FUNCTIONS = {
     "agent_core.tri_one_task_result": (
         "make_task_result", "validate_task_result",
         "make_task_result_from_remote_event", "make_task_result_from_webagent_loop",
+    ),
+    "agent_core.source_attestation": (
+        "capture", "require_task_result_source_attestation", "build_task_result_source_metadata",
     ),
     "agent_core.remote_events": ("RemoteEventStore.emit", "DeliveryManager.deliver"),
     "agent_core.task_continuation": ("TaskContinuationStore.finish", "render_task_reply"),
@@ -244,6 +248,7 @@ def capture(*, role, manifest_verified):
         if name in {
             "WebAgent.protocol_loop", "agent_core.strict_observation_guard", "agent_core.tools",
             "agent_core.tri_one_task_result", "agent_core.remote_events",
+            "agent_core.source_attestation", "RemoteAgent.telegram_webagent_worker",
             "agent_core.task_continuation", "RemoteAgent.telegram_delivery",
             "RemoteAgent.webgpt_delivery", "WebAgent.controller",
         }:
