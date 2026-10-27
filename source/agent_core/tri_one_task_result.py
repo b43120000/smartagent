@@ -73,6 +73,9 @@ def _normalize_source_metadata(value: object) -> dict[str, Any]:
     if commit_status == "PASS":
         if not _HEX_SHA1.fullmatch(source_commit) or trust not in {"SIGNED_RELEASE", "MACHINE_AUTHORIZATION"}:
             raise TaskResultContractError("source_commit_requires_trusted_metadata")
+        # This release has no signature or machine-authorization verifier that
+        # can validate such a claim. A string label alone cannot attest a SHA.
+        raise TaskResultContractError("source_commit_verifier_unavailable")
     elif source_commit != "NOT_ATTESTED":
         raise TaskResultContractError("source_commit_not_attested")
     digests = {}
