@@ -223,6 +223,15 @@ function Get-ManifestFiles([string]$Source) {
         $result.Add([pscustomobject]@{ Relative = $relative; Full = $full; Sha256 = $expected })
     }
     if ($result.Count -eq 0) { throw 'update_manifest_empty' }
+    foreach ($property in @($protocolCore.PSObject.Properties)) {
+        $relative = Convert-RelativePath ([string]$property.Name)
+        $expectedCoreSha = ([string]$property.Value).ToLowerInvariant()
+        if ($expectedCoreSha -notmatch '^[0-9a-f]{64}$') { throw "protocol_manifest_core_hash_invalid:$relative" }
+        $corePath = Join-Path $Source $relative
+        if (-not (Test-Path -LiteralPath $corePath -PathType Leaf)) { throw "protocol_manifest_core_file_missing:$relative" }
+        if ((Get-Sha256 $corePath) -ne $expectedCoreSha) { throw "protocol_manifest_core_hash_mismatch:$relative" }
+        if (([string](Get-JsonProperty $fileMap $relative)).ToLowerInvariant() -ne $expectedCoreSha) { throw "update_manifest_core_hash_disagreement:$relative" }
+    }
     $inventory = @(Get-SafeTreeFiles $Source -SourceInventory)
     $unlisted = @($inventory | Where-Object { -not $seen.ContainsKey($_.Relative.ToLowerInvariant()) } | ForEach-Object { $_.Relative })
     $inventoryKeys = @{}; foreach ($item in $inventory) { $inventoryKeys[$item.Relative.ToLowerInvariant()] = $true }
