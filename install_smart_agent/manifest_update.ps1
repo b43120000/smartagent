@@ -185,6 +185,7 @@ function Get-ManifestFiles([string]$Source) {
     try { $manifest = (Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8) | ConvertFrom-Json }
     catch { throw "update_manifest_unreadable:$($_.Exception.Message)" }
     if ((Get-JsonProperty $manifest 'schema') -ne $ManifestSchema) { throw 'update_manifest_schema_mismatch' }
+    if ([string]::IsNullOrWhiteSpace([string](Get-JsonProperty $manifest 'release_id')) -or [long](Get-JsonProperty $manifest 'release_sequence') -le 0) { throw 'update_manifest_release_identity_invalid' }
     $fileMap = Get-JsonProperty $manifest 'files'
     if ($null -eq $fileMap) { throw 'update_manifest_files_missing' }
     $seen = @{}
