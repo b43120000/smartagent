@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the author-owned full-file manifest consumed by update.ps1."""
+"""Build the author-owned full-file manifest consumed by manifest_update.ps1."""
 from __future__ import annotations
 
 import argparse
