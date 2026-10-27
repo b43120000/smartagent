@@ -193,6 +193,16 @@ function Get-ManifestFiles([string]$Source) {
     }
     $fileMap = Get-JsonProperty $manifest 'files'
     if ($null -eq $fileMap) { throw 'update_manifest_files_missing' }
+    $protocolPath = Join-Path $Source 'config\protocol_manifest.json'
+    try { $protocol = (Get-Content -LiteralPath $protocolPath -Raw -Encoding UTF8) | ConvertFrom-Json }
+    catch { throw 'protocol_manifest_unreadable' }
+    if ((Get-JsonProperty $protocol 'schema') -ne 'SMARTAGENT_PROTOCOL_MANIFEST_V1' -or [int](Get-JsonProperty $protocol 'protocol_version') -le 0 -or [string]::IsNullOrWhiteSpace([string](Get-JsonProperty $protocol 'protocol_family'))) {
+        throw 'protocol_manifest_schema_invalid'
+    }
+    $protocolCore = Get-JsonProperty $protocol 'core_files'
+    if ($null -eq $protocolCore -or @($protocolCore.PSObject.Properties).Count -eq 0) { throw 'protocol_manifest_core_files_missing' }
+    $protocolHash = Get-Sha256 $protocolPath
+    if (([string](Get-JsonProperty $fileMap 'config/protocol_manifest.json')).ToLowerInvariant() -ne $protocolHash) { throw 'update_manifest_protocol_manifest_hash_mismatch' }
     $seen = @{}
     $result = New-Object System.Collections.Generic.List[object]
     foreach ($property in @($fileMap.PSObject.Properties)) {
