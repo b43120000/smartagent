@@ -185,6 +185,10 @@ function Get-ManifestFiles([string]$Source) {
     try { $manifest = (Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8) | ConvertFrom-Json }
     catch { throw "update_manifest_unreadable:$($_.Exception.Message)" }
     if ((Get-JsonProperty $manifest 'schema') -ne $ManifestSchema) { throw 'update_manifest_schema_mismatch' }
+    $entrypointPath = Join-Path $Source 'update.bat'
+    if (-not (Test-Path -LiteralPath $entrypointPath -PathType Leaf)) { throw 'UPDATE_SOURCE_INVALID:missing_update_bat' }
+    $entrypointText = (Get-Content -LiteralPath $entrypointPath -Raw -Encoding UTF8).ToLowerInvariant()
+    if ($entrypointText.Contains('[blocked]') -or -not $entrypointText.Contains('manifest_update.ps1') -or -not $entrypointText.Contains('powershell.exe') -or $entrypointText.Contains('executionpolicy bypass')) { throw 'UPDATE_SOURCE_INVALID:root_update_entrypoint_not_ready' }
     if ([string]::IsNullOrWhiteSpace([string](Get-JsonProperty $manifest 'release_id')) -or [long](Get-JsonProperty $manifest 'release_sequence') -le 0) { throw 'update_manifest_release_identity_invalid' }
     $fileMap = Get-JsonProperty $manifest 'files'
     if ($null -eq $fileMap) { throw 'update_manifest_files_missing' }
