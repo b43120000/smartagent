@@ -10,6 +10,7 @@ import hashlib
 import json
 import marshal
 import os
+import re
 from pathlib import Path
 import sys
 import time
