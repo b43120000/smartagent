@@ -325,8 +325,35 @@ Assert-ExpectedLayout $source $target
 Assert-AclOff $target
 $release = Get-ManifestFiles $source
 $files = @($release.Files)
+$previousOwned = @{}
+$previousManifestPath = Join-Path $target $UpdateManifestRelativePath
+if (Test-Path -LiteralPath $previousManifestPath -PathType Leaf) {
+    try { $previousManifest = (Get-Content -LiteralPath $previousManifestPath -Raw -Encoding UTF8) | ConvertFrom-Json } catch { throw 'UPDATE_TARGET_MANIFEST_INVALID' }
+    if ((Get-JsonProperty $previousManifest 'schema') -ne $ManifestSchema) { throw 'UPDATE_TARGET_MANIFEST_SCHEMA_INVALID' }
+    $previousSequence = [long](Get-JsonProperty $previousManifest 'release_sequence')
+    $candidateSequence = [long](Get-JsonProperty $release.Manifest 'release_sequence')
+    if ($previousSequence -le 0 -or $candidateSequence -le $previousSequence) { throw 'UPDATE_RELEASE_SEQUENCE_NOT_NEWER' }
+    $previousFiles = Get-JsonProperty $previousManifest 'files'
+    if ($null -eq $previousFiles) { throw 'UPDATE_TARGET_MANIFEST_FILES_MISSING' }
+    foreach ($property in @($previousFiles.PSObject.Properties)) {
+        $relative = Convert-RelativePath ([string]$property.Name)
+        if (Test-PreservedFile $relative -or $relative -ieq $UpdateManifestRelativePath) { throw "UPDATE_TARGET_MANIFEST_PATH_FORBIDDEN:$relative" }
+        $expected = ([string]$property.Value).ToLowerInvariant()
+        if ($expected -notmatch '^[0-9a-f]{64}$') { throw "UPDATE_TARGET_MANIFEST_HASH_INVALID:$relative" }
+        $previousOwned[$relative.ToLowerInvariant()] = $expected
+    }
+}
 $targetInventory = @(Get-SafeTreeFiles $target)
-$staleFiles = @($targetInventory | Where-Object { -not $release.Keys.ContainsKey($_.Relative.ToLowerInvariant()) })
+$staleList = New-Object System.Collections.Generic.List[object]
+foreach ($item in $targetInventory) {
+    $key = $item.Relative.ToLowerInvariant()
+    if ($previousOwned.ContainsKey($key) -and -not $release.Keys.ContainsKey($key)) {
+        if ((Get-Sha256 $item.Full) -eq $previousOwned[$key]) {
+            $staleList.Add([pscustomobject]@{ Relative = $item.Relative; Full = $item.Full; Sha256 = $previousOwned[$key] })
+        }
+    }
+}
+$staleFiles = @($staleList.ToArray())
 $manifestTransfer = [pscustomobject]@{
     Relative = $UpdateManifestRelativePath
     Full = $release.ManifestPath
