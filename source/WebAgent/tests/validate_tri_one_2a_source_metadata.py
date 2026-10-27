@@ -4,6 +4,11 @@ import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+import sys
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "source"))
+sys.path.insert(0, str(ROOT))
 
 from agent_core.protocol_manifest import require_protocol_manifest
 from agent_core.remote_events import RemoteEventStore
@@ -98,7 +103,7 @@ def run():
     assert missing["loaded_code_status"] == "NOT_ATTESTED"
     assert missing["source_commit"] == "NOT_ATTESTED"
     assert missing["source_commit_claim"] is None
-    root = Path(__file__).resolve().parents[3]
+    root = ROOT
     manifest_status = require_protocol_manifest(root)
     assert manifest_status.get("hash_verification") == "PASS", manifest_status
     assert not manifest_status.get("hash_mismatches"), manifest_status
