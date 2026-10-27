@@ -247,6 +247,8 @@ def require_task_result_source_attestation(attestation: dict, *, root=None) -> d
         record = observed.get(module_name) or {}
         relative = "source/" + module_name.replace(".", "/") + ".py"
         matches = record.get("live_matches_recompiled_disk") or {}
+        live_hashes = record.get("live_code_sha256") or {}
+        disk_code_hashes = record.get("recompiled_disk_code_sha256") or {}
         disk_sha = str(record.get("disk_sha256_at_capture") or "").lower()
         if (
             record.get("loaded") is not True
@@ -254,13 +256,18 @@ def require_task_result_source_attestation(attestation: dict, *, root=None) -> d
             or not re.fullmatch(r"[0-9a-f]{64}", disk_sha)
             or str(core_files.get(relative) or "").lower() != disk_sha
             or not all(matches.get(name) is True for name in required)
+            or not all(re.fullmatch(r"[0-9a-f]{64}", str(live_hashes.get(name) or "")) for name in required)
+            or not all(re.fullmatch(r"[0-9a-f]{64}", str(disk_code_hashes.get(name) or "")) for name in required)
         ):
             raise RuntimeError("task_result_source_not_attested:" + module_name)
         summaries[module_name] = {
             "source_path": relative,
             "disk_sha256": disk_sha,
             "live_matches_recompiled_disk": {name: True for name in required},
-            "functions": list(required),
+            "functions": {name: True for name in required},
+            "live_code_sha256": {name: live_hashes[name] for name in required},
+            "recompiled_disk_code_sha256": {name: disk_code_hashes[name] for name in required},
+            "comparison_method": str(record.get("comparison_method") or ""),
         }
     return {"status": "PASS", "modules": summaries}
 
