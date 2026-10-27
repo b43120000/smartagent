@@ -10,19 +10,23 @@
 
 一般使用者只需執行根目錄的 `install_smart_agent/launchers/install_smart_agent.bat`。
 
-## 更新既有安裝
+## Release build 與更新狀態
 
-下載新的完整 release 後，從新 release 執行根目錄 `update.bat`，再貼上目前實際使用、已完成 Windows 授權的 `SmartAgentv1` 路徑。更新器會先驗證下載包的 protocol manifest 與完整檔案 manifest，並驗證目標路徑就是 `%ProgramData%\SmartAgent\machine_authorization.json` 綁定的安裝位置；任何驗證失敗都會在停止服務或寫入前中止。正式覆寫前，release 會先複製到 `%ProgramData%\SmartAgent\updates` 的管理員專用候選目錄，再次完整驗證後才部署，避免驗證與複製之間讀到不同內容。
+維護者應從乾淨的 Git checkout 建立完整 release artifact：
 
-更新會替換 application-owned code；若舊安裝已有 `update_manifest.json`，也會移除該 manifest 已列出、但新版已廢棄的受管程式檔。第一次從沒有 update manifest 的舊版升級時，無法安全判定額外檔案是否屬於使用者，因此只清理由新版受管目錄內 `/MIR` 可確定的舊檔，不會猜測刪除未知的頂層檔。更新器會沿用既有 security profile 刷新 restricted executor code 與 machine authorization。它不會執行完整 install/reinstall，也不會重建 executor SID、旋轉排程憑證、清除 Telegram token 或要求重新掃描 QR。
+```powershell
+python install_smart_agent/build_release.py --root . --output-dir C:\release-artifacts
+```
 
-以下內容永遠保留：`localdata` 使用者資料、`.venv`、`config\debug_config.json`、`.git`、`.agents`、使用者捷徑，以及 `%APPDATA%\WebLLMScraper`。更新需要一次 UAC，因為受保護 executor 與 ProgramData 授權只能由系統管理員更新；取消 UAC 時不會修改目標。更新若被斷電或強制終止，下次執行會先使用 ProgramData 中的交易備份回復舊版。若 requirements 或 security policy 版本改變，更新器會在寫入前回報 `UPDATE_MIGRATION_REQUIRED`，不會嘗試隱性修改環境或安全邊界；較舊 protocol 版本也不得覆蓋較新安裝。
+Builder 會固定 source commit/tree、在隔離 staging 內重新生成 strict protocol manifest、source build provenance 與完整 update manifest，驗證每個受管檔案的 SHA-256 和 inventory，再輸出 ZIP 與 sidecar report。輸出目錄必須位於 source checkout 外，source tree 必須乾淨。
 
-第一次成功更新會在 `%ProgramData%\SmartAgent\updater` 發布 ACL 保護且由 machine authorization 綁定雜湊的 updater 副本；後續 `update.bat` 的 UAC 階段改由這個副本執行。首次導入時尚無受保護副本，因此該次仍必須信任目前下載包。更新只刷新 executor code、啟動既有排程並更新 authorization，不會重算 workspace/runtime ACL 或 trusted-executable allowlist。
+目前 root `update.bat` 刻意 fail-closed，因為受保護的更新入口尚未完成。Builder 會拒絕產生可部署 artifact，並回報 `release_update_entrypoint_not_ready`；不要直接執行 `manifest_update.ps1` 來繞過此 Gate，也不要以關閉 ACL 當作替代方案。
 
-manifest 雜湊可確認同一 release 內的檔案一致性與完整性，但目前 release 尚未使用發布者數位簽章，因此不能單靠 manifest 證明下載包的發布者身分。只應從可信來源取得 release，並在 UAC 視窗確認是自己剛啟動的更新。若未來要做到無互動更新或更強的來源鑑別，必須加入簽章 release 與受保護的 SYSTEM updater；不能用略過 UAC 取代。
+`manifest_update.ps1` 的目前支援範圍仍限 ACL OFF。它會驗證 package 的 protocol manifest、完整 update manifest、build provenance、release sequence 與受管檔案雜湊；只移除舊 manifest 曾管理且目前 hash 仍相符的廢棄檔案，未知或已修改的檔案會保留。ACL ON 的受保護 updater、machine authorization 更新與 restricted executor refresh 尚未完成，因此不宣稱整條 release/update 路徑已可部署。
 
-發布新版前，維護者必須先遞增 `build_update_manifest.py` 的 `RELEASE_SEQUENCE`，再依序重建 `protocol_manifest.json` 與 `update_manifest.json`。更新器只接受 sequence 大於目前已安裝 release 的套件，避免同一 protocol 世代被舊包降級。
+Build provenance 目前沒有發布者數位簽章。Runtime 可以記錄 loaded module code identity 與 unsigned build commit claim，但不得將該 claim 升格為 `TaskResult.source_commit`；該欄位必須維持 `NOT_ATTESTED`，直到來源由受信任簽章或受保護 machine-authorization binding 證明。
+
+Release sequence 由 `build_update_manifest.py` 定義，現行候選序號為 `2026102701`，高於舊安裝的 `2026102203`。Builder 負責在 staging 內依序產生 protocol manifest、provenance 與 update manifest；不要手動改寫 manifest 雜湊來通過 Gate。
 
 SmartAgent 直接在目前資料夾內建立執行環境；父資料夾名稱與位置不影響安裝。啟用 Windows restricted executor 時，預設安全路徑為：
 
