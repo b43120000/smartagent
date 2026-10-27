@@ -42,3 +42,16 @@ Run `install_smart_agent\launchers\ensure_portable_runtime.bat` when runtime ext
 Use the bundled `.venv\git\cmd\git.exe` if Git is not on PATH. Before publishing code changes, verify the protocol manifest and run focused tests. Keep protocol and update manifest hashes consistent with the exact tracked file bytes; a normal Git commit is not a newly packaged release.
 
 Default provider DOM files remain versioned. Other URL calibration is origin-specific. Generated verification evidence belongs in localdata and must not be published with browser state or credentials.
+
+## R014-B: host-local marker isolation (Direct Git only)
+
+Git still owns source code, the verifier `source/agent_core/protocol_manifest.py`, and the **tracked** canonical build inputs `config/protocol_manifest.json` and `config/update_manifest.json`. A `.gitignore` entry does not untrack these files. Do not use `skip-worktree`, `assume-unchanged`, reset or force checkout to hide tracked changes.
+
+Machine-specific records under `localdata/`, `.agents/`, personal DOM/binding/config files and ignored environment data must not be required to match Git or another installation. Local diagnostic hash observations, if written, belong only under ignored `localdata/metadata/` and are **not** source or Worker attestation. The pure comparator in `source/agent_core/git_local_marker_policy.py` classifies entries for **cross-install reporting only**; it neither authorizes a deployment nor overrides Git's tracked-file conflict behavior. An installed dirty tracked canonical manifest remains a deployment conflict requiring review even if its entire hash is exempt from cross-install equality.
+
+A pinned candidate is verified against its **own** strict `CORE_FILES` Manifest with no missing or mismatched hashes. Before any Live or deployment, create its canonical Manifest through the supported `build_protocol_manifest()/write_protocol_manifest()` mechanism, commit exact bytes to the candidate branch and pass native `validate_protocol_manifest()` on the new clean source SHA. Preserve the original failing run evidence. Neither an ACL-OFF software-only bypass nor a locally regenerated observation is a strict PASS.
+
+The release builder intentionally regenerates staged `config/protocol_manifest.json` plus `config/update_manifest.json` and `config/source_build_provenance.json`, and `source_attestation.py` checks their internal binding. Those are build/provenance records, **not** freely interchangeable machine tags. Moving the canonical runtime manifest under `localdata/` would change these interfaces and requires separate design; not part of R014-B. The retired `Update.bat` / update transfer / publisher branch is excluded from this task. Preserve the original dirty installed checkout, protected tasks and Writer; use a separately reviewed reversible deployment procedure.
+
+Focused offline policy regression: `python -B source/WebAgent/tests/validate_r014_git_local_marker_policy.py` with `PYTHONPATH=source`. It proves local records are excluded from cross-install equality, canonical files still report tracked conflicts, and a stale candidate-local manifest remains a hard FAIL.
+
