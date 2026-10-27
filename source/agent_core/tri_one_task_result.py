@@ -210,6 +210,7 @@ def make_task_result(
     operational_action_count_basis: str = "CALLER_ATTESTED",
     artifacts: list[dict] | None = None,
     source_commit: str = "NOT_ATTESTED",
+    source_metadata: Mapping[str, object] | None = None,
     completion_kind: str | None = None,
     created_at: object = None,
 ) -> dict[str, Any]:
@@ -259,9 +260,14 @@ def make_task_result(
     ):
         raise TaskResultContractError("invalid_artifacts")
 
+    source_metadata = _normalize_source_metadata(source_metadata)
     source_commit = str(source_commit or "NOT_ATTESTED").strip()
     if source_commit != "NOT_ATTESTED" and not _HEX_SHA1.fullmatch(source_commit):
         raise TaskResultContractError("source_commit_not_attested_sha")
+    if source_commit == "NOT_ATTESTED" and source_metadata.get("source_commit_status") == "PASS":
+        source_commit = str(source_metadata.get("source_commit") or "NOT_ATTESTED")
+    if source_commit != source_metadata.get("source_commit"):
+        raise TaskResultContractError("source_metadata_commit_mismatch")
 
     receipt = dict(terminal_acceptance or {})
     accepted = (
@@ -331,6 +337,7 @@ def make_task_result(
         "source_interface": source_interface,
         "reply_route_id": route_id,
         "source_commit": source_commit,
+        "source_metadata": source_metadata,
         "completion_kind": kind,
         "task_state": state,
         "outcome": outcome,
@@ -393,6 +400,9 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     source_commit = str(result.get("source_commit") or "")
     if source_commit != "NOT_ATTESTED" and not _HEX_SHA1.fullmatch(source_commit):
         raise TaskResultContractError("source_commit_not_attested_sha")
+    source_metadata = _normalize_source_metadata(result.get("source_metadata"))
+    if source_metadata.get("source_commit") != source_commit:
+        raise TaskResultContractError("source_metadata_commit_mismatch")
     if not str(result.get("reply_route_id") or "").startswith("ROUTE-"):
         raise TaskResultContractError("invalid_reply_route_id")
     if not str(result.get("result_id") or "").startswith("TRES-"):
@@ -447,7 +457,8 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
 
 
 def make_task_result_from_remote_event(task: object, event_type: str,
-                                       payload: Mapping[str, object] | None) -> dict[str, Any]:
+                                       payload: Mapping[str, object] | None, *,
+                                       source_metadata: Mapping[str, object] | None = None) -> dict[str, Any]:
     """Create an additive TaskResult from an existing trusted terminal event."""
     event_type = str(event_type or "").strip().upper()
     state_by_event = {
@@ -518,14 +529,9 @@ def make_task_result_from_remote_event(task: object, event_type: str,
     if not isinstance(artifacts, list):
         raise TaskResultContractError("invalid_artifacts")
     answer_text = event_payload.get("summary") or final.get("response") or final.get("error") or ""
-    task_metadata = dict(metadata)
-    attested_sha = str(task_metadata.get("loaded_source_commit") or "").strip()
-    source_commit = (
-        attested_sha
-        if task_metadata.get("loaded_source_commit_attested") is True
-        and _HEX_SHA1.fullmatch(attested_sha)
-        else "NOT_ATTESTED"
-    )
+    # Legacy task metadata flags are not trusted source attestations.
+    source_metadata = _normalize_source_metadata(source_metadata)
+    source_commit = str(source_metadata.get("source_commit") or "NOT_ATTESTED")
     completed_at = getattr(task, "completed_at", None)
     result = make_task_result(
         request_id=str(getattr(task, "request_id", "") or ""),
@@ -543,6 +549,7 @@ def make_task_result_from_remote_event(task: object, event_type: str,
         operational_action_count_basis=action_basis,
         artifacts=artifacts,
         source_commit=source_commit,
+        source_metadata=source_metadata,
         created_at=completed_at,
     )
     plan_id = str(final.get("plan_id") or event_payload.get("plan_id") or "").strip()
