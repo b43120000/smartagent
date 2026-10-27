@@ -59,6 +59,18 @@ def build_release(root: Path, output_dir: Path, *, release_id: str = "") -> dict
         raise RuntimeError("release_provenance_must_be_generated_in_stage")
     if _git(root, "status", "--porcelain", "--untracked-files=all"):
         raise RuntimeError("release_source_tree_dirty")
+    entrypoint = root / "update.bat"
+    try:
+        entrypoint_text = entrypoint.read_text(encoding="utf-8").casefold()
+    except OSError as exc:
+        raise RuntimeError("release_update_entrypoint_missing") from exc
+    if (
+        "[blocked]" in entrypoint_text
+        or "manifest_update.ps1" not in entrypoint_text
+        or "powershell.exe" not in entrypoint_text
+        or "executionpolicy bypass" in entrypoint_text
+    ):
+        raise RuntimeError("release_update_entrypoint_not_ready")
     source_commit = _git(root, "rev-parse", "HEAD").lower()
     source_tree_sha = _git(root, "rev-parse", "HEAD^{tree}").lower()
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or not re.fullmatch(r"[0-9a-f]{40}", source_tree_sha):
