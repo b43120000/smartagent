@@ -104,3 +104,84 @@ def build_release(root: Path, output_dir: Path, *, release_id: str = "") -> dict
         if strict.get("hash_verification") != "PASS" or strict.get("hash_mismatches"):
             raise RuntimeError("release_protocol_manifest_not_strict_pass")
 
+        from install_smart_agent.build_update_manifest import RELEASE_SEQUENCE
+        provenance = {
+            "schema": "SMARTAGENT_SOURCE_BUILD_PROVENANCE_V1",
+            "source_commit": source_commit,
+            "source_tree_sha": source_tree_sha,
+            "source_tree_clean_at_build": True,
+            "provenance_kind": "UNSIGNED_CLEAN_GIT_CHECKOUT",
+            "publisher_signature_status": "NOT_PROVIDED",
+            "build_tool": "install_smart_agent/build_release.py",
+            "built_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "release_id": release_id,
+            "release_sequence": RELEASE_SEQUENCE,
+            "protocol_family": protocol["protocol_family"],
+            "protocol_version": protocol["protocol_version"],
+            "protocol_manifest_sha256": _sha256(protocol_path),
+        }
+        provenance_path = stage / "config" / "source_build_provenance.json"
+        _write_json(provenance_path, provenance)
+        manifest = build_update_manifest.build(stage, release_id=release_id)
+        manifest_path = stage / "config" / "update_manifest.json"
+        _write_json(manifest_path, manifest)
+        expected = build_update_manifest.deployable_files(stage)
+        listed = manifest.get("files")
+        if not isinstance(listed, dict) or set(listed) != set(expected):
+            raise RuntimeError("release_update_manifest_inventory_mismatch")
+        for relative, digest in expected.items():
+            if str(listed.get(relative) or "").lower() != digest.lower():
+                raise RuntimeError("release_update_manifest_hash_mismatch:" + relative)
+        if str(listed.get("config/source_build_provenance.json") or "").lower() != _sha256(provenance_path):
+            raise RuntimeError("release_provenance_not_in_update_manifest")
+        if str(listed.get("config/protocol_manifest.json") or "").lower() != _sha256(protocol_path):
+            raise RuntimeError("release_protocol_manifest_not_in_update_manifest")
+        if manifest.get("release_sequence") != provenance["release_sequence"]:
+            raise RuntimeError("release_sequence_provenance_mismatch")
+
+        archive_name = "SmartAgent-" + release_id + ".zip"
+        archive_path = output_dir / archive_name
+        temporary_archive = output_dir / (archive_name + ".tmp")
+        with zipfile.ZipFile(temporary_archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for relative in sorted(listed) + ["config/update_manifest.json"]:
+                member = stage / Path(relative)
+                if not member.is_file() or member.is_symlink():
+                    raise RuntimeError("release_archive_member_invalid:" + relative)
+                archive.write(member, arcname=Path(relative).as_posix())
+        temporary_archive.replace(archive_path)
+        report = {
+            "schema": "SMARTAGENT_RELEASE_ARTIFACT_REPORT_V1",
+            "release_id": release_id,
+            "release_sequence": manifest["release_sequence"],
+            "source_commit": source_commit,
+            "source_tree_sha": source_tree_sha,
+            "protocol_core_file_count": len(core_files),
+            "deployable_file_count": len(listed),
+            "protocol_manifest_sha256": _sha256(protocol_path),
+            "update_manifest_sha256": _sha256(manifest_path),
+            "artifact_file": archive_name,
+            "artifact_sha256": _sha256(archive_path),
+            "publisher_signature_status": "NOT_PROVIDED",
+        }
+        report_path = output_dir / ("SmartAgent-" + release_id + ".release.json")
+        _write_json(report_path, report)
+        return {"status": "PASS", "artifact": str(archive_path), "report": str(report_path), **report}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", required=True, help="clean SmartAgent Git checkout")
+    parser.add_argument("--output-dir", required=True, help="directory outside the source checkout")
+    parser.add_argument("--release-id", default="")
+    args = parser.parse_args(argv)
+    result = build_release(Path(args.root), Path(args.output_dir), release_id=args.release_id)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print("RELEASE_BUILD_BLOCKED:" + str(exc), file=sys.stderr)
+        raise SystemExit(2)
