@@ -32,6 +32,8 @@ ACTION_COUNT_BASES = frozenset({
     "CALLER_ATTESTED", "RESULT_LEDGER", "TASK_LEDGER", "NO_LEDGER_OBSERVED",
 })
 _HEX_SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
+_HEX_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_SOURCE_METADATA_SCHEMA = "SMARTAGENT_TASK_RESULT_SOURCE_METADATA_V1"
 
 
 class TaskResultContractError(ValueError):
