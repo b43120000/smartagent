@@ -32,6 +32,21 @@ FUNCTIONS = {
         "WebLLMScraper._wait_for_send_ready",
     ),
     "agent_core.composer_operation": ("_page_snapshot", "_write_staged_prompt", "helper_main"),
+    # Tri-One 2A: record actual process-loaded functions. An unloaded module
+    # stays unloaded; never import it merely to satisfy an attestation.
+    "agent_core.tri_one_task_result": (
+        "make_task_result", "validate_task_result",
+        "make_task_result_from_remote_event", "make_task_result_from_webagent_loop",
+    ),
+    "agent_core.remote_events": ("RemoteEventStore.emit", "RemoteEventDeliveryWorker.deliver"),
+    "agent_core.task_continuation": ("TaskContinuationStore.finish", "render_task_reply"),
+    "RemoteAgent.telegram_delivery": (
+        "TelegramDeliveryAdapter.render", "TelegramDeliveryAdapter.deliver_event",
+    ),
+    "RemoteAgent.webgpt_delivery": (
+        "WebGPTDeliveryAdapter.render", "WebGPTDeliveryAdapter.deliver_event",
+    ),
+    "WebAgent.controller": ("build_final_render_prompt", "render_final_ack"),
 }
 
 
@@ -177,7 +192,12 @@ def capture(*, role, manifest_verified):
             function: digest for function in functions
             if (digest := _loaded_fingerprint(module, function)) is not None
         }
-        if name in {"WebAgent.protocol_loop", "agent_core.strict_observation_guard", "agent_core.tools"}:
+        if name in {
+            "WebAgent.protocol_loop", "agent_core.strict_observation_guard", "agent_core.tools",
+            "agent_core.tri_one_task_result", "agent_core.remote_events",
+            "agent_core.task_continuation", "RemoteAgent.telegram_delivery",
+            "RemoteAgent.webgpt_delivery", "WebAgent.controller",
+        }:
             # R012 raw marshal hashes are diagnostics, not semantic equivalence
             # tests. A real code-object or independently verified path mismatch
             # remains fail-closed before Planner or Tool.
