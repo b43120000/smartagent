@@ -38,7 +38,7 @@ FUNCTIONS = {
         "make_task_result", "validate_task_result",
         "make_task_result_from_remote_event", "make_task_result_from_webagent_loop",
     ),
-    "agent_core.remote_events": ("RemoteEventStore.emit", "RemoteEventDeliveryWorker.deliver"),
+    "agent_core.remote_events": ("RemoteEventStore.emit", "DeliveryManager.deliver"),
     "agent_core.task_continuation": ("TaskContinuationStore.finish", "render_task_reply"),
     "RemoteAgent.telegram_delivery": (
         "TelegramDeliveryAdapter.render", "TelegramDeliveryAdapter.deliver_event",
