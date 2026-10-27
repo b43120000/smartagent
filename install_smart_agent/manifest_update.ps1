@@ -195,6 +195,7 @@ function Get-ManifestFiles([string]$Source) {
     $protocolPath = Join-Path $Source 'config\protocol_manifest.json'
     try { $protocol = (Get-Content -LiteralPath $protocolPath -Raw -Encoding UTF8) | ConvertFrom-Json } catch { throw 'protocol_manifest_unreadable' }
     if ((Get-JsonProperty $protocol 'schema') -ne 'SMARTAGENT_PROTOCOL_MANIFEST_V1' -or [int](Get-JsonProperty $protocol 'protocol_version') -le 0) { throw 'protocol_manifest_schema_invalid' }
+    if ([string](Get-JsonProperty $protocol 'protocol_family') -ne [string](Get-JsonProperty $manifest 'protocol_family') -or [int](Get-JsonProperty $protocol 'protocol_version') -ne [int](Get-JsonProperty $manifest 'protocol_version')) { throw 'protocol_manifest_release_identity_mismatch' }
     $protocolCore = Get-JsonProperty $protocol 'core_files'
     if ($null -eq $protocolCore -or @($protocolCore.PSObject.Properties).Count -eq 0) { throw 'protocol_manifest_core_files_missing' }
     $protocolHash = Get-Sha256 $protocolPath
