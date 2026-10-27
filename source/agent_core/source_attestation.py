@@ -163,7 +163,7 @@ def require_writer_loaded_source_attestation(attestation: dict) -> dict:
     ):
         raise RuntimeError("writer_loaded_source_attestation_failed")
     return {"status": "PASS", "module": "agent_core.tools",
-            "functions": list(required),
+            "functions": {name: True for name in required},
             "comparison_method": "cpython_code_object_eq_and_verified_source_filename"}
 
 
