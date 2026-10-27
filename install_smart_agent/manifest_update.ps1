@@ -296,7 +296,10 @@ function Remove-StaleFiles([object[]]$Files, [string]$TargetRoot) {
     foreach ($file in $Files) {
         $targetFile = Join-Path $TargetRoot $file.Relative
         if (-not (Test-IsSameOrChild $targetFile $TargetRoot)) { throw "update_stale_path_escape:$($file.Relative)" }
-        if (Test-Path -LiteralPath $targetFile -PathType Leaf) { Remove-Item -LiteralPath $targetFile -Force }
+        if (Test-Path -LiteralPath $targetFile -PathType Leaf) {
+            if ($file.Sha256 -and (Get-Sha256 $targetFile) -ne $file.Sha256) { throw "update_stale_file_changed:$($file.Relative)" }
+            Remove-Item -LiteralPath $targetFile -Force
+        }
     }
 }
 function Rollback-Target([string]$TargetRoot, [string]$BackupRoot) {
