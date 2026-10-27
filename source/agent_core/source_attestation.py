@@ -292,6 +292,7 @@ def build_task_result_source_metadata(attestation: dict, *, root=None) -> dict:
             raise RuntimeError("task_result_source_manifest_not_strict_pass")
         protocol_path = base / "config" / "protocol_manifest.json"
         protocol_sha = _sha256_file(protocol_path)
+        protocol_document = json.loads(protocol_path.read_text(encoding="utf-8"))
         attestation_bytes = json.dumps(
             attestation, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
         ).encode("utf-8")
@@ -326,6 +327,10 @@ def build_task_result_source_metadata(attestation: dict, *, root=None) -> dict:
             or not re.fullmatch(r"[0-9a-f]{40}", source_tree_sha)
             or provenance.get("protocol_manifest_sha256") != protocol_sha
             or provenance.get("release_sequence") != sequence
+            or provenance.get("release_id") != update_manifest.get("release_id")
+            or provenance.get("protocol_family") != protocol_document.get("protocol_family")
+            or provenance.get("protocol_version") != protocol_document.get("protocol_version")
+            or provenance.get("publisher_signature_status") != "NOT_PROVIDED"
             or update_manifest.get("schema") != "SMARTAGENT_UPDATE_MANIFEST_V1"
             or not isinstance(files, dict)
             or str(files.get("config/source_build_provenance.json") or "").lower() != provenance_sha
