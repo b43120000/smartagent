@@ -64,6 +64,8 @@ def run():
         },
     }
     rejected("source_commit_requires_trusted_metadata", lambda: build(source_metadata=forged))
+    forged["source_commit_trust"] = "MACHINE_AUTHORIZATION"
+    rejected("source_commit_verifier_unavailable", lambda: build(source_metadata=forged))
 
     # A valid unsigned build-commit claim remains a claim; it cannot fill source_commit.
     claim = {
