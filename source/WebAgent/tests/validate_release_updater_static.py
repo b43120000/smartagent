@@ -16,7 +16,7 @@ def run(root: Path = ROOT) -> dict:
     required = (
         "source_build_provenance_schema_invalid",
         "update_manifest_source_provenance_hash_mismatch",
-        "protocol_manifest_core_hash_disagreement",
+        "update_manifest_core_hash_disagreement",
         "UPDATE_RELEASE_SEQUENCE_NOT_NEWER",
         "UPDATE_SOURCE_INVALID:root_update_entrypoint_not_ready",
         "update_stale_file_changed",
