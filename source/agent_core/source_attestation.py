@@ -215,6 +215,138 @@ def require_tri_one_loaded_source_attestation(attestation: dict) -> dict:
     }
 
 
+TASK_RESULT_SOURCE_FUNCTIONS = {
+    "agent_core.source_attestation": (
+        "capture", "require_task_result_source_attestation", "build_task_result_source_metadata",
+    ),
+    "agent_core.remote_events": ("RemoteEventStore.emit",),
+    "agent_core.tri_one_task_result": (
+        "make_task_result", "validate_task_result", "make_task_result_from_remote_event",
+    ),
+    "RemoteAgent.telegram_webagent_worker": ("run_task",),
+}
+
+
+def require_task_result_source_attestation(attestation: dict, *, root=None) -> dict:
+    """Require live producer functions to match their strict-manifested disk source."""
+    if not isinstance(attestation, dict) or attestation.get("manifest_verified_before_capture") is not True:
+        raise RuntimeError("task_result_source_manifest_not_verified")
+    base = Path(root or Path(__file__).resolve().parents[2]).expanduser().resolve()
+    manifest_path = base / "config" / "protocol_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        core_files = manifest.get("core_files", {})
+    except Exception as exc:
+        raise RuntimeError("task_result_source_protocol_manifest_unreadable") from exc
+    if not isinstance(core_files, dict):
+        raise RuntimeError("task_result_source_core_files_missing")
+    observed = attestation.get("modules") or {}
+    summaries = {}
+    for module_name, required in TASK_RESULT_SOURCE_FUNCTIONS.items():
+        record = observed.get(module_name) or {}
+        relative = "source/" + module_name.replace(".", "/") + ".py"
+        matches = record.get("live_matches_recompiled_disk") or {}
+        disk_sha = str(record.get("disk_sha256_at_capture") or "").lower()
+        if (
+            record.get("loaded") is not True
+            or record.get("source_path") != relative
+            or not re.fullmatch(r"[0-9a-f]{64}", disk_sha)
+            or str(core_files.get(relative) or "").lower() != disk_sha
+            or not all(matches.get(name) is True for name in required)
+        ):
+            raise RuntimeError("task_result_source_not_attested:" + module_name)
+        summaries[module_name] = {
+            "source_path": relative,
+            "disk_sha256": disk_sha,
+            "live_matches_recompiled_disk": {name: True for name in required},
+            "functions": list(required),
+        }
+    return {"status": "PASS", "modules": summaries}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_task_result_source_metadata(attestation: dict, *, root=None) -> dict:
+    """Build additive code-identity metadata; never infer source_commit from Git HEAD.
+
+    An unsigned package may carry a build-commit claim, but the TaskResult
+    source_commit remains NOT_ATTESTED until a trusted signature or protected
+    machine-authorization binding is available.
+    """
+    from .tri_one_task_result import _empty_source_metadata
+
+    base = Path(root or Path(__file__).resolve().parents[2]).expanduser().resolve()
+    metadata = _empty_source_metadata("task_result_source_not_attested")
+    try:
+        required = require_task_result_source_attestation(attestation, root=base)
+        from .protocol_manifest import require_protocol_manifest
+        verified = require_protocol_manifest(base)
+        if verified.get("hash_verification") != "PASS" or verified.get("hash_mismatches"):
+            raise RuntimeError("task_result_source_manifest_not_strict_pass")
+        protocol_path = base / "config" / "protocol_manifest.json"
+        protocol_sha = _sha256_file(protocol_path)
+        attestation_bytes = json.dumps(
+            attestation, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+        ).encode("utf-8")
+        metadata.update(
+            loaded_code_status="PASS",
+            attestation_sha256=hashlib.sha256(attestation_bytes).hexdigest(),
+            protocol_manifest_sha256=protocol_sha,
+            modules=required["modules"],
+            reason=None,
+        )
+        provenance_path = base / "config" / "source_build_provenance.json"
+        update_path = base / "config" / "update_manifest.json"
+        if not provenance_path.is_file() or not update_path.is_file():
+            metadata["reason"] = "source_build_provenance_unavailable"
+            return metadata
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            update_manifest = json.loads(update_path.read_text(encoding="utf-8"))
+        except Exception:
+            metadata["reason"] = "source_build_provenance_unreadable"
+            return metadata
+        provenance_sha = _sha256_file(provenance_path)
+        update_sha = _sha256_file(update_path)
+        files = update_manifest.get("files", {})
+        source_commit_claim = str(provenance.get("source_commit") or "").lower()
+        source_tree_sha = str(provenance.get("source_tree_sha") or "").lower()
+        sequence = update_manifest.get("release_sequence")
+        if (
+            provenance.get("schema") != "SMARTAGENT_SOURCE_BUILD_PROVENANCE_V1"
+            or provenance.get("source_tree_clean_at_build") is not True
+            or not re.fullmatch(r"[0-9a-f]{40}", source_commit_claim)
+            or not re.fullmatch(r"[0-9a-f]{40}", source_tree_sha)
+            or provenance.get("protocol_manifest_sha256") != protocol_sha
+            or provenance.get("release_sequence") != sequence
+            or update_manifest.get("schema") != "SMARTAGENT_UPDATE_MANIFEST_V1"
+            or not isinstance(files, dict)
+            or str(files.get("config/source_build_provenance.json") or "").lower() != provenance_sha
+            or str(files.get("config/protocol_manifest.json") or "").lower() != protocol_sha
+        ):
+            metadata["reason"] = "source_build_provenance_not_consistent"
+            return metadata
+        metadata.update(
+            source_commit_claim=source_commit_claim,
+            source_commit_claim_status="UNSIGNED_BUILD_PROVENANCE",
+            source_provenance_sha256=provenance_sha,
+            update_manifest_sha256=update_sha,
+            source_tree_sha=source_tree_sha,
+            publisher_signature_status="NOT_PROVIDED",
+            reason="source_commit_not_attested_unsigned_provenance",
+        )
+        return metadata
+    except Exception as exc:
+        metadata["reason"] = "task_result_source_attestation_failed:" + type(exc).__name__
+        return metadata
+
+
 def capture(*, role, manifest_verified):
     """Snapshot the modules actually loaded in this process at capture time."""
     root = Path(__file__).resolve().parents[2]
