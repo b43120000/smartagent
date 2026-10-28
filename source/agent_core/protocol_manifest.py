@@ -20,6 +20,9 @@ PROTOCOL_VERSION = 9
 
 # Keep this list small and explicit: these files define the wire/tool and
 # project-sync behavior that must be identical in every process/package.
+# Maintenance-only release/update entrypoints are not part of runtime wire or
+# task execution integrity. Their drift must not block normal Agent startup;
+# release workflows validate them separately before invoking those scripts.
 CORE_FILES = (
     'source/agent_core/path_integrity_trace.py',
     'source/agent_core/source_attestation.py',
@@ -64,7 +67,6 @@ CORE_FILES = (
     'install_smart_agent/launchers/reinstall_smart_agent.bat',
     'force_stop_all_agents.bat',
     'Edit_workspace.bat',
-    'update.bat',
     'install_smart_agent/launchers/InstallCheckList.bat',
     'launch_remote_agent.bat',
     'launch_webcopilot.bat',
@@ -76,10 +78,6 @@ CORE_FILES = (
     'install_smart_agent/configure_security.ps1',
     'install_smart_agent/acl_status.ps1',
     'install_smart_agent/security_acl_policy.ps1',
-    'install_smart_agent/update.ps1',
-    'install_smart_agent/manifest_update.ps1',
-    'install_smart_agent/build_update_manifest.py',
-    'install_smart_agent/build_release.py',
     'install_smart_agent/bootstrap_webdirect.ps1',
     'install_smart_agent/prepare_install_instance.ps1',
     'install_smart_agent/complete_install.ps1',
