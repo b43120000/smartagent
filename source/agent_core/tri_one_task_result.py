@@ -379,6 +379,20 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     """Validate a stored record; this does not itself attest terminal or delivery."""
     if not isinstance(result, Mapping) or result.get("schema") != SCHEMA:
         raise TaskResultContractError("wrong_schema")
+    # Stored TaskResultV1 is a bounded audit schema, not a transport envelope.
+    # Returning arbitrary extra fields would copy untrusted route or secret data.
+    # Keep the two existing optional plan lineage fields valid.
+    allowed_result_fields = {
+        "schema", "request_id", "task_id", "task_epoch", "intent_digest",
+        "source_interface", "reply_route_id", "source_commit",
+        "source_metadata", "completion_kind", "task_state", "outcome",
+        "terminal_acceptance", "operational_action_count",
+        "operational_action_count_basis", "evidence_refs", "answer_text",
+        "artifacts", "delivery", "result_id", "created_at",
+        "plan_id", "source_plan_id",
+    }
+    if set(result) - allowed_result_fields:
+        raise TaskResultContractError("unexpected_task_result_field")
     identity = {
         key: str(result.get(key) or "").strip()
         for key in ("request_id", "task_id", "task_epoch", "intent_digest")
@@ -426,6 +440,8 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     terminal = result.get("terminal_acceptance")
     if not isinstance(terminal, Mapping) or terminal.get("status") not in {"ACCEPTED", "MISSING"}:
         raise TaskResultContractError("missing_terminal_acceptance")
+    if set(terminal) - {"status", "receipt_id", "evidence_verdict"}:
+        raise TaskResultContractError("unexpected_terminal_acceptance_field")
     receipt_id = str(terminal.get("receipt_id") or "").strip()
     verdict = str(terminal.get("evidence_verdict") or "").strip().upper()
     if terminal.get("status") == "ACCEPTED":
@@ -437,6 +453,8 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     delivery = result.get("delivery")
     if not isinstance(delivery, Mapping) or delivery.get("status") not in DELIVERY_STATES:
         raise TaskResultContractError("invalid_delivery_state")
+    if set(delivery) - {"status", "attempt_count", "delivery_receipt_id"}:
+        raise TaskResultContractError("unexpected_delivery_field")
     attempts = delivery.get("attempt_count")
     if type(attempts) is not int or attempts < 0:
         raise TaskResultContractError("invalid_delivery_attempt_count")
