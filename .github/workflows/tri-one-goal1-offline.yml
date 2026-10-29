@@ -1,0 +1,58 @@
+name: Tri-One Goal1 Offline Candidate
+
+on:
+  push:
+    branches:
+      - feat/goal1-offline-20261029
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-and-offline:
+    name: Offline 2A + 5A + 5B and strict manifest
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: source
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      TRI_ONE_TASK_RESULT_V1: '0'
+      TRI_ONE_TEXT_ONLY_V1: '0'
+      TRI_ONE_WEBCOPILOT_V9_V1: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime Python dependencies
+        run: python -m pip install -r install_smart_agent/requirements-webdirect.txt
+      - name: Compile candidate Python sources
+        shell: pwsh
+        run: |
+          python -m compileall -q source/agent_core/tri_one_answer_only.py source/agent_core/tri_one_shared_worker.py source/agent_core/tri_one_task_result.py source/agent_core/current_conversation_adapter.py source/agent_core/protocol_manifest.py source/WebAgent/protocol_loop.py source/RemoteAgent/telegram_webagent_worker.py source/RemoteAgent/remote_worker_launcher.py source/WebAgent/tests/validate_tri_one_5a_answer_only.py source/WebAgent/tests/validate_tri_one_5b_shared_worker.py source/WebAgent/tests/goal1_live_triage.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate exact strict protocol manifest
+        shell: pwsh
+        run: |
+          python -c "from agent_core.protocol_manifest import require_protocol_manifest; require_protocol_manifest('.'); print('GOAL1_MANIFEST_PASS')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 2A and 5A/5B offline fixtures
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'source/WebAgent/tests/validate_tri_one_2a_task_result.py',
+            'source/WebAgent/tests/validate_tri_one_2a_matrix.py',
+            'source/WebAgent/tests/validate_tri_one_2a_open_terminal.py',
+            'source/WebAgent/tests/validate_tri_one_5a_answer_only.py',
+            'source/WebAgent/tests/validate_tri_one_5b_shared_worker.py'
+          )
+          foreach ($script in $scripts) {
+            Write-Host "RUN: $script"
+            python -B $script
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: No runtime/browser startup is allowed in this workflow
+        shell: pwsh
+        run: Write-Host 'OFFLINE_ONLY: tests do not dispatch live user tasks or contact ChatGPT/Telegram.'
