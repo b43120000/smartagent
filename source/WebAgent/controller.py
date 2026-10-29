@@ -28,6 +28,20 @@ from .runtime_log import WebAgentRuntimeLog
 from .session import ensure_webagent_session
 from agent_core.task_continuation import TaskContinuationStore, local_owner, render_task_reply
 
+# A/B startup experiment: twice the existing 2-second scraper startup settle.
+# CDP reuse does not pass through the scraper startup delay; this gate does.
+INITIAL_SESSION_SETTLE_SEC = 4.0
+
+
+def wait_for_initial_session_settle(page, expected_id: str, *, sleep_fn=None) -> None:
+    """Pre-first-prompt delay only; never alter Composer recovery or journals."""
+    (sleep_fn if sleep_fn is not None else time.sleep)(INITIAL_SESSION_SETTLE_SEC)
+    if page.is_closed():
+        raise RuntimeError("webagent_initial_session_page_closed_after_settle")
+    current_id = conversation_id(str(getattr(page, "url", "") or ""))
+    if not current_id or current_id != expected_id:
+        raise RuntimeError("webagent_initial_session_conversation_changed_after_settle")
+
 
 def prepare_browser_input_bridge(page, attached_pw=None):
     """Validate/install before claiming ownership or initializing a session."""
@@ -318,6 +332,18 @@ def main(argv: list[str] | None = None) -> int:
     client = WebAgentBrowserClient(scraper, event_sink=runtime_log.emit)
     runtime_log.emit("browser_attached", mode=mode, conversation_url=selected_url)
     print(f"[WebAgent] 已開啟指定對話窗: {selected_url}", flush=True)
+    # Delay the first bootstrap/session-attach request on the actual CDP path.
+    # A previous ComposerOperation journal still takes the unchanged fail-closed
+    # recovery route; time passing never authorizes cleanup, reset or replay.
+    runtime_log.emit(
+        "webagent_initial_session_settle_started",
+        wait_sec=INITIAL_SESSION_SETTLE_SEC, browser_mode=mode,
+    )
+    wait_for_initial_session_settle(page, selected_id)
+    runtime_log.emit(
+        "webagent_initial_session_settle_completed",
+        wait_sec=INITIAL_SESSION_SETTLE_SEC, browser_mode=mode,
+    )
     print("[WebAgent] 步驟 3/4：正在建立 session 並發送 WebAgent/smartagent_tool 協議...", flush=True)
     session = ensure_webagent_session(
         workspace=workspace,

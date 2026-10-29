@@ -196,7 +196,7 @@
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/smart_agent.py": "9b27357fb3d00d7f8371a15bc29ddcc35a2ce216ae899c2fa37f26143092b896",
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
-    "source/WebAgent/controller.py": "3b97afda28f5fe64ea3a8e10f8322f9960d0a0b63dfaf9b6b1b125fe5825af07",
+    "source/WebAgent/controller.py": "a4af58699a364ba11bedc96083cb35a6602bd4b9ac7d37e42eaa42467c9fc773",
     "source/WebAgent/protocol_loop.py": "cb83b182b05e48fa245a818ff6fbc26ad1c9196c62afdc3f697d5207cf972246",
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
