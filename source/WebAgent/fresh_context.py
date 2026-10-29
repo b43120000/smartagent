@@ -78,7 +78,9 @@ class ExistingConversationFreshAdapter:
             raise RuntimeError("GAR_L4_TARGET_PAGE_NOT_UNIQUELY_OWNED")
         page = matching[0]
         from agent_core.conversation_ownership import ConversationOwnershipRegistry
-        if ConversationOwnershipRegistry(self.session_root).references(target):
+        from agent_core.paths import source_root
+        # Match WebLLMScraper._claim_conversation_owner's exact registry root.
+        if ConversationOwnershipRegistry(source_root()).references(target):
             raise RuntimeError("GAR_L4_FRESH_CONTEXT_ALREADY_OWNED")
         # A borrowed WebCopilot tab can be used only while the same browser
         # profile and process lease remain stable. Never call adopt_page:
