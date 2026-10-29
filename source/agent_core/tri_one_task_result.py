@@ -5,8 +5,8 @@ terminal receipt, grant execution authority, or prove delivery. It is additive
 metadata behind a default-OFF feature flag; legacy task/event fields remain
 authoritative throughout 2A.
 
-ANSWER_ONLY is deliberately rejected until 5A introduces and verifies its
-separate answer-only terminal admission path.
+ANSWER_ONLY requires a distinct, Runtime-signed 5A terminal admission reason;
+no ActionResult PASS is fabricated for a text-only response.
 """
 from __future__ import annotations
 
@@ -312,25 +312,34 @@ def make_task_result(
         raise TaskResultContractError("paused_with_terminal_receipt")
 
     verdict = str(receipt.get("evidence_verdict") or "").strip().upper() if accepted else ""
+    answer_only_receipt = (
+        accepted
+        and receipt.get("completion_kind") == "ANSWER_ONLY"
+        and receipt.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+    )
     if completion_kind is None:
         kind = (
-            "EVIDENCE_BACKED"
-            if accepted and refs and verdict in {"PASS", "FAIL"}
+            "ANSWER_ONLY" if answer_only_receipt else
+            "EVIDENCE_BACKED" if accepted and refs and verdict in {"PASS", "FAIL"}
             else "LEGACY_UNVERIFIED"
         )
     else:
         kind = str(completion_kind).strip().upper()
     if kind not in KINDS:
         raise TaskResultContractError("invalid_completion_kind")
-    if kind == "ANSWER_ONLY":
-        # Phase 2A cannot authorize the 5A answer-only terminal lane.
-        raise TaskResultContractError("answer_only_not_implemented_in_2a")
+    if kind == "ANSWER_ONLY" and not (
+        answer_only_receipt and state == "COMPLETED" and outcome == "SUCCESS"
+        and verdict == "UNVERIFIED" and not refs and not artifacts
+        and operational_action_count == 0 and answer_text.strip()
+    ):
+        raise TaskResultContractError("answer_only_admission_contract_invalid")
     if kind == "EVIDENCE_BACKED" and (
         not accepted or not refs or verdict not in {"PASS", "FAIL"}
     ):
         raise TaskResultContractError("unverified_evidence_backed_claim")
-    if outcome == "SUCCESS" and (
-        kind != "EVIDENCE_BACKED" or verdict != "PASS" or not refs
+    if outcome == "SUCCESS" and not (
+        (kind == "EVIDENCE_BACKED" and verdict == "PASS" and bool(refs))
+        or (kind == "ANSWER_ONLY" and answer_only_receipt)
     ):
         raise TaskResultContractError("success_without_passing_evidence")
 
@@ -372,6 +381,8 @@ def make_task_result(
         "result_id": result_id,
         "created_at": _utc_timestamp(created_at),
     }
+    if kind == "ANSWER_ONLY":
+        result["terminal_acceptance"]["admission_reason"] = "ANSWER_ONLY_RESPONSE_ADMITTED"
     return validate_task_result(result)
 
 
@@ -407,8 +418,6 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     kind = str(result.get("completion_kind") or "").strip().upper()
     if state not in STATES or outcome not in OUTCOMES or kind not in KINDS:
         raise TaskResultContractError("invalid_state_outcome_or_kind")
-    if kind == "ANSWER_ONLY":
-        raise TaskResultContractError("answer_only_not_implemented_in_2a")
     count = result.get("operational_action_count")
     if type(count) is not int or count < 0:
         raise TaskResultContractError("invalid_operational_action_count")
@@ -440,15 +449,26 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     terminal = result.get("terminal_acceptance")
     if not isinstance(terminal, Mapping) or terminal.get("status") not in {"ACCEPTED", "MISSING"}:
         raise TaskResultContractError("missing_terminal_acceptance")
-    if set(terminal) - {"status", "receipt_id", "evidence_verdict"}:
+    if set(terminal) - {"status", "receipt_id", "evidence_verdict", "admission_reason"}:
         raise TaskResultContractError("unexpected_terminal_acceptance_field")
     receipt_id = str(terminal.get("receipt_id") or "").strip()
     verdict = str(terminal.get("evidence_verdict") or "").strip().upper()
     if terminal.get("status") == "ACCEPTED":
         if not receipt_id or verdict not in {"PASS", "FAIL", "UNVERIFIED"}:
             raise TaskResultContractError("invalid_terminal_acceptance_summary")
-    elif receipt_id or verdict:
+    elif receipt_id or verdict or terminal.get("admission_reason"):
         raise TaskResultContractError("missing_receipt_has_claims")
+    if kind == "ANSWER_ONLY":
+        if not (
+            terminal.get("status") == "ACCEPTED"
+            and terminal.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+            and state == "COMPLETED" and outcome == "SUCCESS"
+            and verdict == "UNVERIFIED" and not refs and not artifacts
+            and count == 0 and bool(str(result.get("answer_text") or "").strip())
+        ):
+            raise TaskResultContractError("answer_only_admission_contract_invalid")
+    elif terminal.get("admission_reason"):
+        raise TaskResultContractError("unexpected_terminal_admission_reason")
 
     delivery = result.get("delivery")
     if not isinstance(delivery, Mapping) or delivery.get("status") not in DELIVERY_STATES:
@@ -471,7 +491,11 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
         raise TaskResultContractError("noncompleted_success")
     if outcome == "SUCCESS" and (
         state != "COMPLETED" or terminal.get("status") != "ACCEPTED"
-        or kind != "EVIDENCE_BACKED" or verdict != "PASS" or not refs
+        or not (
+            (kind == "EVIDENCE_BACKED" and verdict == "PASS" and bool(refs))
+            or (kind == "ANSWER_ONLY" and verdict == "UNVERIFIED"
+                and terminal.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED")
+        )
     ):
         raise TaskResultContractError("unverified_success")
     if kind == "EVIDENCE_BACKED" and (
