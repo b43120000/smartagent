@@ -393,6 +393,100 @@ def _same_turns(before,after):
     return True
 
 
+
+def _snapshot_difference(before, after):
+    """Digest/index-only diagnostic; never an authorization to recover."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return {"baseline_available": False, "same_turns": False}
+    details = {
+        "baseline_available": True,
+        "same_turns": _same_turns(before, after),
+        "url_same": before.get("url") == after.get("url"),
+        "user_count_same": before.get("user_count") == after.get("user_count"),
+        "assistant_count_same": before.get("assistant_count") == after.get("assistant_count"),
+        "generation_active_before": bool(before.get("generation_active")),
+        "generation_active_after": bool(after.get("generation_active")),
+    }
+    for role in ("user", "assistant"):
+        old = list(before.get(role + "_anchors") or [])
+        new = list(after.get(role + "_anchors") or [])
+        details[role + "_structural_changed_positions"] = [
+            i for i in range(max(len(old), len(new)))
+            if i >= len(old) or i >= len(new) or old[i][0] != new[i][0]
+        ]
+        details[role + "_digest_changed_positions"] = [
+            i for i in range(max(len(old), len(new)))
+            if i >= len(old) or i >= len(new) or old[i][1] != new[i][1]
+        ]
+        prior_ids = before.get(role + "_native_ids")
+        current_ids = after.get(role + "_native_ids")
+        details[role + "_native_ids_equal"] = (
+            prior_ids == current_ids
+            if prior_ids is not None and current_ids is not None else None
+        )
+    return details
+
+
+def _wait_for_prewrite_stability(
+    scraper, prompt, *, samples=4, interval_sec=0.30, timeout_sec=12.0,
+    clock=None, sleep=None,
+):
+    """Read-only stability gate, before writer baseline or composer mutation.
+
+    Requires 4 consistent observations. Does not clear, write or submit.
+    """
+    clock = clock if clock is not None else time.monotonic
+    sleep = sleep if sleep is not None else time.sleep
+    deadline = clock() + max(0.01, float(timeout_sec))
+    consecutive = 0
+    attempts = 0
+    prior = None
+    last_reason = "NO_OBSERVATION"
+    while clock() < deadline:
+        attempts += 1
+        current = _page_snapshot(scraper, prompt)
+        if not current.get("composer_empty") and not current.get("composer_matches"):
+            return dict(status="PREWRITE_FOREIGN_DRAFT",
+                        samples_observed=attempts,
+                        reason_code="FOREIGN_OR_UNKNOWN_DRAFT")
+        try:
+            editor = scraper._composer_locator()
+            interactive = bool(
+                editor is not None and editor.is_visible()
+                and editor.is_enabled() and editor.is_editable()
+            )
+        except Exception:
+            interactive = False
+        if not interactive:
+            consecutive, prior = 0, None
+            last_reason = "COMPOSER_NOT_INTERACTIVE"
+        elif current.get("generation_active"):
+            consecutive, prior = 0, None
+            last_reason = "GENERATION_ACTIVE"
+        elif prior is None:
+            consecutive, prior = 1, current
+            last_reason = "STABILITY_SAMPLING"
+        elif _same_turns(prior, current) and all(
+            prior.get(key) == current.get(key)
+            for key in ("composer_empty", "composer_matches")
+        ):
+            consecutive += 1
+            prior = current
+            last_reason = "STABILITY_SAMPLING"
+        else:
+            consecutive, prior = 1, current
+            last_reason = "DOM_SCOPE_CHANGED"
+        if consecutive >= samples:
+            return dict(status="READY", baseline=current,
+                        samples_observed=attempts)
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
+        sleep(min(max(0.01, float(interval_sec)), remaining))
+    return dict(status="PREWRITE_UNSTABLE", samples_observed=attempts,
+                reason_code=last_reason)
+
+
 def _recover_page(scraper,record):
     first=_page_snapshot(scraper,'')
     time.sleep(.35)
@@ -408,7 +502,13 @@ def _recover_page(scraper,record):
     # ready for another message. After delivery the pre-submit baseline is no
     # longer applicable, but two fresh stable observations are still required.
     if not _same_turns(first,second) or (not delivered and not _same_turns(record.get('baseline'),second)) or first['generation_active'] or second['generation_active']:
-        return dict(status='SCOPE_CHANGED_OR_BUSY',observation=second)
+        return dict(status='SCOPE_CHANGED_OR_BUSY',observation=second,
+            comparison=dict(
+                recent_observations=_snapshot_difference(first,second),
+                historical_baseline=_snapshot_difference(record.get('baseline'),second)
+                    if not delivered else {'not_used_after_confirmed_delivery': True},
+                delivery_confirmed=bool(delivered),
+            ))
     if not delivered and record.get('state') in {'SUBMIT_RESERVED','SUBMIT_ATTEMPTED'}:
         return dict(status='SUBMIT_OUTCOME_UNKNOWN',observation=second)
     if first['composer_empty'] and second['composer_empty']:
@@ -519,7 +619,16 @@ def helper_main():
             print('COMPOSER_RESULT '+json.dumps(result),flush=True)
             return
         if payload['mode']=='write':
-            before=_page_snapshot(scraper,payload['prompt'])
+            prewrite=_wait_for_prewrite_stability(scraper,payload['prompt'])
+            if prewrite['status']!='READY':
+                print('COMPOSER_RESULT '+json.dumps({
+                    'status':prewrite['status'],
+                    'reason_code':prewrite.get('reason_code','PREWRITE_NOT_READY'),
+                    'samples_observed':prewrite['samples_observed'],
+                    'mutation_possible':False,
+                }),flush=True)
+                return
+            before=prewrite['baseline']
             record['baseline']=before;write_json_atomic(journal,record)
             if before['generation_active']:
                 print('COMPOSER_RESULT '+json.dumps({'status':'GENERATION_ACTIVE'}),flush=True)
@@ -533,6 +642,8 @@ def helper_main():
             after=_page_snapshot(scraper,payload['prompt'])
         status=classify_observation(before,after)
         result=dict(status=status,observation=after)
+        if status=='TURN_CHANGED_OR_SUBMIT_UNCERTAIN':
+            result['comparison']=_snapshot_difference(before,after)
         print('COMPOSER_RESULT '+json.dumps(result),flush=True)
         # Do not browser.close/page.close: this client does not own Edge.
 

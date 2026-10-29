@@ -21,12 +21,12 @@ if errorlevel 1 (
   echo   Actual HEAD:       %CURRENT_SHA%
   goto :FATAL
 )
-git diff --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py
+git diff --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py source/agent_core/composer_operation.py source/WebAgent/tests/validate_composer_stability.py source/WebAgent/tests/validate_composer_recovery.py source/WebAgent/tests/validate_composer_operation.py
 if errorlevel 1 (
   echo [ERROR] Modified GAR Source, test or Manifest; tests not started.
   goto :FATAL
 )
-git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py
+git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py source/agent_core/composer_operation.py source/WebAgent/tests/validate_composer_stability.py source/WebAgent/tests/validate_composer_recovery.py source/WebAgent/tests/validate_composer_operation.py
 if errorlevel 1 (
   echo [ERROR] Staged GAR Source, test or Manifest; tests not started.
   goto :FATAL
@@ -70,6 +70,9 @@ set /a PASSED=0
 set /a FAILED=0
 call :RUN_TEST validate_gar_a0_identity
 call :RUN_TEST validate_browser_startup_settle
+call :RUN_TEST validate_composer_stability
+call :RUN_TEST validate_composer_recovery
+call :RUN_TEST validate_composer_operation
 call :RUN_TEST validate_gar_shared_runtime
 call :RUN_TEST validate_gar_protocol_loop_it
 call :RUN_TEST validate_gar_l4_fresh_context
@@ -99,7 +102,7 @@ exit /b 0
 set /a TOTAL+=1
 set "NAME=%~1"
 set "LOG=%LOGDIR%\%NAME%.log"
-echo [%TOTAL%/8] Running %NAME% ...
+echo [%TOTAL%/11] Running %NAME% ...
 %PY_CMD% -B "source\WebAgent\tests\%NAME%.py" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
@@ -118,7 +121,7 @@ exit /b 0
 set /a TOTAL+=1
 set "NAME=strict_manifest"
 set "LOG=%LOGDIR%\%NAME%.log"
-echo [%TOTAL%/8] Running %NAME% ...
+echo [%TOTAL%/11] Running %NAME% ...
 %PY_CMD% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
