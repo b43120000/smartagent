@@ -4801,6 +4801,33 @@ class WebAgentProtocolLoop:
                 blocked = unsatisfied_dependencies(action, self.action_result_ledger, self.run_id, self.task_epoch)
                 late_errors = []
                 from agent_core.action_dependencies import is_observation
+                # GAR cannot clear a previously executed/UNKNOWN mutation by
+                # changing only the Action ID during a new plan. A legitimate
+                # new operation requires a different payload and still passes
+                # ordinary scope/admission/tool security.
+                if (self._gar is not None
+                        and (self._gar.rebases or self._gar.replans)
+                        and not is_observation(action)
+                        and str(action.get("action_id", "")) not in self.action_ledger):
+                    from agent_core.goal_anchored_recovery import mutation_fingerprint
+                    candidate = mutation_fingerprint(action)
+                    for historical_id, entry in self.action_ledger.items():
+                        old_action = entry.get("action")
+                        if (isinstance(old_action, dict)
+                                and historical_id != str(action.get("action_id", ""))
+                                and not is_observation(old_action)
+                                and mutation_fingerprint(old_action) == candidate
+                                and entry.get("executed") is not False):
+                            from agent_core.tool_result_contract import encode_result
+                            self._emit("gar_mutation_replay_blocked",
+                                       request_id=self.run_id, round=self.turn_id,
+                                       action_id=action.get("action_id", ""),
+                                       prior_action_id=historical_id,
+                                       reason="GAR_POTENTIAL_MUTATION_REPLAY")
+                            return encode_result(
+                                "REJECTED", "GAR_POTENTIAL_MUTATION_REPLAY",
+                                tool=action.get("tool", ""), executed=False,
+                            )
                 if not blocked and not is_observation(action) and str(action.get('action_id','')) not in self.action_ledger:
                     self._refresh_action_loop_state()
                     _,late_errors = self._probe_action_admission([
