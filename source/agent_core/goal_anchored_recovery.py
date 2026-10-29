@@ -75,7 +75,21 @@ def is_unverified_nonexecuted_terminal_requirement(
         return False
     if requirement.get("required_action") != "run_command":
         return False
+    if not str(requirement.get("condition_id") or "").strip():
+        return False
+    # The verification diagnostic may be formed before the canonical
+    # next_actions proposal is materialized. An absent proposal is still
+    # an unexecuted prerequisite when the exact normal VERIFY fields exist;
+    # it is NOT verification evidence and cannot admit terminal SUCCESS.
     actions = requirement.get("next_actions")
+    if actions is None:
+        fields = requirement.get("required_fields")
+        return bool(
+            isinstance(fields, list)
+            and all(field in fields for field in (
+                "operation", "command", "success_criteria", "verify",
+            ))
+        )
     if not isinstance(actions, list) or len(actions) != 1:
         return False
     action = actions[0]
@@ -191,6 +205,7 @@ class RecoveryEngine:
         self._last_local_rejected_total = 0
         self._fresh_context_id = ""
         self._l4_fenced = False
+        self._fresh_repair_attempts = 0
         self.same_blocker = 0
         self.level = "L0"
         self._decisions: list[dict[str, str | int]] = []
@@ -370,6 +385,19 @@ class RecoveryEngine:
         self._last_signature = signature
         if self.rejected_rounds > self.max_rejections:
             return self._record("L5", "PAUSED", "GAR_SHARED_BUDGET_EXHAUSTED")
+        # A successfully fenced L4 context may return a newly generated but
+        # malformed V9 response. Permit at most TWO in-place protocol repairs,
+        # using the SAME Planner session and the SAME cumulative budget.
+        # Never bootstrap yet another context or replay any tool mutation.
+        if self._l4_fenced:
+            if self._fresh_repair_attempts >= 2:
+                return self._record("L5", "PAUSED",
+                                    "GAR_FRESH_CONTEXT_REPAIR_EXHAUSTED")
+            self._fresh_repair_attempts += 1
+            return self._record(
+                "L4", "REPAIR", "GAR_FRESH_CONTEXT_MINIMAL_REPAIR",
+                self._prompt("L4", snapshot, code),
+            )
         # Legacy call-sites/tests that do not pass the local budget preserve
         # the original GAR policy. A wired Runtime delegates to GAR only
         # after the Bounded Repair LOCAL limit is reached.
@@ -497,6 +525,7 @@ class RecoveryEngine:
             "last_reason": self._decisions[-1]["reason"] if self._decisions else "NONE",
             "fresh_context_digest": self._fresh_context_id,
             "old_planner_fenced": self._l4_fenced,
+            "fresh_repair_attempts": self._fresh_repair_attempts,
         }
 
 
