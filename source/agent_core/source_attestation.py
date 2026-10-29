@@ -435,3 +435,155 @@ def capture(*, role, manifest_verified):
         "disk_head_is_not_loaded_source_proof": True,
         "modules": modules,
     }
+
+
+# GAR A0: an explicitly opted-in diagnostic of THIS Python process only.
+# No process injection, remote command, evidence generation or terminal authority.
+GAR_A0_FUNCTIONS = {
+    "WebAgent.controller": ("main", "render_final_ack"),
+    "WebAgent.protocol_loop": (
+        "WebAgentProtocolLoop.run", "WebAgentProtocolLoop._run_impl",
+        "WebAgentProtocolLoop._accept_v8_ack",
+        "WebAgentProtocolLoop._gar_rejection",
+        "WebAgentProtocolLoop._gar_l4_activate",
+        "WebAgentProtocolLoop._gar_snapshot",
+    ),
+    "agent_core.goal_anchored_recovery": (
+        "enabled", "RecoveryEngine.snapshot",
+        "RecoveryEngine.planner_rejection",
+        "RecoveryEngine.activate_fresh_context",
+        "RecoveryEngine.fence_old_planner",
+    ),
+    "agent_core.task_progress": (
+        "_validate_evidence_refs", "validate_model_progress",
+        "record_model_progress",
+    ),
+    "agent_core.tri_one_answer_only": (
+        "enabled", "classify_original_request", "accept_terminal_candidate",
+    ),
+    "agent_core.tri_one_task_result": ("enabled",),
+    "agent_core.source_attestation": ("capture_gar_a0",),
+}
+
+
+def gar_a0_enabled(env=None) -> bool:
+    """Process-start diagnostic opt-in; default OFF."""
+    flags = os.environ if env is None else env
+    return str(flags.get("SMARTAGENT_GAR_A0_DIAGNOSTIC", "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def capture_gar_a0(*, controller_main, require_fresh_context: bool = False) -> dict:
+    """Attest already-loaded functions against strict-Manifest disk bytes.
+
+    A matching disk Git HEAD is not trusted loaded-code provenance. For a
+    python -m Controller, __main__ is used ONLY if its file is the actual
+    Controller file and its main callable is the caller-bound main object.
+    All paths are kept relative; errors become NOT_ATTESTED.
+    """
+    root = Path(__file__).resolve().parents[2]
+    expected_files = {}
+    manifest_strict = False
+    try:
+        from .protocol_manifest import require_protocol_manifest
+        result = require_protocol_manifest(root)
+        manifest_strict = (
+            result.get("hash_verification") == "PASS"
+            and not result.get("hash_mismatches")
+        )
+        if manifest_strict:
+            data = json.loads((root / "config" / "protocol_manifest.json").read_text(
+                encoding="utf-8"
+            ))
+            expected_files = data.get("core_files", {})
+            manifest_strict = isinstance(expected_files, dict)
+    except (OSError, ValueError, RuntimeError, KeyError):
+        manifest_strict = False
+
+    required = dict(GAR_A0_FUNCTIONS)
+    if require_fresh_context:
+        required["WebAgent.fresh_context"] = (
+            "ExistingConversationFreshAdapter.prepare",
+        )
+
+    entries = {}
+    all_matched = manifest_strict and controller_main is not None
+    for name, functions in required.items():
+        relative = "source/" + name.replace(".", "/") + ".py"
+        expected_source = (root / relative).resolve()
+        module = sys.modules.get(name)
+        if name == "WebAgent.controller":
+            executing = sys.modules.get("__main__")
+            try:
+                if (executing is not None and
+                        Path(getattr(executing, "__file__", "")).resolve()
+                        == expected_source):
+                    module = executing
+            except (OSError, TypeError, ValueError):
+                pass
+        loaded = module is not None
+        correct_file = False
+        digest = None
+        function_checks = {}
+        if loaded:
+            try:
+                current_file = Path(getattr(module, "__file__", "")).resolve()
+                correct_file = current_file == expected_source
+                if correct_file:
+                    digest = hashlib.sha256(current_file.read_bytes()).hexdigest()
+            except (OSError, TypeError, ValueError):
+                correct_file = False
+        disk_verified = bool(
+            manifest_strict and correct_file and digest
+            and expected_files.get(relative) == digest
+        )
+        callable_bound = (
+            name != "WebAgent.controller"
+            or (module is not None and
+                getattr(module, "main", None) is controller_main)
+        )
+        for function in functions:
+            comparison = {}
+            if disk_verified and callable_bound:
+                try:
+                    comparison = _compared_code_identity(
+                        module, expected_source, function
+                    )
+                except (OSError, SyntaxError, TypeError, ValueError):
+                    pass
+            matched = bool(
+                comparison.get("code_objects_equal") is True
+                and comparison.get("filename_verified") is True
+                and comparison.get("first_line_equal") is True
+                and comparison.get("qualname_equal") is True
+            )
+            function_checks[function] = {
+                "match": matched,
+                "live_code_sha256": comparison.get("live_code_sha256"),
+                "disk_code_sha256": comparison.get("disk_code_sha256"),
+            }
+        module_ok = bool(
+            loaded and disk_verified and callable_bound
+            and all(f["match"] for f in function_checks.values())
+        )
+        all_matched = all_matched and module_ok
+        entries[name] = {
+            "loaded": loaded,
+            "source_path": relative,
+            "strict_manifest_disk_match": disk_verified,
+            "controller_main_bound": bool(callable_bound),
+            "disk_sha256": digest,
+            "functions": function_checks,
+            "match": module_ok,
+        }
+    return {
+        "schema": "SMARTAGENT_GAR_A0_LOADED_CODE_V1",
+        "captured_at_epoch": time.time(),
+        "manifest_strict": manifest_strict,
+        "loaded_code_status": (
+            "MATCHES_VERIFIED_DISK" if all_matched else "NOT_ATTESTED"
+        ),
+        "source_commit_status": "NOT_ATTESTED",
+        "modules": entries,
+    }

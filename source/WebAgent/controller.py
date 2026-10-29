@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import hashlib
 import json
 import os
 import time
@@ -263,6 +264,17 @@ def main(argv: list[str] | None = None) -> int:
         atexit.register(lifecycle.close, reason="webdirect_controller_exit")
     runtime_log = WebAgentRuntimeLog(log_root(runtime_root) / "webagent_runtime.jsonl")
     runtime_log.emit("controller_started", workspace=workspace)
+    # A0 is purely opt-in instrumentation; never reconfigure a live process.
+    from agent_core.source_attestation import gar_a0_enabled
+    a0_diag = gar_a0_enabled()
+    a0_instance = hashlib.sha256(os.urandom(32)).hexdigest() if a0_diag else ""
+    if a0_diag:
+        runtime_log.emit(
+            "gar_a0_controller_started",
+            schema="SMARTAGENT_GAR_A0_STARTUP_V1",
+            controller_instance_digest=a0_instance,
+            controller_role="WEB_DIRECT",
+        )
     bootstrap_request = ""
     bootstrap_pending = False
     if args.bootstrap_provision:
@@ -333,6 +345,12 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
     )
+    if a0_diag:
+        # Bind the actual executing main() callable, not a second module import.
+        loop._gar_a0_diagnostic_enabled = True
+        loop._gar_a0_instance_digest = a0_instance
+        loop._gar_a0_controller_main = main
+        loop._gar_a0_target_salt = os.urandom(32)
     if bootstrap_pending:
         loop.tools.enable_bootstrap_install_policy(runtime_root)
     loop.tools.configure_web_file_capabilities(client.scraper.web_file_capabilities)

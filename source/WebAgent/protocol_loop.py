@@ -4366,6 +4366,72 @@ class WebAgentProtocolLoop:
             enabled as _tri_one_text_enabled, classify_original_request,
         )
         from agent_core.tri_one_task_result import enabled as _tri_one_result_enabled
+        # A0 diagnostic, scoped to the real request and actual Controller.
+        # Never supplies admission evidence or changes recovery/terminal gates.
+        if getattr(self, "_gar_a0_diagnostic_enabled", False):
+            from agent_core.source_attestation import capture_gar_a0
+            from agent_core.goal_anchored_recovery import enabled as _a0_gar_enabled
+            source_identity = {}
+            try:
+                source_identity = capture_gar_a0(
+                    controller_main=getattr(self, "_gar_a0_controller_main", None),
+                    require_fresh_context=bool(self.fresh_context_adapter),
+                )
+            except Exception as exc:
+                source_identity = {
+                    "schema": "SMARTAGENT_GAR_A0_LOADED_CODE_V1",
+                    "loaded_code_status": "NOT_ATTESTED",
+                    "source_commit_status": "NOT_ATTESTED",
+                    "capture_error_type": type(exc).__name__,
+                }
+            gar_flag = bool(_a0_gar_enabled())
+            task_result_flag = bool(_tri_one_result_enabled())
+            text_only_flag = bool(
+                _tri_one_text_enabled(source=self._tri_one_origin)
+            )
+            origin_override = (
+                "TRI_ONE_TEXT_ONLY_" + self._tri_one_origin
+            ) in os.environ
+            fresh_url = os.environ.get(
+                "SMARTAGENT_GAR_FRESH_CONTEXT_URL", ""
+            ).strip()
+            instance = str(getattr(self, "_gar_a0_instance_digest", ""))
+            salt = getattr(self, "_gar_a0_target_salt", b"")
+            fresh_digest = (
+                hashlib.sha256(salt + fresh_url.encode("utf-8")).hexdigest()
+                if fresh_url and isinstance(salt, bytes) and salt else None
+            )
+            ready_flags = (
+                gar_flag and task_result_flag and text_only_flag
+                and (self._gar is not None) == gar_flag
+            )
+            loaded_ok = (
+                source_identity.get("loaded_code_status")
+                == "MATCHES_VERIFIED_DISK"
+            )
+            self._emit(
+                "gar_a0_request_attestation",
+                schema="SMARTAGENT_GAR_A0_REQUEST_V1",
+                request_id=self.run_id,
+                task_id=self.task_id,
+                task_epoch=self.task_epoch,
+                controller_instance_digest=instance,
+                actual_origin=self._tri_one_origin,
+                gar_effective=gar_flag,
+                gar_engine_present=self._gar is not None,
+                task_result_effective=task_result_flag,
+                text_only_effective=text_only_flag,
+                origin_override_present=origin_override,
+                fresh_context_configured=bool(fresh_url),
+                fresh_context_target_digest=fresh_digest,
+                fresh_adapter_present=bool(self.fresh_context_adapter),
+                a0_status=(
+                    "READY_FOR_OWNER_REVIEW"
+                    if instance and loaded_ok and ready_flags
+                    else "NOT_ATTESTED"
+                ),
+                source_identity=source_identity,
+            )
         if _tri_one_result_enabled() and _tri_one_text_enabled(source=self._tri_one_origin):
             text_candidate, _ = classify_original_request(
                 request, attachments=self._tri_one_has_attached_context,
