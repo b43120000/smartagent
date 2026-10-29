@@ -125,7 +125,7 @@ class RecoveryEngine:
 
     def __init__(self, *, request_id: str, task_id: str, task_epoch: str,
                  original_request: str, owner: str = "",
-                 max_rejections: int = 4, max_rebases: int = 1,
+                 max_rejections: int = 10, max_rebases: int = 1,
                  max_replans: int = 1):
         if not all((request_id, task_id, task_epoch, original_request)):
             raise ValueError("gar_identity_or_goal_missing")
@@ -147,6 +147,8 @@ class RecoveryEngine:
         self._last_signature = ""
         self._last_generation: str | None = None
         self._l4_requested = False
+        self._local_repair_exhausted = False
+        self._last_local_rejected_total = 0
         self._fresh_context_id = ""
         self._l4_fenced = False
         self.same_blocker = 0
@@ -223,6 +225,8 @@ class RecoveryEngine:
                 "replans": self.replans,
                 "fresh_sessions": self.fresh_sessions,
                 "max_rejections": self.max_rejections,
+                "local_repair_exhausted": self._local_repair_exhausted,
+                "local_rejected_total": self._last_local_rejected_total,
             },
             "last_level": self.level,
         }
@@ -274,7 +278,9 @@ class RecoveryEngine:
                           snapshot: Mapping[str, object],
                           response_fresh: bool,
                           evidence_generation: str,
-                          original_goal_in_prompt: bool = True) -> RecoveryDecision:
+                          original_goal_in_prompt: bool = True,
+                          local_repair_budget: Mapping[str, object] | None = None
+                          ) -> RecoveryDecision:
         if not self.validate_snapshot(snapshot):
             return self._record("L5", "PAUSED", "GAR_SNAPSHOT_UNVERIFIED")
         if not response_fresh:
@@ -284,6 +290,29 @@ class RecoveryEngine:
                                 "GAR_PENDING_OR_BLOCKED_OPERATION")
         if not original_goal_in_prompt or len(self._original_request) > 4096:
             return self._record("L5", "PAUSED", "GAR_GOAL_PROMPT_UNSAFE")
+        # A single BoundedRepairBudget observes each rejected Planner turn.
+        # If GAR is wired to it, require exact counter synchronization.
+        # Neither L2/L3 nor L4 can reset the total budget by switching
+        # conversation or changing Action IDs.
+        if local_repair_budget is not None:
+            try:
+                total = int(local_repair_budget["rejected_turns_total"])
+                hard_limit = int(local_repair_budget["max_total"])
+                local_exhausted = str(
+                    local_repair_budget["status"]
+                ) == "EXHAUSTED"
+            except (KeyError, TypeError, ValueError):
+                return self._record("L5", "PAUSED", "GAR_LOCAL_BUDGET_INVALID")
+            if (total != self.rejected_rounds + 1
+                    or total <= self._last_local_rejected_total
+                    or hard_limit < 1):
+                return self._record("L5", "PAUSED", "GAR_LOCAL_BUDGET_DESYNC")
+            self._last_local_rejected_total = total
+            if local_exhausted:
+                self._local_repair_exhausted = True
+            if total >= hard_limit:
+                self.rejected_rounds = total
+                return self._record("L5", "PAUSED", "GAR_GLOBAL_SAFETY_BUDGET_EXHAUSTED")
         self.rejected_rounds += 1
         code = _bounded_code(reason, default="PROTOCOL_REJECTED")
         generation = str(evidence_generation)
@@ -295,6 +324,11 @@ class RecoveryEngine:
         self._last_signature = signature
         if self.rejected_rounds > self.max_rejections:
             return self._record("L5", "PAUSED", "GAR_SHARED_BUDGET_EXHAUSTED")
+        # Legacy call-sites/tests that do not pass the local budget preserve
+        # the original GAR policy. A wired Runtime delegates to GAR only
+        # after the Bounded Repair LOCAL limit is reached.
+        if local_repair_budget is not None and not self._local_repair_exhausted:
+            return self._record("L1", "REPAIR", "GAR_LOCAL_REPAIR_ACTIVE")
         if self.same_blocker <= 1:
             return self._record("L1", "REPAIR", code)
         if self.rebases < self.max_rebases:
@@ -408,6 +442,9 @@ class RecoveryEngine:
             "level": self.level,
             "goal_sha256": self.goal_digest,
             "rejected_rounds": self.rejected_rounds,
+            "local_repair_exhausted": self._local_repair_exhausted,
+            "local_rejected_total": self._last_local_rejected_total,
+            "max_global_rejections": self.max_rejections,
             "rebase_count": self.rebases,
             "replan_count": self.replans,
             "fresh_session_count": self.fresh_sessions,
