@@ -213,6 +213,24 @@ class GARProtocolIT(unittest.TestCase):
             self.assertFalse((root / "localdata" / "runtime" /
                               "gar_snapshots").exists())
 
+    def test_gar_off_keeps_legacy_repeated_rejection_pause(self):
+        with tempfile.TemporaryDirectory(prefix="gar-off-legacy-") as directory:
+            root = Path(directory)
+            received = []
+            def invalid_reply(prompt, expected, attachments):
+                received.append(prompt)
+                return "invalid smartagent_tool payload"
+            loop = WebAgentProtocolLoop(
+                root, invalid_reply, progress_root=root, max_turns=8,
+            )
+            with patch.dict(os.environ, {"SMARTAGENT_GAR_V1": "0"}):
+                with self.assertRaisesRegex(RuntimeError, "連續回傳相同"):
+                    loop.run("Explain RAII.", source_tag="REMOTEAGENT_WEBCOPILOT_V9")
+            self.assertEqual(len(received), 2)
+            self.assertIsNone(loop._gar)
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.terminal_acceptance, {})
+
     def test_duplicate_invalid_fresh_planner_reply_bounded(self):
         with tempfile.TemporaryDirectory(prefix="gar-fresh-") as directory:
             root = Path(directory)
