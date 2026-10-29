@@ -13,6 +13,7 @@ from pathlib import Path
 from agent_core.goal_anchored_recovery import (
     RecoveryEngine, FreshContextProof, classify_failure, enabled, mutation_fingerprint,
 )
+from agent_core.bounded_repair import BoundedRepairBudget
 
 
 def make(owner="WEB_COPILOT", goal="Explain C++ RAII."):
@@ -99,7 +100,75 @@ class GARSharedRuntimeTests(unittest.TestCase):
             reason="invalid_progress_payload", snapshot=snapshot(engine),
             response_fresh=True, evidence_generation="same-generation",
         )
-        self.assertEqual(exhaustion.reason, "GAR_SHARED_BUDGET_EXHAUSTED")
+        self.assertEqual(exhaustion.reason, "GAR_FRESH_CONTEXT_UNAVAILABLE")
+
+    def test_local_exhaustion_hands_off_before_l4(self):
+        engine = make()
+        local = BoundedRepairBudget()
+        levels, reasons, counts = [], [], []
+        for i in range(7):
+            budget = local.observe([{"reason": "invalid_progress_payload"}],
+                                   evidence_generation=0)
+            result = engine.planner_rejection(
+                reason="invalid_progress_payload", snapshot=snapshot(engine),
+                response_fresh=True, evidence_generation="fixed-generation",
+                local_repair_budget=budget,
+            )
+            levels.append(result.level)
+            reasons.append(result.reason)
+            counts.append(engine.rejected_rounds)
+        self.assertEqual(levels, ["L1", "L1", "L1", "L1",
+                                  "L2", "L3", "L4"])
+        self.assertEqual(reasons[:4], ["GAR_LOCAL_REPAIR_ACTIVE"] * 4)
+        self.assertEqual(reasons[4:], [
+            "GAR_PROGRESS_REBASE", "GAR_BOUNDED_REPLAN",
+            "GAR_FRESH_CONTEXT_REQUIRED",
+        ])
+        self.assertEqual(counts, list(range(1, 8)))
+        self.assertEqual(engine.diagnostic()["local_rejected_total"], 7)
+        self.assertTrue(engine.diagnostic()["local_repair_exhausted"])
+        self.assertEqual(engine.fresh_sessions, 0)
+
+    def test_local_budget_desync_fails_closed_without_replaying(self):
+        engine = make()
+        one = {
+            "rejected_turns_total": 1, "max_total": 16,
+            "status": "REPAIR_ALLOWED",
+        }
+        initial = engine.planner_rejection(
+            reason="invalid_progress_payload", snapshot=snapshot(engine),
+            response_fresh=True, evidence_generation="g",
+            local_repair_budget=one,
+        )
+        self.assertEqual(initial.status, "REPAIR")
+        duplicate = engine.planner_rejection(
+            reason="invalid_progress_payload", snapshot=snapshot(engine),
+            response_fresh=True, evidence_generation="g",
+            local_repair_budget=one,
+        )
+        self.assertEqual((duplicate.level, duplicate.status, duplicate.reason),
+                         ("L5", "PAUSED", "GAR_LOCAL_BUDGET_DESYNC"))
+        self.assertEqual(engine.rejected_rounds, 1)
+
+    def test_global_repair_budget_does_not_reset_after_local_handoff(self):
+        engine = make()
+        local = BoundedRepairBudget(max_without_evidence=2,
+                                    max_same_reason=2, max_total=5)
+        last = None
+        for i in range(5):
+            budget = local.observe([{"reason": "bad_turn"}],
+                                   evidence_generation=0)
+            last = engine.planner_rejection(
+                reason="bad_turn", snapshot=snapshot(engine),
+                response_fresh=True, evidence_generation="same",
+                local_repair_budget=budget,
+            )
+        self.assertEqual((last.level, last.status, last.reason), (
+            "L5", "PAUSED", "GAR_GLOBAL_SAFETY_BUDGET_EXHAUSTED"
+        ))
+        self.assertEqual(engine.rejected_rounds, 5)
+        self.assertEqual(engine.diagnostic()["local_rejected_total"], 5)
+        self.assertEqual(engine.fresh_sessions, 0)
 
     def test_open_unknown_blocks_replan_and_reexecution(self):
         for pending in (
