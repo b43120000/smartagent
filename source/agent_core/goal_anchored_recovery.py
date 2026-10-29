@@ -82,7 +82,7 @@ def is_unverified_nonexecuted_terminal_requirement(
     # an unexecuted prerequisite when the exact normal VERIFY fields exist;
     # it is NOT verification evidence and cannot admit terminal SUCCESS.
     actions = requirement.get("next_actions")
-    if actions is None:
+    if actions is None or actions == []:
         fields = requirement.get("required_fields")
         return bool(
             isinstance(fields, list)
@@ -288,6 +288,7 @@ class RecoveryEngine:
                 "max_rejections": self.max_rejections,
                 "local_repair_exhausted": self._local_repair_exhausted,
                 "local_rejected_total": self._last_local_rejected_total,
+                "fresh_repair_attempts": self._fresh_repair_attempts,
             },
             "last_level": self.level,
         }
