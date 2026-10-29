@@ -115,6 +115,88 @@ class GARSharedRuntimeTests(unittest.TestCase):
             has_action_history=False, has_condition_results=False,
         ))
 
+    def test_request_accepted_only_is_advisory_without_admitting_success(self):
+        # Live C1 reproduction: REQUEST_ACCEPTED is not executed evidence.
+        requirement = {
+            "missing_condition": "Explain RAII",
+            "condition_id": "COND-RUNTIME-C1",
+            "current_verification_status": "UNVERIFIED",
+            "evidence_refs": ["REQUEST_ACCEPTED"],
+            "required_action": "run_command",
+            "required_fields": ["operation", "command", "success_criteria",
+                                "verify", "condition_id"],
+            "supported_verify_actions": ["run_command", "aggregate_verification"],
+            "supported_verify_checks": ["file_exists", "file_contains", "expect_regex"],
+            "next_actions": [{"tool": "run_command", "operation": "VERIFY",
+                              "condition_id": "COND-RUNTIME-C1"}],
+        }
+        self.assertTrue(is_unverified_nonexecuted_terminal_requirement(
+            requirement, has_action_history=False, has_condition_results=False
+        ))
+        # Classification never rewrites the original terminal requirement.
+        self.assertEqual(requirement["current_verification_status"], "UNVERIFIED")
+        self.assertEqual(requirement["evidence_refs"], ["REQUEST_ACCEPTED"])
+        engine = make()
+        state = engine.snapshot(
+            identity={"request_id": "GAR-RR-1", "task_id": "GAR-TASK-1",
+                      "task_epoch": "GAR-EPOCH-1"},
+            verified_evidence={}, progress={},
+            verification_preconditions=("UNVERIFIED_TERMINAL_NO_EXECUTION",),
+        )
+        self.assertEqual(state["pending_operations"], [])
+        self.assertEqual(state["checkpoint"]["verified_evidence"], [])
+        verdict = engine.planner_rejection(
+            reason="terminal_success_verification_missing",
+            snapshot=state, response_fresh=True,
+            evidence_generation="no-action-result",
+        )
+        self.assertEqual((verdict.level, verdict.status, verdict.reason),
+                         ("L1", "REPAIR", "TERMINAL_SUCCESS_VERIFICATION_MISSING"))
+
+    def test_request_accepted_scope_is_exact_and_hard_blockers_still_block(self):
+        base = {
+            "condition_id": "COND-RUNTIME-C1",
+            "current_verification_status": "UNVERIFIED",
+            "evidence_refs": ["REQUEST_ACCEPTED"],
+            "required_action": "run_command",
+            "required_fields": ["operation", "command", "success_criteria",
+                                "verify", "condition_id"],
+            "next_actions": [{"tool": "run_command", "operation": "VERIFY",
+                              "condition_id": "COND-RUNTIME-C1"}],
+        }
+        rejected = (
+            ({**base, "evidence_refs": ["RUNTIME_STATUS"]}, False, False),
+            ({**base, "evidence_refs": ["ACTION-REF"]}, False, False),
+            ({**base, "evidence_refs": ["REQUEST_ACCEPTED", "ACTION-REF"]}, False, False),
+            ({**base, "evidence_refs": ["REQUEST_ACCEPTED", "REQUEST_ACCEPTED"]}, False, False),
+            ({**base, "current_verification_status": "UNKNOWN"}, False, False),
+            ({**base, "reason_code": "OPEN_WRITE_TRANSACTION"}, False, False),
+            ({**base, "blocking_action_id": "ACT-1"}, False, False),
+            ({**base, "required_action": "commit_file_write"}, False, False),
+            (base, True, False),
+            (base, False, True),
+        )
+        for requirement, actions, conditions in rejected:
+            with self.subTest(requirement=requirement, actions=actions,
+                              conditions=conditions):
+                self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+                    requirement, has_action_history=actions,
+                    has_condition_results=conditions,
+                ))
+        engine = make()
+        for pending, blockers in (
+            ({"unscoped_action_outcome": True}, ()),
+            ({"unknown_action_outcome": True}, ()),
+            ({}, ({"reason_code": "UNRESOLVED", "satisfied": False},)),
+        ):
+            state = snapshot(engine, pending=pending, blockers=blockers)
+            result = engine.planner_rejection(
+                reason="terminal_success_verification_missing", snapshot=state,
+                response_fresh=True, evidence_generation="none",
+            )
+            self.assertEqual((result.level, result.status, result.reason),
+                             ("L5", "PAUSED", "GAR_PENDING_OR_BLOCKED_OPERATION"))
+
     def test_l4_only_repairs_new_session_without_second_context(self):
         from agent_core.goal_anchored_recovery import FreshContextProof
         engine = make()

@@ -71,7 +71,13 @@ def is_unverified_nonexecuted_terminal_requirement(
         return False
     if str(requirement.get("current_verification_status", "")).upper() != "UNVERIFIED":
         return False
-    if requirement.get("evidence_refs") not in ([], (), None):
+    # A single REQUEST_ACCEPTED is a Runtime admission marker, not ActionResult
+    # or terminal verification evidence. V9 Progress permits this marker even
+    # before any tool has run. Treat it as advisory ONLY after the remaining
+    # exact-schema/no-history/UNVERIFIED checks below also pass. Arbitrary,
+    # mixed or duplicated evidence references remain hard blockers.
+    evidence_refs = requirement.get("evidence_refs")
+    if evidence_refs not in ([], (), None, ["REQUEST_ACCEPTED"], ("REQUEST_ACCEPTED",)):
         return False
     if requirement.get("required_action") != "run_command":
         return False

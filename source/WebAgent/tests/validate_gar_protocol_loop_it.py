@@ -65,6 +65,71 @@ class GARProtocolIT(unittest.TestCase):
             self.assertIn("UNVERIFIED_TERMINAL_NO_EXECUTION",
                           checkpoint["verification_preconditions"])
 
+    def test_request_accepted_only_is_advisory_in_real_web_direct_v9(self):
+        # Live C1 reproduction: Progress cites REQUEST_ACCEPTED without tools.
+        # V9 must reject SUCCESS, but GAR must not invent an UNKNOWN side effect.
+        with tempfile.TemporaryDirectory(prefix="gar-c1-request-accepted-") as directory:
+            root = Path(directory)
+            events, planner_calls = [], []
+            def planner(prompt, expected, attachments):
+                planner_calls.append(prompt)
+                reply = answer_only_response(text="RAII releases resources.")
+                marker = '"evidence_refs":[]'
+                assert reply.count(marker) == 1
+                return reply.replace(marker, '"evidence_refs":["REQUEST_ACCEPTED"]', 1)
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=2,
+                event_sink=lambda name, **fields: events.append((name, fields)),
+            )
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "1",
+                "TRI_ONE_TASK_RESULT_V1": "1",
+                "TRI_ONE_TEXT_ONLY_V1": "1",
+            }):
+                with self.assertRaises(Exception):
+                    loop.run(
+                        "Explain RAII.", source_tag="",
+                        request_id="GAR-C1-WEB-RR", task_id="GAR-C1-WEB-TASK",
+                        task_epoch="GAR-C1-WEB-EPOCH",
+                    )
+            rejected = [row for name, row in events if name == "protocol_rejected"]
+            self.assertGreaterEqual(len(rejected), 1)
+            self.assertTrue(any(d.get("reason") == "terminal_success_verification_missing"
+                                for d in rejected[0].get("diagnostics", [])))
+            candidates = [row for name, row in events
+                          if name == "tri_one_answer_only_candidate"]
+            self.assertTrue(candidates)
+            self.assertFalse(candidates[0]["eligible"])
+            self.assertEqual(candidates[0]["reason"],
+                             "action_evidence_cannot_be_answer_only")
+            classified = [row for name, row in events
+                          if name == "gar_pending_classification"]
+            self.assertTrue(classified)
+            self.assertTrue(classified[0]["terminal_precondition_advisory"])
+            self.assertEqual(classified[0]["executed_action_count"], 0)
+            self.assertEqual(classified[0]["recorded_result_count"], 0)
+            decisions = [row for name, row in events
+                         if name == "gar_recovery_decision"]
+            self.assertTrue(decisions)
+            self.assertEqual((decisions[0]["level"], decisions[0]["last_reason"]),
+                             ("L1", "GAR_LOCAL_REPAIR_ACTIVE"))
+            self.assertGreaterEqual(loop._gar.rejected_rounds, 1)
+            self.assertEqual(loop.pending_verification_requirement["evidence_refs"],
+                             ["REQUEST_ACCEPTED"])
+            self.assertFalse(loop.terminal_acceptance)
+            self.assertFalse(loop.action_ledger)
+            self.assertFalse(loop.action_result_ledger)
+            import json
+            checkpoints = list((root / "localdata" / "runtime" /
+                               "gar_snapshots").glob("*.json"))
+            self.assertEqual(len(checkpoints), 1)
+            checkpoint = json.loads(checkpoints[0].read_text(encoding="utf-8"))
+            self.assertEqual(checkpoint["pending_operations"], [])
+            self.assertEqual(checkpoint["checkpoint"]["verified_evidence"], [])
+            self.assertIn("UNVERIFIED_TERMINAL_NO_EXECUTION",
+                          checkpoint["verification_preconditions"])
+            self.assertGreaterEqual(len(planner_calls), 2)
+
     def test_stale_readback_cannot_reexecute_or_complete(self):
         with tempfile.TemporaryDirectory(prefix="gar-stale-") as directory:
             root = Path(directory)

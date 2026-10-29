@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-rem TEMPORARY GAR A0 regression runner. Remove before merging to main.
+rem TEMPORARY GAR A0/C1 regression runner. Remove before merging to main.
 rem Does not change Git/Source/Manifest, or start/stop Controller.
 
 set "REQUIRED_FIX_SHA=f4be45552e1e1916ff12916911f94b41f437382c"
@@ -21,12 +21,12 @@ if errorlevel 1 (
   echo   Actual HEAD:       %CURRENT_SHA%
   goto :FATAL
 )
-git diff --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py source/agent_core/composer_operation.py source/WebAgent/tests/validate_composer_stability.py source/WebAgent/tests/validate_composer_recovery.py source/WebAgent/tests/validate_composer_operation.py
+git diff --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py source/agent_core/composer_operation.py source/WebAgent/tests/validate_composer_stability.py source/WebAgent/tests/validate_composer_recovery.py source/WebAgent/tests/validate_composer_operation.py source/agent_core/goal_anchored_recovery.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py
 if errorlevel 1 (
   echo [ERROR] Modified GAR Source, test or Manifest; tests not started.
   goto :FATAL
 )
-git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py source/agent_core/composer_operation.py source/WebAgent/tests/validate_composer_stability.py source/WebAgent/tests/validate_composer_recovery.py source/WebAgent/tests/validate_composer_operation.py
+git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/protocol_loop.py source/WebAgent/controller.py source/agent_core/source_attestation.py source/WebAgent/tests/validate_gar_a0_identity.py source/agent_core/composer_operation.py source/WebAgent/tests/validate_composer_stability.py source/WebAgent/tests/validate_composer_recovery.py source/WebAgent/tests/validate_composer_operation.py source/agent_core/goal_anchored_recovery.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py
 if errorlevel 1 (
   echo [ERROR] Staged GAR Source, test or Manifest; tests not started.
   goto :FATAL
