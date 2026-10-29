@@ -27,6 +27,18 @@ L5: PAUSED/UNKNOWN and incident reason, no accepted terminal SUCCESS. A minimal 
 
 The shared engine is source/agent_core/goal_anchored_recovery.py; its capability-gated Browser Adapter is source/WebAgent/fresh_context.py; V9 source wiring is in source/WebAgent/protocol_loop.py, WebAgent/controller.py and RemoteAgent/telegram_webagent_worker.py. WebDirect acquires the common execution-page lease for an explicitly configured L4. RemoteAgent already holds that lease. The Goal1 base defaults WEBGPT_COPILOT to shared V9. A deliberate TRI_ONE_WEBCOPILOT_V9_V1=0 opts out into legacy smart_agent.py, outside this GAR integration. LocalAgent full convergence remains the separate 2B/2C architecture.
 
+## Bounded Repair → GAR unified decision ownership (2026-10-29 candidate)
+
+Observed Live failure: after an intentionally malformed V9 test, the original Bounded Repair raised `bounded_repair_exhausted_without_sufficient_new_evidence` before GAR L4 could be attempted. Source RCA: `WebAgentProtocolLoop._admit_bounded_repair` raised on `EXHAUSTED` before its subsequent `_gar_rejection` call. Two repeated-rejection branches could also accidentally count one turn more than once.
+
+With GAR enabled, Bounded Repair is now the local **observation/repair budget**, not an independent terminal decision maker. It reports **one** `gar_local_repair_handoff` on first local exhaustion; GAR owns all subsequent L2/L3/L4 decisions and L5 safe pause. GAR records each rejected Planner turn exactly once and checks exact synchronization against BoundedRepairBudget's `rejected_turns_total`, so a duplicated event or lost counter fails closed with `GAR_LOCAL_BUDGET_DESYNC`.
+
+The original local thresholds remain unchanged: 5 occurrences of the same reason or 6 rejected turns without new evidence (whichever comes first); **global hard limits remain active**. GAR now uses a 10-rejection shared ceiling, bounded further by the original 16-total maximum and existing 600-second soft repair deadline. On identical fresh protocol rejections with no tool effects, the expected staged sequence is four local repairs, then L2 (fifth rejection), L3 (sixth), L4 request (seventh); the eighth and subsequent decisions remain bound by the same counters. L4 does not reset the budget.
+
+When GAR is **OFF**, the original repeated-rejection and Bounded Repair interruption behavior remains unchanged. Transport stale readback and unknown/OPEN action outcomes are separate hard safety gates; they do **not** automatically escalate into L4.
+
+Negative and positive fake-Planner regression cases are in `validate_gar_shared_runtime.py` and `validate_gar_protocol_loop_it.py`. These tests are **committed but execution results are not available**.
+
 ## L4 operator configuration (only after safe idle and exact Source checkout)
 
 In the same browser profile as the original WebCopilot conversation, prepare a SECOND existing ChatGPT conversation and open its full `https://chatgpt.com/c/<distinct-id>` URL in a separate tab. Use a conversation you explicitly designate for recovery; do not use a second Agent or another person's page. The original conversation remains the task and delivery destination. No new tab is created automatically.
