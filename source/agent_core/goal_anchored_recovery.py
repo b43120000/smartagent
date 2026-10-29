@@ -313,6 +313,11 @@ class RecoveryEngine:
         self._l4_requested = True
         return self._record("L4", "PREPARE", "GAR_FRESH_CONTEXT_REQUIRED")
 
+    def refuse_fresh_context(self, reason: str) -> RecoveryDecision:
+        """Terminal L5 fallback; an unverified adapter must never re-ask."""
+        code = _bounded_code(reason, default="GAR_FRESH_CONTEXT_UNAVAILABLE")
+        return self._record("L5", "PAUSED", code)
+
     def activate_fresh_context(self, *, proof: FreshContextProof,
                                snapshot: Mapping[str, object]) -> RecoveryDecision:
         """Admit one new context only against a trusted, same-task proof."""
