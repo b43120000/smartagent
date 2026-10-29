@@ -295,6 +295,7 @@ class WebAgentProtocolLoop:
         self.terminal_acceptance: dict = {}
         self._answer_only_admitted = False
         self._tri_one_origin = "WEB_DIRECT"
+        self._tri_one_has_attached_context = False
         self.tools.configure_project_sync_transport(
             lambda prompt, attachments: self.planner(prompt, None, attachments)
         )
@@ -3909,7 +3910,8 @@ class WebAgentProtocolLoop:
         self._tri_one_origin = (
             "TELEGRAM" if source_name == "REMOTEAGENT_TELEGRAM"
             else "LOCAL_TEST" if source_name == "REMOTEAGENT_TELEGRAM_SIMULATION"
-            else "WEB_COPILOT" if source_name == "TRI_ONE_TEST_V1"
+            else "WEB_COPILOT" if source_name == "REMOTEAGENT_WEBCOPILOT_V9"
+            else "LOCAL_TEST" if source_name == "TRI_ONE_TEST_V1"
             else "WEB_DIRECT"
         )
         self.protocol_state = "ACTIVE"
@@ -3926,6 +3928,9 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
+        # An already queued attachment or skill is an external dependency,
+        # even if the original prose itself contains no file path.
+        self._tri_one_has_attached_context = bool(initial_attachments or skill_context)
         self.execution_state = "NOT_STARTED"
         self.terminal_candidate = {}
         last_no_action_decision_signature: str | None = None
@@ -4076,7 +4081,7 @@ class WebAgentProtocolLoop:
         from agent_core.tri_one_task_result import enabled as _tri_one_result_enabled
         if _tri_one_result_enabled() and _tri_one_text_enabled(source=self._tri_one_origin):
             text_candidate, _ = classify_original_request(
-                request, attachments=bool(initial_attachments),
+                request, attachments=self._tri_one_has_attached_context,
                 authorized_paths=bool(authorized),
                 image_or_artifact_request=bool(self.image_delivery_plan),
                 continuation=bool(self.continuation_source),
