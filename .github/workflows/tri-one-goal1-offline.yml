@@ -31,7 +31,7 @@ jobs:
       - name: Compile candidate Python sources
         shell: pwsh
         run: |
-          python -m compileall -q source/agent_core/tri_one_answer_only.py source/agent_core/tri_one_shared_worker.py source/agent_core/tri_one_task_result.py source/agent_core/current_conversation_adapter.py source/agent_core/protocol_manifest.py source/WebAgent/protocol_loop.py source/RemoteAgent/telegram_webagent_worker.py source/RemoteAgent/remote_worker_launcher.py source/WebAgent/tests/validate_tri_one_5a_answer_only.py source/WebAgent/tests/validate_tri_one_5b_shared_worker.py source/WebAgent/tests/goal1_live_triage.py
+          python -m compileall -q source/agent_core/tri_one_answer_only.py source/agent_core/tri_one_shared_worker.py source/agent_core/tri_one_task_result.py source/agent_core/current_conversation_adapter.py source/agent_core/protocol_manifest.py source/WebAgent/protocol_loop.py source/RemoteAgent/telegram_webagent_worker.py source/RemoteAgent/remote_worker_launcher.py source/WebAgent/tests/validate_tri_one_5a_answer_only.py source/WebAgent/tests/validate_tri_one_5a_protocol_it.py source/WebAgent/tests/validate_tri_one_5b_shared_worker.py source/WebAgent/tests/goal1_live_triage.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate exact strict protocol manifest
         shell: pwsh
@@ -46,6 +46,7 @@ jobs:
             'source/WebAgent/tests/validate_tri_one_2a_matrix.py',
             'source/WebAgent/tests/validate_tri_one_2a_open_terminal.py',
             'source/WebAgent/tests/validate_tri_one_5a_answer_only.py',
+            'source/WebAgent/tests/validate_tri_one_5a_protocol_it.py',
             'source/WebAgent/tests/validate_tri_one_5b_shared_worker.py'
           )
           foreach ($script in $scripts) {
