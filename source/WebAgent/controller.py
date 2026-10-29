@@ -424,20 +424,45 @@ def main(argv: list[str] | None = None) -> int:
                 if lifecycle is not None:
                     lifecycle.emit("VALIDATING", request_id=(test_envelope.request_id if test_envelope is not None else ""))
                     lifecycle.emit("EXECUTING", request_id=(test_envelope.request_id if test_envelope is not None else ""))
-                final_content = loop.run(
-                    request,
-                    request_id=(
-                        test_envelope.request_id if test_envelope is not None else ""
-                    ),
-                    initial_attachments=(
-                        list(test_envelope.attachment_paths)
-                        if test_envelope is not None
-                        else None
-                    ),
-                    source_tag=(
-                        "TRI_ONE_TEST_V1" if test_envelope is not None else ""
-                    ),
+                # GAR L4 uses the same cross-interface page lease as
+                # RemoteAgent, including while its fresh Planner is active.
+                # No lease is acquired for ordinary legacy/flag-OFF tasks.
+                from contextlib import nullcontext
+                from agent_core.goal_anchored_recovery import enabled as gar_enabled
+                from agent_core.paths import remote_execution_page_lock_path
+                from WebAgent.browser_bridge import execution_page_lease
+                use_gar_fresh_lease = (
+                    gar_enabled()
+                    and bool(os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip())
                 )
+                page_guard = (
+                    execution_page_lease(
+                        marker_path=remote_execution_page_lock_path(runtime_root),
+                        label="WebDirect GAR L4 original and fresh conversation",
+                    ) if use_gar_fresh_lease else nullcontext()
+                )
+                with page_guard:
+                    previous_lease_owned = bool(
+                        getattr(scraper, "_execution_page_lease_owned", False)
+                    )
+                    if use_gar_fresh_lease:
+                        scraper._execution_page_lease_owned = True
+                    try:
+                        final_content = loop.run(
+                            request,
+                            request_id=(
+                                test_envelope.request_id if test_envelope is not None else ""
+                            ),
+                            initial_attachments=(
+                                list(test_envelope.attachment_paths)
+                                if test_envelope is not None else None
+                            ),
+                            source_tag=(
+                                "TRI_ONE_TEST_V1" if test_envelope is not None else ""
+                            ),
+                        )
+                    finally:
+                        scraper._execution_page_lease_owned = previous_lease_owned
                 runtime_log.emit("request_local_loop_completed", request_id=loop.run_id, final_content=final_content)
                 if bootstrap_active:
                     from WebAgent.bootstrap_provisioning import finish_bootstrap_provisioning
