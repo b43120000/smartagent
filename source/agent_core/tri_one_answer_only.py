@@ -121,6 +121,8 @@ def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
         return False, "runtime_blocker_unresolved"
     if getattr(loop, "continuation_source", None):
         return False, "continuation_requires_normal_route"
+    if getattr(loop, "_tri_one_has_attached_context", False):
+        return False, "attachment_or_skill_requires_normal_route"
     eligible, reason = classify_original_request(
         getattr(loop, "task_request", ""),
         authorized_paths=bool(getattr(loop, "authorized_paths", [])),
