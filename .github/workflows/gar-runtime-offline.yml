@@ -34,7 +34,7 @@ jobs:
       - name: Python compile gate
         shell: pwsh
         run: |
-          python -m compileall -q source/agent_core/goal_anchored_recovery.py source/WebAgent/protocol_loop.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py
+          python -m compileall -q source/agent_core/goal_anchored_recovery.py source/WebAgent/fresh_context.py source/WebAgent/controller.py source/RemoteAgent/telegram_webagent_worker.py source/WebAgent/protocol_loop.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py source/WebAgent/tests/validate_gar_l4_fresh_context.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Strict manifest gate
         shell: pwsh
@@ -48,6 +48,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_l4_fresh_context.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_protocol_recovery_readback.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Existing Tri-One regressions
@@ -58,6 +60,7 @@ jobs:
             'source/WebAgent/tests/validate_tri_one_2a_matrix.py',
             'source/WebAgent/tests/validate_tri_one_2a_open_terminal.py',
             'source/WebAgent/tests/validate_tri_one_5a_answer_only.py',
+            'source/WebAgent/tests/validate_tri_one_5a_protocol_it.py',
             'source/WebAgent/tests/validate_tri_one_5b_shared_worker.py'
           )
           foreach ($script in $scripts) {
