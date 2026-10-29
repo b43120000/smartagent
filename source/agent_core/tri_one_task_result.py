@@ -328,6 +328,9 @@ def make_task_result(
     if kind not in KINDS:
         raise TaskResultContractError("invalid_completion_kind")
     if kind == "ANSWER_ONLY":
+        # Keep legacy 2A negative contracts stable when no 5A receipt exists.
+        if not answer_only_receipt:
+            raise TaskResultContractError("answer_only_not_implemented_in_2a")
         from .tri_one_answer_only import enabled as answer_only_enabled
         if not (enabled() and answer_only_enabled(source=source_interface)):
             raise TaskResultContractError("answer_only_feature_disabled")
