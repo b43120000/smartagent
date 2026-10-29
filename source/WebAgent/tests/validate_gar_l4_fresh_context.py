@@ -37,6 +37,14 @@ class Scraper:
         return False
 
 
+class Registry:
+    references_count = 0
+    def __init__(self, root):
+        pass
+    def references(self, url):
+        return self.__class__.references_count
+
+
 class Client:
     bootstraps = []
     def __init__(self, scraper, governor=None, event_sink=None, display_name=""):
@@ -75,6 +83,7 @@ def make():
 def prepare(adapter):
     with patch("agent_core.web_runtime.WebLLMScraper", Scraper), \
          patch("WebAgent.browser_client.WebAgentBrowserClient", Client), \
+         patch("agent_core.conversation_ownership.ConversationOwnershipRegistry", Registry), \
          patch("agent_core.session_protocol.SessionProtocol", Protocol):
         return adapter.prepare(
             request_id="RR-IT", task_id="TASK-IT",
@@ -86,6 +95,7 @@ class FreshBrowserAdmissionTests(unittest.TestCase):
     def setUp(self):
         Scraper.instances.clear()
         Client.bootstraps.clear()
+        Registry.references_count = 0
 
     def test_distinct_preopened_page_bootstraps_without_navigation(self):
         old, fresh, adapter = make()
@@ -128,6 +138,13 @@ class FreshBrowserAdmissionTests(unittest.TestCase):
                     prepare(adapter)
                 self.assertEqual(len(Client.bootstraps), 0)
 
+    def test_target_with_existing_owner_is_refused(self):
+        old, fresh, adapter = make()
+        Registry.references_count = 1
+        with self.assertRaisesRegex(RuntimeError, "ALREADY_OWNED"):
+            prepare(adapter)
+        self.assertEqual(Client.bootstraps, [])
+
     def test_target_missing_or_ambiguous(self):
         for case in ("missing", "duplicate"):
             with self.subTest(case=case):
@@ -147,6 +164,7 @@ class FreshBrowserAdmissionTests(unittest.TestCase):
                 return False
         with patch("agent_core.web_runtime.WebLLMScraper", Scraper), \
              patch("WebAgent.browser_client.WebAgentBrowserClient", Client), \
+             patch("agent_core.conversation_ownership.ConversationOwnershipRegistry", Registry), \
              patch("agent_core.session_protocol.SessionProtocol", WrongProtocol):
             with self.assertRaisesRegex(RuntimeError, "PROTOCOL_IDENTITY_UNVERIFIED"):
                 adapter.prepare(
