@@ -337,6 +337,21 @@ class WebAgentProtocolLoop:
         self._stagnation_pending = None
         self._gar = None
 
+    def _gar_persist(self):
+        if self._gar is None:
+            return
+        try:
+            base = self.progress_root if self.progress_root is not None else self.workspace
+            checkpoint = self._gar.persist_snapshot(self._gar_snapshot(), root=base)
+            self._emit("gar_checkpoint_persisted", request_id=self.run_id,
+                       round=self.turn_id,
+                       checkpoint_name=checkpoint.name,
+                       **self._gar.diagnostic())
+        except (OSError, ValueError, TypeError) as exc:
+            # Reporting never rewrites a prior task result or authorizes retry.
+            self._emit("gar_checkpoint_persist_failed", request_id=self.run_id,
+                       round=self.turn_id, error_type=type(exc).__name__)
+
     def _gar_snapshot(self):
         if self._gar is None:
             return None
@@ -361,7 +376,6 @@ class WebAgentProtocolLoop:
     def _gar_rejection(self, diagnostics, *, fresh=True):
         if self._gar is None:
             return None
-        from agent_core.goal_anchored_recovery import RecoveryDecision
         snapshot = self._gar_snapshot()
         reason = str(next((item.get("reason") for item in diagnostics
                            if isinstance(item, dict) and item.get("reason")),
@@ -380,6 +394,7 @@ class WebAgentProtocolLoop:
         )
         self._emit("gar_recovery_decision", request_id=self.run_id,
                    round=self.turn_id, **self._gar.diagnostic())
+        self._gar_persist()
         if decision.status == "PAUSED":
             from agent_core.task_progress import set_runtime_state
             set_runtime_state(self.task_id, "PAUSED", reason=decision.reason,
@@ -4238,6 +4253,7 @@ class WebAgentProtocolLoop:
                     # second Planner decision. Do NOT re-send or execute.
                     snapshot = self._gar_snapshot()
                     classification = self._gar.transport_failure(exc, snapshot)
+                    self._gar_persist()
                     self._emit("gar_transport_integrity", request_id=self.run_id,
                                round=self.turn_id, **self._gar.diagnostic())
                     if classification.reason in {
