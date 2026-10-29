@@ -12,6 +12,7 @@ from pathlib import Path
 
 from agent_core.goal_anchored_recovery import (
     RecoveryEngine, FreshContextProof, classify_failure, enabled, mutation_fingerprint,
+    is_unverified_nonexecuted_terminal_requirement,
 )
 from agent_core.bounded_repair import BoundedRepairBudget
 
@@ -42,6 +43,71 @@ class GARSharedRuntimeTests(unittest.TestCase):
         self.assertFalse(enabled({"SMARTAGENT_GAR_V1": "0"}))
         self.assertTrue(enabled({"SMARTAGENT_GAR_V1": "1"}))
         self.assertTrue(enabled({"SMARTAGENT_GAR_V1": "on"}))
+
+    def test_no_tool_terminal_verification_is_advisory_not_pass(self):
+        # Reproduces GAR L5 at round 1 from terminal_success_verification_missing.
+        requirement = {
+            "missing_condition": "Explain RAII",
+            "condition_id": "COND-TEST",
+            "current_verification_status": "UNVERIFIED",
+            "evidence_refs": [],
+            "required_action": "run_command",
+            "required_fields": ["operation", "command", "success_criteria",
+                                "verify", "condition_id"],
+            "supported_verify_actions": ["run_command", "aggregate_verification"],
+            "supported_verify_checks": ["file_exists", "file_contains", "expect_regex"],
+            "next_actions": [{"tool": "run_command", "operation": "VERIFY",
+                              "condition_id": "COND-TEST"}],
+        }
+        self.assertTrue(is_unverified_nonexecuted_terminal_requirement(
+            requirement, has_action_history=False, has_condition_results=False
+        ))
+        engine = make()
+        state = engine.snapshot(
+            identity={"request_id": "GAR-RR-1", "task_id": "GAR-TASK-1",
+                      "task_epoch": "GAR-EPOCH-1"},
+            verified_evidence={}, progress={},
+            verification_preconditions=("UNVERIFIED_TERMINAL_NO_EXECUTION",),
+        )
+        self.assertEqual(state["pending_operations"], [])
+        self.assertEqual(state["verification_preconditions"],
+                         ["UNVERIFIED_TERMINAL_NO_EXECUTION"])
+        decision = engine.planner_rejection(
+            reason="terminal_success_verification_missing",
+            snapshot=state, response_fresh=True, evidence_generation="zero",
+        )
+        self.assertEqual((decision.level, decision.status), ("L1", "REPAIR"))
+
+    def test_unsafe_verification_requirements_remain_blocking(self):
+        requirement = {
+            "condition_id": "COND-TEST",
+            "current_verification_status": "UNVERIFIED",
+            "evidence_refs": [],
+            "required_action": "run_command",
+            "next_actions": [{"tool": "run_command", "operation": "VERIFY",
+                              "condition_id": "COND-TEST"}],
+        }
+        negatives = [
+            ({**requirement, "reason_code": "OPEN_WRITE_TRANSACTION"}, False, False),
+            ({**requirement, "blocking_action_id": "ACT-1"}, False, False),
+            ({**requirement, "evidence_refs": ["ACT-1"]}, False, False),
+            ({**requirement, "current_verification_status": "UNKNOWN"}, False, False),
+            (requirement, True, False),
+            (requirement, False, True),
+        ]
+        for payload, actions, conditions in negatives:
+            with self.subTest(payload=payload, action_history=actions):
+                self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+                    payload, has_action_history=actions,
+                    has_condition_results=conditions
+                ))
+        engine = make()
+        blocked = snapshot(engine, pending={"pending_verification_requirement": True})
+        paused = engine.planner_rejection(
+            reason="unsafe_verification_pending",
+            snapshot=blocked, response_fresh=True, evidence_generation="none",
+        )
+        self.assertEqual(paused.reason, "GAR_PENDING_OR_BLOCKED_OPERATION")
 
     def test_stale_dom_not_new_planner_or_mutation(self):
         engine = make()
