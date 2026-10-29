@@ -26,28 +26,41 @@ from agent_core.tri_one_task_result import (
 
 
 class SharedWorkerSelectionTests(unittest.TestCase):
-    def test_default_off_keeps_original_workers(self):
+    def test_default_on_for_webcopilot_and_existing_telegram(self):
         self.assertTrue(use_shared_v9_worker("TELEGRAM", {}))
         self.assertTrue(use_shared_v9_worker("LOCAL_TEST", {}))
-        self.assertFalse(use_shared_v9_worker("WEBGPT_COPILOT", {}))
-        self.assertFalse(use_shared_v9_worker("LOCAL_AGENT", {
-            "TRI_ONE_TASK_RESULT_V1": "1",
-            "TRI_ONE_TEXT_ONLY_V1": "1",
-            "TRI_ONE_WEBCOPILOT_V9_V1": "1",
+        self.assertTrue(use_shared_v9_worker("WEBGPT_COPILOT", {}))
+        self.assertTrue(use_shared_v9_worker("webgpt_copilot", {
+            "TRI_ONE_TASK_RESULT_V1": "0",
+            "TRI_ONE_TEXT_ONLY_V1": "0",
         }))
+        self.assertFalse(use_shared_v9_worker("LOCAL_AGENT", {}))
+        self.assertFalse(use_shared_v9_worker("WEBGPT", {}))
+        self.assertFalse(use_shared_v9_worker("", {}))
 
-    def test_webcopilot_requires_all_three_admin_flags(self):
-        flags = {
-            "TRI_ONE_TASK_RESULT_V1": "1",
-            "TRI_ONE_TEXT_ONLY_V1": "1",
-            "TRI_ONE_WEBCOPILOT_V9_V1": "1",
-        }
-        self.assertTrue(use_shared_v9_worker("WEBGPT_COPILOT", flags))
-        for key in tuple(flags):
-            changed = dict(flags)
-            changed[key] = "0"
-            with self.subTest(disabled=key):
-                self.assertFalse(use_shared_v9_worker("WEBGPT_COPILOT", changed))
+    def test_2a_5a_flags_do_not_change_worker_selection(self):
+        for a in ("0", "1"):
+            for b in ("0", "1"):
+                with self.subTest(task_result=a, answer_only=b):
+                    self.assertTrue(use_shared_v9_worker("WEBGPT_COPILOT", {
+                        "TRI_ONE_TASK_RESULT_V1": a,
+                        "TRI_ONE_TEXT_ONLY_V1": b,
+                    }))
+
+    def test_webcopilot_explicit_rollback_and_invalid_values(self):
+        for off in ("0", "off", "false", "no", "invalid"):
+            with self.subTest(disabled=off):
+                self.assertFalse(use_shared_v9_worker(
+                    "WEBGPT_COPILOT", {"TRI_ONE_WEBCOPILOT_V9_V1": off}
+                ))
+        for on in ("1", "on", "true", "yes", ""):
+            with self.subTest(enabled=on):
+                self.assertTrue(use_shared_v9_worker(
+                    "WEBGPT_COPILOT", {"TRI_ONE_WEBCOPILOT_V9_V1": on}
+                ))
+        self.assertTrue(use_shared_v9_worker(
+            "TELEGRAM", {"TRI_ONE_WEBCOPILOT_V9_V1": "0"}
+        ))
 
 
 class WebCopilotIngressTests(unittest.TestCase):
