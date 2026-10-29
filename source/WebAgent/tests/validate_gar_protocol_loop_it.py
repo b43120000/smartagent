@@ -19,6 +19,52 @@ from WebAgent.tests.validate_tri_one_5a_protocol_it import answer_only_response
 
 
 class GARProtocolIT(unittest.TestCase):
+    def test_unverified_terminal_precondition_is_not_unknown_side_effect(self):
+        # Real V9 parser and terminal gate: first response is a valid V9
+        # terminal SUCCESS without evidence; with 5A OFF it must be rejected,
+        # but GAR must not mistake that *protocol requirement* for a tool
+        # executing with UNKNOWN outcome.
+        with tempfile.TemporaryDirectory(prefix="gar-terminal-prereq-") as directory:
+            root = Path(directory)
+            events = []
+            replies = []
+            def planner(prompt, expected, attachments):
+                replies.append(prompt)
+                return answer_only_response(text="RAII releases resources.")
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=2,
+                event_sink=lambda name, **fields: events.append((name, fields)),
+            )
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "1",
+                "TRI_ONE_TASK_RESULT_V1": "0",
+                "TRI_ONE_TEXT_ONLY_V1": "0",
+            }):
+                with self.assertRaises(Exception):
+                    loop.run(
+                        "Explain RAII.", source_tag="REMOTEAGENT_WEBCOPILOT_V9",
+                        request_id="GAR-PRE-RR", task_id="GAR-PRE-TASK",
+                        task_epoch="GAR-PRE-EPOCH",
+                    )
+            decisions = [row for name, row in events
+                         if name == "gar_recovery_decision"]
+            self.assertGreaterEqual(len(decisions), 1)
+            self.assertEqual(decisions[0]["last_reason"],
+                             "GAR_LOCAL_REPAIR_ACTIVE")
+            self.assertGreaterEqual(loop._gar.rejected_rounds, 1)
+            self.assertTrue(loop.pending_verification_requirement)
+            self.assertFalse(loop.terminal_acceptance)
+            self.assertFalse(loop.action_result_ledger)
+            self.assertFalse(loop.action_ledger)
+            files = list((root / "localdata" / "runtime" /
+                          "gar_snapshots").glob("*.json"))
+            self.assertEqual(len(files), 1)
+            import json
+            checkpoint = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(checkpoint["pending_operations"], [])
+            self.assertIn("UNVERIFIED_TERMINAL_NO_EXECUTION",
+                          checkpoint["verification_preconditions"])
+
     def test_stale_readback_cannot_reexecute_or_complete(self):
         with tempfile.TemporaryDirectory(prefix="gar-stale-") as directory:
             root = Path(directory)
