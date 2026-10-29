@@ -460,7 +460,7 @@ class WebAgentProtocolLoop:
             progress=progress,
         )
 
-    def _gar_rejection(self, diagnostics, *, fresh=True):
+    def _gar_rejection(self, diagnostics, *, fresh=True, repair_budget=None):
         if self._gar is None:
             return None
         snapshot = self._gar_snapshot()
@@ -478,6 +478,7 @@ class WebAgentProtocolLoop:
         decision = self._gar.planner_rejection(
             reason=reason, snapshot=snapshot, response_fresh=fresh,
             evidence_generation=hashlib.sha256(generation.encode("utf-8")).hexdigest(),
+            local_repair_budget=repair_budget,
         )
         self._emit("gar_recovery_decision", request_id=self.run_id,
                    round=self.turn_id, **self._gar.diagnostic())
@@ -497,7 +498,7 @@ class WebAgentProtocolLoop:
         if self.cancel_check is not None:
             self.cancel_check()
 
-    def _admit_bounded_repair(self, diagnostics) -> None:
+    def _admit_bounded_repair(self, diagnostics) -> dict:
         # Never treat an Action ID/prose change as progress. Only Runtime
         # records marked executed are considered a new evidence generation.
         evidence_generation = sum(
@@ -513,6 +514,20 @@ class WebAgentProtocolLoop:
             round=self.turn_id,
             **budget,
         )
+        if budget["status"] == "EXHAUSTED" and self._gar is not None:
+            # LOCAL_REPAIR_EXHAUSTED is a handoff, not a second termination
+            # authority. GAR sees the same counters and enforces the hard
+            # global cap; a Session switch never resets them.
+            self._emit(
+                "gar_local_repair_handoff",
+                request_id=self.run_id, round=self.turn_id,
+                rejected_turns_total=budget["rejected_turns_total"],
+                rejected_turns_without_new_evidence=budget[
+                    "rejected_turns_without_new_evidence"
+                ],
+                local_reason_codes=budget["reason_codes"],
+            )
+            return budget
         if budget["status"] == "EXHAUSTED":
             reason = "bounded_repair_exhausted_without_sufficient_new_evidence"
             set_runtime_state(
@@ -530,6 +545,7 @@ class WebAgentProtocolLoop:
                 "SmartAgent 修復回合已達安全上限；保留既有證據並暫停。"
                 + reason
             )
+        return budget
 
     def _record_preexecution_predicate_rejection(self, calls, diagnostics) -> None:
         """Remember only a Runtime-verified, nonexecuted invalid fact Predicate.
@@ -4410,12 +4426,8 @@ class WebAgentProtocolLoop:
                 rejection_signature = self._rejected_exchange_signature(
                     calls, diagnostics, response,
                 )
-                if rejection_signature == last_rejected_exchange_signature:
-                    if self._gar is not None:
-                        gar_prompt = self._gar_rejection(diagnostics)
-                        if gar_prompt:
-                            prompt = gar_prompt
-                            continue
+                if (rejection_signature == last_rejected_exchange_signature
+                        and self._gar is None):
                     reason = "semantic_stagnation:repeated_protocol_rejection"
                     set_runtime_state(self.task_id, "PAUSED", reason=reason, root=self.progress_root)
                     raise RuntimeError(
@@ -4423,8 +4435,10 @@ class WebAgentProtocolLoop:
                     )
                 last_rejected_exchange_signature = rejection_signature
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
-                self._admit_bounded_repair(diagnostics)
-                gar_prompt = self._gar_rejection(diagnostics)
+                repair_budget = self._admit_bounded_repair(diagnostics)
+                gar_prompt = self._gar_rejection(
+                    diagnostics, repair_budget=repair_budget,
+                )
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
@@ -4483,7 +4497,7 @@ class WebAgentProtocolLoop:
                     round=self.turn_id,
                     diagnostics=ack_diagnostics,
                 )
-                self._admit_bounded_repair(ack_diagnostics)
+                repair_budget = self._admit_bounded_repair(ack_diagnostics)
                 from agent_core.task_progress import record_progress_repair
                 progress_diagnostic = next((row for row in ack_diagnostics if row.get('reason')=='invalid_progress_payload' and row.get('field_issues')), None)
                 if progress_diagnostic:
@@ -4495,12 +4509,8 @@ class WebAgentProtocolLoop:
                 if progress_diagnostic:
                     from agent_core.progress_recovery import repair_signature
                     rejection_signature = repr(repair_signature(progress_diagnostic, len(self.action_result_ledger)))
-                if rejection_signature == last_rejected_exchange_signature:
-                    if self._gar is not None:
-                        gar_prompt = self._gar_rejection(ack_diagnostics)
-                        if gar_prompt:
-                            prompt = gar_prompt
-                            continue
+                if (rejection_signature == last_rejected_exchange_signature
+                        and self._gar is None):
                     diagnostic = dict(ack_diagnostics[0] if ack_diagnostics else {})
                     diagnostic_reason = str(diagnostic.get("reason", "unknown") or "unknown")
                     diagnostic_detail = str(diagnostic.get("detail", "") or "")
@@ -4522,7 +4532,9 @@ class WebAgentProtocolLoop:
                         f"reason={diagnostic_reason}; detail={diagnostic_detail}"
                     )
                 last_rejected_exchange_signature = rejection_signature
-                gar_prompt = self._gar_rejection(ack_diagnostics)
+                gar_prompt = self._gar_rejection(
+                    ack_diagnostics, repair_budget=repair_budget,
+                )
                 repair_note = ""
                 spec = self._safe_protocol_spec_rejection()
                 if spec:
