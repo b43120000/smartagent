@@ -27,6 +27,16 @@ L5: PAUSED/UNKNOWN and incident reason, no accepted terminal SUCCESS. A minimal 
 
 The shared engine is source/agent_core/goal_anchored_recovery.py; its capability-gated Browser Adapter is source/WebAgent/fresh_context.py; V9 source wiring is in source/WebAgent/protocol_loop.py, WebAgent/controller.py and RemoteAgent/telegram_webagent_worker.py. WebDirect acquires the common execution-page lease for an explicitly configured L4. RemoteAgent already holds that lease. The Goal1 base defaults WEBGPT_COPILOT to shared V9. A deliberate TRI_ONE_WEBCOPILOT_V9_V1=0 opts out into legacy smart_agent.py, outside this GAR integration. LocalAgent full convergence remains the separate 2B/2C architecture.
 
+## RCA: first-round GAR_PENDING_OR_BLOCKED_OPERATION (2026-10-29)
+
+A no-side-effect M365/RAII failure-injection Live produced `GAR safely paused: GAR_PENDING_OR_BLOCKED_OPERATION` at round=1. The redacted checkpoint showed `pending_verification_requirement=UNKNOWN`, `blockers=[]`, and both `rejected_rounds=0` and `local_rejected_total=0`. Source trace: the Runtime creates `pending_verification_requirement` when a V9 `COMPLETE/SUCCESS` is rejected for `terminal_success_verification_missing`. This can happen with **zero executed tools**; GAR had incorrectly classified all such requirements as potentially in-flight operations.
+
+Candidate correction: `is_unverified_nonexecuted_terminal_requirement` checks an exact, restrictive zero-action/no-evidence shape, including no Action/Result/Condition ledger, no evidence refs, no blocking action ID or reason code, `current_verification_status=UNVERIFIED`, and a canonical `run_command VERIFY` prerequisite. Only this specific case becomes an advisory `UNVERIFIED_TERMINAL_NO_EXECUTION` checkpoint precondition rather than an unsafe pending operation. The V9 terminal acceptance and verification requirement remain intact, so this change **does not** accept the original unsupported SUCCESS or execute the suggested command.
+
+Any `OPEN_WRITE_TRANSACTION`, unknown outcome, existing action history, referenced evidence, transport ambiguity, or noncanonical requirement remains a hard L5 safety blocker. The negative and positive regression cases are in `validate_gar_shared_runtime.py` and `validate_gar_protocol_loop_it.py`. No new Live run or offline PASS proof was obtained here.
+
+**Important:** The original deliberate-protocol-violation prompt contains test instructions and may not qualify for 5A Answer-only admission; an unsupported terminal claim is still rejected. This classification fix merely lets legitimate GAR recovery continue rather than confusing that rejected claim with an in-flight side effect.
+
 ## Bounded Repair → GAR unified decision ownership (2026-10-29 candidate)
 
 Observed Live failure: after an intentionally malformed V9 test, the original Bounded Repair raised `bounded_repair_exhausted_without_sufficient_new_evidence` before GAR L4 could be attempted. Source RCA: `WebAgentProtocolLoop._admit_bounded_repair` raised on `EXHAUSTED` before its subsequent `_gar_rejection` call. Two repeated-rejection branches could also accidentally count one turn more than once.
