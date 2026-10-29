@@ -439,6 +439,18 @@ class WebAgentProtocolLoop:
             "active_stage_manifest",
         )
         pending = {name: bool(getattr(self, name, None)) for name in pending_names}
+        # An attempted tool in the Action Ledger without a corresponding
+        # Runtime result is NOT a safely known outcome. A fresh Planner may
+        # not bridge that gap by saying it completed.
+        pending["unscoped_action_outcome"] = any(
+            action_id not in self.action_result_ledger
+            for action_id in self.action_ledger
+        )
+        pending["unknown_action_outcome"] = any(
+            str(row.get("execution_status", "") or "").upper() in {
+                "UNKNOWN", "OPEN", "PENDING", "RUNNING"
+            } for row in self.action_ledger.values() if isinstance(row, dict)
+        )
         return self._gar.snapshot(
             identity={"request_id": self.run_id, "task_id": self.task_id,
                       "task_epoch": self.task_epoch},
