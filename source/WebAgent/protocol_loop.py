@@ -293,6 +293,8 @@ class WebAgentProtocolLoop:
         self.continuation_mode = ""
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance: dict = {}
+        self._answer_only_admitted = False
+        self._tri_one_origin = "WEB_DIRECT"
         self.tools.configure_project_sync_transport(
             lambda prompt, attachments: self.planner(prompt, None, attachments)
         )
@@ -2175,6 +2177,9 @@ class WebAgentProtocolLoop:
         }
         signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         payload["receipt_id"] = "TERM-" + hashlib.sha256(signed.encode('utf-8')).hexdigest()[:20].upper()
+        if self._answer_only_admitted:
+            payload["completion_kind"] = "ANSWER_ONLY"
+            payload["admission_reason"] = "ANSWER_ONLY_RESPONSE_ADMITTED"
         self.terminal_acceptance = payload
         self._emit("runtime_terminal_accepted", **payload)
         return payload
@@ -3479,7 +3484,22 @@ class WebAgentProtocolLoop:
                 normalized_progress,
                 reason="verification_evidence_action_required",
             )]
+        # Phase 5A: a separate, explicitly enabled answer-only admission lane.
+        # No ActionResult or fabricated verification PASS is produced. Every
+        # canonical V9/Progress/scope/identity gate before this point still runs.
+        answer_only_admission = False
         if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED":
+            from agent_core.tri_one_answer_only import enabled as answer_only_enabled, accept_terminal_candidate
+            from agent_core.tri_one_task_result import enabled as task_result_enabled
+            if task_result_enabled() and answer_only_enabled(source=getattr(self, "_tri_one_origin", "")):
+                final_action = next((a for a in operational if a.get("tool") == "final_response"), {})
+                answer_only_admission, answer_reason = accept_terminal_candidate(
+                    self, normalized_progress, final_action,
+                )
+                self._emit("tri_one_answer_only_candidate",
+                           request_id=self.run_id, round=self.turn_id,
+                           eligible=answer_only_admission, reason=answer_reason)
+        if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED" and not answer_only_admission:
             final_action = next(
                 (item for item in operational if item.get("tool") == "final_response"),
                 {},
@@ -3609,6 +3629,7 @@ class WebAgentProtocolLoop:
             return [], diagnostics
         if getattr(self, '_action_admission_probe', False):
             return actions, []
+        self._answer_only_admitted = answer_only_admission
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
         self.protocol_state = "ACCEPTED"
@@ -3882,6 +3903,13 @@ class WebAgentProtocolLoop:
         PIT.record("07_loop_input", request)
         self.intent_digest = digest_intent(request)
         self.task_request = request
+        source_name = str(source_tag or "").upper()
+        self._tri_one_origin = (
+            "TELEGRAM" if source_name == "REMOTEAGENT_TELEGRAM"
+            else "LOCAL_TEST" if source_name == "REMOTEAGENT_TELEGRAM_SIMULATION"
+            else "WEB_COPILOT" if source_name == "TRI_ONE_TEST_V1"
+            else "WEB_DIRECT"
+        )
         self.protocol_state = "ACTIVE"
         self.action_loop_state = build_action_loop_state(
             transport_state=self.protocol_state,
@@ -3895,6 +3923,7 @@ class WebAgentProtocolLoop:
         self.turn_id = 0
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
+        self._answer_only_admitted = False
         self.execution_state = "NOT_STARTED"
         self.terminal_candidate = {}
         last_no_action_decision_signature: str | None = None
@@ -4039,6 +4068,28 @@ class WebAgentProtocolLoop:
             )
         prompt += "\n" + lazy_context_sync_prompt(request, self.workspace)
         prompt += "\n" + format_prompt_context(self.progress_ledger)
+        from agent_core.tri_one_answer_only import (
+            enabled as _tri_one_text_enabled, classify_original_request,
+        )
+        from agent_core.tri_one_task_result import enabled as _tri_one_result_enabled
+        if _tri_one_result_enabled() and _tri_one_text_enabled(source=self._tri_one_origin):
+            text_candidate, _ = classify_original_request(
+                request, attachments=bool(initial_attachments),
+                authorized_paths=bool(authorized),
+                image_or_artifact_request=bool(self.image_delivery_plan),
+                continuation=bool(self.continuation_source),
+            )
+            if text_candidate:
+                prompt += (
+                    "\\n[TRI_ONE_ANSWER_ONLY_CANDIDATE]\\n"
+                    "The original request may qualify for text-only completion. "
+                    "If it needs no external information or side effects, emit ONE "
+                    "canonical v9 turn: complete report_progress, final_response "
+                    "and turn_commit. Set every completed step to COMPLETED and "
+                    "cite no invented evidence. Runtime will decide eligibility; "
+                    "any tool need requires the ordinary Action Loop.\\n"
+                    "[/TRI_ONE_ANSWER_ONLY_CANDIDATE]"
+                )
         from agent_core.strict_observation_guard import strict_observation_only_request
         if strict_observation_only_request(self.task_request):
             prompt += (
