@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from agent_core.goal_anchored_recovery import (
-    RecoveryEngine, classify_failure, enabled, mutation_fingerprint,
+    RecoveryEngine, FreshContextProof, classify_failure, enabled, mutation_fingerprint,
 )
 
 
@@ -90,8 +90,9 @@ class GARSharedRuntimeTests(unittest.TestCase):
                 self.assertNotIn("PASSWORD=", step.prompt)
             self.assertFalse(step.mutation_allowed)
             self.assertFalse(step.new_session_allowed)
-        self.assertEqual([x[0] for x in got], ["L1", "L2", "L3", "L5"])
-        self.assertEqual(got[-1][2], "GAR_FRESH_CONTEXT_UNAVAILABLE")
+        self.assertEqual([x[0] for x in got], ["L1", "L2", "L3", "L4"])
+        self.assertEqual((got[-1][1], got[-1][2]),
+                         ("PREPARE", "GAR_FRESH_CONTEXT_REQUIRED"))
         self.assertEqual(engine.diagnostic()["rejected_rounds"], 4)
         self.assertEqual(engine.diagnostic()["fresh_session_count"], 0)
         exhaustion = engine.planner_rejection(
@@ -178,6 +179,77 @@ class GARSharedRuntimeTests(unittest.TestCase):
         )
         self.assertEqual((first.level, second.level), ("L1", "L1"))
         self.assertEqual(engine.rejected_rounds, 2)
+
+    def test_l4_proof_and_old_planner_fence(self):
+        engine = make()
+        for _ in range(4):
+            decision = engine.planner_rejection(
+                reason="invalid_progress_payload", snapshot=snapshot(engine),
+                response_fresh=True, evidence_generation="zero",
+            )
+        self.assertEqual((decision.level, decision.status), ("L4", "PREPARE"))
+        p = FreshContextProof(
+            request_id="GAR-RR-1", task_id="GAR-TASK-1",
+            task_epoch="GAR-EPOCH-1", owner="WEB_COPILOT",
+            original_conversation_id="old-c", fresh_conversation_id="new-c",
+            protocol_session_id="FRESH-BOOTSTRAP-ID",
+            protocol_identity_verified=True, page_ownership_verified=True,
+            previous_generation_inactive=True,
+        )
+        activated = engine.activate_fresh_context(proof=p, snapshot=snapshot(engine))
+        self.assertEqual((activated.level, activated.status), ("L4", "ACTIVATED"))
+        self.assertIn("Explain C++ RAII.", activated.prompt)
+        self.assertEqual(engine.fresh_sessions, 1)
+        self.assertFalse(engine.fence_old_planner(context_id="old-c"))
+        self.assertTrue(engine.fence_old_planner(context_id="new-c"))
+        self.assertEqual(engine.activate_fresh_context(
+            proof=p, snapshot=snapshot(engine)).reason, "GAR_L4_NOT_REQUESTED")
+        self.assertEqual(engine.planner_rejection(
+            reason="invalid_progress_payload", snapshot=snapshot(engine),
+            response_fresh=True, evidence_generation="zero",
+        ).status, "PAUSED")
+
+    def test_l4_negative_proofs_and_pending_side_effect(self):
+        good = dict(
+            request_id="GAR-RR-1", task_id="GAR-TASK-1",
+            task_epoch="GAR-EPOCH-1", owner="WEB_COPILOT",
+            original_conversation_id="old-c", fresh_conversation_id="new-c",
+            protocol_session_id="BOOTSTRAP",
+            protocol_identity_verified=True, page_ownership_verified=True,
+            previous_generation_inactive=True,
+        )
+        for key, bad in (
+            ("task_epoch", "stale"),
+            ("request_id", "other"),
+            ("owner", "TELEGRAM"),
+            ("fresh_conversation_id", "old-c"),
+            ("protocol_identity_verified", False),
+            ("page_ownership_verified", False),
+            ("previous_generation_inactive", False),
+            ("protocol_session_id", ""),
+        ):
+            engine = make()
+            for _ in range(4):
+                engine.planner_rejection(
+                    reason="bad_progress", snapshot=snapshot(engine),
+                    response_fresh=True, evidence_generation="same",
+                )
+            proof = FreshContextProof(**{**good, key: bad})
+            result = engine.activate_fresh_context(
+                proof=proof, snapshot=snapshot(engine))
+            self.assertEqual(result.status, "PAUSED", key)
+            self.assertEqual(engine.fresh_sessions, 0, key)
+        engine = make()
+        for _ in range(4):
+            engine.planner_rejection(
+                reason="bad_progress", snapshot=snapshot(engine),
+                response_fresh=True, evidence_generation="same",
+            )
+        blocked = engine.activate_fresh_context(
+            proof=FreshContextProof(**good),
+            snapshot=snapshot(engine, pending={"unknown_write": True}),
+        )
+        self.assertEqual(blocked.reason, "GAR_L4_SNAPSHOT_OR_EFFECT_UNSAFE")
 
     def test_same_policy_both_origins(self):
         left = make(owner="TELEGRAM")
