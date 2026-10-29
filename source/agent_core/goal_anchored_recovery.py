@@ -290,6 +290,34 @@ class RecoveryEngine:
             + "\n[/GAR_RUNTIME_RECOVERY]"
         )
 
+    def persist_snapshot(self, snapshot: Mapping[str, object],
+                         *, root: str | Path) -> Path:
+        """Durably save only the redacted checkpoint, never the raw Goal.
+
+        Scoped under the caller's authorized Runtime state root. This never
+        resumes or re-dispatches a task; a separate audited continuation must
+        load and verify task ownership, ledger and original Goal first.
+        """
+        if not self.validate_snapshot(snapshot):
+            raise ValueError("gar_snapshot_integrity_failed")
+        base = Path(root).expanduser().resolve()
+        destination_dir = base / "localdata" / "runtime" / "gar_snapshots"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        filename = _hash(
+            self.request_id + "\\0" + self.task_id + "\\0" + self.task_epoch
+        )[:40] + ".json"
+        target = destination_dir / filename
+        temp = destination_dir / (filename + ".pending")
+        payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"))
+        # A prior crash may leave a .pending file; never consider it current.
+        with temp.open("w", encoding="utf-8") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temp.replace(target)
+        return target
+
     def diagnostic(self) -> dict[str, object]:
         """Safe bounded incident summary without original text or raw logs."""
         return {
