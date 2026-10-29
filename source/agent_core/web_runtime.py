@@ -1529,7 +1529,10 @@ class WebLLMScraper:
         from .paths import runtime_root
         self._composer_io_unconfirmed = True
         self._composer_operation_url = self._page.url
-        timeout_sec = max(30.0, (len(prompt) / 4096.0) * 3.5 + 10.0) * 1.5
+        # The verified 4-KiB writes include native UI/readback latency.
+        # Live bootstrap took ~60s for only 16 KiB of a 33-KiB prompt;
+        # retain a finite length budget without weakening readback or recovery.
+        timeout_sec = max(30.0, (len(prompt) / 4096.0) * 10.0 + 20.0) * 1.5
         observation_timeout_sec = max(8.0, (len(prompt) / 4096.0) * 1.5 + 4.0)
         self._log_stage("composer_bounded_begin", f"prompt_len={len(prompt)} timeout_sec={timeout_sec:.1f}")
         try:
