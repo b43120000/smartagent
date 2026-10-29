@@ -4081,13 +4081,13 @@ class WebAgentProtocolLoop:
             )
             if text_candidate:
                 prompt += (
-                    "\\n[TRI_ONE_ANSWER_ONLY_CANDIDATE]\\n"
+                    "\n[TRI_ONE_ANSWER_ONLY_CANDIDATE]\n"
                     "The original request may qualify for text-only completion. "
                     "If it needs no external information or side effects, emit ONE "
                     "canonical v9 turn: complete report_progress, final_response "
                     "and turn_commit. Set every completed step to COMPLETED and "
                     "cite no invented evidence. Runtime will decide eligibility; "
-                    "any tool need requires the ordinary Action Loop.\\n"
+                    "any tool need requires the ordinary Action Loop.\n"
                     "[/TRI_ONE_ANSWER_ONLY_CANDIDATE]"
                 )
         from agent_core.strict_observation_guard import strict_observation_only_request
