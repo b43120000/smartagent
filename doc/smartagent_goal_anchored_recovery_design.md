@@ -43,6 +43,26 @@ GAR 目標是**提高原始任務驗收完成率**，並同時確保重複副作
 
 **規劃上的邏輯關係：** 一個 Original Task 可以由多個 Planner Session 接續，但每次 session transition 必須具備完整 owner/request/task/epoch lineage 與防重播保護。若現有 Task Continuation 需要新 request/task/epoch，必須明示父子關係、沿用原 Goal Contract 並執行現有授權檢查；不得因為本文件的抽象「同一 Task」而繞過既有身份模型。
 
+### 2.1 共用 Runtime Recovery Engine（正式架構要求）
+
+**GAR 的 L1–L5 恢復決策、Goal Contract／Recovery Snapshot、checkpoint、共用 repair budget、no-progress 判定、session fencing 與 terminal safety gate，必須實作於共用 Runtime 核心（建議位於 \`source/agent_core/\` 的獨立 Recovery Engine），不得只寫在 \`WebAgentProtocolLoop\`、\`smart_agent.py\`、Telegram 或 WebCopilot 專屬流程裡，也不得為各介面複製一份恢復邏輯。** L0 的 DOM/Transport freshness 由各 Adapter 負責觀察，但將標準化事件交由共用 Engine 決定是否需升級恢復。
+
+~~~text
+Telegram / RemoteAgent ──┐
+                         ├─ thin Runtime adapter ─┐
+WebCopilot ───────────────┤                       ├─ Shared GAR Recovery Engine
+                         │                       │   Goal / Evidence / Checkpoint
+LocalAgent（未來） ───────┘                       │   L1-L5 Hybrid Recovery
+                                                 └─ existing Admission / Executor
+~~~
+
+- **單一恢復語意**：所有入口共用相同狀態機、Snapshot 格式、成功／中斷判準及防重播規則；Adapter 僅轉換介面特有的 request identity、Planner 呼叫、Transport lifecycle、事件與最後的回覆交付。
+- **必須實際接線**：RemoteAgent 現有主要執行路徑涉及 \`WebAgent/protocol_loop.py\`；WebCopilot 的真實入口會經 \`source/web_copilot.py\` 和 \`source/smart_agent.py\`，**不保證**自動經過同一個 Protocol Loop。實作前逐一確認 Source call path，讓兩者都明確呼叫共用 Recovery Engine，而非只在一端啟用。
+- **行為一致 ≠ 傳輸完全相同**：Recovery 決策與安全契約一致，但 Browser／Telegram 的回覆發送、授權範圍、Session 建立與證據取得依各自能力 Adapter 處理；缺少 capability 時應安全 PAUSED，不假裝跨入口全功能一致。
+- **2B／2C 的關係**：共用 GAR 引擎必須避免加深三套 Planner 的分岔。若共用 ProtocolEngine／三介面匯流（2B／2C）尚未完成，可先以薄 Adapter 對接已受支援的入口；**不得將 5B 完成誤判為 2B／2C 已完成**。LocalAgent 必須經實際接線與獨立驗證後才能宣稱支援。
+- **跨介面驗收為強制條件**：使用相同的 synthetic Goal／blocker／Snapshot/repair budget，在 Telegram／RemoteAgent 與 WebCopilot 各做 UT/IT 及授權的 Live E2E；比對相同恢復決策、未完成目標、Evidence lineage、terminal 結果與零重複副作用。只在 RemoteAgent 通過的 GAR **不能宣稱**共用功能已驗收。LocalAgent 為後續獨立 Gate。
+- **部署與啟用**：預設 OFF；同一邏輯由各入口受控啟用，不自動替換正在執行的 Worker 或共享瀏覽器 Session；每個入口驗證實際載入的候選 Source SHA，並可獨立回退。
+
 ## 3. Hybrid Recovery 分層狀態機
 
 | 層級 | 觸發／用途 | Runtime 行為 | 預期結果 |
@@ -128,6 +148,8 @@ Fresh Context 不一定意味著「新建 ChatGPT 網頁聊天」。其定義是
 - \`doc/runtime_it16_prerequisite_bounded_repair_design.md\`
 - \`doc/shared_task_continuation.md\`
 
+**共用引擎的唯一實作責任：** `agent_core` 提供 interface-neutral GAR Recovery Engine；`WebAgent/protocol_loop.py` 與 `smart_agent.py` 僅作為呼叫／事件轉接點，不能擁有兩套不同的 GAR state machine。正式接線位置依最新 Source 檢查結果決定，不能用本文件視為已實作。
+
 上述為**預計整合點**，不是宣稱這些模組目前已具備 GAR 所有能力。實作前必須對正在開發的產品分支重新比對 API、schema 與 Task Continuation 行為。
 
 ## 9. 驗收與成功率定義
@@ -175,11 +197,11 @@ Fresh Context 不一定意味著「新建 ChatGPT 網頁聊天」。其定義是
 
 | 階段 | 產物 | 過關條件 |
 |---|---|---|
-| GAR-0 — Baseline/Contract | 固定原始任務測試集；Goal Contract/Snapshot schema、目前 Runtime seam mapping | 定義可客觀測量的 OGCR、identity/inflight safety gate；不修改主線 |
+| GAR-0 — Baseline/Contract | 固定原始任務測試集；Goal Contract/Snapshot schema、**共用 Runtime Engine API 與兩個實際入口 call-path mapping** | 定義可客觀測量的 OGCR、identity/inflight safety gate；不修改主線 |
 | GAR-1 — Classification | Transport freshness / Schema repair / semantic no-progress 事件分類 | 能辨識舊 DOM vs 真實新回覆；不得誤觸 tool |
 | GAR-2 — L2/L3 | Runtime Snapshot projection、Progress Rebase、Bounded Replan | 保留 Goal/evidence、阻止重播，於既有預算內產生有效下一步或 PAUSED |
 | GAR-3 — L4 | Fresh Planner Context adapter、session fencing、load/verify snapshot | 能可靠隔離舊 Session；無可用 adapter 時 fail closed |
-| GAR-4 — Comparison | A/B/C 對照驗證，含離線、注入錯誤、可授權的安全 E2E | 以原始任務完成率與安全指標決定是否採用、調參或回退 |
+| GAR-4 — Comparison | A/B/C 對照驗證，含離線、注入錯誤、**Telegram/RemoteAgent 與 WebCopilot 各自授權的安全 E2E** | 以原始任務完成率、安全指標、跨入口決策一致性決定是否採用、調參或回退 |
 | GAR-5 — Rollout | 預設 OFF 的灰度配置、觀測與回退機制 | 不影響原 PR10/PR11；審核通過後才開啟 |
 
 **依賴關係：** GAR 作為獨立規劃項目，不能把未完成的 PR10-2A/5A/5B/Goal1/PR11 驗收直接改稱 GAR PASS；也不能在開發 GAR 時改寫那些既定 gate。正式改 Source/啟動 Live/merge 需另行授權並具備獨立驗證計畫。
@@ -192,6 +214,7 @@ Fresh Context 不一定意味著「新建 ChatGPT 網頁聊天」。其定義是
 - **Budget 與升級門檻**：L2/L3/L4 幾次、何種語意變化算客觀進展？需與既有 bounded repair 計數及 soft deadline 整合。
 - **Evaluation Datasets**：如何選取真實的長任務、repair hang、DOM replay、chunk OPEN/UNKNOWN、外部交付等案例，同時不碰使用者真資料？
 - **跨 Session 工具狀態**：in-flight mutation、舊 Planner 遲到的 ACK、terminal receipt、effectively-stale evidence 由誰進行 fencing 與仲裁？
+- **共用 Engine 接線**：WebCopilot／RemoteAgent 各自實際 Runtime 路由如何接入同一 Engine 並維持原有身份、安全、回覆交付？2B／2C 若未完成需哪些薄 Adapter？LocalAgent 何時完成獨立整合？
 
 上述未決事項不得由模型根據直覺標成「已經解決」。
 
