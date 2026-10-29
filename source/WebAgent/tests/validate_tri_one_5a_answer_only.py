@@ -80,6 +80,8 @@ class AnswerOnlyPolicyTests(unittest.TestCase):
         for request in (
             "Explain the latest GitHub status of my repository.",
             "What is the exchange rate today?",
+            "What is the status of my project?",
+            "Explain the attached document.",
             "Read this workspace file then summarize.",
             "請解釋今天新竹的天氣",
             "請修改這個專案的檔案",
