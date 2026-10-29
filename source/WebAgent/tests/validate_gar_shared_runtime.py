@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from agent_core.goal_anchored_recovery import (
-    RecoveryEngine, classify_failure, enabled,
+    RecoveryEngine, classify_failure, enabled, mutation_fingerprint,
 )
 
 
@@ -210,6 +210,16 @@ class GARSharedRuntimeTests(unittest.TestCase):
             self.assertTrue(str(file.resolve()).startswith(
                 str(Path(directory).resolve())
             ))
+
+    def test_mutation_fingerprint_blocks_changed_action_id(self):
+        a = {"tool": "run_command", "action_id": "ACT-1",
+             "command": "echo hello", "operation": "READ_ONLY"}
+        b = {"tool": "run_command", "action_id": "ACT-NEW",
+             "command": "echo hello", "operation": "READ_ONLY",
+             "depends_on": ["other"]}
+        c = {**b, "command": "echo different"}
+        self.assertEqual(mutation_fingerprint(a), mutation_fingerprint(b))
+        self.assertNotEqual(mutation_fingerprint(a), mutation_fingerprint(c))
 
     def test_cannot_forge_authorization_or_fresh_session(self):
         from agent_core.goal_anchored_recovery import RecoveryDecision
