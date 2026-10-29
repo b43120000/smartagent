@@ -450,6 +450,17 @@ class WebAgentProtocolLoop:
             has_action_history=bool(self.action_ledger or self.action_result_ledger),
             has_condition_results=bool(self.condition_result_ledger),
         )
+        if self._gar is not None and self.turn_id:
+            # Codes only: avoid placing raw goal, tool results, paths, or
+            # model output into the GAR redacted incident record.
+            self._emit(
+                "gar_pending_classification",
+                request_id=self.run_id, round=self.turn_id,
+                pending_kinds=sorted(k for k, v in pending.items() if v),
+                terminal_precondition_advisory=bool(advisory_verification),
+                executed_action_count=len(self.action_ledger),
+                recorded_result_count=len(self.action_result_ledger),
+            )
         if advisory_verification:
             # Only a rejected no-tool terminal SUCCESS claim. It is still a
             # V9 verification prerequisite, not evidence of a real in-flight
@@ -522,6 +533,15 @@ class WebAgentProtocolLoop:
         self._emit("gar_recovery_decision", request_id=self.run_id,
                    round=self.turn_id, **self._gar.diagnostic())
         self._gar_persist()
+        if decision.status == "REPAIR" and decision.level == "L4":
+            # The new V9 Planner is already fenced/verified. Correct only
+            # its protocol formatting in-place; no new browser/session.
+            self._emit(
+                "gar_fresh_context_protocol_repair",
+                request_id=self.run_id, round=self.turn_id,
+                reason=decision.reason,
+                rejected_turns_total=self._gar.rejected_rounds,
+            )
         if decision.status == "PREPARE":
             # Refresh the checkpoint after recording the local/global budget.
             # The new session inherits the actual latest counters, not the
@@ -534,7 +554,9 @@ class WebAgentProtocolLoop:
             self._emit("gar_safe_pause", request_id=self.run_id,
                        round=self.turn_id, reason=decision.reason)
             raise RuntimeError("GAR safely paused: " + decision.reason)
-        return decision.prompt if decision.status in {"REBASE", "REPLAN"} else None
+        return decision.prompt if decision.status in {"REBASE", "REPLAN"} or (
+            decision.level == "L4" and decision.status == "REPAIR"
+        ) else None
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None:
