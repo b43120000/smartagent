@@ -276,6 +276,7 @@ class WebAgentProtocolLoop:
         progress_root: str | Path | None = None,
         continuation_store=None,
         continuation_owner: str = "",
+        fresh_context_adapter=None,
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.planner = planner
@@ -336,6 +337,70 @@ class WebAgentProtocolLoop:
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
         self._gar = None
+        self._gar_fresh_adapter = fresh_context_adapter
+        self._gar_fresh_binding = None
+
+    def _gar_l4_activate(self, snapshot):
+        """Switch only after Runtime and browser both verify a distinct context.
+
+        No new browser session is created by the Protocol Loop. The original
+        request, Task/epoch, Action Ledger, Progress and Outbox remain intact.
+        """
+        from agent_core.task_progress import set_runtime_state
+        adapter = self._gar_fresh_adapter
+        if adapter is None:
+            reason = "GAR_FRESH_CONTEXT_UNAVAILABLE"
+            set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                              root=self.progress_root)
+            self._gar_persist()
+            raise RuntimeError("GAR safely paused: " + reason)
+        try:
+            binding = adapter.prepare(
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, owner=self._tri_one_origin,
+            )
+        except BaseException as exc:
+            # A failed/ambiguous bootstrap may have submitted a prompt: never
+            # retry in-place or treat that submit as a completed task action.
+            reason = "GAR_L4_BOOTSTRAP_UNVERIFIED"
+            self._gar_persist()
+            set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                              root=self.progress_root)
+            self._emit("gar_fresh_context_failed", request_id=self.run_id,
+                       round=self.turn_id, reason=reason,
+                       exception_type=type(exc).__name__)
+            raise RuntimeError("GAR safely paused: " + reason) from exc
+        verdict = self._gar.activate_fresh_context(
+            proof=binding.proof, snapshot=snapshot,
+        )
+        if verdict.status != "ACTIVATED":
+            binding.close()
+            set_runtime_state(self.task_id, "PAUSED", reason=verdict.reason,
+                              root=self.progress_root)
+            self._gar_persist()
+            raise RuntimeError("GAR safely paused: " + verdict.reason)
+        # The new Planner has its own verified bootstrap/session. All old ACKs
+        # remain in seen_web_ack_ids and in events; clear ONLY the previous-ACK
+        # transport pointer after recording the explicit fence transition.
+        previous_ack = self.pending_web_ack_id
+        self._gar_fresh_binding = binding
+        self.planner = binding.planner
+        self.pending_web_ack_id = ""
+        self.pending_result_ack_id = ""
+        self._gar_persist()
+        self._emit(
+            "gar_fresh_planner_activated",
+            request_id=self.run_id, round=self.turn_id,
+            previous_ack_digest=hashlib.sha256(
+                str(previous_ack).encode("utf-8")).hexdigest(),
+            **self._gar.diagnostic(),
+        )
+        from agent_core.task_progress import format_prompt_context
+        return (
+            verdict.prompt + "\n[LAST_ACCEPTED_RUNTIME_PROGRESS]\n"
+            + format_prompt_context(self.progress_ledger)
+            + "\n[/LAST_ACCEPTED_RUNTIME_PROGRESS]"
+        )
 
     def _gar_persist(self):
         if self._gar is None:
@@ -395,6 +460,8 @@ class WebAgentProtocolLoop:
         self._emit("gar_recovery_decision", request_id=self.run_id,
                    round=self.turn_id, **self._gar.diagnostic())
         self._gar_persist()
+        if decision.status == "PREPARE":
+            return self._gar_l4_activate(snapshot)
         if decision.status == "PAUSED":
             from agent_core.task_progress import set_runtime_state
             set_runtime_state(self.task_id, "PAUSED", reason=decision.reason,
@@ -3873,6 +3940,7 @@ class WebAgentProtocolLoop:
         self.continuation_mode = ""
         self._protocol_spec_rejection = {}
         registered = False
+        self._gar_fresh_binding = None
         try:
             if self.continuation_store:
                 from agent_core.task_continuation import parse_continuation
@@ -3948,6 +4016,16 @@ class WebAgentProtocolLoop:
                     error=f"{type(release_error).__name__}: {release_error}",
                 )
             raise
+        finally:
+            binding = self._gar_fresh_binding
+            self._gar_fresh_binding = None
+            if binding is not None:
+                try:
+                    binding.close()
+                except Exception as exc:
+                    self._emit("gar_fresh_context_cleanup_failed",
+                               request_id=str(request_id or self.run_id or ""),
+                               error_type=type(exc).__name__)
 
     def _run_impl(
         self,
