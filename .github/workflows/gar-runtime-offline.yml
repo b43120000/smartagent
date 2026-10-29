@@ -48,6 +48,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_protocol_recovery_readback.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Existing Tri-One regressions
         shell: pwsh
         run: |
