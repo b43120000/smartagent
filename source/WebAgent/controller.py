@@ -322,6 +322,16 @@ def main(argv: list[str] | None = None) -> int:
         progress_root=runtime_root,
         continuation_store=TaskContinuationStore(runtime_root),
         continuation_owner=local_owner(),
+        fresh_context_adapter=(
+            __import__(
+                "WebAgent.fresh_context", fromlist=["ExistingConversationFreshAdapter"]
+            ).ExistingConversationFreshAdapter(
+                client=client, workspace=workspace, session_root=runtime_root,
+                display_name="WebDirect",
+            )
+            if os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+            else None
+        ),
     )
     if bootstrap_pending:
         loop.tools.enable_bootstrap_install_policy(runtime_root)
