@@ -227,7 +227,10 @@ class RecoveryEngine:
         """L0: never resend merely because DOM readback did not change."""
         if not self.validate_snapshot(snapshot):
             return self._record("L5", "PAUSED", "GAR_SNAPSHOT_UNVERIFIED")
-        _, reason = classify_failure(error=str(error), response_fresh=False)
+        # The adapter already attempted the original request and raised.
+        # Do not infer stale DOM merely from a generic network exception or
+        # cancellation; classify only from a concrete trusted error code.
+        _, reason = classify_failure(error=str(error), response_fresh=None)
         return self._record("L0", "PAUSED", reason)
 
     def planner_rejection(self, *, reason: str,
