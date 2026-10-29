@@ -4375,7 +4375,7 @@ class WebAgentProtocolLoop:
             try:
                 source_identity = capture_gar_a0(
                     controller_main=getattr(self, "_gar_a0_controller_main", None),
-                    require_fresh_context=bool(self.fresh_context_adapter),
+                    require_fresh_context=bool(self._gar_fresh_adapter),
                 )
             except Exception as exc:
                 source_identity = {
@@ -4424,7 +4424,7 @@ class WebAgentProtocolLoop:
                 origin_override_present=origin_override,
                 fresh_context_configured=bool(fresh_url),
                 fresh_context_target_digest=fresh_digest,
-                fresh_adapter_present=bool(self.fresh_context_adapter),
+                fresh_adapter_present=bool(self._gar_fresh_adapter),
                 a0_status=(
                     "READY_FOR_OWNER_REVIEW"
                     if instance and loaded_ok and ready_flags

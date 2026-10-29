@@ -123,5 +123,34 @@ class GARInProcessA0Tests(unittest.TestCase):
 
 
 
+    def test_request_observes_configured_fresh_adapter_without_using_it(self):
+        events = []
+        with tempfile.TemporaryDirectory(prefix="gar-a0-adapter-") as directory:
+            root = Path(directory)
+            loop = protocol_loop.WebAgentProtocolLoop(
+                root, lambda prompt, expected, attachments: answer_only_response(),
+                progress_root=root, max_turns=2,
+                event_sink=lambda name, **fields: events.append((name, fields)),
+                fresh_context_adapter=object(),
+            )
+            loop._gar_a0_diagnostic_enabled = True
+            loop._gar_a0_instance_digest = "A0-TEST-ADAPTER"
+            loop._gar_a0_controller_main = lambda: None
+            loop._gar_a0_target_salt = b"test-only-private-salt"
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "1",
+                "TRI_ONE_TASK_RESULT_V1": "1",
+                "TRI_ONE_TEXT_ONLY_V1": "1",
+            }):
+                loop.run("Explain RAII in C++.")
+        samples = [data for name, data in events
+                   if name == "gar_a0_request_attestation"]
+        self.assertEqual(len(samples), 1)
+        self.assertTrue(samples[0]["fresh_adapter_present"])
+        self.assertEqual(samples[0]["a0_status"], "NOT_ATTESTED")
+        self.assertEqual(loop.terminal_outcome, "SUCCESS")
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
