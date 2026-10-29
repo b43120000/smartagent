@@ -22,18 +22,18 @@
 - **離線測試程式**：`source/WebAgent/tests/validate_tri_one_5a_answer_only.py` 與 `validate_tri_one_5b_shared_worker.py` 涵蓋 text-only 正負例、跨入口旗標選擇、WebCopilot 內部控制文字過濾、共享 Outbox 結果／去重／交付回執。以上是**已提交的測試碼，不代表已執行 PASS**。
 - **封閉環境摘要工具**：\`source/WebAgent/tests/goal1_live_triage.py\` 可選擇讀取本機 log，僅提取有限的診斷標記／筆數／hash，而不輸出原始 log、敏感 ID、路徑或原文；也可不讀 log，僅使用自然語言症狀。
 
-**5B 共用執行路徑（本分支新增，預設 OFF）：**
-`source/web_copilot.py` 的 WebCopilot 原始入口仍會使用 `AgentIngressGateway`。新的 `agent_core/tri_one_shared_worker.py` 及 `RemoteAgent/remote_worker_launcher.py` 只有在三個受控旗標明確開啟後，才把 **WEBGPT_COPILOT** 導向原本 Telegram 使用的 `RemoteAgent.telegram_webagent_worker`／`WebAgentProtocolLoop`；否則完全保留舊 `smart_agent.py` Worker，不新增 CDP Browser。共用 V9 Worker 使用原 queue/task/epoch、Progress/Action Ledger、Terminal Receipt、RemoteEventStore 與原 Telegram/WebGPT Outbox。已對 WebCopilot 源頭訊息加上 protocol control filtering，避免 Agent 自己的回覆再成為新任務。
+**5B 共用執行路徑（本分支新增，WebCopilot 預設 ON）：**
+`source/web_copilot.py` 的 WebCopilot 原始入口仍會使用 `AgentIngressGateway`。新的 `agent_core/tri_one_shared_worker.py` 及 `RemoteAgent/remote_worker_launcher.py` **預設**將 WEBGPT_COPILOT 導向 Telegram 已使用的 `RemoteAgent.telegram_webagent_worker`／`WebAgentProtocolLoop`；不要求 Telegram 入口同時啟動，也不新增 CDP Browser。僅在明確設定 `TRI_ONE_WEBCOPILOT_V9_V1=0` 時才退回舊 `smart_agent.py` Worker。共用 V9 Worker 使用原 queue/task/epoch、Progress/Action Ledger、Terminal Receipt、RemoteEventStore 與原 Telegram/WebGPT Outbox。已對 WebCopilot 源頭訊息加上 protocol control filtering，避免 Agent 自己的回覆再成為新任務。
 
 **受控旗標／回退**：
-- `TRI_ONE_TASK_RESULT_V1=1`：開啟 2A 結果契約；
-- `TRI_ONE_TEXT_ONLY_V1=1`：開啟 5A Answer-only admission；
-- `TRI_ONE_WEBCOPILOT_V9_V1=1`：只針對 WebCopilot 啟用共用 V9 Worker（5B）。
-上述三項全開時才切換 WebCopilot Worker；關閉任何一個則維持其原本 `smart_agent.py` 路徑。Telegram／LOCAL_TEST 原本已使用 V9 Worker；其 Fast Path 另受 5A 旗標控制。啟閉時應先確保沒有正在執行的任務，不能以改環境變數強行接管舊 Worker。
+- `TRI_ONE_WEBCOPILOT_V9_V1`：**未設定／空值／`1` = WebCopilot 共用 V9 Worker（預設）；`0`／`false`／`off`／`no` = 明確回退到舊 `smart_agent.py` Worker。不認識的值安全回退舊路徑。
+- `TRI_ONE_TASK_RESULT_V1=1`：**獨立選項**，啟用 2A 的額外結果資料；預設 OFF，與選擇 V9 Worker 無關。
+- `TRI_ONE_TEXT_ONLY_V1=1`：**獨立選項**，啟用 5A Answer-only 快速完成；預設 OFF，與選擇 V9 Worker 無關。
+Telegram／LOCAL_TEST 仍使用原有共用 V9 Worker；**你可以只啟動 WebCopilot 來驗證，不需要開 Telegram**。修改旗標只對新啟動的 Worker 有效；既有 Task／Worker／隔離狀態不得藉由改旗標強制接管、清除或重播。
 
 **尚待證實的限制**：WebCopilot 的真正模型回覆仍透過既有 `WebGPTDeliveryAdapter`，必須 Live 確認原始對話送達、無重複接收內部 turn；artifact metadata 保留並不代表 WebGPT 已收到附件。此次改動不包含 LocalAgent 的全路徑共用協議（需 2B/2C）。
 
-**目前驗收：** 2A 原 shared branch Live L03 曾回報 WRITER_TIMEOUT/QUARANTINED；此分支的 5A/5B 無可引用的候選 SHA 原始 Live 證據，UT/IT/Live 一律不得因 Source 存在而標 PASS。
+**目前驗收：** 2A 原 shared branch Live L03 曾回報 WRITER_TIMEOUT/QUARANTINED。此分支將 WebCopilot V9 置為預設，不代表該問題已修復或 2A/5A/5B Live 通過；仍須先以最新 exact SHA 完成離線測試及 source/manifest attestation。
 
 ## 3. 本機先跑純離線驗證（不要啟動 Worker/Browser）
 
