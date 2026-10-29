@@ -103,6 +103,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(len(fresh_calls), 1)
             self.assertEqual(len(old_calls), 7)
             self.assertEqual(releases, ["done"])
+            self.assertIs(loop.planner, old)
             observed = [name for name, _ in events]
             self.assertIn("gar_local_repair_handoff", observed)
             self.assertIn("gar_fresh_planner_activated", observed)
@@ -160,6 +161,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(len(original_calls), 7)
             self.assertEqual(len(fresh_calls), 1)
             self.assertEqual(releases, ["released"])
+            self.assertIs(loop.planner, old_planner)
             self.assertEqual(loop._gar.fresh_sessions, 1)
             self.assertTrue(loop._gar.diagnostic()["old_planner_fenced"])
             self.assertEqual(loop.action_ledger, {})
