@@ -3407,8 +3407,21 @@ class WebAgentProtocolLoop:
         )
         if state_diagnostic:
             return [], [state_diagnostic]
+        # An evidence-free terminal-shaped exchange must reach the existing
+        # terminal/answer-only admission gates. This is NOT verification PASS.
+        # Only the actual no-tool-history final_response shape gets this lane.
+        empty_terminal_candidate = (
+            len(operational) == 1
+            and operational[0].get("tool") == "final_response"
+            and not self.action_ledger
+            and not self.action_result_ledger
+            and not self.condition_result_ledger
+        )
         try:
-            normalized_progress = validate_model_progress(progress_actions[0], self.progress_ledger)
+            normalized_progress = validate_model_progress(
+                progress_actions[0], self.progress_ledger,
+                allow_empty_terminal_candidate=empty_terminal_candidate,
+            )
         except TaskProgressError as exc:
             from agent_core.progress_recovery import repair_diagnostic, read_only_progress_fallback
             diagnostic = self._progress_repair_diagnostic(progress_actions[0], exc)
@@ -4748,6 +4761,9 @@ class WebAgentProtocolLoop:
                 self.progress_ledger = record_model_progress(
                     self.task_id, progress_action, request_id=self.run_id, goal=request,
                     round_id=self.turn_id, root=self.progress_root,
+                    # Only a terminal already admitted as ANSWER_ONLY can be
+                    # persisted with no action evidence.
+                    allow_empty_terminal_candidate=self._answer_only_admitted,
                 )
                 if self.progress_ledger.repair_state.get('status') == 'REPAIR_REQUIRED':
                     self.progress_ledger = record_progress_repair(self.task_id, {},

@@ -266,8 +266,9 @@ def _validate_completion_contract(
     return normalized
 
 
-def _validate_evidence_refs(value: Any) -> list[str]:
-    if not isinstance(value, list) or not value or len(value) > MAX_EVIDENCE_REFS:
+def _validate_evidence_refs(value: Any, *, allow_empty: bool = False) -> list[str]:
+    if (not isinstance(value, list) or len(value) > MAX_EVIDENCE_REFS
+            or (not value and not allow_empty)):
         raise TaskProgressError(
             f"evidence_refs must contain 1..{MAX_EVIDENCE_REFS} references"
         )
@@ -339,6 +340,7 @@ def initialize_progress(task_id: str, *, request_id: str, goal: str, root: str |
 
 def validate_model_progress(
     payload: Mapping[str, Any], existing: TaskProgressLedger | None = None,
+    *, allow_empty_terminal_candidate: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise TaskProgressError("report_progress payload must be an object")
@@ -453,7 +455,13 @@ def validate_model_progress(
             },
         )
     matched_condition_id = condition_id_for(condition_class, matched_condition)
-    evidence_refs = _validate_evidence_refs(payload.get("evidence_refs"))
+    # Empty evidence is only a *candidate* for a text-only terminal, never
+    # verification evidence. V9 must still admit or reject the terminal.
+    evidence_refs = _validate_evidence_refs(
+        payload.get("evidence_refs"),
+        allow_empty=(allow_empty_terminal_candidate
+                     and decision == "COMPLETE" and outcome == "SUCCESS"),
+    )
     decision_reason = _short_text(
         payload.get("decision_reason"), "decision_reason", required=True
     )
@@ -485,9 +493,13 @@ def validate_model_progress(
 def record_model_progress(
     task_id: str, payload: Mapping[str, Any], *, request_id: str, goal: str,
     round_id: int, root: str | Path | None = None,
+    allow_empty_terminal_candidate: bool = False,
 ) -> TaskProgressLedger:
     ledger = initialize_progress(task_id, request_id=request_id, goal=goal, root=root)
-    normalized = validate_model_progress(payload, ledger)
+    normalized = validate_model_progress(
+        payload, ledger,
+        allow_empty_terminal_candidate=allow_empty_terminal_candidate,
+    )
     total = normalized["total_steps"]
     current = normalized["current_step"]
     steps = normalized["steps"]
