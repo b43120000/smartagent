@@ -77,6 +77,9 @@ class ExistingConversationFreshAdapter:
         if len(matching) != 1 or matching[0] is original_page:
             raise RuntimeError("GAR_L4_TARGET_PAGE_NOT_UNIQUELY_OWNED")
         page = matching[0]
+        from agent_core.conversation_ownership import ConversationOwnershipRegistry
+        if ConversationOwnershipRegistry(self.session_root).references(target):
+            raise RuntimeError("GAR_L4_FRESH_CONTEXT_ALREADY_OWNED")
         # A borrowed WebCopilot tab can be used only while the same browser
         # profile and process lease remain stable. Never call adopt_page:
         # it rewrites the provider-global scraper and the original reply route.
@@ -93,6 +96,13 @@ class ExistingConversationFreshAdapter:
         scraper._execution_page_lease_owned = True
         scraper._expected_execution_url = target
         scraper._rate_governor = self.client.governor
+        try:
+            if bool(scraper._is_generation_active()):
+                raise RuntimeError("GAR_L4_TARGET_GENERATION_ACTIVE")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError("GAR_L4_TARGET_IDLE_NOT_ATTESTED") from exc
         # Claim/release only this distinct conversation; never close the page.
         scraper._claim_conversation_owner(target)
         self._used = True
