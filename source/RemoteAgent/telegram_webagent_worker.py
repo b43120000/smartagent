@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""One-shot Telegram -> WebAgent Direct execution worker.
+"""One-shot shared V9 RemoteAgent/WebCopilot -> WebAgent execution worker.
 
-The Telegram receiver and durable queue remain transport owners.  This worker
-only owns one request-scoped WebGPT protocol loop and writes the terminal result
-back to the transport-neutral RemoteEvent outbox.
+The source ingress and durable queue remain transport owners. This worker
+owns one request-scoped WebGPT protocol loop and returns its accepted result
+to the existing transport-neutral RemoteEvent outbox.
 """
 from agent_core import path_integrity_trace as PIT
 
@@ -194,8 +194,9 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     if protocol_family not in {"SMARTAGENT_V8", "SMARTAGENT_V9"}:
         raise RuntimeError("remote_task_protocol_family_mismatch")
     source_transport = str((task.metadata or {}).get("transport", "")).upper()
-    if source_transport not in {"TELEGRAM", "LOCAL_TEST"}:
-        raise RuntimeError("telegram_webagent_worker_rejects_non_telegram_task")
+    from agent_core.tri_one_shared_worker import use_shared_v9_worker
+    if not use_shared_v9_worker(source_transport):
+        raise RuntimeError("shared_webagent_worker_transport_not_admitted")
     from agent_core.task_progress import (
         delete_progress,
         initialize_progress,
@@ -567,6 +568,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     "REMOTEAGENT_TELEGRAM"
                     if source_transport == "TELEGRAM"
                     else "REMOTEAGENT_TELEGRAM_SIMULATION"
+                    if source_transport == "LOCAL_TEST"
+                    else "REMOTEAGENT_WEBCOPILOT_V9"
                 ),
                 trusted_authorized_paths=trusted_authorized_paths,
             )
@@ -612,17 +615,27 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 request_id=task.request_id,
                 plan_id=plan_id,
             )
-        terminal_payload = prepare_telegram_completion(
-            request=task.request,
-            summary=final_content,
-            workspace=task.workspace,
-            artifacts=loop.tools.take_outbound_artifacts(),
-            # A published plan describes future execution.  Missing artifacts
-            # are therefore expected even when the plan mentions a later
-            # Telegram delivery step.  Real artifacts are still validated and
-            # delivered when present.
-            expect_artifact=False if plan_id else None,
-        )
+        outbound = loop.tools.take_outbound_artifacts()
+        if source_transport == "WEBGPT_COPILOT":
+            # WebCopilot delivers TEXT through its original WebGPT outbox.
+            # Local file creation is not proof of browser-file delivery.
+            # Preserve artifact metadata without advertising Telegram delivery.
+            terminal_payload = {
+                "summary": final_content,
+                "workspace": str(Path(task.workspace).resolve()),
+                "artifacts": list(outbound),
+                "artifact_rejections": [],
+            }
+        else:
+            terminal_payload = prepare_telegram_completion(
+                request=task.request,
+                summary=final_content,
+                workspace=task.workspace,
+                artifacts=outbound,
+                # A published plan describes future execution. Missing artifacts
+                # are expected even when it mentions a later Telegram delivery.
+                expect_artifact=False if plan_id else None,
+            )
         terminal_payload["plan_id"] = plan_id
         terminal_payload['task_outcome'] = loop.terminal_outcome
         terminal_payload['terminal_acceptance'] = dict(getattr(loop, 'terminal_acceptance', {}) or {})
@@ -674,12 +687,12 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         runtime_log.write(
             "TASK_COMPLETED",
             component="telegram_webagent_worker",
-            stage="FINAL_TO_TELEGRAM",
+            stage="FINAL_TO_ORIGIN_OUTBOX",
             task_id=task.task_id,
             request_id=task.request_id,
             elapsed_sec=elapsed,
         )
-        print(f"[RemoteAgent] 任務完成，等待 Telegram 回傳: {task.request_id}", flush=True)
+        print(f"[RemoteAgent] 任務完成，等待 {source_transport} 原路回傳: {task.request_id}", flush=True)
         return 0
     except BaseException as exc:
         # A Runtime PAUSED checkpoint is not a terminal failed task.
