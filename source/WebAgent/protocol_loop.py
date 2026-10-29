@@ -486,7 +486,10 @@ class WebAgentProtocolLoop:
                    round=self.turn_id, **self._gar.diagnostic())
         self._gar_persist()
         if decision.status == "PREPARE":
-            return self._gar_l4_activate(snapshot)
+            # Refresh the checkpoint after recording the local/global budget.
+            # The new session inherits the actual latest counters, not the
+            # pre-decision snapshot from this rejected Planner turn.
+            return self._gar_l4_activate(self._gar_snapshot())
         if decision.status == "PAUSED":
             from agent_core.task_progress import set_runtime_state
             set_runtime_state(self.task_id, "PAUSED", reason=decision.reason,
