@@ -74,8 +74,8 @@ class RemoteWorkerLauncher:
     def _spawn(self, task, token: str):
         transport = str((getattr(task, "metadata", {}) or {}).get("transport", "")).upper()
         from agent_core.tri_one_shared_worker import use_shared_v9_worker
-        # One exact existing queue/lease/Worker only. WebCopilot opts in to
-        # the same V9 Runtime as Telegram; flag OFF preserves legacy routing.
+        # One existing queue/lease/Worker only. WebCopilot defaults to the
+        # shared Telegram V9 Runtime; explicit opt-out keeps legacy routing.
         worker_entry = (
             [self.python, "-m", "RemoteAgent.telegram_webagent_worker"]
             if use_shared_v9_worker(transport)
