@@ -280,6 +280,7 @@ class WebAgentProtocolLoop:
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.planner = planner
+        self._default_planner = planner
         self.tools = tool_context or WebAgentToolContext(self.workspace)
         self.max_turns = max(1, int(max_turns))
         self.event_sink = event_sink
@@ -4058,6 +4059,10 @@ class WebAgentProtocolLoop:
                 )
             raise
         finally:
+            # This WebDirect/RemoteAgent Runtime may process another request.
+            # Never leave it bound to the closed L4 Planner page after an
+            # accepted terminal result OR an interrupted fresh-context run.
+            self.planner = self._default_planner
             binding = self._gar_fresh_binding
             self._gar_fresh_binding = None
             if binding is not None:
