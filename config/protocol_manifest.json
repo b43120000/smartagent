@@ -84,7 +84,7 @@
     "source/agent_core/project_sync_runner.py": "7a7c17e9b376b2f26b869a8acfdb9e4dd325cd2924579cfd58cb8109bd3f8d46",
     "source/agent_core/project_sync_transaction.py": "2e8514576da80223d521ab716226ebd0a2a14a4077cc68b00807148c7be5543f",
     "source/agent_core/project_sync.py": "614aad90249e003b5cb6a5d96ffdc95069819777c6f9c6d967286a4dd8d38c82",
-    "source/agent_core/protocol_manifest.py": "73dc56e35174dabde7499a610467839fd3793a9ca9373ac440b7a5de60cba77c",
+    "source/agent_core/protocol_manifest.py": "dfef55429358ed425fe9f197dbed27029debca6d9eb94d82db408a2dcef24ba6",
     "source/agent_core/protocol_v8.py": "31f08b070bbfd2cb67c1323af9f18c6d6c5527036b8131abd7b9cc70fbcb9608",
     "source/agent_core/protocol_v9.py": "26932c3fa2bc41edfc16bc80613953e4c16f0e3a4ecfa42c6d7af5fdb3d8e51a",
     "source/agent_core/query_expected_outcome.py": "fa74ed8331ba794f0c14f3c06ef8d9bd8447788fbf51e02ec72bed99204821bd",
@@ -197,10 +197,11 @@
     "source/smart_agent.py": "9b27357fb3d00d7f8371a15bc29ddcc35a2ce216ae899c2fa37f26143092b896",
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "3d7083600f57d94c395d3a1b430dc655fc9f73aeb6cc8a2fa81c7b6cfba535a5",
-    "source/WebAgent/protocol_loop.py": "30d00201fda4037548af7234027f16ebcba92cab7073ed3cfba02cbf99325f6d",
+    "source/WebAgent/protocol_loop.py": "247afab76088fd4e7467331272be0c72b671d7e820a1f0ea611ddefbbdad6566",
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
-    "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66"
+    "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
+    "source/agent_core/goal_anchored_recovery.py": "80cba668d18368b8a3898112b0e178a5eb26704ede4a31ce2356141fab341591"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
