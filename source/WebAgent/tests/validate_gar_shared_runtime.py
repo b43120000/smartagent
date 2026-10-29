@@ -95,6 +95,10 @@ class GARSharedRuntimeTests(unittest.TestCase):
         self.assertTrue(is_unverified_nonexecuted_terminal_requirement(
             requirement, has_action_history=False, has_condition_results=False,
         ))
+        self.assertTrue(is_unverified_nonexecuted_terminal_requirement(
+            {**requirement, "next_actions": []},
+            has_action_history=False, has_condition_results=False,
+        ))
         self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
             requirement, has_action_history=True, has_condition_results=False,
         ))
