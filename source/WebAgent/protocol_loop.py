@@ -2175,11 +2175,13 @@ class WebAgentProtocolLoop:
             "verification_status": self._effective_verification_status(
                 refs, matched_condition=progress.matched_condition),
         }
-        signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-        payload["receipt_id"] = "TERM-" + hashlib.sha256(signed.encode('utf-8')).hexdigest()[:20].upper()
+        # Include the distinct answer-only admission type in the receipt ID.
+        # An evidence-free text reply cannot collide with an ordinary receipt.
         if self._answer_only_admitted:
             payload["completion_kind"] = "ANSWER_ONLY"
             payload["admission_reason"] = "ANSWER_ONLY_RESPONSE_ADMITTED"
+        signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        payload["receipt_id"] = "TERM-" + hashlib.sha256(signed.encode('utf-8')).hexdigest()[:20].upper()
         self.terminal_acceptance = payload
         self._emit("runtime_terminal_accepted", **payload)
         return payload
