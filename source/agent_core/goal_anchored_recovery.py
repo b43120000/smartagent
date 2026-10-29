@@ -48,6 +48,46 @@ def _digest_json(value: object) -> str:
                             separators=(",", ":"), default=str))
 
 
+def is_unverified_nonexecuted_terminal_requirement(
+    requirement: Mapping[str, object] | None, *,
+    has_action_history: bool, has_condition_results: bool,
+) -> bool:
+    """Only classify a zero-evidence *terminal claim* as a protocol prerequisite.
+
+    This is NOT an authorization to accept terminal SUCCESS. The original V9
+    verification requirement stays live and must still be satisfied normally.
+    Any executed, missing, unknown or inconsistent effect is a HARD blocker.
+    """
+    if not isinstance(requirement, Mapping) or not requirement:
+        return False
+    if has_action_history or has_condition_results:
+        return False
+    allowed = {
+        "missing_condition", "condition_id", "current_verification_status",
+        "evidence_refs", "required_action", "required_fields",
+        "supported_verify_actions", "supported_verify_checks", "next_actions",
+    }
+    if set(requirement).difference(allowed):
+        return False
+    if str(requirement.get("current_verification_status", "")).upper() != "UNVERIFIED":
+        return False
+    if requirement.get("evidence_refs") not in ([], (), None):
+        return False
+    if requirement.get("required_action") != "run_command":
+        return False
+    actions = requirement.get("next_actions")
+    if not isinstance(actions, list) or len(actions) != 1:
+        return False
+    action = actions[0]
+    return bool(
+        isinstance(action, Mapping)
+        and action.get("tool") == "run_command"
+        and action.get("operation") == "VERIFY"
+        and set(action).issubset({"tool", "operation", "condition_id"})
+        and action.get("condition_id") == requirement.get("condition_id")
+    )
+
+
 def mutation_fingerprint(action: Mapping[str, object]) -> str:
     """Detect same mutation with a different model-authored Action ID.
 
@@ -171,7 +211,8 @@ class RecoveryEngine:
                  verified_evidence: Mapping[str, object],
                  blockers: list[object] | tuple[object, ...] = (),
                  pending_operations: Mapping[str, object] | None = None,
-                 progress: Mapping[str, object] | None = None) -> dict[str, object]:
+                 progress: Mapping[str, object] | None = None,
+                 verification_preconditions: tuple[str, ...] = ()) -> dict[str, object]:
         """Evidence-minimal, deterministic, integrity-checkable checkpoint.
 
         The record contains only IDs, finite states, hashes and counters, not
@@ -218,6 +259,11 @@ class RecoveryEngine:
                 "verified_evidence": refs,
             },
             "pending_operations": pending,
+            # Advisory verification is never silently discarded. It may
+            # coexist with GAR replan, but it cannot prove terminal SUCCESS.
+            "verification_preconditions": sorted({
+                _bounded_code(item) for item in verification_preconditions
+            }),
             "blockers": sorted(set(normalized_blockers)),
             "recovery_budget": {
                 "rejected_rounds": self.rejected_rounds,
@@ -455,4 +501,5 @@ class RecoveryEngine:
 
 
 __all__ = ["FEATURE_FLAG", "SCHEMA", "RecoveryDecision", "RecoveryEngine",
-           "FreshContextProof", "enabled", "classify_failure", "mutation_fingerprint"]
+           "FreshContextProof", "enabled", "classify_failure", "mutation_fingerprint",
+           "is_unverified_nonexecuted_terminal_requirement"]
