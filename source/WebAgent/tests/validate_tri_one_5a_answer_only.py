@@ -54,7 +54,8 @@ def _make(receipt=None, **kwargs):
         evidence_refs=[], operational_action_count=0,
     )
     args.update(kwargs)
-    return make_task_result(**args)
+    with patch.dict(os.environ, {"TRI_ONE_TASK_RESULT_V1":"1", "TRI_ONE_TEXT_ONLY_V1":"1"}):
+        return make_task_result(**args)
 
 
 class AnswerOnlyPolicyTests(unittest.TestCase):
