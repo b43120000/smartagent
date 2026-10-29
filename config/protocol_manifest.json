@@ -201,7 +201,7 @@
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
-    "source/agent_core/goal_anchored_recovery.py": "0c5bb12c8a512d5bcfeaef101d19d692ef31668ee7a0a583207c53125059ee8c",
+    "source/agent_core/goal_anchored_recovery.py": "6c75c79a4d0e23794d04151021a18c006a703d5e4fd0c01eebe279eaeee333a3",
     "source/WebAgent/fresh_context.py": "1fe23e48232650ba5ee37b41fa32d62963b531330721e2cabe81c10eb7ae8daf"
   },
   "manifest_schema_version": 1,
