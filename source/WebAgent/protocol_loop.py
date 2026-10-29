@@ -388,7 +388,13 @@ class WebAgentProtocolLoop:
         # transport pointer after recording the explicit fence transition.
         previous_ack = self.pending_web_ack_id
         self._gar_fresh_binding = binding
-        self.planner = binding.planner
+        def fenced_fresh_planner(prompt, expected, attachments):
+            if not self._gar.fence_old_planner(
+                context_id=binding.proof.fresh_conversation_id
+            ):
+                raise RuntimeError("GAR_L4_OLD_PLANNER_FENCED")
+            return binding.planner(prompt, expected, attachments)
+        self.planner = fenced_fresh_planner
         self.pending_web_ack_id = ""
         self.pending_result_ack_id = ""
         self._gar_persist()
