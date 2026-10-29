@@ -26,7 +26,9 @@ jobs:
       PYTHONUTF8: '1'
       TRI_ONE_TASK_RESULT_V1: '0'
       TRI_ONE_TEXT_ONLY_V1: '0'
-      TRI_ONE_WEBCOPILOT_V9_V1: '0'
+      # Test the shipped default-on WebCopilot shared Worker; individual
+      # tests verify that an explicit opt-out reverts to the legacy route.
+      TRI_ONE_WEBCOPILOT_V9_V1: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
