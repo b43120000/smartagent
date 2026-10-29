@@ -78,6 +78,75 @@ class GARSharedRuntimeTests(unittest.TestCase):
         )
         self.assertEqual((decision.level, decision.status), ("L1", "REPAIR"))
 
+    def test_terminal_verify_prerequisite_without_materialized_next_actions(self):
+        # Real Runtime's verification diagnostic may be formed before
+        # a next_actions list exists. This is advisory ONLY with no actions
+        # ever attempted; terminal SUCCESS still requires the original gate.
+        requirement = {
+            "missing_condition": "Explain RAII",
+            "condition_id": "C-RUNTIME-1",
+            "current_verification_status": "UNVERIFIED",
+            "required_action": "run_command",
+            "required_fields": ["operation", "command", "success_criteria", "verify"],
+            "supported_verify_actions": ["run_command", "aggregate_verification"],
+            "supported_verify_checks": ["file_exists", "file_contains", "expect_regex"],
+            "evidence_refs": [],
+        }
+        self.assertTrue(is_unverified_nonexecuted_terminal_requirement(
+            requirement, has_action_history=False, has_condition_results=False,
+        ))
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            requirement, has_action_history=True, has_condition_results=False,
+        ))
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            {**requirement, "reason_code": "OPEN_WRITE_TRANSACTION"},
+            has_action_history=False, has_condition_results=False,
+        ))
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            {**requirement, "evidence_refs": ["EXECUTED-ACTION"]},
+            has_action_history=False, has_condition_results=False,
+        ))
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            {**requirement, "required_fields": ["verify"]},
+            has_action_history=False, has_condition_results=False,
+        ))
+
+    def test_l4_only_repairs_new_session_without_second_context(self):
+        from agent_core.goal_anchored_recovery import FreshContextProof
+        engine = make()
+        for _ in range(4):
+            engine.planner_rejection(
+                reason="invalid_progress_payload", snapshot=snapshot(engine),
+                response_fresh=True, evidence_generation="same",
+            )
+        proof = FreshContextProof(
+            request_id="GAR-RR-1", task_id="GAR-TASK-1",
+            task_epoch="GAR-EPOCH-1", owner="WEB_COPILOT",
+            original_conversation_id="old-c", fresh_conversation_id="new-c",
+            protocol_session_id="FRESH-BOOTSTRAP-ID",
+            protocol_identity_verified=True, page_ownership_verified=True,
+            previous_generation_inactive=True,
+        )
+        verdict = engine.activate_fresh_context(proof=proof, snapshot=snapshot(engine))
+        self.assertEqual(verdict.status, "ACTIVATED")
+        for _ in range(2):
+            correction = engine.planner_rejection(
+                reason="fresh_reply_invalid", snapshot=snapshot(engine),
+                response_fresh=True, evidence_generation="same",
+            )
+            self.assertEqual((correction.level, correction.status),
+                             ("L4", "REPAIR"))
+            self.assertIn("Explain C++ RAII.", correction.prompt)
+            self.assertFalse(correction.new_session_allowed)
+        exhausted = engine.planner_rejection(
+            reason="fresh_reply_invalid", snapshot=snapshot(engine),
+            response_fresh=True, evidence_generation="same",
+        )
+        self.assertEqual((exhausted.level, exhausted.status, exhausted.reason),
+                         ("L5", "PAUSED", "GAR_FRESH_CONTEXT_REPAIR_EXHAUSTED"))
+        self.assertEqual(engine.fresh_sessions, 1)
+        self.assertTrue(engine.diagnostic()["old_planner_fenced"])
+
     def test_unsafe_verification_requirements_remain_blocking(self):
         requirement = {
             "condition_id": "COND-TEST",
