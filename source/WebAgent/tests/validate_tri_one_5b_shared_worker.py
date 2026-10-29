@@ -108,5 +108,67 @@ class OutboxTests(unittest.TestCase):
             self.assertEqual(store.ready(), [])
 
 
+    def test_answer_only_result_delivered_once_per_original_route(self):
+        for source, transport in (
+            ("TELEGRAM", "TELEGRAM"),
+            ("WEB_COPILOT", "WEBGPT_COPILOT"),
+        ):
+            with self.subTest(transport=transport), tempfile.TemporaryDirectory() as directory:
+                store = RemoteEventStore(Path(directory) / "events.json")
+                task = SimpleNamespace(
+                    task_id="TASK-5B-ANSWER", request_id="RR-5B-ANSWER",
+                    reply_route={"transport": transport,
+                                 "conversation_url": "https://chatgpt.com/c/fixture"},
+                    metadata={"transport": transport},
+                )
+                receipt = {
+                    "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
+                    "admission_status": "ACCEPTED",
+                    "request_id": task.request_id, "task_id": task.task_id,
+                    "task_epoch": "EPOCH-5B", "task_outcome": "SUCCESS",
+                    "runtime_state": "COMPLETED", "receipt_id": "TERM-5B-ANSWER",
+                    "evidence_refs": [], "evidence_verdict": "UNVERIFIED",
+                    "completion_kind": "ANSWER_ONLY",
+                    "admission_reason": "ANSWER_ONLY_RESPONSE_ADMITTED",
+                }
+                with patch.dict(os.environ, {
+                    "TRI_ONE_TASK_RESULT_V1": "1",
+                    "TRI_ONE_TEXT_ONLY_V1": "1",
+                }):
+                    result = make_task_result(
+                        request_id=task.request_id, task_id=task.task_id,
+                        task_epoch="EPOCH-5B", intent_digest="fixture-goal",
+                        source_interface=source, trusted_reply_route=task.reply_route,
+                        state="COMPLETED", outcome="SUCCESS",
+                        terminal_acceptance=receipt,
+                        answer_text="RAII manages resource lifetime.",
+                        evidence_refs=[], operational_action_count=0,
+                    )
+                with patch.dict(os.environ, {"TRI_ONE_TASK_RESULT_V1": "0"}):
+                    event = store.emit("TASK_COMPLETED", task, status="COMPLETED",
+                                       payload={"summary": "RAII manages resource lifetime.",
+                                                "task_result_v1": result})
+                class Adapter:
+                    def __init__(self):
+                        self.calls = 0
+                    def deliver_event(self, route, wire):
+                        self.calls += 1
+                        return {"delivered": True, "reply": "observed"}
+                adapter = Adapter()
+                manager = DeliveryManager(store, {transport: adapter})
+                self.assertTrue(manager.deliver(event)["delivered"])
+                self.assertFalse(manager.deliver(event)["delivered"])
+                self.assertEqual(adapter.calls, 1)
+                fresh = RemoteEventStore(Path(directory) / "events.json")
+                stored = fresh.events[event.event_id]
+                saved = stored.payload["task_result_v1"]
+                self.assertEqual(saved["completion_kind"], "ANSWER_ONLY")
+                self.assertEqual(saved["outcome"], "SUCCESS")
+                self.assertEqual(saved["evidence_refs"], [])
+                self.assertEqual(saved["delivery"]["status"], "DELIVERED")
+                self.assertTrue(saved["delivery"]["delivery_receipt_id"])
+                self.assertEqual(saved["operational_action_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
