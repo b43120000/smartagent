@@ -429,7 +429,7 @@ class GARSharedRuntimeTests(unittest.TestCase):
         self.assertEqual(engine.planner_rejection(
             reason="invalid_progress_payload", snapshot=snapshot(engine),
             response_fresh=True, evidence_generation="zero",
-        ).status, "PAUSED")
+        ).status, "REPAIR")
 
     def test_l4_negative_proofs_and_pending_side_effect(self):
         good = dict(
