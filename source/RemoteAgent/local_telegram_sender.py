@@ -160,6 +160,23 @@ def _print_new_events(outbox: Path, seen: set[str]) -> None:
         print("\n" + str(row.get("text", "") or ""), flush=True)
 
 
+def _delivered_terminal_event(store: RemoteEventStore, task):
+    """Queue completion can precede event emission; wait for this reply's ACK."""
+    expected = {
+        "COMPLETED": "TASK_COMPLETED", "FAILED": "TASK_FAILED",
+        "INTERRUPTED": "TASK_INTERRUPTED", "CANCELLED": "TASK_INTERRUPTED",
+    }.get(task.state)
+    store.load()
+    matching = [event for event in store.events.values()
+                if event.task_id == task.task_id
+                and event.request_id == task.request_id
+                and event.event_type == expected
+                and str(event.reply_route.get("transport", "")).upper() == "LOCAL_TEST"]
+    if len(matching) != 1 or matching[0].delivery_state != "DELIVERED":
+        return None
+    return matching[0]
+
+
 def _tail_request_log(root: Path, request_id: str, limit: int = 20) -> list[str]:
     path = remote_runtime_log_path(root)
     if not path.is_file():
@@ -286,8 +303,20 @@ def send_and_wait(
         if current is not None and current.state in {"COMPLETED", "FAILED", "INTERRUPTED", "CANCELLED"}:
             delivery.retry_ready(transports={"LOCAL_TEST"})
             _print_new_events(outbox, seen)
+            terminal_event = _delivered_terminal_event(event_store, current)
+            if terminal_event is None:
+                if result_sink is not None:
+                    result_sink.update({"observed_task_state": current.state,
+                                        "delivery_status": "PENDING"})
+                time.sleep(1.0)
+                continue
             print(f"\n[RemoteAgent Test] terminal_state={current.state}", flush=True)
             if result_sink is not None:
+                result_sink.update({
+                    "delivery_status": "DELIVERED",
+                    "terminal_event_id": terminal_event.event_id,
+                    "delivery_receipt": dict(terminal_event.payload.get("delivery_receipt") or {}),
+                })
                 ledger = dict(getattr(current, "result_ledger", {}) or {})
                 final_value = ledger.get("final", "")
                 if isinstance(final_value, dict):
