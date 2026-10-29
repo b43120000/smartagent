@@ -157,6 +157,7 @@ CORE_FILES = (
     'source/agent_core/request_ownership.py',
     'source/agent_core/task_state.py',
     'source/agent_core/tri_one_task_result.py',
+    'source/agent_core/goal_anchored_recovery.py',
     'source/agent_core/tri_one_answer_only.py',
     'source/agent_core/tri_one_shared_worker.py',
     'source/agent_core/current_conversation_adapter.py',
