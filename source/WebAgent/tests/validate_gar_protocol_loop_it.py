@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 from WebAgent.protocol_loop import WebAgentProtocolLoop
 from agent_core.task_progress import read_progress
+from agent_core.goal_anchored_recovery import FreshContextProof
+from WebAgent.fresh_context import FreshPlannerBinding
 
 
 class GARProtocolIT(unittest.TestCase):
@@ -53,6 +55,89 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(len(checkpoint), 1)
             self.assertTrue(any(name == "gar_transport_integrity"
                                 for name, _ in events))
+
+    def test_l4_new_planner_replaces_old_after_verified_preparation(self):
+        with tempfile.TemporaryDirectory(prefix="gar-l4-it-") as directory:
+            root = Path(directory)
+            original_calls = []
+            fresh_calls = []
+            prepares = []
+            releases = []
+            class FakeAdapter:
+                def prepare(self, *, request_id, task_id, task_epoch, owner):
+                    prepares.append((request_id, task_id, task_epoch, owner))
+                    proof = FreshContextProof(
+                        request_id=request_id, task_id=task_id,
+                        task_epoch=task_epoch, owner=owner,
+                        original_conversation_id="old-session",
+                        fresh_conversation_id="fresh-session",
+                        protocol_session_id="GAR-L4-PROTOCOL",
+                        protocol_identity_verified=True,
+                        page_ownership_verified=True,
+                        previous_generation_inactive=True,
+                    )
+                    def planner(prompt, expected, attachments):
+                        fresh_calls.append(prompt)
+                        return "still invalid protocol"
+                    return FreshPlannerBinding(
+                        proof=proof, planner=planner,
+                        close=lambda: releases.append("released"),
+                    )
+            def old_planner(prompt, expected, attachments):
+                original_calls.append(prompt)
+                return "invalid smartagent_tool payload"
+            loop = WebAgentProtocolLoop(
+                root, old_planner, progress_root=root, max_turns=10,
+                fresh_context_adapter=FakeAdapter(),
+            )
+            with patch.dict(os.environ, {"SMARTAGENT_GAR_V1": "1"}):
+                with self.assertRaises(RuntimeError):
+                    loop.run(
+                        "Explain RAII.", request_id="RR-L4-IT",
+                        task_id="TASK-L4-IT", task_epoch="EPOCH-L4-IT",
+                        source_tag="REMOTEAGENT_WEBCOPILOT_V9",
+                    )
+            self.assertEqual(len(prepares), 1)
+            self.assertGreaterEqual(len(original_calls), 3)
+            self.assertEqual(len(fresh_calls), 1)
+            self.assertEqual(releases, ["released"])
+            self.assertEqual(loop._gar.fresh_sessions, 1)
+            self.assertTrue(loop._gar.diagnostic()["old_planner_fenced"])
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.terminal_acceptance, {})
+
+    def test_l4_invalid_proof_never_switches_planner(self):
+        with tempfile.TemporaryDirectory(prefix="gar-l4-negative-") as directory:
+            root = Path(directory)
+            fresh_calls = []
+            class BadAdapter:
+                def prepare(self, **kw):
+                    return FreshPlannerBinding(
+                        proof=FreshContextProof(
+                            request_id=kw["request_id"],
+                            task_id=kw["task_id"],
+                            task_epoch="wrong-epoch", owner=kw["owner"],
+                            original_conversation_id="same",
+                            fresh_conversation_id="same",
+                            protocol_session_id="BAD",
+                            protocol_identity_verified=True,
+                            page_ownership_verified=True,
+                            previous_generation_inactive=True,
+                        ),
+                        planner=lambda *_: fresh_calls.append(True),
+                        close=lambda: None,
+                    )
+            loop = WebAgentProtocolLoop(
+                root, lambda *_: "invalid protocol",
+                progress_root=root, max_turns=10,
+                fresh_context_adapter=BadAdapter(),
+            )
+            with patch.dict(os.environ, {"SMARTAGENT_GAR_V1": "1"}):
+                with self.assertRaisesRegex(RuntimeError, "GAR_L4_PROOF_MISMATCH"):
+                    loop.run("Explain RAII.", source_tag="REMOTEAGENT_TELEGRAM")
+            self.assertEqual(fresh_calls, [])
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.terminal_acceptance, {})
 
     def test_default_off_does_not_activate_new_gar(self):
         with tempfile.TemporaryDirectory(prefix="gar-default-off-") as directory:
