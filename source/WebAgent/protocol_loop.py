@@ -339,6 +339,7 @@ class WebAgentProtocolLoop:
         self._gar = None
         self._gar_fresh_adapter = fresh_context_adapter
         self._gar_fresh_binding = None
+        self._gar_local_handoff_reported = False
 
     def _gar_l4_activate(self, snapshot):
         """Switch only after Runtime and browser both verify a distinct context.
@@ -518,15 +519,17 @@ class WebAgentProtocolLoop:
             # LOCAL_REPAIR_EXHAUSTED is a handoff, not a second termination
             # authority. GAR sees the same counters and enforces the hard
             # global cap; a Session switch never resets them.
-            self._emit(
-                "gar_local_repair_handoff",
-                request_id=self.run_id, round=self.turn_id,
-                rejected_turns_total=budget["rejected_turns_total"],
-                rejected_turns_without_new_evidence=budget[
-                    "rejected_turns_without_new_evidence"
-                ],
-                local_reason_codes=budget["reason_codes"],
-            )
+            if not self._gar_local_handoff_reported:
+                self._gar_local_handoff_reported = True
+                self._emit(
+                    "gar_local_repair_handoff",
+                    request_id=self.run_id, round=self.turn_id,
+                    rejected_turns_total=budget["rejected_turns_total"],
+                    rejected_turns_without_new_evidence=budget[
+                        "rejected_turns_without_new_evidence"
+                    ],
+                    local_reason_codes=budget["reason_codes"],
+                )
             return budget
         if budget["status"] == "EXHAUSTED":
             reason = "bounded_repair_exhausted_without_sufficient_new_evidence"
@@ -4148,6 +4151,7 @@ class WebAgentProtocolLoop:
         self._blocker_recovery = BlockerRecovery()
         # Each request owns a fresh repair and no-progress budget.
         self._bounded_repair = BoundedRepairBudget()
+        self._gar_local_handoff_reported = False
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
