@@ -60,7 +60,7 @@ class GARProtocolIT(unittest.TestCase):
     def test_l4_fresh_planner_can_complete_text_only_goal(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-success-") as directory:
             root = Path(directory)
-            old_calls, fresh_calls, releases = [], [], []
+            old_calls, fresh_calls, releases, events = [], [], [], []
             class FreshAdapter:
                 def prepare(self, *, request_id, task_id, task_epoch, owner):
                     proof = FreshContextProof(
@@ -86,6 +86,7 @@ class GARProtocolIT(unittest.TestCase):
             loop = WebAgentProtocolLoop(
                 root, old, progress_root=root, max_turns=12,
                 fresh_context_adapter=FreshAdapter(),
+                event_sink=lambda name, **data: events.append((name, data)),
             )
             with patch.dict(os.environ, {
                 "SMARTAGENT_GAR_V1": "1",
@@ -100,8 +101,13 @@ class GARProtocolIT(unittest.TestCase):
                 )
             self.assertEqual(final, "RAII releases resources.")
             self.assertEqual(len(fresh_calls), 1)
-            self.assertEqual(len(old_calls), 4)
+            self.assertEqual(len(old_calls), 7)
             self.assertEqual(releases, ["done"])
+            observed = [name for name, _ in events]
+            self.assertIn("gar_local_repair_handoff", observed)
+            self.assertIn("gar_fresh_planner_activated", observed)
+            self.assertEqual(loop._gar.rejected_rounds, 7)
+            self.assertEqual(loop._bounded_repair.rejected_turns, 7)
             self.assertEqual(loop._gar.fresh_sessions, 1)
             self.assertEqual(loop.terminal_outcome, "SUCCESS")
             self.assertEqual(loop.terminal_acceptance["admission_status"], "ACCEPTED")
@@ -151,7 +157,7 @@ class GARProtocolIT(unittest.TestCase):
                         source_tag="REMOTEAGENT_WEBCOPILOT_V9",
                     )
             self.assertEqual(len(prepares), 1)
-            self.assertGreaterEqual(len(original_calls), 3)
+            self.assertEqual(len(original_calls), 7)
             self.assertEqual(len(fresh_calls), 1)
             self.assertEqual(releases, ["released"])
             self.assertEqual(loop._gar.fresh_sessions, 1)
