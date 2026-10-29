@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Only the latest candidate needs offline proof; do not accumulate runners
+# while the isolated branch is receiving targeted source corrections.
+concurrency:
+  group: tri-one-goal1-offline-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   source-and-offline:
     name: Offline 2A + 5A + 5B and strict manifest
