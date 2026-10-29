@@ -485,6 +485,16 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 progress_root=root,
                 continuation_store=continuation_store,
                 continuation_owner=task_owner(task),
+                fresh_context_adapter=(
+                    __import__(
+                        "WebAgent.fresh_context", fromlist=["ExistingConversationFreshAdapter"]
+                    ).ExistingConversationFreshAdapter(
+                        client=client, workspace=task.workspace, session_root=root,
+                        display_name="RemoteAgent",
+                    )
+                    if os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+                    else None
+                ),
             )
             loop.tools.configure_web_file_capabilities(client.scraper.web_file_capabilities)
             from agent_core.project_sync_receiver import browser_receiver_identity
