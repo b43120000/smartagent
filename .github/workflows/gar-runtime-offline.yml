@@ -1,0 +1,67 @@
+name: GAR Shared Runtime Offline Gate
+
+on:
+  push:
+    branches:
+      - feat/gar-shared-runtime-20261029
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gar-shared-runtime-offline
+  cancel-in-progress: true
+
+jobs:
+  gar-offline-gate:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONPATH: source
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      SMARTAGENT_GAR_V1: '0'
+      TRI_ONE_TASK_RESULT_V1: '0'
+      TRI_ONE_TEXT_ONLY_V1: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing WebDirect test dependencies
+        run: python -m pip install -r install_smart_agent/requirements-webdirect.txt
+      - name: Python compile gate
+        shell: pwsh
+        run: |
+          python -m compileall -q source/agent_core/goal_anchored_recovery.py source/WebAgent/protocol_loop.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Strict manifest gate
+        shell: pwsh
+        run: |
+          python -c "from agent_core.protocol_manifest import require_protocol_manifest; require_protocol_manifest('.'); print('GAR_MANIFEST_PASS')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: GAR L0-L5 invariant and fake-planner IT
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_gar_shared_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Existing Tri-One regressions
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'source/WebAgent/tests/validate_tri_one_2a_task_result.py',
+            'source/WebAgent/tests/validate_tri_one_2a_matrix.py',
+            'source/WebAgent/tests/validate_tri_one_2a_open_terminal.py',
+            'source/WebAgent/tests/validate_tri_one_5a_answer_only.py',
+            'source/WebAgent/tests/validate_tri_one_5b_shared_worker.py'
+          )
+          foreach ($script in $scripts) {
+            python -B $script
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: No Live work was attempted
+        shell: pwsh
+        run: Write-Host 'OFFLINE_ONLY: No CDP attach, WebGPT submit, Telegram send, or actual end-user task'
