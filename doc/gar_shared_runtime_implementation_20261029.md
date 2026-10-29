@@ -1,6 +1,6 @@
 # GAR Shared Runtime — candidate implementation handoff
 
-Status: SOURCE CANDIDATE; UT/IT NOT YET VERIFIED; Live NOT RUN; NOT FORMAL PASS.
+Status: L0–L4 SOURCE CANDIDATE; UT/IT NOT YET VERIFIED; Live NOT RUN; NOT FORMAL PASS.
 Branch: feat/gar-shared-runtime-20261029
 Base: Goal1 091568ed2bbdef3025945f495d0cb5f07f8df49d
 Feature switch: SMARTAGENT_GAR_V1=1, default OFF. Existing TRI_ONE_* flags are independent.
@@ -21,16 +21,31 @@ L2: For repeated, genuinely fresh protocol rejections with no pending unsafe ope
 
 L3: A later repeated blocker permits one bounded alternative plan; a mutation semantically identical to an already executed/unknown action is blocked before execution even if the action_id is changed.
 
-L4: No independently attested fresh-context adapter is present. The engine must fail closed with GAR_FRESH_CONTEXT_UNAVAILABLE and may not invent a new ChatGPT page, reset ACKs, or let a new Worker claim old actions.
+L4: Implemented explicit, capability-gated ExistingConversationFreshAdapter in source/WebAgent/fresh_context.py. When an operator has prepared a DIFFERENT existing ChatGPT conversation tab in the SAME BrowserContext and configured SMARTAGENT_GAR_FRESH_CONTEXT_URL, GAR checks the original page lease, source generation idle, distinct target conversation ID/provider, exactly one target tab, no other worker owner, target idle and a matching new SessionProtocol bootstrap. Only then Runtime validates FreshContextProof (same request/task/epoch/owner) and fences the old Planner before using the new page. The original TaskResult, Action Ledger, user scope and original-interface reply destination remain with the original worker. A missing/invalid URL or failed bootstrap safely pauses L5, never creates a tab, resends the original task or accepts an old ACK. This is a SOURCE CANDIDATE pending tests, not verified Live.
 
 L5: PAUSED/UNKNOWN and incident reason, no accepted terminal SUCCESS. A minimal redacted checkpoint is persisted under localdata/runtime/gar_snapshots, with digests but no raw original request, tool results, paths, or secrets.
 
-The shared engine is source/agent_core/goal_anchored_recovery.py. V9 integration is source/WebAgent/protocol_loop.py, used by WebDirect and RemoteAgent and by WebCopilot when the shared V9 worker is enabled. The Goal1 base defaults WEBGPT_COPILOT to shared V9. A deliberate TRI_ONE_WEBCOPILOT_V9_V1=0 opts out into legacy smart_agent.py, outside this GAR integration. LocalAgent complete convergence requires the separate 2B/2C architecture.
+The shared engine is source/agent_core/goal_anchored_recovery.py; its capability-gated Browser Adapter is source/WebAgent/fresh_context.py; V9 source wiring is in source/WebAgent/protocol_loop.py, WebAgent/controller.py and RemoteAgent/telegram_webagent_worker.py. WebDirect acquires the common execution-page lease for an explicitly configured L4. RemoteAgent already holds that lease. The Goal1 base defaults WEBGPT_COPILOT to shared V9. A deliberate TRI_ONE_WEBCOPILOT_V9_V1=0 opts out into legacy smart_agent.py, outside this GAR integration. LocalAgent full convergence remains the separate 2B/2C architecture.
+
+## L4 operator configuration (only after safe idle and exact Source checkout)
+
+In the same browser profile as the original WebCopilot conversation, prepare a SECOND existing ChatGPT conversation and open its full `https://chatgpt.com/c/<distinct-id>` URL in a separate tab. Use a conversation you explicitly designate for recovery; do not use a second Agent or another person's page. The original conversation remains the task and delivery destination. No new tab is created automatically.
+
+```powershell
+$env:SMARTAGENT_GAR_V1 = "1"
+$env:SMARTAGENT_GAR_FRESH_CONTEXT_URL = "https://chatgpt.com/c/REPLACE-WITH-EXISTING-SECOND-CONVERSATION-ID"
+# Optional, independent Goal1 flags only if their own acceptance gates permit:
+# $env:TRI_ONE_TASK_RESULT_V1 = "1"
+# $env:TRI_ONE_TEXT_ONLY_V1 = "1"
+```
+
+These are process environment variables to set BEFORE starting a new, idle Worker. No live task may be restarted or replayed merely to apply them. L4 is attempted only after repeated FRESH Planner protocol rejections with a verified safe checkpoint; L0 stale readback still pauses because no independently fresh response was obtained.
 
 ## Offline tests to execute and record for an exact frozen SHA
 
 - source/WebAgent/tests/validate_gar_shared_runtime.py
-- source/WebAgent/tests/validate_gar_protocol_loop_it.py
+- source/WebAgent/tests/validate_gar_protocol_loop_it.py (including fresh V9 terminal and old Planner fencing)
+- source/WebAgent/tests/validate_gar_l4_fresh_context.py (mock BrowserContext, owner, bootstrap and identity negatives)
 - source/WebAgent/tests/validate_protocol_recovery_readback.py
 - source/WebAgent/tests/validate_tri_one_2a_task_result.py
 - source/WebAgent/tests/validate_tri_one_2a_matrix.py
@@ -43,7 +58,7 @@ Windows CI definition: .github/workflows/gar-runtime-offline.yml. A workflow fil
 ## Gates remaining before complete GAR acceptance
 
 1. Source candidate is not PASS until real offline UT/IT and regression evidence are recorded.
-2. True fresh-context L4 needs a supported, verified adapter with session fencing, original task owner/route, snapshot integrity, and no duplicate side effects. Unsupported means explicit PAUSED; no fake success.
+2. L4 Source adapter and Session Fencing have now been implemented, but NO real browser/session bootstrap acceptance has been observed in the closed environment. A prepared independent conversation URL is mandatory; missing support means explicit L5 PAUSED, no fake success. A previously attempted stale L0 response is not a fresh Planner reply and L4 is not invoked to bypass its unknown transport result.
 3. The DOM/Composer stale-readback root cause is a distinct transport issue; this implementation does not remove it.
 4. Cross request/task/epoch continuation budget persistence and ownership need separate verified migration, not an unguarded automatic resume.
 5. Real WebDirect/WebCopilot and RemoteAgent E2E require verified loaded Source SHA and actual original-interface delivery. No new Live was run here.
