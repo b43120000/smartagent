@@ -99,6 +99,27 @@ class RecoveryDecision:
             raise ValueError("gar_cannot_grant_execution_or_new_session")
 
 
+@dataclass(frozen=True)
+class FreshContextProof:
+    """A transport-owned, independently verified *different* planner context.
+
+    Model text, copied DOM and a self-proclaimed conversation ID cannot create
+    this proof. Only the trusted browser adapter constructs it after a matching
+    protocol bootstrap and a verified, separate conversation binding.
+    """
+
+    request_id: str
+    task_id: str
+    task_epoch: str
+    owner: str
+    original_conversation_id: str
+    fresh_conversation_id: str
+    protocol_session_id: str
+    protocol_identity_verified: bool
+    page_ownership_verified: bool
+    previous_generation_inactive: bool
+
+
 class RecoveryEngine:
     """One request/task/epoch, one bounded recovery budget across rounds."""
 
@@ -125,6 +146,9 @@ class RecoveryEngine:
         self.fresh_sessions = 0
         self._last_signature = ""
         self._last_generation: str | None = None
+        self._l4_requested = False
+        self._fresh_context_id = ""
+        self._l4_fenced = False
         self.same_blocker = 0
         self.level = "L0"
         self._decisions: list[dict[str, str | int]] = []
@@ -281,9 +305,50 @@ class RecoveryEngine:
             self.replans += 1
             return self._record("L3", "REPLAN", "GAR_BOUNDED_REPLAN",
                                 self._prompt("L3", snapshot, code))
-        # L4 is unsafe without an externally verified fresh-context adapter.
-        # It must not silently create a new browser conversation or clear ACK.
-        return self._record("L5", "PAUSED", "GAR_FRESH_CONTEXT_UNAVAILABLE")
+        # L4 is a *request* for a trusted adapter, not permission to send a
+        # prompt or create another browser. The Runtime validates and fences
+        # the adapter proof before any further Planner operation.
+        if self.fresh_sessions >= 1 or self._l4_requested:
+            return self._record("L5", "PAUSED", "GAR_FRESH_CONTEXT_UNAVAILABLE")
+        self._l4_requested = True
+        return self._record("L4", "PREPARE", "GAR_FRESH_CONTEXT_REQUIRED")
+
+    def activate_fresh_context(self, *, proof: FreshContextProof,
+                               snapshot: Mapping[str, object]) -> RecoveryDecision:
+        """Admit one new context only against a trusted, same-task proof."""
+        if not self._l4_requested or self.fresh_sessions >= 1:
+            return self._record("L5", "PAUSED", "GAR_L4_NOT_REQUESTED")
+        if not self.validate_snapshot(snapshot) or self._unsafe(snapshot):
+            return self._record("L5", "PAUSED", "GAR_L4_SNAPSHOT_OR_EFFECT_UNSAFE")
+        if not isinstance(proof, FreshContextProof):
+            return self._record("L5", "PAUSED", "GAR_L4_PROOF_INVALID")
+        if any((
+            proof.request_id != self.request_id,
+            proof.task_id != self.task_id,
+            proof.task_epoch != self.task_epoch,
+            proof.owner != self.owner,
+            not proof.original_conversation_id,
+            not proof.fresh_conversation_id,
+            proof.original_conversation_id == proof.fresh_conversation_id,
+            not proof.protocol_session_id,
+            not proof.protocol_identity_verified,
+            not proof.page_ownership_verified,
+            not proof.previous_generation_inactive,
+        )):
+            return self._record("L5", "PAUSED", "GAR_L4_PROOF_MISMATCH")
+        self.fresh_sessions += 1
+        self._fresh_context_id = _hash(proof.fresh_conversation_id)[:24]
+        self._l4_fenced = True
+        return self._record(
+            "L4", "ACTIVATED", "GAR_FRESH_CONTEXT_VERIFIED",
+            self._prompt("L4", snapshot, "GAR_FRESH_CONTEXT_VERIFIED"),
+        )
+
+    def fence_old_planner(self, *, context_id: str) -> bool:
+        """Refuse any delayed reply from the previous Planner after L4."""
+        if not self._l4_fenced:
+            return True
+        return _hash(str(context_id))[:24] == self._fresh_context_id
 
     def _prompt(self, level: str, snapshot: Mapping[str, object],
                 code: str) -> str:
@@ -342,8 +407,10 @@ class RecoveryEngine:
             "replan_count": self.replans,
             "fresh_session_count": self.fresh_sessions,
             "last_reason": self._decisions[-1]["reason"] if self._decisions else "NONE",
+            "fresh_context_digest": self._fresh_context_id,
+            "old_planner_fenced": self._l4_fenced,
         }
 
 
 __all__ = ["FEATURE_FLAG", "SCHEMA", "RecoveryDecision", "RecoveryEngine",
-           "enabled", "classify_failure", "mutation_fingerprint"]
+           "FreshContextProof", "enabled", "classify_failure", "mutation_fingerprint"]
