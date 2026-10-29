@@ -21,6 +21,7 @@ SIGNALS = (
     "GAR_TRANSPORT_INTEGRITY", "GAR_RECOVERY_DECISION",
     "GAR_SAFE_PAUSE", "GAR_CHECKPOINT_PERSISTED",
     "GAR_MUTATION_REPLAY_BLOCKED",
+    "GAR_VERIFICATION_REQUIREMENT_CLASSIFIED",
 )
 _SIGNAL_RE = re.compile("|".join(re.escape(token) for token in SIGNALS), re.I)
 # Fixed diagnostic vocabulary only; freeform model text and raw paths are
