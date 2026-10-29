@@ -335,6 +335,59 @@ class WebAgentProtocolLoop:
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
+        self._gar = None
+
+    def _gar_snapshot(self):
+        if self._gar is None:
+            return None
+        ledger = self.progress_ledger
+        progress = dict(getattr(ledger, "__dict__", {}) or {})
+        pending_names = (
+            "pending_result_recovery", "pending_verification_requirement",
+            "pending_action_repair", "pending_progress_repair_actions",
+            "deferred_action_repairs", "pending_command_field_repairs",
+            "active_stage_manifest",
+        )
+        pending = {name: bool(getattr(self, name, None)) for name in pending_names}
+        return self._gar.snapshot(
+            identity={"request_id": self.run_id, "task_id": self.task_id,
+                      "task_epoch": self.task_epoch},
+            verified_evidence=dict(self.action_result_ledger),
+            blockers=list((self.action_loop_state or {}).get("blockers") or []),
+            pending_operations=pending,
+            progress=progress,
+        )
+
+    def _gar_rejection(self, diagnostics, *, fresh=True):
+        if self._gar is None:
+            return None
+        from agent_core.goal_anchored_recovery import RecoveryDecision
+        snapshot = self._gar_snapshot()
+        reason = str(next((item.get("reason") for item in diagnostics
+                           if isinstance(item, dict) and item.get("reason")),
+                          "PROTOCOL_REJECTED"))
+        # Only Runtime-recorded evidence changes the generation, not new
+        # Action IDs, prose, retries or merely executed=True.
+        generation = json.dumps([
+            [key, row.get("effective_verification_status"),
+             row.get("evidence_status"), row.get("result_status")]
+            for key, row in sorted(self.action_result_ledger.items())
+            if isinstance(row, dict)
+        ], ensure_ascii=False, sort_keys=True)
+        decision = self._gar.planner_rejection(
+            reason=reason, snapshot=snapshot, response_fresh=fresh,
+            evidence_generation=hashlib.sha256(generation.encode("utf-8")).hexdigest(),
+        )
+        self._emit("gar_recovery_decision", request_id=self.run_id,
+                   round=self.turn_id, **self._gar.diagnostic())
+        if decision.status == "PAUSED":
+            from agent_core.task_progress import set_runtime_state
+            set_runtime_state(self.task_id, "PAUSED", reason=decision.reason,
+                              root=self.progress_root)
+            self._emit("gar_safe_pause", request_id=self.run_id,
+                       round=self.turn_id, reason=decision.reason)
+            raise RuntimeError("GAR safely paused: " + decision.reason)
+        return decision.prompt if decision.status in {"REBASE", "REPLAN"} else None
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None:
@@ -3967,6 +4020,17 @@ class WebAgentProtocolLoop:
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
+        from agent_core.goal_anchored_recovery import (
+            enabled as gar_enabled, RecoveryEngine,
+        )
+        self._gar = (
+            RecoveryEngine(
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, original_request=self.task_request,
+                owner=self._tri_one_origin,
+            )
+            if gar_enabled() else None
+        )
         self._request_started_monotonic = time.monotonic()
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
@@ -4169,6 +4233,19 @@ class WebAgentProtocolLoop:
                 PIT.record("11_planner_response", response, evidence_status="ACTION_VALUE", extra={"round": self.turn_id})
             except BaseException as exc:
                 self.protocol_state = "INTERRUPTED"
+                if self._gar is not None:
+                    # L0 stale DOM/ACK is transport uncertainty, not a
+                    # second Planner decision. Do NOT re-send or execute.
+                    snapshot = self._gar_snapshot()
+                    classification = self._gar.transport_failure(exc, snapshot)
+                    self._emit("gar_transport_integrity", request_id=self.run_id,
+                               round=self.turn_id, **self._gar.diagnostic())
+                    if classification.reason in {
+                        "STALE_TRANSPORT_READBACK", "TRANSPORT_UNCERTAIN"
+                    }:
+                        set_runtime_state(self.task_id, "PAUSED",
+                                          reason=classification.reason,
+                                          root=self.progress_root)
                 self._emit(
                     "protocol_transport_interrupted",
                     request_id=self.run_id,
@@ -4210,6 +4287,11 @@ class WebAgentProtocolLoop:
                     calls, diagnostics, response,
                 )
                 if rejection_signature == last_rejected_exchange_signature:
+                    if self._gar is not None:
+                        gar_prompt = self._gar_rejection(diagnostics)
+                        if gar_prompt:
+                            prompt = gar_prompt
+                            continue
                     reason = "semantic_stagnation:repeated_protocol_rejection"
                     set_runtime_state(self.task_id, "PAUSED", reason=reason, root=self.progress_root)
                     raise RuntimeError(
@@ -4218,6 +4300,7 @@ class WebAgentProtocolLoop:
                 last_rejected_exchange_signature = rejection_signature
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
                 self._admit_bounded_repair(diagnostics)
+                gar_prompt = self._gar_rejection(diagnostics)
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
@@ -4226,6 +4309,8 @@ class WebAgentProtocolLoop:
                 pending_recovery = self._result_recovery_guidance([])
                 if pending_recovery:
                     prompt += "\n" + pending_recovery
+                if gar_prompt:
+                    prompt += "\n" + gar_prompt
                 continue
 
             calls = self._restore_progress_repair_actions(calls)
@@ -4287,6 +4372,11 @@ class WebAgentProtocolLoop:
                     from agent_core.progress_recovery import repair_signature
                     rejection_signature = repr(repair_signature(progress_diagnostic, len(self.action_result_ledger)))
                 if rejection_signature == last_rejected_exchange_signature:
+                    if self._gar is not None:
+                        gar_prompt = self._gar_rejection(ack_diagnostics)
+                        if gar_prompt:
+                            prompt = gar_prompt
+                            continue
                     diagnostic = dict(ack_diagnostics[0] if ack_diagnostics else {})
                     diagnostic_reason = str(diagnostic.get("reason", "unknown") or "unknown")
                     diagnostic_detail = str(diagnostic.get("detail", "") or "")
@@ -4308,6 +4398,7 @@ class WebAgentProtocolLoop:
                         f"reason={diagnostic_reason}; detail={diagnostic_detail}"
                     )
                 last_rejected_exchange_signature = rejection_signature
+                gar_prompt = self._gar_rejection(ack_diagnostics)
                 repair_note = ""
                 spec = self._safe_protocol_spec_rejection()
                 if spec:
@@ -4436,6 +4527,8 @@ class WebAgentProtocolLoop:
                 pending_recovery = self._result_recovery_guidance([])
                 if pending_recovery:
                     prompt += "\n" + pending_recovery
+                if gar_prompt:
+                    prompt += "\n" + gar_prompt
                 continue
             last_rejected_exchange_signature = None
 
