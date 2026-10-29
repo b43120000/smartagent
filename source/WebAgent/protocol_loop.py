@@ -441,6 +441,21 @@ class WebAgentProtocolLoop:
             "active_stage_manifest",
         )
         pending = {name: bool(getattr(self, name, None)) for name in pending_names}
+        from agent_core.goal_anchored_recovery import (
+            is_unverified_nonexecuted_terminal_requirement,
+        )
+        requirement = self.pending_verification_requirement
+        advisory_verification = is_unverified_nonexecuted_terminal_requirement(
+            requirement,
+            has_action_history=bool(self.action_ledger or self.action_result_ledger),
+            has_condition_results=bool(self.condition_result_ledger),
+        )
+        if advisory_verification:
+            # Only a rejected no-tool terminal SUCCESS claim. It is still a
+            # V9 verification prerequisite, not evidence of a real in-flight
+            # tool. Allow bounded GAR repair while keeping the requirement
+            # unchanged for terminal admission on every subsequent turn.
+            pending["pending_verification_requirement"] = False
         # An attempted tool in the Action Ledger without a corresponding
         # Runtime result is NOT a safely known outcome. A fresh Planner may
         # not bridge that gap by saying it completed.
@@ -460,6 +475,10 @@ class WebAgentProtocolLoop:
             blockers=list((self.action_loop_state or {}).get("blockers") or []),
             pending_operations=pending,
             progress=progress,
+            verification_preconditions=(
+                ("UNVERIFIED_TERMINAL_NO_EXECUTION",)
+                if advisory_verification else ()
+            ),
         )
 
     def _gar_rejection(self, diagnostics, *, fresh=True, repair_budget=None):
