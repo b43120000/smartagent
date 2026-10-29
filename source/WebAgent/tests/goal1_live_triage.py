@@ -20,6 +20,19 @@ SIGNALS = (
     "ACTION_REJECTED", "ROUND_STARTED", "RESPONSE_RECEIVED",
 )
 _SIGNAL_RE = re.compile("|".join(re.escape(token) for token in SIGNALS), re.I)
+# Fixed diagnostic vocabulary only; freeform model text and raw paths are
+# never copied out of the closed machine.
+REASONS = (
+    "WRITER_TIMEOUT", "QUARANTINED", "INVALID_PROGRESS_PAYLOAD",
+    "RUNTIME_EVIDENCE_REF_UNKNOWN", "TERMINAL_SUCCESS_VERIFICATION_MISSING",
+    "DECLARED_NEXT_ACTION_MISSING", "MISSING_TURN_COMMIT",
+    "FINAL_RESPONSE_NOT_EXCLUSIVE", "UNRESOLVED_ACTION_REPAIRS",
+    "REQUIRED_TRANSITION_ACTION_MISSING", "ACTIVE_ACTION_NOT_COMPLETE",
+    "SOURCE_LOAD_ATTESTATION_UNAVAILABLE", "BOUND_PAGE_COUNT_0",
+    "REQUEST_ELAPSED_SOFT_DEADLINE", "TERMINAL_REFERENCE_IDENTITY_NOT_SCOPED",
+    "DELIVERY_OUTCOME_UNKNOWN", "SCOPE_REJECTED",
+)
+_REASON_RE = re.compile("|".join(re.escape(token) for token in REASONS), re.I)
 _SECRET_RE = re.compile(
     r"(?i)(?:api[_ -]?key|authorization|bearer|password|token|cookie|"
     r"secret|chat[_ -]?id)\s*[=:]\s*\S+"
@@ -47,7 +60,10 @@ def observe_log(path: Path) -> dict:
     digest = hashlib.sha256()
     count = 0
     hits = collections.Counter()
+    reason_hits = collections.Counter()
     last = "NONE"
+    last_reason = "NONE"
+    last_reason_line = 0
     with path.open("rb") as handle:
         for raw in handle:
             digest.update(raw)
@@ -60,12 +76,20 @@ def observe_log(path: Path) -> dict:
                 signal = match.group(0).upper()
                 hits[signal] += 1
                 last = signal
+            for match in _REASON_RE.finditer(line):
+                reason = match.group(0).upper()
+                reason_hits[reason] += 1
+                last_reason = reason
+                last_reason_line = count
     return {
         "log_sha256": digest.hexdigest(),
         "log_bytes": path.stat().st_size,
         "log_lines": count,
         "last_known_signal": last,
         "signal_counts": dict(sorted(hits.items())),
+        "last_known_reason": last_reason,
+        "last_reason_line": last_reason_line,
+        "reason_counts": dict(sorted(reason_hits.items())),
     }
 
 
