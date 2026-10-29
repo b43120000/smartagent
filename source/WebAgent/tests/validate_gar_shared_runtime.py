@@ -170,6 +170,24 @@ class GARSharedRuntimeTests(unittest.TestCase):
         self.assertEqual(engine.diagnostic()["local_rejected_total"], 5)
         self.assertEqual(engine.fresh_sessions, 0)
 
+    def test_gar_shared_hard_ceiling_even_with_changing_evidence(self):
+        engine = make()
+        local = BoundedRepairBudget(max_without_evidence=2,
+                                    max_same_reason=2, max_total=16)
+        result = None
+        for number in range(11):
+            budget = local.observe([{"reason": "bad_v9"}],
+                                   evidence_generation=number)
+            result = engine.planner_rejection(
+                reason="bad_v9", snapshot=snapshot(engine),
+                response_fresh=True, evidence_generation="evidence-%d" % number,
+                local_repair_budget=budget,
+            )
+        self.assertEqual((result.level, result.status, result.reason),
+                         ("L5", "PAUSED", "GAR_SHARED_BUDGET_EXHAUSTED"))
+        self.assertEqual(engine.rejected_rounds, 11)
+        self.assertEqual(engine.fresh_sessions, 0)
+
     def test_open_unknown_blocks_replan_and_reexecution(self):
         for pending in (
             {"pending_write": {"state": "OPEN"}},
