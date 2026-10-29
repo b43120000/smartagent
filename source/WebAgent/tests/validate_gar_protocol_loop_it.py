@@ -15,6 +15,7 @@ from WebAgent.protocol_loop import WebAgentProtocolLoop
 from agent_core.task_progress import read_progress
 from agent_core.goal_anchored_recovery import FreshContextProof
 from WebAgent.fresh_context import FreshPlannerBinding
+from WebAgent.tests.validate_tri_one_5a_protocol_it import answer_only_response
 
 
 class GARProtocolIT(unittest.TestCase):
@@ -55,6 +56,58 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(len(checkpoint), 1)
             self.assertTrue(any(name == "gar_transport_integrity"
                                 for name, _ in events))
+
+    def test_l4_fresh_planner_can_complete_text_only_goal(self):
+        with tempfile.TemporaryDirectory(prefix="gar-l4-success-") as directory:
+            root = Path(directory)
+            old_calls, fresh_calls, releases = [], [], []
+            class FreshAdapter:
+                def prepare(self, *, request_id, task_id, task_epoch, owner):
+                    proof = FreshContextProof(
+                        request_id=request_id, task_id=task_id,
+                        task_epoch=task_epoch, owner=owner,
+                        original_conversation_id="old-page",
+                        fresh_conversation_id="fresh-page",
+                        protocol_session_id="GAR-BOOTSTRAP-FRESH",
+                        protocol_identity_verified=True,
+                        page_ownership_verified=True,
+                        previous_generation_inactive=True,
+                    )
+                    def fresh(prompt, expected, attachments):
+                        fresh_calls.append((prompt, expected))
+                        return answer_only_response(text="RAII releases resources.")
+                    return FreshPlannerBinding(
+                        proof=proof, planner=fresh,
+                        close=lambda: releases.append("done"),
+                    )
+            def old(prompt, expected, attachments):
+                old_calls.append(prompt)
+                return "invalid V9 protocol envelope"
+            loop = WebAgentProtocolLoop(
+                root, old, progress_root=root, max_turns=12,
+                fresh_context_adapter=FreshAdapter(),
+            )
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "1",
+                "TRI_ONE_TASK_RESULT_V1": "1",
+                "TRI_ONE_TEXT_ONLY_V1": "1",
+            }):
+                final = loop.run(
+                    "Explain RAII in C++.",
+                    request_id="RR-GAR-L4-PASS", task_id="TASK-GAR-L4-PASS",
+                    task_epoch="EPOCH-GAR-L4-PASS",
+                    source_tag="REMOTEAGENT_WEBCOPILOT_V9",
+                )
+            self.assertEqual(final, "RAII releases resources.")
+            self.assertEqual(len(fresh_calls), 1)
+            self.assertEqual(len(old_calls), 4)
+            self.assertEqual(releases, ["done"])
+            self.assertEqual(loop._gar.fresh_sessions, 1)
+            self.assertEqual(loop.terminal_outcome, "SUCCESS")
+            self.assertEqual(loop.terminal_acceptance["admission_status"], "ACCEPTED")
+            self.assertEqual(loop.terminal_acceptance["completion_kind"], "ANSWER_ONLY")
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.action_result_ledger, {})
 
     def test_l4_new_planner_replaces_old_after_verified_preparation(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-it-") as directory:
