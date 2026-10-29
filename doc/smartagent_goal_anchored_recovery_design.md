@@ -63,6 +63,12 @@ LocalAgent（未來） ───────┘                       │   L1-L
 - **跨介面驗收為強制條件**：使用相同的 synthetic Goal／blocker／Snapshot/repair budget，在 Telegram／RemoteAgent 與 WebCopilot 各做 UT/IT 及授權的 Live E2E；比對相同恢復決策、未完成目標、Evidence lineage、terminal 結果與零重複副作用。只在 RemoteAgent 通過的 GAR **不能宣稱**共用功能已驗收。LocalAgent 為後續獨立 Gate。
 - **部署與啟用**：預設 OFF；同一邏輯由各入口受控啟用，不自動替換正在執行的 Worker 或共享瀏覽器 Session；每個入口驗證實際載入的候選 Source SHA，並可獨立回退。
 
+### 2.2 L4 Fresh Planner Context 的候選實作（2026-10-29）
+
+目前獨立 Source 分支 `feat/gar-shared-runtime-20261029` 已加入 `agent_core.goal_anchored_recovery.FreshContextProof` 及 `WebAgent.fresh_context.ExistingConversationFreshAdapter`。在 **SMARTAGENT_GAR_V1=1** 且操作者事先準備、明確指定不同的現有對話 `SMARTAGENT_GAR_FRESH_CONTEXT_URL` 時，兩個原始 V9 入口（WebDirect、WebCopilot/RemoteAgent）可由同一 GAR 引擎申請 L4。Adapter 必須證明原本 BrowserContext 的 exclusive page lease、原頁非生成中、新頁唯一且沒有其他 Agent owner、完整 matching Protocol Session bootstrap、request/task/epoch/owner 身分不變；才允許 Runtime 替換 Planner callable。原始 reply route、Action Ledger、verification 和 Scope 維持不變；舊 ACK 及遲到回覆被 fencing；未知副作用拒絕切換。失敗進 L5 PAUSED，**不能視為舊 L0 stale-readback 已自動修復**。
+
+此段僅表示**程式碼候選已提交**。正式 GAR-3 PASS 仍需 exact SHA 的離線 UT/IT、跨入口 Live 及實際載入 Source／Bootstrap／送達證據，詳 `doc/gar_shared_runtime_implementation_20261029.md`。未提供新對話的介面不能透過隱式建立分頁或清空 ACK 來冒充 L4。
+
 ## 3. Hybrid Recovery 分層狀態機
 
 | 層級 | 觸發／用途 | Runtime 行為 | 預期結果 |
