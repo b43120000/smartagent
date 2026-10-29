@@ -48,6 +48,19 @@ def _digest_json(value: object) -> str:
                             separators=(",", ":"), default=str))
 
 
+def mutation_fingerprint(action: Mapping[str, object]) -> str:
+    """Detect same mutation with a different model-authored Action ID.
+
+    This is a conservative safety check used only during GAR rebase/replan.
+    Tool admission and existing idempotency controls remain authoritative.
+    """
+    if not isinstance(action, Mapping):
+        raise ValueError("gar_invalid_action")
+    identity_only = {"action_id", "depends_on", "replaces_action_id"}
+    normalized = {k: v for k, v in action.items() if k not in identity_only}
+    return _digest_json(normalized)
+
+
 def _bounded_code(value: object, *, default: str = "UNKNOWN") -> str:
     # Diagnostic code only, never arbitrary exception body or freeform log text.
     match = re.match(r"^[A-Za-z][A-Za-z0-9_:-]{0,95}$",
@@ -333,4 +346,4 @@ class RecoveryEngine:
 
 
 __all__ = ["FEATURE_FLAG", "SCHEMA", "RecoveryDecision", "RecoveryEngine",
-           "enabled", "classify_failure"]
+           "enabled", "classify_failure", "mutation_fingerprint"]
