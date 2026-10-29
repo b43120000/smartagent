@@ -349,7 +349,9 @@ class WebAgentProtocolLoop:
         from agent_core.task_progress import set_runtime_state
         adapter = self._gar_fresh_adapter
         if adapter is None:
-            reason = "GAR_FRESH_CONTEXT_UNAVAILABLE"
+            reason = self._gar.refuse_fresh_context(
+                "GAR_FRESH_CONTEXT_UNAVAILABLE"
+            ).reason
             set_runtime_state(self.task_id, "PAUSED", reason=reason,
                               root=self.progress_root)
             self._gar_persist()
@@ -362,7 +364,9 @@ class WebAgentProtocolLoop:
         except BaseException as exc:
             # A failed/ambiguous bootstrap may have submitted a prompt: never
             # retry in-place or treat that submit as a completed task action.
-            reason = "GAR_L4_BOOTSTRAP_UNVERIFIED"
+            reason = self._gar.refuse_fresh_context(
+                "GAR_L4_BOOTSTRAP_UNVERIFIED"
+            ).reason
             self._gar_persist()
             set_runtime_state(self.task_id, "PAUSED", reason=reason,
                               root=self.progress_root)
