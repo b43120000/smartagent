@@ -327,6 +327,10 @@ def make_task_result(
         kind = str(completion_kind).strip().upper()
     if kind not in KINDS:
         raise TaskResultContractError("invalid_completion_kind")
+    if kind == "ANSWER_ONLY":
+        from .tri_one_answer_only import enabled as answer_only_enabled
+        if not (enabled() and answer_only_enabled(source=source_interface)):
+            raise TaskResultContractError("answer_only_feature_disabled")
     if kind == "ANSWER_ONLY" and not (
         answer_only_receipt and state == "COMPLETED" and outcome == "SUCCESS"
         and verdict == "UNVERIFIED" and not refs and not artifacts
