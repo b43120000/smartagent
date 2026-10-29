@@ -361,7 +361,7 @@ class WebAgentProtocolLoop:
                 request_id=self.run_id, task_id=self.task_id,
                 task_epoch=self.task_epoch, owner=self._tri_one_origin,
             )
-        except BaseException as exc:
+        except Exception as exc:
             # A failed/ambiguous bootstrap may have submitted a prompt: never
             # retry in-place or treat that submit as a completed task action.
             reason = self._gar.refuse_fresh_context(
