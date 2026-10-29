@@ -4038,10 +4038,18 @@ class WebAgentProtocolLoop:
         from agent_core.goal_anchored_recovery import (
             enabled as gar_enabled, RecoveryEngine,
         )
+        # A continuation may present a fresh imperative such as "continue".
+        # GAR must anchor to the trusted effective original Goal, not that
+        # UI shorthand, and may not infer a broader scope from old model prose.
+        continuation_goal = (
+            (self.continuation_source or {}).get("effective_goal")
+            or (self.continuation_source or {}).get("goal")
+        ) if isinstance(self.continuation_source, dict) else ""
+        gar_goal = str(continuation_goal or self.task_request)
         self._gar = (
             RecoveryEngine(
                 request_id=self.run_id, task_id=self.task_id,
-                task_epoch=self.task_epoch, original_request=self.task_request,
+                task_epoch=self.task_epoch, original_request=gar_goal,
                 owner=self._tri_one_origin,
             )
             if gar_enabled() else None
