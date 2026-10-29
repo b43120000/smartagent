@@ -4,11 +4,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from agent_core import source_attestation, task_progress
 from WebAgent import protocol_loop
+from WebAgent.tests.validate_tri_one_5a_protocol_it import answer_only_response
 
 
 class GARInProcessA0Tests(unittest.TestCase):
@@ -81,6 +84,43 @@ class GARInProcessA0Tests(unittest.TestCase):
         self.assertFalse(
             record["modules"]["WebAgent.controller"]["match"]
         )
+
+
+    def test_real_loop_request_emits_bound_a0_event_without_fabricated_pass(self):
+        events = []
+        with tempfile.TemporaryDirectory(prefix="gar-a0-request-") as directory:
+            root = Path(directory)
+            loop = protocol_loop.WebAgentProtocolLoop(
+                root, lambda prompt, expected, attachments: answer_only_response(),
+                progress_root=root, max_turns=2,
+                event_sink=lambda name, **fields: events.append((name, fields)),
+            )
+            loop._gar_a0_diagnostic_enabled = True
+            loop._gar_a0_instance_digest = "A0-TEST-INSTANCE"
+            loop._gar_a0_controller_main = lambda: None
+            loop._gar_a0_target_salt = b"test-only-private-salt"
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "1",
+                "TRI_ONE_TASK_RESULT_V1": "1",
+                "TRI_ONE_TEXT_ONLY_V1": "1",
+            }):
+                loop.run("Explain RAII in C++.")
+        samples = [data for name, data in events
+                   if name == "gar_a0_request_attestation"]
+        self.assertEqual(len(samples), 1)
+        sample = samples[0]
+        self.assertEqual(sample["controller_instance_digest"], "A0-TEST-INSTANCE")
+        self.assertEqual(sample["actual_origin"], "WEB_DIRECT")
+        self.assertTrue(sample["gar_effective"])
+        self.assertTrue(sample["gar_engine_present"])
+        self.assertTrue(sample["task_result_effective"])
+        self.assertTrue(sample["text_only_effective"])
+        self.assertEqual(sample["a0_status"], "NOT_ATTESTED")
+        self.assertEqual(
+            sample["source_identity"]["loaded_code_status"], "NOT_ATTESTED"
+        )
+        self.assertEqual(loop.terminal_outcome, "SUCCESS")
+
 
 
 if __name__ == "__main__":
