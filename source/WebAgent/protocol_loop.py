@@ -485,6 +485,24 @@ class WebAgentProtocolLoop:
         if self._gar is None:
             return None
         snapshot = self._gar_snapshot()
+        if self.pending_verification_requirement:
+            advisory = "UNVERIFIED_TERMINAL_NO_EXECUTION" in (
+                snapshot.get("verification_preconditions") or ()
+            )
+            self._emit(
+                "gar_verification_requirement_classified",
+                request_id=self.run_id, round=self.turn_id,
+                classification=(
+                    "NON_EXECUTED_TERMINAL_PREREQUISITE"
+                    if advisory else "HARD_OR_UNATTESTED_VERIFICATION"
+                ),
+                action_history_present=bool(
+                    self.action_ledger or self.action_result_ledger
+                ),
+                evidence_ref_count=len(
+                    self.pending_verification_requirement.get("evidence_refs") or []
+                ),
+            )
         reason = str(next((item.get("reason") for item in diagnostics
                            if isinstance(item, dict) and item.get("reason")),
                           "PROTOCOL_REJECTED"))
