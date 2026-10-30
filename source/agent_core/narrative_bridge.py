@@ -58,6 +58,16 @@ def _safe_id(value: str) -> str:
     return safe
 
 
+def _encode_canonical_tool_json(item: Mapping[str, Any]) -> str:
+    """Encode in-band Markdown fences without changing JSON content.
+
+    The strict v8/v9 parser must not see the fence delimiter inside quoted
+    JSON values such as a C++ example. JSON decoding restores the exact text.
+    """
+    payload = json.dumps(dict(item), ensure_ascii=False, separators=(",", ":"))
+    return payload.replace(chr(96), r"\u0060")
+
+
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
@@ -680,7 +690,7 @@ class NarrativeDecisionBridge:
         if self.draft.canonical_calls:
             blocks = [dict(item) for item in self.draft.canonical_calls]
             rendered = "\n".join(
-                "```smartagent_tool\n" + json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n```"
+                "```smartagent_tool\n" + _encode_canonical_tool_json(item) + "\n```"
                 for item in blocks
             )
             self.draft.state = "VALIDATED"
@@ -708,7 +718,7 @@ class NarrativeDecisionBridge:
             self._fail(f"unsupported decision kind: {kind}")
         blocks.append({"tool": "turn_commit", "action_count": len(blocks)})
         rendered = "\n".join(
-            "```smartagent_tool\n" + json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n```"
+            "```smartagent_tool\n" + _encode_canonical_tool_json(item) + "\n```"
             for item in blocks
         )
         self.draft.state = "VALIDATED"

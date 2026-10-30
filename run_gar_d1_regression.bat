@@ -38,13 +38,13 @@ if errorlevel 1 (
   goto :FATAL
 )
 rem Preserve existing local Manifest changes; do not stash, reset or overwrite.
-git diff --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat
+git diff --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat source/agent_core/narrative_bridge.py source/WebAgent/tests/validate_narrative_v9_bridge.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has unstaged edits.
   git status --short
   goto :FATAL
 )
-git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat
+git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat source/agent_core/narrative_bridge.py source/WebAgent/tests/validate_narrative_v9_bridge.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has staged edits.
   git status --short
@@ -112,6 +112,7 @@ call :TEST validate_gar_shared_runtime
 call :TEST validate_gar_protocol_loop_it
 call :TEST validate_gar_l4_fresh_context
 call :TEST validate_protocol_recovery_freshness
+call :TEST validate_narrative_v9_bridge
 call :TEST validate_tri_one_5a_protocol_it
 call :TEST validate_gar_terminal_empty_evidence_boundary
 call :TEST validate_gar_d1_fault_injection
@@ -144,7 +145,7 @@ exit /b 0
 set /a TOTAL+=1
 set "NAME=%~1"
 set "LOG=%LOGDIR%\%NAME%.log"
-echo [%TOTAL%/13] %NAME%
+echo [%TOTAL%/14] %NAME%
 "%PY_EXE%" %PY_ARGS% -B "source\WebAgent\tests\%NAME%.py" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
@@ -161,7 +162,7 @@ exit /b 0
 set /a TOTAL+=1
 set "NAME=strict_manifest"
 set "LOG=%LOGDIR%\%NAME%.log"
-echo [%TOTAL%/13] %NAME%
+echo [%TOTAL%/14] %NAME%
 "%PY_EXE%" %PY_ARGS% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (

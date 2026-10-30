@@ -12,6 +12,7 @@ from agent_core.narrative_bridge import (
     NarrativeDecisionBridge,
 )
 from agent_core.protocol_v9 import parse_v9_tool_transport
+from agent_core.protocol_v8 import parse_v8_tool_transport
 from WebAgent.protocol import WEBAGENT_PROTOCOL_BODY, WEBAGENT_PROTOCOL_VERSION
 
 
@@ -109,6 +110,41 @@ def run() -> dict:
         assert final_calls[1]["content"] == "盤點完成，沒有需要執行的本機動作。"
         assert final_calls[0]["current_step"] == final_calls[0]["total_steps"]
         assert final_calls[0]["outcome"] == "FAILED"
+
+        # L4 RAII response containing a fenced C++ example must remain valid.
+        fenced_cpp = (
+            "RAII closes the file automatically.\n"
+            "```cpp\n"
+            "std::ofstream file(\"out.txt\");\n"
+            "file << \"ok\";\n"
+            "```\n"
+            "No explicit close is required."
+        )
+        fenced_final = NarrativeDecisionBridge.create(
+            expected=expected(root, round_id=18),
+            source_text=fenced_cpp, root=root,
+        )
+        fenced_final.accept_reply("FINAL_RESPONSE")
+        fenced_final.accept_reply("FAILED")
+        fenced_wire = fenced_final.canonical_response()
+        fenced_calls, fenced_errors = parse_v8_tool_transport(fenced_wire)
+        assert not fenced_errors, fenced_errors
+        assert fenced_calls[1]["content"] == fenced_cpp
+        assert fenced_calls[-1]["tool"] == "turn_commit"
+        assert r"\u0060" in fenced_wire
+        assert "```cpp" not in fenced_wire
+
+        # Existing persisted canonical_calls also uses safe serialization.
+        cached = NarrativeDecisionBridge.create(
+            expected=expected(root, round_id=19),
+            source_text="cached narrative", root=root,
+        )
+        cached.draft.canonical_calls = [dict(item) for item in fenced_calls]
+        cached.draft.state = "READY_FOR_VALIDATION"
+        cached_wire = cached.canonical_response()
+        cached_calls, cached_errors = parse_v8_tool_transport(cached_wire)
+        assert not cached_errors, cached_errors
+        assert cached_calls[1]["content"] == fenced_cpp
 
         refusal_expected = expected(root, round_id=14)
         refusal_expected["narrative_recovery_context"]["authorized_paths"] = [r"C:\workspace"]
@@ -341,6 +377,8 @@ def run() -> dict:
         "confirmed_slots_persisted_immediately": True,
         "typed_field_validation_and_retry": True,
         "runtime_canonicalization": True,
+        "embedded_cpp_markdown_fences_preserve_content": True,
+        "cached_canonical_calls_preserve_content": True,
         "tolerant_exclusive_json_recovery": True,
         "tolerant_json_runtime_owns_ids_and_commit": True,
         "prose_embedded_json_not_executable": True,

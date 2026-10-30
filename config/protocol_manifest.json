@@ -68,7 +68,7 @@
     "source/agent_core/host_supervisor.py": "64f59b62e1b23a378901bd33dc36fad44e73e30d03b20e955102a4f118578393",
     "source/agent_core/image_delivery.py": "83bae85193127b269abf1fa9272ea96a436bdcbb377e6502869fd6f3bc8ecb3c",
     "source/agent_core/metadata.py": "2bea4379dcba5d4082f9941d35a7b41ee3baa47f4e966d75592e0907944b40d6",
-    "source/agent_core/narrative_bridge.py": "a87e2523e569e1f7062a9e54ec78f4a1f17eabe0fa68f5747f6570ffa2e5ab80",
+    "source/agent_core/narrative_bridge.py": "c43be8ea7633a2bfe8fb7b46068d53e8d2bce24cfd4b457e56fce76541688e48",
     "source/agent_core/path_cli.py": "343be7979954b38bdcccf75ded8566e942ff616d34193a8becbb157f281def98",
     "source/agent_core/path_integrity_trace.py": "fa7230ccc3be8d29ef66599bc3daa8018403b22e6fed6cf792a388cbe403bf09",
     "source/agent_core/path_security.py": "e2134677c4f1c38ba68710858086a65d7c70a25db9638269266234fb0950ffa9",
