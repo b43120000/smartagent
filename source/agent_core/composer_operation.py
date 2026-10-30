@@ -319,10 +319,37 @@ def _recover_locked(*,endpoint,url,journal,record,cancel_check,new_prompt=None):
     return result
 
 
+def _last_turn_readiness(adapter, users, assistants):
+    """Read-only, DOM-ordered assistant-completion hint for prewrite gating.
+
+    Role-specific ordinals cannot establish cross-role chronological order;
+    use the provider Adapter's native DOM relation, never message counts.
+    This is a readiness hint, not proof that the browser can accept a write.
+    """
+    if not users and not assistants:
+        return 'EMPTY_CONVERSATION'
+    if not assistants:
+        return 'LAST_USER_NO_ASSISTANT'
+    if not users:
+        return 'ASSISTANT_WITHOUT_USER'
+    latest_user, latest_assistant = users[-1], assistants[-1]
+    if not str(getattr(latest_assistant, 'raw_text', '') or '').strip():
+        return 'ASSISTANT_CONTENT_EMPTY'
+    try:
+        if adapter._is_after(latest_user, latest_assistant):
+            return 'LAST_ASSISTANT'
+        if adapter._is_after(latest_assistant, latest_user):
+            return 'LAST_USER'
+    except Exception:
+        pass
+    return 'LAST_TURN_ORDER_UNKNOWN'
+
+
 def _page_snapshot(scraper,prompt):
     adapter=scraper._web_ui_adapter()
     users=adapter.observation_turns('user')
     assistants=adapter.observation_turns('assistant')
+    last_turn_status=_last_turn_readiness(adapter,users,assistants)
     # Persist the native Adapter verification result, never raw DOM text.
     validation = adapter.validate_composer(prompt)
     verification = dict(matched=bool(validation.matched),
@@ -334,6 +361,7 @@ def _page_snapshot(scraper,prompt):
     return dict(composer_matches=bool(validation.matched),
         composer_validation=verification,
         composer_empty=not scraper._normalize_composer_text(scraper._read_composer_text()),
+        last_turn_status=last_turn_status,
         url=scraper._page.url,
         user_anchors=[[t.structural_id,t.content_digest] for t in users[-2:]],
         assistant_anchors=[[t.structural_id,t.content_digest] for t in assistants[-2:]],
@@ -382,6 +410,9 @@ def _native_identity(turn):
 def _same_turns(before,after):
     if not before or not after:return False
     if any(before.get(k)!=after.get(k) for k in ('url','user_count','assistant_count')):return False
+    if ('last_turn_status' in before and 'last_turn_status' in after
+            and before['last_turn_status'] != after['last_turn_status']):
+        return False
     for role in ('user','assistant'):
         a=before.get(role+'_anchors',[]);b=after.get(role+'_anchors',[])
         if [v[1] for v in a]!=[v[1] for v in b]:return False
@@ -463,6 +494,9 @@ def _wait_for_prewrite_stability(
         elif current.get("generation_active"):
             consecutive, prior = 0, None
             last_reason = "GENERATION_ACTIVE"
+        elif current.get("last_turn_status") not in {"EMPTY_CONVERSATION", "LAST_ASSISTANT"}:
+            consecutive, prior = 0, None
+            last_reason = str(current.get("last_turn_status") or "LAST_TURN_UNOBSERVED")
         elif prior is None:
             consecutive, prior = 1, current
             last_reason = "STABILITY_SAMPLING"
