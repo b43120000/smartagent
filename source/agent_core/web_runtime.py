@@ -3534,6 +3534,8 @@ class WebLLMScraper:
 
         stable_text = ""
         stable_since = None
+        sr_first_text = None
+        sr_first_since = None
         ui_idle_since = None
         ui_idle_signature = ""
         protocol_started_at = None
@@ -3745,6 +3747,57 @@ class WebLLMScraper:
                         )
 
                     text = self._current_new_response_text(snapshot, assistant_turn)
+
+                    # Diagnostic-only exit BEFORE commit matching, any V9
+                    # normalization/admission, Narrative Bridge, ACK probe or
+                    # Tool Action. Only one stable, request-owned assistant
+                    # readback may be collected per request and round.
+                    from .sr_first_readback import enabled as sr_enabled
+                    if protocol_expected and sr_enabled():
+                        if text != sr_first_text:
+                            sr_first_text = text
+                            sr_first_since = now
+                        stable_for_sr = 0.0 if sr_first_since is None else now - sr_first_since
+                        required_stability = max(
+                            2.0, float(self._protocol_commit_stable_sec),
+                        )
+                        if text and stable_for_sr >= required_stability and not self._is_generation_active():
+                            from .sr_first_readback import capture_first_readback
+                            source_record = self._protocol_response_source(
+                                snapshot, assistant_turn, text,
+                            )
+                            result = capture_first_readback(
+                                text=text,
+                                assistant_turn=assistant_turn,
+                                response_source=source_record,
+                                expected=protocol_expected,
+                                ui_idle_seconds=idle_for,
+                                stable_seconds=stable_for_sr,
+                            )
+                            self._log_stage(
+                                "sr_first_readback_captured",
+                                f"request_id={protocol_expected.get('run_id', '')} "
+                                f"round={protocol_expected.get('turn_id', '')} "
+                                f"verdict={result.verdict} "
+                                f"evidence={result.capture_dir} "
+                                "actions=0 repair_prompts=0",
+                            )
+                            raise result
+                        current_stage = "sr_first_readback_wait_stability"
+                        detail = (
+                            f"text_len={len(text)} stable={stable_for_sr:.2f}/"
+                            f"{required_stability:.2f}s "
+                            "no_protocol_repair=true no_tool_execution=true"
+                        )
+                        # The normal protocol branch is intentionally skipped.
+                        # Wait for a stable first readback, or let existing
+                        # generation-stall safety terminate the observation.
+                        last_stage = current_stage
+                        if now - last_log >= 2.0:
+                            self._log_stage(current_stage, detail)
+                            last_log = now
+                        time.sleep(0.25)
+                        continue
 
                     if protocol_expected:
                         matching_commit = self._matching_protocol_commit(text, protocol_expected)

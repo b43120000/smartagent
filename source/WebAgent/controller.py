@@ -712,6 +712,43 @@ def main(argv: list[str] | None = None) -> int:
                     print("[WebAgent Provisioning] FAILED. Re-run the installer after fixing the reported error.", flush=True)
                     return 1
             except Exception as exc:
+                # SR Gate is an intentional FIRST-READBACK-ONLY observation.
+                # Never send render_final_ack or a replacement model prompt;
+                # leave the original model turn visible for human comparison.
+                from agent_core.sr_first_readback import (
+                    SRFirstReadbackCaptured,
+                    enabled as sr_first_readback_enabled,
+                )
+                if sr_first_readback_enabled():
+                    from agent_core.task_progress import set_runtime_state
+                    captured = isinstance(exc, SRFirstReadbackCaptured)
+                    if loop.task_id:
+                        set_runtime_state(
+                            loop.task_id, "PAUSED",
+                            reason=("sr_first_readback_captured" if captured
+                                    else "sr_first_readback_failed:" + type(exc).__name__),
+                            root=loop.progress_root,
+                        )
+                    print(
+                        "[SR-GATE] " + (
+                            f"CAPTURED verdict={exc.verdict} evidence={exc.capture_dir}"
+                            if captured else f"FAILED {type(exc).__name__}: {exc}"
+                        ) + " | NO model ACK sent; NO tool executed by SR gate",
+                        flush=True,
+                    )
+                    runtime_log.emit(
+                        "sr_first_readback_captured" if captured else "sr_first_readback_failed",
+                        request_id=loop.run_id,
+                        verdict=(exc.verdict if captured else "UNAVAILABLE"),
+                        error_type=type(exc).__name__,
+                    )
+                    if lifecycle is not None:
+                        lifecycle.emit(
+                            "ERROR", request_id=loop.run_id,
+                            message="SR_FIRST_READBACK_CAPTURED" if captured
+                            else "SR_FIRST_READBACK_FAILED",
+                        )
+                    continue
                 from agent_core.task_progress import set_runtime_state
                 if loop.task_id:
                     set_runtime_state(
