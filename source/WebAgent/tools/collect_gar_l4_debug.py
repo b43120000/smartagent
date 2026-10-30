@@ -232,7 +232,7 @@ def composer_journals_redacted(root: Path, events: list[dict]) -> list[dict]:
         diagnostic = record.get("readback_failure")
         if isinstance(diagnostic, dict):
             whitelisted = {}
-            for key in ("chunk_start", "chunk_end", "chunk_chars", "attempts",
+            for key in ("chunk_start", "chunk_end", "chunk_chars", "input_units", "attempts",
                         "timeout_sec", "elapsed_sec", "expected_prefix_chars",
                         "expected_length", "observed_length"):
                 value = diagnostic.get(key)
@@ -247,7 +247,7 @@ def composer_journals_redacted(root: Path, events: list[dict]) -> list[dict]:
             if isinstance(last_error, str) and re.fullmatch(r"[A-Za-z_]{1,80}", last_error):
                 whitelisted["last_read_error_type"] = last_error
             unit_kind = diagnostic.get("unit_kind")
-            if unit_kind in ("text", "soft_break"):
+            if unit_kind in ("text", "soft_break", "mixed"):
                 whitelisted["unit_kind"] = unit_kind
             item["readback_failure"] = whitelisted
         journals.append(item)
