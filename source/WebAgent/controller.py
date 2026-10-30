@@ -148,6 +148,58 @@ def live_planner(
     )
 
 
+class GARD1LiveFaultInjector:
+    """Opt-in, one-request WebDirect-only test of the real GAR L4 path.
+
+    Only the original Planner response is simulated. The L4 adapter owns a
+    separate real browser client/Planner, and never calls this wrapper.
+    The only eligible request is a fixed, side-effect-free text-only question.
+    """
+
+    TEST_REQUEST = "Explain RAII in C++."
+    INVALID_V9 = "GAR_D1_INVALID_V9"
+    MAX_INJECTED_REJECTIONS = 7
+
+    def __init__(self, real_planner, event_sink, *, enabled=False):
+        self._real_planner = real_planner
+        self._emit = event_sink
+        self.enabled = bool(enabled)
+        self._active = False
+        self._used = False
+        self.injected = 0
+
+    def arm(self, request: str, *, eligible: bool) -> bool:
+        if (not self.enabled or self._used or self._active
+                or not eligible or request != self.TEST_REQUEST):
+            return False
+        self._used = True  # Consume the single-use ticket before any Planner call.
+        self._active = True
+        self.injected = 0
+        self._emit("gar_d1_test_armed", origin="WEB_DIRECT",
+                   fault_mode="INVALID_V9_ORIGINAL_PLANNER_ONLY",
+                   max_faults=self.MAX_INJECTED_REJECTIONS)
+        return True
+
+    def planner(self, prompt, expected, attachments):
+        if not self._active:
+            return self._real_planner(prompt, expected, attachments)
+        # Not an admission bypass: if the test scope became unsafe, stop.
+        if attachments or self.injected >= self.MAX_INJECTED_REJECTIONS:
+            raise RuntimeError("GAR_D1_TEST_INJECTION_SCOPE_OR_BUDGET_EXCEEDED")
+        self.injected += 1
+        self._emit("gar_d1_test_fault_injected", origin="WEB_DIRECT",
+                   sequence=self.injected, fault_code="INVALID_V9",
+                   action_executed=False)
+        # Deliberately invalid, fresh local test response; never claim this was
+        # a real ChatGPT model reply, and never fabricate a Runtime PASS.
+        return self.INVALID_V9
+
+    def disarm(self):
+        if self._active:
+            self._emit("gar_d1_test_disarmed",
+                       injected_count=self.injected, single_use=True)
+        self._active = False
+
 def _resolve_workspace(value: str) -> str:
     default = Path(__file__).resolve().parents[1]
     # Be tolerant of malformed Windows launcher argv such as C:\path\repo".
@@ -351,11 +403,24 @@ def main(argv: list[str] | None = None) -> int:
         state_dir=state_dir,
         send_prompt=client.ask,
     )
-    loop = WebAgentProtocolLoop(
-        workspace,
+    # D1 temporary test: arm only an exact safe, one-shot WebDirect task.
+    # Bootstrap and all L4 Fresh Planner calls continue over real Browser.
+    d1_test_enabled = os.environ.get("SMARTAGENT_GAR_D1_FAULT_INJECTION_V1", "").strip() == "1"
+    if d1_test_enabled:
+        from agent_core.goal_anchored_recovery import enabled as gar_enabled
+        fresh_target = os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+        if (not gar_enabled() or not fresh_target or not conversation_id(fresh_target)
+                or conversation_id(fresh_target) == selected_id):
+            raise RuntimeError("GAR_D1_TEST_REQUIRES_GAR_AND_DISTINCT_FRESH_CONTEXT")
+    d1_fault = GARD1LiveFaultInjector(
         lambda prompt, expected, attachments: live_planner(
             client, prompt, expected, attachments
         ),
+        runtime_log.emit, enabled=d1_test_enabled,
+    )
+    loop = WebAgentProtocolLoop(
+        workspace,
+        d1_fault.planner,
         event_sink=runtime_log.emit,
         progress_root=runtime_root,
         continuation_store=TaskContinuationStore(runtime_root),
@@ -492,6 +557,11 @@ def main(argv: list[str] | None = None) -> int:
                     if use_gar_fresh_lease:
                         scraper._execution_page_lease_owned = True
                     try:
+                        d1_fault.arm(
+                            request,
+                            eligible=(not bootstrap_active and test_envelope is None
+                                      and not scraper._composer_attachment_count()),
+                        )
                         final_content = loop.run(
                             request,
                             request_id=(
@@ -506,6 +576,7 @@ def main(argv: list[str] | None = None) -> int:
                             ),
                         )
                     finally:
+                        d1_fault.disarm()
                         scraper._execution_page_lease_owned = previous_lease_owned
                 runtime_log.emit("request_local_loop_completed", request_id=loop.run_id, final_content=final_content)
                 if bootstrap_active:
