@@ -499,6 +499,25 @@ class WebAgentProtocolLoop:
             self._gar_fresh_binding = None
             binding.close()
 
+    def _gar_semantic_supervision(self, reason: str) -> str:
+        """Review a trusted runtime-observed stall without faking V9 rejection."""
+        if self._gar is None or os.environ.get(
+            "SMARTAGENT_GAR_L4_SUPERVISOR_V1", "1"
+        ).strip().lower() in {"0", "false", "no", "off"}:
+            return ""
+        decision = self._gar.request_supervisory_review(
+            snapshot=self._gar_snapshot(), reason=reason,
+        )
+        self._emit("gar_semantic_stagnation_decision",
+                   request_id=self.run_id, round=self.turn_id,
+                   observed_reason=reason,
+                   **self._gar.diagnostic())
+        self._gar_persist()
+        if decision.status == "PREPARE":
+            self._gar_last_blocker_reason = reason
+            return self._gar_l4_activate(self._gar_snapshot())
+        return ""
+
     def _gar_persist(self):
         if self._gar is None:
             return
@@ -4591,6 +4610,11 @@ class WebAgentProtocolLoop:
                 raise RuntimeError("Repair elapsed budget exhausted; task safely paused. " + reason)
             if self._stagnation_pending:
                 reason = "semantic_stagnation:repeated_authorization_or_preflight_blocker"
+                recovery = self._gar_semantic_supervision(reason)
+                if recovery:
+                    self._stagnation_pending = None
+                    prompt = recovery
+                    continue
                 set_runtime_state(self.task_id, "PAUSED", reason=reason,
                                   root=self.progress_root)
                 self._emit("protocol_loop_paused", request_id=self.run_id,
@@ -5126,6 +5150,10 @@ class WebAgentProtocolLoop:
                 )
                 if decision_signature == last_no_action_decision_signature:
                     reason = "semantic_stagnation:repeated_model_decision_without_new_runtime_evidence"
+                    recovery = self._gar_semantic_supervision(reason)
+                    if recovery:
+                        prompt = recovery
+                        continue
                     set_runtime_state(
                         self.task_id, "PAUSED", reason=reason, root=self.progress_root
                     )
@@ -5180,7 +5208,8 @@ class WebAgentProtocolLoop:
                 # new operation requires a different payload and still passes
                 # ordinary scope/admission/tool security.
                 if (self._gar is not None
-                        and (self._gar.rebases or self._gar.replans)
+                        and (self._gar.rebases or self._gar.replans
+                             or self._gar.diagnostic()["supervisor_review_returned"])
                         and not is_observation(action)
                         and str(action.get("action_id", "")) not in self.action_ledger):
                     from agent_core.goal_anchored_recovery import mutation_fingerprint
