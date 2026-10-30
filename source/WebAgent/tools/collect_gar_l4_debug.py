@@ -229,6 +229,14 @@ def composer_journals_redacted(root: Path, events: list[dict]) -> list[dict]:
             "confirmed_chars": (record.get("confirmed_prefix") or {}).get("chars"),
             "result_status": scrub((record.get("result") or {}).get("status"), 90),
         }
+        result = record.get("result") or {}
+        reason_code = result.get("reason_code") if isinstance(result, dict) else None
+        if isinstance(reason_code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,89}", reason_code):
+            item["prewrite_reason_code"] = reason_code
+        baseline = record.get("baseline") or {}
+        last_turn = baseline.get("last_turn_status") if isinstance(baseline, dict) else None
+        if isinstance(last_turn, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,89}", last_turn):
+            item["baseline_last_turn_status"] = last_turn
         diagnostic = record.get("readback_failure")
         if isinstance(diagnostic, dict):
             whitelisted = {}
