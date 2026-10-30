@@ -49,9 +49,20 @@ class D1FaultInjectionTest(unittest.TestCase):
         self.assertFalse(fault.arm(fault.TEST_REQUEST, eligible=True))
         self.assertEqual(fault.planner("after", {}, []), "REAL")
         self.assertEqual(len(real), 1)
-        self.assertEqual([name for name, _ in emitted],
-                         ["gar_d1_test_armed", "gar_d1_test_fault_injected",
-                          "gar_d1_test_disarmed"])
+        # The enabled injector now reports why an arm request was refused.
+        # These diagnostic events are not Planner turns or tool actions.
+        self.assertEqual(
+            [(name, data.get("reason")) for name, data in emitted],
+            [
+                ("gar_d1_test_not_armed", "REQUEST_NOT_EXACT_MATCH"),
+                ("gar_d1_test_not_armed", "INPUT_NOT_ELIGIBLE"),
+                ("gar_d1_test_not_armed", "REQUEST_NOT_EXACT_MATCH"),
+                ("gar_d1_test_armed", None),
+                ("gar_d1_test_fault_injected", None),
+                ("gar_d1_test_disarmed", None),
+                ("gar_d1_test_not_armed", "SINGLE_USE_CONSUMED"),
+            ],
+        )
         self.assertEqual(fault.injected, 1)
 
     def test_enabled_d1_reports_exact_not_armed_reason_without_prompt(self):

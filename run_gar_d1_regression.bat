@@ -103,6 +103,9 @@ echo.
 set /a TOTAL=0
 set /a PASSED=0
 set /a FAILED=0
+set "FIRST_FAIL_NAME="
+set "FIRST_FAIL_RC="
+set "FIRST_FAIL_LOG="
 call :TEST validate_gar_a0_identity
 call :TEST validate_browser_startup_settle
 call :TEST validate_composer_stability
@@ -125,10 +128,7 @@ echo.
 type "%LOGDIR%\summary.txt"
 echo.
 echo Logs: "%LOGDIR%"
-if %FAILED% GTR 0 (
-  echo [FAIL] Offline gate failed. Do not do Live.
-  exit /b 1
-)
+if %FAILED% GTR 0 goto :SHOW_FAILURE
 echo [PASS] Offline only. Chrome3 L4 Live remains a separate acceptance gate.
 exit /b 0
 
@@ -144,8 +144,12 @@ if "%RC%"=="0" (
   >> "%LOGDIR%\summary.txt" echo PASS %NAME% exit=0
 ) else (
   set /a FAILED+=1
-  echo [FAIL] %NAME% exit=%RC%
-  type "%LOG%"
+  if not defined FIRST_FAIL_LOG (
+    set "FIRST_FAIL_NAME=%NAME%"
+    set "FIRST_FAIL_RC=%RC%"
+    set "FIRST_FAIL_LOG=%LOG%"
+  )
+  echo [FAIL] %NAME% exit=%RC% -- Details repeated at end.
   >> "%LOGDIR%\summary.txt" echo FAIL %NAME% exit=%RC%
 )
 exit /b 0
@@ -162,12 +166,42 @@ if "%RC%"=="0" (
   >> "%LOGDIR%\summary.txt" echo PASS %NAME% exit=0
 ) else (
   set /a FAILED+=1
-  echo [FAIL] %NAME% exit=%RC%
-  type "%LOG%"
+  if not defined FIRST_FAIL_LOG (
+    set "FIRST_FAIL_NAME=%NAME%"
+    set "FIRST_FAIL_RC=%RC%"
+    set "FIRST_FAIL_LOG=%LOG%"
+  )
+  echo [FAIL] %NAME% exit=%RC% -- Details repeated at end.
   >> "%LOGDIR%\summary.txt" echo FAIL %NAME% exit=%RC%
 )
 exit /b 0
 
+:SHOW_FAILURE
+echo.
+echo ==============================================================
+echo  GAR D1 REGRESSION FAILED - DO NOT RUN LIVE
+echo ==============================================================
+echo  Exact Git SHA: %HEAD_SHA%
+echo  First failed test: %FIRST_FAIL_NAME%
+echo  Exit code: %FIRST_FAIL_RC%
+echo  Log path: %FIRST_FAIL_LOG%
+echo  Summary path: %LOGDIR%\summary.txt
+echo.
+echo ------------------ PYTHON ERROR / TRACEBACK ------------------
+if not defined FIRST_FAIL_LOG goto :SHOW_FAILURE_END
+if not exist "%FIRST_FAIL_LOG%" goto :SHOW_FAILURE_END
+rem End of unittest output contains the failing assertion/traceback.
+powershell -NoProfile -NonInteractive -Command "Get-Content -LiteralPath $env:FIRST_FAIL_LOG -Tail 90"
+if errorlevel 1 type "%FIRST_FAIL_LOG%"
+:SHOW_FAILURE_END
+echo ----------------------- END ERROR ----------------------------
+echo [FAIL] %FAILED% of %TOTAL% regression commands failed.
+echo [FAIL] Do not run GAR Live until all 12 commands pass.
+pause
+exit /b 1
+
 :FATAL
 echo [ERROR] D1 preflight failed. No regressions run.
+echo [ERROR] Correct the preflight issue printed above.
+pause
 exit /b 2
