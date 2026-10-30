@@ -94,7 +94,10 @@ class GARProtocolIT(unittest.TestCase):
                     )
             rejected = [row for name, row in events if name == "protocol_rejected"]
             self.assertGreaterEqual(len(rejected), 1)
-            self.assertTrue(any(d.get("reason") == "terminal_success_verification_missing"
+            # Shared Answer-only now returns an explicit model-repair
+            # diagnostic for non-action status refs. It must NEVER convert
+            # them into verified Action Evidence or terminal SUCCESS.
+            self.assertTrue(any(d.get("reason") == "answer_only_status_markers_not_action_evidence"
                                 for d in rejected[0].get("diagnostics", [])))
             candidates = [row for name, row in events
                           if name == "tri_one_answer_only_candidate"]
@@ -104,18 +107,16 @@ class GARProtocolIT(unittest.TestCase):
                              "action_evidence_cannot_be_answer_only")
             classified = [row for name, row in events
                           if name == "gar_pending_classification"]
-            self.assertTrue(classified)
-            self.assertTrue(classified[0]["terminal_precondition_advisory"])
-            self.assertEqual(classified[0]["executed_action_count"], 0)
-            self.assertEqual(classified[0]["recorded_result_count"], 0)
+            # No pending Action verification is manufactured by this
+            # fail-closed status-marker repair path.
+            self.assertFalse(classified)
             decisions = [row for name, row in events
                          if name == "gar_recovery_decision"]
             self.assertTrue(decisions)
             self.assertEqual((decisions[0]["level"], decisions[0]["last_reason"]),
                              ("L1", "GAR_LOCAL_REPAIR_ACTIVE"))
             self.assertGreaterEqual(loop._gar.rejected_rounds, 1)
-            self.assertEqual(loop.pending_verification_requirement["evidence_refs"],
-                             ["REQUEST_ACCEPTED"])
+            self.assertFalse(loop.pending_verification_requirement)
             self.assertFalse(loop.terminal_acceptance)
             self.assertFalse(loop.action_ledger)
             self.assertFalse(loop.action_result_ledger)
@@ -126,8 +127,7 @@ class GARProtocolIT(unittest.TestCase):
             checkpoint = json.loads(checkpoints[0].read_text(encoding="utf-8"))
             self.assertEqual(checkpoint["pending_operations"], [])
             self.assertEqual(checkpoint["checkpoint"]["verified_evidence"], [])
-            self.assertIn("UNVERIFIED_TERMINAL_NO_EXECUTION",
-                          checkpoint["verification_preconditions"])
+            self.assertFalse(checkpoint["checkpoint"]["verified_evidence"])
             self.assertGreaterEqual(len(planner_calls), 2)
 
     def test_narrative_status_marker_is_advisory_in_real_web_direct_v9(self):
@@ -153,13 +153,15 @@ class GARProtocolIT(unittest.TestCase):
                              request_id="GAR-D1-MARKER-RR",
                              task_id="GAR-D1-MARKER-TASK",
                              task_epoch="GAR-D1-MARKER-EPOCH")
-            classifications = [data for name, data in events
-                               if name == "gar_verification_requirement_classified"]
-            self.assertTrue(classifications)
-            self.assertEqual(classifications[0]["classification"],
-                             "NON_EXECUTED_TERMINAL_PREREQUISITE")
-            self.assertEqual(classifications[0]["evidence_marker_class"],
-                             "RUNTIME_STATUS_ONLY")
+            # The strict shared Answer-only contract explicitly rejects a
+            # model's RUNTIME_STATUS citation before constructing an Action
+            # verification requirement. The rejection is a repair prompt.
+            rejections = [data for name, data in events if name == "protocol_rejected"]
+            self.assertTrue(rejections)
+            self.assertTrue(any(
+                d.get("reason") == "answer_only_status_markers_not_action_evidence"
+                for d in rejections[0].get("diagnostics", [])
+            ))
             decisions = [data for name, data in events
                          if name == "gar_recovery_decision"]
             self.assertTrue(decisions)
@@ -167,8 +169,7 @@ class GARProtocolIT(unittest.TestCase):
                              ("L1", "GAR_LOCAL_REPAIR_ACTIVE"))
             self.assertFalse(loop.terminal_acceptance)
             self.assertFalse(loop.action_result_ledger)
-            self.assertEqual(loop.pending_verification_requirement["evidence_refs"],
-                             ["RUNTIME_STATUS"])
+            self.assertFalse(loop.pending_verification_requirement)
 
     def test_stale_readback_cannot_reexecute_or_complete(self):
         with tempfile.TemporaryDirectory(prefix="gar-stale-") as directory:
