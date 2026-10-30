@@ -72,6 +72,8 @@ class ReviewContractTests(unittest.TestCase):
             reason="semantic_stagnation:repeated_model_decision_without_new_runtime_evidence",
         )
         self.assertEqual((denied.level, denied.status), ("L5", "PAUSED"))
+        e = RecoveryEngine(request_id="RR", task_id="TASK", task_epoch="E",
+                           original_request="6-step camera validation")
         proposed = e.request_supervisory_review(
             snapshot=snapshot(),
             reason="semantic_stagnation:repeated_model_decision_without_new_runtime_evidence",
