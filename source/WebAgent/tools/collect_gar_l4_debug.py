@@ -172,7 +172,83 @@ def event_for_export(event: dict) -> dict:
             clean["review_metadata"] = review_info(event.get("response"))
         else:
             clean["browser_error_category"] = scrub(event.get("error_type"), 100)
+    if event.get("event") in {
+        "browser_response_failed", "protocol_transport_interrupted", "request_failed",
+    }:
+        # Export only recognized machine-readable transport error codes;
+        # never export raw errors, which can contain URLs or prompt fragments.
+        message = str(event.get("error") or "")
+        clean["transport_error_codes"] = re.findall(
+            r"\\[([A-Z][A-Z0-9_]{3,80})\\]", message)[:8]
+        reason = re.search(
+            r"reason=(composer_[A-Za-z0-9_:]{1,120})", message)
+        if reason:
+            clean["composer_reason_code"] = reason.group(1)
     return clean
+
+
+def composer_journals_redacted(root: Path, events: list[dict]) -> list[dict]:
+    """Read only same-Controller, same-run-window journal metadata.
+
+    No file paths, URL, prompt, submit marker, full draft or raw journal
+    is exported. Original journals remain untouched in the runtime root.
+    """
+    pid_set = {e.get("pid") for e in events
+               if type(e.get("pid")) is int and e["pid"] > 0}
+    if not pid_set:
+        return []
+    timestamps = []
+    for event in events:
+        try:
+            timestamps.append(datetime.fromisoformat(
+                str(event.get("timestamp", ""))).timestamp())
+        except (TypeError, ValueError):
+            pass
+    lower = min(timestamps)-120 if timestamps else None
+    upper = max(timestamps)+120 if timestamps else None
+    directory = root / "localdata" / "runtime" / "composer_operations"
+    journals = []
+    for file in sorted(directory.glob("*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)[:100]:
+        try:
+            mtime = file.stat().st_mtime
+            if lower is not None and not (lower <= mtime <= upper):
+                continue
+            record = json.loads(file.read_text(encoding="utf-8"))
+            if not isinstance(record, dict) or record.get("owner_pid") not in pid_set:
+                continue
+        except (OSError, ValueError, TypeError):
+            continue
+        item = {
+            "owner_pid": record["owner_pid"],
+            "state": scrub(record.get("state"), 50),
+            "reason": scrub(record.get("reason"), 90),
+            "prompt_chars": record.get("prompt_chars")
+                            if type(record.get("prompt_chars")) is int else None,
+            "pending_chars": (record.get("pending_prefix") or {}).get("chars"),
+            "confirmed_chars": (record.get("confirmed_prefix") or {}).get("chars"),
+            "result_status": scrub((record.get("result") or {}).get("status"), 90),
+        }
+        diagnostic = record.get("readback_failure")
+        if isinstance(diagnostic, dict):
+            whitelisted = {}
+            for key in ("chunk_start", "chunk_end", "chunk_chars", "attempts",
+                        "timeout_sec", "elapsed_sec", "expected_prefix_chars",
+                        "expected_length", "observed_length"):
+                value = diagnostic.get(key)
+                if type(value) in (int, float) and value >= 0:
+                    whitelisted[key] = value
+            for key in ("expected_prefix_sha256", "expected_sha256",
+                        "observed_sha256"):
+                value = diagnostic.get(key)
+                if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value):
+                    whitelisted[key] = value
+            last_error = diagnostic.get("last_read_error_type")
+            if isinstance(last_error, str) and re.fullmatch(r"[A-Za-z_]{1,80}", last_error):
+                whitelisted["last_read_error_type"] = last_error
+            item["readback_failure"] = whitelisted
+        journals.append(item)
+    return journals[:12]
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -261,6 +337,7 @@ def collect(root: Path, *, request_id: str = "", now: datetime | None = None) ->
     checks["l4_full_e2e"] = all(checks.values())
     reviews = [row.get("review_metadata") for row in sanitized
                if row.get("review_metadata")]
+    journals = composer_journals_redacted(root, matching)
     report = {
         "schema": "GAR_L4_DEBUG_COLLECTION_V1",
         "collected_at": now.isoformat(timespec="seconds"),
@@ -273,6 +350,7 @@ def collect(root: Path, *, request_id: str = "", now: datetime | None = None) ->
         "last_selected_timestamp": (sanitized[-1].get("timestamp") if sanitized else None),
         "event_checks": checks,
         "review_count": len(reviews),
+        "composer_journal_count": len(journals),
         "gar_l4_review_errors": [
             {"reason": row.get("reason"), "exception_type": row.get("exception_type")}
             for row in sanitized if row.get("event") == "gar_l4_supervisor_review_failed"
@@ -283,6 +361,7 @@ def collect(root: Path, *, request_id: str = "", now: datetime | None = None) ->
     }
     write_json(outdir / "acceptance_report.json", report)
     write_json(outdir / "webgpt2_review_redacted.json", reviews)
+    write_json(outdir / "composer_journals_redacted.json", journals)
     write_json(outdir / "checkout_identity.json", git_info(root))
     write_json(outdir / "strict_manifest_gate.json", manifest_info(root))
     write_json(outdir / "regression_index.json", regression_summaries(root, outdir))
@@ -294,8 +373,8 @@ def collect(root: Path, *, request_id: str = "", now: datetime | None = None) ->
         "WebGPT2 advice may contain user task wording; inspect before sharing.\n"
         "No browser cookies, profiles, ChatGPT URLs, passwords or raw prompts are copied.\n"
         "Contents: acceptance_report.json, runtime_events_sanitized.jsonl,\n"
-        "webgpt2_review_redacted.json, checkout_identity.json,\n"
-        "strict_manifest_gate.json, regression summaries/index.\n"
+        "webgpt2_review_redacted.json, composer_journals_redacted.json,\n"
+        "checkout_identity.json, strict_manifest_gate.json, regression summaries/index.\n"
         "To collect a different request: collectData.bat --request-id WA-...\n"
     )
     (outdir / "README.txt").write_text(readme, encoding="utf-8")
