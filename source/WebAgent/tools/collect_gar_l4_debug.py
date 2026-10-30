@@ -179,7 +179,7 @@ def event_for_export(event: dict) -> dict:
         # never export raw errors, which can contain URLs or prompt fragments.
         message = str(event.get("error") or "")
         clean["transport_error_codes"] = re.findall(
-            r"\\[([A-Z][A-Z0-9_]{3,80})\\]", message)[:8]
+            r"\[([A-Z][A-Z0-9_]{3,80})\]", message)[:8]
         reason = re.search(
             r"reason=(composer_[A-Za-z0-9_:]{1,120})", message)
         if reason:
