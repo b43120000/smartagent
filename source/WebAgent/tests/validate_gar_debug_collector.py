@@ -122,6 +122,8 @@ class GARCollectorTests(unittest.TestCase):
                 "prompt_chars": 11719,
                 "pending_prefix": {"chars": 4096},
                 "reason": "writer_exception_or_cancelled",
+                "baseline": {"last_turn_status": "LAST_ASSISTANT",
+                             "private_raw_response": "SECRET_ASSISTANT"},
                 "readback_failure": {
                     "chunk_start": 0, "chunk_end": 4096,
                     "chunk_chars": 4096, "expected_prefix_chars": 4096,
@@ -131,6 +133,13 @@ class GARCollectorTests(unittest.TestCase):
                     "observed_sha256": "b" * 64,
                     "ignored_secret": "SECRET_OTHER",
                 },
+            }), encoding="utf-8")
+            (journals / "prewrite_refusal.json").write_text(json.dumps({
+                "owner_pid": 19, "state": "FAILED_PRE_WRITE",
+                "prompt_chars": 6000, "reason": "PREWRITE_UNSTABLE",
+                "result": {"status": "PREWRITE_UNSTABLE",
+                           "reason_code": "LAST_USER",
+                           "private_raw_response": "SECRET_USER"},
             }), encoding="utf-8")
             outdir = collect(root, request_id="WA-TEST",
                              now=datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc))
@@ -149,10 +158,14 @@ class GARCollectorTests(unittest.TestCase):
             self.assertIn("4096", journal_export)
             self.assertIn('"observed_length": 1024', journal_export)
             self.assertIn('"unit_kind": "text"', journal_export)
+            self.assertIn('"prewrite_reason_code": "LAST_USER"', journal_export)
+            self.assertIn('"baseline_last_turn_status": "LAST_ASSISTANT"', journal_export)
+            self.assertNotIn("SECRET_USER", journal_export)
+            self.assertNotIn("SECRET_ASSISTANT", journal_export)
             self.assertNotIn("private", journal_export)
             self.assertNotIn("SECRET_COMPOSER_PROMPT", journal_export)
             self.assertNotIn("SECRET_OTHER", journal_export)
-            self.assertEqual(report["composer_journal_count"], 1)
+            self.assertEqual(report["composer_journal_count"], 2)
             with zipfile.ZipFile(zip_path) as zf:
                 self.assertIn(outdir.name + "/acceptance_report.json", zf.namelist())
                 self.assertIn(outdir.name + "/composer_journals_redacted.json", zf.namelist())
