@@ -76,6 +76,7 @@ call :RUN_TEST validate_composer_operation
 call :RUN_TEST validate_gar_shared_runtime
 call :RUN_TEST validate_gar_protocol_loop_it
 call :RUN_TEST validate_gar_l4_fresh_context
+call :RUN_TEST validate_gar_l4_supervision
 call :RUN_TEST validate_tri_one_5a_protocol_it
 call :RUN_TEST validate_gar_terminal_empty_evidence_boundary
 call :RUN_MANIFEST
@@ -102,7 +103,7 @@ exit /b 0
 set /a TOTAL+=1
 set "NAME=%~1"
 set "LOG=%LOGDIR%\%NAME%.log"
-echo [%TOTAL%/11] Running %NAME% ...
+echo [%TOTAL%/12] Running %NAME% ...
 %PY_CMD% -B "source\WebAgent\tests\%NAME%.py" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
@@ -121,8 +122,8 @@ exit /b 0
 set /a TOTAL+=1
 set "NAME=strict_manifest"
 set "LOG=%LOGDIR%\%NAME%.log"
-echo [%TOTAL%/11] Running %NAME% ...
-%PY_CMD% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
+echo [%TOTAL%/12] Running %NAME% ...
+%PY_CMD% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==204 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
   set /a PASSED+=1

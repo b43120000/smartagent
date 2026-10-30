@@ -26,6 +26,8 @@ if not defined SMARTAGENT_GAR_FRESH_CONTEXT_URL (
 )
 set "SMARTAGENT_GAR_A0_DIAGNOSTIC=1"
 set "SMARTAGENT_GAR_V1=1"
+rem Legacy D1 replay gate requires original takeover semantics.
+set "SMARTAGENT_GAR_L4_SUPERVISOR_V1=0"
 set "TRI_ONE_TASK_RESULT_V1=1"
 set "TRI_ONE_TEXT_ONLY_V1=1"
 set "SMARTAGENT_GAR_D1_FAULT_INJECTION_V1=1"

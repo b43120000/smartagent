@@ -153,6 +153,7 @@ class D1FaultInjectionTest(unittest.TestCase):
                     "SMARTAGENT_GAR_V1": "1",
                     "TRI_ONE_TASK_RESULT_V1": "1",
                     "TRI_ONE_TEXT_ONLY_V1": "1",
+                    "SMARTAGENT_GAR_L4_SUPERVISOR_V1": "0",
                 }):
                     result = loop.run(
                         fault.TEST_REQUEST, source_tag="",

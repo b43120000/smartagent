@@ -163,7 +163,7 @@ set /a TOTAL+=1
 set "NAME=strict_manifest"
 set "LOG=%LOGDIR%\%NAME%.log"
 echo [%TOTAL%/14] %NAME%
-"%PY_EXE%" %PY_ARGS% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
+"%PY_EXE%" %PY_ARGS% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==204 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
   set /a PASSED+=1
