@@ -38,13 +38,13 @@ if errorlevel 1 (
   goto :FATAL
 )
 rem Preserve existing local Manifest changes; do not stash, reset or overwrite.
-git diff --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/tests/validate_gar_d1_fault_injection.py
+git diff --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has unstaged edits.
   git status --short
   goto :FATAL
 )
-git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/tests/validate_gar_d1_fault_injection.py
+git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has staged edits.
   git status --short
