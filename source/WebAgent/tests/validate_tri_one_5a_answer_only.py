@@ -180,9 +180,13 @@ class AnswerOnlyPolicyTests(unittest.TestCase):
                 _loop("Explain RAII in C++."), plain, extra,
                 source="WEB_COPILOT")
             self.assertFalse(allowed)
-        self.assertFalse(authorize_omitted_terminal_evidence(
-            _loop("Explain RAII"), plain, terminal, source="WEB_COPILOT")[0]
-        ) if not enabled(source="WEB_COPILOT") else None
+        with patch.dict(os.environ, {
+            "TRI_ONE_TASK_RESULT_V1": "1", "TRI_ONE_TEXT_ONLY_V1": "0",
+        }):
+            self.assertFalse(authorize_omitted_terminal_evidence(
+                _loop("Explain RAII"), plain, terminal,
+                source="WEB_COPILOT",
+            )[0])
         self.assertNotIn("evidence_refs", plain)
         # The generalized Progress module still refuses missing evidence by
         # default, including non-terminal Progress and action-bearing tasks.
