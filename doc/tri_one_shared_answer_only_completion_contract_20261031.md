@@ -20,6 +20,7 @@ GAR L4 remains advisory and does not manufacture Action Result evidence. It resu
 ## Regression checks
 
 Offline from repo root (`PYTHONPATH=source`):
+- `python -B source/WebAgent/tests/validate_progress_reply_contract.py`
 - `python -B source/WebAgent/tests/validate_tri_one_5a_answer_only.py`
 - `python -B source/WebAgent/tests/validate_tri_one_5a_protocol_it.py`
 - `python -B source/WebAgent/tests/validate_tri_one_5b_shared_worker.py`
