@@ -254,9 +254,124 @@ def test_multiline_first_line_truncation_is_avoided_without_replay():
     assert list(co._composer_write_units(short)) == [(0, len(short), short, False)]
 
 
+def test_last_assistant_prewrite_readiness_gate():
+    """Last assistant is a stable DOM-order precondition, never a send proof."""
+    from types import SimpleNamespace
+
+    def turn(text, order):
+        return SimpleNamespace(raw_text=text, order=order)
+
+    class Adapter:
+        @staticmethod
+        def _is_after(earlier, later):
+            return later.order > earlier.order
+
+    adapter = Adapter()
+    user = turn('user asked', 1)
+    assistant = turn('assistant completed', 2)
+    newest_user = turn('another pending user', 3)
+    assert co._last_turn_readiness(adapter, (), ()) == 'EMPTY_CONVERSATION'
+    assert co._last_turn_readiness(adapter, (user,), ()) == 'LAST_USER_NO_ASSISTANT'
+    assert co._last_turn_readiness(adapter, (), (assistant,)) == 'ASSISTANT_WITHOUT_USER'
+    assert co._last_turn_readiness(adapter, (user,), (turn('', 2),)) == 'ASSISTANT_CONTENT_EMPTY'
+    assert co._last_turn_readiness(adapter, (user,), (assistant,)) == 'LAST_ASSISTANT'
+    assert co._last_turn_readiness(adapter, (newest_user,), (assistant,)) == 'LAST_USER'
+    assert co._last_turn_readiness(adapter, (user,), (turn('same position', 1),)) == 'LAST_TURN_ORDER_UNKNOWN'
+
+    class UnavailableOrder:
+        def _is_after(self, earlier, later):
+            raise RuntimeError('Detached DOM node')
+    assert co._last_turn_readiness(UnavailableOrder(), (user,), (assistant,)) == 'LAST_TURN_ORDER_UNKNOWN'
+
+    def snapshot(status, *, active=False, digest='completed_response'):
+        return dict(
+            url='https://chatgpt.com/c/test',
+            user_count=1 if status != 'EMPTY_CONVERSATION' else 0,
+            assistant_count=1 if status != 'EMPTY_CONVERSATION' else 0,
+            user_anchors=[['user_1', 'prompt_digest']] if status != 'EMPTY_CONVERSATION' else [],
+            assistant_anchors=[['assistant_1', digest]] if status != 'EMPTY_CONVERSATION' else [],
+            user_native_ids=['u1'] if status != 'EMPTY_CONVERSATION' else [],
+            assistant_native_ids=['a1'] if status != 'EMPTY_CONVERSATION' else [],
+            composer_empty=True, composer_matches=False,
+            generation_active=active, last_turn_status=status,
+        )
+
+    class Editor:
+        def is_visible(self): return True
+        def is_enabled(self): return True
+        def is_editable(self): return True
+
+    class FakeScraper:
+        def _composer_locator(self): return Editor()
+
+    class Clock:
+        def __init__(self): self.now = 0.0
+        def monotonic(self): return self.now
+        def sleep(self, duration): self.now += duration
+
+    def run_gate(frames, *, timeout=3.0, samples=4):
+        clock = Clock()
+        read_index = [0]
+        def observe(*args):
+            index = read_index[0]
+            read_index[0] += 1
+            return frames[min(index, len(frames) - 1)]
+        with patch.object(co, '_page_snapshot', side_effect=observe):
+            result = co._wait_for_prewrite_stability(
+                FakeScraper(), 'never-send', samples=samples,
+                interval_sec=.3, timeout_sec=timeout,
+                clock=clock.monotonic, sleep=clock.sleep,
+            )
+        return result, read_index[0]
+
+    # Already completed response is stable for all 4 samples.
+    ready, observed = run_gate([snapshot('LAST_ASSISTANT')])
+    assert ready['status'] == 'READY' and observed == 4
+    assert ready['baseline']['last_turn_status'] == 'LAST_ASSISTANT'
+
+    # Brand-new empty conversation must remain able to bootstrap.
+    fresh, observed = run_gate([snapshot('EMPTY_CONVERSATION')])
+    assert fresh['status'] == 'READY' and observed == 4
+
+    # Last user alone never means the assistant finished.
+    pending, observed = run_gate([snapshot('LAST_USER')], timeout=1.0)
+    assert pending['status'] == 'PREWRITE_UNSTABLE'
+    assert pending['reason_code'] == 'LAST_USER'
+    assert observed >= 3
+
+    # Even a visible Assistant response cannot pass while streaming.
+    streaming, _ = run_gate([snapshot('LAST_ASSISTANT', active=True)], timeout=1.0)
+    assert streaming['status'] == 'PREWRITE_UNSTABLE'
+    assert streaming['reason_code'] == 'GENERATION_ACTIVE'
+
+    # DOM order unknown or assistant text missing are hard prewrite stops.
+    for status in ('LAST_TURN_ORDER_UNKNOWN', 'ASSISTANT_CONTENT_EMPTY'):
+        blocked, _ = run_gate([snapshot(status)], timeout=1.0)
+        assert blocked['status'] == 'PREWRITE_UNSTABLE'
+        assert blocked['reason_code'] == status
+
+    # Waiting user -> last assistant must begin a NEW 4-sample stability run.
+    progressing, observed = run_gate(
+        [snapshot('LAST_USER')] * 2 + [snapshot('LAST_ASSISTANT')] * 4)
+    assert progressing['status'] == 'READY' and observed == 6
+
+    # A changed Assistant message digest interrupts the stability window.
+    changed, observed = run_gate([
+        snapshot('LAST_ASSISTANT', digest='a'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+    ])
+    assert changed['status'] == 'READY' and observed == 5
+
+    assert not co._same_turns(snapshot('LAST_USER'), snapshot('LAST_ASSISTANT'))
+
+
 def run():
     test_bounded_chunk_readback_is_strict_and_does_not_retype()
     test_multiline_first_line_truncation_is_avoided_without_replay()
+    test_last_assistant_prewrite_readiness_gate()
     before=dict(url='https://chatgpt.com/c/test',user_count=2,assistant_count=2,
                 user_anchors=[['u','abc']],assistant_anchors=[['a','def']],generation_active=False)
     after={**before,'composer_matches':True}
