@@ -178,7 +178,23 @@ def capture_first_readback(
         dom_saved, dom_truncated = None, False
 
     action_seed = request_id + ":" + round_id
-    verdict = classify(body, action_seed=action_seed)
+    # Preserve the original bytes even if the parser diagnostic unexpectedly
+    # raises: a malformed parser must never erase the first-readback sample.
+    (target / "extracted_response.txt").write_text(body_saved, encoding="utf-8")
+    if dom_saved is not None:
+        (target / "dom_turn_inner_text.txt").write_text(dom_saved, encoding="utf-8")
+    try:
+        verdict = classify(body, action_seed=action_seed)
+    except Exception as exc:
+        verdict = {
+            "verdict": "PARSER_EXCEPTION",
+            "error_type": type(exc).__name__,
+            "syntax_valid": False,
+            "semantic_ack_admission": "NOT_RUN",
+            "action_admission": "NOT_RUN",
+            "actions_executed": 0,
+            "repair_prompts_sent": 0,
+        }
     dom_digest = _digest(dom) if dom is not None else ""
     scoped_id = str((response_source or {}).get("scope_id", "") or "")
     metadata = {
@@ -209,9 +225,6 @@ def capture_first_readback(
         "live_terminal_success": False,
         "expected_stop": True,
     }
-    (target / "extracted_response.txt").write_text(body_saved, encoding="utf-8")
-    if dom_saved is not None:
-        (target / "dom_turn_inner_text.txt").write_text(dom_saved, encoding="utf-8")
     (target / "capture.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8",
     )

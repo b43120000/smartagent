@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import zipfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,7 +43,7 @@ def bundle(root: Path) -> Path:
     target_dir = evidence / "bundles"
     target_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target = target_dir / f"SR_FIRST_READBACK_{stamp}.zip"
+    target = target_dir / f"SR_FIRST_READBACK_{stamp}_{uuid.uuid4().hex[:6]}.zip"
     entries: list[tuple[Path, str]] = []
     if captures.exists():
         for folder in sorted(captures.iterdir()):
