@@ -58,6 +58,32 @@ class ReviewContractTests(unittest.TestCase):
         advice = parse_review_response(review_reply(prompt), nonce="a" * 32)
         self.assertEqual(advice["completed_steps"][1], "2. validation complete")
 
+    def test_runtime_observed_semantic_stall_can_request_single_review(self):
+        from agent_core.goal_anchored_recovery import RecoveryEngine
+        e = RecoveryEngine(request_id="RR", task_id="TASK", task_epoch="E",
+                           original_request="6-step camera validation")
+        def snapshot(pending=None):
+            return e.snapshot(
+                identity={"request_id": "RR", "task_id": "TASK", "task_epoch": "E"},
+                verified_evidence={}, pending_operations=pending,
+            )
+        denied = e.request_supervisory_review(
+            snapshot=snapshot({"unknown": True}),
+            reason="semantic_stagnation:repeated_model_decision_without_new_runtime_evidence",
+        )
+        self.assertEqual((denied.level, denied.status), ("L5", "PAUSED"))
+        proposed = e.request_supervisory_review(
+            snapshot=snapshot(),
+            reason="semantic_stagnation:repeated_model_decision_without_new_runtime_evidence",
+        )
+        self.assertEqual((proposed.level, proposed.status), ("L4", "PREPARE"))
+        self.assertEqual(e.rejected_rounds, 0)
+        duplicate = e.request_supervisory_review(
+            snapshot=snapshot(),
+            reason="semantic_stagnation:repeated_model_decision_without_new_runtime_evidence",
+        )
+        self.assertEqual(duplicate.status, "PAUSED")
+
     def test_reject_tool_blocks_wrong_nonce_duplicate_json_and_extra_fields(self):
         original = review_reply('"nonce":"%s"' % ("b" * 32))
         for raw in (
