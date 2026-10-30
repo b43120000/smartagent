@@ -57,7 +57,7 @@
     "source/RemoteAgent/telegram_webagent_worker.py": "9a9dadcdbc3c1a8a8d371f3e307f2bc74ba14acf116f09ed7f3f6ce4d6b1d2a9",
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
-    "source/WebAgent/controller.py": "fb802e7c346fa74bd9adfc24e18a59deff4d41fb2573dddbbee2a704a90ebaf8",
+    "source/WebAgent/controller.py": "4311d0d77e8351fc9432ada3bbac8275f9fbc1780b7f403ab97b7ca0a5907b0d",
     "source/WebAgent/fresh_context.py": "04e7188925cf06926408e5e85b0cc59c96ec571f2fb810cf4bb6b34b0b4796ee",
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/protocol_loop.py": "77c6ee3c89caee78d08a82846ad5064e18d4131128cfd6d8d223128d0a3c39ab",
