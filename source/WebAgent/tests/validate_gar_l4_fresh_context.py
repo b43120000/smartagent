@@ -85,10 +85,13 @@ def prepare(adapter):
          patch("WebAgent.browser_client.WebAgentBrowserClient", Client), \
          patch("agent_core.conversation_ownership.ConversationOwnershipRegistry", Registry), \
          patch("agent_core.session_protocol.SessionProtocol", Protocol):
-        return adapter.prepare(
-            request_id="RR-IT", task_id="TASK-IT",
-            task_epoch="EPOCH-IT", owner="WEB_COPILOT",
-        )
+        with patch.dict(__import__("os").environ, {
+            "SMARTAGENT_GAR_L4_SUPERVISOR_V1": "0",
+        }):
+            return adapter.prepare(
+                request_id="RR-IT", task_id="TASK-IT",
+                task_epoch="EPOCH-IT", owner="WEB_COPILOT",
+            )
 
 
 class FreshBrowserAdmissionTests(unittest.TestCase):
@@ -167,11 +170,14 @@ class FreshBrowserAdmissionTests(unittest.TestCase):
              patch("WebAgent.browser_client.WebAgentBrowserClient", Client), \
              patch("agent_core.conversation_ownership.ConversationOwnershipRegistry", Registry), \
              patch("agent_core.session_protocol.SessionProtocol", WrongProtocol):
-            with self.assertRaisesRegex(RuntimeError, "PROTOCOL_IDENTITY_UNVERIFIED"):
-                adapter.prepare(
-                    request_id="RR-IT", task_id="TASK-IT",
-                    task_epoch="EPOCH-IT", owner="WEB_COPILOT",
-                )
+            with patch.dict(__import__("os").environ, {
+                "SMARTAGENT_GAR_L4_SUPERVISOR_V1": "0",
+            }):
+                with self.assertRaisesRegex(RuntimeError, "PROTOCOL_IDENTITY_UNVERIFIED"):
+                    adapter.prepare(
+                        request_id="RR-IT", task_id="TASK-IT",
+                        task_epoch="EPOCH-IT", owner="WEB_COPILOT",
+                    )
         self.assertEqual(old._released, 0)
         self.assertEqual(Scraper.instances[-1]._released, 1)
 
