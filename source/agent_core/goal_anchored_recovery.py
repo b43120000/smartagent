@@ -456,8 +456,8 @@ class RecoveryEngine:
             return self._record("L5", "PAUSED", "GAR_SNAPSHOT_UNVERIFIED")
         if self._unsafe(snapshot):
             return self._record("L5", "PAUSED", "GAR_PENDING_OR_BLOCKED_OPERATION")
-        if (self._l4_requested or self.fresh_sessions or self._l4_advice_delivered
-                or self.rejected_rounds >= self.max_rejections):
+        if (self.level == "L5" or self._l4_requested or self.fresh_sessions
+                or self._l4_advice_delivered or self.rejected_rounds >= self.max_rejections):
             return self._record("L5", "PAUSED", "GAR_SEMANTIC_REVIEW_UNAVAILABLE")
         if not str(reason or "").startswith("semantic_stagnation:"):
             return self._record("L5", "PAUSED", "GAR_SEMANTIC_REASON_UNVERIFIED")
