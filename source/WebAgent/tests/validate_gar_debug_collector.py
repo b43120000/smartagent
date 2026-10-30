@@ -125,6 +125,7 @@ class GARCollectorTests(unittest.TestCase):
                 "readback_failure": {
                     "chunk_start": 0, "chunk_end": 4096,
                     "chunk_chars": 4096, "expected_prefix_chars": 4096,
+                    "unit_kind": "text",
                     "observed_length": 1024,
                     "expected_prefix_sha256": "a" * 64,
                     "observed_sha256": "b" * 64,
@@ -147,6 +148,7 @@ class GARCollectorTests(unittest.TestCase):
             self.assertIn("QUARANTINED", journal_export)
             self.assertIn("4096", journal_export)
             self.assertIn('"observed_length": 1024', journal_export)
+            self.assertIn('"unit_kind": "text"', journal_export)
             self.assertNotIn("private", journal_export)
             self.assertNotIn("SECRET_COMPOSER_PROMPT", journal_export)
             self.assertNotIn("SECRET_OTHER", journal_export)
