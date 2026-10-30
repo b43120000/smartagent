@@ -136,7 +136,7 @@
     "source/agent_core/stage_result.py": "6e37aee642656c69bd9b86eda896c2c8d465c75228788ffea95c9410cd696906",
     "source/agent_core/strict_observation_guard.py": "9388d38dcd8546ffb8d98c90110fb92bd9e0530dc8f4605e1edbcba936fc81ad",
     "source/agent_core/task_plan.py": "eee662fe3729f602f91cb6a7d895510046c8518e4089de7e26b02e1b2198e471",
-    "source/agent_core/task_progress.py": "b9819c83c80d8d605aee8bc8bb6a5c5a9471e340f6ad2a3a9b3ecaedee7c9f15",
+    "source/agent_core/task_progress.py": "f6f090e6b9212b9b3baf9b5ba69625809f4f19cbb04ae00fe79ff693970c2454",
     "source/agent_core/task_state.py": "2cba328de03e79d0a3672e6c8e24a6937f299b497292160d45c3aff5bacf058c",
     "source/agent_core/tool_capabilities.py": "0a7eb8e39181d9d8bba28429fa1dee0d7730eeece3c93e5b6ef4a7d43bdb9423",
     "source/agent_core/tool_result_contract.py": "ea343a3a6dbdcc1b563e5776bdff1564169dac296d3d12fc4187eca519481830",
