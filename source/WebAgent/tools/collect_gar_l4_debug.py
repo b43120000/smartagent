@@ -246,6 +246,9 @@ def composer_journals_redacted(root: Path, events: list[dict]) -> list[dict]:
             last_error = diagnostic.get("last_read_error_type")
             if isinstance(last_error, str) and re.fullmatch(r"[A-Za-z_]{1,80}", last_error):
                 whitelisted["last_read_error_type"] = last_error
+            unit_kind = diagnostic.get("unit_kind")
+            if unit_kind in ("text", "soft_break"):
+                whitelisted["unit_kind"] = unit_kind
             item["readback_failure"] = whitelisted
         journals.append(item)
     return journals[:12]
