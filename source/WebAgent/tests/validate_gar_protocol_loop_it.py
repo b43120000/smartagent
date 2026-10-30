@@ -209,6 +209,7 @@ class GARProtocolIT(unittest.TestCase):
                                 for name, _ in events))
 
     def test_l4_fresh_planner_can_complete_text_only_goal(self):
+        # Explicit backward-compatibility test; new v1 defaults to supervisor.
         with tempfile.TemporaryDirectory(prefix="gar-l4-success-") as directory:
             root = Path(directory)
             old_calls, fresh_calls, releases, events = [], [], [], []
@@ -243,6 +244,7 @@ class GARProtocolIT(unittest.TestCase):
                 "SMARTAGENT_GAR_V1": "1",
                 "TRI_ONE_TASK_RESULT_V1": "1",
                 "TRI_ONE_TEXT_ONLY_V1": "1",
+                "SMARTAGENT_GAR_L4_SUPERVISOR_V1": "0",
             }):
                 final = loop.run(
                     "Explain RAII in C++.",
@@ -301,7 +303,7 @@ class GARProtocolIT(unittest.TestCase):
                 root, old_planner, progress_root=root, max_turns=10,
                 fresh_context_adapter=FakeAdapter(),
             )
-            with patch.dict(os.environ, {"SMARTAGENT_GAR_V1": "1"}):
+            with patch.dict(os.environ, {"SMARTAGENT_GAR_V1": "1", "SMARTAGENT_GAR_L4_SUPERVISOR_V1": "0"}):
                 with self.assertRaises(RuntimeError):
                     loop.run(
                         "Explain RAII.", request_id="RR-L4-IT",
