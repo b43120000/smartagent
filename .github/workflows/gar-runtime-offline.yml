@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/gar-shared-runtime-20261029
+      - feat/gar-v1-l4-supervisor-webgpt1-20261030
   workflow_dispatch:
 
 permissions:
@@ -34,7 +35,7 @@ jobs:
       - name: Python compile gate
         shell: pwsh
         run: |
-          python -m compileall -q source/agent_core/goal_anchored_recovery.py source/WebAgent/fresh_context.py source/WebAgent/controller.py source/RemoteAgent/telegram_webagent_worker.py source/WebAgent/protocol_loop.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py source/WebAgent/tests/validate_gar_l4_fresh_context.py
+          python -m compileall -q source/agent_core/goal_anchored_recovery.py source/agent_core/gar_l4_supervision.py source/WebAgent/fresh_context.py source/WebAgent/controller.py source/RemoteAgent/telegram_webagent_worker.py source/WebAgent/protocol_loop.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/WebAgent/tests/validate_gar_l4_supervision.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Strict manifest gate
         shell: pwsh
@@ -49,6 +50,8 @@ jobs:
           python -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_gar_l4_fresh_context.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_l4_supervision.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_protocol_recovery_readback.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
