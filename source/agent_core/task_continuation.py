@@ -32,6 +32,8 @@ def terminal_heading(state, outcome=''):
         value = normalize_task_outcome(outcome)
         return {'SUCCESS': '🟢 已完成', 'FAILED': '🔴 已結束（驗收失敗）',
                 'PARTIAL': '🟠 部分完成／結果未確認', 'UNKNOWN': '🟠 部分完成／結果未確認'}[value]
+    if state == 'PAUSED':
+        return '🟠 任務已暫停（尚未完成）'
     return '🔴 執行失敗' if state == 'FAILED' else '🟠 任務中斷'
 
 

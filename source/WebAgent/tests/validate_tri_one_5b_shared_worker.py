@@ -1,0 +1,187 @@
+"""Tri-One 5B offline cross-interface routing/receipt cases.
+
+No real ChatGPT/Telegram, no UI, no network or system mutation.
+
+Run from repository root with PYTHONPATH=source:
+  python -B source/WebAgent/tests/validate_tri_one_5b_shared_worker.py
+"""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from agent_core.current_conversation_adapter import (
+    build_webcopilot_message, is_internal_webcopilot_turn,
+)
+from agent_core.tri_one_shared_worker import use_shared_v9_worker
+from agent_core.remote_events import RemoteEventStore, DeliveryManager
+from agent_core.tri_one_task_result import (
+    make_task_result, validate_task_result,
+)
+
+
+class SharedWorkerSelectionTests(unittest.TestCase):
+    def test_default_on_for_webcopilot_and_existing_telegram(self):
+        self.assertTrue(use_shared_v9_worker("TELEGRAM", {}))
+        self.assertTrue(use_shared_v9_worker("LOCAL_TEST", {}))
+        self.assertTrue(use_shared_v9_worker("WEBGPT_COPILOT", {}))
+        self.assertTrue(use_shared_v9_worker("webgpt_copilot", {
+            "TRI_ONE_TASK_RESULT_V1": "0",
+            "TRI_ONE_TEXT_ONLY_V1": "0",
+        }))
+        self.assertFalse(use_shared_v9_worker("LOCAL_AGENT", {}))
+        self.assertFalse(use_shared_v9_worker("WEBGPT", {}))
+        self.assertFalse(use_shared_v9_worker("", {}))
+
+    def test_2a_5a_flags_do_not_change_worker_selection(self):
+        for a in ("0", "1"):
+            for b in ("0", "1"):
+                with self.subTest(task_result=a, answer_only=b):
+                    self.assertTrue(use_shared_v9_worker("WEBGPT_COPILOT", {
+                        "TRI_ONE_TASK_RESULT_V1": a,
+                        "TRI_ONE_TEXT_ONLY_V1": b,
+                    }))
+
+    def test_webcopilot_explicit_rollback_and_invalid_values(self):
+        for off in ("0", "off", "false", "no", "invalid"):
+            with self.subTest(disabled=off):
+                self.assertFalse(use_shared_v9_worker(
+                    "WEBGPT_COPILOT", {"TRI_ONE_WEBCOPILOT_V9_V1": off}
+                ))
+        for on in ("1", "on", "true", "yes", ""):
+            with self.subTest(enabled=on):
+                self.assertTrue(use_shared_v9_worker(
+                    "WEBGPT_COPILOT", {"TRI_ONE_WEBCOPILOT_V9_V1": on}
+                ))
+        self.assertTrue(use_shared_v9_worker(
+            "TELEGRAM", {"TRI_ONE_WEBCOPILOT_V9_V1": "0"}
+        ))
+
+
+class WebCopilotIngressTests(unittest.TestCase):
+    def test_v9_protocol_control_turn_cannot_reingest(self):
+        for body in (
+            "[WEBAGENT_REQUEST_SOURCE]\nREMOTEAGENT_WEBCOPILOT_V9",
+            "[WEBAGENT_TOOL_RESULTS]\nTool result",
+            "[WEBAGENT_PROTOCOL_REJECTED]\nmissing field",
+            "[AGENT_SESSION_ATTACH]\nready",
+            "[REMOTE_AGENT_RESULT]\nevent_id=EVT-1",
+            "[SMARTAGENT_V8_REQUIRED] control",
+        ):
+            with self.subTest(first_line=body.splitlines()[0]):
+                self.assertTrue(is_internal_webcopilot_turn(body))
+                with self.assertRaises(ValueError):
+                    build_webcopilot_message(
+                        body,
+                        conversation_url="https://chatgpt.com/c/fixture",
+                        turn_index=1, allow_plain=True,
+                    )
+
+    def test_human_plain_request_is_still_ingested(self):
+        message = build_webcopilot_message(
+            "Explain RAII in C++.",
+            conversation_url="https://chatgpt.com/c/fixture",
+            turn_index=2, allow_plain=True,
+        )
+        self.assertEqual(message.transport, "WEBGPT_COPILOT")
+        self.assertEqual(message.text, "Explain RAII in C++.")
+
+
+class OutboxTests(unittest.TestCase):
+    def test_duplicate_complete_event_and_confirmed_delivery_do_not_duplicate(self):
+        # Feature flags OFF: this checks the unchanged transport-neutral
+        # event/outbox semantics without requiring a signed V9 receipt.
+        with tempfile.TemporaryDirectory() as directory:
+            store = RemoteEventStore(Path(directory) / "events.json")
+            task = SimpleNamespace(
+                task_id="TASK-5B-OUTBOX", request_id="RR-5B-OUTBOX",
+                reply_route={"transport": "WEBGPT_COPILOT",
+                             "conversation_url": "https://chatgpt.com/c/fixture"},
+                metadata={"transport": "WEBGPT_COPILOT"},
+            )
+            with patch.dict(os.environ, {"TRI_ONE_TASK_RESULT_V1": "0"}):
+                event = store.emit("TASK_COMPLETED", task, status="COMPLETED",
+                                   payload={"summary": "Result"})
+                again = store.emit("TASK_COMPLETED", task, status="COMPLETED",
+                                   payload={"summary": "Result"})
+            self.assertEqual(event.event_id, again.event_id)
+            self.assertEqual(len(store.events), 1)
+            claimed = store.claim_delivery(event.event_id, "fixture-owner")
+            self.assertIsNotNone(claimed)
+            self.assertIsNone(store.claim_delivery(event.event_id, "second-owner"))
+            delivered = store.mark_delivered(event.event_id, adapter_result={
+                "delivered": True, "reply": "visible message",
+            })
+            self.assertEqual(delivered.delivery_state, "DELIVERED")
+            self.assertEqual(store.ready(), [])
+
+
+    def test_answer_only_result_delivered_once_per_original_route(self):
+        for source, transport in (
+            ("TELEGRAM", "TELEGRAM"),
+            ("WEB_COPILOT", "WEBGPT_COPILOT"),
+        ):
+            with self.subTest(transport=transport), tempfile.TemporaryDirectory() as directory:
+                store = RemoteEventStore(Path(directory) / "events.json")
+                task = SimpleNamespace(
+                    task_id="TASK-5B-ANSWER", request_id="RR-5B-ANSWER",
+                    reply_route={"transport": transport,
+                                 "conversation_url": "https://chatgpt.com/c/fixture"},
+                    metadata={"transport": transport},
+                )
+                receipt = {
+                    "schema": "SMARTAGENT_TERMINAL_ACCEPTANCE_V1",
+                    "admission_status": "ACCEPTED",
+                    "request_id": task.request_id, "task_id": task.task_id,
+                    "task_epoch": "EPOCH-5B", "task_outcome": "SUCCESS",
+                    "runtime_state": "COMPLETED", "receipt_id": "TERM-5B-ANSWER",
+                    "evidence_refs": [], "evidence_verdict": "UNVERIFIED",
+                    "completion_kind": "ANSWER_ONLY",
+                    "admission_reason": "ANSWER_ONLY_RESPONSE_ADMITTED",
+                }
+                with patch.dict(os.environ, {
+                    "TRI_ONE_TASK_RESULT_V1": "1",
+                    "TRI_ONE_TEXT_ONLY_V1": "1",
+                }):
+                    result = make_task_result(
+                        request_id=task.request_id, task_id=task.task_id,
+                        task_epoch="EPOCH-5B", intent_digest="fixture-goal",
+                        source_interface=source, trusted_reply_route=task.reply_route,
+                        state="COMPLETED", outcome="SUCCESS",
+                        terminal_acceptance=receipt,
+                        answer_text="RAII manages resource lifetime.",
+                        evidence_refs=[], operational_action_count=0,
+                    )
+                with patch.dict(os.environ, {"TRI_ONE_TASK_RESULT_V1": "0"}):
+                    event = store.emit("TASK_COMPLETED", task, status="COMPLETED",
+                                       payload={"summary": "RAII manages resource lifetime.",
+                                                "task_result_v1": result})
+                class Adapter:
+                    def __init__(self):
+                        self.calls = 0
+                    def deliver_event(self, route, wire):
+                        self.calls += 1
+                        return {"delivered": True, "reply": "observed"}
+                adapter = Adapter()
+                manager = DeliveryManager(store, {transport: adapter})
+                self.assertTrue(manager.deliver(event)["delivered"])
+                self.assertFalse(manager.deliver(event)["delivered"])
+                self.assertEqual(adapter.calls, 1)
+                fresh = RemoteEventStore(Path(directory) / "events.json")
+                stored = fresh.events[event.event_id]
+                saved = stored.payload["task_result_v1"]
+                self.assertEqual(saved["completion_kind"], "ANSWER_ONLY")
+                self.assertEqual(saved["outcome"], "SUCCESS")
+                self.assertEqual(saved["evidence_refs"], [])
+                self.assertEqual(saved["delivery"]["status"], "DELIVERED")
+                self.assertTrue(saved["delivery"]["delivery_receipt_id"])
+                self.assertEqual(saved["operational_action_count"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

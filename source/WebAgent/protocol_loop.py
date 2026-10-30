@@ -276,9 +276,11 @@ class WebAgentProtocolLoop:
         progress_root: str | Path | None = None,
         continuation_store=None,
         continuation_owner: str = "",
+        fresh_context_adapter=None,
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.planner = planner
+        self._default_planner = planner
         self.tools = tool_context or WebAgentToolContext(self.workspace)
         self.max_turns = max(1, int(max_turns))
         self.event_sink = event_sink
@@ -293,6 +295,9 @@ class WebAgentProtocolLoop:
         self.continuation_mode = ""
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance: dict = {}
+        self._answer_only_admitted = False
+        self._tri_one_origin = "WEB_DIRECT"
+        self._tri_one_has_attached_context = False
         self.tools.configure_project_sync_transport(
             lambda prompt, attachments: self.planner(prompt, None, attachments)
         )
@@ -332,12 +337,351 @@ class WebAgentProtocolLoop:
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
+        self._gar = None
+        self._gar_fresh_adapter = fresh_context_adapter
+        self._gar_fresh_binding = None
+        self._gar_local_handoff_reported = False
+        self._gar_last_blocker_reason = ""
+
+    def _gar_l4_activate(self, snapshot):
+        """Switch only after Runtime and browser both verify a distinct context.
+
+        No new browser session is created by the Protocol Loop. The original
+        request, Task/epoch, Action Ledger, Progress and Outbox remain intact.
+        """
+        from agent_core.task_progress import set_runtime_state
+        adapter = self._gar_fresh_adapter
+        if adapter is None:
+            reason = self._gar.refuse_fresh_context(
+                "GAR_FRESH_CONTEXT_UNAVAILABLE"
+            ).reason
+            set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                              root=self.progress_root)
+            self._gar_persist()
+            raise RuntimeError("GAR safely paused: " + reason)
+        try:
+            binding = adapter.prepare(
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, owner=self._tri_one_origin,
+            )
+        except Exception as exc:
+            # A failed/ambiguous bootstrap may have submitted a prompt: never
+            # retry in-place or treat that submit as a completed task action.
+            reason = self._gar.refuse_fresh_context(
+                "GAR_L4_BOOTSTRAP_UNVERIFIED"
+            ).reason
+            self._gar_persist()
+            set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                              root=self.progress_root)
+            self._emit("gar_fresh_context_failed", request_id=self.run_id,
+                       round=self.turn_id, reason=reason,
+                       exception_type=type(exc).__name__)
+            raise RuntimeError("GAR safely paused: " + reason) from exc
+        verdict = self._gar.activate_fresh_context(
+            proof=binding.proof, snapshot=snapshot,
+        )
+        if verdict.status != "ACTIVATED":
+            binding.close()
+            set_runtime_state(self.task_id, "PAUSED", reason=verdict.reason,
+                              root=self.progress_root)
+            self._gar_persist()
+            raise RuntimeError("GAR safely paused: " + verdict.reason)
+        supervisor = os.environ.get(
+            "SMARTAGENT_GAR_L4_SUPERVISOR_V1", "1"
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        if supervisor:
+            return self._gar_l4_supervisory_review(binding)
+        # Legacy takeover mode, only when supervision is explicitly disabled.
+        # The new Planner has its own verified bootstrap/session. All old ACKs
+        # remain in seen_web_ack_ids and in events; clear ONLY the previous-ACK
+        # transport pointer after recording the explicit fence transition.
+        previous_ack = self.pending_web_ack_id
+        self._gar_fresh_binding = binding
+        def fenced_fresh_planner(prompt, expected, attachments):
+            if not self._gar.fence_old_planner(
+                context_id=binding.proof.fresh_conversation_id
+            ):
+                raise RuntimeError("GAR_L4_OLD_PLANNER_FENCED")
+            return binding.planner(prompt, expected, attachments)
+        self.planner = fenced_fresh_planner
+        self.pending_web_ack_id = ""
+        self.pending_result_ack_id = ""
+        self._gar_persist()
+        self._emit(
+            "gar_fresh_planner_activated",
+            request_id=self.run_id, round=self.turn_id,
+            previous_ack_digest=hashlib.sha256(
+                str(previous_ack).encode("utf-8")).hexdigest(),
+            **self._gar.diagnostic(),
+        )
+        from agent_core.task_progress import format_prompt_context
+        return (
+            verdict.prompt + "\n[LAST_ACCEPTED_RUNTIME_PROGRESS]\n"
+            + format_prompt_context(self.progress_ledger)
+            + "\n[/LAST_ACCEPTED_RUNTIME_PROGRESS]"
+        )
+
+    def _gar_l4_supervisory_review(self, binding):
+        """Pause WebGPT1, obtain one WebGPT2 review, then resume WebGPT1.
+
+        No WebGPT2 tool/action/terminal output enters the trusted Runtime.
+        """
+        from agent_core.gar_l4_supervision import (
+            review_prompt, parse_review_response, advisory_digest,
+        )
+        from agent_core.task_progress import set_runtime_state
+        self._gar_fresh_binding = binding
+        self._emit("gar_l4_webgpt1_paused_for_review",
+                   request_id=self.run_id, round=self.turn_id,
+                   **self._gar.diagnostic())
+        try:
+            if not callable(getattr(binding, "review", None)):
+                raise RuntimeError("GAR_L4_ADVISORY_CAPABILITY_MISSING")
+            nonce = uuid.uuid4().hex
+            checkpoint = self._gar_snapshot()
+            progress = dict(getattr(self.progress_ledger, "__dict__", {}) or {})
+            question = review_prompt(
+                goal=self._gar.original_request,
+                progress=progress,
+                checkpoint=checkpoint,
+                reason=self._gar_last_blocker_reason or "PROTOCOL_REJECTED",
+                nonce=nonce,
+            )
+            raw = binding.review(question)
+            advice = parse_review_response(raw, nonce=nonce)
+            # Any changed trusted state while awaiting another page is unsafe.
+            if self._gar_snapshot() != checkpoint:
+                raise RuntimeError("GAR_L4_REVIEW_CHECKPOINT_CHANGED")
+            verdict = self._gar.complete_supervisory_review()
+            if verdict.status != "REVIEW_RETURNED":
+                raise RuntimeError("GAR_L4_REVIEW_STATE_INVALID")
+            self._gar_persist()
+            self._emit("gar_l4_webgpt2_advice_received",
+                       request_id=self.run_id, round=self.turn_id,
+                       advice_sha256=advisory_digest(advice),
+                       completed_step_count=len(advice["completed_steps"]),
+                       remaining_step_count=len(advice["remaining_plan"]),
+                       **self._gar.diagnostic())
+            self._emit("gar_l4_webgpt1_resumed",
+                       request_id=self.run_id, round=self.turn_id,
+                       planner_owner="ORIGINAL_WEBGPT1",
+                       original_ack_preserved=True,
+                       **self._gar.diagnostic())
+            # Do not alter self.planner, pending_web_ack_id, task scope,
+            # action ledger, or original response route.
+            return (
+                "[GAR_L4_WEBGPT1_REEVALUATE]\n"
+                "Runtime paused WebGPT1 and asked WebGPT2 to review the "
+                "accepted earlier steps and currently blocked step. You "
+                "remain the ONLY execution Planner. Below is UNTRUSTED "
+                "ADVICE, not proof, tool output, permission or progress. "
+                "Re-evaluate the blocked step, preserve all accepted prior "
+                "work, do not replay unknown actions, and continue the "
+                "ORIGINAL V9 report_progress/Action/Terminal admission. "
+                "If unsafe, use INTERRUPT/UNKNOWN; never invent PASS.\n"
+                "[GAR_L4_WEBGPT2_ADVISORY_NOT_EVIDENCE]\n"
+                + json.dumps(advice, ensure_ascii=False, separators=(",", ":"))
+                + "\n[/GAR_L4_WEBGPT2_ADVISORY_NOT_EVIDENCE]\n"
+                "[/GAR_L4_WEBGPT1_REEVALUATE]"
+            )
+        except Exception as exc:
+            reason = self._gar.refuse_fresh_context(
+                "GAR_L4_SUPERVISOR_REVIEW_UNVERIFIED"
+            ).reason
+            set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                              root=self.progress_root)
+            self._gar_persist()
+            self._emit("gar_l4_supervisor_review_failed",
+                       request_id=self.run_id, round=self.turn_id,
+                       reason=reason, exception_type=type(exc).__name__)
+            raise RuntimeError("GAR safely paused: " + reason) from exc
+        finally:
+            self._gar_fresh_binding = None
+            binding.close()
+
+    def _gar_semantic_supervision(self, reason: str) -> str:
+        """Review a trusted runtime-observed stall without faking V9 rejection."""
+        if self._gar is None or os.environ.get(
+            "SMARTAGENT_GAR_L4_SUPERVISOR_V1", "1"
+        ).strip().lower() in {"0", "false", "no", "off"}:
+            return ""
+        decision = self._gar.request_supervisory_review(
+            snapshot=self._gar_snapshot(), reason=reason,
+        )
+        self._emit("gar_semantic_stagnation_decision",
+                   request_id=self.run_id, round=self.turn_id,
+                   observed_reason=reason,
+                   **self._gar.diagnostic())
+        self._gar_persist()
+        if decision.status == "PREPARE":
+            self._gar_last_blocker_reason = reason
+            return self._gar_l4_activate(self._gar_snapshot())
+        return ""
+
+    def _gar_persist(self):
+        if self._gar is None:
+            return
+        try:
+            base = self.progress_root if self.progress_root is not None else self.workspace
+            checkpoint = self._gar.persist_snapshot(self._gar_snapshot(), root=base)
+            self._emit("gar_checkpoint_persisted", request_id=self.run_id,
+                       round=self.turn_id,
+                       checkpoint_name=checkpoint.name,
+                       **self._gar.diagnostic())
+        except (OSError, ValueError, TypeError) as exc:
+            # Reporting never rewrites a prior task result or authorizes retry.
+            self._emit("gar_checkpoint_persist_failed", request_id=self.run_id,
+                       round=self.turn_id, error_type=type(exc).__name__)
+
+    def _gar_snapshot(self):
+        if self._gar is None:
+            return None
+        ledger = self.progress_ledger
+        progress = dict(getattr(ledger, "__dict__", {}) or {})
+        pending_names = (
+            "pending_result_recovery", "pending_verification_requirement",
+            "pending_action_repair", "pending_progress_repair_actions",
+            "deferred_action_repairs", "pending_command_field_repairs",
+            "active_stage_manifest",
+        )
+        pending = {name: bool(getattr(self, name, None)) for name in pending_names}
+        from agent_core.goal_anchored_recovery import (
+            is_unverified_nonexecuted_terminal_requirement,
+        )
+        requirement = self.pending_verification_requirement
+        advisory_verification = is_unverified_nonexecuted_terminal_requirement(
+            requirement,
+            has_action_history=bool(self.action_ledger or self.action_result_ledger),
+            has_condition_results=bool(self.condition_result_ledger),
+        )
+        if self._gar is not None and self.turn_id:
+            # Codes only: avoid placing raw goal, tool results, paths, or
+            # model output into the GAR redacted incident record.
+            self._emit(
+                "gar_pending_classification",
+                request_id=self.run_id, round=self.turn_id,
+                pending_kinds=sorted(k for k, v in pending.items() if v),
+                terminal_precondition_advisory=bool(advisory_verification),
+                executed_action_count=len(self.action_ledger),
+                recorded_result_count=len(self.action_result_ledger),
+            )
+        if advisory_verification:
+            # Only a rejected no-tool terminal SUCCESS claim. It is still a
+            # V9 verification prerequisite, not evidence of a real in-flight
+            # tool. Allow bounded GAR repair while keeping the requirement
+            # unchanged for terminal admission on every subsequent turn.
+            pending["pending_verification_requirement"] = False
+        # An attempted tool in the Action Ledger without a corresponding
+        # Runtime result is NOT a safely known outcome. A fresh Planner may
+        # not bridge that gap by saying it completed.
+        pending["unscoped_action_outcome"] = any(
+            action_id not in self.action_result_ledger
+            for action_id in self.action_ledger
+        )
+        pending["unknown_action_outcome"] = any(
+            str(row.get("execution_status", "") or "").upper() in {
+                "UNKNOWN", "OPEN", "PENDING", "RUNNING"
+            } for row in self.action_ledger.values() if isinstance(row, dict)
+        )
+        return self._gar.snapshot(
+            identity={"request_id": self.run_id, "task_id": self.task_id,
+                      "task_epoch": self.task_epoch},
+            verified_evidence=dict(self.action_result_ledger),
+            blockers=list((self.action_loop_state or {}).get("blockers") or []),
+            pending_operations=pending,
+            progress=progress,
+            verification_preconditions=(
+                ("UNVERIFIED_TERMINAL_NO_EXECUTION",)
+                if advisory_verification else ()
+            ),
+        )
+
+    def _gar_rejection(self, diagnostics, *, fresh=True, repair_budget=None):
+        if self._gar is None:
+            return None
+        snapshot = self._gar_snapshot()
+        if self.pending_verification_requirement:
+            advisory = "UNVERIFIED_TERMINAL_NO_EXECUTION" in (
+                snapshot.get("verification_preconditions") or ()
+            )
+            refs = self.pending_verification_requirement.get("evidence_refs") or []
+            marker_class = (
+                "RUNTIME_STATUS_ONLY" if refs == ["RUNTIME_STATUS"]
+                else "REQUEST_ACCEPTED_ONLY" if refs == ["REQUEST_ACCEPTED"]
+                else "NO_EVIDENCE_REFS" if not refs
+                else "OTHER_OR_MIXED_REFS"
+            )
+            classification = (
+                "NON_EXECUTED_TERMINAL_PREREQUISITE"
+                if advisory else "HARD_OR_UNATTESTED_VERIFICATION"
+            )
+            self._emit(
+                "gar_verification_requirement_classified",
+                request_id=self.run_id, round=self.turn_id,
+                classification=classification,
+                evidence_marker_class=marker_class,
+                action_history_present=bool(self.action_ledger or self.action_result_ledger),
+                condition_history_present=bool(self.condition_result_ledger),
+                evidence_ref_count=len(refs),
+            )
+            # Safe local console diagnostic: no raw refs or model output.
+            print(
+                f"[WebAgent][GAR] round={self.turn_id} "
+                f"verification={classification} marker={marker_class} "
+                f"action_history={int(bool(self.action_ledger or self.action_result_ledger))} "
+                f"condition_history={int(bool(self.condition_result_ledger))}",
+                flush=True,
+            )
+        reason = str(next((item.get("reason") for item in diagnostics
+                           if isinstance(item, dict) and item.get("reason")),
+                          "PROTOCOL_REJECTED"))
+        self._gar_last_blocker_reason = reason
+        # Only Runtime-recorded evidence changes the generation, not new
+        # Action IDs, prose, retries or merely executed=True.
+        generation = json.dumps([
+            [key, row.get("effective_verification_status"),
+             row.get("evidence_status"), row.get("result_status")]
+            for key, row in sorted(self.action_result_ledger.items())
+            if isinstance(row, dict)
+        ], ensure_ascii=False, sort_keys=True)
+        decision = self._gar.planner_rejection(
+            reason=reason, snapshot=snapshot, response_fresh=fresh,
+            evidence_generation=hashlib.sha256(generation.encode("utf-8")).hexdigest(),
+            local_repair_budget=repair_budget,
+        )
+        self._emit("gar_recovery_decision", request_id=self.run_id,
+                   round=self.turn_id, **self._gar.diagnostic())
+        self._gar_persist()
+        if decision.status == "REPAIR" and decision.level == "L4":
+            # The new V9 Planner is already fenced/verified. Correct only
+            # its protocol formatting in-place; no new browser/session.
+            self._emit(
+                "gar_fresh_context_protocol_repair",
+                request_id=self.run_id, round=self.turn_id,
+                reason=decision.reason,
+                rejected_turns_total=self._gar.rejected_rounds,
+            )
+        if decision.status == "PREPARE":
+            # Refresh the checkpoint after recording the local/global budget.
+            # The new session inherits the actual latest counters, not the
+            # pre-decision snapshot from this rejected Planner turn.
+            return self._gar_l4_activate(self._gar_snapshot())
+        if decision.status == "PAUSED":
+            from agent_core.task_progress import set_runtime_state
+            set_runtime_state(self.task_id, "PAUSED", reason=decision.reason,
+                              root=self.progress_root)
+            self._emit("gar_safe_pause", request_id=self.run_id,
+                       round=self.turn_id, reason=decision.reason)
+            raise RuntimeError("GAR safely paused: " + decision.reason)
+        return decision.prompt if decision.status in {"REBASE", "REPLAN"} or (
+            decision.level == "L4" and decision.status == "REPAIR"
+        ) else None
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None:
             self.cancel_check()
 
-    def _admit_bounded_repair(self, diagnostics) -> None:
+    def _admit_bounded_repair(self, diagnostics) -> dict:
         # Never treat an Action ID/prose change as progress. Only Runtime
         # records marked executed are considered a new evidence generation.
         evidence_generation = sum(
@@ -353,6 +697,22 @@ class WebAgentProtocolLoop:
             round=self.turn_id,
             **budget,
         )
+        if budget["status"] == "EXHAUSTED" and self._gar is not None:
+            # LOCAL_REPAIR_EXHAUSTED is a handoff, not a second termination
+            # authority. GAR sees the same counters and enforces the hard
+            # global cap; a Session switch never resets them.
+            if not self._gar_local_handoff_reported:
+                self._gar_local_handoff_reported = True
+                self._emit(
+                    "gar_local_repair_handoff",
+                    request_id=self.run_id, round=self.turn_id,
+                    rejected_turns_total=budget["rejected_turns_total"],
+                    rejected_turns_without_new_evidence=budget[
+                        "rejected_turns_without_new_evidence"
+                    ],
+                    local_reason_codes=budget["reason_codes"],
+                )
+            return budget
         if budget["status"] == "EXHAUSTED":
             reason = "bounded_repair_exhausted_without_sufficient_new_evidence"
             set_runtime_state(
@@ -370,6 +730,7 @@ class WebAgentProtocolLoop:
                 "SmartAgent 修復回合已達安全上限；保留既有證據並暫停。"
                 + reason
             )
+        return budget
 
     def _record_preexecution_predicate_rejection(self, calls, diagnostics) -> None:
         """Remember only a Runtime-verified, nonexecuted invalid fact Predicate.
@@ -784,6 +1145,8 @@ class WebAgentProtocolLoop:
             filtered_refs = sorted(all_refs)
         payload = {
             "available_refs": filtered_refs,
+            "non_action_status_markers": ["REQUEST_ACCEPTED", "RUNTIME_STATUS"],
+            "answer_only_rule": "Status markers are not tool evidence. An eligible no-action COMPLETE/SUCCESS may omit evidence_refs; normal actions require real Action Result evidence.",
             "verification_status": self._effective_verification_status(),
             "legacy_last_verification_status": self.tools.last_verification_status,
             "execution_state": self.execution_state,
@@ -2173,6 +2536,11 @@ class WebAgentProtocolLoop:
             "verification_status": self._effective_verification_status(
                 refs, matched_condition=progress.matched_condition),
         }
+        # Include the distinct answer-only admission type in the receipt ID.
+        # An evidence-free text reply cannot collide with an ordinary receipt.
+        if self._answer_only_admitted:
+            payload["completion_kind"] = "ANSWER_ONLY"
+            payload["admission_reason"] = "ANSWER_ONLY_RESPONSE_ADMITTED"
         signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         payload["receipt_id"] = "TERM-" + hashlib.sha256(signed.encode('utf-8')).hexdigest()[:20].upper()
         self.terminal_acceptance = payload
@@ -2869,9 +3237,29 @@ class WebAgentProtocolLoop:
         )
         if wrapper_diagnostic:
             return [], [wrapper_diagnostic]
+        # Shared Tri-One Completion Contract: only the trusted, no-action,
+        # exclusive final_response terminal may omit evidence_refs. This is
+        # transport-neutral (Telegram/WebCopilot/Local Test) and does not
+        # bypass the later normal Progress/Action/Terminal receipt gates.
+        from agent_core.tri_one_answer_only import authorize_omitted_terminal_evidence
+        omitted_evidence_authorized, _omission_reason = authorize_omitted_terminal_evidence(
+            self, normalized_progress_action, submitted,
+            source=getattr(self, "_tri_one_origin", ""),
+        )
+        if omitted_evidence_authorized:
+            self._emit(
+                'tri_one_answer_only_evidence_omitted',
+                request_id=self.run_id, round=self.turn_id,
+                origin=getattr(self, "_tri_one_origin", ""),
+                action_history_count=len(self.action_ledger),
+                action_result_count=len(self.action_result_ledger),
+            )
         from agent_core.progress_reply_contract import materialize_progress
         try:
-            normalized_progress_action = materialize_progress(normalized_progress_action, self.progress_ledger)
+            normalized_progress_action = materialize_progress(
+                normalized_progress_action, self.progress_ledger,
+                allow_omitted_answer_only_evidence=omitted_evidence_authorized,
+            )
             inherited = [field for field in ('base_evaluation','total_steps','current_step','steps','completion_contract')
                          if field not in progress_actions[0] and field in normalized_progress_action]
             normalized_fields = [field for field in normalized_progress_action if field in progress_actions[0]
@@ -3160,8 +3548,21 @@ class WebAgentProtocolLoop:
         )
         if state_diagnostic:
             return [], [state_diagnostic]
+        # An evidence-free terminal-shaped exchange must reach the existing
+        # terminal/answer-only admission gates. This is NOT verification PASS.
+        # Only the actual no-tool-history final_response shape gets this lane.
+        empty_terminal_candidate = (
+            len(operational) == 1
+            and operational[0].get("tool") == "final_response"
+            and not self.action_ledger
+            and not self.action_result_ledger
+            and not self.condition_result_ledger
+        )
         try:
-            normalized_progress = validate_model_progress(progress_actions[0], self.progress_ledger)
+            normalized_progress = validate_model_progress(
+                progress_actions[0], self.progress_ledger,
+                allow_empty_terminal_candidate=empty_terminal_candidate,
+            )
         except TaskProgressError as exc:
             from agent_core.progress_recovery import repair_diagnostic, read_only_progress_fallback
             diagnostic = self._progress_repair_diagnostic(progress_actions[0], exc)
@@ -3479,7 +3880,52 @@ class WebAgentProtocolLoop:
                 normalized_progress,
                 reason="verification_evidence_action_required",
             )]
+        # Phase 5A: a separate, explicitly enabled answer-only admission lane.
+        # No ActionResult or fabricated verification PASS is produced. Every
+        # canonical V9/Progress/scope/identity gate before this point still runs.
+        answer_only_admission = False
         if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED":
+            from agent_core.tri_one_answer_only import enabled as answer_only_enabled, accept_terminal_candidate
+            from agent_core.tri_one_task_result import enabled as task_result_enabled
+            if task_result_enabled() and answer_only_enabled(source=getattr(self, "_tri_one_origin", "")):
+                final_action = next((a for a in operational if a.get("tool") == "final_response"), {})
+                answer_only_admission, answer_reason = accept_terminal_candidate(
+                    self, normalized_progress, final_action,
+                )
+                self._emit("tri_one_answer_only_candidate",
+                           request_id=self.run_id, round=self.turn_id,
+                           eligible=answer_only_admission, reason=answer_reason)
+                # A status marker is NOT a tool result. If it was explicitly
+                # cited in an otherwise eligible no-action final, reject with
+                # precise repair guidance; never silently strip model refs.
+                if (not answer_only_admission
+                        and answer_reason == "action_evidence_cannot_be_answer_only"):
+                    refs = set(normalized_progress.get("evidence_refs") or [])
+                    if refs and refs <= {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}:
+                        no_refs = {**normalized_progress, "evidence_refs": []}
+                        safe_without_refs, _ = accept_terminal_candidate(
+                            self, no_refs, final_action,
+                        )
+                        if safe_without_refs:
+                            self._emit(
+                                "tri_one_answer_only_status_refs_rejected",
+                                request_id=self.run_id, round=self.turn_id,
+                                ref_count=len(refs),
+                                action_history_count=len(self.action_ledger),
+                            )
+                            return [], [{
+                                "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+                                "reason": "answer_only_status_markers_not_action_evidence",
+                                "detail": "Runtime status markers are not Action Results; no action evidence was recorded.",
+                                "suggestion": (
+                                    "If the original request only needs text, keep the "
+                                    "exclusive final_response and correct report_progress "
+                                    "by OMITTING evidence_refs (or explicitly setting []). "
+                                    "Never invent or cite status markers as tool verification. "
+                                    "If any action was executed, use the ordinary verified Action Loop."
+                                ),
+                            }]
+        if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED" and not answer_only_admission:
             final_action = next(
                 (item for item in operational if item.get("tool") == "final_response"),
                 {},
@@ -3609,6 +4055,7 @@ class WebAgentProtocolLoop:
             return [], diagnostics
         if getattr(self, '_action_admission_probe', False):
             return actions, []
+        self._answer_only_admitted = answer_only_admission
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
         self.protocol_state = "ACCEPTED"
@@ -3781,6 +4228,7 @@ class WebAgentProtocolLoop:
         self.continuation_mode = ""
         self._protocol_spec_rejection = {}
         registered = False
+        self._gar_fresh_binding = None
         try:
             if self.continuation_store:
                 from agent_core.task_continuation import parse_continuation
@@ -3856,6 +4304,20 @@ class WebAgentProtocolLoop:
                     error=f"{type(release_error).__name__}: {release_error}",
                 )
             raise
+        finally:
+            # This WebDirect/RemoteAgent Runtime may process another request.
+            # Never leave it bound to the closed L4 Planner page after an
+            # accepted terminal result OR an interrupted fresh-context run.
+            self.planner = self._default_planner
+            binding = self._gar_fresh_binding
+            self._gar_fresh_binding = None
+            if binding is not None:
+                try:
+                    binding.close()
+                except Exception as exc:
+                    self._emit("gar_fresh_context_cleanup_failed",
+                               request_id=str(request_id or self.run_id or ""),
+                               error_type=type(exc).__name__)
 
     def _run_impl(
         self,
@@ -3882,6 +4344,14 @@ class WebAgentProtocolLoop:
         PIT.record("07_loop_input", request)
         self.intent_digest = digest_intent(request)
         self.task_request = request
+        source_name = str(source_tag or "").upper()
+        self._tri_one_origin = (
+            "TELEGRAM" if source_name == "REMOTEAGENT_TELEGRAM"
+            else "LOCAL_TEST" if source_name == "REMOTEAGENT_TELEGRAM_SIMULATION"
+            else "WEB_COPILOT" if source_name == "REMOTEAGENT_WEBCOPILOT_V9"
+            else "LOCAL_TEST" if source_name == "TRI_ONE_TEST_V1"
+            else "WEB_DIRECT"
+        )
         self.protocol_state = "ACTIVE"
         self.action_loop_state = build_action_loop_state(
             transport_state=self.protocol_state,
@@ -3895,6 +4365,10 @@ class WebAgentProtocolLoop:
         self.turn_id = 0
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
+        self._answer_only_admitted = False
+        # An already queued attachment or skill is an external dependency,
+        # even if the original prose itself contains no file path.
+        self._tri_one_has_attached_context = bool(initial_attachments or skill_context)
         self.execution_state = "NOT_STARTED"
         self.terminal_candidate = {}
         last_no_action_decision_signature: str | None = None
@@ -3928,9 +4402,30 @@ class WebAgentProtocolLoop:
         self._blocker_recovery = BlockerRecovery()
         # Each request owns a fresh repair and no-progress budget.
         self._bounded_repair = BoundedRepairBudget()
+        self._gar_local_handoff_reported = False
+        self._gar_last_blocker_reason = ""
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
+        from agent_core.goal_anchored_recovery import (
+            enabled as gar_enabled, RecoveryEngine,
+        )
+        # A continuation may present a fresh imperative such as "continue".
+        # GAR must anchor to the trusted effective original Goal, not that
+        # UI shorthand, and may not infer a broader scope from old model prose.
+        continuation_goal = (
+            (self.continuation_source or {}).get("effective_goal")
+            or (self.continuation_source or {}).get("goal")
+        ) if isinstance(self.continuation_source, dict) else ""
+        gar_goal = str(continuation_goal or self.task_request)
+        self._gar = (
+            RecoveryEngine(
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, original_request=gar_goal,
+                owner=self._tri_one_origin,
+            )
+            if gar_enabled() else None
+        )
         self._request_started_monotonic = time.monotonic()
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
@@ -4039,6 +4534,34 @@ class WebAgentProtocolLoop:
             )
         prompt += "\n" + lazy_context_sync_prompt(request, self.workspace)
         prompt += "\n" + format_prompt_context(self.progress_ledger)
+        from agent_core.tri_one_answer_only import (
+            enabled as _tri_one_text_enabled, classify_original_request,
+        )
+        from agent_core.tri_one_task_result import enabled as _tri_one_result_enabled
+        # A0 diagnostic, scoped to the real request and actual Controller.
+        # Never supplies admission evidence or changes recovery/terminal gates.
+        if _tri_one_result_enabled() and _tri_one_text_enabled(source=self._tri_one_origin):
+            text_candidate, _ = classify_original_request(
+                request, attachments=self._tri_one_has_attached_context,
+                authorized_paths=bool(authorized),
+                image_or_artifact_request=bool(self.image_delivery_plan),
+                continuation=bool(self.continuation_source),
+            )
+            if text_candidate:
+                prompt += (
+                    "\n[TRI_ONE_ANSWER_ONLY_CANDIDATE]\n"
+                    "The original request may qualify for text-only completion. "
+                    "If it needs no external information or side effects, emit ONE "
+                    "canonical v9 turn: complete report_progress, final_response "
+                    "and turn_commit. Set every completed step to COMPLETED. "
+                    "For an Answer-only terminal OMIT evidence_refs entirely "
+                    "(or explicitly use []). Do not cite REQUEST_ACCEPTED or "
+                    "RUNTIME_STATUS: these are status markers, NOT Action Evidence. "
+                    "The shared Runtime alone checks whether omission is safe; "
+                    "any tool or external-information need requires the ordinary "
+                    "Action Loop and action-scoped evidence_refs.\n"
+                    "[/TRI_ONE_ANSWER_ONLY_CANDIDATE]"
+                )
         from agent_core.strict_observation_guard import strict_observation_only_request
         if strict_observation_only_request(self.task_request):
             prompt += (
@@ -4079,6 +4602,11 @@ class WebAgentProtocolLoop:
                 raise RuntimeError("Repair elapsed budget exhausted; task safely paused. " + reason)
             if self._stagnation_pending:
                 reason = "semantic_stagnation:repeated_authorization_or_preflight_blocker"
+                recovery = self._gar_semantic_supervision(reason)
+                if recovery:
+                    self._stagnation_pending = None
+                    prompt = recovery
+                    continue
                 set_runtime_state(self.task_id, "PAUSED", reason=reason,
                                   root=self.progress_root)
                 self._emit("protocol_loop_paused", request_id=self.run_id,
@@ -4111,6 +4639,20 @@ class WebAgentProtocolLoop:
                 PIT.record("11_planner_response", response, evidence_status="ACTION_VALUE", extra={"round": self.turn_id})
             except BaseException as exc:
                 self.protocol_state = "INTERRUPTED"
+                if self._gar is not None:
+                    # L0 stale DOM/ACK is transport uncertainty, not a
+                    # second Planner decision. Do NOT re-send or execute.
+                    snapshot = self._gar_snapshot()
+                    classification = self._gar.transport_failure(exc, snapshot)
+                    self._gar_persist()
+                    self._emit("gar_transport_integrity", request_id=self.run_id,
+                               round=self.turn_id, **self._gar.diagnostic())
+                    if classification.reason in {
+                        "STALE_TRANSPORT_READBACK", "TRANSPORT_UNCERTAIN"
+                    }:
+                        set_runtime_state(self.task_id, "PAUSED",
+                                          reason=classification.reason,
+                                          root=self.progress_root)
                 self._emit(
                     "protocol_transport_interrupted",
                     request_id=self.run_id,
@@ -4151,7 +4693,8 @@ class WebAgentProtocolLoop:
                 rejection_signature = self._rejected_exchange_signature(
                     calls, diagnostics, response,
                 )
-                if rejection_signature == last_rejected_exchange_signature:
+                if (rejection_signature == last_rejected_exchange_signature
+                        and self._gar is None):
                     reason = "semantic_stagnation:repeated_protocol_rejection"
                     set_runtime_state(self.task_id, "PAUSED", reason=reason, root=self.progress_root)
                     raise RuntimeError(
@@ -4159,7 +4702,10 @@ class WebAgentProtocolLoop:
                     )
                 last_rejected_exchange_signature = rejection_signature
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
-                self._admit_bounded_repair(diagnostics)
+                repair_budget = self._admit_bounded_repair(diagnostics)
+                gar_prompt = self._gar_rejection(
+                    diagnostics, repair_budget=repair_budget,
+                )
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
@@ -4168,6 +4714,8 @@ class WebAgentProtocolLoop:
                 pending_recovery = self._result_recovery_guidance([])
                 if pending_recovery:
                     prompt += "\n" + pending_recovery
+                if gar_prompt:
+                    prompt += "\n" + gar_prompt
                 continue
 
             calls = self._restore_progress_repair_actions(calls)
@@ -4216,7 +4764,7 @@ class WebAgentProtocolLoop:
                     round=self.turn_id,
                     diagnostics=ack_diagnostics,
                 )
-                self._admit_bounded_repair(ack_diagnostics)
+                repair_budget = self._admit_bounded_repair(ack_diagnostics)
                 from agent_core.task_progress import record_progress_repair
                 progress_diagnostic = next((row for row in ack_diagnostics if row.get('reason')=='invalid_progress_payload' and row.get('field_issues')), None)
                 if progress_diagnostic:
@@ -4228,7 +4776,8 @@ class WebAgentProtocolLoop:
                 if progress_diagnostic:
                     from agent_core.progress_recovery import repair_signature
                     rejection_signature = repr(repair_signature(progress_diagnostic, len(self.action_result_ledger)))
-                if rejection_signature == last_rejected_exchange_signature:
+                if (rejection_signature == last_rejected_exchange_signature
+                        and self._gar is None):
                     diagnostic = dict(ack_diagnostics[0] if ack_diagnostics else {})
                     diagnostic_reason = str(diagnostic.get("reason", "unknown") or "unknown")
                     diagnostic_detail = str(diagnostic.get("detail", "") or "")
@@ -4250,6 +4799,9 @@ class WebAgentProtocolLoop:
                         f"reason={diagnostic_reason}; detail={diagnostic_detail}"
                     )
                 last_rejected_exchange_signature = rejection_signature
+                gar_prompt = self._gar_rejection(
+                    ack_diagnostics, repair_budget=repair_budget,
+                )
                 repair_note = ""
                 spec = self._safe_protocol_spec_rejection()
                 if spec:
@@ -4378,6 +4930,8 @@ class WebAgentProtocolLoop:
                 pending_recovery = self._result_recovery_guidance([])
                 if pending_recovery:
                     prompt += "\n" + pending_recovery
+                if gar_prompt:
+                    prompt += "\n" + gar_prompt
                 continue
             last_rejected_exchange_signature = None
 
@@ -4390,6 +4944,9 @@ class WebAgentProtocolLoop:
                 self.progress_ledger = record_model_progress(
                     self.task_id, progress_action, request_id=self.run_id, goal=request,
                     round_id=self.turn_id, root=self.progress_root,
+                    # Only a terminal already admitted as ANSWER_ONLY can be
+                    # persisted with no action evidence.
+                    allow_empty_terminal_candidate=self._answer_only_admitted,
                 )
                 if self.progress_ledger.repair_state.get('status') == 'REPAIR_REQUIRED':
                     self.progress_ledger = record_progress_repair(self.task_id, {},
@@ -4585,6 +5142,10 @@ class WebAgentProtocolLoop:
                 )
                 if decision_signature == last_no_action_decision_signature:
                     reason = "semantic_stagnation:repeated_model_decision_without_new_runtime_evidence"
+                    recovery = self._gar_semantic_supervision(reason)
+                    if recovery:
+                        prompt = recovery
+                        continue
                     set_runtime_state(
                         self.task_id, "PAUSED", reason=reason, root=self.progress_root
                     )
@@ -4634,6 +5195,34 @@ class WebAgentProtocolLoop:
                 blocked = unsatisfied_dependencies(action, self.action_result_ledger, self.run_id, self.task_epoch)
                 late_errors = []
                 from agent_core.action_dependencies import is_observation
+                # GAR cannot clear a previously executed/UNKNOWN mutation by
+                # changing only the Action ID during a new plan. A legitimate
+                # new operation requires a different payload and still passes
+                # ordinary scope/admission/tool security.
+                if (self._gar is not None
+                        and (self._gar.rebases or self._gar.replans
+                             or self._gar.diagnostic()["supervisor_review_returned"])
+                        and not is_observation(action)
+                        and str(action.get("action_id", "")) not in self.action_ledger):
+                    from agent_core.goal_anchored_recovery import mutation_fingerprint
+                    candidate = mutation_fingerprint(action)
+                    for historical_id, entry in self.action_ledger.items():
+                        old_action = entry.get("action")
+                        if (isinstance(old_action, dict)
+                                and historical_id != str(action.get("action_id", ""))
+                                and not is_observation(old_action)
+                                and mutation_fingerprint(old_action) == candidate
+                                and entry.get("executed") is not False):
+                            from agent_core.tool_result_contract import encode_result
+                            self._emit("gar_mutation_replay_blocked",
+                                       request_id=self.run_id, round=self.turn_id,
+                                       action_id=action.get("action_id", ""),
+                                       prior_action_id=historical_id,
+                                       reason="GAR_POTENTIAL_MUTATION_REPLAY")
+                            return encode_result(
+                                "REJECTED", "GAR_POTENTIAL_MUTATION_REPLAY",
+                                tool=action.get("tool", ""), executed=False,
+                            )
                 if not blocked and not is_observation(action) and str(action.get('action_id','')) not in self.action_ledger:
                     self._refresh_action_loop_state()
                     _,late_errors = self._probe_action_admission([

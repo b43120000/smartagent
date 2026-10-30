@@ -343,6 +343,19 @@ def _evaluate_verification_step(
         time.sleep(delay_sec)
     evidence = {"label": label, "action": action, "passed": False, "spec_valid": True}
 
+    # Validate the entire regex contract before invoking a command. Invalid
+    # verification specifications must not execute even a nominally harmless
+    # command before Runtime can reject the spec.
+    if action == "run_command" and step.get("expect_regex") is not None:
+        patterns = step.get("expect_regex")
+        patterns = patterns if isinstance(patterns, list) else [patterns]
+        try:
+            for pattern in patterns:
+                re.compile(str(pattern), flags=re.MULTILINE)
+        except re.error as exc:
+            evidence.update({"spec_valid": False, "error": f"invalid expect_regex: {exc}"})
+            return evidence
+
     if action == "run_command":
         command = step.get("command", "")
         if not isinstance(command, str) or not command.strip():
