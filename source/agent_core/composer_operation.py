@@ -531,6 +531,58 @@ def _recover_page(scraper,record):
         sent_count=len(delivered),draft_cleanup='OWNED_DRAFT_CLEARED',observation=final)
 
 
+def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
+                          clock=None, sleep=None):
+    """Bounded, strictly read-only DOM verification after ONE keyboard write.
+
+    Never type again or treat a timeout as success. The returned/raised
+    diagnostics contain only counts, SHA-256 digests, and error class names.
+    """
+    clock = clock or time.monotonic
+    sleep = sleep or time.sleep
+    started = clock()
+    deadline = started + max(0.01, float(timeout_sec))
+    attempts = 0
+    read_error = None
+    while True:
+        attempts += 1
+        try:
+            if scraper._composer_matches_prompt(prefix):
+                return dict(attempts=attempts,
+                            elapsed_sec=round(clock()-started, 3))
+            read_error = None
+        except Exception as exc:
+            # No retry of the writer: transient read-only DOM observations
+            # may be sampled again within the same finite deadline.
+            read_error = type(exc).__name__
+        remaining = deadline-clock()
+        if remaining <= 0:
+            break
+        sleep(min(.20, remaining))
+
+    # _composer_matches_prompt() records the most recent strict adapter
+    # validation. Whitelist only scalar lengths and validated digest strings;
+    # never persist any composer text or prompt fragment in the journal.
+    info = dict(attempts=attempts,
+                timeout_sec=round(max(0.01, float(timeout_sec)), 3),
+                elapsed_sec=round(clock()-started, 3),
+                expected_prefix_chars=len(prefix),
+                expected_prefix_sha256=hashlib.sha256(prefix.encode()).hexdigest())
+    validation = getattr(scraper, '_last_composer_validation', None)
+    if validation is not None:
+        for key in ('expected_length', 'observed_length'):
+            value = getattr(validation, key, None)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                info[key] = value
+        for key in ('expected_sha256', 'observed_sha256'):
+            value = getattr(validation, key, None)
+            if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value):
+                info[key] = value
+    if read_error:
+        info['last_read_error_type'] = read_error
+    raise ComposerOperationError('composer_chunk_readback_failed', info)
+
+
 def _write_staged_prompt(scraper,prompt,record,journal):
     PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
@@ -558,12 +610,22 @@ def _write_staged_prompt(scraper,prompt,record,journal):
         scraper._check_cancel_requested('composer_chunk')
         PIT.record('09_keyboard_insert_text', prompt[start:end], extra={'chunk_start': start, 'chunk_end': end})
         scraper._page.keyboard.insert_text(prompt[start:end])
-        deadline=time.monotonic()+2
-        while not scraper._composer_matches_prompt(prefix):
-            if time.monotonic()>=deadline:raise ComposerOperationError('composer_chunk_readback_failed')
-            time.sleep(.1)
+        try:
+            readback = _await_chunk_readback(scraper, prefix)
+        except ComposerOperationError as exc:
+            # Durable, content-free evidence survives writer quarantine.
+            record['readback_failure'] = dict(
+                chunk_start=start, chunk_end=end, chunk_chars=end-start,
+                **exc.evidence,
+            )
+            write_json_atomic(journal,record)
+            scraper._log_stage('composer_chunk_readback_failed',
+                               json.dumps(record['readback_failure'],
+                                          ensure_ascii=True, separators=(',', ':')))
+            raise
         record['confirmed_prefix']=checkpoint;write_json_atomic(journal,record)
-        scraper._log_stage('composer_chunk_verified',f'chars={end}/{len(prompt)}')
+        scraper._log_stage('composer_chunk_verified',
+                           f"chars={end}/{len(prompt)} readback_attempts={readback['attempts']}")
 
 
 def helper_main():
