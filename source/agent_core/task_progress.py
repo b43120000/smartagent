@@ -346,7 +346,10 @@ def validate_model_progress(
         raise TaskProgressError("report_progress payload must be an object")
     from .progress_reply_contract import materialize_progress
     try:
-        payload = materialize_progress(payload, existing)
+        payload = materialize_progress(
+            payload, existing,
+            allow_omitted_answer_only_evidence=allow_empty_terminal_candidate,
+        )
     except ValueError as exc:
         raise TaskProgressError(str(exc), field='progress_update') from exc
     total = _number(payload.get("total_steps"), "total_steps")
