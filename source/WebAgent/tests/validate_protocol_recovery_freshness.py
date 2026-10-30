@@ -84,6 +84,45 @@ def run() -> dict:
         "reason": "fresh_recovery_response",
     }
 
+    # Fresh Planner may have a different message/Scope but repeat identical
+    # text. The diagnostic shows this distinction without changing the block.
+    old_identity = source("scope-original-private", "assistant-old-private",
+                          "fp-old", "identical-text-digest")
+    new_identity = source("scope-new-private", "assistant-new-private",
+                          "fp-new", "identical-text-digest")
+    verdict = WebLLMScraper._classify_protocol_recovery_readback(
+        old_identity, new_identity,
+    )
+    assert verdict == {"fresh": False, "reason": "response_sha_unchanged"}
+    delta = WebLLMScraper._gar_l4_readback_identity_summary(
+        old_identity, new_identity, verdict,
+    )
+    assert delta["freshness"] == "STALE"
+    assert delta["reason"] == "response_sha_unchanged"
+    assert delta["assistant_id"]["relation"] == "CHANGED"
+    assert delta["scope_id"]["relation"] == "CHANGED"
+    assert delta["response_sha"]["relation"] == "SAME"
+    assert all(len(delta[field][side]) == 12 for field in
+               ("assistant_id", "scope_id", "response_sha")
+               for side in ("before", "after"))
+    redacted = json.dumps(delta, ensure_ascii=False)
+    assert all(private not in redacted for private in
+               ("scope-original-private", "assistant-new-private",
+                "identical-text-digest"))
+    same_dom = WebLLMScraper._gar_l4_readback_identity_summary(
+        old_identity, old_identity, verdict,
+    )
+    assert all(same_dom[field]["relation"] == "SAME" for field in
+               ("assistant_id", "scope_id", "response_sha"))
+    missing = WebLLMScraper._gar_l4_readback_identity_summary(
+        source("", "", "", "sha1"), source("", "", "", "sha2"),
+        {"fresh": True, "reason": "fresh_recovery_response"},
+    )
+    assert missing["assistant_id"]["relation"] == "BOTH_MISSING"
+    assert missing["scope_id"]["relation"] == "BOTH_MISSING"
+    assert missing["response_sha"]["relation"] == "CHANGED"
+    assert missing["freshness"] == "FRESH"
+
     adapter = BaseWebUIAdapter.__new__(BaseWebUIAdapter)
     element = FakeElement("new assistant response", "assistant-turn-2")
     turn = TurnRef(
@@ -108,6 +147,8 @@ def run() -> dict:
     assert "WEB_PROTOCOL_RECOVERY_STALE_READBACK" in runtime_source
     assert 'stage="protocol_recovery_stale_readback"' in runtime_source
     assert 'diagnostic["response_source"]' in runtime_source
+    assert '"gar_l4_readback_identity"' in runtime_source
+    assert 'last_gar_l4_readback_signature' in runtime_source
 
     result = {
         "same_response_sha_rejected": True,
@@ -118,6 +159,8 @@ def run() -> dict:
         "turn_ref_is_unwrapped_for_fingerprint": True,
         "fresh_recovery_response_accepted": True,
         "explicit_terminal_classification": True,
+        "gar_l4_redacted_identity_delta": True,
+        "same_response_remains_stale_despite_changed_assistant_id": True,
     }
     print("PROTOCOL_RECOVERY_FRESHNESS_OK")
     print(json.dumps(result, ensure_ascii=False, indent=2))

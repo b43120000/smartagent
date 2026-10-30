@@ -178,6 +178,8 @@ class ExistingConversationFreshAdapter:
         scraper._execution_page_lease_owned = True
         scraper._expected_execution_url = target
         scraper._rate_governor = self.client.governor
+        # Observational only, scoped to the L4 Fresh Planner.
+        scraper._gar_l4_readback_diagnostic = True
         try:
             if bool(scraper._is_generation_active()):
                 raise RuntimeError("GAR_L4_TARGET_GENERATION_ACTIVE")

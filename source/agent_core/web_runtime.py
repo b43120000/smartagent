@@ -3064,6 +3064,50 @@ class WebLLMScraper:
         return {"fresh": True, "reason": "fresh_recovery_response"}
 
     @staticmethod
+    def _gar_l4_readback_identity_summary(
+        rejected_source: dict | None,
+        current_source: dict | None,
+        readback: dict | None,
+    ) -> dict:
+        """Report before/after identity evidence without changing admission.
+
+        Every console token is a second SHA digest; neither raw Scope IDs,
+        provider IDs nor response text are recorded in this L4 diagnostic.
+        """
+        before = dict(rejected_source or {})
+        after = dict(current_source or {})
+        verdict = dict(readback or {})
+
+        def field_delta(field: str) -> dict:
+            old = str(before.get(field, "") or "")
+            new = str(after.get(field, "") or "")
+            if not old and not new:
+                relation = "BOTH_MISSING"
+            elif not old:
+                relation = "BEFORE_MISSING"
+            elif not new:
+                relation = "AFTER_MISSING"
+            else:
+                relation = "SAME" if old == new else "CHANGED"
+
+            def token(value: str) -> str:
+                if not value:
+                    return "-"
+                return hashlib.sha256(
+                    value.encode("utf-8", errors="replace")
+                ).hexdigest()[:12]
+
+            return {"before": token(old), "after": token(new), "relation": relation}
+
+        return {
+            "freshness": "FRESH" if bool(verdict.get("fresh")) else "STALE",
+            "reason": str(verdict.get("reason", "unknown") or "unknown"),
+            "assistant_id": field_delta("assistant_id_sha256"),
+            "scope_id": field_delta("scope_id"),
+            "response_sha": field_delta("response_sha256"),
+        }
+
+    @staticmethod
     def _select_protocol_recovery_mode(
         text: str,
         diagnostic: dict,
@@ -3506,6 +3550,7 @@ class WebLLMScraper:
         context_rebase_token = ""
         context_rebase_source_text = ""
         last_protocol_diagnostic_signature = ""
+        last_gar_l4_readback_signature = ""
         protocol_recovery_rejected_source = {}
         fresh_page_image_state = self._fresh_ready_page_image_state(snapshot)
         fresh_artifact_seen = bool(fresh_page_image_state is not None)
@@ -3853,6 +3898,27 @@ class WebLLMScraper:
                                     response_source,
                                 )
                                 diagnostic["recovery_readback"] = readback
+                                # Diagnostic ONLY for L4's fresh Planner, once
+                                # per distinct response identity pair.  No
+                                # change to stale/ACK/operation safety gates.
+                                if bool(getattr(self, "_gar_l4_readback_diagnostic", False)):
+                                    delta = self._gar_l4_readback_identity_summary(
+                                        protocol_recovery_rejected_source,
+                                        response_source,
+                                        readback,
+                                    )
+                                    delta_json = json.dumps(
+                                        delta, ensure_ascii=True, sort_keys=True,
+                                    )
+                                    if delta_json != last_gar_l4_readback_signature:
+                                        last_gar_l4_readback_signature = delta_json
+                                        self._log_stage(
+                                            "gar_l4_readback_identity",
+                                            "round={} attempt=2 {}".format(
+                                                protocol_expected.get("turn_id", ""),
+                                                delta_json,
+                                            ),
+                                        )
                                 if not bool(readback.get("fresh")):
                                     diagnostic["original_kind"] = diagnostic.get("kind", "missing")
                                     diagnostic["kind"] = "stale_recovery_readback"

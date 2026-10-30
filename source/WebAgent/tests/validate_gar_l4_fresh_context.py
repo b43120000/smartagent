@@ -101,6 +101,7 @@ class FreshBrowserAdmissionTests(unittest.TestCase):
         old, fresh, adapter = make()
         binding = prepare(adapter)
         self.assertEqual(binding.proof.original_conversation_id, "old")
+        self.assertTrue(Scraper.instances[-1]._gar_l4_readback_diagnostic)
         self.assertEqual(binding.proof.fresh_conversation_id, "fresh")
         self.assertTrue(binding.proof.protocol_identity_verified)
         self.assertEqual(old._page.url, "https://chatgpt.com/c/old")
