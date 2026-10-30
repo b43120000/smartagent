@@ -39,7 +39,12 @@ class GARCollectorTests(unittest.TestCase):
         self.assertNotIn("SECRET PRIVATE", serialized)
         self.assertNotIn("chatgpt.com", serialized)
         self.assertNotIn('"token"', serialized)
-        self.assertNotIn('"nonce"', serialized)
+        # The schema key name may appear in field_names, but the actual
+        # challenge nonce must never be exported as a value or raw field.
+        self.assertNotIn('"nonce":', serialized)
+        self.assertNotIn("a" * 32, serialized)
+        self.assertIn("nonce", sanitized["review_metadata"]["field_names"])
+        self.assertTrue(sanitized["review_metadata"]["nonce_present"])
         self.assertIn("missing_smartagent_tool_envelope", serialized)
         self.assertEqual(sanitized["review_metadata"]["json_valid"], True)
         self.assertIn("[REDACTED_SECRET]", scrub("password: secret1"))
