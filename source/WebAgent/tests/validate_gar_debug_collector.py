@@ -45,6 +45,17 @@ class GARCollectorTests(unittest.TestCase):
         self.assertIn("[REDACTED_SECRET]", scrub("password: secret1"))
         self.assertIn("[REDACTED_URL]", scrub("https://chatgpt.com/c/private"))
         self.assertEqual(review_info("not-json")["json_valid"], False)
+        failure = event_for_export({
+            "event": "browser_response_failed",
+            "error": ("[WEB_COMPOSER_UNCONFIRMED] reason="
+                      "composer_helper_failed:composer_chunk_readback_failed"
+                      " https://chatgpt.com/c/private"),
+        })
+        self.assertEqual(failure["transport_error_codes"],
+                         ["WEB_COMPOSER_UNCONFIRMED"])
+        self.assertEqual(failure["composer_reason_code"],
+                         "composer_helper_failed:composer_chunk_readback_failed")
+        self.assertNotIn("error", failure)
 
     def test_select_request_isolation_and_full_d1_event_signature(self):
         pid = 44
@@ -97,6 +108,24 @@ class GARCollectorTests(unittest.TestCase):
             ]
             (logdir / "webagent_runtime.jsonl").write_text(
                 "\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+            journals = root / "localdata" / "runtime" / "composer_operations"
+            journals.mkdir(parents=True)
+            (journals / "private_page_hash.json").write_text(json.dumps({
+                "owner_pid": 19, "state": "QUARANTINED",
+                "url": "https://chatgpt.com/c/private",
+                "prompt": "SECRET_COMPOSER_PROMPT",
+                "prompt_chars": 11719,
+                "pending_prefix": {"chars": 4096},
+                "reason": "writer_exception_or_cancelled",
+                "readback_failure": {
+                    "chunk_start": 0, "chunk_end": 4096,
+                    "chunk_chars": 4096, "expected_prefix_chars": 4096,
+                    "observed_length": 1024,
+                    "expected_prefix_sha256": "a" * 64,
+                    "observed_sha256": "b" * 64,
+                    "ignored_secret": "SECRET_OTHER",
+                },
+            }), encoding="utf-8")
             outdir = collect(root, request_id="WA-TEST",
                              now=datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc))
             self.assertTrue(outdir.is_dir())
@@ -109,8 +138,17 @@ class GARCollectorTests(unittest.TestCase):
             bundle = (outdir / "runtime_events_sanitized.jsonl").read_text("utf-8")
             self.assertNotIn("PRIVATE MODEL ANSWER", bundle)
             self.assertNotIn("raw private user prompt", bundle)
+            journal_export = (outdir / "composer_journals_redacted.json").read_text("utf-8")
+            self.assertIn("QUARANTINED", journal_export)
+            self.assertIn("4096", journal_export)
+            self.assertIn('"observed_length": 1024', journal_export)
+            self.assertNotIn("private", journal_export)
+            self.assertNotIn("SECRET_COMPOSER_PROMPT", journal_export)
+            self.assertNotIn("SECRET_OTHER", journal_export)
+            self.assertEqual(report["composer_journal_count"], 1)
             with zipfile.ZipFile(zip_path) as zf:
                 self.assertIn(outdir.name + "/acceptance_report.json", zf.namelist())
+                self.assertIn(outdir.name + "/composer_journals_redacted.json", zf.namelist())
                 self.assertNotIn("webagent_runtime.jsonl", zf.namelist())
 
 
