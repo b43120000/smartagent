@@ -106,6 +106,7 @@ class FreshPlannerBinding:
     proof: FreshContextProof
     planner: Callable[[str, dict, list[str]], str]
     close: Callable[[], None]
+    review: Callable[[str], str] | None = None
 
 
 class ExistingConversationFreshAdapter:
@@ -206,10 +207,15 @@ class ExistingConversationFreshAdapter:
                 display_name=self.display_name + " L4",
             )
             session_id = "GAR-L4-" + uuid.uuid4().hex.upper()
+            supervisor = os.environ.get(
+                "SMARTAGENT_GAR_L4_SUPERVISOR_V1", "1"
+            ).strip().lower() not in {"0", "false", "no", "off"}
+            if supervisor:
+                from agent_core.gar_l4_supervision import SUPERVISOR_PROTOCOL
             protocol = SessionProtocol(
-                WEBAGENT_PROTOCOL_NAME,
-                WEBAGENT_PROTOCOL_VERSION,
-                WEBAGENT_PROTOCOL_BODY,
+                "gar_l4_supervisor" if supervisor else WEBAGENT_PROTOCOL_NAME,
+                1 if supervisor else WEBAGENT_PROTOCOL_VERSION,
+                SUPERVISOR_PROTOCOL if supervisor else WEBAGENT_PROTOCOL_BODY,
             )
             reply = fresh_client.ask(
                 protocol.bootstrap_prompt(session_id=session_id),
@@ -235,19 +241,41 @@ class ExistingConversationFreshAdapter:
                 previous_generation_inactive=True,
             )
 
-            def planner(prompt: str, expected: dict,
-                        attachments: list[str]) -> str:
-                # A copied response from the source page cannot satisfy the
-                # new page's request-scope / matching V9 ACK.
+            def assert_binding() -> None:
                 if not same_conversation(str(getattr(page, "url", "") or ""), target):
                     raise RuntimeError("GAR_L4_PAGE_IDENTITY_CHANGED")
+                if not bool(getattr(original, "_execution_page_lease_owned", False)):
+                    raise RuntimeError("GAR_L4_ORIGINAL_LEASE_LOST")
+                if bool(getattr(original, "_pending_submit_context", None)):
+                    raise RuntimeError("GAR_L4_ORIGINAL_SUBMIT_UNKNOWN")
+
+            def planner(prompt: str, expected: dict,
+                        attachments: list[str]) -> str:
+                if supervisor:
+                    raise RuntimeError("GAR_L4_SUPERVISOR_NO_TOOL_PLANNER")
+                assert_binding()
                 return fresh_client.ask(
                     prompt,
                     stage="GAR L4 Fresh Planner 回合",
                     attachment_paths=attachments or None,
                     protocol_expected=expected,
                 )
-            return FreshPlannerBinding(proof=proof, planner=planner, close=close)
+
+            def review(prompt: str) -> str:
+                if not supervisor:
+                    raise RuntimeError("GAR_L4_REVIEW_MODE_NOT_ENABLED")
+                assert_binding()
+                answer = fresh_client.ask(
+                    prompt, stage="GAR L4 WebGPT2 read-only recovery review",
+                    protocol_expected=None,
+                )
+                assert_binding()
+                if bool(getattr(scraper, "_pending_submit_context", None)):
+                    raise RuntimeError("GAR_L4_REVIEW_SUBMISSION_UNCERTAIN")
+                return answer
+
+            return FreshPlannerBinding(proof=proof, planner=planner,
+                                       close=close, review=review if supervisor else None)
         except BaseException:
             close()
             raise
