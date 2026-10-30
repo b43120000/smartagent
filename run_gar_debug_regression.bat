@@ -26,8 +26,9 @@ echo ============================================================
 call :TEST validate_gar_l4_supervision
 call :TEST validate_gar_d1_fault_injection
 call :TEST validate_gar_debug_collector
+call :TEST validate_composer_operation
 set /a TOTAL+=1
-echo [4/4] strict manifest
+echo [4/5] strict manifest
 "%PY_EXE%" -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); assert r['core_file_count']==204 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r; print('PASS strict_manifest')" >> "%RUN_LOG%" 2>&1
 if errorlevel 1 (
   echo [FAIL] strict manifest
@@ -44,7 +45,7 @@ if %FAILED% GTR 0 (
   pause
   exit /b 1
 )
-echo [PASS] All four offline checks.
+echo [PASS] All five offline checks.
 echo [LOG] "%RUN_LOG%"
 echo [INFO] Live GAR verification is separate. Run GAR_debug_webcopiolt.bat.
 pause
@@ -52,7 +53,7 @@ exit /b 0
 
 :TEST
 set /a TOTAL+=1
-echo [%TOTAL%/4] %~1
+echo [%TOTAL%/5] %~1
 "%PY_EXE%" -B "source\WebAgent\tests\%~1.py" >> "%RUN_LOG%" 2>&1
 if errorlevel 1 (
   echo [FAIL] %~1
