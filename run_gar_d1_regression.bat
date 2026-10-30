@@ -38,13 +38,13 @@ if errorlevel 1 (
   goto :FATAL
 )
 rem Preserve existing local Manifest changes; do not stash, reset or overwrite.
-git diff --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat source/agent_core/narrative_bridge.py source/WebAgent/tests/validate_narrative_v9_bridge.py
+git diff --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat source/agent_core/narrative_bridge.py source/WebAgent/tests/validate_narrative_v9_bridge.py source/agent_core/goal_anchored_recovery.py source/WebAgent/protocol_loop.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has unstaged edits.
   git status --short
   goto :FATAL
 )
-git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat source/agent_core/narrative_bridge.py source/WebAgent/tests/validate_narrative_v9_bridge.py
+git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/fresh_context.py source/WebAgent/tests/validate_gar_d1_fault_injection.py source/WebAgent/tests/validate_gar_l4_fresh_context.py source/agent_core/web_runtime.py source/WebAgent/tests/validate_protocol_recovery_freshness.py run_gar_d1_regression.bat source/agent_core/narrative_bridge.py source/WebAgent/tests/validate_narrative_v9_bridge.py source/agent_core/goal_anchored_recovery.py source/WebAgent/protocol_loop.py source/WebAgent/tests/validate_gar_shared_runtime.py source/WebAgent/tests/validate_gar_protocol_loop_it.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has staged edits.
   git status --short
