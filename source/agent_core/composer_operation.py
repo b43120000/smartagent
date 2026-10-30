@@ -189,16 +189,25 @@ def _prepare_locked(*,endpoint,url,prompt,journal_root,timeout_sec,
     started=time.monotonic()
     try:
         timed_out=False
+        writer_result=None
         try:
-            run_helper(payload,timeout_sec,cancel_check)
+            writer_result=run_helper(payload,timeout_sec,cancel_check)
         except subprocess.TimeoutExpired:
             timed_out=True
-        # The writer has exited before observation begins. Never start a second
-        # write; a late browser command may still have changed the draft.
-        try:
-            result=observe_composer(payload,observation_timeout_sec,cancel_check)
-        except Exception as exc:
-            result=dict(status='OBSERVER_FAILED',error_type=type(exc).__name__,error_code='observer_exception')
+        # A trusted, explicitly prewrite-only refusal has not touched the
+        # composer. Preserve its precise reason instead of replacing it with
+        # the later generic observer classification.
+        if (isinstance(writer_result,dict)
+                and writer_result.get('status') in {'PREWRITE_UNSTABLE','PREWRITE_FOREIGN_DRAFT'}
+                and writer_result.get('mutation_possible') is False):
+            result=writer_result
+        else:
+            # The writer has exited before observation begins. Never start a
+            # second write; a late browser command may have changed the draft.
+            try:
+                result=observe_composer(payload,observation_timeout_sec,cancel_check)
+            except Exception as exc:
+                result=dict(status='OBSERVER_FAILED',error_type=type(exc).__name__,error_code='observer_exception')
         if timed_out:
             result['writer_timed_out']=True
             # A browser command can outlive its CDP client; never submit after timeout.
