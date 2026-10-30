@@ -166,6 +166,7 @@ class GARD1LiveFaultInjector:
         self.enabled = bool(enabled)
         self._active = False
         self._used = False
+        self._released_after_l4 = False
         self.injected = 0
 
     def arm(self, request: str, *, eligible: bool) -> bool:
@@ -188,6 +189,7 @@ class GARD1LiveFaultInjector:
             return False
         self._used = True  # Consume the single-use ticket before any Planner call.
         self._active = True
+        self._released_after_l4 = False
         self.injected = 0
         self._emit("gar_d1_test_armed", origin="WEB_DIRECT",
                    fault_mode="INVALID_V9_ORIGINAL_PLANNER_ONLY",
@@ -207,6 +209,29 @@ class GARD1LiveFaultInjector:
         # Deliberately invalid, fresh local test response; never claim this was
         # a real ChatGPT model reply, and never fabricate a Runtime PASS.
         return self.INVALID_V9
+
+    def release_after_verified_l4(self, event: str, fields: dict) -> bool:
+        """Release only after the trusted Runtime emits verified WebGPT1 resume.
+
+        Never release solely because seven invalid turns were injected.
+        A failed/partial L4 review must keep the original Planner fenced.
+        """
+        if (not self.enabled or not self._active or self._released_after_l4
+                or self.injected != self.MAX_INJECTED_REJECTIONS):
+            return False
+        if (event != "gar_l4_webgpt1_resumed"
+                or fields.get("planner_owner") != "ORIGINAL_WEBGPT1"
+                or fields.get("original_ack_preserved") is not True
+                or fields.get("supervisor_review_returned") is not True
+                or fields.get("level") != "L4"):
+            return False
+        self._released_after_l4 = True
+        self._active = False
+        self._emit("gar_d1_test_resume_release",
+                   injected_count=self.injected, single_use=True,
+                   release_reason="VERIFIED_L4_WEBGPT1_RESUMED",
+                   action_executed=False)
+        return True
 
     def disarm(self):
         if self._active:
@@ -472,10 +497,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
         runtime_log.emit, enabled=d1_test_enabled,
     )
+    def gar_debug_event_sink(event: str, **fields) -> None:
+        runtime_log.emit(event, **fields)
+        # The only release trigger is the trusted, verified L4 return event.
+        # It does not grant execution permission or bypass V9 admission.
+        d1_fault.release_after_verified_l4(event, fields)
+
     loop = WebAgentProtocolLoop(
         workspace,
         d1_fault.planner,
-        event_sink=runtime_log.emit,
+        event_sink=gar_debug_event_sink,
         progress_root=runtime_root,
         continuation_store=TaskContinuationStore(runtime_root),
         continuation_owner=local_owner(),
