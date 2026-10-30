@@ -130,6 +130,46 @@ class GARProtocolIT(unittest.TestCase):
                           checkpoint["verification_preconditions"])
             self.assertGreaterEqual(len(planner_calls), 2)
 
+    def test_narrative_status_marker_is_advisory_in_real_web_direct_v9(self):
+        with tempfile.TemporaryDirectory(prefix="gar-d1-marker-") as directory:
+            root = Path(directory)
+            events = []
+            def planner(prompt, expected, attachments):
+                reply = answer_only_response(text="RAII releases resources.")
+                marker = '"evidence_refs":[]'
+                assert reply.count(marker) == 1
+                return reply.replace(marker, '"evidence_refs":["RUNTIME_STATUS"]', 1)
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=2,
+                event_sink=lambda name, **fields: events.append((name, fields)),
+            )
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "1",
+                "TRI_ONE_TASK_RESULT_V1": "1",
+                "TRI_ONE_TEXT_ONLY_V1": "1",
+            }):
+                with self.assertRaises(Exception):
+                    loop.run("Explain RAII.", source_tag="",
+                             request_id="GAR-D1-MARKER-RR",
+                             task_id="GAR-D1-MARKER-TASK",
+                             task_epoch="GAR-D1-MARKER-EPOCH")
+            classifications = [data for name, data in events
+                               if name == "gar_verification_requirement_classified"]
+            self.assertTrue(classifications)
+            self.assertEqual(classifications[0]["classification"],
+                             "NON_EXECUTED_TERMINAL_PREREQUISITE")
+            self.assertEqual(classifications[0]["evidence_marker_class"],
+                             "RUNTIME_STATUS_ONLY")
+            decisions = [data for name, data in events
+                         if name == "gar_recovery_decision"]
+            self.assertTrue(decisions)
+            self.assertEqual((decisions[0]["level"], decisions[0]["last_reason"]),
+                             ("L1", "GAR_LOCAL_REPAIR_ACTIVE"))
+            self.assertFalse(loop.terminal_acceptance)
+            self.assertFalse(loop.action_result_ledger)
+            self.assertEqual(loop.pending_verification_requirement["evidence_refs"],
+                             ["RUNTIME_STATUS"])
+
     def test_stale_readback_cannot_reexecute_or_complete(self):
         with tempfile.TemporaryDirectory(prefix="gar-stale-") as directory:
             root = Path(directory)

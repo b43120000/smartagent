@@ -153,6 +153,38 @@ class GARSharedRuntimeTests(unittest.TestCase):
         self.assertEqual((verdict.level, verdict.status, verdict.reason),
                          ("L1", "REPAIR", "TERMINAL_SUCCESS_VERIFICATION_MISSING"))
 
+    def test_narrative_runtime_status_only_is_advisory_not_terminal_pass(self):
+        # Round-8 D1: Narrative Bridge defaults to one RUNTIME_STATUS marker.
+        base = {
+            "missing_condition": "Explain RAII",
+            "condition_id": "COND-D1",
+            "current_verification_status": "UNVERIFIED",
+            "evidence_refs": ["RUNTIME_STATUS"],
+            "required_action": "run_command",
+            "required_fields": ["operation", "command", "success_criteria",
+                                "verify", "condition_id"],
+            "next_actions": [{"tool": "run_command", "operation": "VERIFY",
+                              "condition_id": "COND-D1"}],
+        }
+        self.assertTrue(is_unverified_nonexecuted_terminal_requirement(
+            base, has_action_history=False, has_condition_results=False
+        ))
+        self.assertEqual(base["current_verification_status"], "UNVERIFIED")
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            base, has_action_history=True, has_condition_results=False
+        ))
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            base, has_action_history=False, has_condition_results=True
+        ))
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            {**base, "reason_code": "OPEN_WRITE_TRANSACTION"},
+            has_action_history=False, has_condition_results=False
+        ))
+        self.assertFalse(is_unverified_nonexecuted_terminal_requirement(
+            {**base, "evidence_refs": ["RUNTIME_STATUS", "ACTION-REF"]},
+            has_action_history=False, has_condition_results=False
+        ))
+
     def test_request_accepted_scope_is_exact_and_hard_blockers_still_block(self):
         base = {
             "condition_id": "COND-RUNTIME-C1",
@@ -165,7 +197,9 @@ class GARSharedRuntimeTests(unittest.TestCase):
                               "condition_id": "COND-RUNTIME-C1"}],
         }
         rejected = (
-            ({**base, "evidence_refs": ["RUNTIME_STATUS"]}, False, False),
+            ({**base, "evidence_refs": ["RUNTIME_STATUS", "ACTION-REF"]}, False, False),
+            ({**base, "evidence_refs": ["RUNTIME_STATUS", "REQUEST_ACCEPTED"]}, False, False),
+            ({**base, "evidence_refs": ["RUNTIME_STATUS", "RUNTIME_STATUS"]}, False, False),
             ({**base, "evidence_refs": ["ACTION-REF"]}, False, False),
             ({**base, "evidence_refs": ["REQUEST_ACCEPTED", "ACTION-REF"]}, False, False),
             ({**base, "evidence_refs": ["REQUEST_ACCEPTED", "REQUEST_ACCEPTED"]}, False, False),

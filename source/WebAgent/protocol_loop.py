@@ -500,19 +500,33 @@ class WebAgentProtocolLoop:
             advisory = "UNVERIFIED_TERMINAL_NO_EXECUTION" in (
                 snapshot.get("verification_preconditions") or ()
             )
+            refs = self.pending_verification_requirement.get("evidence_refs") or []
+            marker_class = (
+                "RUNTIME_STATUS_ONLY" if refs == ["RUNTIME_STATUS"]
+                else "REQUEST_ACCEPTED_ONLY" if refs == ["REQUEST_ACCEPTED"]
+                else "NO_EVIDENCE_REFS" if not refs
+                else "OTHER_OR_MIXED_REFS"
+            )
+            classification = (
+                "NON_EXECUTED_TERMINAL_PREREQUISITE"
+                if advisory else "HARD_OR_UNATTESTED_VERIFICATION"
+            )
             self._emit(
                 "gar_verification_requirement_classified",
                 request_id=self.run_id, round=self.turn_id,
-                classification=(
-                    "NON_EXECUTED_TERMINAL_PREREQUISITE"
-                    if advisory else "HARD_OR_UNATTESTED_VERIFICATION"
-                ),
-                action_history_present=bool(
-                    self.action_ledger or self.action_result_ledger
-                ),
-                evidence_ref_count=len(
-                    self.pending_verification_requirement.get("evidence_refs") or []
-                ),
+                classification=classification,
+                evidence_marker_class=marker_class,
+                action_history_present=bool(self.action_ledger or self.action_result_ledger),
+                condition_history_present=bool(self.condition_result_ledger),
+                evidence_ref_count=len(refs),
+            )
+            # Safe local console diagnostic: no raw refs or model output.
+            print(
+                f"[WebAgent][GAR] round={self.turn_id} "
+                f"verification={classification} marker={marker_class} "
+                f"action_history={int(bool(self.action_ledger or self.action_result_ledger))} "
+                f"condition_history={int(bool(self.condition_result_ledger))}",
+                flush=True,
             )
         reason = str(next((item.get("reason") for item in diagnostics
                            if isinstance(item, dict) and item.get("reason")),
