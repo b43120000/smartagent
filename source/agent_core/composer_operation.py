@@ -583,11 +583,45 @@ def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
     raise ComposerOperationError('composer_chunk_readback_failed', info)
 
 
+def _composer_write_units(prompt):
+    """Yield exact, non-overlapping units; only long multiline prompts use soft breaks.
+
+    Long multiline insert_text() is not an atomic editor transaction in
+    ChatGPT ProseMirror. Never send a literal newline through insert_text() in
+    this gated path; an explicit Shift+Enter is the non-submit line break.
+    Short prompts keep the previously verified writer behavior.
+    """
+    if len(prompt) < 4096 or ('\n' not in prompt and '\r' not in prompt):
+        for start in range(0, len(prompt), 4096):
+            end = min(start + 4096, len(prompt))
+            yield start, end, prompt[start:end], False
+        return
+    start = 0
+    while start < len(prompt):
+        if prompt[start] in '\r\n':
+            end = start + (2 if prompt.startswith('\r\n', start) else 1)
+            yield start, end, '', True
+        else:
+            next_break = min(
+                (index for index in (prompt.find('\r', start),
+                                     prompt.find('\n', start)) if index >= 0),
+                default=len(prompt),
+            )
+            end = min(start + 1024, next_break)
+            yield start, end, prompt[start:end], False
+        start = end
+
+
+def composer_write_unit_count(prompt):
+    """Deterministic upper-bound input for the whole-operation deadline."""
+    return sum(1 for _ in _composer_write_units(prompt))
+
+
 def _write_staged_prompt(scraper,prompt,record,journal):
     PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
     scraper._focus_composer_dom()
-    for start in range(0,len(prompt),4096):
+    for start, end, value, soft_break in _composer_write_units(prompt):
         if start and not scraper._composer_matches_prompt(prompt[:start]):
             raise ComposerOperationError('composer_prefix_changed')
         loc=scraper._focus_composer_dom()
@@ -603,19 +637,26 @@ def _write_staged_prompt(scraper,prompt,record,journal):
             }''')
         # Synchronize ProseMirror's editor selection as well as the DOM range.
         scraper._page.keyboard.press('Control+End')
-        end=min(start+4096,len(prompt));prefix=prompt[:end]
+        prefix=prompt[:end]
         checkpoint=dict(chars=end,sha256=hashlib.sha256(prefix.encode()).hexdigest(),
             normalized_sha256=hashlib.sha256(scraper._normalize_composer_text(prefix).encode()).hexdigest())
         record['pending_prefix']=checkpoint;write_json_atomic(journal,record)
         scraper._check_cancel_requested('composer_chunk')
-        PIT.record('09_keyboard_insert_text', prompt[start:end], extra={'chunk_start': start, 'chunk_end': end})
-        scraper._page.keyboard.insert_text(prompt[start:end])
+        if soft_break:
+            # Never press bare Enter: on ChatGPT it may submit an incomplete
+            # protocol prompt. The complete prefix is re-verified below.
+            scraper._page.keyboard.press('Shift+Enter')
+        else:
+            PIT.record('09_keyboard_insert_text', value,
+                       extra={'chunk_start': start, 'chunk_end': end})
+            scraper._page.keyboard.insert_text(value)
         try:
             readback = _await_chunk_readback(scraper, prefix)
         except ComposerOperationError as exc:
             # Durable, content-free evidence survives writer quarantine.
             record['readback_failure'] = dict(
                 chunk_start=start, chunk_end=end, chunk_chars=end-start,
+                unit_kind='soft_break' if soft_break else 'text',
                 **exc.evidence,
             )
             write_json_atomic(journal,record)
