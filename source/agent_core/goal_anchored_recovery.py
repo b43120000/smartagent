@@ -215,6 +215,7 @@ class RecoveryEngine:
         self._last_local_rejected_total = 0
         self._fresh_context_id = ""
         self._l4_fenced = False
+        self._l4_advice_delivered = False
         self._fresh_repair_attempts = 0
         self.same_blocker = 0
         self.level = "L0"
@@ -400,6 +401,17 @@ class RecoveryEngine:
         # malformed V9 response. Permit at most TWO in-place protocol repairs,
         # using the SAME Planner session and the SAME cumulative budget.
         # Never bootstrap yet another context or replay any tool mutation.
+        if self._l4_advice_delivered:
+            # Return to WebGPT1 after one read-only WebGPT2 review. A repeated
+            # invalid V9 reply cannot trigger a second review or reset budget.
+            if self._fresh_repair_attempts >= 2:
+                return self._record("L5", "PAUSED",
+                                    "GAR_L4_ORIGINAL_REEVALUATION_EXHAUSTED")
+            self._fresh_repair_attempts += 1
+            return self._record(
+                "L4", "REPAIR", "GAR_L4_WEBGPT1_FORMAT_REPAIR",
+                self._prompt("L4", snapshot, code),
+            )
         if self._l4_fenced:
             if self._fresh_repair_attempts >= 2:
                 return self._record("L5", "PAUSED",
@@ -467,6 +479,17 @@ class RecoveryEngine:
             "L4", "ACTIVATED", "GAR_FRESH_CONTEXT_VERIFIED",
             self._prompt("L4", snapshot, "GAR_FRESH_CONTEXT_VERIFIED"),
         )
+
+    def complete_supervisory_review(self) -> RecoveryDecision:
+        """Re-enable original WebGPT1 ONLY after WebGPT2 advisory is validated.
+
+        The original user task/ledger/budget/permissions are not replaced.
+        """
+        if not self._l4_fenced or self.fresh_sessions != 1 or self._l4_advice_delivered:
+            return self._record("L5", "PAUSED", "GAR_L4_REVIEW_STATE_INVALID")
+        self._l4_fenced = False
+        self._l4_advice_delivered = True
+        return self._record("L4", "REVIEW_RETURNED", "GAR_L4_WEBGPT1_RESUMED")
 
     def fence_old_planner(self, *, context_id: str) -> bool:
         """Refuse any delayed reply from the previous Planner after L4."""
@@ -536,6 +559,7 @@ class RecoveryEngine:
             "last_reason": self._decisions[-1]["reason"] if self._decisions else "NONE",
             "fresh_context_digest": self._fresh_context_id,
             "old_planner_fenced": self._l4_fenced,
+            "supervisor_review_returned": self._l4_advice_delivered,
             "fresh_repair_attempts": self._fresh_repair_attempts,
         }
 
