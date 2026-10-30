@@ -7,13 +7,15 @@ from unittest.mock import patch
 from agent_core import composer_operation as co
 
 
-def snap(digest="a", *, busy=False, empty=True, match=False):
+def snap(digest="a", *, busy=False, empty=True, match=False,
+         last_turn_status="LAST_ASSISTANT"):
     return dict(
         url="https://chatgpt.com/c/example", user_count=2, assistant_count=2,
         user_anchors=[["u0","u0d"],["u1","u1d"]],
         assistant_anchors=[["a0",digest],["a1",digest]],
         user_native_ids=["u0","u1"], assistant_native_ids=["a0","a1"],
         generation_active=busy, composer_empty=empty, composer_matches=match,
+        last_turn_status=last_turn_status,
     )
 
 
@@ -54,6 +56,22 @@ class ComposerStabilityTest(unittest.TestCase):
         result,count=self.probe([snap("old")]+[snap("new")]*4)
         self.assertEqual(result["status"],"READY")
         self.assertEqual(count,5)
+
+    def test_last_user_and_missing_status_never_admitted(self):
+        for status in ("LAST_USER", "LAST_TURN_ORDER_UNKNOWN", None):
+            result,_=self.probe([snap(last_turn_status=status)],timeout=1.25)
+            self.assertEqual(result["status"],"PREWRITE_UNSTABLE")
+            self.assertEqual(result["reason_code"],
+                             status or "LAST_TURN_UNOBSERVED")
+
+    def test_empty_conversation_ready_for_bootstrap(self):
+        empty=snap(last_turn_status="EMPTY_CONVERSATION")
+        empty.update(user_count=0,assistant_count=0,user_anchors=[],
+                     assistant_anchors=[],user_native_ids=[],
+                     assistant_native_ids=[])
+        result,count=self.probe([empty]*4)
+        self.assertEqual(result["status"],"READY")
+        self.assertEqual(count,4)
 
     def test_changing_assistant_digests_never_admitted(self):
         result,_=self.probe([snap(str(x)) for x in range(12)],timeout=1.25)
