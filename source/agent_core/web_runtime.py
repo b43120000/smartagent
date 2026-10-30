@@ -3761,7 +3761,14 @@ class WebLLMScraper:
                         required_stability = max(
                             2.0, float(self._protocol_commit_stable_sec),
                         )
-                        if text and stable_for_sr >= required_stability and not self._is_generation_active():
+                        # A visibly empty assistant node can be a selector
+                        # failure; record it after a bounded idle window rather
+                        # than waiting forever or inventing a model response.
+                        empty_idle_timeout = bool(
+                            not text and protocol_started_at is not None
+                            and now - protocol_started_at >= 30.0
+                        )
+                        if ((text and stable_for_sr >= required_stability) or empty_idle_timeout) and not self._is_generation_active():
                             from .sr_first_readback import capture_first_readback
                             source_record = self._protocol_response_source(
                                 snapshot, assistant_turn, text,
