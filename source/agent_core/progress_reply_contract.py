@@ -1,7 +1,8 @@
 """Fixed Progress schema with Runtime-selected FULL/PATCH reply requirements.
 
-Only accepted planning state is inherited. Decisions, evidence and blockers are
-always supplied afresh; materialization does not imply acceptance or execution.
+Only accepted planning state is inherited. Decisions and blockers are supplied
+afresh. Action Evidence is required except for a Runtime-authorized text-only
+terminal; materialization never implies acceptance or execution.
 """
 from copy import deepcopy
 import re
@@ -23,7 +24,8 @@ def reply_contract(ledger):
     return {
         'schema': 'SMARTAGENT_PROGRESS_REPLY_CONTRACT_V1',
         'preferred_mode': 'PATCH' if patch else 'FULL',
-        'always_required': list(ROUND_FIELDS),
+        'always_required': [field for field in ROUND_FIELDS if field != 'evidence_refs'],
+        'normally_required': ['evidence_refs'],
         'initial_required': [*INHERITED_FIELDS, 'outcome'] if not patch else [],
         'continue_required': ['next_action'],
         'terminal_required': ['outcome'],
@@ -33,6 +35,11 @@ def reply_contract(ledger):
             'changed_total_steps': ['steps'],
             'ambiguous_condition': ['matched_condition_id'],
             'runtime_blocker': ['context_request.blocking_action_id'],
+            'answer_only_terminal': {
+                'when': 'Runtime-authorized COMPLETE/SUCCESS with exclusive final_response and no tool actions or unresolved operations',
+                'evidence_refs': 'optional; absent becomes [] internally; explicit refs are never removed',
+            },
+            'other_decisions': ['evidence_refs'],
         },
         'never_inherit': ['decision', 'outcome', 'evidence_refs', 'decision_reason',
                           'context_request', 'matched_condition_id', 'next_phase',
@@ -40,8 +47,18 @@ def reply_contract(ledger):
     }
 
 
-def materialize_progress(payload, ledger):
+def materialize_progress(
+    payload, ledger, *, allow_omitted_answer_only_evidence=False,
+):
     result = normalize_progress_fields(payload)
+    # The caller must have already proved the trusted, no-action terminal
+    # conditions. Never manufacture an Action Result, and never delete an
+    # explicit (including nonempty) evidence_refs value from the model.
+    if (allow_omitted_answer_only_evidence
+            and 'evidence_refs' not in result
+            and str(result.get('decision', '')).upper() == 'COMPLETE'
+            and str(result.get('outcome', '')).upper() == 'SUCCESS'):
+        result['evidence_refs'] = []
     mode = result.get('progress_update', 'PATCH' if has_accepted_plan(ledger) else 'FULL')
     if mode not in {'FULL', 'PATCH'}:
         raise ValueError('progress_update must be FULL or PATCH')
