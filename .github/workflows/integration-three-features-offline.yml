@@ -31,7 +31,7 @@ jobs:
       - name: Strict manifest gate
         shell: pwsh
         run: |
-          python -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['hash_verification']=='PASS' and r['core_file_count']==206"
+          python -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['hash_verification']=='PASS' and r['core_file_count']==207"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Shared GAR and Tri-One regressions
         shell: pwsh

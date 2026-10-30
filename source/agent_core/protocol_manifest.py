@@ -162,6 +162,7 @@ CORE_FILES = (
     'source/WebAgent/fresh_context.py',
     'source/agent_core/tri_one_answer_only.py',
     'source/agent_core/tri_one_shared_worker.py',
+    'source/agent_core/current_conversation_adapter.py',
     'source/agent_core/tool_capabilities.py',
     'source/agent_core/task_progress.py',
     'source/agent_core/action_loop_state.py',

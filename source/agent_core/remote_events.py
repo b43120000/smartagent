@@ -8,7 +8,7 @@ from typing import Any
 from .process_file_lock import exclusive_process_lock
 from .json_state_io import read_json_retry, write_json_atomic
 
-EVENT_TYPES={"TASK_ACCEPTED","TASK_STARTED","TASK_PROGRESS","TASK_COMPLETED","TASK_FAILED","TASK_INTERRUPTED","SECURITY_CONFIRMATION_REQUIRED"}
+EVENT_TYPES={"TASK_ACCEPTED","TASK_STARTED","TASK_PROGRESS","TASK_COMPLETED","TASK_FAILED","TASK_INTERRUPTED","TASK_PAUSED","SECURITY_CONFIRMATION_REQUIRED"}
 READY="READY"; DELIVERING="DELIVERING"; DELIVERED="DELIVERED"
 DELIVERY_RECONCILE_MIN_AGE_SEC=30.0
 
@@ -79,10 +79,63 @@ class RemoteEventStore:
     def emit(self,event_type:str,task:Any,*,status:str,payload:dict|None=None)->RemoteEvent:
         if event_type not in EVENT_TYPES: raise ValueError(event_type)
         with self._lock,self.process_lock():
-            self.load(); discriminator=str((payload or {}).get('approval_id','')) if event_type=='SECURITY_CONFIRMATION_REQUIRED' else ''; raw=f"{event_type}|{task.task_id}|{discriminator}"; eid='EVT-'+hashlib.sha256(raw.encode()).hexdigest()[:20].upper()
-            if eid in self.events: return self.events[eid]
+            self.load()
+            original_payload = dict(payload or {})
+            discriminator = (
+                str(original_payload.get("approval_id", ""))
+                if event_type == "SECURITY_CONFIRMATION_REQUIRED" else ""
+            )
+            raw = f"{event_type}|{task.task_id}|{discriminator}"
+            eid = "EVT-" + hashlib.sha256(raw.encode()).hexdigest()[:20].upper()
+            if eid in self.events:
+                return self.events[eid]
+
+            # Default OFF: preserve the legacy wire/persisted payload byte shape.
+            # When opted in, TaskResult is an additive audit record only; it
+            # cannot manufacture terminal admission or change task outcome.
+            if (
+                event_type in {"TASK_COMPLETED", "TASK_FAILED", "TASK_INTERRUPTED", "TASK_PAUSED"}
+                and str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower()
+                    in {"1", "true", "yes"}
+            ):
+                contract_error_type = ()
+                try:
+                    from .tri_one_task_result import (
+                        TaskResultContractError, make_task_result_from_remote_event,
+                    )
+                    from .protocol_manifest import require_protocol_manifest
+                    from .source_attestation import capture, build_task_result_source_metadata
+                    contract_error_type = TaskResultContractError
+                    source_root = Path(__file__).resolve().parents[2]
+                    manifest_status = require_protocol_manifest(source_root)
+                    attestation = capture(
+                        role="task_result_producer",
+                        manifest_verified=(
+                            manifest_status.get("hash_verification") == "PASS"
+                            and not manifest_status.get("hash_mismatches")
+                        ),
+                    )
+                    source_metadata = build_task_result_source_metadata(
+                        attestation, root=source_root,
+                    )
+                    original_payload["source_metadata"] = source_metadata
+                    original_payload["task_result_v1"] = make_task_result_from_remote_event(
+                        task, event_type, original_payload,
+                        source_metadata=source_metadata,
+                    )
+                    original_payload.pop("task_result_contract_status", None)
+                    original_payload.pop("task_result_contract_error", None)
+                except Exception as exc:
+                    # This additive audit lane must not strand an already
+                    # completed legacy task or suppress its existing delivery.
+                    original_payload["task_result_contract_status"] = "ERROR"
+                    original_payload["task_result_contract_error"] = (
+                        str(exc) if isinstance(exc, contract_error_type)
+                        else "contract_build_failed:" + type(exc).__name__
+                    )
+
             route=dict(getattr(task,'reply_route',{}) or getattr(task,'metadata',{}).get('reply_route',{}) or {})
-            ev=RemoteEvent(eid,event_type,str(task.request_id),str(task.task_id),str(status),route,dict(payload or {}),created_at=time.time())
+            ev=RemoteEvent(eid,event_type,str(task.request_id),str(task.task_id),str(status),route,original_payload,created_at=time.time())
             self.events[eid]=ev; self.save(); return ev
     def ready(self):
         with self._lock:
@@ -95,14 +148,72 @@ class RemoteEventStore:
             self.load(); ev=self.events[event_id]
             if ev.delivery_state!=READY: return None
             ev.delivery_state=DELIVERING; ev.delivery_owner=str(owner_token); ev.delivery_owner_pid=os.getpid(); ev.delivery_owner_started_at=_process_started_at(os.getpid()); ev.delivery_started_at=time.time(); ev.attempts+=1; ev.last_error=''; self.save(); return copy.deepcopy(ev)
-    def mark_delivered(self,event_id:str):
+    def mark_delivered(self,event_id:str,*,adapter_result:dict|None=None):
         with self._lock,self.process_lock():
-            self.load(); ev=self.events[event_id]; ev.delivery_state=DELIVERED; ev.delivered_at=time.time(); ev.last_error=''; ev.delivery_owner=''; ev.delivery_owner_pid=0; ev.delivery_owner_started_at=0.0; self.save(); return ev
+            self.load()
+            ev=self.events[event_id]
+            ev.delivery_state=DELIVERED
+            ev.delivered_at=time.time()
+            ev.last_error=''
+            ev.delivery_owner=''
+            ev.delivery_owner_pid=0
+            ev.delivery_owner_started_at=0.0
+            result=(ev.payload or {}).get("task_result_v1")
+            if isinstance(result,dict) and isinstance(result.get("delivery"),dict):
+                transport=str((ev.reply_route or {}).get("transport","") or "").upper()
+                receipt_id="DREC-"+hashlib.sha256(
+                    f"{ev.event_id}|{transport}|{int(ev.attempts or 0)}".encode("utf-8")
+                ).hexdigest()[:24].upper()
+                adapter_summary={"schema":"SMARTAGENT_DELIVERY_RECEIPT_V1",
+                    "receipt_id":receipt_id,"event_id":ev.event_id,"transport":transport,
+                    "attempt":int(ev.attempts or 0),"receipt_kind":(
+                        "RECONCILED_OBSERVED"
+                        if bool((adapter_result or {}).get("reconciled"))
+                        else "RUNTIME_ADAPTER_ACK"
+                    ),
+                    "adapter_confirmed":not bool((adapter_result or {}).get("reconciled")),
+                    "reconciled_observed":bool((adapter_result or {}).get("reconciled"))}
+                observed=dict(adapter_result or {})
+                for key in ("message_count","artifact_count"):
+                    value=observed.get(key)
+                    if type(value) is int and value >= 0:
+                        adapter_summary[key]=value
+                reply=str(observed.get("reply") or "")
+                if transport=="TELEGRAM" and reply:
+                    message_ids=[part.strip() for part in reply.split(",") if part.strip().isdigit()]
+                    adapter_summary["provider_message_id_count"]=len(message_ids)
+                    if message_ids:
+                        adapter_summary["provider_message_ids_sha256"]=hashlib.sha256(
+                            ",".join(message_ids).encode("utf-8")
+                        ).hexdigest()
+                ev.payload["delivery_receipt"]=adapter_summary
+                result["delivery"].update(
+                    status="DELIVERED",
+                    attempt_count=max(int(result["delivery"].get("attempt_count",0) or 0),int(ev.attempts or 0)),
+                    delivery_receipt_id=receipt_id,
+                )
+            self.save()
+            return ev
+
     def mark_failed_attempt(self,event_id:str,error:str,owner_token:str=""):
         with self._lock,self.process_lock():
-            self.load(); ev=self.events[event_id]
+            self.load()
+            ev=self.events[event_id]
             if owner_token and ev.delivery_owner!=owner_token: return copy.deepcopy(ev)
-            ev.delivery_state=READY; ev.delivery_owner=''; ev.delivery_owner_pid=0; ev.delivery_owner_started_at=0.0; ev.last_error=str(error or '')[:2000]; self.save(); return ev
+            ev.delivery_state=READY
+            ev.delivery_owner=''
+            ev.delivery_owner_pid=0
+            ev.delivery_owner_started_at=0.0
+            ev.last_error=str(error or '')[:2000]
+            result=(ev.payload or {}).get("task_result_v1")
+            if isinstance(result,dict) and isinstance(result.get("delivery"),dict):
+                result["delivery"].update(
+                    status="PENDING",
+                    attempt_count=max(int(result["delivery"].get("attempt_count",0) or 0),int(ev.attempts or 0)),
+                    delivery_receipt_id=None,
+                )
+            self.save()
+            return ev
 
     def pause_for_tasks(self, task_ids:set[str], *, reason:str) -> int:
         """Stop old task events from being retried after a runtime reset."""
@@ -142,7 +253,7 @@ class DeliveryManager:
         except Exception as exc:
             self.store.mark_failed_attempt(event.event_id,f'{type(exc).__name__}: {exc}',self.owner_token)
             return {'delivered':False,'reason':f'{type(exc).__name__}: {exc}'}
-        if result.get('delivered'): self.store.mark_delivered(event.event_id)
+        if result.get('delivered'): self.store.mark_delivered(event.event_id,adapter_result=result)
         else: self.store.mark_failed_attempt(event.event_id,str(result.get('reason','delivery_failed')),self.owner_token)
         return result
     def reconcile_delivering(self,transports:set[str]|None=None,should_continue=None):
@@ -162,7 +273,7 @@ class DeliveryManager:
                 outcomes.append((event.event_id,{'delivered':False,'reason':'delivery_outcome_unknown','uncertain':True})); continue
             result=reconcile(event.reply_route,self._wire(event))
             if result.get('delivered'):
-                self.store.mark_delivered(event.event_id)
+                self.store.mark_delivered(event.event_id,adapter_result=result)
             elif result.get('definitive_not_delivered'):
                 self.store.mark_failed_attempt(event.event_id,'reconciled_not_delivered')
             elif result.get('retry_allowed'):

@@ -130,6 +130,9 @@ class TelegramDeliveryAdapter:
             if not payload.get('summary') and '[WEB_PROVIDER_CONVERSATION_FULL]' in str(payload.get('error','')):
                 summary = '對話已滿，請建立新對話並更新 Workspace 的對話 URL，再重新發送需求。\n本次未自動重送；已完成的工具結果仍保留。'
             return _terminal_text(event, summary, 'FAILED')
+        if event_type == "TASK_PAUSED":
+            summary = str(payload.get("summary") or payload.get("error") or "任務暫停，尚未完成。")
+            return _terminal_text(event, summary, "PAUSED", "UNKNOWN")
         if event_type == "TASK_INTERRUPTED":
             summary = payload.get('summary') or str(payload.get('error', ''))
             if not payload.get('summary') and '[WEB_PROVIDER_CONVERSATION_FULL]' in str(payload.get('error','')):
