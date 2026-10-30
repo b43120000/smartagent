@@ -126,7 +126,14 @@ type "%LOGDIR%\summary.txt"
 echo.
 echo Logs: "%LOGDIR%"
 if %FAILED% GTR 0 (
+  echo.
+  echo ============================================================
+  echo [GAR D1] FAILED TEST DETAILS -- PRINTED AT END FOR SCREENSHOTS
+  echo ============================================================
+  for /f "tokens=2" %%T in ('findstr /B /C:"FAIL " "%LOGDIR%\summary.txt"') do call :SHOW_FAILURE "%%T"
+  echo ============================================================
   echo [FAIL] Offline gate failed. Do not do Live.
+  echo [FAIL] Local evidence: "%LOGDIR%"
   exit /b 1
 )
 echo [PASS] Offline only. Chrome3 L4 Live remains a separate acceptance gate.
@@ -144,8 +151,7 @@ if "%RC%"=="0" (
   >> "%LOGDIR%\summary.txt" echo PASS %NAME% exit=0
 ) else (
   set /a FAILED+=1
-  echo [FAIL] %NAME% exit=%RC%
-  type "%LOG%"
+  echo [FAIL] %NAME% exit=%RC% -- traceback printed at END of the run
   >> "%LOGDIR%\summary.txt" echo FAIL %NAME% exit=%RC%
 )
 exit /b 0
@@ -162,10 +168,27 @@ if "%RC%"=="0" (
   >> "%LOGDIR%\summary.txt" echo PASS %NAME% exit=0
 ) else (
   set /a FAILED+=1
-  echo [FAIL] %NAME% exit=%RC%
-  type "%LOG%"
+  echo [FAIL] %NAME% exit=%RC% -- traceback printed at END of the run
   >> "%LOGDIR%\summary.txt" echo FAIL %NAME% exit=%RC%
 )
+exit /b 0
+
+:SHOW_FAILURE
+set "BAD_TEST=%~1"
+set "BAD_LOG=%LOGDIR%\%BAD_TEST%.log"
+echo.
+echo [FAILED CASE] %BAD_TEST%
+if not exist "%BAD_LOG%" (
+  echo [ERROR] Missing detail log: "%BAD_LOG%"
+  exit /b 0
+)
+echo [TRACEBACK] Last 80 lines of the failed test:
+"%PY_EXE%" %PY_ARGS% -c "import pathlib,sys; p=pathlib.Path(sys.argv[1]); print('\n'.join(p.read_text(encoding='utf-8',errors='replace').splitlines()[-80:]))" "%BAD_LOG%"
+if errorlevel 1 (
+  echo [ERROR] Could not display test log with Python; printing it in full:
+  type "%BAD_LOG%"
+)
+echo [FAILED LOG] "%BAD_LOG%"
 exit /b 0
 
 :FATAL

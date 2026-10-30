@@ -49,9 +49,22 @@ class D1FaultInjectionTest(unittest.TestCase):
         self.assertFalse(fault.arm(fault.TEST_REQUEST, eligible=True))
         self.assertEqual(fault.planner("after", {}, []), "REAL")
         self.assertEqual(len(real), 1)
-        self.assertEqual([name for name, _ in emitted],
-                         ["gar_d1_test_armed", "gar_d1_test_fault_injected",
-                          "gar_d1_test_disarmed"])
+        # New D1 rejection telemetry is an expected part of the safety
+        # contract. Denied requests do not consume the single-use ticket.
+        self.assertEqual(
+            [(name, fields.get("reason")) for name, fields in emitted],
+            [
+                ("gar_d1_test_not_armed", "REQUEST_NOT_EXACT_MATCH"),
+                ("gar_d1_test_not_armed", "INPUT_NOT_ELIGIBLE"),
+                ("gar_d1_test_not_armed", "REQUEST_NOT_EXACT_MATCH"),
+                ("gar_d1_test_armed", None),
+                ("gar_d1_test_fault_injected", None),
+                ("gar_d1_test_disarmed", None),
+                ("gar_d1_test_not_armed", "SINGLE_USE_CONSUMED"),
+            ],
+        )
+        self.assertTrue(all("request" not in details and "prompt" not in details
+                            for _, details in emitted))
         self.assertEqual(fault.injected, 1)
 
     def test_enabled_d1_reports_exact_not_armed_reason_without_prompt(self):
