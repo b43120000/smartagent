@@ -138,5 +138,26 @@ def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
     return True, "ANSWER_ONLY_RESPONSE_ADMITTED"
 
 
+def authorize_omitted_terminal_evidence(
+    loop: object, progress: Mapping[str, object],
+    operational: list[dict], *, source: str,
+) -> tuple[bool, str]:
+    """Authorize *only* an absent evidence field for a no-action terminal.
+
+    This is common V9 Runtime admission, independent of the ingress provider
+    and reply destination. Explicit [] or nonempty references are never edited.
+    A successful preflight is not terminal acceptance or execution evidence:
+    all normal Progress, scope, receipt and delivery gates still run afterward.
+    """
+    if "evidence_refs" in progress:
+        return False, "evidence_refs_explicit"
+    if len(operational) != 1 or operational[0].get("tool") != "final_response":
+        return False, "answer_only_final_response_not_exclusive"
+    from .tri_one_task_result import enabled as task_result_enabled
+    if not task_result_enabled() or not enabled(source=source):
+        return False, "answer_only_feature_disabled"
+    return accept_terminal_candidate(loop, progress, operational[0])
+
+
 __all__ = ["FEATURE_FLAG", "enabled", "classify_original_request",
-           "accept_terminal_candidate"]
+           "accept_terminal_candidate", "authorize_omitted_terminal_evidence"]
