@@ -107,9 +107,14 @@ class GARProtocolIT(unittest.TestCase):
                              "action_evidence_cannot_be_answer_only")
             classified = [row for name, row in events
                           if name == "gar_pending_classification"]
-            # No pending Action verification is manufactured by this
-            # fail-closed status-marker repair path.
-            self.assertFalse(classified)
+            # GAR still emits classification telemetry; it must report no
+            # pending Action, no Action/Result history and not misclassify a
+            # model status-marker correction as verified execution evidence.
+            self.assertTrue(classified)
+            self.assertTrue(all(not row["terminal_precondition_advisory"]
+                                and row["executed_action_count"] == 0
+                                and row["recorded_result_count"] == 0
+                                and not row["pending_kinds"] for row in classified))
             decisions = [row for name, row in events
                          if name == "gar_recovery_decision"]
             self.assertTrue(decisions)
