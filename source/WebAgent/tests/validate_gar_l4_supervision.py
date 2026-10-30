@@ -28,7 +28,7 @@ def review_reply(prompt, *, revised="Inspect blocker and try a safe new strategy
         "schema": SCHEMA, "nonce": found.group(1),
         "completed_steps": ["1. prerequisite complete", "2. validation complete"],
         "blocked_step": "3. the previous approach failed",
-        "failure_analysis": "The current step is stuck on the same protocol blocker",
+        "failure_analysis": "Runtime observed missing_smartagent_tool_envelope in the prior Planner",
         "revised_step": revised,
         "remaining_plan": ["4. continue without repeating prior actions"],
         "safety_notes": ["Preserve original permissions and evidence"],
@@ -85,6 +85,20 @@ class ReviewContractTests(unittest.TestCase):
             reason="semantic_stagnation:repeated_model_decision_without_new_runtime_evidence",
         )
         self.assertEqual(duplicate.status, "PAUSED")
+
+    def test_advice_can_mention_invalid_v9_envelope_without_being_tool_call(self):
+        nonce = "d" * 32
+        response = review_reply('"nonce":"%s"' % nonce)
+        self.assertIn("missing_smartagent_tool_envelope", response)
+        advice = parse_review_response(response, nonce=nonce)
+        self.assertIn("missing_smartagent_tool_envelope", advice["failure_analysis"])
+        self.assertEqual(advice["schema"], SCHEMA)
+        # An actual tool envelope is still not a standalone JSON review.
+        with self.assertRaises(ValueError):
+            parse_review_response(
+                "```smartagent_tool\\n" + response + "\\n```",
+                nonce=nonce,
+            )
 
     def test_reject_tool_blocks_wrong_nonce_duplicate_json_and_extra_fields(self):
         original = review_reply('"nonce":"%s"' % ("b" * 32))
