@@ -4,16 +4,28 @@ rem TEMPORARY GAR A0/C1 regression runner. Remove before merging to main.
 rem Does not change Git/Source/Manifest, or start/stop Controller.
 
 set "REQUIRED_FIX_SHA=f4be45552e1e1916ff12916911f94b41f437382c"
-cd /d "%~dp0" || goto :FATAL
+cd /d "%~dp0" || (
+  echo [ERROR] Cannot enter runner folder: %~dp0
+  goto :FATAL
+)
 if not exist "source\WebAgent\tests\validate_gar_a0_identity.py" (
   echo [ERROR] Missing GAR A0 test source. Checkout the updated GAR branch.
   goto :FATAL
 )
-if not exist "config\protocol_manifest.json" goto :FATAL
+if not exist "config\protocol_manifest.json" (
+  echo [ERROR] Strict Manifest missing: "%CD%\config\protocol_manifest.json"
+  echo [HINT] Use a complete checkout with matching Source Manifest.
+  goto :FATAL
+)
 
 set "CURRENT_SHA="
 for /f "delims=" %%I in ('git rev-parse HEAD 2^>nul') do set "CURRENT_SHA=%%I"
-if not defined CURRENT_SHA goto :FATAL
+if not defined CURRENT_SHA (
+  echo [ERROR] Cannot determine Git HEAD in "%CD%".
+  echo [HINT] This may be a deployed/copy-only folder without .git.
+  echo [HINT] For exact-SHA regression use the Git checkout at the candidate commit.
+  goto :FATAL
+)
 git merge-base --is-ancestor %REQUIRED_FIX_SHA% HEAD >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] Current Git HEAD is not the GAR A0 source-fix commit or its descendant.
