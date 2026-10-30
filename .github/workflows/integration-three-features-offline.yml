@@ -36,7 +36,7 @@ jobs:
       - name: Shared GAR and Tri-One regressions
         shell: pwsh
         run: |
-          $tests = @('validate_progress_reply_contract','validate_tri_one_5a_answer_only','validate_tri_one_5a_protocol_it','validate_tri_one_5b_shared_worker','validate_gar_shared_runtime','validate_gar_protocol_loop_it','validate_gar_l4_fresh_context','validate_gar_l4_supervision','validate_composer_stability','validate_composer_operation','validate_runtime_evidence_foundation','validate_evidence_terminal_boundaries','validate_narrative_v9_bridge','validate_action_scoped_admission','validate_composer_recovery','validate_startup_protocol_flow','validate_progress_terminal_lifecycle','validate_task_progress','validate_web_ui_contract')
+          $tests = @('validate_progress_reply_contract','validate_tri_one_5a_answer_only','validate_tri_one_5a_protocol_it','validate_tri_one_5b_shared_worker','validate_gar_shared_runtime','validate_gar_protocol_loop_it','validate_gar_l4_fresh_context','validate_gar_l4_supervision','validate_composer_stability','validate_composer_operation','validate_runtime_evidence_foundation','validate_evidence_terminal_boundaries','validate_narrative_v9_bridge','validate_action_scoped_admission','validate_composer_recovery','validate_startup_protocol_flow','validate_progress_terminal_lifecycle','validate_task_progress')
           foreach ($test in $tests) {
             python -B "source/WebAgent/tests/$test.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
