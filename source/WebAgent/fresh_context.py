@@ -1,9 +1,11 @@
 """GAR L4: transport-verified fresh Planner context in the SAME browser profile.
 
-No new browser, tab, login, implicit chat navigation, or old-request replay.
-The operator must explicitly prepare a *different* existing conversation tab
-and pin its exact URL using SMARTAGENT_GAR_FRESH_CONTEXT_URL. This adapter
-only attaches to that page while the original worker owns the page lease.
+No new browser profile, login, L4-time tab creation, or old-request replay.
+When SMARTAGENT_GAR_FRESH_CONTEXT_URL is explicitly set, the WebDirect
+Controller prepares exactly one DISTINCT existing conversation tab at startup
+(reuses it if already open); the L4 Adapter still only attaches to the verified
+pre-existing tab under the original worker's page lease. Startup preparation
+never sends an L4 bootstrap or acquires a fresh task owner.
 
 The original response/outbox stays attached to the original request route.
 """
@@ -19,6 +21,84 @@ from agent_core.conversation_identity import (
     conversation_id, conversation_provider, same_conversation,
 )
 from agent_core.goal_anchored_recovery import FreshContextProof
+
+def ensure_fresh_context_page(*, context, original_page, target_url: str) -> dict:
+    """Prepare exactly one second tab in the existing BrowserContext at startup.
+
+    No bootstrap, no task replay, no owner claim, no original-page navigation.
+    Existing pages are not closed or navigated. Fail closed on duplicates and
+    foreign ownership. The actual L4 adapter still checks every admission gate.
+    """
+    from agent_core.conversation_ownership import ConversationOwnershipRegistry
+    from agent_core.paths import source_root
+    from WebAgent.browser_bridge import (
+        _conversation_ready, execution_page_lease, normalize_conversation_url,
+    )
+    from agent_core.shared_browser import shared_browser_enabled, mark_shared_page
+
+    target = normalize_conversation_url(str(target_url or "").strip())
+    original_url = str(getattr(original_page, "url", "") or "")
+    expected_id = conversation_id(target)
+    original_id = conversation_id(original_url)
+    if not expected_id or not original_id:
+        raise RuntimeError("GAR_L4_STARTUP_EXPLICIT_CONVERSATION_REQUIRED")
+    if (same_conversation(original_url, target)
+            or conversation_provider(target) != conversation_provider(original_url)):
+        raise RuntimeError("GAR_L4_STARTUP_TARGET_NOT_DISTINCT")
+
+    with execution_page_lease(label="GAR L4 startup second-conversation tab"):
+        if not getattr(context, "pages", None) or original_page not in context.pages:
+            raise RuntimeError("GAR_L4_STARTUP_ORIGINAL_PAGE_NOT_ATTACHED")
+        if bool(original_page.is_closed()):
+            raise RuntimeError("GAR_L4_STARTUP_ORIGINAL_PAGE_CLOSED")
+        matches = [
+            page for page in list(context.pages)
+            if not bool(page.is_closed())
+            and same_conversation(str(getattr(page, "url", "") or ""), target)
+        ]
+        if len(matches) > 1 or (matches and matches[0] is original_page):
+            raise RuntimeError("GAR_L4_STARTUP_TARGET_NOT_UNIQUE")
+        if ConversationOwnershipRegistry(source_root()).references(target):
+            raise RuntimeError("GAR_L4_STARTUP_TARGET_ALREADY_OWNED")
+        created = not matches
+        page = matches[0] if matches else None
+        try:
+            if created:
+                # This creates only a TAB, not a browser profile or a new
+                # conversation. Navigation is to the operator's existing /c/ ID.
+                page = context.new_page()
+                if shared_browser_enabled():
+                    mark_shared_page(page)
+                _conversation_ready(page, target)
+            actual = str(getattr(page, "url", "") or "")
+            if not same_conversation(actual, target):
+                raise RuntimeError("GAR_L4_STARTUP_TARGET_IDENTITY_MISMATCH")
+            if page is original_page or bool(page.is_closed()):
+                raise RuntimeError("GAR_L4_STARTUP_TARGET_UNAVAILABLE")
+            duplicates = [
+                item for item in list(context.pages)
+                if not bool(item.is_closed())
+                and same_conversation(str(getattr(item, "url", "") or ""), target)
+            ]
+            if len(duplicates) != 1 or duplicates[0] is not page:
+                raise RuntimeError("GAR_L4_STARTUP_TARGET_NOT_UNIQUE")
+            # A newly created tab usually steals focus. Restore the original
+            # WebCopilot page before accepting requests from its input bridge.
+            original_page.bring_to_front()
+        except BaseException:
+            if created and page is not None:
+                try:
+                    page.close()  # Only the tab created by THIS startup.
+                except Exception:
+                    pass
+            raise
+        return {
+            "created": created,
+            "target_conversation_id": expected_id,
+            "same_context": True,
+            "bootstrap_sent": False,
+        }
+
 
 
 @dataclass
@@ -171,4 +251,5 @@ class ExistingConversationFreshAdapter:
             raise
 
 
-__all__ = ["ExistingConversationFreshAdapter", "FreshPlannerBinding"]
+__all__ = ["ExistingConversationFreshAdapter", "FreshPlannerBinding",
+           "ensure_fresh_context_page"]

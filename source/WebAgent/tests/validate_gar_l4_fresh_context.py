@@ -191,5 +191,128 @@ class FreshBrowserAdmissionTests(unittest.TestCase):
         binding.close()
 
 
+
+class FreshStartupPageTests(unittest.TestCase):
+    """User-supplied target URL creates/reuses a tab, never sends Bootstrap."""
+
+    class BrowserPage:
+        def __init__(self, url="about:blank"):
+            self.url = url
+            self.closed = False
+            self.focused = 0
+        def is_closed(self):
+            return self.closed
+        def bring_to_front(self):
+            self.focused += 1
+        def close(self):
+            self.closed = True
+
+    class BrowserContext:
+        def __init__(self, original, *others):
+            self.pages = [original, *others]
+            self.created = []
+        def new_page(self):
+            page = FreshStartupPageTests.BrowserPage()
+            self.created.append(page)
+            self.pages.append(page)
+            return page
+
+    def setUp(self):
+        Client.bootstraps.clear()
+        Registry.references_count = 0
+        self.old = self.BrowserPage("https://chatgpt.com/c/old")
+        self.target = (
+            "https://chatgpt.com/g/g-p-localagentspace/c/fresh"
+        )
+        self.visited = []
+
+    def _prepare(self, context, target=None, *, fail_navigation=False):
+        from contextlib import nullcontext
+        from WebAgent.fresh_context import ensure_fresh_context_page
+
+        def ready(page, url):
+            self.visited.append(url)
+            if fail_navigation:
+                raise RuntimeError("GAR_L4_TEST_NAVIGATION_FAILED")
+            page.url = url
+
+        with patch("WebAgent.browser_bridge.execution_page_lease",
+                   side_effect=lambda **kw: nullcontext()), \
+             patch("WebAgent.browser_bridge._conversation_ready",
+                   side_effect=ready), \
+             patch("agent_core.conversation_ownership.ConversationOwnershipRegistry",
+                   Registry), \
+             patch("agent_core.shared_browser.shared_browser_enabled",
+                   return_value=False):
+            return ensure_fresh_context_page(
+                context=context, original_page=self.old,
+                target_url=target if target is not None else self.target,
+            )
+
+    def test_fresh_target_is_opened_once_in_existing_context(self):
+        context = self.BrowserContext(self.old)
+        data = self._prepare(context)
+        self.assertTrue(data["created"])
+        self.assertFalse(data["bootstrap_sent"])
+        self.assertTrue(data["same_context"])
+        self.assertEqual(len(context.pages), 2)
+        self.assertEqual(context.created[0].url, self.target)
+        self.assertEqual(self.visited, [self.target])
+        self.assertEqual(self.old.url, "https://chatgpt.com/c/old")
+        self.assertEqual(self.old.focused, 1)
+        self.assertFalse(self.old.closed)
+        self.assertEqual(Client.bootstraps, [])
+        again = self._prepare(context)
+        self.assertFalse(again["created"])
+        self.assertEqual(len(context.pages), 2)
+        self.assertEqual(len(context.created), 1)
+        self.assertEqual(self.visited, [self.target])
+        self.assertEqual(self.old.focused, 2)
+
+    def test_already_open_target_is_reused_without_navigation(self):
+        existing = self.BrowserPage("https://chatgpt.com/c/fresh")
+        context = self.BrowserContext(self.old, existing)
+        result = self._prepare(context)
+        self.assertFalse(result["created"])
+        self.assertEqual(len(context.created), 0)
+        self.assertEqual(existing.url, "https://chatgpt.com/c/fresh")
+        self.assertEqual(self.visited, [])
+        self.assertEqual(self.old.focused, 1)
+
+    def test_invalid_same_provider_mismatch_and_duplicate_fail_closed(self):
+        for target in ("https://chatgpt.com/", self.old.url,
+                       "https://claude.ai/chat/fresh"):
+            with self.subTest(target=target):
+                context = self.BrowserContext(self.old)
+                with self.assertRaises(RuntimeError):
+                    self._prepare(context, target=target)
+                self.assertEqual(context.created, [])
+                self.assertFalse(self.old.closed)
+                self.assertEqual(Client.bootstraps, [])
+        second = self.BrowserPage("https://chatgpt.com/c/fresh")
+        third = self.BrowserPage(self.target)
+        context = self.BrowserContext(self.old, second, third)
+        with self.assertRaisesRegex(RuntimeError, "NOT_UNIQUE"):
+            self._prepare(context)
+        self.assertFalse(second.closed)
+        self.assertFalse(third.closed)
+        self.assertEqual(len(context.created), 0)
+
+    def test_foreign_owner_or_navigation_failure_keeps_original_untouched(self):
+        context = self.BrowserContext(self.old)
+        Registry.references_count = 1
+        with self.assertRaisesRegex(RuntimeError, "ALREADY_OWNED"):
+            self._prepare(context)
+        self.assertEqual(context.created, [])
+        Registry.references_count = 0
+        with self.assertRaisesRegex(RuntimeError, "NAVIGATION_FAILED"):
+            self._prepare(context, fail_navigation=True)
+        self.assertEqual(len(context.created), 1)
+        self.assertTrue(context.created[0].closed)
+        self.assertFalse(self.old.closed)
+        self.assertEqual(self.old.url, "https://chatgpt.com/c/old")
+        self.assertEqual(Client.bootstraps, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

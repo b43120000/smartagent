@@ -403,6 +403,31 @@ def main(argv: list[str] | None = None) -> int:
         state_dir=state_dir,
         send_prompt=client.ask,
     )
+    # L4 target URL is an explicit operator request to prepare a second tab.
+    # No fresh Bootstrap is submitted until the real GAR L4 decision.
+    fresh_target = os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+    if fresh_target:
+        from WebAgent.fresh_context import ensure_fresh_context_page
+        try:
+            prepared = ensure_fresh_context_page(
+                context=context, original_page=page, target_url=fresh_target,
+            )
+        except Exception as exc:
+            runtime_log.emit("gar_fresh_context_page_prepare_failed",
+                             reason_code=str(exc) if isinstance(exc, RuntimeError)
+                             else "GAR_L4_STARTUP_PREPARE_ERROR",
+                             exception_type=type(exc).__name__)
+            raise
+        target_digest = hashlib.sha256(
+            prepared["target_conversation_id"].encode("utf-8")
+        ).hexdigest()
+        runtime_log.emit("gar_fresh_context_page_prepared",
+                         created=prepared["created"], reused=not prepared["created"],
+                         target_conversation_digest=target_digest,
+                         same_context=True, bootstrap_sent=False)
+        print("[WebAgent] GAR L4 target tab ready "
+              f"({'created' if prepared['created'] else 'reused'}; no bootstrap sent).",
+              flush=True)
     # D1 temporary test: arm only an exact safe, one-shot WebDirect task.
     # Bootstrap and all L4 Fresh Planner calls continue over real Browser.
     d1_test_enabled = os.environ.get("SMARTAGENT_GAR_D1_FAULT_INJECTION_V1", "").strip() == "1"
