@@ -20,6 +20,7 @@ SINGLE_LIMIT = 3 * 1024 * 1024
 TOTAL_LIMIT = 64 * 1024 * 1024
 CAPTURE_FILES = frozenset({
     "capture.json", "extracted_response.txt", "dom_turn_inner_text.txt",
+    "dom_selected_structure.json",
 })
 REGRESSION_FILES = frozenset({
     "summary.txt", "validate_shared_runtime_sr02_sr03.log",

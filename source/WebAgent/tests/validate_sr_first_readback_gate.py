@@ -73,6 +73,12 @@ class SRFirstReadbackIT(unittest.TestCase):
                     self.assertEqual(data["diagnostic"]["repair_prompts_sent"], 0)
                     self.assertEqual(data["diagnostic"]["semantic_ack_admission"], "NOT_RUN")
                     self.assertEqual(data["dom_and_extractor_equal"], True)
+                    structure = json.loads(
+                        (result.capture_dir / "dom_selected_structure.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    self.assertEqual(structure["status"], "SELECTOR_API_UNAVAILABLE")
                     self.assertEqual(
                         (result.capture_dir / "extracted_response.txt").read_text(encoding="utf-8"),
                         raw,

@@ -69,6 +69,37 @@ def _selected_dom_turn_text(assistant_turn) -> tuple[str | None, str]:
         return None, "DOM_TURN_READ_ERROR_" + type(exc).__name__
 
 
+def _selected_dom_structure(assistant_turn) -> dict:
+    """Bounded, text-only structure of the selected assistant subtree.
+
+    This captures pre/code/table independently from the text extractor,
+    without dumping outerHTML, attributes, scripts or whole-page DOM.
+    """
+    node = getattr(assistant_turn, "element", assistant_turn)
+    query = getattr(node, "query_selector_all", None)
+    result: dict = {}
+    if not callable(query):
+        return {"status": "SELECTOR_API_UNAVAILABLE"}
+    for selector, label in (("pre", "pre"), ("code", "code"), ("table", "table")):
+        try:
+            elements = list(query(selector))
+            snippets = []
+            for element in elements[:32]:
+                getter = getattr(element, "inner_text", None)
+                if callable(getter):
+                    value, truncated = _clamp_text(str(getter() or ""))
+                    snippets.append({"text": value, "truncated": truncated})
+            result[label] = {
+                "count": len(elements),
+                "captured": len(snippets),
+                "first_32_texts": snippets,
+            }
+        except Exception as exc:
+            result[label] = {"read_error": type(exc).__name__}
+    result["status"] = "SELECTED_ASSISTANT_SUBTREE_ONLY"
+    return result
+
+
 def classify(raw_text: str, *, action_seed: str = "") -> dict:
     """Classify original transport and all normalization without admitting it."""
     source = str(raw_text or "")
@@ -183,5 +214,10 @@ def capture_first_readback(
         (target / "dom_turn_inner_text.txt").write_text(dom_saved, encoding="utf-8")
     (target / "capture.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    (target / "dom_selected_structure.json").write_text(
+        json.dumps(_selected_dom_structure(assistant_turn),
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     return SRFirstReadbackCaptured(target, verdict["verdict"])
