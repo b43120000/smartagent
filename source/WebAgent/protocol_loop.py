@@ -3895,6 +3895,36 @@ class WebAgentProtocolLoop:
                 self._emit("tri_one_answer_only_candidate",
                            request_id=self.run_id, round=self.turn_id,
                            eligible=answer_only_admission, reason=answer_reason)
+                # A status marker is NOT a tool result. If it was explicitly
+                # cited in an otherwise eligible no-action final, reject with
+                # precise repair guidance; never silently strip model refs.
+                if (not answer_only_admission
+                        and answer_reason == "action_evidence_cannot_be_answer_only"):
+                    refs = set(normalized_progress.get("evidence_refs") or [])
+                    if refs and refs <= {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}:
+                        no_refs = {**normalized_progress, "evidence_refs": []}
+                        safe_without_refs, _ = accept_terminal_candidate(
+                            self, no_refs, final_action,
+                        )
+                        if safe_without_refs:
+                            self._emit(
+                                "tri_one_answer_only_status_refs_rejected",
+                                request_id=self.run_id, round=self.turn_id,
+                                ref_count=len(refs),
+                                action_history_count=len(self.action_ledger),
+                            )
+                            return [], [{
+                                "marker": "[WEBAGENT_PROGRESS_REJECTED]",
+                                "reason": "answer_only_status_markers_not_action_evidence",
+                                "detail": "Runtime status markers are not Action Results; no action evidence was recorded.",
+                                "suggestion": (
+                                    "If the original request only needs text, keep the "
+                                    "exclusive final_response and correct report_progress "
+                                    "by OMITTING evidence_refs (or explicitly setting []). "
+                                    "Never invent or cite status markers as tool verification. "
+                                    "If any action was executed, use the ordinary verified Action Loop."
+                                ),
+                            }]
         if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED" and not answer_only_admission:
             final_action = next(
                 (item for item in operational if item.get("tool") == "final_response"),
