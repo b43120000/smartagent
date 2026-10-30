@@ -189,8 +189,12 @@ def test_multiline_first_line_truncation_is_avoided_without_replay():
     prompt = (header + rest + '\n```smartagent_tool\n{}\n```')[:11707]
     assert len(prompt) >= 4096 and '\n' in prompt
     units = list(co._composer_write_units(prompt))
+    batches = list(co._composer_write_batches(prompt))
     assert co.composer_write_unit_count(prompt) == len(units)
+    assert len(batches) < len(units)
     assert ''.join(prompt[a:b] for a,b,_,_ in units) == prompt
+    assert ''.join(prompt[a:b] for a,b,_ in batches) == prompt
+    assert all(b-a <= 1024 for a,b,_ in batches)
     assert all(b-a <= 1024 or is_break for a,b,_,is_break in units)
     assert all(('\n' not in value and '\r' not in value)
                for _,_,value,is_break in units if not is_break)
@@ -216,7 +220,7 @@ def test_multiline_first_line_truncation_is_avoided_without_replay():
                        for kind,value in scraper.keyboard_calls)
         assert '中文相機驗證' not in journal.read_text(encoding='utf-8')
         assert 'WUS-' not in journal.read_text(encoding='utf-8')
-        assert len([x for x in scraper.logged if x[0] == 'composer_chunk_verified']) == len(units)
+        assert len([x for x in scraper.logged if x[0] == 'composer_chunk_verified']) == len(batches)
 
     with tempfile.TemporaryDirectory(prefix='gar-composer-multiline-fail-') as tmp:
         journal = Path(tmp) / 'journal.json'
@@ -233,9 +237,10 @@ def test_multiline_first_line_truncation_is_avoided_without_replay():
             else:
                 raise AssertionError('Unknown draft must not pass')
         assert clock.now >= 8.0
-        assert record['readback_failure']['unit_kind'] == 'text'
-        assert 'confirmed_prefix' in record
-        assert record['confirmed_prefix']['chars'] < len(prompt)
+        assert record['readback_failure']['unit_kind'] == 'mixed'
+        assert record['readback_failure']['input_units'] == len(batches[0][2])
+        assert 'confirmed_prefix' not in record
+        assert record['pending_prefix']['chars'] == batches[0][1]
         assert not any(x[1] in ('Enter', 'Control+A', 'Backspace')
                        for x in scraper.keyboard_calls if x[0] == 'press')
         # The first rejected unit is attempted once; never rewrite it.
