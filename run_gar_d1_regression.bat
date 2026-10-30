@@ -51,29 +51,33 @@ if errorlevel 1 (
   goto :FATAL
 )
 rem Match launch_webcopilot.bat first; do not depend on global Python PATH.
-set "PY_CMD="
+set "PY_EXE="
+set "PY_ARGS="
 if exist "%CD%\.venv\Scripts\python.exe" (
-  set "PY_CMD=\"%CD%\.venv\Scripts\python.exe\""
+  set "PY_EXE=%CD%\.venv\Scripts\python.exe"
 ) else (
   python -c "import sys; assert sys.version_info >= (3,10)" >nul 2>&1
-  if not errorlevel 1 set "PY_CMD=python"
-  if not defined PY_CMD (
+  if not errorlevel 1 set "PY_EXE=python"
+  if not defined PY_EXE (
     py -3 -c "import sys; assert sys.version_info >= (3,10)" >nul 2>&1
-    if not errorlevel 1 set "PY_CMD=py -3"
+    if not errorlevel 1 (
+      set "PY_EXE=py"
+      set "PY_ARGS=-3"
+    )
   )
 )
-if not defined PY_CMD (
+if not defined PY_EXE (
   echo [ERROR] No usable Python 3.10+ found.
   echo [HINT] WebCopilot normally uses .venv\Scripts\python.exe.
   echo [HINT] Check the installed virtualenv in this SAME checkout.
   goto :FATAL
 )
-%PY_CMD% -c "import sys; print(sys.executable); assert sys.version_info >= (3,10)"
+"%PY_EXE%" %PY_ARGS% -c "import sys; print(sys.executable); assert sys.version_info >= (3,10)"
 if errorlevel 1 (
   echo [ERROR] Selected project Python is not usable or is older than 3.10.
   goto :FATAL
 )
-echo [D1 Preflight] Python: %PY_CMD%
+echo [D1 Preflight] Python: "%PY_EXE%" %PY_ARGS%
 set "PYTHONPATH=%CD%\source"
 set "PYTHONDONTWRITEBYTECODE=1"
 set "SMARTAGENT_GAR_D1_FAULT_INJECTION_V1=0"
@@ -133,7 +137,7 @@ set /a TOTAL+=1
 set "NAME=%~1"
 set "LOG=%LOGDIR%\%NAME%.log"
 echo [%TOTAL%/12] %NAME%
-%PY_CMD% -B "source\WebAgent\tests\%NAME%.py" > "%LOG%" 2>&1
+"%PY_EXE%" %PY_ARGS% -B "source\WebAgent\tests\%NAME%.py" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
   set /a PASSED+=1
@@ -151,7 +155,7 @@ set /a TOTAL+=1
 set "NAME=strict_manifest"
 set "LOG=%LOGDIR%\%NAME%.log"
 echo [%TOTAL%/12] %NAME%
-%PY_CMD% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
+"%PY_EXE%" %PY_ARGS% -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
   set /a PASSED+=1
