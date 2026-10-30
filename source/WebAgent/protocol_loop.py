@@ -341,6 +341,7 @@ class WebAgentProtocolLoop:
         self._gar_fresh_adapter = fresh_context_adapter
         self._gar_fresh_binding = None
         self._gar_local_handoff_reported = False
+        self._gar_last_blocker_reason = ""
 
     def _gar_l4_activate(self, snapshot):
         """Switch only after Runtime and browser both verify a distinct context.
@@ -443,7 +444,7 @@ class WebAgentProtocolLoop:
                 goal=self._gar.original_request,
                 progress=progress,
                 checkpoint=checkpoint,
-                reason=self._gar.diagnostic()["last_reason"],
+                reason=self._gar_last_blocker_reason or "PROTOCOL_REJECTED",
                 nonce=nonce,
             )
             raw = binding.review(question)
@@ -615,6 +616,7 @@ class WebAgentProtocolLoop:
         reason = str(next((item.get("reason") for item in diagnostics
                            if isinstance(item, dict) and item.get("reason")),
                           "PROTOCOL_REJECTED"))
+        self._gar_last_blocker_reason = reason
         # Only Runtime-recorded evidence changes the generation, not new
         # Action IDs, prose, retries or merely executed=True.
         generation = json.dumps([
@@ -4330,6 +4332,7 @@ class WebAgentProtocolLoop:
         # Each request owns a fresh repair and no-progress budget.
         self._bounded_repair = BoundedRepairBudget()
         self._gar_local_handoff_reported = False
+        self._gar_last_blocker_reason = ""
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
