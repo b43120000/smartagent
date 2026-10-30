@@ -367,6 +367,34 @@ def test_last_assistant_prewrite_readiness_gate():
 
     assert not co._same_turns(snapshot('LAST_USER'), snapshot('LAST_ASSISTANT'))
 
+    # The parent must surface the exact trusted PREWRITE reason: no writer
+    # mutation, no observer replay, and no unknown-draft quarantine.
+    with tempfile.TemporaryDirectory(prefix='gar-prewrite-gate-') as temp:
+        args = dict(endpoint='http://127.0.0.1:1272',
+                    url='https://chatgpt.com/c/test',
+                    prompt='never-send', journal_root=temp)
+        def refusal(payload, *_a, **_kw):
+            assert payload['mode'] == 'write'
+            return dict(status='PREWRITE_UNSTABLE', reason_code='LAST_USER',
+                        mutation_possible=False, samples_observed=5)
+        with patch.object(co, 'run_helper', side_effect=refusal) as writer, \
+             patch.object(co, 'observe_composer', side_effect=AssertionError('No observer needed')):
+            try:
+                co.prepare_composer(**args)
+            except co.ComposerOperationError as exc:
+                assert str(exc) == 'composer_pre_write_failed'
+                assert exc.evidence['status'] == 'PREWRITE_UNSTABLE'
+                assert exc.evidence['reason_code'] == 'LAST_USER'
+                assert exc.evidence['mutation_possible'] is False
+            else:
+                raise AssertionError('Unstable page must not be written to')
+            assert writer.call_count == 1
+        journal_record = json.loads(next(Path(temp).glob('*.json')).read_text('utf-8'))
+        assert journal_record['state'] == 'FAILED_PRE_WRITE'
+        assert journal_record['reason'] == 'PREWRITE_UNSTABLE'
+        assert journal_record['result']['reason_code'] == 'LAST_USER'
+        assert 'baseline' not in journal_record
+
 
 def run():
     test_bounded_chunk_readback_is_strict_and_does_not_retype()
