@@ -7,9 +7,9 @@ Previously observed Request `WA-363DF1B5D05B454C`: GAR L4 supervisor review, Web
 
 ## Narrow source change
 
-For ChatGPT prompts at least 4096 characters that contain a newline, the existing bounded Writer now preserves the prompt as a series of content units (at most 1024 characters) and explicit `Shift+Enter` non-submit line breaks. Each unit is strictly read back and Journal-checkpointed before proceeding. No blind replay, bulk clear, unsafe verification bypass or new Provider contract. Short prompts and long single-line inputs use the existing legacy framed `insert_text` path, preserving the WebGPT2 bootstrap flow. The whole-operation time budget grows with unit count but is capped at 240 seconds; the existing independent post-write observation and send-state verification remain authoritative.
+For ChatGPT prompts at least 4096 characters that contain a newline, the existing bounded Writer now preserves the prompt as a series of content units (at most 1024 characters) and explicit `Shift+Enter` non-submit line breaks. Physical text and non-submit newline inputs are grouped into approximately 1024-character batches. Every batch is strictly read back and Journal-checkpointed before the next batch, reducing DOM verification overhead on slower devices. No blind replay, bulk clear, unsafe verification bypass or new Provider contract. Short prompts and long single-line inputs use the existing legacy framed `insert_text` path, preserving the WebGPT2 bootstrap flow. The whole-operation time budget grows with unit count but is capped at 240 seconds; the existing independent post-write observation and send-state verification remain authoritative.
 
-The collector additionally exports `readback_failure.unit_kind` (text/soft_break) to its redacted, request-scoped ZIP.
+The collector additionally exports `readback_failure.unit_kind` (text/soft_break/mixed) and the physical input-unit count to its redacted, request-scoped ZIP.
 
 ## Offline and Live gates
 
