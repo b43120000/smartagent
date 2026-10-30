@@ -98,7 +98,35 @@ def run():
             raise AssertionError('inherited old blocker context')
         # Shared Phase-1 terminal: evidence_refs is absent from the model
         # only if the trusted V9 caller explicitly authorizes it.
+        # completed_progress() is a FAILED compilation fixture. It is
+        # intentionally ineligible for Answer-only, even when the gate is on.
+        failed_without_refs = completed_progress('P-FAILED-NO-REFS')
+        failed_without_refs.pop('evidence_refs')
+        try:
+            validate_model_progress(
+                failed_without_refs, allow_empty_terminal_candidate=True)
+        except TaskProgressError:
+            pass
+        else:
+            raise AssertionError('FAILED terminal omitted required evidence')
+
+        # The positive case is a no-tool text explanation with SUCCESS.
         omitted = completed_progress('P-OMIT')
+        omitted.update(
+            base_evaluation='Explain RAII requires only a text explanation.',
+            steps=[{'step':1,'desc':'Explain RAII','status':'COMPLETED'}],
+            current_focus='Answer ready',
+            next_action='Reply with explanation',
+            completion_contract={
+                'success':['RAII explanation provided'],
+                'failure':['Explanation unavailable'],
+                'in_progress':['Preparing RAII explanation'],
+                'interrupted':['Cannot continue explaining'],
+            },
+            outcome='SUCCESS',
+            matched_condition='RAII explanation provided',
+            decision_reason='Text-only explanation with no Tool actions',
+        )
         omitted.pop('evidence_refs')
         try:
             validate_model_progress(omitted)
@@ -108,6 +136,8 @@ def run():
             raise AssertionError('evidence omission admitted without Runtime authorization')
         checked = validate_model_progress(
             omitted, allow_empty_terminal_candidate=True)
+        assert checked['decision'] == 'COMPLETE'
+        assert checked['outcome'] == 'SUCCESS'
         assert checked['evidence_refs'] == []
         assert 'evidence_refs' not in omitted
         explicit = {**omitted, 'evidence_refs':['RUNTIME_STATUS']}
