@@ -10,7 +10,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_core.tri_one_answer_only import (
-    accept_terminal_candidate, classify_original_request, enabled,
+    accept_terminal_candidate, authorize_omitted_terminal_evidence,
+    classify_original_request, enabled,
 )
 from agent_core.tri_one_task_result import (
     TaskResultContractError, make_task_result, validate_task_result,
@@ -127,6 +128,75 @@ class AnswerOnlyPolicyTests(unittest.TestCase):
         self.assertFalse(accept_terminal_candidate(
             _loop("Explain RAII"), progress,
             {"tool":"final_response","content":"I checked your files."})[0])
+
+    def test_omitted_evidence_shared_contract_policy(self):
+        from agent_core.progress_reply_contract import (
+            materialize_progress, reply_contract,
+        )
+        plain = {"decision": "COMPLETE", "outcome": "SUCCESS",
+                 "current_focus": "answer ready", "decision_reason": "No tools"}
+        terminal = [{"tool": "final_response", "content": "RAII uses destructors."}]
+        with patch.dict(os.environ, {
+            "TRI_ONE_TASK_RESULT_V1": "1", "TRI_ONE_TEXT_ONLY_V1": "1",
+        }):
+            for origin in ("TELEGRAM", "WEB_COPILOT", "LOCAL_TEST", "WEB_DIRECT"):
+                with self.subTest(origin=origin):
+                    ok, reason = authorize_omitted_terminal_evidence(
+                        _loop("Explain RAII in C++."), plain, terminal,
+                        source=origin,
+                    )
+                    self.assertTrue(ok, reason)
+                    result = materialize_progress(
+                        plain, None, allow_omitted_answer_only_evidence=ok)
+                    self.assertEqual(result["evidence_refs"], [])
+                    self.assertNotIn("evidence_refs", plain)
+            for dirty in (
+                {"action_ledger": {"ACT-1": {"state": "SUCCEEDED"}}},
+                {"action_result_ledger": {"ACT-1": {"verification_status": "PASS"}}},
+                {"pending_result_recovery": {"active": True}},
+                {"pending_verification_requirement": {"required_action": "run_command"}},
+                {"pending_action_repair": {"active": True}},
+                {"action_loop_state": {"blockers": [{"satisfied": False}]}},
+                {"authorized_paths": ["some/path"]},
+            ):
+                allowed, _ = authorize_omitted_terminal_evidence(
+                    _loop("Explain RAII in C++.", **dirty), plain,
+                    terminal, source="WEB_COPILOT")
+                self.assertFalse(allowed, dirty)
+
+            for nonterminal in (
+                {**plain, "decision": "CONTINUE", "outcome": "PENDING"},
+                {**plain, "decision": "COMPLETE", "outcome": "FAILED"},
+                {**plain, "evidence_refs": []},
+                {**plain, "evidence_refs": ["RUNTIME_STATUS"]},
+            ):
+                allowed, _ = authorize_omitted_terminal_evidence(
+                    _loop("Explain RAII in C++."), nonterminal,
+                    terminal, source="WEB_COPILOT")
+                self.assertFalse(allowed)
+
+            extra = [*terminal, {"tool": "read_file", "path": "x"}]
+            allowed, _ = authorize_omitted_terminal_evidence(
+                _loop("Explain RAII in C++."), plain, extra,
+                source="WEB_COPILOT")
+            self.assertFalse(allowed)
+        self.assertFalse(authorize_omitted_terminal_evidence(
+            _loop("Explain RAII"), plain, terminal, source="WEB_COPILOT")[0]
+        ) if not enabled(source="WEB_COPILOT") else None
+        self.assertNotIn("evidence_refs", plain)
+        # The generalized Progress module still refuses missing evidence by
+        # default, including non-terminal Progress and action-bearing tasks.
+        self.assertNotIn("evidence_refs", materialize_progress(plain, None))
+        self.assertEqual(
+            materialize_progress({**plain, "evidence_refs": ["RUNTIME_STATUS"]},
+                                 None, allow_omitted_answer_only_evidence=True
+                                 )["evidence_refs"],
+            ["RUNTIME_STATUS"],
+        )
+        meta = reply_contract(None)
+        self.assertIn("evidence_refs", meta["normally_required"])
+        self.assertNotIn("evidence_refs", meta["always_required"])
+        self.assertIn("answer_only_terminal", meta["conditional"])
 
     def test_result_roundtrip_and_no_fake_action_pass(self):
         result = _make()
