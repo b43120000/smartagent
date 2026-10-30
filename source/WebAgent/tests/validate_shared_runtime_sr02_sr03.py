@@ -84,13 +84,14 @@ class SR02SR03FormatTest(unittest.TestCase):
         original = json_content()
         self.assertIn("SR03_END", original)
         self.assertIn("繁體中文", original)
-        self.assertIn(r"C:\camera\tests\ae.json", original)
+        self.assertIn(r"C:\\camera\\tests\\ae.json", original)
         calls, errors = parse_v9_tool_transport(make_wire(original))
         self.assertEqual(errors, [])
         self.assertEqual(calls[1]["content"], original)
         embedded = calls[1]["content"]
         json_block = embedded.split(FENCE + "json\n", 1)[1].split("\n" + FENCE, 1)[0]
         restored = json.loads(json_block)
+        self.assertEqual(restored["config"]["paths"][0], r"C:\camera\tests\ae.json")
         self.assertEqual(restored["config"]["quotes"], 'A "quoted" value')
         self.assertEqual(restored["config"]["lines"], "line1\nline2\tTabbed")
         self.assertEqual(restored["config"]["embedded_markdown"].count(FENCE), 2)
