@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import hashlib
 import json
 import os
 import time
@@ -26,6 +27,20 @@ from .protocol_loop import WebAgentProtocolLoop
 from .runtime_log import WebAgentRuntimeLog
 from .session import ensure_webagent_session
 from agent_core.task_continuation import TaskContinuationStore, local_owner, render_task_reply
+
+# A/B startup experiment: twice the existing 2-second scraper startup settle.
+# CDP reuse does not pass through the scraper startup delay; this gate does.
+INITIAL_SESSION_SETTLE_SEC = 4.0
+
+
+def wait_for_initial_session_settle(page, expected_id: str, *, sleep_fn=None) -> None:
+    """Pre-first-prompt delay only; never alter Composer recovery or journals."""
+    (sleep_fn if sleep_fn is not None else time.sleep)(INITIAL_SESSION_SETTLE_SEC)
+    if page.is_closed():
+        raise RuntimeError("webagent_initial_session_page_closed_after_settle")
+    current_id = conversation_id(str(getattr(page, "url", "") or ""))
+    if not current_id or current_id != expected_id:
+        raise RuntimeError("webagent_initial_session_conversation_changed_after_settle")
 
 
 def prepare_browser_input_bridge(page, attached_pw=None):
@@ -306,6 +321,18 @@ def main(argv: list[str] | None = None) -> int:
     client = WebAgentBrowserClient(scraper, event_sink=runtime_log.emit)
     runtime_log.emit("browser_attached", mode=mode, conversation_url=selected_url)
     print(f"[WebAgent] 已開啟指定對話窗: {selected_url}", flush=True)
+    # Delay the first bootstrap/session-attach request on the actual CDP path.
+    # A previous ComposerOperation journal still takes the unchanged fail-closed
+    # recovery route; time passing never authorizes cleanup, reset or replay.
+    runtime_log.emit(
+        "webagent_initial_session_settle_started",
+        wait_sec=INITIAL_SESSION_SETTLE_SEC, browser_mode=mode,
+    )
+    wait_for_initial_session_settle(page, selected_id)
+    runtime_log.emit(
+        "webagent_initial_session_settle_completed",
+        wait_sec=INITIAL_SESSION_SETTLE_SEC, browser_mode=mode,
+    )
     print("[WebAgent] 步驟 3/4：正在建立 session 並發送 WebAgent/smartagent_tool 協議...", flush=True)
     session = ensure_webagent_session(
         workspace=workspace,
@@ -313,6 +340,31 @@ def main(argv: list[str] | None = None) -> int:
         state_dir=state_dir,
         send_prompt=client.ask,
     )
+    # L4 target URL is an explicit operator request to prepare a second tab.
+    # No fresh Bootstrap is submitted until the real GAR L4 decision.
+    fresh_target = os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+    if fresh_target:
+        from WebAgent.fresh_context import ensure_fresh_context_page
+        try:
+            prepared = ensure_fresh_context_page(
+                context=context, original_page=page, target_url=fresh_target,
+            )
+        except Exception as exc:
+            runtime_log.emit("gar_fresh_context_page_prepare_failed",
+                             reason_code=str(exc) if isinstance(exc, RuntimeError)
+                             else "GAR_L4_STARTUP_PREPARE_ERROR",
+                             exception_type=type(exc).__name__)
+            raise
+        target_digest = hashlib.sha256(
+            prepared["target_conversation_id"].encode("utf-8")
+        ).hexdigest()
+        runtime_log.emit("gar_fresh_context_page_prepared",
+                         created=prepared["created"], reused=not prepared["created"],
+                         target_conversation_digest=target_digest,
+                         same_context=True, bootstrap_sent=False)
+        print("[WebAgent] GAR L4 target tab ready "
+              f"({'created' if prepared['created'] else 'reused'}; no bootstrap sent).",
+              flush=True)
     loop = WebAgentProtocolLoop(
         workspace,
         lambda prompt, expected, attachments: live_planner(
@@ -322,6 +374,16 @@ def main(argv: list[str] | None = None) -> int:
         progress_root=runtime_root,
         continuation_store=TaskContinuationStore(runtime_root),
         continuation_owner=local_owner(),
+        fresh_context_adapter=(
+            __import__(
+                "WebAgent.fresh_context", fromlist=["ExistingConversationFreshAdapter"]
+            ).ExistingConversationFreshAdapter(
+                client=client, workspace=workspace, session_root=runtime_root,
+                display_name="WebDirect",
+            )
+            if os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+            else None
+        ),
     )
     if bootstrap_pending:
         loop.tools.enable_bootstrap_install_policy(runtime_root)
@@ -414,20 +476,45 @@ def main(argv: list[str] | None = None) -> int:
                 if lifecycle is not None:
                     lifecycle.emit("VALIDATING", request_id=(test_envelope.request_id if test_envelope is not None else ""))
                     lifecycle.emit("EXECUTING", request_id=(test_envelope.request_id if test_envelope is not None else ""))
-                final_content = loop.run(
-                    request,
-                    request_id=(
-                        test_envelope.request_id if test_envelope is not None else ""
-                    ),
-                    initial_attachments=(
-                        list(test_envelope.attachment_paths)
-                        if test_envelope is not None
-                        else None
-                    ),
-                    source_tag=(
-                        "TRI_ONE_TEST_V1" if test_envelope is not None else ""
-                    ),
+                # GAR L4 uses the same cross-interface page lease as
+                # RemoteAgent, including while its fresh Planner is active.
+                # No lease is acquired for ordinary legacy/flag-OFF tasks.
+                from contextlib import nullcontext
+                from agent_core.goal_anchored_recovery import enabled as gar_enabled
+                from agent_core.paths import remote_execution_page_lock_path
+                from WebAgent.browser_bridge import execution_page_lease
+                use_gar_fresh_lease = (
+                    gar_enabled()
+                    and bool(os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip())
                 )
+                page_guard = (
+                    execution_page_lease(
+                        marker_path=remote_execution_page_lock_path(runtime_root),
+                        label="WebDirect GAR L4 original and fresh conversation",
+                    ) if use_gar_fresh_lease else nullcontext()
+                )
+                with page_guard:
+                    previous_lease_owned = bool(
+                        getattr(scraper, "_execution_page_lease_owned", False)
+                    )
+                    if use_gar_fresh_lease:
+                        scraper._execution_page_lease_owned = True
+                    try:
+                        final_content = loop.run(
+                            request,
+                            request_id=(
+                                test_envelope.request_id if test_envelope is not None else ""
+                            ),
+                            initial_attachments=(
+                                list(test_envelope.attachment_paths)
+                                if test_envelope is not None else None
+                            ),
+                            source_tag=(
+                                "TRI_ONE_TEST_V1" if test_envelope is not None else ""
+                            ),
+                        )
+                    finally:
+                        scraper._execution_page_lease_owned = previous_lease_owned
                 runtime_log.emit("request_local_loop_completed", request_id=loop.run_id, final_content=final_content)
                 if bootstrap_active:
                     from WebAgent.bootstrap_provisioning import finish_bootstrap_provisioning
@@ -448,6 +535,32 @@ def main(argv: list[str] | None = None) -> int:
                     outcome=loop.terminal_outcome,
                     source_task_id=(loop.continuation_source or {}).get('task_id', ''),
                 )
+                task_result_fields = {}
+                if str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower() in {"1", "true", "yes"}:
+                    contract_error_type = ()
+                    try:
+                        from agent_core.tri_one_task_result import (
+                            TaskResultContractError,
+                            make_task_result_from_webagent_loop,
+                        )
+                        contract_error_type = TaskResultContractError
+                        task_result_fields["task_result_v1"] = make_task_result_from_webagent_loop(
+                            loop,
+                            final_content,
+                            source_interface="LOCAL_TEST" if test_envelope is not None else "WEB_DIRECT",
+                        )
+                    except Exception as exc:
+                        task_result_fields["task_result_contract_status"] = "ERROR"
+                        task_result_fields["task_result_contract_error"] = (
+                            str(exc) if isinstance(exc, contract_error_type)
+                            else "contract_build_failed:" + type(exc).__name__
+                        )
+                    runtime_log.emit(
+                        "task_result_contract",
+                        request_id=loop.run_id,
+                        task_id=loop.task_id,
+                        **task_result_fields,
+                    )
                 if "smartagent_tool" in str(rendered):
                     print("[WebAgent][WARN] 最終呈現仍是 protocol envelope；不自動重送。", flush=True)
                 else:
@@ -462,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
                             "ack_ids": list(loop.accepted_ack_ids),
                             "uploaded_attachments": list(loop.sent_attachment_paths),
                             "verification_status": loop.tools.last_verification_status,
+                            **task_result_fields,
                         },
                     )
                 if lifecycle is not None:
@@ -469,6 +583,7 @@ def main(argv: list[str] | None = None) -> int:
                         "TASK_COMPLETED",
                         request_id=loop.run_id,
                         message="已完成",
+                        **task_result_fields,
                     )
                     lifecycle.emit("WAITING_WEBGPT_SIGNAL")
                 from agent_core.task_progress import delete_progress

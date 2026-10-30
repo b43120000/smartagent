@@ -1,5 +1,6 @@
 """Bounded writer, strict evidence, cancellation and no-replay regression."""
 import inspect
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -13,7 +14,392 @@ from agent_core import composer_operation as co
 from agent_core.web_runtime import WebLLMScraper, WebScraperStageError
 
 
+def test_bounded_chunk_readback_is_strict_and_does_not_retype():
+    """Deterministic 11719-char first-chunk delayed DOM and persistent mismatch."""
+    from types import SimpleNamespace
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    class FakeScraper:
+        def __init__(self, clock, *, permanent_mismatch=False):
+            self.clock = clock
+            self.permanent_mismatch = permanent_mismatch
+            self.typed = ''
+            self.writes = []
+            self.logged = []
+            self._last_composer_validation = None
+
+            class Keyboard:
+                def press(_, key):
+                    assert key == 'Control+End'
+
+                def insert_text(_, value):
+                    self.typed += value
+                    self.writes.append(value)
+
+            self._page = SimpleNamespace(keyboard=Keyboard())
+
+        def _composer_matches_prompt(self, expected):
+            self._last_composer_validation = SimpleNamespace(
+                expected_length=len(expected),
+                observed_length=len(self.typed),
+                expected_sha256=hashlib.sha256(expected.encode()).hexdigest(),
+                observed_sha256=hashlib.sha256(self.typed.encode()).hexdigest(),
+            )
+            return (not self.permanent_mismatch and self.typed == expected
+                    and self.clock.now >= 2.4)
+
+        def _focus_composer_dom(self):
+            return SimpleNamespace(evaluate=lambda _script: None)
+
+        def _normalize_composer_text(self, value):
+            return value
+
+        def _check_cancel_requested(self, _stage):
+            return None
+
+        def _log_stage(self, stage, detail):
+            self.logged.append((stage, detail))
+
+    prompt = 'SENSITIVE_USER_PROMPT_' + 'x' * (11719 - len('SENSITIVE_USER_PROMPT_'))
+    with tempfile.TemporaryDirectory() as folder:
+        clock = Clock()
+        fake = FakeScraper(clock)
+        journal = Path(folder) / 'delayed.json'
+        record = dict(state='IN_FLIGHT')
+        with patch.object(co.time, 'monotonic', clock.monotonic), \
+             patch.object(co.time, 'sleep', clock.sleep), \
+             patch.object(co.PIT, 'record', return_value=None):
+            co._write_staged_prompt(fake, prompt, record, journal)
+        assert fake.writes == [prompt[:4096], prompt[4096:8192], prompt[8192:]]
+        assert clock.now >= 2.4 and clock.now <= 8.0
+        assert record['confirmed_prefix']['chars'] == 11719
+        assert record['pending_prefix']['chars'] == 11719
+        assert 'readback_failure' not in record
+        assert 'SENSITIVE_USER_PROMPT_' not in journal.read_text(encoding='utf-8')
+        assert len([e for e in fake.logged if e[0] == 'composer_chunk_verified']) == 3
+
+    with tempfile.TemporaryDirectory() as folder:
+        clock = Clock()
+        fake = FakeScraper(clock, permanent_mismatch=True)
+        journal = Path(folder) / 'mismatch.json'
+        record = dict(state='IN_FLIGHT')
+        with patch.object(co.time, 'monotonic', clock.monotonic), \
+             patch.object(co.time, 'sleep', clock.sleep), \
+             patch.object(co.PIT, 'record', return_value=None):
+            try:
+                co._write_staged_prompt(fake, prompt, record, journal)
+            except co.ComposerOperationError as exc:
+                assert str(exc) == 'composer_chunk_readback_failed'
+                assert exc.evidence['observed_length'] == 4096
+                assert exc.evidence['expected_length'] == 4096
+            else:
+                raise AssertionError('Unknown DOM state must fail closed')
+        assert fake.writes == [prompt[:4096]], 'never automatically rewrite a chunk'
+        assert clock.now >= 8.0 and clock.now <= 8.2
+        assert record['pending_prefix']['chars'] == 4096
+        assert 'confirmed_prefix' not in record
+        diag = record['readback_failure']
+        assert diag['chunk_start'] == 0 and diag['chunk_end'] == 4096
+        assert diag['attempts'] >= 2
+        assert diag['observed_sha256'] == hashlib.sha256(prompt[:4096].encode()).hexdigest()
+        saved = journal.read_text(encoding='utf-8')
+        assert 'SENSITIVE_USER_PROMPT_' not in saved
+        assert 'readback_failure' in saved
+
+
+def test_multiline_first_line_truncation_is_avoided_without_replay():
+    """Reproduce a browser that accepts only the first line of bulk insert_text.
+
+    Preserve V9 submit markers, Unicode, blank lines, long logical lines, and
+    markdown fences; no Enter/Send, no clear and no writer replay.
+    """
+    from types import SimpleNamespace
+
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    class FakeProseMirror:
+        def __init__(self, *, drop_after_first_newline=False):
+            self.text = ''
+            self.keyboard_calls = []
+            self.logged = []
+            self._last_composer_validation = None
+            self.drop_after_first_newline = drop_after_first_newline
+
+            class Keyboard:
+                def press(_, key):
+                    self.keyboard_calls.append(('press', key))
+                    assert key in ('Control+End', 'Shift+Enter')
+                    if key == 'Shift+Enter':
+                        self.text += '\n'
+
+                def insert_text(_, value):
+                    self.keyboard_calls.append(('insert_text', value))
+                    # This recreates the actual 17-character readback issue:
+                    # bulk multiline insert_text is only able to retain line 1.
+                    if '\n' in value:
+                        value = value.split('\n', 1)[0]
+                    if self.drop_after_first_newline and '\n' in self.text:
+                        return
+                    self.text += value
+
+            self._page = SimpleNamespace(keyboard=Keyboard())
+
+        def _composer_matches_prompt(self, expected):
+            expected = expected.replace('\r\n', '\n').replace('\r', '\n')
+            self._last_composer_validation = SimpleNamespace(
+                expected_length=len(expected), observed_length=len(self.text),
+                expected_sha256=hashlib.sha256(expected.encode()).hexdigest(),
+                observed_sha256=hashlib.sha256(self.text.encode()).hexdigest(),
+            )
+            return self.text == expected
+
+        def _focus_composer_dom(self):
+            return SimpleNamespace(evaluate=lambda script: None)
+
+        def _normalize_composer_text(self, value):
+            return value.replace('\r\n', '\n').replace('\r', '\n')
+
+        def _check_cancel_requested(self, stage):
+            assert stage == 'composer_chunk'
+
+        def _log_stage(self, stage, detail):
+            self.logged.append((stage, detail))
+
+    header = '[WEBUI_SUBMIT_ID]\nWUS-' + 'A' * 32 + '\n[/WEBUI_SUBMIT_ID]\n'
+    rest = '\n\n'.join([
+        '中文相機驗證 example line ' + str(i) + ' ü ' + ('x' * 137)
+        for i in range(80)
+    ])
+    prompt = (header + rest + '\n```smartagent_tool\n{}\n```')[:11707]
+    assert len(prompt) >= 4096 and '\n' in prompt
+    units = list(co._composer_write_units(prompt))
+    batches = list(co._composer_write_batches(prompt))
+    assert co.composer_write_unit_count(prompt) == len(units)
+    assert len(batches) < len(units)
+    assert ''.join(prompt[a:b] for a,b,_,_ in units) == prompt
+    assert ''.join(prompt[a:b] for a,b,_ in batches) == prompt
+    assert all(b-a <= 1024 for a,b,_ in batches)
+    assert all(b-a <= 1024 or is_break for a,b,_,is_break in units)
+    assert all(('\n' not in value and '\r' not in value)
+               for _,_,value,is_break in units if not is_break)
+    assert all(not value for _,_,value,is_break in units if is_break)
+    assert any(is_break for _,_,_,is_break in units)
+
+    with tempfile.TemporaryDirectory(prefix='gar-composer-multiline-ok-') as tmp:
+        journal = Path(tmp) / 'journal.json'
+        record = {'state': 'IN_FLIGHT'}
+        scraper = FakeProseMirror()
+        with patch.object(co.PIT, 'record', return_value=None):
+            co._write_staged_prompt(scraper, prompt, record, journal)
+        assert scraper.text == prompt
+        assert record['pending_prefix']['chars'] == len(prompt)
+        assert record['confirmed_prefix']['chars'] == len(prompt)
+        assert 'readback_failure' not in record
+        assert all(key != 'Enter' for kind,key in scraper.keyboard_calls if kind == 'press')
+        assert not any(key in ('Control+A', 'Backspace') for kind,key in scraper.keyboard_calls
+                       if kind == 'press')
+        assert any(kind == 'press' and key == 'Shift+Enter'
+                   for kind,key in scraper.keyboard_calls)
+        assert not any(kind == 'insert_text' and '\n' in value
+                       for kind,value in scraper.keyboard_calls)
+        assert '中文相機驗證' not in journal.read_text(encoding='utf-8')
+        assert 'WUS-' not in journal.read_text(encoding='utf-8')
+        assert len([x for x in scraper.logged if x[0] == 'composer_chunk_verified']) == len(batches)
+
+    with tempfile.TemporaryDirectory(prefix='gar-composer-multiline-fail-') as tmp:
+        journal = Path(tmp) / 'journal.json'
+        record = {'state': 'IN_FLIGHT'}
+        scraper = FakeProseMirror(drop_after_first_newline=True)
+        clock = Clock()
+        with patch.object(co.time, 'monotonic', clock.monotonic), \
+             patch.object(co.time, 'sleep', clock.sleep), \
+             patch.object(co.PIT, 'record', return_value=None):
+            try:
+                co._write_staged_prompt(scraper, prompt, record, journal)
+            except co.ComposerOperationError as exc:
+                assert str(exc) == 'composer_chunk_readback_failed'
+            else:
+                raise AssertionError('Unknown draft must not pass')
+        assert clock.now >= 8.0
+        assert record['readback_failure']['unit_kind'] == 'mixed'
+        assert record['readback_failure']['input_units'] == len(batches[0][2])
+        assert 'confirmed_prefix' not in record
+        assert record['pending_prefix']['chars'] == batches[0][1]
+        assert not any(x[1] in ('Enter', 'Control+A', 'Backspace')
+                       for x in scraper.keyboard_calls if x[0] == 'press')
+        # The first rejected unit is attempted once; never rewrite it.
+        inserted = [v for kind,v in scraper.keyboard_calls if kind == 'insert_text']
+        assert len(inserted) == len(set(inserted))
+        assert not any(v in journal.read_text(encoding='utf-8')
+                       for v in ('WUS-' + 'A' * 32, '中文相機驗證'))
+
+    # Preserve the existing short multiline path used by WebGPT2 L4 reviews.
+    short = 'first\nsecond'
+    assert list(co._composer_write_units(short)) == [(0, len(short), short, False)]
+
+
+def test_last_assistant_prewrite_readiness_gate():
+    """Last assistant is a stable DOM-order precondition, never a send proof."""
+    from types import SimpleNamespace
+
+    def turn(text, order):
+        return SimpleNamespace(raw_text=text, order=order)
+
+    class Adapter:
+        @staticmethod
+        def _is_after(earlier, later):
+            return later.order > earlier.order
+
+    adapter = Adapter()
+    user = turn('user asked', 1)
+    assistant = turn('assistant completed', 2)
+    newest_user = turn('another pending user', 3)
+    assert co._last_turn_readiness(adapter, (), ()) == 'EMPTY_CONVERSATION'
+    assert co._last_turn_readiness(adapter, (user,), ()) == 'LAST_USER_NO_ASSISTANT'
+    assert co._last_turn_readiness(adapter, (), (assistant,)) == 'ASSISTANT_WITHOUT_USER'
+    assert co._last_turn_readiness(adapter, (user,), (turn('', 2),)) == 'ASSISTANT_CONTENT_EMPTY'
+    assert co._last_turn_readiness(adapter, (user,), (assistant,)) == 'LAST_ASSISTANT'
+    assert co._last_turn_readiness(adapter, (newest_user,), (assistant,)) == 'LAST_USER'
+    assert co._last_turn_readiness(adapter, (user,), (turn('same position', 1),)) == 'LAST_TURN_ORDER_UNKNOWN'
+
+    class UnavailableOrder:
+        def _is_after(self, earlier, later):
+            raise RuntimeError('Detached DOM node')
+    assert co._last_turn_readiness(UnavailableOrder(), (user,), (assistant,)) == 'LAST_TURN_ORDER_UNKNOWN'
+
+    def snapshot(status, *, active=False, digest='completed_response'):
+        return dict(
+            url='https://chatgpt.com/c/test',
+            user_count=1 if status != 'EMPTY_CONVERSATION' else 0,
+            assistant_count=1 if status != 'EMPTY_CONVERSATION' else 0,
+            user_anchors=[['user_1', 'prompt_digest']] if status != 'EMPTY_CONVERSATION' else [],
+            assistant_anchors=[['assistant_1', digest]] if status != 'EMPTY_CONVERSATION' else [],
+            user_native_ids=['u1'] if status != 'EMPTY_CONVERSATION' else [],
+            assistant_native_ids=['a1'] if status != 'EMPTY_CONVERSATION' else [],
+            composer_empty=True, composer_matches=False,
+            generation_active=active, last_turn_status=status,
+        )
+
+    class Editor:
+        def is_visible(self): return True
+        def is_enabled(self): return True
+        def is_editable(self): return True
+
+    class FakeScraper:
+        def _composer_locator(self): return Editor()
+
+    class Clock:
+        def __init__(self): self.now = 0.0
+        def monotonic(self): return self.now
+        def sleep(self, duration): self.now += duration
+
+    def run_gate(frames, *, timeout=3.0, samples=4):
+        clock = Clock()
+        read_index = [0]
+        def observe(*args):
+            index = read_index[0]
+            read_index[0] += 1
+            return frames[min(index, len(frames) - 1)]
+        with patch.object(co, '_page_snapshot', side_effect=observe):
+            result = co._wait_for_prewrite_stability(
+                FakeScraper(), 'never-send', samples=samples,
+                interval_sec=.3, timeout_sec=timeout,
+                clock=clock.monotonic, sleep=clock.sleep,
+            )
+        return result, read_index[0]
+
+    # Already completed response is stable for all 4 samples.
+    ready, observed = run_gate([snapshot('LAST_ASSISTANT')])
+    assert ready['status'] == 'READY' and observed == 4
+    assert ready['baseline']['last_turn_status'] == 'LAST_ASSISTANT'
+
+    # Brand-new empty conversation must remain able to bootstrap.
+    fresh, observed = run_gate([snapshot('EMPTY_CONVERSATION')])
+    assert fresh['status'] == 'READY' and observed == 4
+
+    # Last user alone never means the assistant finished.
+    pending, observed = run_gate([snapshot('LAST_USER')], timeout=1.0)
+    assert pending['status'] == 'PREWRITE_UNSTABLE'
+    assert pending['reason_code'] == 'LAST_USER'
+    assert observed >= 3
+
+    # Even a visible Assistant response cannot pass while streaming.
+    streaming, _ = run_gate([snapshot('LAST_ASSISTANT', active=True)], timeout=1.0)
+    assert streaming['status'] == 'PREWRITE_UNSTABLE'
+    assert streaming['reason_code'] == 'GENERATION_ACTIVE'
+
+    # DOM order unknown or assistant text missing are hard prewrite stops.
+    for status in ('LAST_TURN_ORDER_UNKNOWN', 'ASSISTANT_CONTENT_EMPTY'):
+        blocked, _ = run_gate([snapshot(status)], timeout=1.0)
+        assert blocked['status'] == 'PREWRITE_UNSTABLE'
+        assert blocked['reason_code'] == status
+
+    # Waiting user -> last assistant must begin a NEW 4-sample stability run.
+    progressing, observed = run_gate(
+        [snapshot('LAST_USER')] * 2 + [snapshot('LAST_ASSISTANT')] * 4)
+    assert progressing['status'] == 'READY' and observed == 6
+
+    # A changed Assistant message digest interrupts the stability window.
+    changed, observed = run_gate([
+        snapshot('LAST_ASSISTANT', digest='a'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+        snapshot('LAST_ASSISTANT', digest='b'),
+    ])
+    assert changed['status'] == 'READY' and observed == 5
+
+    assert not co._same_turns(snapshot('LAST_USER'), snapshot('LAST_ASSISTANT'))
+
+    # The parent must surface the exact trusted PREWRITE reason: no writer
+    # mutation, no observer replay, and no unknown-draft quarantine.
+    with tempfile.TemporaryDirectory(prefix='gar-prewrite-gate-') as temp:
+        args = dict(endpoint='http://127.0.0.1:1272',
+                    url='https://chatgpt.com/c/test',
+                    prompt='never-send', journal_root=temp)
+        def refusal(payload, *_a, **_kw):
+            assert payload['mode'] == 'write'
+            return dict(status='PREWRITE_UNSTABLE', reason_code='LAST_USER',
+                        mutation_possible=False, samples_observed=5)
+        with patch.object(co, 'run_helper', side_effect=refusal) as writer, \
+             patch.object(co, 'observe_composer', side_effect=AssertionError('No observer needed')):
+            try:
+                co.prepare_composer(**args)
+            except co.ComposerOperationError as exc:
+                assert str(exc) == 'composer_pre_write_failed'
+                assert exc.evidence['status'] == 'PREWRITE_UNSTABLE'
+                assert exc.evidence['reason_code'] == 'LAST_USER'
+                assert exc.evidence['mutation_possible'] is False
+            else:
+                raise AssertionError('Unstable page must not be written to')
+            assert writer.call_count == 1
+        journal_record = json.loads(next(Path(temp).glob('*.json')).read_text('utf-8'))
+        assert journal_record['state'] == 'FAILED_PRE_WRITE'
+        assert journal_record['reason'] == 'PREWRITE_UNSTABLE'
+        assert journal_record['result']['reason_code'] == 'LAST_USER'
+        assert 'baseline' not in journal_record
+
+
 def run():
+    test_bounded_chunk_readback_is_strict_and_does_not_retype()
+    test_multiline_first_line_truncation_is_avoided_without_replay()
+    test_last_assistant_prewrite_readiness_gate()
     before=dict(url='https://chatgpt.com/c/test',user_count=2,assistant_count=2,
                 user_anchors=[['u','abc']],assistant_anchors=[['a','def']],generation_active=False)
     after={**before,'composer_matches':True}
