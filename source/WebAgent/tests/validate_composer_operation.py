@@ -116,8 +116,142 @@ def test_bounded_chunk_readback_is_strict_and_does_not_retype():
         assert 'readback_failure' in saved
 
 
+def test_multiline_first_line_truncation_is_avoided_without_replay():
+    """Reproduce a browser that accepts only the first line of bulk insert_text.
+
+    Preserve V9 submit markers, Unicode, blank lines, long logical lines, and
+    markdown fences; no Enter/Send, no clear and no writer replay.
+    """
+    from types import SimpleNamespace
+
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    class FakeProseMirror:
+        def __init__(self, *, drop_after_first_newline=False):
+            self.text = ''
+            self.keyboard_calls = []
+            self.logged = []
+            self._last_composer_validation = None
+            self.drop_after_first_newline = drop_after_first_newline
+
+            class Keyboard:
+                def press(_, key):
+                    self.keyboard_calls.append(('press', key))
+                    assert key in ('Control+End', 'Shift+Enter')
+                    if key == 'Shift+Enter':
+                        self.text += '\n'
+
+                def insert_text(_, value):
+                    self.keyboard_calls.append(('insert_text', value))
+                    # This recreates the actual 17-character readback issue:
+                    # bulk multiline insert_text is only able to retain line 1.
+                    if '\n' in value:
+                        value = value.split('\n', 1)[0]
+                    if self.drop_after_first_newline and '\n' in self.text:
+                        return
+                    self.text += value
+
+            self._page = SimpleNamespace(keyboard=Keyboard())
+
+        def _composer_matches_prompt(self, expected):
+            expected = expected.replace('\r\n', '\n').replace('\r', '\n')
+            self._last_composer_validation = SimpleNamespace(
+                expected_length=len(expected), observed_length=len(self.text),
+                expected_sha256=hashlib.sha256(expected.encode()).hexdigest(),
+                observed_sha256=hashlib.sha256(self.text.encode()).hexdigest(),
+            )
+            return self.text == expected
+
+        def _focus_composer_dom(self):
+            return SimpleNamespace(evaluate=lambda script: None)
+
+        def _normalize_composer_text(self, value):
+            return value.replace('\r\n', '\n').replace('\r', '\n')
+
+        def _check_cancel_requested(self, stage):
+            assert stage == 'composer_chunk'
+
+        def _log_stage(self, stage, detail):
+            self.logged.append((stage, detail))
+
+    header = '[WEBUI_SUBMIT_ID]\nWUS-' + 'A' * 32 + '\n[/WEBUI_SUBMIT_ID]\n'
+    rest = '\n\n'.join([
+        '中文相機驗證 example line ' + str(i) + ' ü ' + ('x' * 137)
+        for i in range(80)
+    ])
+    prompt = (header + rest + '\n```smartagent_tool\n{}\n```')[:11707]
+    assert len(prompt) >= 4096 and '\n' in prompt
+    units = list(co._composer_write_units(prompt))
+    assert co.composer_write_unit_count(prompt) == len(units)
+    assert ''.join(prompt[a:b] for a,b,_,_ in units) == prompt
+    assert all(b-a <= 1024 or is_break for a,b,_,is_break in units)
+    assert all(('\n' not in value and '\r' not in value)
+               for _,_,value,is_break in units if not is_break)
+    assert all(not value for _,_,value,is_break in units if is_break)
+    assert any(is_break for _,_,_,is_break in units)
+
+    with tempfile.TemporaryDirectory(prefix='gar-composer-multiline-ok-') as tmp:
+        journal = Path(tmp) / 'journal.json'
+        record = {'state': 'IN_FLIGHT'}
+        scraper = FakeProseMirror()
+        with patch.object(co.PIT, 'record', return_value=None):
+            co._write_staged_prompt(scraper, prompt, record, journal)
+        assert scraper.text == prompt
+        assert record['pending_prefix']['chars'] == len(prompt)
+        assert record['confirmed_prefix']['chars'] == len(prompt)
+        assert 'readback_failure' not in record
+        assert all(key != 'Enter' for kind,key in scraper.keyboard_calls if kind == 'press')
+        assert not any(key in ('Control+A', 'Backspace') for kind,key in scraper.keyboard_calls
+                       if kind == 'press')
+        assert any(kind == 'press' and key == 'Shift+Enter'
+                   for kind,key in scraper.keyboard_calls)
+        assert not any(kind == 'insert_text' and '\n' in value
+                       for kind,value in scraper.keyboard_calls)
+        assert '中文相機驗證' not in journal.read_text(encoding='utf-8')
+        assert 'WUS-' not in journal.read_text(encoding='utf-8')
+        assert len([x for x in scraper.logged if x[0] == 'composer_chunk_verified']) == len(units)
+
+    with tempfile.TemporaryDirectory(prefix='gar-composer-multiline-fail-') as tmp:
+        journal = Path(tmp) / 'journal.json'
+        record = {'state': 'IN_FLIGHT'}
+        scraper = FakeProseMirror(drop_after_first_newline=True)
+        clock = Clock()
+        with patch.object(co.time, 'monotonic', clock.monotonic), \
+             patch.object(co.time, 'sleep', clock.sleep), \
+             patch.object(co.PIT, 'record', return_value=None):
+            try:
+                co._write_staged_prompt(scraper, prompt, record, journal)
+            except co.ComposerOperationError as exc:
+                assert str(exc) == 'composer_chunk_readback_failed'
+            else:
+                raise AssertionError('Unknown draft must not pass')
+        assert clock.now >= 8.0
+        assert record['readback_failure']['unit_kind'] == 'text'
+        assert 'confirmed_prefix' in record
+        assert record['confirmed_prefix']['chars'] < len(prompt)
+        assert not any(x[1] in ('Enter', 'Control+A', 'Backspace')
+                       for x in scraper.keyboard_calls if x[0] == 'press')
+        # The first rejected unit is attempted once; never rewrite it.
+        inserted = [v for kind,v in scraper.keyboard_calls if kind == 'insert_text']
+        assert len(inserted) == len(set(inserted))
+        assert not any(v in journal.read_text(encoding='utf-8')
+                       for v in ('WUS-' + 'A' * 32, '中文相機驗證'))
+
+    # Preserve the existing short multiline path used by WebGPT2 L4 reviews.
+    short = 'first\nsecond'
+    assert list(co._composer_write_units(short)) == [(0, len(short), short, False)]
+
+
 def run():
     test_bounded_chunk_readback_is_strict_and_does_not_retype()
+    test_multiline_first_line_truncation_is_avoided_without_replay()
     before=dict(url='https://chatgpt.com/c/test',user_count=2,assistant_count=2,
                 user_anchors=[['u','abc']],assistant_anchors=[['a','def']],generation_active=False)
     after={**before,'composer_matches':True}
