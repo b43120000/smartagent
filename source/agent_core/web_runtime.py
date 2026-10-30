@@ -5433,6 +5433,11 @@ class WebLLMScraper:
                     f"type={type(cancel_exc).__name__} message={str(cancel_exc)[:400]}"
                 )
             raise
+        except SRFirstReadbackCaptured as exc:
+            self._pending_submit_context = None
+            self._submit_click_attempted = False
+            self._set_request_state("READY_IDLE", "sr_first_readback_captured")
+            raise
         except WebScraperStageError as exc:
             if composer_claimed and not submit_attempted and not getattr(self, "_composer_io_unconfirmed", False) and getattr(self, "_request_state", "") != "READY_IDLE":
                 self._reset_pre_submit_to_ready_idle(attachments)
