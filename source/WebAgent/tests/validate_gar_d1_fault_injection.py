@@ -54,6 +54,32 @@ class D1FaultInjectionTest(unittest.TestCase):
                           "gar_d1_test_disarmed"])
         self.assertEqual(fault.injected, 1)
 
+    def test_enabled_d1_reports_exact_not_armed_reason_without_prompt(self):
+        emitted = []
+        real = []
+        fault = GARD1LiveFaultInjector(
+            lambda *args: real.append(args) or "REAL",
+            lambda name, **fields: emitted.append((name, fields)),
+            enabled=True,
+        )
+        self.assertFalse(fault.arm("解釋 RAII", eligible=True))
+        self.assertFalse(fault.arm(fault.TEST_REQUEST, eligible=False))
+        self.assertEqual(
+            [(name, data["reason"]) for name, data in emitted],
+            [
+                ("gar_d1_test_not_armed", "REQUEST_NOT_EXACT_MATCH"),
+                ("gar_d1_test_not_armed", "INPUT_NOT_ELIGIBLE"),
+            ],
+        )
+        self.assertTrue(all("request" not in data and "prompt" not in data
+                            for _, data in emitted))
+        self.assertEqual(real, [])
+        self.assertTrue(fault.arm(fault.TEST_REQUEST, eligible=True))
+        self.assertFalse(fault.arm(fault.TEST_REQUEST, eligible=True))
+        self.assertEqual(emitted[-1][1]["reason"], "SINGLE_USE_CONSUMED")
+        fault.disarm()
+        self.assertEqual(real, [])
+
     def test_never_falls_through_to_real_planner_on_unsafe_injection(self):
         real = []
         fault = GARD1LiveFaultInjector(

@@ -169,8 +169,22 @@ class GARD1LiveFaultInjector:
         self.injected = 0
 
     def arm(self, request: str, *, eligible: bool) -> bool:
-        if (not self.enabled or self._used or self._active
-                or not eligible or request != self.TEST_REQUEST):
+        # Diagnostics contain only stable reason codes, never original prompts.
+        if not self.enabled:
+            return False
+        if self._used:
+            reason = "SINGLE_USE_CONSUMED"
+        elif self._active:
+            reason = "ALREADY_ARMED"
+        elif not eligible:
+            reason = "INPUT_NOT_ELIGIBLE"
+        elif request != self.TEST_REQUEST:
+            reason = "REQUEST_NOT_EXACT_MATCH"
+        else:
+            reason = ""
+        if reason:
+            self._emit("gar_d1_test_not_armed", reason=reason,
+                       origin="WEB_DIRECT", eligible_input=bool(eligible))
             return False
         self._used = True  # Consume the single-use ticket before any Planner call.
         self._active = True
@@ -437,6 +451,21 @@ def main(argv: list[str] | None = None) -> int:
         if (not gar_enabled() or not fresh_target or not conversation_id(fresh_target)
                 or conversation_id(fresh_target) == selected_id):
             raise RuntimeError("GAR_D1_TEST_REQUIRES_GAR_AND_DISTINCT_FRESH_CONTEXT")
+    from agent_core.conversation_identity import conversation_provider
+    runtime_log.emit(
+        "gar_d1_test_configuration",
+        enabled=d1_test_enabled,
+        original_provider=conversation_provider(selected_url),
+        fresh_provider=conversation_provider(fresh_target),
+        fresh_target_configured=bool(fresh_target),
+        exact_request_required=True,
+        single_use=True,
+    )
+    print("[WebAgent] D1 diagnostics: "
+          f"enabled={int(d1_test_enabled)} "
+          f"original_provider={conversation_provider(selected_url)} "
+          f"fresh_provider={conversation_provider(fresh_target)}",
+          flush=True)
     d1_fault = GARD1LiveFaultInjector(
         lambda prompt, expected, attachments: live_planner(
             client, prompt, expected, attachments
