@@ -617,11 +617,31 @@ def composer_write_unit_count(prompt):
     return sum(1 for _ in _composer_write_units(prompt))
 
 
+def _composer_write_batches(prompt, max_chars=1024):
+    """Group physical input events into bounded, strictly verified prefixes.
+
+    A batch may contain several literal-text and soft-break events, but is
+    only considered committed when the complete batch prefix passes readback.
+    This avoids a DOM read/focus roundtrip for every newline in long prompts.
+    """
+    pending = []
+    size = 0
+    for unit in _composer_write_units(prompt):
+        span = unit[1] - unit[0]
+        if pending and size + span > max_chars:
+            yield pending[0][0], pending[-1][1], tuple(pending)
+            pending, size = [], 0
+        pending.append(unit)
+        size += span
+    if pending:
+        yield pending[0][0], pending[-1][1], tuple(pending)
+
+
 def _write_staged_prompt(scraper,prompt,record,journal):
     PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
     scraper._focus_composer_dom()
-    for start, end, value, soft_break in _composer_write_units(prompt):
+    for start, end, units in _composer_write_batches(prompt):
         if start and not scraper._composer_matches_prompt(prompt[:start]):
             raise ComposerOperationError('composer_prefix_changed')
         loc=scraper._focus_composer_dom()
@@ -641,22 +661,26 @@ def _write_staged_prompt(scraper,prompt,record,journal):
         checkpoint=dict(chars=end,sha256=hashlib.sha256(prefix.encode()).hexdigest(),
             normalized_sha256=hashlib.sha256(scraper._normalize_composer_text(prefix).encode()).hexdigest())
         record['pending_prefix']=checkpoint;write_json_atomic(journal,record)
-        scraper._check_cancel_requested('composer_chunk')
-        if soft_break:
-            # Never press bare Enter: on ChatGPT it may submit an incomplete
-            # protocol prompt. The complete prefix is re-verified below.
-            scraper._page.keyboard.press('Shift+Enter')
-        else:
-            PIT.record('09_keyboard_insert_text', value,
-                       extra={'chunk_start': start, 'chunk_end': end})
-            scraper._page.keyboard.insert_text(value)
+        for part_start, part_end, value, soft_break in units:
+            scraper._check_cancel_requested('composer_chunk')
+            if soft_break:
+                # Never press bare Enter: it can submit an incomplete prompt.
+                scraper._page.keyboard.press('Shift+Enter')
+            else:
+                PIT.record('09_keyboard_insert_text', value,
+                           extra={'chunk_start': part_start, 'chunk_end': part_end})
+                scraper._page.keyboard.insert_text(value)
         try:
             readback = _await_chunk_readback(scraper, prefix)
         except ComposerOperationError as exc:
             # Durable, content-free evidence survives writer quarantine.
             record['readback_failure'] = dict(
                 chunk_start=start, chunk_end=end, chunk_chars=end-start,
-                unit_kind='soft_break' if soft_break else 'text',
+                unit_kind=('mixed' if any(x[3] for x in units)
+                           and any(not x[3] for x in units)
+                           else 'soft_break' if all(x[3] for x in units)
+                           else 'text'),
+                input_units=len(units),
                 **exc.evidence,
             )
             write_json_atomic(journal,record)
@@ -666,7 +690,7 @@ def _write_staged_prompt(scraper,prompt,record,journal):
             raise
         record['confirmed_prefix']=checkpoint;write_json_atomic(journal,record)
         scraper._log_stage('composer_chunk_verified',
-                           f"chars={end}/{len(prompt)} readback_attempts={readback['attempts']}")
+                           f"chars={end}/{len(prompt)} units={len(units)} readback_attempts={readback['attempts']}")
 
 
 def helper_main():
