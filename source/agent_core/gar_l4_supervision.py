@@ -71,7 +71,11 @@ def review_prompt(*, goal: str, progress: Mapping[str, object],
 
 def parse_review_response(response: str, *, nonce: str) -> dict[str, object]:
     raw = str(response or "").strip()
-    if not raw or len(raw) > 10000 or "smartagent_tool" in raw.lower():
+    # A mention of "smartagent_tool" in an explanatory JSON value is not
+    # an executable tool invocation (e.g. missing_smartagent_tool_envelope).
+    # Require exactly one JSON object and validate the closed schema below;
+    # actual fenced/tool transport cannot pass JSON or the field whitelist.
+    if not raw or len(raw) > 10000:
         raise ValueError("GAR_L4_ADVICE_NOT_PURE_TEXT")
     def unique(pairs):
         record = {}
