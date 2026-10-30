@@ -444,6 +444,26 @@ class RecoveryEngine:
         self._l4_requested = True
         return self._record("L4", "PREPARE", "GAR_FRESH_CONTEXT_REQUIRED")
 
+    def request_supervisory_review(self, *, snapshot: Mapping[str, object],
+                                   reason: str) -> RecoveryDecision:
+        """Escalate a Runtime-observed semantic stall, not a fake V9 rejection.
+
+        Only an actual accepted no-progress loop or exhausted semantic guard
+        may call this method. No rejection count is forged or repair budget
+        reset. Unknown operations and incomplete checkpoint always fail closed.
+        """
+        if not self.validate_snapshot(snapshot):
+            return self._record("L5", "PAUSED", "GAR_SNAPSHOT_UNVERIFIED")
+        if self._unsafe(snapshot):
+            return self._record("L5", "PAUSED", "GAR_PENDING_OR_BLOCKED_OPERATION")
+        if (self._l4_requested or self.fresh_sessions or self._l4_advice_delivered
+                or self.rejected_rounds >= self.max_rejections):
+            return self._record("L5", "PAUSED", "GAR_SEMANTIC_REVIEW_UNAVAILABLE")
+        if not str(reason or "").startswith("semantic_stagnation:"):
+            return self._record("L5", "PAUSED", "GAR_SEMANTIC_REASON_UNVERIFIED")
+        self._l4_requested = True
+        return self._record("L4", "PREPARE", "GAR_SEMANTIC_STAGNATION_REVIEW_REQUIRED")
+
     def refuse_fresh_context(self, reason: str) -> RecoveryDecision:
         """Terminal L5 fallback; an unverified adapter must never re-ask."""
         code = _bounded_code(reason, default="GAR_FRESH_CONTEXT_UNAVAILABLE")
