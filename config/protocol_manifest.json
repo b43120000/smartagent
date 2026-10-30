@@ -81,7 +81,7 @@
     "source/agent_core/evidence_foundation.py": "012dbeef688e50840f58611a2a938f2f554b3609daf118063a8bf8af44c5a3b7",
     "source/agent_core/force_stop_all_agents.py": "bc3aa935f1f03352632fac54dad4efcd166adfb0b6e0200cf20b82c2798d5f1a",
     "source/agent_core/force_stop_cleanup.py": "0f61acdffc4edcdf8c42298d430a1034a228157a03118608a3a84dffc5d4cfe2",
-    "source/agent_core/gar_l4_supervision.py": "59b8415ed26459d6139ea3d895559a3be008f8ca483f0d0f008d4b865ed878bf",
+    "source/agent_core/gar_l4_supervision.py": "5088f23f114e940f925adda81e84eafe98fb04811b31c84bc1404d1687b11e01",
     "source/agent_core/goal_anchored_recovery.py": "4814fb6a756506c28e043935e8cf389166bd73f7c5afc1657f5d70f318161cc6",
     "source/agent_core/google_drive.py": "fde41e312177796392a53ce46d35ab2e35821ba21c60f40fef0643bb0ac2fbba",
     "source/agent_core/host_supervisor.py": "64f59b62e1b23a378901bd33dc36fad44e73e30d03b20e955102a4f118578393",
