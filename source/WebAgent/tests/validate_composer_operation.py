@@ -1,5 +1,6 @@
 """Bounded writer, strict evidence, cancellation and no-replay regression."""
 import inspect
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -13,7 +14,110 @@ from agent_core import composer_operation as co
 from agent_core.web_runtime import WebLLMScraper, WebScraperStageError
 
 
+def test_bounded_chunk_readback_is_strict_and_does_not_retype():
+    """Deterministic 11719-char first-chunk delayed DOM and persistent mismatch."""
+    from types import SimpleNamespace
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    class FakeScraper:
+        def __init__(self, clock, *, permanent_mismatch=False):
+            self.clock = clock
+            self.permanent_mismatch = permanent_mismatch
+            self.typed = ''
+            self.writes = []
+            self.logged = []
+            self._last_composer_validation = None
+
+            class Keyboard:
+                def press(_, key):
+                    assert key == 'Control+End'
+
+                def insert_text(_, value):
+                    self.typed += value
+                    self.writes.append(value)
+
+            self._page = SimpleNamespace(keyboard=Keyboard())
+
+        def _composer_matches_prompt(self, expected):
+            self._last_composer_validation = SimpleNamespace(
+                expected_length=len(expected),
+                observed_length=len(self.typed),
+                expected_sha256=hashlib.sha256(expected.encode()).hexdigest(),
+                observed_sha256=hashlib.sha256(self.typed.encode()).hexdigest(),
+            )
+            return (not self.permanent_mismatch and self.typed == expected
+                    and self.clock.now >= 2.4)
+
+        def _focus_composer_dom(self):
+            return SimpleNamespace(evaluate=lambda _script: None)
+
+        def _normalize_composer_text(self, value):
+            return value
+
+        def _check_cancel_requested(self, _stage):
+            return None
+
+        def _log_stage(self, stage, detail):
+            self.logged.append((stage, detail))
+
+    prompt = 'SENSITIVE_USER_PROMPT_' + 'x' * (11719 - len('SENSITIVE_USER_PROMPT_'))
+    with tempfile.TemporaryDirectory() as folder:
+        clock = Clock()
+        fake = FakeScraper(clock)
+        journal = Path(folder) / 'delayed.json'
+        record = dict(state='IN_FLIGHT')
+        with patch.object(co.time, 'monotonic', clock.monotonic), \
+             patch.object(co.time, 'sleep', clock.sleep), \
+             patch.object(co.PIT, 'record', return_value=None):
+            co._write_staged_prompt(fake, prompt, record, journal)
+        assert fake.writes == [prompt[:4096], prompt[4096:8192], prompt[8192:]]
+        assert clock.now >= 2.4 and clock.now <= 8.0
+        assert record['confirmed_prefix']['chars'] == 11719
+        assert record['pending_prefix']['chars'] == 11719
+        assert 'readback_failure' not in record
+        assert 'SENSITIVE_USER_PROMPT_' not in journal.read_text(encoding='utf-8')
+        assert len([e for e in fake.logged if e[0] == 'composer_chunk_verified']) == 3
+
+    with tempfile.TemporaryDirectory() as folder:
+        clock = Clock()
+        fake = FakeScraper(clock, permanent_mismatch=True)
+        journal = Path(folder) / 'mismatch.json'
+        record = dict(state='IN_FLIGHT')
+        with patch.object(co.time, 'monotonic', clock.monotonic), \
+             patch.object(co.time, 'sleep', clock.sleep), \
+             patch.object(co.PIT, 'record', return_value=None):
+            try:
+                co._write_staged_prompt(fake, prompt, record, journal)
+            except co.ComposerOperationError as exc:
+                assert str(exc) == 'composer_chunk_readback_failed'
+                assert exc.evidence['observed_length'] == 4096
+                assert exc.evidence['expected_length'] == 4096
+            else:
+                raise AssertionError('Unknown DOM state must fail closed')
+        assert fake.writes == [prompt[:4096]], 'never automatically rewrite a chunk'
+        assert clock.now >= 8.0 and clock.now <= 8.2
+        assert record['pending_prefix']['chars'] == 4096
+        assert 'confirmed_prefix' not in record
+        diag = record['readback_failure']
+        assert diag['chunk_start'] == 0 and diag['chunk_end'] == 4096
+        assert diag['attempts'] >= 2
+        assert diag['observed_sha256'] == hashlib.sha256(prompt[:4096].encode()).hexdigest()
+        saved = journal.read_text(encoding='utf-8')
+        assert 'SENSITIVE_USER_PROMPT_' not in saved
+        assert 'readback_failure' in saved
+
+
 def run():
+    test_bounded_chunk_readback_is_strict_and_does_not_retype()
     before=dict(url='https://chatgpt.com/c/test',user_count=2,assistant_count=2,
                 user_anchors=[['u','abc']],assistant_anchors=[['a','def']],generation_active=False)
     after={**before,'composer_matches':True}
