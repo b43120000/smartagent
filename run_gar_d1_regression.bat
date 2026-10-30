@@ -1,37 +1,79 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 rem GAR D1 WebCopilot injection: offline-only regression, no browser/Telegram.
+rem Uses the SAME project .venv Python as launch_webcopilot.bat.
+chcp 65001 >nul 2>&1
 rem Stable ancestor gate rather than impossible self-referential commit SHA.
 set "REQUIRED_BASE=51072718ebfe11a8e460d51134ecbc01e6bfa900"
-cd /d "%~dp0" || goto :FATAL
-if not exist "source\WebAgent\tests\validate_gar_d1_fault_injection.py" goto :FATAL
-if not exist "config\protocol_manifest.json" goto :FATAL
+cd /d "%~dp0"
+if errorlevel 1 (
+  echo [ERROR] Cannot enter BAT directory: %~dp0
+  goto :FATAL
+)
+echo [D1 Preflight] Repo: %CD%
+if not exist "source\WebAgent\tests\validate_gar_d1_fault_injection.py" (
+  echo [ERROR] D1 test file missing. Switch to correct source commit.
+  goto :FATAL
+)
+if not exist "config\protocol_manifest.json" (
+  echo [ERROR] Strict manifest missing.
+  goto :FATAL
+)
+where git >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] git.exe missing from Windows CMD PATH. Run through Git Bash or add Git\cmd to PATH.
+  goto :FATAL
+)
 set "HEAD_SHA="
 for /f "delims=" %%I in ('git rev-parse HEAD 2^>nul') do set "HEAD_SHA=%%I"
-if not defined HEAD_SHA goto :FATAL
+if not defined HEAD_SHA (
+  echo [ERROR] git rev-parse HEAD failed from CMD.
+  goto :FATAL
+)
+echo [D1 Preflight] Git HEAD: %HEAD_SHA%
 git merge-base --is-ancestor %REQUIRED_BASE% HEAD >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] Revision is not descended from C1 baseline %REQUIRED_BASE%.
+  echo [ERROR] Actual HEAD: %HEAD_SHA%
   goto :FATAL
 )
 rem Preserve existing local Manifest changes; do not stash, reset or overwrite.
 git diff --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/tests/validate_gar_d1_fault_injection.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has unstaged edits.
+  git status --short
   goto :FATAL
 )
 git diff --cached --quiet -- config/protocol_manifest.json source/WebAgent/controller.py source/WebAgent/tests/validate_gar_d1_fault_injection.py
 if errorlevel 1 (
   echo [ERROR] Tracked GAR D1 source, test, or manifest has staged edits.
+  git status --short
   goto :FATAL
 )
-set "PY_CMD=python"
-python -c "import sys; assert sys.version_info >= (3,10)" >nul 2>&1
-if errorlevel 1 (
-  set "PY_CMD=py -3"
-  py -3 -c "import sys; assert sys.version_info >= (3,10)" >nul 2>&1
-  if errorlevel 1 goto :FATAL
+rem Match launch_webcopilot.bat first; do not depend on global Python PATH.
+set "PY_CMD="
+if exist "%CD%\.venv\Scripts\python.exe" (
+  set "PY_CMD=\"%CD%\.venv\Scripts\python.exe\""
+) else (
+  python -c "import sys; assert sys.version_info >= (3,10)" >nul 2>&1
+  if not errorlevel 1 set "PY_CMD=python"
+  if not defined PY_CMD (
+    py -3 -c "import sys; assert sys.version_info >= (3,10)" >nul 2>&1
+    if not errorlevel 1 set "PY_CMD=py -3"
+  )
 )
+if not defined PY_CMD (
+  echo [ERROR] No usable Python 3.10+ found.
+  echo [HINT] WebCopilot normally uses .venv\Scripts\python.exe.
+  echo [HINT] Check the installed virtualenv in this SAME checkout.
+  goto :FATAL
+)
+%PY_CMD% -c "import sys; print(sys.executable); assert sys.version_info >= (3,10)"
+if errorlevel 1 (
+  echo [ERROR] Selected project Python is not usable or is older than 3.10.
+  goto :FATAL
+)
+echo [D1 Preflight] Python: %PY_CMD%
 set "PYTHONPATH=%CD%\source"
 set "PYTHONDONTWRITEBYTECODE=1"
 set "SMARTAGENT_GAR_D1_FAULT_INJECTION_V1=0"
@@ -40,7 +82,10 @@ for /f "delims=" %%I in ('powershell -NoProfile -Command Get-Date -Format yyyyMM
 if not defined STAMP set "STAMP=run"
 set "LOGDIR=%CD%\localdata\logs\gar-d1-regression\%STAMP%_%RANDOM%%RANDOM%"
 mkdir "%LOGDIR%" >nul 2>&1
-if errorlevel 1 goto :FATAL
+if errorlevel 1 (
+  echo [ERROR] Cannot create log directory: %LOGDIR%
+  goto :FATAL
+)
 (
   echo GAR D1 offline regression
   echo sha=%HEAD_SHA%
