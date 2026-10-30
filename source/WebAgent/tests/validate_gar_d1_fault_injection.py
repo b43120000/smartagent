@@ -109,6 +109,136 @@ class D1FaultInjectionTest(unittest.TestCase):
         self.assertEqual(real, [])
         fault.disarm()
 
+    def test_v2_release_requires_verified_l4_after_all_seven_faults(self):
+        observed = []
+        real_calls = []
+        fault = GARD1LiveFaultInjector(
+            lambda *args: real_calls.append(args) or "REAL",
+            lambda name, **fields: observed.append((name, fields)),
+            enabled=True,
+        )
+        self.assertTrue(fault.arm(fault.TEST_REQUEST, eligible=True))
+        valid = {
+            "planner_owner": "ORIGINAL_WEBGPT1",
+            "original_ack_preserved": True,
+            "supervisor_review_returned": True,
+            "level": "L4",
+        }
+        self.assertFalse(fault.release_after_verified_l4(
+            "gar_l4_webgpt1_resumed", valid))
+        for _ in range(7):
+            self.assertEqual(fault.planner("prompt", {}, []), fault.INVALID_V9)
+        self.assertFalse(fault.release_after_verified_l4(
+            "gar_l4_webgpt2_advice_received", valid))
+        self.assertFalse(fault.release_after_verified_l4(
+            "gar_l4_webgpt1_resumed", {**valid, "supervisor_review_returned": False}))
+        with self.assertRaisesRegex(RuntimeError, "SCOPE_OR_BUDGET_EXCEEDED"):
+            fault.planner("prompt", {}, [])
+        self.assertTrue(fault.release_after_verified_l4(
+            "gar_l4_webgpt1_resumed", valid))
+        self.assertFalse(fault.release_after_verified_l4(
+            "gar_l4_webgpt1_resumed", valid))
+        self.assertEqual(fault.planner("after", {}, []), "REAL")
+        self.assertEqual(len(real_calls), 1)
+        self.assertEqual(
+            [name for name, _ in observed].count("gar_d1_test_resume_release"), 1)
+        fault.disarm()
+
+    def test_d1_v2_supervisory_live_equivalent_returns_to_original_planner(self):
+        import json
+        import re
+        from agent_core.gar_l4_supervision import SCHEMA
+
+        with tempfile.TemporaryDirectory(prefix="gar-d1-v2-") as folder:
+            root = Path(folder)
+            emitted, real_calls, reviews, released = [], [], [], []
+
+            def real_planner(prompt, expected, files):
+                real_calls.append((prompt, expected, files))
+                return answer_only_response(text="Original WebGPT1: RAII complete.")
+
+            fault = GARD1LiveFaultInjector(
+                real_planner,
+                lambda name, **data: emitted.append((name, data)),
+                enabled=True,
+            )
+
+            class Supervisor:
+                def prepare(self, *, request_id, task_id, task_epoch, owner):
+                    proof = FreshContextProof(
+                        request_id=request_id, task_id=task_id,
+                        task_epoch=task_epoch, owner=owner,
+                        original_conversation_id="original",
+                        fresh_conversation_id="second",
+                        protocol_session_id="GAR-D1-V2-BOOTSTRAP",
+                        protocol_identity_verified=True,
+                        page_ownership_verified=True,
+                        previous_generation_inactive=True,
+                    )
+
+                    def review(prompt):
+                        reviews.append(prompt)
+                        found = re.search(r'"nonce":"([0-9a-f]{32})"', prompt)
+                        assert found
+                        return json.dumps({
+                            "schema": SCHEMA,
+                            "nonce": found.group(1),
+                            "completed_steps": [],
+                            "blocked_step": "V9 planner envelope rejected",
+                            "failure_analysis": "missing_smartagent_tool_envelope",
+                            "revised_step": "Return to original WebGPT1 with valid V9",
+                            "remaining_plan": ["Answer the original RAII question"],
+                            "safety_notes": ["No executed actions to replay"],
+                        })
+
+                    def no_planner(*args):
+                        raise AssertionError("WebGPT2 must remain read-only")
+
+                    return FreshPlannerBinding(
+                        proof=proof, planner=no_planner, review=review,
+                        close=lambda: released.append(True),
+                    )
+
+            def trusted_sink(name, **data):
+                emitted.append((name, data))
+                fault.release_after_verified_l4(name, data)
+
+            loop = WebAgentProtocolLoop(
+                root, fault.planner, progress_root=root, max_turns=12,
+                fresh_context_adapter=Supervisor(), event_sink=trusted_sink,
+            )
+            self.assertTrue(fault.arm(fault.TEST_REQUEST, eligible=True))
+            try:
+                with patch.dict(os.environ, {
+                    "SMARTAGENT_GAR_V1": "1",
+                    "SMARTAGENT_GAR_L4_SUPERVISOR_V1": "1",
+                    "TRI_ONE_TASK_RESULT_V1": "1",
+                    "TRI_ONE_TEXT_ONLY_V1": "1",
+                }):
+                    result = loop.run(
+                        fault.TEST_REQUEST, request_id="GAR-D1-V2-RR",
+                        task_id="GAR-D1-V2-TASK", task_epoch="GAR-D1-V2-EPOCH",
+                        source_tag="",
+                    )
+            finally:
+                fault.disarm()
+            names = [name for name, _ in emitted]
+            self.assertEqual(result, "Original WebGPT1: RAII complete.")
+            self.assertEqual(fault.injected, 7)
+            self.assertEqual(len(real_calls), 1)
+            self.assertEqual(len(reviews), 1)
+            self.assertEqual(released, [True])
+            self.assertIn("gar_l4_webgpt1_paused_for_review", names)
+            self.assertIn("gar_l4_webgpt2_advice_received", names)
+            self.assertIn("gar_l4_webgpt1_resumed", names)
+            self.assertIn("gar_d1_test_resume_release", names)
+            self.assertEqual(loop.terminal_outcome, "SUCCESS")
+            self.assertEqual(loop.terminal_acceptance["admission_status"], "ACCEPTED")
+            self.assertTrue(any("GAR_L4_WEBGPT2_ADVISORY_NOT_EVIDENCE"
+                                in call[0] for call in real_calls))
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.action_result_ledger, {})
+
     def test_fake_planner_d1_escalates_and_real_v9_terminal_is_admitted(self):
         with tempfile.TemporaryDirectory(prefix="gar-d1-inject-") as folder:
             root = Path(folder)
