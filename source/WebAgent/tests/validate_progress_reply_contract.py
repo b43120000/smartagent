@@ -96,6 +96,26 @@ def run():
             pass
         else:
             raise AssertionError('inherited old blocker context')
+        # Shared Phase-1 terminal: evidence_refs is absent from the model
+        # only if the trusted V9 caller explicitly authorizes it.
+        omitted = completed_progress('P-OMIT')
+        omitted.pop('evidence_refs')
+        try:
+            validate_model_progress(omitted)
+        except TaskProgressError:
+            pass
+        else:
+            raise AssertionError('evidence omission admitted without Runtime authorization')
+        checked = validate_model_progress(
+            omitted, allow_empty_terminal_candidate=True)
+        assert checked['evidence_refs'] == []
+        assert 'evidence_refs' not in omitted
+        explicit = {**omitted, 'evidence_refs':['RUNTIME_STATUS']}
+        assert validate_model_progress(
+            explicit, allow_empty_terminal_candidate=True,
+        )['evidence_refs'] == ['RUNTIME_STATUS']
+        assert 'evidence_refs' in reply_contract(ledger)['normally_required']
+        assert 'answer_only_terminal' in reply_contract(ledger)['conditional']
         validate_model_action(patch())
         try:
             validate_model_action({'tool':'run_command','action_id':'NO-COMMAND','progress_update':'PATCH'})
