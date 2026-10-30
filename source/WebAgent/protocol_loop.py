@@ -1145,6 +1145,8 @@ class WebAgentProtocolLoop:
             filtered_refs = sorted(all_refs)
         payload = {
             "available_refs": filtered_refs,
+            "non_action_status_markers": ["REQUEST_ACCEPTED", "RUNTIME_STATUS"],
+            "answer_only_rule": "Status markers are not tool evidence. An eligible no-action COMPLETE/SUCCESS may omit evidence_refs; normal actions require real Action Result evidence.",
             "verification_status": self._effective_verification_status(),
             "legacy_last_verification_status": self.tools.last_verification_status,
             "execution_state": self.execution_state,
@@ -3235,9 +3237,29 @@ class WebAgentProtocolLoop:
         )
         if wrapper_diagnostic:
             return [], [wrapper_diagnostic]
+        # Shared Tri-One Completion Contract: only the trusted, no-action,
+        # exclusive final_response terminal may omit evidence_refs. This is
+        # transport-neutral (Telegram/WebCopilot/Local Test) and does not
+        # bypass the later normal Progress/Action/Terminal receipt gates.
+        from agent_core.tri_one_answer_only import authorize_omitted_terminal_evidence
+        omitted_evidence_authorized, _omission_reason = authorize_omitted_terminal_evidence(
+            self, normalized_progress_action, submitted,
+            source=getattr(self, "_tri_one_origin", ""),
+        )
+        if omitted_evidence_authorized:
+            self._emit(
+                'tri_one_answer_only_evidence_omitted',
+                request_id=self.run_id, round=self.turn_id,
+                origin=getattr(self, "_tri_one_origin", ""),
+                action_history_count=len(self.action_ledger),
+                action_result_count=len(self.action_result_ledger),
+            )
         from agent_core.progress_reply_contract import materialize_progress
         try:
-            normalized_progress_action = materialize_progress(normalized_progress_action, self.progress_ledger)
+            normalized_progress_action = materialize_progress(
+                normalized_progress_action, self.progress_ledger,
+                allow_omitted_answer_only_evidence=omitted_evidence_authorized,
+            )
             inherited = [field for field in ('base_evaluation','total_steps','current_step','steps','completion_contract')
                          if field not in progress_actions[0] and field in normalized_progress_action]
             normalized_fields = [field for field in normalized_progress_action if field in progress_actions[0]
@@ -4565,9 +4587,13 @@ class WebAgentProtocolLoop:
                     "The original request may qualify for text-only completion. "
                     "If it needs no external information or side effects, emit ONE "
                     "canonical v9 turn: complete report_progress, final_response "
-                    "and turn_commit. Set every completed step to COMPLETED and "
-                    "cite no invented evidence. Runtime will decide eligibility; "
-                    "any tool need requires the ordinary Action Loop.\n"
+                    "and turn_commit. Set every completed step to COMPLETED. "
+                    "For an Answer-only terminal OMIT evidence_refs entirely "
+                    "(or explicitly use []). Do not cite REQUEST_ACCEPTED or "
+                    "RUNTIME_STATUS: these are status markers, NOT Action Evidence. "
+                    "The shared Runtime alone checks whether omission is safe; "
+                    "any tool or external-information need requires the ordinary "
+                    "Action Loop and action-scoped evidence_refs.\n"
                     "[/TRI_ONE_ANSWER_ONLY_CANDIDATE]"
                 )
         from agent_core.strict_observation_guard import strict_observation_only_request
