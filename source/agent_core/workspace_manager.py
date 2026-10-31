@@ -133,7 +133,10 @@ def _binding_snapshot() -> dict:
     }
 
 
-def _save_binding(mode: str, workspace: str, url: str) -> dict:
+def _save_binding(mode: str, workspace: str, url: str, *,
+                  gar_webgpt2_url: str | None = None) -> dict:
+    if mode != "local" and gar_webgpt2_url is not None:
+        raise ValueError("gar_webgpt2_is_local_only")
     workspace = require_writable_workspace(workspace)
     url = normalize_web_conversation_url(url)
     registry = ConversationRegistry(); registry.load()
@@ -144,6 +147,7 @@ def _save_binding(mode: str, workspace: str, url: str) -> dict:
             planner_key=str(current.get("planner_key") or "web_chatgpt"),
             executor_key=str(current.get("executor_key") or "cloud_gptoss"),
             operator_key=str(current.get("operator_key") or "cloud_gptoss"),
+            gar_webgpt2_url=gar_webgpt2_url,
         )
         registry.upsert_binding(workspace, url)
         return {"mode": mode, "status": "APPLIED", "binding": saved}
@@ -234,9 +238,15 @@ def _binding_menu() -> int:
     mode = "local" if mode_raw == "1" else "remote"
     workspace = _choose_workspace("[2-1] 選擇可讀寫 Workspace", snapshot["writable_workspaces"])
     current = snapshot[mode]
-    print(f"目前 WebGPT URL：{current.get('gpt_url', '（尚未設定）')}")
-    url = input("WebGPT 對話頁面 URL: ").strip()
-    result = _save_binding(mode, workspace, url)
+    print(f"目前 WebGPT1 URL：{current.get('gpt_url', '（尚未設定）')}")
+    url = input("WebGPT1 對話頁面 URL: ").strip()
+    if mode == "local":
+        print(f"目前 GAR WebGPT2 URL：{current.get('gar_webgpt2_url') or '（尚未設定）'}")
+        gar_input = input("GAR WebGPT2 URL（Enter=保留，-=清除）: ").strip()
+        gar_value = None if not gar_input else ("" if gar_input == "-" else gar_input)
+        result = _save_binding(mode, workspace, url, gar_webgpt2_url=gar_value)
+    else:
+        result = _save_binding(mode, workspace, url)
     print("\n[OK] 設定完成")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
@@ -1084,6 +1094,8 @@ def main(argv=None) -> int:
     parser.add_argument("--set-binding", choices=("local", "remote"))
     parser.add_argument("--workspace", default="")
     parser.add_argument("--url", default="")
+    parser.add_argument("--gar-webgpt2-url", default=None,
+                        help="Local binding only; omit to preserve, empty string to clear")
     parser.add_argument("--browser-settings", action="store_true")
     args = parser.parse_args(argv)
     if args.show:
@@ -1095,7 +1107,9 @@ def main(argv=None) -> int:
             raise RuntimeError("security_initialize_requires_administrator")
         return _initialize_security_profile()
     if args.set_binding:
-        print(json.dumps(_save_binding(args.set_binding, args.workspace, args.url), ensure_ascii=False, indent=2)); return 0
+        result = _save_binding(args.set_binding, args.workspace, args.url,
+                               gar_webgpt2_url=args.gar_webgpt2_url)
+        print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
     return _interactive()
 
 

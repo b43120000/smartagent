@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/mainline-hybrid-writer-5a-20261101
+      - feat/gar-webgpt2-saved-startup-20261101
       - main
   workflow_dispatch:
 
@@ -52,6 +53,13 @@ jobs:
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_tri_one_5a_protocol_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_tri_one_5a_answer_only.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: GAR saved WebGPT1/WebGPT2 startup regression
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_gar_saved_startup.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_gar_l4_fresh_context.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: GAR L4 non-interference
         shell: pwsh
