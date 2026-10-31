@@ -3771,12 +3771,15 @@ class WebLLMScraper:
                             f"idle_for={idle_for:.2f}s turn_id={(protocol_expected or {}).get('turn_id', '')}",
                         )
                         if protocol_expected:
-                            from .sr_first_readback import capture_p2_readonly_turn
-                            capture_p2_readonly_turn(
-                                stage="UI_IDLE", expected=protocol_expected,
-                                snapshot=snapshot, assistant_turn=assistant_turn,
-                                text="", adapter=self._web_ui_adapter(),
-                            )
+                            try:
+                                from .sr_first_readback import capture_p2_readonly_turn
+                                capture_p2_readonly_turn(
+                                    stage="UI_IDLE", expected=protocol_expected,
+                                    snapshot=snapshot, assistant_turn=assistant_turn,
+                                    text="", adapter=self._web_ui_adapter(),
+                                )
+                            except Exception:
+                                pass  # Diagnostics cannot change Runtime behavior.
 
                     text = self._current_new_response_text(snapshot, assistant_turn)
 
@@ -3914,12 +3917,15 @@ class WebLLMScraper:
                                                 sort_keys=True,
                                             ),
                                         )
-                                    from .sr_first_readback import capture_p2_readonly_turn
-                                    capture_p2_readonly_turn(
-                                        stage="COMMIT_READY", expected=protocol_expected,
-                                        snapshot=snapshot, assistant_turn=assistant_turn,
-                                        text=text, adapter=self._web_ui_adapter(),
-                                    )
+                                    try:
+                                        from .sr_first_readback import capture_p2_readonly_turn
+                                        capture_p2_readonly_turn(
+                                            stage="COMMIT_READY", expected=protocol_expected,
+                                            snapshot=snapshot, assistant_turn=assistant_turn,
+                                            text=text, adapter=self._web_ui_adapter(),
+                                        )
+                                    except Exception:
+                                        pass  # Never turn an observer failure into admission failure.
                                     self._log_stage(
                                         "protocol_commit_complete",
                                         f"protocol_version=9 action_count={matching_commit.get('action_count')} chars={len(text)} "
