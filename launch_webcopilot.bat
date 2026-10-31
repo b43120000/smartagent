@@ -4,6 +4,9 @@ chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 call "%~dp0install_smart_agent\launchers\ensure_portable_runtime.bat"
 if errorlevel 1 exit /b %ERRORLEVEL%
+rem Mainline ChatGPT Hybrid Composer: verified 512-char prefix + bulk tail.
+rem Set SMARTAGENT_COMPOSER_HYBRID_V1=0 to opt out for this process.
+if not defined SMARTAGENT_COMPOSER_HYBRID_V1 set "SMARTAGENT_COMPOSER_HYBRID_V1=1"
 set "SMARTAGENT_SOURCE=%~dp0source"
 if not exist "%SMARTAGENT_SOURCE%\agent_core\__init__.py" (
     echo [SmartAgent] ERROR Canonical source is missing: %SMARTAGENT_SOURCE%
