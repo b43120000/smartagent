@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -25,6 +26,7 @@ EVENTS = frozenset({
     "task_result_contract", "task_progress_updated",
     "interruption_render_unavailable", "action_dependency_blocked",
     "gar_safe_pause", "bounded_repair_observed",
+    "protocol_rejected", "protocol_loop_paused",
 })
 FIELDS = frozenset({
     "request_id", "task_id", "round", "action_id", "tool",
@@ -34,6 +36,25 @@ FIELDS = frozenset({
     "source_interface", "request_phase", "completion_status",
 })
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# Fixed classifications only. Runtime errors, diagnostics, model text and
+# arbitrary reason strings are NEVER copied verbatim.
+KNOWN_REASONS = {
+    "missing_smartagent_tool_envelope": "MISSING_TOOL_ENVELOPE",
+    "missing_turn_commit": "MISSING_TURN_COMMIT",
+    "invalid_json": "INVALID_JSON",
+    "json_parse_error": "JSON_PARSE_ERROR",
+    "protocol_rejected": "PROTOCOL_REJECTED",
+    "bounded_repair_exhausted_without_sufficient_new_evidence": "BOUNDED_REPAIR_EXHAUSTED",
+    "semantic_stagnation": "SEMANTIC_STAGNATION",
+    "request elapsed soft deadline": "REQUEST_ELAPSED_SOFT_DEADLINE",
+    "Repair elapsed budget exhausted": "REPAIR_ELAPSED_BUDGET_EXHAUSTED",
+    "composer_chunk_readback_failed": "COMPOSER_READBACK_FAILED",
+}
+def _reason_categories(value):
+    if not isinstance(value, str) or not value:
+        return []
+    return sorted(set(code for marker, code in KNOWN_REASONS.items()
+                      if marker.lower() in value.lower()))
 
 
 def _safe_field(key: str, value):
@@ -105,6 +126,32 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
                 value = _safe_field(key, row[key])
                 if value is not None:
                     result[key] = value
+        if kind in {"protocol_rejected", "bounded_repair_observed",
+                    "protocol_loop_paused", "request_failed"}:
+            # Whitelist known runtime reasons, or compare non-reversible hashes
+            # of unknown reason fields. Do not serialize exception details.
+            reason_candidates = []
+            if isinstance(row.get("reason"), str):
+                reason_candidates.append(row["reason"])
+            if kind == "request_failed" and isinstance(row.get("error"), str):
+                reason_candidates.append(row["error"])
+            if isinstance(row.get("reason_codes"), list):
+                reason_candidates.extend(x for x in row["reason_codes"]
+                                         if isinstance(x, str))
+            if isinstance(row.get("diagnostics"), list):
+                reason_candidates.extend(x.get("reason") for x in row["diagnostics"]
+                                         if isinstance(x, dict) and isinstance(x.get("reason"), str))
+            categories = sorted(set(code for reason in reason_candidates
+                                    for code in _reason_categories(reason)))
+            if categories:
+                result["reason_categories"] = categories
+            elif reason_candidates:
+                result["reason_categories"] = ["UNCLASSIFIED"]
+            if reason_candidates:
+                result["reason_sha256"] = [
+                    hashlib.sha256(x.encode("utf-8")).hexdigest()
+                    for x in reason_candidates[:8]
+                ]
         events.append(result)
     # Controller logs can include several tasks. Only identical Request IDs
     # to recorded turns are treated as scoped; unscoped events are diagnostic.
@@ -112,6 +159,15 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
     if ids:
         events = [r for r in events if not r.get("request_id")
                   or r["request_id"] in ids]
+        started = [r["timestamp"] for r in events
+                   if r["event"] == "request_started"
+                   and r.get("request_id") in ids and r.get("timestamp")]
+        if started:
+            # Controller timestamps are consistently local ISO8601. Limit
+            # legacy unscoped browser events to this request's start onward.
+            begin = min(started)
+            events = [r for r in events if r.get("request_id")
+                      or not r.get("timestamp") or r["timestamp"] >= begin]
     accepted = sorted({r.get("request_id") for r in events
                        if r["event"] == "runtime_terminal_accepted"
                        and r.get("request_id")})
