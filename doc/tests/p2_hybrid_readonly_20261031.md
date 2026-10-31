@@ -16,9 +16,9 @@ This starts NORMAL WebAgent runtime with:
 - `SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1=1`
 - `SMARTAGENT_COMPOSER_HYBRID_ONCE_V1=1`
 
-The first ChatGPT composer write with more than 1024 characters (including
+The first ChatGPT composer write with more than 512 characters (including
 the WUS transport envelope) on this scraper instance uses one-shot Hybrid.
-If no eligible write occurs, no Hybrid event is produced. The first 1024
+If no eligible write occurs, no Hybrid event is produced. The first 512
 characters are verified in small units; the remaining content is written
 without per-unit readback, with a strict whole-tail DOM readback and the
 existing independent observer/revalidation before Send. Multiline input
