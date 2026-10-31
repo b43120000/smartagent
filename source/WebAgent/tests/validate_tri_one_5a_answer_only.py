@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from agent_core.tri_one_answer_only import (
     accept_terminal_candidate, classify_original_request, enabled,
+    explicit_tool_restrictions, tool_restriction_diagnostic,
 )
 from agent_core.tri_one_task_result import (
     TaskResultContractError, make_task_result, validate_task_result,
@@ -96,6 +97,54 @@ class AnswerOnlyPolicyTests(unittest.TestCase):
             "Explain RAII", authorized_paths=True)[0])
         self.assertFalse(classify_original_request(
             "Explain RAII", continuation=True)[0])
+
+    def test_negative_tool_instruction_is_not_positive_tool_intent(self):
+        requests = (
+            "請說明 C++ RAII 的概念，以及 std::unique_ptr 如何實現 RAII。"
+            "給出簡短的 C++ 範例。本任務不需要操作本機檔案或執行任何命令。",
+            "Explain C++ RAII. Do not execute local commands or modify files.",
+            "請解釋 C++ RAII。不得使用任何工具。",
+        )
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertEqual(classify_original_request(request),
+                                 (True, "bounded_text_only_intent"))
+                self.assertTrue(explicit_tool_restrictions(request)[0])
+                self.assertEqual(
+                    accept_terminal_candidate(
+                        _loop(request),
+                        {"decision": "COMPLETE", "outcome": "SUCCESS",
+                         "evidence_refs": []},
+                        {"tool": "final_response", "content": "RAII owns lifetime."},
+                    ),
+                    (True, "ANSWER_ONLY_RESPONSE_ADMITTED"),
+                )
+        # Removing the restriction must not hide positive external intent.
+        for request in (
+            "請說明目前 Git HEAD，但不要執行命令。",
+            "請讀取工作區 README 並解釋，但不要執行命令。",
+            "Explain the latest project status. Do not use tools.",
+            "請說明 RAII，然後實際執行測試。本任務不需要操作本機檔案或執行任何命令。",
+        ):
+            with self.subTest(negative=request):
+                self.assertFalse(classify_original_request(request)[0])
+
+    def test_original_user_tool_prohibition(self):
+        request = "請解釋 C++ RAII。本任務不需要操作本機檔案或執行任何命令。"
+        self.assertIsNone(tool_restriction_diagnostic(
+            request, [{"tool": "final_response"}]))
+        for tool in ("run_command", "read_file", "list_directory",
+                     "inspect_project_scope", "observe_fact"):
+            with self.subTest(tool=tool):
+                denied = tool_restriction_diagnostic(request, [{"tool": tool}])
+                self.assertEqual(denied["reason"], "text_only_tool_forbidden")
+        # A command-only prohibition is *not* a ban on all read tools.
+        request = "請讀取 README，但不要執行命令。"
+        self.assertEqual(explicit_tool_restrictions(request), (False, True))
+        self.assertIsNone(tool_restriction_diagnostic(
+            request, [{"tool": "read_file"}]))
+        self.assertIsNotNone(tool_restriction_diagnostic(
+            request, [{"tool": "run_command"}]))
 
     def test_terminal_gate_positive_and_no_action_evidence_fabricated(self):
         progress = {"decision":"COMPLETE", "outcome":"SUCCESS", "evidence_refs":[]}
