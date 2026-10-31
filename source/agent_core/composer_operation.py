@@ -573,6 +573,7 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=102
     raw multiline insert_text() can silently truncate ProseMirror content.
     This writer never submits, replays, or relaxes independent final validation.
     """
+    started = time.monotonic()
     units = []
     for start, end, value, soft_break in _composer_write_units(prompt):
         if soft_break:
@@ -655,9 +656,30 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=102
             time.sleep(.2)
         record['confirmed_prefix'] = data
         write_json_atomic(journal, record)
+    elapsed = round(time.monotonic() - started, 3)
     scraper._log_stage('composer_hybrid_verified',
                        f"prefix_chars={first[-1][1] if first else 0} "
-                       f"tail_units={len(rest)} total_chars={len(prompt)}")
+                       f"tail_units={len(rest)} total_chars={len(prompt)} "
+                       f"elapsed_sec={elapsed:.3f}")
+    # Bounded writer instrumentation, no content, URL, user data or DOM HTML.
+    try:
+        from datetime import datetime, timezone
+        from .paths import log_root
+        target = log_root() / "p2-readonly" / "hybrid_writer.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        item = dict(schema="COMPOSER_HYBRID_WRITER_V1",
+                    utc=datetime.now(timezone.utc).isoformat(),
+                    mode="ONE_SHOT_PREFIX1024_BULK_TAIL",
+                    prefix_chars=(first[-1][1] if first else 0),
+                    tail_units=len(rest), prompt_chars=len(prompt),
+                    elapsed_seconds=elapsed,
+                    prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                    status="VERIFIED")
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(item, ensure_ascii=False,
+                                    separators=(",", ":")) + "\n")
+    except Exception:
+        pass
 
 
 def _write_staged_prompt(scraper,prompt,record,journal):
