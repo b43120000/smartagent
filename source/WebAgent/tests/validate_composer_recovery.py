@@ -27,6 +27,9 @@ def run():
         with patch.object(co,'_page_snapshot',return_value=observation),patch.object(co.time,'sleep'):
             return co._recover_page(scraper,{**record,**changes})
     assert recover(remount)['status']=='RECOVERED_EMPTY' and not cleared
+    changed={**remount,'user_count':3}
+    assert recover(changed,reason='writer_exception_or_cancelled',url=base['url'])['status']=='RECOVERED_EMPTY'
+    assert recover({**changed,'composer_empty':False},reason='writer_exception_or_cancelled',url=base['url'])['status']=='SCOPE_CHANGED_OR_BUSY'
     assert recover({**remount,'generation_active':True})['status']=='SCOPE_CHANGED_OR_BUSY'
     assert recover({**remount,'user_count':3})['status']=='SCOPE_CHANGED_OR_BUSY'
     assert recover(remount,state='SUBMIT_ATTEMPTED')['status']=='SUBMIT_OUTCOME_UNKNOWN'

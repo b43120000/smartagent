@@ -544,7 +544,11 @@ def _recover_page(scraper,record):
     # Delivery proves the previous message arrived, not that the composer is
     # ready for another message. After delivery the pre-submit baseline is no
     # longer applicable, but two fresh stable observations are still required.
-    if not _same_turns(first,second) or (not delivered and not _same_turns(record.get('baseline'),second)) or first['generation_active'] or second['generation_active']:
+    pre_submit_empty = (record.get('state') == 'QUARANTINED'
+        and record.get('reason') == 'writer_exception_or_cancelled'
+        and first['composer_empty'] and second['composer_empty']
+        and first.get('url') == record.get('url') == second.get('url'))
+    if not _same_turns(first,second) or (not delivered and not pre_submit_empty and not _same_turns(record.get('baseline'),second)) or first['generation_active'] or second['generation_active']:
         return dict(status='SCOPE_CHANGED_OR_BUSY',observation=second,
             comparison=dict(
                 recent_observations=_snapshot_difference(first,second),
@@ -627,14 +631,13 @@ def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
 
 
 def _composer_write_units(prompt):
-    """Yield exact, non-overlapping units; only long multiline prompts use soft breaks.
+    """Yield exact, non-overlapping units with editor soft breaks.
 
     Long multiline insert_text() is not an atomic editor transaction in
     ChatGPT ProseMirror. Never send a literal newline through insert_text() in
-    this gated path; an explicit Shift+Enter is the non-submit line break.
-    Short prompts keep the previously verified writer behavior.
+    this path; an explicit Shift+Enter is the non-submit line break.
     """
-    if len(prompt) < 4096 or ('\n' not in prompt and '\r' not in prompt):
+    if '\n' not in prompt and '\r' not in prompt:
         for start in range(0, len(prompt), 4096):
             end = min(start + 4096, len(prompt))
             yield start, end, prompt[start:end], False

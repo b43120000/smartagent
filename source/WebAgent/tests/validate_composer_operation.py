@@ -249,9 +249,9 @@ def test_multiline_first_line_truncation_is_avoided_without_replay():
         assert not any(v in journal.read_text(encoding='utf-8')
                        for v in ('WUS-' + 'A' * 32, '中文相機驗證'))
 
-    # Preserve the existing short multiline path used by WebGPT2 L4 reviews.
+    # Short multiline prompts also need editor soft breaks.
     short = 'first\nsecond'
-    assert list(co._composer_write_units(short)) == [(0, len(short), short, False)]
+    assert list(co._composer_write_units(short)) == [(0, 5, 'first', False), (5, 6, '', True), (6, 12, 'second', False)]
 
 
 def test_last_assistant_prewrite_readiness_gate():
