@@ -6,6 +6,7 @@ on:
       - diagnostic/sr05-turn-roster-20261031
       - experiment/hybrid-writer-p2-readonly-20261031
       - fix/tri-one-5a-no-tool-textonly-20261031
+      - fix/p2-sr-gate-mode-isolation-nameerror-20261031
   workflow_dispatch:
 
 permissions:
