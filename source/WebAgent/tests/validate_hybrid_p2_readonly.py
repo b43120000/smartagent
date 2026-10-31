@@ -75,7 +75,8 @@ def test_hybrid_writer():
     longline = "S"*5120
     prefix = _simulate_writer(longline)
     assert ("text", 512) in prefix
-    assert ("text", 4096) in prefix
+    assert max(n for kind,n in prefix if kind == "text") <= 4096
+    assert sum(n for kind,n in prefix if kind == "text") == len(longline)
     assert len([s for s in prefix if s[0] == "read"]) <= 5
     # The 512-char boundary is independently checked in the writer log.
     crlf_split = "A"*511 + "\n" + "B"*650
