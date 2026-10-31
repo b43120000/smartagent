@@ -134,6 +134,10 @@ def test_p2_hook_and_sanitizer():
         (logdir/"webagent_runtime.jsonl").write_text("\n".join(json.dumps(x) for x in [
             {"event":"request_started","request_id":"WA-TEST","request":"PRIVATE_USER_TEXT"},
             {"event":"ack_accepted","request_id":"WA-TEST","round":2,"ack_id":"WEBACK-1","content":"PRIVATE_SECRET"},
+            {"event":"protocol_rejected","request_id":"WA-TEST","round":3,
+             "diagnostics":[{"reason":"missing_smartagent_tool_envelope","detail":"PRIVATE_DANGEROUS"}]},
+            {"event":"bounded_repair_observed","request_id":"WA-TEST","round":3,
+             "reason_codes":["missing_smartagent_tool_envelope"],"status":"REPAIR_ALLOWED"},
             {"event":"tool_started","request_id":"WA-TEST","tool":"read_file","path":"C:\\private"},
             {"event":"runtime_terminal_accepted","request_id":"WA-TEST"},
             {"event":"request_completed","request_id":"WA-TEST","rendered_response":"PRIVATE_TEXT"},
@@ -146,6 +150,10 @@ def test_p2_hook_and_sanitizer():
         assert b"PRIVATE" not in data and b"C:\\private" not in data
         assert json.loads(bundle["p2_terminal_summary.json"])["status"]=="ACCEPTED_AND_COMPLETED"
         assert len(json.loads(bundle["p2_turn_observation.json"])["records"])==1
+        events = json.loads(bundle["p2_admission_trace.json"])["events"]
+        rejected = [e for e in events if e["event"] == "protocol_rejected"]
+        assert rejected[0]["reason_categories"] == ["MISSING_TOOL_ENVELOPE"]
+        assert all("PRIVATE" not in json.dumps(row) for row in events)
         # Real one-click bundler must also work without any P1 captures.
         from WebAgent.tests.collect_sr_readback_bundle import bundle as collect_zip
         with patch.object(collector,"log_root",return_value=logdir):
