@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - diagnostic/sr05-turn-roster-20261031
+      - experiment/hybrid-writer-p2-readonly-20261031
   workflow_dispatch:
 
 permissions:
