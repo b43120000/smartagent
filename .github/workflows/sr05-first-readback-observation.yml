@@ -40,6 +40,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\\.venv\\Scripts\\python.exe -B source/WebAgent/tests/validate_composer_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate Hybrid Writer and P2 readonly collector
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_hybrid_p2_readonly.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload bounded offline logs
         if: always()
         uses: actions/upload-artifact@v4
