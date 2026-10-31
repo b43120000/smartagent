@@ -24,7 +24,7 @@ def fence(payload: dict) -> str:
     ) + "\n" + ticks
 
 
-def answer_only_response(*, text: str = "RAII releases owned resources.") -> str:
+def answer_only_response(*, text: str = "RAII releases owned resources.", evidence_refs=None) -> str:
     progress = {
         "tool": "report_progress", "action_id": "P-ANSWER-01",
         "total_steps": 1, "current_step": 1,
@@ -41,7 +41,7 @@ def answer_only_response(*, text: str = "RAII releases owned resources.") -> str
         },
         "decision": "COMPLETE", "outcome": "SUCCESS",
         "matched_condition": "已提供一般概念的文字解說",
-        "evidence_refs": [],
+        "evidence_refs": [] if evidence_refs is None else list(evidence_refs),
         "decision_reason": "原始目標只需要文字說明且未執行工具。",
     }
     final = {"tool": "final_response", "action_id": "A-ANSWER-01",
@@ -98,6 +98,135 @@ class AnswerOnlyV9IT(unittest.TestCase):
             "給出簡短的 C++ 範例。本任務不需要操作本機檔案或執行任何命令。",
             "",
         )
+
+    def test_status_refs_are_not_action_evidence_in_5a(self):
+        request = (
+            "請說明 C++ RAII 的概念，以及 std::unique_ptr 如何實現 RAII。"
+            "給出簡短的 C++ 範例。本任務不需要操作本機檔案或執行任何命令。"
+        )
+        for refs in (
+            ["RUNTIME_STATUS"], ["REQUEST_ACCEPTED"],
+            ["REQUEST_ACCEPTED", "RUNTIME_STATUS"],
+        ):
+            with self.subTest(refs=refs), tempfile.TemporaryDirectory(
+                prefix="tri5a-status-"
+            ) as directory:
+                root = Path(directory)
+                turns, events = [], []
+                def planner(prompt, expected, attachments):
+                    turns.append(prompt)
+                    return answer_only_response(evidence_refs=refs)
+                loop = WebAgentProtocolLoop(
+                    root, planner, progress_root=root, max_turns=2,
+                    event_sink=lambda kind, **kw: events.append((kind, kw)),
+                )
+                flags = {
+                    "TRI_ONE_TASK_RESULT_V1": "1",
+                    "TRI_ONE_TEXT_ONLY_V1": "1",
+                }
+                with patch.dict(os.environ, flags), patch.object(
+                    loop.tools, "execute",
+                    side_effect=AssertionError("status refs must not cause tool I/O"),
+                ) as execute:
+                    answer = loop.run(request, request_id="WA-5A-STATUS")
+                self.assertEqual(answer, "RAII releases owned resources.")
+                self.assertEqual(len(turns), 1)
+                execute.assert_not_called()
+                self.assertEqual(loop.progress_ledger.evidence_refs, [])
+                self.assertEqual(loop.action_result_ledger, {})
+                self.assertEqual(loop.action_ledger, {})
+                self.assertEqual(loop.condition_result_ledger, {})
+                receipt = loop.terminal_acceptance
+                self.assertEqual(receipt["completion_kind"], "ANSWER_ONLY")
+                self.assertEqual(receipt["evidence_refs"], [])
+                self.assertEqual(receipt["evidence_verdict"], "UNVERIFIED")
+                self.assertEqual(receipt["admission_reason"],
+                                 "ANSWER_ONLY_RESPONSE_ADMITTED")
+                normalized = [e for kind,e in events
+                              if kind == "tri_one_answer_only_evidence_classified"]
+                self.assertEqual(len(normalized), 1)
+                self.assertEqual(normalized[0]["evidence_class"], "RUNTIME_CONTEXT")
+                self.assertEqual(normalized[0]["original_ref_count"], len(refs))
+                self.assertTrue(normalized[0]["normalized"])
+                self.assertTrue(normalized[0]["clean_runtime"])
+                self.assertFalse(any(kind == "tool_started" for kind,_ in events))
+                self.assertFalse(any(kind == "protocol_rejected" for kind,_ in events))
+
+    def test_reference_normalization_never_bypasses_existing_gates(self):
+        cases = (
+            # Model-invented refs must be rejected, never reinterpreted as status.
+            ("Explain RAII in C++.", ["UNKNOWN-ACT"], "INVALID_OR_UNTRUSTED"),
+            # An action/fresh external task is never a 5A Answer-only candidate.
+            ("Read this workspace file then summarize.", ["RUNTIME_STATUS"], None),
+        )
+        for request, refs, expected_class in cases:
+            with self.subTest(request=request), tempfile.TemporaryDirectory(
+                prefix="tri5a-reject-"
+            ) as directory:
+                root = Path(directory)
+                events = []
+                loop = WebAgentProtocolLoop(
+                    root,
+                    lambda *_: answer_only_response(evidence_refs=refs),
+                    progress_root=root, max_turns=2,
+                    event_sink=lambda kind, **kw: events.append((kind, kw)),
+                )
+                with patch.dict(os.environ, {
+                    "TRI_ONE_TASK_RESULT_V1": "1",
+                    "TRI_ONE_TEXT_ONLY_V1": "1",
+                }), patch.object(
+                    loop.tools, "execute",
+                    side_effect=AssertionError("rejected task must not run tools"),
+                ) as execute:
+                    with self.assertRaises(Exception):
+                        loop.run(request)
+                execute.assert_not_called()
+                self.assertFalse(loop._answer_only_admitted)
+                self.assertFalse(loop.terminal_acceptance)
+                classified = [e for kind,e in events
+                              if kind == "tri_one_answer_only_evidence_classified"]
+                if expected_class is None:
+                    self.assertEqual(classified, [])
+                else:
+                    self.assertTrue(classified)
+                    self.assertEqual(classified[0]["evidence_class"], expected_class)
+                    self.assertFalse(classified[0]["normalized"])
+
+    def test_pending_verification_blocks_status_ref_normalization(self):
+        with tempfile.TemporaryDirectory(prefix="tri5a-pending-") as directory:
+            root = Path(directory)
+            events = []
+            loop = WebAgentProtocolLoop(
+                root, lambda *_: answer_only_response(
+                    evidence_refs=["RUNTIME_STATUS"]),
+                progress_root=root, max_turns=2,
+                event_sink=lambda kind, **kw: events.append((kind, kw)),
+            )
+            # Inject a real Runtime-owned blocker after request initialization,
+            # before admission, without creating fake Action Evidence.
+            def planner(prompt, expected, attachments):
+                loop.pending_verification_requirement = {
+                    "required_action": "run_command",
+                    "reason_code": "POSTCONDITION_REQUIRED",
+                }
+                return answer_only_response(evidence_refs=["RUNTIME_STATUS"])
+            loop.planner = planner
+            with patch.dict(os.environ, {
+                "TRI_ONE_TASK_RESULT_V1": "1",
+                "TRI_ONE_TEXT_ONLY_V1": "1",
+            }), patch.object(
+                loop.tools, "execute", side_effect=AssertionError("no tools"),
+            ) as execute:
+                with self.assertRaises(Exception):
+                    loop.run("Explain RAII in C++.")
+            execute.assert_not_called()
+            self.assertFalse(loop._answer_only_admitted)
+            self.assertFalse(loop.terminal_acceptance)
+            events_classified = [data for kind,data in events
+                                 if kind == "tri_one_answer_only_evidence_classified"]
+            self.assertTrue(events_classified)
+            self.assertFalse(events_classified[0]["normalized"])
+            self.assertFalse(events_classified[0]["clean_runtime"])
 
     def test_tool_filler_is_rejected_without_executing_then_answer_only(self):
         request = (
