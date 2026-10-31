@@ -12,13 +12,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core.sr_first_readback import (
-    SRFirstReadbackCaptured, capture_first_readback, classify, enabled,
+    SRFirstReadbackCaptured, SRModeConflictError, capture_first_readback,
+    classify, enabled, assert_sr_p2_isolated, runtime_mode_attestation,
 )
 from WebAgent.tests.collect_sr_readback_bundle import bundle
 from WebAgent.tests.validate_shared_runtime_sr02_sr03 import (
     cpp_content, json_content, make_wire,
 )
 from agent_core.web_runtime import WebLLMScraper
+from agent_core import web_runtime as runtime_module
 
 
 class FakeNode:
@@ -44,6 +46,77 @@ class SRFirstReadbackIT(unittest.TestCase):
             "SMARTAGENT_SR_FIRST_READBACK_ONLY_V1": "1",
         }):
             self.assertTrue(enabled())
+
+    def test_sr_p2_mutual_exclusion_flag_matrix(self):
+        combos = (
+            ("0", "0", "NORMAL", False),
+            ("1", "0", "P1_FIRST_READBACK", False),
+            ("0", "1", "P2", False),
+            ("1", "1", "CONFLICT", True),
+        )
+        for sr_gate, p2, mode, conflicts in combos:
+            flags = {
+                "SMARTAGENT_SR_FIRST_READBACK_ONLY_V1": sr_gate,
+                "SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1": p2,
+                "SMARTAGENT_COMPOSER_HYBRID_ONCE_V1": "1",
+                "PRIVATE_RUNTIME_SECRET": "DO_NOT_LOG",
+            }
+            with self.subTest(sr_gate=sr_gate, p2=p2):
+                attestation = runtime_mode_attestation(flags)
+                self.assertEqual(attestation["mode_status"], mode)
+                self.assertEqual(attestation["sr_gate_active"], sr_gate == "1")
+                self.assertEqual(attestation["p2_diagnostic_active"], p2 == "1")
+                self.assertTrue(attestation["hybrid_once_active"])
+                self.assertNotIn("DO_NOT_LOG", json.dumps(attestation))
+                if conflicts:
+                    with self.assertRaisesRegex(SRModeConflictError, "SR_P2_MODE_CONFLICT"):
+                        assert_sr_p2_isolated(flags)
+                else:
+                    self.assertEqual(assert_sr_p2_isolated(flags), attestation)
+
+    def test_scraper_conflict_blocks_before_composer_or_page_access(self):
+        # _page and all other Browser state are intentionally absent.
+        scraper = WebLLMScraper.__new__(WebLLMScraper)
+        self.assertIs(runtime_module.SRFirstReadbackCaptured, SRFirstReadbackCaptured)
+        flags = {
+            "SMARTAGENT_SR_FIRST_READBACK_ONLY_V1": "1",
+            "SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1": "1",
+        }
+        with patch.dict(os.environ, flags):
+            with self.assertRaisesRegex(SRModeConflictError, "SR_P2_MODE_CONFLICT"):
+                scraper.ask("Must never reach the composer")
+        self.assertFalse(hasattr(scraper, "_calibrated_file_request"))
+
+    def test_controller_conflict_fails_before_browser_attach(self):
+        from WebAgent import controller
+        with tempfile.TemporaryDirectory(prefix="sr-p2-conflict-") as temp:
+            root = Path(temp)
+            with patch.dict(os.environ, {
+                "SMARTAGENT_SR_FIRST_READBACK_ONLY_V1": "1",
+                "SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1": "1",
+            }), patch("WebAgent.controller._resolve_workspace", return_value=root), \\
+                    patch("agent_core.protocol_manifest.require_protocol_manifest"), \\
+                    patch("WebAgent.controller.install_root", return_value=root), \\
+                    patch("WebAgent.controller.log_root", return_value=root / "logs"), \\
+                    patch("WebAgent.controller.RuntimeLifecycle.from_environment", return_value=None), \\
+                    patch("WebAgent.controller.open_or_attach_browser",
+                          side_effect=AssertionError("Browser attached during mode conflict")) as attach:
+                outcome = controller.main([
+                    "--workspace", str(root),
+                    "--webgpt-url", "https://chatgpt.com/c/fixture",
+                ])
+            self.assertEqual(outcome, 2)
+            attach.assert_not_called()
+            events = [
+                json.loads(row) for row in (root / "logs" / "webagent_runtime.jsonl")
+                .read_text(encoding="utf-8").splitlines()
+            ]
+            attested = [row for row in events if row.get("event") == "controller_mode_attestation"]
+            rejected = [row for row in events if row.get("event") == "controller_mode_rejected"]
+            self.assertEqual(len(attested), 1)
+            self.assertEqual(attested[0]["mode_status"], "CONFLICT")
+            self.assertEqual(len(rejected), 1)
+            self.assertEqual(rejected[0]["reason"], "SR_P2_MODE_CONFLICT")
 
     def test_cpp_and_json_capture_without_action(self):
         with tempfile.TemporaryDirectory(prefix="sr-gate-") as tmp:
