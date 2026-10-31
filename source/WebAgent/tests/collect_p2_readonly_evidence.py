@@ -32,6 +32,7 @@ EVENTS = frozenset({
     "browser_send_started", "p2_request_ingress",
     "planner_round_started", "protocol_transport_interrupted",
     "tri_one_text_only_scope", "tri_one_answer_only_candidate",
+    "tri_one_answer_only_evidence_classified",
     "text_only_tool_execution_blocked",
     "controller_mode_attestation", "controller_mode_rejected",
     "sr_first_readback_captured", "sr_first_readback_failed",
@@ -46,6 +47,8 @@ FIELDS = frozenset({
     "hybrid_eligible", "completion_kind", "admission_reason",
     "eligible", "reason", "sr_gate_active", "p2_diagnostic_active",
     "hybrid_once_active", "mode_status",
+    "evidence_class", "original_ref_count", "context_ref_count",
+    "normalized", "clean_runtime",
 })
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 # Convert runtime browser phase text to a fixed enum. Never expose an
@@ -105,13 +108,21 @@ def _reason_categories(value):
 
 
 def _safe_field(key: str, value):
-    if key in {"round", "action_count", "protocol_version", "request_chars"}:
+    if key in {"round", "action_count", "protocol_version", "request_chars",
+               "original_ref_count", "context_ref_count"}:
         return value if type(value) is int and 0 <= value <= 1000000 else None
     if key in {"response_stable", "action_executed", "hybrid_eligible", "eligible",
-               "sr_gate_active", "p2_diagnostic_active", "hybrid_once_active"}:
+               "sr_gate_active", "p2_diagnostic_active", "hybrid_once_active",
+               "normalized", "clean_runtime"}:
         return value if type(value) is bool else None
     if key == "request_sha256":
         return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+    if key == "evidence_class":
+        return value if value in {
+            "NO_EVIDENCE", "RUNTIME_CONTEXT", "PROTOCOL_CONTROL",
+            "ACTION_RESULT", "CONDITION_VERIFICATION",
+            "INVALID_OR_UNTRUSTED",
+        } else None
     if key == "mode_status":
         return value if value in {"NORMAL", "P2", "P1_FIRST_READBACK", "CONFLICT"} else None
     if key == "completion_kind":
