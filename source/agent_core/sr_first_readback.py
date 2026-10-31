@@ -547,3 +547,62 @@ def capture_first_readback(
         encoding="utf-8",
     )
     return SRFirstReadbackCaptured(target, verdict["verdict"])
+
+
+def capture_p2_readonly_turn(*, stage: str, expected: dict, snapshot: dict,
+                             assistant_turn, text: str, adapter) -> None:
+    """Best-effort metadata-only P2 observation; cannot affect admission.
+
+    Unlike SR First Readback this runs with the NORMAL protocol gate enabled.
+    No full URL, prompts, response text, DOM HTML or browser secrets are stored.
+    Only bounded metadata from the already-owned assistant is recorded.
+    """
+    if os.environ.get("SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1", "") != "1":
+        return
+    try:
+        from .paths import log_root
+        scope = snapshot.get("_web_ui_scope")
+        user = getattr(scope, "user_turn", None)
+        def hashed_turn(turn):
+            if turn is None:
+                return ""
+            try:
+                raw = str(adapter.durable_turn_id(turn) or "")
+            except Exception:
+                raw = ""
+            return _digest(raw) if raw else ""
+        counts = {}
+        for role in ("user", "assistant"):
+            try:
+                counts[role] = len(adapter.turns(role))
+            except Exception:
+                counts[role] = None
+        record = {
+            "schema": "P2_READONLY_TURN_V1",
+            "utc": datetime.now(timezone.utc).isoformat(),
+            "stage": str(stage)[:32],
+            "request_id": str((expected or {}).get("run_id", ""))[:96],
+            "round": int((expected or {}).get("turn_id", 0) or 0),
+            "scope_present": scope is not None,
+            "scope_id_sha256": _digest(str(getattr(scope, "scope_id", "") or "")),
+            "request_user_bound": user is not None,
+            "request_user_id_sha256": hashed_turn(user),
+            "assistant_id_sha256": hashed_turn(assistant_turn),
+            "assistant_ordinal": getattr(assistant_turn, "ordinal", None),
+            "assistant_count_before": int(snapshot.get("assistant_count", 0) or 0),
+            "user_count_before": int(snapshot.get("user_count", 0) or 0),
+            "assistant_count_observed": counts["assistant"],
+            "user_count_observed": counts["user"],
+            "response_chars": len(text),
+            "response_sha256": _digest(text),
+            "note": "Read-only; no admission authority; DOM counts need not increase.",
+        }
+        output = log_root() / "p2-readonly" / "turn_readback.jsonl"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False,
+                                    separators=(",", ":")) + "\n")
+    except Exception:
+        # Never let instrumentation change normal Runtime decisions.
+        return
+
