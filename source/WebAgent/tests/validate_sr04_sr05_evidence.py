@@ -157,7 +157,7 @@ class SR04SR05IT(unittest.TestCase):
             # BOTH LF and CRLF and must survive byte-for-byte on Windows.
             extracted = (result.capture_dir / "extracted_response.txt").read_bytes()
             text_content = (result.capture_dir / "dom_turn_text_content.txt").read_bytes()
-            self.assertIn(b"\\\\r\\\\n", extracted)
+            self.assertIn(b"\\r\\n", extracted)
             self.assertIn(b"\n", extracted)
             self.assertIn(b"\r\n", text_content)
             self.assertIn(b"prefix\n", text_content)
