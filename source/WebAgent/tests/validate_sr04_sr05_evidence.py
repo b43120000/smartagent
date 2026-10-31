@@ -152,12 +152,15 @@ class SR04SR05IT(unittest.TestCase):
                 self.assertEqual(f["stored_sha256"], f["original_sha256"])
                 self.assertTrue(f["matches_original"])
                 self.assertEqual(f["newline_policy"], "UTF8_BYTES_NO_TRANSLATION")
-            self.assertIn(b"\r\n", (
-                result.capture_dir / "extracted_response.txt"
-            ).read_bytes())
-            self.assertIn(b"\n", (
-                result.capture_dir / "extracted_response.txt"
-            ).read_bytes())
+            # JSON transport escapes inner CRLF into literal backslashes;
+            # the independent DOM textContent fixture deliberately contains
+            # BOTH LF and CRLF and must survive byte-for-byte on Windows.
+            extracted = (result.capture_dir / "extracted_response.txt").read_bytes()
+            text_content = (result.capture_dir / "dom_turn_text_content.txt").read_bytes()
+            self.assertIn(b"\\\\r\\\\n", extracted)
+            self.assertIn(b"\n", extracted)
+            self.assertIn(b"\r\n", text_content)
+            self.assertIn(b"prefix\n", text_content)
             structure = json.loads((
                 result.capture_dir / "dom_selected_structure.json"
             ).read_text(encoding="utf-8"))
