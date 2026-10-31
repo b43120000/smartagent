@@ -3660,6 +3660,62 @@ class WebAgentProtocolLoop:
                     "detail": "current_step=total_steps may continue only while an evidence-producing final-step action is present",
                     "suggestion": "保留最後一步 IN_PROGRESS，並在同輪輸出補驗證或修正 action；否則改為 COMPLETE。",
                 }]
+        # Tri-One 5A only: a model may cite fixed Runtime status refs as
+        # "evidence" despite having performed no Tool Action. They are not
+        # ActionResult evidence and cannot establish verification PASS.
+        # Keep the original transport/diagnostic data; normalize only this
+        # validated zero-tool Answer-only candidate before terminal admission.
+        if (
+            getattr(self, "_answer_only_scope", False)
+            and decision == "COMPLETE" and outcome == "SUCCESS"
+            and len(operational) == 1
+            and operational[0].get("tool") == "final_response"
+        ):
+            from agent_core.tri_one_answer_only import (
+                ANSWER_ONLY_RUNTIME_CONTEXT_REFS,
+                classify_answer_only_evidence_refs,
+            )
+            original_refs = list(normalized_progress["evidence_refs"])
+            evidence_class = classify_answer_only_evidence_refs(
+                original_refs,
+                action_result_ids=self.action_result_ledger,
+                condition_result_ids=self.condition_result_ledger,
+            )
+            clean_runtime = not any((
+                self.action_ledger, self.action_result_ledger,
+                self.condition_result_ledger,
+                self.pending_verification_requirement,
+                self.pending_result_recovery, self.deferred_action_repairs,
+                self.pending_progress_repair_actions, self.pending_action_repair,
+                self.active_stage_manifest, self.continuation_source,
+                self._tri_one_has_attached_context, self.authorized_paths,
+                self.image_delivery_plan,
+            )) and not any(
+                not item.get("satisfied")
+                for item in (self.action_loop_state or {}).get("blockers", [])
+                if isinstance(item, Mapping)
+            )
+            normalized_context_only = (
+                evidence_class == "RUNTIME_CONTEXT" and clean_runtime
+            )
+            if normalized_context_only:
+                # This is NOT action verification and does not create PASS.
+                # Preserve the source reply for audit; the accepted progress
+                # and terminal receipt must truthfully contain zero Action refs.
+                normalized_progress["evidence_refs"] = []
+                progress_actions[0]["evidence_refs"] = []
+            self._emit(
+                "tri_one_answer_only_evidence_classified",
+                request_id=self.run_id, round=self.turn_id,
+                evidence_class=evidence_class,
+                original_ref_count=len(original_refs),
+                context_ref_count=sum(
+                    ref in ANSWER_ONLY_RUNTIME_CONTEXT_REFS
+                    for ref in original_refs
+                ),
+                normalized=normalized_context_only,
+                clean_runtime=clean_runtime,
+            )
         evidence_refs = set(normalized_progress["evidence_refs"])
         unknown_refs = sorted(evidence_refs - self._runtime_evidence_refs())
         if unknown_refs:
@@ -4520,7 +4576,9 @@ class WebAgentProtocolLoop:
                     "If it needs no external information or side effects, emit ONE "
                     "canonical v9 turn: complete report_progress, final_response "
                     "and turn_commit. Set every completed step to COMPLETED and "
-                    "cite no invented evidence. Runtime will decide eligibility; "
+                    "set report_progress.evidence_refs=[] for answer-only, NEVER cite " 
+                    "REQUEST_ACCEPTED or RUNTIME_STATUS as answer verification. "
+                    "Runtime will classify those status-only refs if supplied; "
                     "any tool need requires the ordinary Action Loop.\n"
                     "[/TRI_ONE_ANSWER_ONLY_CANDIDATE]"
                 )
