@@ -197,7 +197,7 @@
     "source/agent_core/windows_process_job.py": "e78233d731fbfafa85d5ad493e117c75b160ef660548a5a0aa84bfc2d3b19037",
     "source/agent_core/windows_security.py": "5fc6d526978be8690327dfd6b58ff3b21fa007be2f8c9d86cf536ced981f0c1c",
     "source/agent_core/workspace_access.py": "717a392d7bd8e329312766d9478f16cb0e9615d52c728dced691dce319efad4c",
-    "source/agent_core/workspace_manager.py": "d5bbc0c5471073053a8fc89a06d8608ac82c8cbaefc5debeeab02bfb2e7da1e5",
+    "source/agent_core/workspace_manager.py": "2b01145bd5f4d79dc7d691222b08d90e9bd4327ef7e50e971ab7df7dff3d6f18",
     "source/smart_agent.py": "f416a3c6a83ccee464154909117a762283ce35c985050afaabcd6f8aa8930c62",
     "source/agent_core/goal_anchored_recovery.py": "4814fb6a756506c28e043935e8cf389166bd73f7c5afc1657f5d70f318161cc6",
     "source/agent_core/gar_l4_supervision.py": "5088f23f114e940f925adda81e84eafe98fb04811b31c84bc1404d1687b11e01",
@@ -207,7 +207,7 @@
     "source/agent_core/tri_one_shared_worker.py": "bddb403263eee2d1f2f5ec3675b873dd91f24d3158a7d5f77db21fe0e30c4c86",
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/agent_core/current_conversation_adapter.py": "47f7eb37ed40a5558d7e03c09f3ac8b455b617513dd3a998e37935abb77a22ee",
-    "source/agent_core/gar_webgpt2_settings.py": "858f5e0da1a0d18d1d61183c6056f98273e52dea9e75ec541793980cc9bc3c0e"
+    "source/agent_core/gar_webgpt2_settings.py": "83c61ae5b47231ef58a865df6a0acb136f0045e86d4b4f7a67b3c8b0a43cfdc8"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

@@ -1,7 +1,8 @@
 """Independent GAR WebGPT2 target shared across SmartAgent interfaces.
 
-A stored target does not enable GAR. The explicit process-level env override
-takes precedence, including an explicit empty string to disable the target.
+An effective configured WebGPT2 target automatically enables GAR on agent
+startup; an empty target disables it. The explicit process-level target URL
+override still takes precedence, including an explicit empty string.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from .workspace import normalize_chatgpt_url
 
 SCHEMA = "SMARTAGENT_SHARED_GAR_WEBGPT2_V1"
 ENV_KEY = "SMARTAGENT_GAR_FRESH_CONTEXT_URL"
+GAR_FLAG = "SMARTAGENT_GAR_V1"
 
 
 def settings_path() -> Path:
@@ -73,8 +75,11 @@ def apply_target(primary_url: str, *, environ: MutableMapping[str, str] | None =
         raise ValueError("gar_webgpt2_must_differ_from_active_webgpt1")
     if target and ENV_KEY not in values:
         values[ENV_KEY] = target
+    # Apply at each agent/worker startup. A previous explicit GAR flag must
+    # not silently disagree with the effective WebGPT2 configuration.
+    values[GAR_FLAG] = "1" if target else "0"
     return target
 
 
-__all__ = ["SCHEMA", "ENV_KEY", "settings_path", "validate_target",
+__all__ = ["SCHEMA", "ENV_KEY", "GAR_FLAG", "settings_path", "validate_target",
            "load_target", "save_target", "apply_target"]

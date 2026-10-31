@@ -254,7 +254,7 @@ def _gar_webgpt2_menu() -> int:
         return 0
     target = save_gar_webgpt2("" if raw == "-" else raw)
     print(f"[OK] GAR WebGPT2 URL：{target or '（已清除）'}")
-    print("下次啟動 Agent / Worker 生效；GAR 不會自動啟用。")
+    print("下次啟動 Agent / Worker 生效；有 WebGPT2 URL 時 GAR=1，清空時 GAR=0。")
     return 0
 
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import workspace_manager
-from agent_core.gar_webgpt2_settings import SCHEMA, ENV_KEY, apply_target, load_target, save_target
+from agent_core.gar_webgpt2_settings import SCHEMA, ENV_KEY, GAR_FLAG, apply_target, load_target, save_target
 from agent_core.startup_preferences import save_startup_preferences
 
 PRIMARY = "https://chatgpt.com/c/primary"
@@ -45,7 +45,7 @@ class SharedGARTests(unittest.TestCase):
                 env={}
                 self.assertEqual(apply_target(primary,environ=env,path=p),FRESH)
                 self.assertEqual(env[ENV_KEY],FRESH)
-                self.assertNotIn("SMARTAGENT_GAR_V1",env)
+                self.assertEqual(env[GAR_FLAG],"1")
             with self.assertRaisesRegex(ValueError,"must_differ"):
                 apply_target(FRESH,environ={},path=p)
 
@@ -54,10 +54,49 @@ class SharedGARTests(unittest.TestCase):
             p=Path(d)/"gar.json"
             save_target(FRESH,path=p)
             manual="https://chatgpt.com/c/manual"
-            self.assertEqual(apply_target(PRIMARY,environ={ENV_KEY:manual},path=p),manual)
-            self.assertEqual(apply_target(PRIMARY,environ={ENV_KEY:""},path=p),"")
+            explicit={ENV_KEY:manual,GAR_FLAG:"0"}
+            self.assertEqual(apply_target(PRIMARY,environ=explicit,path=p),manual)
+            self.assertEqual(explicit[GAR_FLAG],"1")
+            disabled={ENV_KEY:"",GAR_FLAG:"1"}
+            self.assertEqual(apply_target(PRIMARY,environ=disabled,path=p),"")
+            self.assertEqual(disabled[GAR_FLAG],"0")
             with self.assertRaisesRegex(ValueError,"must_differ"):
                 apply_target(PRIMARY,environ={ENV_KEY:PRIMARY},path=p)
+
+    def test_no_saved_webgpt2_disables_gar_at_startup(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            legacy=Path(d)/"legacy.json"
+            for raw in (None,""):
+                if raw is not None:
+                    save_target(raw,path=p)
+                env={GAR_FLAG:"1"}
+                self.assertEqual(apply_target(PRIMARY,environ=env,path=p,legacy_path=legacy),"")
+                self.assertEqual(env[GAR_FLAG],"0")
+                self.assertNotIn(ENV_KEY,env)
+
+    def test_clear_global_setting_turns_off_gar(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            env={}
+            save_target(FRESH,path=p)
+            self.assertEqual(apply_target(PRIMARY,environ=env,path=p),FRESH)
+            self.assertEqual(env[GAR_FLAG],"1")
+            save_target("",path=p)
+            # Each agent startup is a fresh process; it does not inherit a
+            # previously calculated URL from an earlier launched agent.
+            next_start_env={GAR_FLAG:"1"}
+            self.assertEqual(apply_target(PRIMARY,environ=next_start_env,path=p),"")
+            self.assertEqual(next_start_env[GAR_FLAG],"0")
+
+    def test_invalid_target_does_not_enable_gar(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            save_target(FRESH,path=p)
+            env={ENV_KEY:"https://chatgpt.com/",GAR_FLAG:"0"}
+            with self.assertRaises(ValueError):
+                apply_target(PRIMARY,environ=env,path=p)
+            self.assertEqual(env[GAR_FLAG],"0")
 
     def test_fail_closed_on_invalid_url_or_schema(self):
         with tempfile.TemporaryDirectory() as d:

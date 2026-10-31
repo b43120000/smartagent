@@ -6,6 +6,7 @@ on:
       - feat/mainline-hybrid-writer-5a-20261101
       - feat/gar-webgpt2-saved-startup-20261101
       - feat/shared-gar-webgpt2-all-agents-20261101
+      - feat/gar-auto-enable-from-webgpt2-20261101
       - main
   workflow_dispatch:
 
