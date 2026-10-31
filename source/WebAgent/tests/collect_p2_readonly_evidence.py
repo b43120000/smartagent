@@ -178,9 +178,17 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
     logs = log_root(root)
     trace_path = logs / "p2-readonly" / "turn_readback.jsonl"
     writer_path = logs / "p2-readonly" / "hybrid_writer.jsonl"
+    runtime_path = logs / "webagent_runtime.jsonl"
     if not trace_path.is_file() and not writer_path.is_file():
-        return {}
-    raw_events = _read_jsonl(logs / "webagent_runtime.jsonl", 2500)
+        # A startup-mode conflict correctly stops BEFORE producing any
+        # Assistant Turn or Composer Write. Still package its safe verdict.
+        if not runtime_path.is_file():
+            return {}
+        recent = _read_jsonl(runtime_path, 2500)
+        if not any(item.get("event") == "controller_mode_attestation"
+                   for item in recent):
+            return {}
+    raw_events = _read_jsonl(runtime_path, 2500)
     # Always isolate the latest controller process; don't let historical
     # failed requests masquerade as the new P2 outcome.
     latest_start_idx = next(
