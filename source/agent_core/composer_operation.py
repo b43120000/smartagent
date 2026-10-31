@@ -749,20 +749,15 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=512
                        extra={'chunk_start': start, 'chunk_end': end})
             scraper._page.keyboard.insert_text(value)
 
-    # Strict first prefix, one unit at a time, same fail-closed validation as
-    # the existing protected writer.
-    for unit in first:
-        start, end, _, _ = unit
-        if start and not scraper._composer_matches_prompt(prompt[:start]):
-            raise ComposerOperationError('composer_prefix_changed')
+    # Input only the first <=512 characters before one strict DOM checkpoint.
+    # The entire prefix is read back before the tail starts. No retyping or
+    # speculative continuation after an incomplete prefix observation.
+    if first:
         focus_end()
-        prefix, data = checkpoint(end, phase='verified_prefix')
-        type_unit(unit)
-        deadline = time.monotonic() + 2.0
-        while not scraper._composer_matches_prompt(prefix):
-            if time.monotonic() >= deadline:
-                raise ComposerOperationError('composer_chunk_readback_failed')
-            time.sleep(.1)
+        prefix, data = checkpoint(first[-1][1], phase='verified_prefix')
+        for unit in first:
+            type_unit(unit)
+        _await_chunk_readback(scraper, prefix, timeout_sec=8.0)
         record['confirmed_prefix'] = data
         write_json_atomic(journal, record)
 
