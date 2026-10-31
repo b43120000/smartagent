@@ -244,6 +244,11 @@ def test_answer_only_receipt_collected_without_tool_events():
             {"timestamp": timestamp, "event":"tri_one_answer_only_candidate",
              "request_id":"WA-TEXT", "eligible":True,
              "reason":"ANSWER_ONLY_RESPONSE_ADMITTED"},
+            {"timestamp": timestamp, "event":"tri_one_answer_only_evidence_classified",
+             "request_id":"WA-TEXT", "round":1,
+             "evidence_class":"RUNTIME_CONTEXT", "original_ref_count":2,
+             "context_ref_count":2, "normalized":True, "clean_runtime":True,
+             "original_refs":["REQUEST_ACCEPTED", "DO_NOT_EXPORT_SECRET"]},
             {"timestamp": timestamp, "event":"runtime_terminal_accepted",
              "request_id":"WA-TEXT", "completion_kind":"ANSWER_ONLY",
              "admission_reason":"ANSWER_ONLY_RESPONSE_ADMITTED",
@@ -270,7 +275,15 @@ def test_answer_only_receipt_collected_without_tool_events():
                 and x.get("eligible")] 
         assert [x for x in trace if x.get("event") == "runtime_terminal_accepted"
                 and x.get("completion_kind") == "ANSWER_ONLY"]
+        ref_events = [x for x in trace
+                      if x.get("event") == "tri_one_answer_only_evidence_classified"]
+        assert len(ref_events) == 1
+        assert ref_events[0]["evidence_class"] == "RUNTIME_CONTEXT"
+        assert ref_events[0]["original_ref_count"] == 2
+        assert ref_events[0]["normalized"] is True
+        assert "original_refs" not in ref_events[0]
         assert b"PRIVATE_SECRET" not in b"".join(package.values())
+        assert b"DO_NOT_EXPORT_SECRET" not in b"".join(package.values())
 
 def test_p2_hook_and_sanitizer():
     class Adapter:
