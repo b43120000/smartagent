@@ -127,6 +127,36 @@ other historical conversation text is automatically included.
 The current response body and selected DOM texts CAN contain private
 information. Inspect ZIP contents before sharing.
 
+
+## 6 — SR-05 P1 readonly DOM turn-count diagnosis
+
+For the count drop reported at c98279c (assistant/user 5 -> 4), the
+diagnostic branch retains the *same* \`collect_sr_first_readback.bat\` entry.
+New First-Readback captures additionally write
+\`captures/<request>/turn_observation.json\`.
+
+Each observation contains bounded, text-free pre-submit and after-completion
+rosters (up to 128 turns per role), logical/deduplicated vs raw DOM element
+counts, provider selectors, root=page, timestamp, hashed page URL, hashed
+turn IDs, ordinal and content hashes, and a before/after delta. Neither
+the full URL, user prompt, message content, attributes nor HTML is saved in
+this diagnostic. Identity hashes may be ordinal-derived fallbacks. Snapshots
+are non-atomic; the observation cannot by itself prove a transient browser
+re-rendering event or attribute an issue to the language model.
+
+Use the existing live gate once and submit the identical SR-05 prompt
+three times in the *same* conversation, waiting for an independent CAPTURED
+record after each request. Do not switch conversations, scroll, or reload.
+Then simply run:
+
+    cmd.exe /c collect_sr_first_readback.bat
+
+Upload the resulting single ZIP at
+\`localdata/logs/sr-first-readback/bundles/SR_FIRST_READBACK_*.zip\`.
+The allowlist includes the new turn_observation.json; older captures without
+this optional file remain valid. No Source runtime admission or tool execution
+policy has been changed.
+
 ## Interpretation limitations
 
 This test checks the **first observed** assistant response, not the hidden
