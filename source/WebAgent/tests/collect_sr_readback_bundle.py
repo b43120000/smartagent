@@ -198,9 +198,9 @@ def bundle(root: Path) -> Path:
                 p = folder / name
                 if p.is_file() and not p.is_symlink():
                     entries.append((p, f"regression/{folder.name}/{name}"))
-    if not entries:
+    if not entries and not p2_evidence:
         raise RuntimeError(
-            "SR_BUNDLE_NO_EVIDENCE: run regression / SR-02 / SR-03 before packaging"
+            "SR_BUNDLE_NO_EVIDENCE: run SR captures or P2 readonly diagnostic first"
         )
     total = 0
     manifest = []
@@ -227,7 +227,8 @@ def bundle(root: Path) -> Path:
         git_sha = "UNKNOWN"
     note = (
         "SR FIRST READBACK EVIDENCE (NOT A LIVE SUCCESS RECEIPT)\n"
-        "Model-generated assistant response text is included verbatim.\n"
+        ("Model-generated assistant response text may be present in old SR captures.\n"
+         if entries else "P2-only metadata evidence; no raw assistant text is included.\n")
         "Inspect all extracted_response.txt and dom_turn_inner_text.txt files "
         "before sharing. Do NOT add secrets, tokens or browser profiles.\n"
         "Scope: selected request-owned assistant turn only; the separate "
