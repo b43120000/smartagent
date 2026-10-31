@@ -100,6 +100,152 @@ def _selected_dom_structure(assistant_turn) -> dict:
     return result
 
 
+
+def _turn_identity(adapter, turn) -> dict:
+    """Hashed provider identity and ordinal; neither implies freshness alone."""
+    if turn is None:
+        return {"present": False, "ordinal": None,
+                "durable_id_sha256": "", "structural_id": "",
+                "content_digest": "", "durable_id_available": False}
+    try:
+        durable = str(adapter.durable_turn_id(turn) or "")
+    except Exception:
+        durable = ""
+    structure = str(getattr(turn, "structural_id", "") or "")
+    return {
+        "present": True,
+        "ordinal": getattr(turn, "ordinal", None),
+        "durable_id_sha256": _digest(durable) if durable else "",
+        "structural_id": structure,
+        "content_digest": str(getattr(turn, "content_digest", "") or ""),
+        "durable_id_available": bool(durable),
+        "identity_note": "May use ordinal-derived fallback; identity alone is not freshness proof.",
+    }
+
+
+def _final_response_content(text: str) -> tuple[str | None, str]:
+    """Passive parse of the decoded FINAL_RESPONSE, never ACK admission."""
+    try:
+        parsed = parse_v9_tool_transport_detailed(str(text or ""))
+        if parsed.diagnostics or not parsed.calls:
+            return None, "UNPARSEABLE"
+        final = [x.get("content") for x in parsed.calls
+                 if x.get("tool") == "final_response"]
+        if len(final) == 1 and isinstance(final[0], str):
+            return final[0], "FOUND"
+        return None, "NO_SINGLE_FINAL_RESPONSE"
+    except Exception as exc:
+        return None, "PARSER_EXCEPTION_" + type(exc).__name__
+
+
+def capture_pre_submit_identity(adapter, snapshot: dict) -> dict:
+    """Snapshot last assistant BEFORE submit, without copying old conversation."""
+    result = {
+        "status": "UNAVAILABLE", "assistant_count_before": int(
+            snapshot.get("assistant_count", 0) or 0
+        ), "user_count_before": int(snapshot.get("user_count", 0) or 0),
+        "previous_assistant": {"present": False},
+        "previous_response_sha256": "",
+        "previous_final_content_sha256": "",
+        "previous_final_content_state": "NOT_OBSERVED",
+    }
+    try:
+        turns = list(adapter.turns("assistant"))
+        previous = turns[-1] if turns else None
+        result["previous_assistant"] = _turn_identity(adapter, previous)
+        if previous is not None:
+            raw = str(adapter.extract_final_text(previous) or "")
+            result["previous_response_sha256"] = _digest(raw)
+            content, content_state = _final_response_content(raw)
+            result["previous_final_content_state"] = content_state
+            if content is not None:
+                result["previous_final_content_sha256"] = _digest(content)
+        result["status"] = "OBSERVED"
+    except Exception as exc:
+        result["status"] = "OBSERVATION_ERROR_" + type(exc).__name__
+    return result
+
+
+def _dom_turn_text_content(assistant_turn) -> tuple[str | None, str]:
+    node = getattr(assistant_turn, "element", assistant_turn)
+    fn = getattr(node, "text_content", None)
+    if not callable(fn):
+        return None, "TEXT_CONTENT_UNAVAILABLE"
+    try:
+        return str(fn() or ""), "TEXT_CONTENT_OBSERVED"
+    except Exception as exc:
+        return None, "TEXT_CONTENT_ERROR_" + type(exc).__name__
+
+
+def _write_exact_text(target: Path, text: str) -> dict:
+    """No universal-newline rewriting on Windows: byte-stable UTF-8 artifact."""
+    original = str(text or "").encode("utf-8", errors="replace")
+    limited, truncated = _clamp_text(str(text or ""))
+    written = limited.encode("utf-8", errors="replace")
+    target.write_bytes(written)
+    verify = target.read_bytes()
+    result = {
+        "original_sha256": hashlib.sha256(original).hexdigest(),
+        "stored_sha256": hashlib.sha256(verify).hexdigest(),
+        "original_bytes": len(original),
+        "stored_bytes": len(verify),
+        "truncated": truncated,
+        "write_verified": written == verify,
+        "matches_original": original == verify,
+        "newline_policy": "UTF8_BYTES_NO_TRANSLATION",
+    }
+    if not result["write_verified"] or (not truncated and not result["matches_original"]):
+        raise RuntimeError("SR_BYTE_FIDELITY_WRITE_MISMATCH")
+    return result
+
+
+def _case_and_markers(final_content: str | None) -> dict:
+    if not isinstance(final_content, str):
+        return {"test_case": "UNCLASSIFIED", "status": "NO_FINAL_CONTENT"}
+    if "SR04_" in final_content or "SR04_END" in final_content:
+        required = ["SR04_BEGIN", *[f"SR04_SECTION_{i:02d}" for i in range(1, 21)],
+                    "SR04_END"]
+        missing = [marker for marker in required if marker not in final_content]
+        positions = [final_content.find(marker) for marker in required]
+        return {
+            "test_case": "SR-04",
+            "status": "MARKERS_PRESENT" if not missing and positions == sorted(positions)
+                      else "MARKERS_INCOMPLETE_OR_ORDERED_WRONG",
+            "expected_marker_count": len(required),
+            "missing_markers": missing,
+            "markers_in_order": not missing and positions == sorted(positions),
+            "content_characters": len(final_content),
+        }
+    if "SR05_END" in final_content:
+        return {"test_case": "SR-05", "status": "MARKER_PRESENT",
+                "content_characters": len(final_content)}
+    return {"test_case": "OTHER", "status": "NOT_SR04_OR_SR05"}
+
+
+def _freshness_pair(pre: dict, current: dict, current_content_sha: str) -> dict:
+    prev = dict(pre.get("previous_assistant") or {})
+    before = str(prev.get("durable_id_sha256", "") or "")
+    after = str(current.get("durable_id_sha256", "") or "")
+    prev_content_sha = str(pre.get("previous_final_content_sha256", "") or "")
+    if before and after:
+        identity = "SAME" if before == after else "CHANGED"
+    else:
+        identity = "UNKNOWN"
+    same_content = (prev_content_sha == current_content_sha) if (
+        prev_content_sha and current_content_sha) else None
+    return {
+        "previous_vs_current_assistant_identity": identity,
+        "decoded_final_content_sha_equal": same_content,
+        "previous_final_content_observed": bool(prev_content_sha),
+        "assessment": (
+            "SAME_IDENTITY_REQUIRES_REVIEW" if identity == "SAME"
+            else "NEW_IDENTITY_CONTENT_REPEAT" if identity == "CHANGED" and same_content
+            else "NEW_IDENTITY_CONTENT_DIFFERS" if identity == "CHANGED" and same_content is False
+            else "INSUFFICIENT_EVIDENCE"
+        ),
+        "admission_consequence": "NONE_DIAGNOSTIC_ONLY",
+    }
+
 def classify(raw_text: str, *, action_seed: str = "") -> dict:
     """Classify original transport and all normalization without admitting it."""
     source = str(raw_text or "")
@@ -152,6 +298,9 @@ def capture_first_readback(
     expected: dict,
     ui_idle_seconds: float,
     stable_seconds: float,
+    pre_submit_identity: dict | None = None,
+    snapshot_summary: dict | None = None,
+    adapter=None,
 ) -> SRFirstReadbackCaptured:
     """Persist evidence BEFORE any normal parser recovery or tool admission."""
     root_value = os.environ.get(EVIDENCE_ENV, "").strip()
@@ -171,18 +320,20 @@ def capture_first_readback(
 
     body = str(text or "")
     dom, dom_state = _selected_dom_turn_text(assistant_turn)
-    body_saved, body_truncated = _clamp_text(body)
-    if dom is not None:
-        dom_saved, dom_truncated = _clamp_text(dom)
-    else:
-        dom_saved, dom_truncated = None, False
-
+    raw_fidelity = _write_exact_text(target / "extracted_response.txt", body)
+    dom_fidelity = (
+        _write_exact_text(target / "dom_turn_inner_text.txt", dom)
+        if dom is not None else None
+    )
+    dom_content, dom_content_status = _dom_turn_text_content(assistant_turn)
+    content_fidelity = (
+        _write_exact_text(target / "dom_turn_text_content.txt", dom_content)
+        if dom_content is not None else None
+    )
+    # Byte-preserved evidence is durable even when parsing fails.
+    body_truncated = bool(raw_fidelity["truncated"])
+    dom_truncated = bool(dom_fidelity and dom_fidelity["truncated"])
     action_seed = request_id + ":" + round_id
-    # Preserve the original bytes even if the parser diagnostic unexpectedly
-    # raises: a malformed parser must never erase the first-readback sample.
-    (target / "extracted_response.txt").write_text(body_saved, encoding="utf-8")
-    if dom_saved is not None:
-        (target / "dom_turn_inner_text.txt").write_text(dom_saved, encoding="utf-8")
     try:
         verdict = classify(body, action_seed=action_seed)
     except Exception as exc:
@@ -197,6 +348,35 @@ def capture_first_readback(
         }
     dom_digest = _digest(dom) if dom is not None else ""
     scoped_id = str((response_source or {}).get("scope_id", "") or "")
+    final_content, final_content_state = _final_response_content(body)
+    final_sha = _digest(final_content) if final_content is not None else ""
+    previous = dict(pre_submit_identity or {})
+    if adapter is not None:
+        current = _turn_identity(adapter, assistant_turn)
+    else:
+        current = {
+            "present": assistant_turn is not None,
+            "ordinal": getattr(assistant_turn, "ordinal", None),
+            "durable_id_sha256": str(
+                (response_source or {}).get("assistant_id_sha256", "") or ""
+            ),
+            "durable_id_available": bool(
+                (response_source or {}).get("assistant_id_sha256", "")
+            ),
+        }
+    current["response_sha256"] = raw_fidelity["original_sha256"]
+    current["final_content_sha256"] = final_sha
+    current["final_content_state"] = final_content_state
+    current["previous_comparison"] = _freshness_pair(previous, current, final_sha)
+    snapshot_info = dict(snapshot_summary or {})
+    # No raw prompt, page URL, browser profile or request scope identifiers.
+    allow_snapshot = (
+        "assistant_count_before", "user_count_before",
+        "assistant_count_after", "user_count_after",
+        "request_user_ordinal", "request_scope_binding",
+    )
+    safe_snapshot = {k: snapshot_info[k] for k in allow_snapshot
+                     if k in snapshot_info}
     metadata = {
         "schema": "SMARTAGENT_SR_FIRST_READBACK_V1",
         "request_id": request_id,
@@ -209,6 +389,21 @@ def capture_first_readback(
         "response_sha256": _digest(body),
         "response_utf8_bytes": len(body.encode("utf-8", errors="replace")),
         "response_capture_truncated": body_truncated,
+        "byte_fidelity": {
+            "extracted_response": raw_fidelity,
+            "dom_turn_inner_text": dom_fidelity,
+            "dom_turn_text_content": content_fidelity,
+        },
+        "dom_turn_text_content_status": dom_content_status,
+        "final_content_sha256": final_sha,
+        "final_content_state": final_content_state,
+        "test_case": _case_and_markers(final_content),
+        "turn_identity": {
+            "before_submit": previous,
+            "current_assistant": current,
+            "counts_and_binding": safe_snapshot,
+            "request_scope_id_sha256": _digest(scoped_id) if scoped_id else "",
+        },
         "dom_turn_source": dom_state,
         "dom_turn_sha256": dom_digest,
         "dom_turn_utf8_bytes": len(dom.encode("utf-8", errors="replace")) if dom is not None else None,

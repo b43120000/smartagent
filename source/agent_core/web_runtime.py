@@ -2277,6 +2277,15 @@ class WebLLMScraper:
             prompt,
             conversation_id=conversation_id,
         )
+        # Passive, immutable PRE-SUBMIT identity for SR-05. Never copy previous
+        # conversation text to the capture: only hash it for comparison.
+        from .sr_first_readback import (
+            enabled as sr_gate_enabled, capture_pre_submit_identity,
+        )
+        if sr_gate_enabled():
+            snapshot["_sr_pre_submit_identity"] = capture_pre_submit_identity(
+                self._web_ui_adapter(), snapshot,
+            )
         return snapshot
 
     def _wait_for_idle_before_submit(self) -> None:
@@ -3773,6 +3782,12 @@ class WebLLMScraper:
                             source_record = self._protocol_response_source(
                                 snapshot, assistant_turn, text,
                             )
+                            from .sr_first_readback import capture_first_readback
+                            adapter = self._web_ui_adapter()
+                            all_assistants = list(adapter.turns("assistant"))
+                            all_users = list(adapter.turns("user"))
+                            request_scope = snapshot.get("_web_ui_scope")
+                            request_user = getattr(request_scope, "user_turn", None)
                             result = capture_first_readback(
                                 text=text,
                                 assistant_turn=assistant_turn,
@@ -3780,6 +3795,18 @@ class WebLLMScraper:
                                 expected=protocol_expected,
                                 ui_idle_seconds=idle_for,
                                 stable_seconds=stable_for_sr,
+                                pre_submit_identity=snapshot.get("_sr_pre_submit_identity"),
+                                snapshot_summary={
+                                    "assistant_count_before": snapshot.get("assistant_count", 0),
+                                    "user_count_before": snapshot.get("user_count", 0),
+                                    "assistant_count_after": len(all_assistants),
+                                    "user_count_after": len(all_users),
+                                    "request_user_ordinal": getattr(request_user, "ordinal", None),
+                                    "request_scope_binding": (
+                                        "BOUND" if request_user is not None else "UNBOUND"
+                                    ),
+                                },
+                                adapter=adapter,
                             )
                             self._log_stage(
                                 "sr_first_readback_captured",
