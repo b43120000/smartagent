@@ -1,0 +1,41 @@
+name: SR-05 First Readback Observation (Offline)
+
+on:
+  push:
+    branches:
+      - diagnostic/sr05-turn-roster-20261031
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sr05-offline:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      PYTHONPATH: source
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Setup project .venv and test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -r install_smart_agent/requirements-webdirect.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run SR first readback offline regression
+        shell: cmd
+        run: call run_sr_first_readback_regression.bat
+      - name: Upload bounded offline logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sr05-first-readback-offline-logs
+          path: localdata/logs/sr-first-readback-regression
+          if-no-files-found: ignore
+          retention-days: 7
