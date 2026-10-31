@@ -423,6 +423,10 @@ def capture_first_readback(
     (target / "capture.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8",
     )
+    (target / "turn_identity.json").write_text(
+        json.dumps(metadata["turn_identity"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     (target / "dom_selected_structure.json").write_text(
         json.dumps(_selected_dom_structure(assistant_turn),
                    ensure_ascii=False, indent=2),

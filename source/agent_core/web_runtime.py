@@ -3782,7 +3782,6 @@ class WebLLMScraper:
                             source_record = self._protocol_response_source(
                                 snapshot, assistant_turn, text,
                             )
-                            from .sr_first_readback import capture_first_readback
                             adapter = self._web_ui_adapter()
                             all_assistants = list(adapter.turns("assistant"))
                             all_users = list(adapter.turns("user"))
