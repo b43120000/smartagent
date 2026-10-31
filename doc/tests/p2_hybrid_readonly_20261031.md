@@ -16,8 +16,11 @@ This starts NORMAL WebAgent runtime with:
 - `SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1=1`
 - `SMARTAGENT_COMPOSER_HYBRID_ONCE_V1=1`
 
-The first ChatGPT composer write with more than 512 characters (including
-the WUS transport envelope) on this scraper instance uses one-shot Hybrid.
+Session Bootstrap/Attach always uses the normal protected Writer, even
+when the Hybrid flag is enabled. Only after Controller READY, the first
+official WebDirect task's Planner prompt over 512 characters (including
+the WUS transport envelope) uses one-shot Hybrid. Final render ACK and
+subsequent Planner rounds do not rearm it.
 If no eligible write occurs, no Hybrid event is produced. The first 512
 characters are verified in small units; the remaining content is written
 without per-unit readback, with a strict whole-tail DOM readback and the
@@ -53,7 +56,12 @@ browser profiles and whole-page HTML are NEVER copied by the P2 collector.
 Operator still reviews the ZIP, which also contains historic P1 model text.
 
 **Limitations:** P2 hook is best-effort, cannot change admission or action
-execution, and may be missing after early failures. The event log is
+execution, and may be missing after early failures. The collector selects
+the newest controller_started session boundary, excludes earlier P2 failure
+records from its verdict, records only allowlisted Browser Stage labels
+(SESSION_BOOTSTRAP / SESSION_ATTACH / TASK_PLANNER / FINAL_RENDER_ACK), and
+captures sanitized task ingress metadata plus classified protocol rejection
+reasons (not the original error text). The event log is
 bounded and cannot guarantee a complete task transcript. A PASS requires
 correlated RequestScope, accepted turn commit, protocol admission, and
 normal terminal result; one event alone is insufficient. Live must be
