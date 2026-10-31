@@ -19,6 +19,10 @@ agent_core/web_runtime.py
   scraper.close()
 """
 from agent_core import path_integrity_trace as PIT
+from .sr_first_readback import (
+    SRFirstReadbackCaptured,
+    assert_sr_p2_isolated,
+)
 
 import time
 import uuid
@@ -3791,6 +3795,7 @@ class WebLLMScraper:
                     # Tool Action. Only one stable, request-owned assistant
                     # readback may be collected per request and round.
                     from .sr_first_readback import enabled as sr_enabled
+                    assert_sr_p2_isolated()
                     if protocol_expected and sr_enabled():
                         if text != sr_first_text:
                             sr_first_text = text
@@ -5136,6 +5141,11 @@ class WebLLMScraper:
         """
         from .payload_budget import PromptBudgetExceeded, ensure_webgpt_prompt_budget
         from .request_ownership import guard_web_prompt
+
+        # Protect before composer/file mutation: P2 cannot run a P1
+        # first-readback-only controlled stop, even if the process environment
+        # was changed after the controller READY.
+        assert_sr_p2_isolated()
 
         # A new ask (including a pre-submit failure) retires the previous file
         # scope. Empty request IDs must never reopen a prior response artifact.
