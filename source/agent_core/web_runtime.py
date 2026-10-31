@@ -1531,6 +1531,9 @@ class WebLLMScraper:
         # failure does not trigger a second hybrid attempt.
         hybrid_once = (
             os.environ.get("SMARTAGENT_COMPOSER_HYBRID_ONCE_V1", "") == "1"
+            # Only the first real WebDirect task Planner turn after READY.
+            # Session bootstrap/attach and final ACK never consume this grant.
+            and getattr(self, "_composer_hybrid_task_enabled", False) is True
             and not getattr(self, "_composer_hybrid_once_used", False)
             and len(prompt) > 512
         )
