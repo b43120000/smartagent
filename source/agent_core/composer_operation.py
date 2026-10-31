@@ -565,8 +565,8 @@ def _composer_write_units(prompt):
 
 
 
-def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=1024):
-    """One-shot experiment: verified 1024-char prefix, legacy-speed suffix.
+def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=512):
+    """One-shot experiment: verified 512-char prefix, legacy-speed suffix.
 
     Suffix runs as one physical input batch with a SINGLE strict final
     checkpoint, not per-line DOM polling. Keep Shift+Enter on all newlines;
@@ -574,19 +574,25 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=102
     This writer never submits, replays, or relaxes independent final validation.
     """
     started = time.monotonic()
-    units = []
+    # Split exactly at the intended character boundary, not unit starts.
+    # Keep CRLF atomic: if the split lands between CR and LF, defer both
+    # characters to the bulk tail (one Shift+Enter).
+    boundary = min(max(0, int(verified_chars)), len(prompt))
+    if 0 < boundary < len(prompt) and prompt[boundary-1:boundary+1] == '\r\n':
+        boundary -= 1
+    first, rest = [], []
     for start, end, value, soft_break in _composer_write_units(prompt):
-        if soft_break:
-            units.append((start, end, value, True))
+        unit = (start, end, value, soft_break)
+        if end <= boundary:
+            first.append(unit)
+        elif start >= boundary:
+            rest.append(unit)
         else:
-            # The protected front must be 1024 characters, not one entire
-            # 4096-character legacy unit when the prompt is single-line.
-            for offset in range(0, len(value), 1024):
-                finish = min(offset + 1024, len(value))
-                units.append((start + offset, start + finish, value[offset:finish], False))
-    boundary = min(int(verified_chars), len(prompt))
-    first = [unit for unit in units if unit[0] < boundary]
-    rest = units[len(first):]
+            if soft_break:
+                raise ComposerOperationError('composer_hybrid_newline_boundary')
+            cut = boundary - start
+            first.append((start, boundary, value[:cut], False))
+            rest.append((boundary, end, value[cut:], False))
     scraper._focus_composer_dom()
 
     def focus_end():
@@ -689,7 +695,7 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=102
         target.parent.mkdir(parents=True, exist_ok=True)
         item = dict(schema="COMPOSER_HYBRID_WRITER_V1",
                     utc=datetime.now(timezone.utc).isoformat(),
-                    mode="ONE_SHOT_PREFIX1024_BULK_TAIL",
+                    mode="ONE_SHOT_PREFIX512_BULK_TAIL",
                     prefix_chars=(first[-1][1] if first else 0),
                     tail_units=len(rest), prompt_chars=len(prompt),
                     elapsed_seconds=elapsed,
