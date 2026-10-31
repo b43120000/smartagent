@@ -227,9 +227,9 @@ def bundle(root: Path) -> Path:
         git_sha = "UNKNOWN"
     note = (
         "SR FIRST READBACK EVIDENCE (NOT A LIVE SUCCESS RECEIPT)\n"
-        ("Model-generated assistant response text may be present in old SR captures.\n"
-         if entries else "P2-only metadata evidence; no raw assistant text is included.\n")
-        "Inspect all extracted_response.txt and dom_turn_inner_text.txt files "
+        + ("Model-generated assistant response text may be present in old SR captures.\n"
+           if entries else "P2-only metadata evidence; no raw assistant text is included.\n")
+        + "Inspect all extracted_response.txt and dom_turn_inner_text.txt files "
         "before sharing. Do NOT add secrets, tokens or browser profiles.\n"
         "Scope: selected request-owned assistant turn only; the separate "
         "DOM innerText may include controls and need not match extracted text.\n"
