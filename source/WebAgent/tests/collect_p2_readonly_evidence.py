@@ -33,6 +33,8 @@ EVENTS = frozenset({
     "planner_round_started", "protocol_transport_interrupted",
     "tri_one_text_only_scope", "tri_one_answer_only_candidate",
     "text_only_tool_execution_blocked",
+    "controller_mode_attestation", "controller_mode_rejected",
+    "sr_first_readback_captured", "sr_first_readback_failed",
 })
 FIELDS = frozenset({
     "request_id", "task_id", "round", "action_id", "tool",
@@ -42,7 +44,8 @@ FIELDS = frozenset({
     "source_interface", "request_phase", "completion_status",
     "session_mode", "source_kind", "request_chars", "request_sha256",
     "hybrid_eligible", "completion_kind", "admission_reason",
-    "eligible", "reason",
+    "eligible", "reason", "sr_gate_active", "p2_diagnostic_active",
+    "hybrid_once_active", "mode_status",
 })
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 # Convert runtime browser phase text to a fixed enum. Never expose an
@@ -104,10 +107,13 @@ def _reason_categories(value):
 def _safe_field(key: str, value):
     if key in {"round", "action_count", "protocol_version", "request_chars"}:
         return value if type(value) is int and 0 <= value <= 1000000 else None
-    if key in {"response_stable", "action_executed", "hybrid_eligible", "eligible"}:
+    if key in {"response_stable", "action_executed", "hybrid_eligible", "eligible",
+               "sr_gate_active", "p2_diagnostic_active", "hybrid_once_active"}:
         return value if type(value) is bool else None
     if key == "request_sha256":
         return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+    if key == "mode_status":
+        return value if value in {"NORMAL", "P2", "P1_FIRST_READBACK", "CONFLICT"} else None
     if key == "completion_kind":
         return value if value in {"ANSWER_ONLY", "EVIDENCE_BACKED"} else None
     if key == "admission_reason":
@@ -273,15 +279,44 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
     failed = sorted({r.get("request_id") for r in events
                      if r["event"] == "request_failed"
                      and r.get("request_id")})
+    modes = [ev for ev in events if ev.get("event") == "controller_mode_attestation"]
+    sr_stop_seen = any(ev.get("event") in {
+        "sr_first_readback_captured", "sr_first_readback_failed",
+    } for ev in events)
+    mode_conflict = any(ev.get("event") == "controller_mode_rejected"
+                        for ev in events) or any(ev.get("mode_status") == "CONFLICT"
+                                               for ev in modes)
+    p2_mode_valid = bool(modes) and not mode_conflict and not sr_stop_seen and all(
+        ev.get("p2_diagnostic_active") is True
+        and ev.get("sr_gate_active") is False
+        and ev.get("mode_status") == "P2"
+        for ev in modes
+    )
     summary = {
         "schema": "P2_TERMINAL_SUMMARY_V1",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "status": ("FAILED_REQUEST_PRESENT" if failed else
+        "status": ("MODE_CONFLICT" if mode_conflict else
+                   "P2_SR_GATE_CAPTURED" if sr_stop_seen and modes else
+                   "P2_MODE_INVALID" if modes and not p2_mode_valid else
+                   "FAILED_REQUEST_PRESENT" if failed else
                    "ACCEPTED_AND_COMPLETED" if accepted and set(accepted).issubset(completed)
                    else "UNKNOWN_NOT_FULLY_CORRELATED"),
+        "p2_mode_attested": p2_mode_valid,
         "accepted_request_ids": accepted, "completed_request_ids": completed,
         "failed_request_ids": failed, "admission_event_count": len(events),
         "turn_observations": len(turns),
+        "mode_attestations": [
+            {k: ev[k] for k in (
+                "timestamp", "mode_status", "sr_gate_active",
+                "p2_diagnostic_active", "hybrid_once_active",
+            ) if k in ev}
+            for ev in events if ev["event"] == "controller_mode_attestation"
+        ],
+        "sr_first_readback_event_count": sum(
+            1 for ev in events if ev["event"] in {
+                "sr_first_readback_captured", "sr_first_readback_failed"
+            }
+        ),
         "answer_only_accepted_request_ids": sorted({
             r.get("request_id") for r in events
             if r.get("event") == "runtime_terminal_accepted"
