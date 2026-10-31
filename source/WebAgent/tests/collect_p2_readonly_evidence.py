@@ -31,6 +31,8 @@ EVENTS = frozenset({
     "webagent_initial_session_settle_completed",
     "browser_send_started", "p2_request_ingress",
     "planner_round_started", "protocol_transport_interrupted",
+    "tri_one_text_only_scope", "tri_one_answer_only_candidate",
+    "text_only_tool_execution_blocked",
 })
 FIELDS = frozenset({
     "request_id", "task_id", "round", "action_id", "tool",
@@ -39,7 +41,8 @@ FIELDS = frozenset({
     "commit_state", "response_stable", "action_executed", "ack_id",
     "source_interface", "request_phase", "completion_status",
     "session_mode", "source_kind", "request_chars", "request_sha256",
-    "hybrid_eligible",
+    "hybrid_eligible", "completion_kind", "admission_reason",
+    "eligible", "reason",
 })
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 # Convert runtime browser phase text to a fixed enum. Never expose an
@@ -101,10 +104,24 @@ def _reason_categories(value):
 def _safe_field(key: str, value):
     if key in {"round", "action_count", "protocol_version", "request_chars"}:
         return value if type(value) is int and 0 <= value <= 1000000 else None
-    if key in {"response_stable", "action_executed", "hybrid_eligible"}:
+    if key in {"response_stable", "action_executed", "hybrid_eligible", "eligible"}:
         return value if type(value) is bool else None
     if key == "request_sha256":
         return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+    if key == "completion_kind":
+        return value if value in {"ANSWER_ONLY", "EVIDENCE_BACKED"} else None
+    if key == "admission_reason":
+        return value if value in {"ANSWER_ONLY_RESPONSE_ADMITTED"} else None
+    if key == "reason":
+        return value if value in {
+            "bounded_text_only_intent", "ANSWER_ONLY_RESPONSE_ADMITTED",
+            "text_only_tool_forbidden", "text_only_terminal_not_admissible",
+            "external_information_or_action_indicated",
+            "structured_tool_or_continuation_required",
+            "external_resource_or_path", "empty_or_unbounded_input",
+            "text_intent_not_unambiguously_classified",
+            "runtime_actions_or_recovery_pending",
+        } else None
     if key == "source_kind":
         return value if value in {"WEB_UI", "LOCAL_TEST", "BOOTSTRAP_PROVISION"} else None
     if key == "session_mode":
@@ -265,6 +282,13 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
         "accepted_request_ids": accepted, "completed_request_ids": completed,
         "failed_request_ids": failed, "admission_event_count": len(events),
         "turn_observations": len(turns),
+        "answer_only_accepted_request_ids": sorted({
+            r.get("request_id") for r in events
+            if r.get("event") == "runtime_terminal_accepted"
+            and r.get("completion_kind") == "ANSWER_ONLY"
+            and r.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+            and r.get("request_id")
+        }),
         "latest_controller_started": latest_start,
         "scope": "LATEST_CONTROLLER_RUN" if latest_start is not None else "NO_CONTROLLER_BOUNDARY_AVAILABLE",
         "limits": ["Events are a bounded window; no full history proof",
