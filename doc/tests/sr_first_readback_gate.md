@@ -1,89 +1,137 @@
-# Shared Runtime SR First-Readback-Only — WebGPT1 SR-02 / SR-03
+# Shared Runtime SR-04 / SR-05 — byte fidelity and repeated Assistant identity
 
-## Why this build
+Base commit: dc1ee74e77620a2ed05b8d05d9557be269006b1d.
 
-This branch extends 75febba681949d2541f51f2423420dc2b2a35867.
-GAR and deliberate V9 fault injection are OFF. The first stable, request-owned
-assistant response observed after UI_CONFIRMED_IDLE is captured. Runtime does
-**not** send format-repair prompts, perform Narrative Bridge reconstruction,
-enter WebAgent Bounded Repair, execute any Tool Action, or send a final ACK.
-SR_FIRST_READBACK_CAPTURED is an expected, safe diagnostic stop, NOT SUCCESS.
+This branch keeps **First-Readback-Only**, with GAR/D1/format repair/slot
+reconstruction/Tool Action execution disabled. The request-owner assistant
+turn is observed only after UI idle and text stability. The diagnostic stop
+`SR_FIRST_READBACK_CAPTURED` is **expected**, not a task success.
+The ordinary Runtime/Parser acceptance rules are unchanged when the flag is OFF.
 
-Shared WebGPT DOM, Parser and serializer are unchanged by the gate when the
-flag is OFF. L4 is outside the scope of this experiment.
+## 1 — Offline (SmartAgent project Python)
 
-## 1. Preconditions
-
-- Switch to the exact candidate SHA stated in the delivery.
-- Stop previous Controllers when idle; never force-restart in-flight tools.
-- Use the installed SmartAgent virtual environment in the same checkout:
-  .venv\Scripts\python.exe.
-- WebGPT1 must have its saved conversation/browser startup configured.
-- Two NEW requests, not retries of interrupted prior work.
-
-## 2. Offline Regression
+Run from a CLEAN checkout of this exact candidate SHA:
 
     cmd.exe /c run_sr_first_readback_regression.bat
 
-Expected:
-    commands=9
-    passed=9
-    failed=0
+Expected commands=10, passed=10, failed=0. The 10th command validates strict
+manifest SHA for 203 tracked core files. The new SR04/05 test includes:
+mixed LF/CRLF+Unicode byte fidelity, long-response section markers,
+two independent identical-content Assistant turns, stale/same-identity
+negative case, and a tampered ZIP must be rejected.
 
-Logs: localdata/logs/sr-first-readback-regression/<timestamp>/.
-FAIL prints the last 80 test-log lines in the console. This is OFFLINE only.
+If FAIL, do not start Live. The BAT prints last 80 test-log lines and saves
+logs in localdata/logs/sr-first-readback-regression/<timestamp>/.
 
-## 3. Live launcher
+## 2 — Start WebGPT1 (SmartAgent .venv Python)
 
     cmd.exe /c launch_sr_first_readback_webgpt1.bat
 
-Effective environment:
+The BAT sets:
     SMARTAGENT_SR_FIRST_READBACK_ONLY_V1=1
+    SMARTAGENT_SR_EVIDENCE_DIR=<checkout>\localdata\logs\sr-first-readback
     SMARTAGENT_GAR_V1=0
     SMARTAGENT_GAR_D1_FAULT_INJECTION_V1=0
     SMARTAGENT_GAR_FRESH_CONTEXT_URL=(empty)
     TRI_ONE_TASK_RESULT_V1=1
     TRI_ONE_TEXT_ONLY_V1=1
 
-The existing launch_webcopilot.bat starts its Controller with SmartAgent
-.venv Python. Neither Chrome profile nor shared runtime installation changes.
+It calls launch_webcopilot.bat, which uses .venv\Scripts\python.exe.
+No change to Update.bat, main, browser profiles, or normal Parser admission.
 
-## 4. SR-02 Prompt
+## 3 — SR-04 Long Response (send once; wait for CAPTURED)
 
-請只進行文字解說，不要執行檔案或系統操作。詳細解釋 C++ RAII，
-提供三個 Markdown cpp 程式碼區塊，分別示範 std::ofstream、
-std::unique_ptr、std::lock_guard。每段說明 destructor、lifetime
-和 exception safety。最後單獨一行輸出 SR02_END。
+請只提供繁體中文文字，不要執行任何檔案或系統操作。
 
-## 5. SR-03 Prompt
+請撰寫一份 Android Camera 3A / ISP Quality Validation 長篇說明，
+不少於 3,500 個中文字，且必須依序包含以下原樣標記：
 
-請只提供文字與範例，不要執行檔案或系統操作。產生有效 JSON，
-以 Markdown json 程式碼區塊呈現。JSON 包含 nested objects、array、
-繁體中文、雙引號字串、Windows 路徑 C:\camera\tests\ae.json、
-newline、tab、反斜線，以及一個含有三反引號 C++ Markdown
-片段的字串欄位。完成後解釋逃逸字元。最後單獨一行輸出 SR03_END。
+SR04_BEGIN
+SR04_SECTION_01
+SR04_SECTION_02
+SR04_SECTION_03
+SR04_SECTION_04
+SR04_SECTION_05
+SR04_SECTION_06
+SR04_SECTION_07
+SR04_SECTION_08
+SR04_SECTION_09
+SR04_SECTION_10
+SR04_SECTION_11
+SR04_SECTION_12
+SR04_SECTION_13
+SR04_SECTION_14
+SR04_SECTION_15
+SR04_SECTION_16
+SR04_SECTION_17
+SR04_SECTION_18
+SR04_SECTION_19
+SR04_SECTION_20
+SR04_END
 
-Wait until the prior request shows "[SR-GATE] CAPTURED" before submitting
-the next. The Controller does NOT send a completion ACK to the model.
+請按序為每一節提供不同的完整技術說明，包含 AE、AWB、AF、Sensor
+SNR、Dynamic Range、Tone Mapping、Flicker、低照度、CTS/ITS 及
+KPI 量測等主題。每節至少兩段，不要把全部內容寫成短清單。
+最後一行只輸出 SR04_END，不要在其後增加任何文字。
 
-## 6. ZIP collection and review
+### SR-04 diagnosis
+
+Inspect:
+- capture.json `test_case.status=MARKERS_PRESENT` and
+  `missing_markers=[]` (a failed marker check can be the model's own omission).
+- SHA256/byte length for original vs every on-disk UTF-8 text artifact.
+- decoded `final_response.content`, DOM innerText, DOM textContent, and
+  the selected pre/code/table subtree. Note these are *different DOM views*;
+  whitespace or controls may differ harmlessly.
+- If the model omitted sections in its `final_response.content` and both DOM
+  views show the same omission, do not label it as Runtime truncation.
+
+## 4 — SR-05 Identical Content, two NEW requests
+
+Send the *exact same prompt* below TWICE as two independent WebGPT1 user
+requests. Wait for a separate `[SR-GATE] CAPTURED` after each send.
+Do not send SR-04 or another prompt BETWEEN the two SR-05 requests.
+
+請只提供文字答案，不要執行任何檔案或系統操作。
+你的最終自然語言答覆必須嚴格只有以下兩行，逐字相同，不能增加
+序號、Markdown、程式碼、日期或說明：
+
+RAII 使用物件生命週期管理資源。
+SR05_END
+
+For the two requests, the expected `final_response.content` SHA
+is identical; outer V9 Envelope may differ because progress/action IDs can
+change. Compare separate Request IDs, Scope SHA and Assistant Durable IDs.
+If distinct IDs/Scope and identical content, the evidence is *consistent
+with* two independently bound turns. Missing/identical identities are
+inconclusive or require review, **not** an automatic execution admission.
+
+## 5 — Collect one ZIP
 
     cmd.exe /c collect_sr_first_readback.bat
 
-Output: localdata/logs/sr-first-readback/bundles/SR_FIRST_READBACK_*.zip
+The bundle contains all available SR captures from this checkout, including
+legacy SR-02/03 samples if present, plus only allowlisted Offline logs.
+New captures contain:
+- extracted_response.txt, dom_turn_inner_text.txt, dom_turn_text_content.txt
+- capture.json, turn_identity.json, dom_selected_structure.json
+- evidence_integrity.json and sr05_pair_comparison.json in ZIP root
+- bundle_manifest.json (per-file SHA256) and README_REVIEW_BEFORE_UPLOAD.txt
 
-ZIP only includes capture.json, extracted_response.txt and the selected
-assistant DOM node innerText (if available), SR Offline test logs, a version
-identifier and a per-file SHA256 manifest. It deliberately excludes browser
-profile, cookies, tokens, auth state, arbitrary runtime logs and whole-page
-HTML. The captures contain verbatim assistant response text; review them
-before sharing. No screenshot can be reconstructed from this ZIP alone.
+New byte-fidelity records are checked against the on-disk bytes before
+packaging; corrupted new captures cause packaging to fail. Legacy captures
+are labeled LEGACY_UNVERIFIED rather than treated as corrupted. No whole
+page HTML, browser profile, cookies, tokens, arbitrary local logs or
+other historical conversation text is automatically included.
 
-Compare each capture's extracted_response.txt with dom_turn_inner_text.txt.
-The latter may include extra UI controls; a byte mismatch is diagnostic,
-not automatic proof of bad scraping. Check SR02_END / SR03_END, Markdown
-fences, JSON escapes and parse normalizations. We cannot independently prove
-the screen rendering matches capture bytes without a screenshot/visual record.
+The current response body and selected DOM texts CAN contain private
+information. Inspect ZIP contents before sharing.
 
-A valid protocol at this stage is only a **syntax result**: semantic ACK,
-full WebAgent admission, tool execution and terminal SUCCESS are NOT_RUN.
+## Interpretation limitations
+
+This test checks the **first observed** assistant response, not the hidden
+network transport or raw original model tokens. DOM textContent may include
+hidden elements. Provider identity can use a structural/ordinal fallback
+rather than a proven stable message ID. SR-05 pair status is diagnostic;
+it does not override existing `response_sha_unchanged` recovery
+guards. Semantic ACK and final terminal admission remain NOT_RUN.

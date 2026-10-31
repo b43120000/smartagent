@@ -35,7 +35,9 @@ echo SmartAgent Python: %WEBAGENT_PYTHON%
 echo Evidence: %SMARTAGENT_SR_EVIDENCE_DIR%
 echo.
 echo [SR-GATE] No local Tool Action is executed. No repair or final ACK is sent.
-echo [SR-GATE] After READY, submit SR-02 and SR-03 as SEPARATE tasks.
+echo [SR-GATE] After READY: SR-04 once, SR-05 identical prompt TWICE.
+echo [SR-GATE] Wait for CAPTURED before the next request.
+echo [SR-GATE] Use collect_sr_first_readback.bat for one ZIP.
 echo.
 call "%~dp0launch_webcopilot.bat"
 set "RC=%ERRORLEVEL%"
