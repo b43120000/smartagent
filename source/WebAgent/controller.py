@@ -317,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     if bridge is None:
         return 2
     scraper = adopt_page(page, context, attached_pw)
+    scraper._composer_hybrid_task_enabled = False  # No hybrid during session setup
     atexit.register(scraper.release_conversation_owner)
     client = WebAgentBrowserClient(scraper, event_sink=runtime_log.emit)
     runtime_log.emit("browser_attached", mode=mode, conversation_url=selected_url)
@@ -500,6 +501,11 @@ def main(argv: list[str] | None = None) -> int:
                     if use_gar_fresh_lease:
                         scraper._execution_page_lease_owned = True
                     try:
+                        # Mainline Hybrid is enabled only during real task Planner
+                        # turns. It never changes Session/ACK/write-recovery paths.
+                        scraper._composer_hybrid_task_enabled = bool(
+                            not bootstrap_active and test_envelope is None
+                        )
                         final_content = loop.run(
                             request,
                             request_id=(
@@ -514,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
                             ),
                         )
                     finally:
+                        scraper._composer_hybrid_task_enabled = False
                         scraper._execution_page_lease_owned = previous_lease_owned
                 runtime_log.emit("request_local_loop_completed", request_id=loop.run_id, final_content=final_content)
                 if bootstrap_active:
