@@ -48,7 +48,7 @@
     "install_smart_agent/validate_portable_runtime.ps1": "c28ea59304fe9b12f9ba68d243e2a1c203622f15524a00424a8b82d3f8317c4b",
     "install_smart_agent/verify_webdirect_bootstrap.py": "a3dfe14ff031212d3df8a23ef9aa22ef57044672f53987b38f4b358f06b36517",
     "launch_remote_agent.bat": "2ea9720fd81bfd26bbab65a38aeda163c5622671afff17b993078d393c65f0d4",
-    "launch_webcopilot.bat": "1fa87c5d74e793daceba210c228920849063f8a4129b60b9f0bceb5d0437702e",
+    "launch_webcopilot.bat": "a9565392a87c6d20f0d5d89b3d5499a2875c72bbea34a02e87ea82d784ff35b2",
     "source/RemoteAgent/remote_feature_catalog.py": "edee932de11fe7d71cf3360b9aed7a5ab1fcb549ec74912439c0203308155d17",
     "source/RemoteAgent/remote_protocol.py": "38f0335979fc804619b0441a402401676c924f7b99418ba58a26f4089fd7ccab",
     "source/RemoteAgent/remote_runtime.py": "ceeb3d41d343e14e000d9e4b1ad158eb3cf861dbb01ede0329b10e5309a24ef5",
