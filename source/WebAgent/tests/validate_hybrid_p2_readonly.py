@@ -53,6 +53,11 @@ def _simulate_writer(prompt, *, hybrid=True):
             else:
                 composer._write_staged_prompt(Scraper(), prompt, state, path)
         persisted = json.loads(path.read_text(encoding="utf-8"))
+        if hybrid:
+            evidence = Path(tmp) / "p2-readonly" / "hybrid_writer.jsonl"
+            row = json.loads(evidence.read_text(encoding="utf-8").splitlines()[-1])
+            assert row["mode"] == "ONE_SHOT_PREFIX512_BULK_TAIL"
+            assert row["prefix_chars"] == min(512, len(prompt))
         assert typed[0] == prompt
         assert persisted["confirmed_prefix"]["chars"] == len(prompt)
         assert persisted["confirmed_prefix"]["sha256"] == hashlib.sha256(prompt.encode()).hexdigest()
@@ -69,8 +74,15 @@ def test_hybrid_writer():
     assert ("key", "Shift+Enter") in hybrid
     longline = "S"*5120
     prefix = _simulate_writer(longline)
-    assert ("text", 1024) in prefix
+    assert ("text", 512) in prefix
+    assert ("text", 4096) in prefix
     assert len([s for s in prefix if s[0] == "read"]) <= 5
+    # The 512-char boundary is independently checked in the writer log.
+    crlf_split = "A"*511 + "\n" + "B"*650
+    _simulate_writer(crlf_split)
+    # If boundary intersects CRLF, the CRLF is atomic in the tail.
+    # Text is validated by the normalized readback in Live, not raw insertion.
+
     # A failed tail must fail-closed, not append/replay a second time.
     class FailedKeyboard:
         def __init__(self): self.typed=""
