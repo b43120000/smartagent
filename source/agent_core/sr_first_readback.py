@@ -138,6 +138,95 @@ def _final_response_content(text: str) -> tuple[str | None, str]:
         return None, "PARSER_EXCEPTION_" + type(exc).__name__
 
 
+
+def _observe_turn_roster(adapter) -> dict:
+    """Read-only, bounded DOM evidence; never store URL, prompt, or message text.
+
+    Each role is enumerated independently, so the roster is observational,
+    not an atomic browser snapshot. Durable IDs may have ordinal fallbacks.
+    """
+    result = {
+        "schema": "SR_DOM_TURN_ROSTER_V1",
+        "utc": datetime.now(timezone.utc).isoformat(),
+        "status": "UNAVAILABLE" if adapter is None else "OBSERVED",
+        "root": "page",
+        "snapshot_atomic": False,
+    }
+    if adapter is None:
+        return result
+    page = getattr(adapter, "page", None)
+    url = str(getattr(page, "url", "") or "")
+    result["page_url_sha256"] = _digest(url) if url else ""
+    result["url_available"] = bool(url)
+    result["provider"] = str(getattr(adapter, "provider_name", "") or "")[:64]
+    profile = getattr(adapter, "profile", None)
+    for role in ("user", "assistant"):
+        selector = str(getattr(profile, role + "_turn_selector", "") or "")
+        observation = {
+            "selector": selector,
+            "raw_dom_count": None,
+            "logical_turn_count": None,
+            "truncated": False,
+            "turns": [],
+        }
+        try:
+            raw_fn = getattr(adapter, "turn_elements", None)
+            if callable(raw_fn):
+                observation["raw_dom_count"] = len(raw_fn(role))
+            turns = list(adapter.turns(role))
+            observation["logical_turn_count"] = len(turns)
+            observation["truncated"] = len(turns) > 128
+            for turn in turns[:128]:
+                try:
+                    durable = str(adapter.durable_turn_id(turn) or "")
+                except Exception:
+                    durable = ""
+                observation["turns"].append({
+                    "ordinal": getattr(turn, "ordinal", None),
+                    "durable_id_sha256": _digest(durable) if durable else "",
+                    "structural_id": str(getattr(turn, "structural_id", "") or ""),
+                    "content_digest": str(getattr(turn, "content_digest", "") or ""),
+                    "stable_attribute_names": sorted({
+                        str(name) for name, _ in
+                        (getattr(turn, "stable_attributes", ()) or ())
+                    }),
+                })
+        except Exception as exc:
+            observation["error_type"] = type(exc).__name__
+        result[role] = observation
+    return result
+
+
+def _roster_delta(before: dict, after: dict) -> dict:
+    """Summarize hashed IDs only; never infer which provider DOM rule changed."""
+    result = {"status": "OBSERVED", "identity_caveat": "ORDINAL_FALLBACK_POSSIBLE"}
+    if before.get("status") != "OBSERVED" or after.get("status") != "OBSERVED":
+        return {"status": "UNKNOWN", "reason": "ROSTER_UNAVAILABLE"}
+    result["same_page_url_hash"] = (
+        before["page_url_sha256"] == after["page_url_sha256"]
+        if before.get("page_url_sha256") and after.get("page_url_sha256")
+        else None
+    )
+    for role in ("user", "assistant"):
+        prev = before.get(role) or {}
+        curr = after.get(role) or {}
+        old = [x["durable_id_sha256"] for x in prev.get("turns", ())
+               if x.get("durable_id_sha256")]
+        new = [x["durable_id_sha256"] for x in curr.get("turns", ())
+               if x.get("durable_id_sha256")]
+        result[role] = {
+            "raw_count_before": prev.get("raw_dom_count"),
+            "raw_count_after": curr.get("raw_dom_count"),
+            "logical_count_before": prev.get("logical_turn_count"),
+            "logical_count_after": curr.get("logical_turn_count"),
+            "removed_id_hashes": [x for x in old if x not in new],
+            "added_id_hashes": [x for x in new if x not in old],
+            "selector_same": prev.get("selector") == curr.get("selector"),
+            "complete_rosters": not (prev.get("truncated") or curr.get("truncated")),
+        }
+    return result
+
+
 def capture_pre_submit_identity(adapter, snapshot: dict) -> dict:
     """Snapshot last assistant BEFORE submit, without copying old conversation."""
     result = {
@@ -163,6 +252,7 @@ def capture_pre_submit_identity(adapter, snapshot: dict) -> dict:
         result["status"] = "OBSERVED"
     except Exception as exc:
         result["status"] = "OBSERVATION_ERROR_" + type(exc).__name__
+    result["dom_roster_before"] = _observe_turn_roster(adapter)
     return result
 
 
@@ -381,6 +471,26 @@ def capture_first_readback(
     )
     safe_snapshot = {k: snapshot_info[k] for k in allow_snapshot
                      if k in snapshot_info}
+    roster_before = previous.pop("dom_roster_before", {"status": "NOT_CAPTURED"})
+    roster_after = _observe_turn_roster(adapter)
+    turn_observation = {
+        "schema": "SR05_TURN_OBSERVATION_V1",
+        "request_id": request_id,
+        "round": round_id,
+        "before_submit": roster_before,
+        "after_completion": roster_after,
+        "delta": _roster_delta(roster_before, roster_after),
+        "runtime_count_summary": safe_snapshot,
+        "notes": [
+            "Non-atomic role enumerations, not a streaming DOM trace.",
+            "Page URLs, prompt text and user/assistant message text are NOT stored.",
+            "Hashed identities can be ordinal fallbacks; no admission effect.",
+        ],
+    }
+    (target / "turn_observation.json").write_text(
+        json.dumps(turn_observation, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     metadata = {
         "schema": "SMARTAGENT_SR_FIRST_READBACK_V1",
         "request_id": request_id,
