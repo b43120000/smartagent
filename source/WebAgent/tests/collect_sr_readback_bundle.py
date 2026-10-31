@@ -177,6 +177,8 @@ def bundle(root: Path) -> Path:
     if corrupted:
         raise RuntimeError("SR_BUNDLE_FIDELITY_MISMATCH: " + ",".join(corrupted))
     sr05_pair = _sr05_pair_report(captures)
+    from WebAgent.tests.collect_p2_readonly_evidence import make_p2_evidence
+    p2_evidence = make_p2_evidence(root)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = target_dir / f"SR_FIRST_READBACK_{stamp}_{uuid.uuid4().hex[:6]}.zip"
     entries: list[tuple[Path, str]] = []
@@ -210,6 +212,12 @@ def bundle(root: Path) -> Path:
         if total > TOTAL_LIMIT:
             raise RuntimeError("SR_BUNDLE_TOTAL_TOO_LARGE: remove old SR captures first")
         manifest.append((p, arc))
+    for name, data in sorted(p2_evidence.items()):
+        if len(data) > SINGLE_LIMIT:
+            raise RuntimeError(f"SR_BUNDLE_FILE_TOO_LARGE: p2/{name}")
+        total += len(data)
+        if total > TOTAL_LIMIT:
+            raise RuntimeError("SR_BUNDLE_TOTAL_TOO_LARGE: p2 evidence")
     try:
         git_sha = subprocess.check_output(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -225,7 +233,8 @@ def bundle(root: Path) -> Path:
         "Scope: selected request-owned assistant turn only; the separate "
         "DOM innerText may include controls and need not match extracted text.\n"
         f"git_sha={git_sha}\n"
-        "No model replay/repair/Tool Action was authorized by this gate.\n"
+        "SR captures are first-readback only; P2 files (if present) are\n"
+        "read-only metadata of NORMAL runtime, not an admission verdict.\n"
     )
     with zipfile.ZipFile(
         target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
@@ -236,6 +245,11 @@ def bundle(root: Path) -> Path:
         zf.writestr("sr05_pair_comparison.json",
                     json.dumps(sr05_pair, ensure_ascii=False, indent=2))
         records = []
+        for name, data in sorted(p2_evidence.items()):
+            arc = "p2/" + name
+            zf.writestr(arc, data)
+            records.append({"file": arc, "utf8_bytes": len(data),
+                            "sha256": hashlib.sha256(data).hexdigest()})
         for path, arc in manifest:
             data = path.read_bytes()
             zf.writestr(arc, data)
