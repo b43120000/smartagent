@@ -33,6 +33,13 @@ jobs:
       - name: Run SR first readback offline regression
         shell: cmd
         run: call run_sr_first_readback_regression.bat
+      - name: Validate composer write and recovery backport
+        shell: pwsh
+        run: |
+          .\\.venv\\Scripts\\python.exe -B source/WebAgent/tests/validate_composer_operation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\\.venv\\Scripts\\python.exe -B source/WebAgent/tests/validate_composer_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload bounded offline logs
         if: always()
         uses: actions/upload-artifact@v4
