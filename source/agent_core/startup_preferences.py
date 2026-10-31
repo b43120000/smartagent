@@ -88,7 +88,9 @@ def save_startup_preferences(
         previous.get("gar_webgpt2_url", "") if gar_webgpt2_url is None
         else gar_webgpt2_url
     )
-    fresh_url = validate_gar_webgpt2_url(gpt_url, requested_gar_url)
+    # Legacy setting is retained only as migration fallback. It must no longer
+    # be tied to one agent's primary URL when a worker saves its startup state.
+    fresh_url = str(requested_gar_url or "").strip()
     selected = {
         "workspace": str(workspace),
         "workspace_rel": _workspace_relative_to_project(str(workspace)),

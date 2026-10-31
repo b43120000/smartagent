@@ -43,27 +43,6 @@ def wait_for_initial_session_settle(page, expected_id: str, *, sleep_fn=None) ->
         raise RuntimeError("webagent_initial_session_conversation_changed_after_settle")
 
 
-def apply_saved_gar_webgpt2_url(saved: dict, webgpt1_url: str, *,
-                                  environ=None) -> str:
-    """Load a saved GAR target only when an explicit process override is absent.
-
-    Configuring a target does not enable SMARTAGENT_GAR_V1; the existing L4
-    startup/admission checks remain responsible for page and session safety.
-    """
-    values = os.environ if environ is None else environ
-    key = "SMARTAGENT_GAR_FRESH_CONTEXT_URL"
-    if key in values:
-        return str(values.get(key) or "").strip()
-    from agent_core.startup_preferences import validate_gar_webgpt2_url
-
-    target = validate_gar_webgpt2_url(
-        webgpt1_url, str(saved.get("gar_webgpt2_url", "") or "")
-    )
-    if target:
-        values[key] = target
-    return target
-
-
 def prepare_browser_input_bridge(page, attached_pw=None):
     """Validate/install before claiming ownership or initializing a session."""
     try:
@@ -289,11 +268,13 @@ def main(argv: list[str] | None = None) -> int:
             if not args.workspace or not args.webgpt_url:
                 print("[WebAgent] Local/WebCopilot first-run setup did not produce a complete startup preference.", flush=True)
                 return 2
-        try:
-            apply_saved_gar_webgpt2_url(saved, args.webgpt_url)
-        except ValueError as exc:
-            print(f"[WebAgent] Saved GAR WebGPT2 URL rejected: {exc}", flush=True)
-            return 2
+    # Shared GAR target applies even with an explicit --webgpt-url override.
+    try:
+        from agent_core.gar_webgpt2_settings import apply_target
+        apply_target(args.webgpt_url)
+    except ValueError as exc:
+        print(f"[WebAgent] Shared GAR WebGPT2 URL rejected: {exc}", flush=True)
+        return 2
     workspace = _resolve_workspace(args.workspace)
     from agent_core.protocol_manifest import require_protocol_manifest
     require_protocol_manifest(install_root())
