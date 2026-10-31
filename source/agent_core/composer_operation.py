@@ -501,7 +501,11 @@ def _recover_page(scraper,record):
     # Delivery proves the previous message arrived, not that the composer is
     # ready for another message. After delivery the pre-submit baseline is no
     # longer applicable, but two fresh stable observations are still required.
-    if not _same_turns(first,second) or (not delivered and not _same_turns(record.get('baseline'),second)) or first['generation_active'] or second['generation_active']:
+    pre_submit_empty = (record.get('state') == 'QUARANTINED'
+        and record.get('reason') == 'writer_exception_or_cancelled'
+        and first['composer_empty'] and second['composer_empty']
+        and first.get('url') == record.get('url') == second.get('url'))
+    if not _same_turns(first,second) or (not delivered and not pre_submit_empty and not _same_turns(record.get('baseline'),second)) or first['generation_active'] or second['generation_active']:
         return dict(status='SCOPE_CHANGED_OR_BUSY',observation=second,
             comparison=dict(
                 recent_observations=_snapshot_difference(first,second),
@@ -531,11 +535,39 @@ def _recover_page(scraper,record):
         sent_count=len(delivered),draft_cleanup='OWNED_DRAFT_CLEARED',observation=final)
 
 
+def _composer_write_units(prompt):
+    """Yield exact, non-overlapping units with editor soft breaks.
+
+    Literal newlines through insert_text are unsafe in ChatGPT ProseMirror.
+    Shift+Enter adds a soft break without submitting the unfinished message.
+    The 4096-character plain-text behavior stays unchanged.
+    """
+    if '\n' not in prompt and '\r' not in prompt:
+        for start in range(0, len(prompt), 4096):
+            end = min(start + 4096, len(prompt))
+            yield start, end, prompt[start:end], False
+        return
+    start = 0
+    while start < len(prompt):
+        if prompt[start] in '\r\n':
+            end = start + (2 if prompt.startswith('\r\n', start) else 1)
+            yield start, end, '', True
+        else:
+            next_break = min(
+                (index for index in (prompt.find('\r', start),
+                                     prompt.find('\n', start)) if index >= 0),
+                default=len(prompt),
+            )
+            end = min(start + 1024, next_break)
+            yield start, end, prompt[start:end], False
+        start = end
+
+
 def _write_staged_prompt(scraper,prompt,record,journal):
     PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
     scraper._focus_composer_dom()
-    for start in range(0,len(prompt),4096):
+    for start, end, value, soft_break in _composer_write_units(prompt):
         if start and not scraper._composer_matches_prompt(prompt[:start]):
             raise ComposerOperationError('composer_prefix_changed')
         loc=scraper._focus_composer_dom()
@@ -551,13 +583,16 @@ def _write_staged_prompt(scraper,prompt,record,journal):
             }''')
         # Synchronize ProseMirror's editor selection as well as the DOM range.
         scraper._page.keyboard.press('Control+End')
-        end=min(start+4096,len(prompt));prefix=prompt[:end]
+        prefix=prompt[:end]
         checkpoint=dict(chars=end,sha256=hashlib.sha256(prefix.encode()).hexdigest(),
             normalized_sha256=hashlib.sha256(scraper._normalize_composer_text(prefix).encode()).hexdigest())
         record['pending_prefix']=checkpoint;write_json_atomic(journal,record)
         scraper._check_cancel_requested('composer_chunk')
-        PIT.record('09_keyboard_insert_text', prompt[start:end], extra={'chunk_start': start, 'chunk_end': end})
-        scraper._page.keyboard.insert_text(prompt[start:end])
+        if soft_break:
+            scraper._page.keyboard.press('Shift+Enter')
+        else:
+            PIT.record('09_keyboard_insert_text', value, extra={'chunk_start': start, 'chunk_end': end})
+            scraper._page.keyboard.insert_text(value)
         deadline=time.monotonic()+2
         while not scraper._composer_matches_prompt(prefix):
             if time.monotonic()>=deadline:raise ComposerOperationError('composer_chunk_readback_failed')
