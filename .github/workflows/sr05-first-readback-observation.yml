@@ -19,6 +19,8 @@ jobs:
       PYTHONPATH: source
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # run_sr_first_readback_regression.bat requires historical merge-base
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
