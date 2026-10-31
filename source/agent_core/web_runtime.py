@@ -3782,9 +3782,17 @@ class WebLLMScraper:
                             source_record = self._protocol_response_source(
                                 snapshot, assistant_turn, text,
                             )
-                            adapter = self._web_ui_adapter()
-                            all_assistants = list(adapter.turns("assistant"))
-                            all_users = list(adapter.turns("user"))
+                            # Supplementary identities cannot block a valid
+                            # raw capture if the DOM enumeration itself fails.
+                            adapter = None
+                            assistant_count_after = None
+                            user_count_after = None
+                            try:
+                                adapter = self._web_ui_adapter()
+                                assistant_count_after = len(adapter.turns("assistant"))
+                                user_count_after = len(adapter.turns("user"))
+                            except Exception:
+                                adapter = None
                             request_scope = snapshot.get("_web_ui_scope")
                             request_user = getattr(request_scope, "user_turn", None)
                             result = capture_first_readback(
@@ -3798,8 +3806,8 @@ class WebLLMScraper:
                                 snapshot_summary={
                                     "assistant_count_before": snapshot.get("assistant_count", 0),
                                     "user_count_before": snapshot.get("user_count", 0),
-                                    "assistant_count_after": len(all_assistants),
-                                    "user_count_after": len(all_users),
+                                    "assistant_count_after": assistant_count_after,
+                                    "user_count_after": user_count_after,
                                     "request_user_ordinal": getattr(request_user, "ordinal", None),
                                     "request_scope_binding": (
                                         "BOUND" if request_user is not None else "UNBOUND"
