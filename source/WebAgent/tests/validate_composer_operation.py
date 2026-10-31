@@ -14,6 +14,42 @@ from agent_core.web_runtime import WebLLMScraper, WebScraperStageError
 
 
 def run():
+    # bbdaf06 backport: short multiline text must be typed via Shift+Enter,
+    # not by insert_text('first\nsecond') (ProseMirror may drop the suffix).
+    assert list(co._composer_write_units('first\nsecond')) == [
+        (0,5,'first',False), (5,6,'',True), (6,12,'second',False),
+    ]
+    assert list(co._composer_write_units('first\r\nsecond')) == [
+        (0,5,'first',False), (5,7,'',True), (7,13,'second',False),
+    ]
+    assert list(map(lambda x: (x[0],x[1]), co._composer_write_units('A'*5000))) == [
+        (0,4096), (4096,5000),
+    ]
+    entered=['']
+    calls=[]
+    class Keyboard:
+        def press(self, key):
+            calls.append(('press', key))
+            if key == 'Shift+Enter':
+                entered[0] += '\n'
+        def insert_text(self, value):
+            assert '\n' not in value and '\r' not in value
+            calls.append(('insert', value))
+            entered[0] += value
+    class Scraper:
+        _page=type('Page',(),{'keyboard':Keyboard()})()
+        def _composer_matches_prompt(self, expected):return entered[0] == expected
+        def _focus_composer_dom(self):return None
+        def _normalize_composer_text(self, value):return value
+        def _check_cancel_requested(self, stage):return None
+        def _log_stage(self,*args):return None
+    with tempfile.TemporaryDirectory() as temp:
+        journal=Path(temp)/'composer.json'
+        co._write_staged_prompt(Scraper(),'first\nsecond',{},journal)
+        assert entered[0]=='first\nsecond'
+        assert ('press','Shift+Enter') in calls
+        assert all('\n' not in value for op,value in calls if op=='insert')
+        assert json.loads(journal.read_text(encoding='utf-8'))['confirmed_prefix']['chars']==12
     before=dict(url='https://chatgpt.com/c/test',user_count=2,assistant_count=2,
                 user_anchors=[['u','abc']],assistant_anchors=[['a','def']],generation_active=False)
     after={**before,'composer_matches':True}
