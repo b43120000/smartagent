@@ -2627,6 +2627,14 @@ def main():
 
     selected_workspace = startup_profile["workspace"]
     selected_gpt_url = startup_profile["gpt_url"]
+    # LocalAgent and legacy RemoteAgent use the same independent WebGPT2 URL.
+    # Loading the target does not implicitly activate GAR/L4.
+    try:
+        from agent_core.gar_webgpt2_settings import apply_target as apply_gar_target
+        apply_gar_target(selected_gpt_url)
+    except ValueError as exc:
+        print(f"[SmartAgent] Shared GAR WebGPT2 URL rejected: {exc}")
+        sys.exit(2)
     if not remote_worker_mode:
         from agent_core.self_repair_protocol import DEFAULT_REPAIR_URL
         _conversation_registry().upsert_binding(

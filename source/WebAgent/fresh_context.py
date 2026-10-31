@@ -22,13 +22,15 @@ from agent_core.conversation_identity import (
 )
 from agent_core.goal_anchored_recovery import FreshContextProof
 
-def ensure_fresh_context_page(*, context, original_page, target_url: str) -> dict:
+def ensure_fresh_context_page(*, context, original_page, target_url: str,
+                              page_lease_held: bool = False) -> dict:
     """Prepare exactly one second tab in the existing BrowserContext at startup.
 
     No bootstrap, no task replay, no owner claim, no original-page navigation.
     Existing pages are not closed or navigated. Fail closed on duplicates and
     foreign ownership. The actual L4 adapter still checks every admission gate.
     """
+    from contextlib import nullcontext
     from agent_core.conversation_ownership import ConversationOwnershipRegistry
     from agent_core.paths import source_root
     from WebAgent.browser_bridge import (
@@ -46,7 +48,11 @@ def ensure_fresh_context_page(*, context, original_page, target_url: str) -> dic
             or conversation_provider(target) != conversation_provider(original_url)):
         raise RuntimeError("GAR_L4_STARTUP_TARGET_NOT_DISTINCT")
 
-    with execution_page_lease(label="GAR L4 startup second-conversation tab"):
+    # The request-scoped RemoteAgent worker already holds this page lease;
+    # only WebDirect startup needs to acquire it here.
+    lease = (nullcontext() if page_lease_held else
+             execution_page_lease(label="GAR L4 startup second-conversation tab"))
+    with lease:
         if not getattr(context, "pages", None) or original_page not in context.pages:
             raise RuntimeError("GAR_L4_STARTUP_ORIGINAL_PAGE_NOT_ATTACHED")
         if bool(original_page.is_closed()):
