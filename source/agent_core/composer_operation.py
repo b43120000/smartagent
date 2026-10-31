@@ -153,16 +153,17 @@ def observe_composer(payload, timeout_sec, cancel_check=None):
 
 
 def prepare_composer(*,endpoint,url,prompt,journal_root,timeout_sec=30.0,
-                     observation_timeout_sec=8.0,cancel_check=None):
+                     observation_timeout_sec=8.0,cancel_check=None,hybrid=False):
     from .process_file_lock import exclusive_process_lock
     root=Path(journal_root)
     with exclusive_process_lock(root/(page_key(endpoint,url)+'.lock'),timeout_sec=1.0,label='composer'):
         return _prepare_locked(endpoint=endpoint,url=url,prompt=prompt,journal_root=root,
-            timeout_sec=timeout_sec,observation_timeout_sec=observation_timeout_sec,cancel_check=cancel_check)
+            timeout_sec=timeout_sec,observation_timeout_sec=observation_timeout_sec,cancel_check=cancel_check,
+            hybrid=hybrid)
 
 
 def _prepare_locked(*,endpoint,url,prompt,journal_root,timeout_sec,
-                    observation_timeout_sec,cancel_check):
+                    observation_timeout_sec,cancel_check,hybrid=False):
     parsed=urlsplit(endpoint)
     if parsed.scheme not in {'http','ws'} or parsed.hostname not in {'127.0.0.1','localhost','::1'}:
         raise ComposerOperationError('composer_endpoint_not_local')
@@ -185,7 +186,7 @@ def _prepare_locked(*,endpoint,url,prompt,journal_root,timeout_sec,
     record['logical_prompt_sha256']=logical_prompt_sha(prompt)
     write_json_atomic(journal,record)
     payload=dict(mode='write',endpoint=endpoint,url=url,prompt=prompt,journal=str(journal),
-                 operation_id=record['operation_id'])
+                 operation_id=record['operation_id'],hybrid=bool(hybrid))
     started=time.monotonic()
     try:
         timed_out=False
@@ -683,6 +684,150 @@ def _composer_write_batches(prompt, max_chars=1024):
         yield pending[0][0], pending[-1][1], tuple(pending)
 
 
+def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=512):
+    """One-shot experiment: verified 512-char prefix, legacy-speed suffix.
+
+    Suffix runs as one physical input batch with a SINGLE strict final
+    checkpoint, not per-line DOM polling. Keep Shift+Enter on all newlines;
+    raw multiline insert_text() can silently truncate ProseMirror content.
+    This writer never submits, replays, or relaxes independent final validation.
+    """
+    PIT.record('09_helper_input', prompt)
+    started = time.monotonic()
+    # Split exactly at the intended character boundary, not unit starts.
+    # Keep CRLF atomic: if the split lands between CR and LF, defer both
+    # characters to the bulk tail (one Shift+Enter).
+    boundary = min(max(0, int(verified_chars)), len(prompt))
+    if 0 < boundary < len(prompt) and prompt[boundary-1:boundary+1] == '\r\n':
+        boundary -= 1
+    first, rest = [], []
+    for start, end, value, soft_break in _composer_write_units(prompt):
+        unit = (start, end, value, soft_break)
+        if end <= boundary:
+            first.append(unit)
+        elif start >= boundary:
+            rest.append(unit)
+        else:
+            if soft_break:
+                raise ComposerOperationError('composer_hybrid_newline_boundary')
+            cut = boundary - start
+            first.append((start, boundary, value[:cut], False))
+            rest.append((boundary, end, value[cut:], False))
+    scraper._focus_composer_dom()
+
+    def focus_end():
+        loc = scraper._focus_composer_dom()
+        if loc is not None:
+            loc.evaluate("""el => {
+                el.focus();
+                if (typeof el.setSelectionRange === 'function') {
+                    el.setSelectionRange(el.value.length, el.value.length);
+                } else {
+                    const r = document.createRange(); r.selectNodeContents(el);
+                    r.collapse(false);
+                    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+                }
+            }""")
+        scraper._page.keyboard.press('Control+End')
+
+    def checkpoint(end, *, phase):
+        prefix = prompt[:end]
+        data = dict(chars=end, sha256=hashlib.sha256(prefix.encode()).hexdigest(),
+            normalized_sha256=hashlib.sha256(
+                scraper._normalize_composer_text(prefix).encode()).hexdigest())
+        record['pending_prefix'] = data
+        write_json_atomic(journal, record)
+        return prefix, data
+
+    def type_unit(unit):
+        start, end, value, soft_break = unit
+        scraper._check_cancel_requested('composer_chunk')
+        if soft_break:
+            scraper._page.keyboard.press('Shift+Enter')
+        else:
+            PIT.record('09_keyboard_insert_text', value,
+                       extra={'chunk_start': start, 'chunk_end': end})
+            scraper._page.keyboard.insert_text(value)
+
+    # Strict first prefix, one unit at a time, same fail-closed validation as
+    # the existing protected writer.
+    for unit in first:
+        start, end, _, _ = unit
+        if start and not scraper._composer_matches_prompt(prompt[:start]):
+            raise ComposerOperationError('composer_prefix_changed')
+        focus_end()
+        prefix, data = checkpoint(end, phase='verified_prefix')
+        type_unit(unit)
+        deadline = time.monotonic() + 2.0
+        while not scraper._composer_matches_prompt(prefix):
+            if time.monotonic() >= deadline:
+                raise ComposerOperationError('composer_chunk_readback_failed')
+            time.sleep(.1)
+        record['confirmed_prefix'] = data
+        write_json_atomic(journal, record)
+
+    # One bulk tail; no per-newline CDP readback or journal checkpoints.
+    if rest:
+        first_tail = rest[0][0]
+        if not scraper._composer_matches_prompt(prompt[:first_tail]):
+            raise ComposerOperationError('composer_prefix_changed')
+        focus_end()
+        prefix, data = checkpoint(len(prompt), phase='bulk_tail')
+        # Coalesce adjacent text into <=4096-character old-style inserts.
+        # Keep each newline as Shift+Enter; no interim DOM or journal reads.
+        bulk_events = []
+        pending = None
+        for unit in rest:
+            start, end, value, soft_break = unit
+            if soft_break:
+                if pending is not None:
+                    bulk_events.append(pending)
+                    pending = None
+                bulk_events.append(unit)
+            elif pending is None:
+                pending = unit
+            elif len(pending[2]) + len(value) <= 4096:
+                pending = (pending[0], end, pending[2] + value, False)
+            else:
+                bulk_events.append(pending)
+                pending = unit
+        if pending is not None:
+            bulk_events.append(pending)
+        for unit in bulk_events:
+            type_unit(unit)
+        deadline = time.monotonic() + 8.0
+        while not scraper._composer_matches_prompt(prefix):
+            if time.monotonic() >= deadline:
+                raise ComposerOperationError('composer_chunk_readback_failed')
+            time.sleep(.2)
+        record['confirmed_prefix'] = data
+        write_json_atomic(journal, record)
+    elapsed = round(time.monotonic() - started, 3)
+    scraper._log_stage('composer_hybrid_verified',
+                       f"prefix_chars={first[-1][1] if first else 0} "
+                       f"tail_units={len(rest)} tail_events={len(bulk_events) if rest else 0} total_chars={len(prompt)} "
+                       f"elapsed_sec={elapsed:.3f}")
+    # Bounded writer instrumentation, no content, URL, user data or DOM HTML.
+    try:
+        from datetime import datetime, timezone
+        from .paths import log_root
+        target = log_root() / "p2-readonly" / "hybrid_writer.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        item = dict(schema="COMPOSER_HYBRID_WRITER_V1",
+                    utc=datetime.now(timezone.utc).isoformat(),
+                    mode="ONE_SHOT_PREFIX512_BULK_TAIL",
+                    prefix_chars=(first[-1][1] if first else 0),
+                    tail_units=len(rest), prompt_chars=len(prompt),
+                    elapsed_seconds=elapsed,
+                    prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                    status="VERIFIED")
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(item, ensure_ascii=False,
+                                    separators=(",", ":")) + "\n")
+    except Exception:
+        pass
+
+
 def _write_staged_prompt(scraper,prompt,record,journal):
     PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
@@ -808,7 +953,10 @@ def helper_main():
                 return
             if not before['composer_empty'] and not before['composer_matches']:
                 raise ComposerOperationError('composer_unrelated_draft_present')
-            _write_staged_prompt(scraper,payload['prompt'],record,journal)
+            if payload.get('hybrid') and len(payload['prompt']) > 1024:
+                _write_hybrid_prompt(scraper,payload['prompt'],record,journal)
+            else:
+                _write_staged_prompt(scraper,payload['prompt'],record,journal)
             after=_page_snapshot(scraper,payload['prompt'])
         else:
             before=record.get('baseline')
