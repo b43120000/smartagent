@@ -80,11 +80,22 @@ KNOWN_REASONS = {
     "Repair elapsed budget exhausted": "REPAIR_ELAPSED_BUDGET_EXHAUSTED",
     "composer_chunk_readback_failed": "COMPOSER_READBACK_FAILED",
 }
+# Exact, Source-defined admission rejection identifiers only, no arbitrary
+# user/model prose, paths or free-form error detail.
+PROTOCOL_ADMISSION_REASONS = frozenset("""
+evidence_file_exists_boolean_required required_transition_action_missing pending_action_requires_observation blocked_action_selected terminal_transition_requires_final_response blocked_semantic_action_repeated progress_wrapper_invalid progress_wrapper_conflict declared_next_action_missing terminal_semantics_complete_but_decision_was_continue command_repair_target_not_pending command_repair_identity_changed invalid_or_duplicate_action_id unresolved_action_repairs action_id_payload_mismatch action_replacement_not_deferred action_repair_count_mismatch missing_turn_commit progress_count_invalid pending_actions_not_preserved query_project_structured_queries_required edit_plan_prerequisite_unsatisfied edit_plan_prerequisite_action_mismatch task_plan_repair_without_runtime_latch task_plan_repair_latch_active task_plan_repair_action_required task_plan_repair_payload_mismatch web_planner_project_read_requires_query_project run_command_verification_contract_required run_command_working_directory_rejected run_command_shell_syntax_mismatch final_response_not_exclusive spec_invalid_protocol_evidence_ref_required objective_unknown_interrupt_not_safe_or_unbound path_independent_command_bound_workspace_already_available missing_context_requires_runtime_read expected_failure_not_bound_to_success_contract final_step_continue_requires_action runtime_evidence_ref_unknown terminal_decision_missing_action_result_evidence continuation_execution_reconciliation_required verifies_action_id_unknown complete_decision_requires_final_response continue_decision_forbids_final_response interrupt_decision_forbids_action active_action_not_complete partial_not_supported_or_recoverable_work verification_evidence_action_required terminal_success_verification_missing success_contradicts_runtime_verification failure_not_supported_by_runtime_evidence failed_fact_unbound_to_declared_success_condition unsupported_tool duplicate_action_id delete_target_requires_resolution invalid_progress_payload action_dependency_unsatisfied progress_repair_stalled_no_new_read_evidence
+""".split())
+
 def _reason_categories(value):
     if not isinstance(value, str) or not value:
         return []
-    return sorted(set(code for marker, code in KNOWN_REASONS.items()
-                      if marker.lower() in value.lower()))
+    categories = {code for marker, code in KNOWN_REASONS.items()
+                  if marker.lower() in value.lower()}
+    # Whitelist exact tokens only. A diagnostic containing user prose cannot
+    # become an exported reason_code, even if it contains a familiar word.
+    if value in PROTOCOL_ADMISSION_REASONS:
+        categories.add("ADMISSION_" + value.upper())
+    return sorted(categories)
 
 
 def _safe_field(key: str, value):
