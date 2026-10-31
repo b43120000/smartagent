@@ -239,6 +239,19 @@ class SR04SR05IT(unittest.TestCase):
             self.assertEqual(report["request_scope_sha_equal"], False)
             self.assertEqual(report["second_previous_assistant_matches_first"], True)
             self.assertTrue(report["distinct_request_ids"])
+            # DOM history can recycle a visible pair without count growth.
+            # Distinct Request/Assistant identity and content binding, not a
+            # monotonically increasing scalar DOM count, determine SR05 status.
+            capture_path = capture_b.capture_dir / "capture.json"
+            b["turn_identity"]["counts_and_binding"].update({
+                "assistant_count_before": 4, "assistant_count_after": 4,
+                "user_count_before": 4, "user_count_after": 4,
+            })
+            capture_path.write_text(json.dumps(b, ensure_ascii=False, indent=2), encoding="utf-8")
+            recycled = _sr05_pair_report(
+                root / "localdata/logs/sr-first-readback/captures"
+            )
+            self.assertEqual(recycled["status"], "CONSISTENT_WITH_DISTINCT_TURNS")
             zip_path = bundle(root)
             with zipfile.ZipFile(zip_path) as archive:
                 self.assertIsNone(archive.testzip())
