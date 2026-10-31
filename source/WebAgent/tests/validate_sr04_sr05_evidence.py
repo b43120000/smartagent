@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from agent_core.sr_first_readback import (
     capture_pre_submit_identity, capture_first_readback, _case_and_markers,
+    _observe_turn_roster, _roster_delta,
 )
 from WebAgent.tests.validate_shared_runtime_sr02_sr03 import make_wire
 from WebAgent.tests.collect_sr_readback_bundle import (
@@ -112,6 +113,32 @@ def save(root, *, number, previous, current, content, request=None):
 
 
 class SR04SR05IT(unittest.TestCase):
+    def test_p1_roster_delta_records_hashes_only(self):
+        private_url = "https://chatgpt.com/c/private-conversation"
+        private_message = "PRIVATE_PROMPT_NOT_ALLOWED_IN_ROSTER"
+        old = FakeTurn(private_message, "assistant-A", 5)
+        new = FakeTurn("PRIVATE_REPLY_NOT_ALLOWED_IN_ROSTER", "assistant-B", 4)
+        adapter = FakeAdapter([old])
+        adapter.page = SimpleNamespace(url=private_url)
+        adapter.profile = SimpleNamespace(
+            user_turn_selector="[data-message-author-role='user']",
+            assistant_turn_selector="[data-message-author-role='assistant']",
+        )
+        adapter.turn_elements = lambda role: list(adapter.turns(role))
+        before = _observe_turn_roster(adapter)
+        adapter._turns = [new]
+        after = _observe_turn_roster(adapter)
+        delta = _roster_delta(before, after)
+        self.assertTrue(delta["same_page_url_hash"])
+        self.assertEqual(delta["assistant"]["logical_count_before"], 1)
+        self.assertEqual(delta["assistant"]["logical_count_after"], 1)
+        self.assertEqual(len(delta["assistant"]["removed_id_hashes"]), 1)
+        self.assertEqual(len(delta["assistant"]["added_id_hashes"]), 1)
+        payload = json.dumps([before, after, delta])
+        self.assertNotIn(private_url, payload)
+        self.assertNotIn(private_message, payload)
+        self.assertNotIn("PRIVATE_REPLY_NOT_ALLOWED_IN_ROSTER", payload)
+
     def test_sr04_all_markers_and_order(self):
         result = _case_and_markers(sr04())
         self.assertEqual(result["test_case"], "SR-04")
@@ -147,6 +174,12 @@ class SR04SR05IT(unittest.TestCase):
                 (result.capture_dir / "capture.json").read_text(encoding="utf-8")
             )
             self.assertEqual(capture["test_case"]["status"], "MARKERS_PRESENT")
+            roster = json.loads(
+                (result.capture_dir / "turn_observation.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(roster["schema"], "SR05_TURN_OBSERVATION_V1")
+            self.assertIn("before_submit", roster)
+            self.assertIn("after_completion", roster)
             for key, filename in [
                 ("extracted_response", "extracted_response.txt"),
                 ("dom_turn_inner_text", "dom_turn_inner_text.txt"),
