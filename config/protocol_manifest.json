@@ -76,7 +76,7 @@
     "source/agent_core/chunked_write.py": "cf5acd5ae5229dfdc62164957b34c21dbd29b6af5006c78265072f6b00bd74e0",
     "source/agent_core/command_operation.py": "cdf7f95493be12618197df6a0b2be7e208ac5d69dd46b3642c8f4e7d4d119faa",
     "source/agent_core/command_security.py": "0b0fbb895865bcc3aa9ef3a1d50dc02c37fd67adc4e054099394dea4f477e62e",
-    "source/agent_core/composer_operation.py": "67c21e37f415c057d6d17e3c50a26cb1441122752de92e18577864a015ee5a4a",
+    "source/agent_core/composer_operation.py": "2beacb765fb79940432824e96083e78b7ddfae5c63a2c407270b43342d89105f",
     "source/agent_core/context_acquisition.py": "32c3f51a7c17a56f86ed814124987396c6a21a04f85b497614e998d645619970",
     "source/agent_core/evidence_foundation.py": "012dbeef688e50840f58611a2a938f2f554b3609daf118063a8bf8af44c5a3b7",
     "source/agent_core/force_stop_all_agents.py": "bc3aa935f1f03352632fac54dad4efcd166adfb0b6e0200cf20b82c2798d5f1a",
