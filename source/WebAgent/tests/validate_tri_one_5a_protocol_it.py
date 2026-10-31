@@ -105,32 +105,60 @@ class AnswerOnlyV9IT(unittest.TestCase):
                 self._loop_case("Explain RAII in C++.", source,
                                 omit_evidence=True)
 
-    def test_explicit_status_marker_requires_model_correction(self):
-        with tempfile.TemporaryDirectory(prefix="goal1-status-repair-") as directory:
+    def test_runtime_context_refs_are_classified_without_action_evidence(self):
+        request = "Explain RAII in C++."
+        for refs in (
+            ["REQUEST_ACCEPTED"], ["RUNTIME_STATUS"],
+            ["REQUEST_ACCEPTED", "RUNTIME_STATUS"],
+        ):
+            with self.subTest(refs=refs), tempfile.TemporaryDirectory(
+                prefix="goal1-status-classified-"
+            ) as directory:
+                root = Path(directory)
+                responses, events = [], []
+                def planner(prompt, expected, attachments):
+                    responses.append(prompt)
+                    return answer_only_response(evidence_refs=refs)
+                loop = WebAgentProtocolLoop(
+                    root, planner, progress_root=root, max_turns=2,
+                    event_sink=lambda event, **kw: events.append((event, kw)),
+                )
+                with patch.dict(os.environ, {
+                    "TRI_ONE_TASK_RESULT_V1": "1", "TRI_ONE_TEXT_ONLY_V1": "1",
+                }), patch.object(loop.tools, "execute",
+                                 side_effect=AssertionError("no tools allowed")) as execute:
+                    answer = loop.run(
+                        request, request_id="RR-5A-MARKER",
+                        task_id="TASK-5A-MARKER", task_epoch="EPOCH-5A-MARKER",
+                        source_tag="REMOTEAGENT_WEBCOPILOT_V9")
+                self.assertEqual(answer, "RAII releases owned resources.")
+                self.assertEqual(len(responses), 1)
+                self.assertEqual(execute.call_count, 0)
+                self.assertEqual(loop.action_ledger, {})
+                self.assertEqual(loop.action_result_ledger, {})
+                self.assertEqual(loop.terminal_acceptance["evidence_refs"], [])
+                self.assertEqual(loop.terminal_acceptance["completion_kind"], "ANSWER_ONLY")
+                self.assertEqual(loop.terminal_acceptance["evidence_verdict"], "UNVERIFIED")
+                classified = [data for name, data in events
+                              if name == "tri_one_answer_only_evidence_classified"]
+                self.assertEqual(len(classified), 1)
+                self.assertEqual(classified[0]["evidence_class"], "RUNTIME_CONTEXT")
+                self.assertTrue(classified[0]["normalized"])
+
+    def test_unknown_refs_never_become_answer_only_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="goal1-unknown-") as directory:
             root = Path(directory)
-            outputs = iter((
-                answer_only_response(evidence_refs=["RUNTIME_STATUS"]),
-                answer_only_response(omit_evidence=True),
-            ))
-            responses = []
-            def planner(prompt, expected, attachments):
-                responses.append(prompt)
-                return next(outputs)
-            loop = WebAgentProtocolLoop(root, planner, progress_root=root, max_turns=3)
+            loop = WebAgentProtocolLoop(
+                root, lambda *_: answer_only_response(evidence_refs=["ACT-FAKE"]),
+                progress_root=root, max_turns=2,
+            )
             with patch.dict(os.environ, {
                 "TRI_ONE_TASK_RESULT_V1": "1", "TRI_ONE_TEXT_ONLY_V1": "1",
             }):
-                answer = loop.run(
-                    "Explain RAII in C++.", request_id="RR-5A-MARKER",
-                    task_id="TASK-5A-MARKER", task_epoch="EPOCH-5A-MARKER",
-                    source_tag="REMOTEAGENT_WEBCOPILOT_V9")
-            self.assertEqual(answer, "RAII releases owned resources.")
-            self.assertEqual(len(responses), 2)
-            self.assertIn("answer_only_status_markers_not_action_evidence",
-                          responses[-1])
-            self.assertEqual(loop.action_ledger, {})
-            self.assertEqual(loop.action_result_ledger, {})
-            self.assertEqual(loop.terminal_acceptance["evidence_refs"], [])
+                with self.assertRaises(Exception):
+                    loop.run("Explain RAII in C++.")
+            self.assertFalse(loop._answer_only_admitted)
+            self.assertFalse(loop.terminal_acceptance)
 
     def test_external_facts_never_use_answer_only_terminal(self):
         with tempfile.TemporaryDirectory(prefix="goal1-negative-") as directory:
