@@ -240,9 +240,10 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
         started = [r["timestamp"] for r in events
                    if r["event"] == "request_started"
                    and r.get("request_id") in ids and r.get("timestamp")]
-        if started:
-            # Controller timestamps are consistently local ISO8601. Limit
-            # legacy unscoped browser events to this request's start onward.
+        if started and latest_start is None:
+            # Legacy logs have no controller boundary. In that case, only,
+            # use request start as a fallback; with a controller boundary
+            # we MUST preserve Bootstrap -> READY -> ingress stages.
             begin = min(started)
             events = [r for r in events if r.get("request_id")
                       or not r.get("timestamp") or r["timestamp"] >= begin]
