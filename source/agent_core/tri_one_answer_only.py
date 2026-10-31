@@ -43,6 +43,66 @@ _EXTERNAL_OR_ACTION = re.compile(
     r"真的|實際確認|驗證過)",
     re.IGNORECASE,
 )
+# Only remove self-contained tool-prohibition clauses from eligibility text.
+# Never remove a positive operational requirement such as "read README".
+# This is not evidence of correctness and grants no tool execution privilege.
+_NO_TOOL_CLAUSE = re.compile(
+    r"(?:本任務\s*)?(?:不需要|無需|不必|不要|不得|禁止)\s*"
+    r"(?:操作(?:本機)?檔案或執行任何命令|使用任何工具|使用工具|"
+    r"執行任何命令|執行本機命令|執行命令|操作本機檔案|操作檔案)"
+    r"|(?:do\s+not|don't|no\s+need\s+to)\s+"
+    r"(?:execute\s+(?:any\s+)?(?:local\s+)?commands?\s+or\s+"
+    r"(?:modify|access)\s+files?|use\s+(?:any\s+)?tools?|"
+    r"execute\s+(?:any\s+)?(?:local\s+)?commands?|"
+    r"modify\s+(?:any\s+)?files?)",
+    re.IGNORECASE,
+)
+# Unlike a request merely prohibiting a shell command, this explicitly
+# denies all operational tools. The entire operational scope is authoritative
+# even when answer-only feature flags are OFF.
+_NO_ANY_TOOL = re.compile(
+    r"(?:本任務\s*)?(?:不需要|無需|不必|不要|不得|禁止)\s*"
+    r"(?:使用(?:任何)?工具|操作(?:本機)?檔案或執行任何命令)"
+    r"|(?:do\s+not|don't)\s+(?:use\s+(?:any\s+)?tools?|"
+    r"execute\s+(?:any\s+)?(?:local\s+)?commands?\s+or\s+"
+    r"(?:modify|access)\s+files?)",
+    re.IGNORECASE,
+)
+_NO_COMMAND = re.compile(
+    r"(?:不需要|無需|不必|不要|不得|禁止)\s*執行(?:任何|本機)?命令"
+    r"|(?:do\s+not|don't)\s+execute\s+(?:any\s+)?(?:local\s+)?commands?",
+    re.IGNORECASE,
+)
+
+
+def explicit_tool_restrictions(request: str) -> tuple[bool, bool]:
+    """Trusted original request restrictions: (no_all_tools, no_commands)."""
+    text = str(request or "")
+    no_tools = bool(_NO_ANY_TOOL.search(text))
+    no_commands = bool(no_tools or _NO_COMMAND.search(text))
+    return no_tools, no_commands
+
+
+def tool_restriction_diagnostic(request: str, actions) -> dict | None:
+    """No model action may override explicit, original user tool restrictions."""
+    no_tools, no_commands = explicit_tool_restrictions(request)
+    for action in actions:
+        tool = str(action.get("tool", "") or "") if isinstance(action, Mapping) else ""
+        if (no_tools and tool not in {"report_progress", "final_response", "turn_commit"}
+                or no_commands and tool == "run_command"):
+            return {
+                "marker": "[WEBAGENT_USER_TOOL_RESTRICTION]",
+                "reason": "text_only_tool_forbidden",
+                "detail": "original request prohibits the proposed operational tool",
+                "suggestion": (
+                    "不得執行該工具，也不得為 Terminal Verification 補用 run_command。"
+                    "純文字任務應提供 canonical report_progress + final_response + turn_commit；"
+                    "若確實需要外部資料，僅能說明無法驗證，不得虛構結果。"
+                ),
+            }
+    return None
+
+
 _URI_OR_PATH = re.compile(
     r"(?:https?://|www\.|[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|"
     r"(?:^|[\s(])(?:\.{1,2}[/\\]|~/))", re.IGNORECASE,
@@ -86,9 +146,12 @@ def classify_original_request(
         return False, "empty_or_unbounded_input"
     if _URI_OR_PATH.search(text):
         return False, "external_resource_or_path"
-    if _EXTERNAL_OR_ACTION.search(text):
+    # The *prohibition itself* is not a positive request to access files or
+    # run commands. Positive tool/fresh-information intent remains untouched.
+    intent_text = _NO_TOOL_CLAUSE.sub(" ", text)
+    if _EXTERNAL_OR_ACTION.search(intent_text):
         return False, "external_information_or_action_indicated"
-    if not _TEXT_INTENT.search(text):
+    if not _TEXT_INTENT.search(intent_text):
         return False, "text_intent_not_unambiguously_classified"
     return True, "bounded_text_only_intent"
 
@@ -139,4 +202,5 @@ def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
 
 
 __all__ = ["FEATURE_FLAG", "enabled", "classify_original_request",
-           "accept_terminal_candidate"]
+           "accept_terminal_candidate", "explicit_tool_restrictions",
+           "tool_restriction_diagnostic"]
