@@ -41,6 +41,39 @@ def enabled() -> bool:
     return os.environ.get(FLAG, "").strip() == "1"
 
 
+class SRModeConflictError(RuntimeError):
+    """Configuration error: P2 diagnostic must never activate P1 stop gate."""
+
+
+def runtime_mode_attestation(environ=None) -> dict:
+    """Expose *only* bounded, non-secret effective mode flags."""
+    env = os.environ if environ is None else environ
+    sr_gate = str(env.get(FLAG, "")).strip() == "1"
+    p2 = str(env.get("SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1", "")).strip() == "1"
+    hybrid = str(env.get("SMARTAGENT_COMPOSER_HYBRID_ONCE_V1", "")).strip() == "1"
+    status = "CONFLICT" if sr_gate and p2 else "P2" if p2 else (
+        "P1_FIRST_READBACK" if sr_gate else "NORMAL"
+    )
+    return {
+        "schema": "SMARTAGENT_SR_P2_MODE_ATTESTATION_V1",
+        "sr_gate_active": sr_gate,
+        "p2_diagnostic_active": p2,
+        "hybrid_once_active": hybrid,
+        "mode_status": status,
+    }
+
+
+def assert_sr_p2_isolated(environ=None) -> dict:
+    """Fail closed before any browser effects when incompatible gates overlap."""
+    snapshot = runtime_mode_attestation(environ)
+    if snapshot["mode_status"] == "CONFLICT":
+        raise SRModeConflictError(
+            "SR_P2_MODE_CONFLICT: P2 normal Runtime cannot use "
+            "SMARTAGENT_SR_FIRST_READBACK_ONLY_V1=1"
+        )
+    return snapshot
+
+
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
 
