@@ -573,7 +573,16 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=102
     raw multiline insert_text() can silently truncate ProseMirror content.
     This writer never submits, replays, or relaxes independent final validation.
     """
-    units = list(_composer_write_units(prompt))
+    units = []
+    for start, end, value, soft_break in _composer_write_units(prompt):
+        if soft_break:
+            units.append((start, end, value, True))
+        else:
+            # The protected front must be 1024 characters, not one entire
+            # 4096-character legacy unit when the prompt is single-line.
+            for offset in range(0, len(value), 1024):
+                finish = min(offset + 1024, len(value))
+                units.append((start + offset, start + finish, value[offset:finish], False))
     boundary = min(int(verified_chars), len(prompt))
     first = [unit for unit in units if unit[0] < boundary]
     rest = units[len(first):]
