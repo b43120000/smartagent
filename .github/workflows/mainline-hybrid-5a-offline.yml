@@ -1,0 +1,60 @@
+name: Mainline Hybrid Writer + 5A Offline
+
+on:
+  push:
+    branches:
+      - feat/mainline-hybrid-writer-5a-20261101
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hybrid-5a-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      PYTHONPATH: source
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install WebDirect test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -r install_smart_agent/requirements-webdirect.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate exact protocol manifest
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Hybrid Composer dispatcher, 512 prefix and bulk-tail
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_mainline_hybrid_writer.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Existing Composer fail-closed regression
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_composer_operation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_composer_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 5A Answer-only integration and policy
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_tri_one_5a_protocol_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_tri_one_5a_answer_only.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: GAR L4 non-interference
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_gar_l4_supervision.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
