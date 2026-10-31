@@ -94,11 +94,11 @@ class SRFirstReadbackIT(unittest.TestCase):
             with patch.dict(os.environ, {
                 "SMARTAGENT_SR_FIRST_READBACK_ONLY_V1": "1",
                 "SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1": "1",
-            }), patch("WebAgent.controller._resolve_workspace", return_value=root), \\
-                    patch("agent_core.protocol_manifest.require_protocol_manifest"), \\
-                    patch("WebAgent.controller.install_root", return_value=root), \\
-                    patch("WebAgent.controller.log_root", return_value=root / "logs"), \\
-                    patch("WebAgent.controller.RuntimeLifecycle.from_environment", return_value=None), \\
+            }), patch("WebAgent.controller._resolve_workspace", return_value=root), \
+                    patch("agent_core.protocol_manifest.require_protocol_manifest"), \
+                    patch("WebAgent.controller.install_root", return_value=root), \
+                    patch("WebAgent.controller.log_root", return_value=root / "logs"), \
+                    patch("WebAgent.controller.RuntimeLifecycle.from_environment", return_value=None), \
                     patch("WebAgent.controller.open_or_attach_browser",
                           side_effect=AssertionError("Browser attached during mode conflict")) as attach:
                 outcome = controller.main([
