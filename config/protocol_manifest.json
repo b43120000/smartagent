@@ -128,7 +128,7 @@
     "source/agent_core/tri_one_task_result.py": "fcb248515174f9406492bc56f8d64bae14d9b5b9a50edb6fc7fac3b86a2029f1",
     "source/agent_core/typed_field_values.py": "afea71946afe45888279c54829c4f337b1b3d9914ce6aa1167a9c7353c9ce3e5",
     "source/agent_core/ui_calibration.py": "5069f742bd8027c67163cab80171316e583ad6b1ac1bcba6ddaab80c91be1e16",
-    "source/agent_core/web_runtime.py": "83857879d71d12ae267b8638d46474c33af581ff87d94e1b23e0ea0c0bd9438c",
+    "source/agent_core/web_runtime.py": "ebae71fe407481cd5a8a6ec6c903f42e65d375b8bb3ed9eab82e13f4e53c46ce",
     "source/agent_core/web_ui/__init__.py": "6ec6879a99313157a0400ee00dbf1ec598ef7b8c036094a9fc1adbce475ad69d",
     "source/agent_core/web_ui/attachment_probe.py": "fa112c12c8889d51f89408819173afcd310deba373f6d1f893af803fd4280b6b",
     "source/agent_core/web_ui/base_adapter.py": "6c797b0cf819e1d1127188ba7bcfa6add051524c15a6fa6f217eb64a9352e366",
