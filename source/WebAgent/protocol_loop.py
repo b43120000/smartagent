@@ -2693,8 +2693,34 @@ class WebAgentProtocolLoop:
             for name, value in saved.items():
                 setattr(self, name, value)
 
+    def _text_only_tool_diagnostic(self, actions):
+        """Runtime-owned prohibition, independent of the model's tool plan."""
+        from agent_core.tri_one_answer_only import tool_restriction_diagnostic
+        denied = tool_restriction_diagnostic(self.task_request, actions)
+        if denied:
+            return denied
+        if getattr(self, "_answer_only_scope", False):
+            for action in actions:
+                if str(action.get("tool", "") or "") not in {
+                    "report_progress", "final_response", "turn_commit"
+                }:
+                    return {
+                        "marker": "[WEBAGENT_TEXT_ONLY_SCOPE]",
+                        "reason": "text_only_tool_forbidden",
+                        "detail": "Runtime admitted this original request as text-only",
+                        "suggestion": (
+                            "不得補做 run_command 或其他操作。"
+                            "保留 canonical report_progress + final_response + turn_commit，"
+                            "零 operational action，由 Answer-only Terminal Gate 驗收。"
+                        ),
+                    }
+        return None
+
     def _accept_action_batch(self, calls, expected):
         """Keep transport/Progress global; partition operational admission only."""
+        denied = self._text_only_tool_diagnostic(calls)
+        if denied:
+            return [], [denied]
         from copy import deepcopy
         from agent_core.action_dependencies import dependency_diagnostic
         from agent_core.smartagent_protocol import normalize_tool_numeric_fields
@@ -3101,6 +3127,9 @@ class WebAgentProtocolLoop:
                 "detail": exc.detail,
                 "suggestion": "只修正 compact v9 turn_commit，不要重做 action。",
             }]
+        denied = self._text_only_tool_diagnostic(actions)
+        if denied:
+            return [], [denied]
         progress_actions = [action for action in actions if action.get("tool") == "report_progress"]
         if len(progress_actions) != 1:
             return [], [{
@@ -3769,6 +3798,21 @@ class WebAgentProtocolLoop:
                            request_id=self.run_id, round=self.turn_id,
                            eligible=answer_only_admission, reason=answer_reason)
         if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED" and not answer_only_admission:
+            from agent_core.tri_one_answer_only import explicit_tool_restrictions
+            no_tools, _ = explicit_tool_restrictions(self.task_request)
+            if no_tools or getattr(self, "_answer_only_scope", False):
+                # Do not prescribe run_command as a fake terminal verifier.
+                # Correct the canonical text-only candidate, or fail closed.
+                return [], [{
+                    "marker": "[WEBAGENT_TEXT_ONLY_TERMINAL_REJECTED]",
+                    "reason": "text_only_terminal_not_admissible",
+                    "detail": "answer_only_candidate_rejected_or_feature_unavailable",
+                    "suggestion": (
+                        "原始需求禁止操作；不可透過 run_command 補 Terminal Evidence。"
+                        "若符合既有 5A 條件，修正 Progress / final_response 的文字結案資料；"
+                        "若需外部事實但禁止工具，回覆資訊限制，不得捏造成功驗證。"
+                    ),
+                }]
             final_action = next(
                 (item for item in operational if item.get("tool") == "final_response"),
                 {},
@@ -3916,6 +3960,17 @@ class WebAgentProtocolLoop:
         return actions, []
 
     def _execute_action(self, action: dict) -> str:
+        # Last pre-execution guard: no other admission/repair path may
+        # dispatch an operational tool forbidden by the original request.
+        denied = self._text_only_tool_diagnostic([action])
+        if denied:
+            from agent_core.tool_result_contract import encode_result
+            self._emit("text_only_tool_execution_blocked",
+                       request_id=self.run_id, round=self.turn_id,
+                       tool=str(action.get("tool", "") or ""),
+                       reason="text_only_tool_forbidden")
+            return encode_result("REJECTED", "TEXT_ONLY_TOOL_FORBIDDEN",
+                                 executed=False, detail="Tool never invoked")
         if action.get('tool') == 'delete_path' and self.resolved_delete_target and str(action.get('path', '')).casefold() != self.resolved_delete_target.casefold():
             from agent_core.tool_result_contract import encode_result
             return encode_result('REJECTED', 'TARGET_MISMATCH', requested_path=action.get('path', ''), detail='Use only the exact target proven by Runtime discovery')
@@ -4209,6 +4264,7 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
+        self._answer_only_scope = False
         # An already queued attachment or skill is an external dependency,
         # even if the original prose itself contains no file path.
         self._tri_one_has_attached_context = bool(initial_attachments or skill_context)
@@ -4447,12 +4503,16 @@ class WebAgentProtocolLoop:
                 source_identity=source_identity,
             )
         if _tri_one_result_enabled() and _tri_one_text_enabled(source=self._tri_one_origin):
-            text_candidate, _ = classify_original_request(
+            text_candidate, eligibility_reason = classify_original_request(
                 request, attachments=self._tri_one_has_attached_context,
                 authorized_paths=bool(authorized),
                 image_or_artifact_request=bool(self.image_delivery_plan),
                 continuation=bool(self.continuation_source),
             )
+            self._answer_only_scope = bool(text_candidate)
+            self._emit("tri_one_text_only_scope",
+                       request_id=self.run_id, eligible=bool(text_candidate),
+                       reason=eligibility_reason)
             if text_candidate:
                 prompt += (
                     "\n[TRI_ONE_ANSWER_ONLY_CANDIDATE]\n"
