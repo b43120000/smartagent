@@ -1,5 +1,6 @@
 """Offline isolated Hybrid Writer + P2 metadata/collector regression."""
 import hashlib
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "source"))
 from agent_core import composer_operation as composer
 from agent_core import sr_first_readback as sr
+from agent_core.web_runtime import WebLLMScraper
 from WebAgent.tests import collect_p2_readonly_evidence as collector
 
 
@@ -107,6 +109,125 @@ def test_hybrid_writer():
                 raise AssertionError("failed writer was accepted")
 
 
+
+def test_hybrid_task_scope():
+    # Verify the actual Scraper dispatcher, not just the lower-level writer.
+    scraper = WebLLMScraper.__new__(WebLLMScraper)
+    scraper.service = "chatgpt"
+    scraper._isolated_browser = None
+    scraper._page = SimpleNamespace(url="https://chatgpt.com/c/fixture")
+    scraper._composer_hybrid_task_enabled = False
+    scraper.get_cdp_endpoint = lambda: "http://127.0.0.1:9222"
+    scraper._check_cancel_requested = lambda stage: None
+    scraper._log_stage = lambda *args: None
+    prompt = "P" * 1500
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.dict(os.environ, {"SMARTAGENT_COMPOSER_HYBRID_ONCE_V1": "1"}), \
+             patch("agent_core.composer_operation.prepare_composer",
+                   return_value={"operation_id": "TEST_OP"}) as prepare, \
+             patch("agent_core.paths.runtime_root", return_value=Path(tmp)):
+            # Session Bootstrap / Attach: normal protected writer.
+            assert scraper._write_prompt_to_composer(prompt)
+            assert prepare.call_args.kwargs["hybrid_once"] is False
+            assert not getattr(scraper, "_composer_hybrid_once_used", False)
+            # Controller READY, then real task starts.
+            scraper._composer_hybrid_task_enabled = True
+            assert scraper._write_prompt_to_composer(prompt)
+            assert prepare.call_args.kwargs["hybrid_once"] is True
+            assert scraper._composer_hybrid_once_used is True
+            # Second Planner round does not consume/rearm Hybrid.
+            assert scraper._write_prompt_to_composer(prompt)
+            assert prepare.call_args.kwargs["hybrid_once"] is False
+            # Final ACK outside task.
+            scraper._composer_hybrid_task_enabled = False
+            assert scraper._write_prompt_to_composer(prompt)
+            assert prepare.call_args.kwargs["hybrid_once"] is False
+            assert prepare.call_count == 4
+    # A failure still consumes the grant: never automatic hybrid replay.
+    scraper._composer_hybrid_once_used = False
+    scraper._composer_hybrid_task_enabled = True
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.dict(os.environ, {"SMARTAGENT_COMPOSER_HYBRID_ONCE_V1": "1"}), \
+             patch("agent_core.composer_operation.prepare_composer",
+                   side_effect=RuntimeError("writer failed")), \
+             patch("agent_core.paths.runtime_root", return_value=Path(tmp)):
+            try:
+                scraper._write_prompt_to_composer(prompt)
+            except Exception:
+                pass
+            else:
+                raise AssertionError("expected writer failure")
+            assert scraper._composer_hybrid_once_used is True
+
+
+def test_latest_controller_run_scope():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        logdir = root / "localdata" / "logs"
+        (logdir / "p2-readonly").mkdir(parents=True)
+        now = datetime.now(timezone.utc)
+        fmt = lambda dt: dt.isoformat()
+        old = fmt(now - timedelta(hours=2))
+        start = fmt(now - timedelta(minutes=1))
+        fresh = fmt(now - timedelta(seconds=15))
+        def rec(t, event, **kw):
+            return {"timestamp": t, "event": event, **kw}
+        all_events = [
+            rec(old, "controller_started"),
+            rec(old, "request_failed", request_id="WA-OLD", error="PRIVATE_OLD_FAILURE"),
+            rec(start, "controller_started"),
+            rec(start, "browser_send_started", stage="協議初始化", response="PRIVATE_BOOTSTRAP"),
+            rec(start, "browser_response_completed", stage="協議初始化", response="PRIVATE_OUTPUT"),
+            rec(start, "controller_ready", session_mode="BOOTSTRAP"),
+            rec(fresh, "p2_request_ingress", source_kind="WEB_UI",
+                request_sha256=hashlib.sha256(b"private-request").hexdigest(),
+                request_chars=15, hybrid_eligible=True, request="PRIVATE_BODY"),
+            rec(fresh, "browser_send_started", stage="smartagent_tool 規劃回合"),
+            rec(fresh, "request_started", request_id="WA-FRESH", request="PRIVATE_REQUEST"),
+            rec(fresh, "protocol_rejected", request_id="WA-FRESH", round=1,
+                diagnostics=[{"reason": "missing_smartagent_tool_envelope",
+                              "marker": "[WEBAGENT_V8_PARSE_ERROR]",
+                              "detail": "PRIVATE_PROTOCOL"}]),
+        ]
+        (logdir / "webagent_runtime.jsonl").write_text(
+            "\n".join(json.dumps(x, ensure_ascii=False) for x in all_events)+"\n", encoding="utf-8",
+        )
+        (logdir / "p2-readonly" / "turn_readback.jsonl").write_text(
+            "\n".join(json.dumps(x) for x in [
+                {"schema":"P2_READONLY_TURN_V1", "utc":old, "request_id":"WA-OLD"},
+                {"schema":"P2_READONLY_TURN_V1", "utc":fresh, "request_id":"WA-FRESH"},
+            ])+"\n", encoding="utf-8",
+        )
+        (logdir / "p2-readonly" / "hybrid_writer.jsonl").write_text(
+            "\n".join(json.dumps(x) for x in [
+                {"schema":"COMPOSER_HYBRID_WRITER_V1","utc":old, "mode":"OLD"},
+                {"schema":"COMPOSER_HYBRID_WRITER_V1","utc":fresh,
+                 "mode":"ONE_SHOT_PREFIX512_BULK_TAIL","prefix_chars":512},
+            ])+"\n", encoding="utf-8",
+        )
+        with patch.object(collector, "log_root", return_value=logdir):
+            evidence = collector.make_p2_evidence(root)
+        trace = json.loads(evidence["p2_admission_trace.json"])["events"]
+        summary = json.loads(evidence["p2_terminal_summary.json"])
+        turns = json.loads(evidence["p2_turn_observation.json"])["records"]
+        writers = json.loads(evidence["p2_writer_trace.json"])["records"]
+        assert summary["scope"] == "LATEST_CONTROLLER_RUN"
+        assert summary["status"] == "UNKNOWN_NOT_FULLY_CORRELATED"
+        assert summary["failed_request_ids"] == []
+        assert len(turns) == 1 and turns[0]["request_id"] == "WA-FRESH"
+        assert len(writers) == 1 and writers[0]["prefix_chars"] == 512
+        assert all("WA-OLD" not in json.dumps(row) for row in trace)
+        assert all("PRIVATE" not in json.dumps(row) for row in trace)
+        assert any(x.get("browser_stage") == "SESSION_BOOTSTRAP" for x in trace)
+        assert any(x.get("browser_stage") == "TASK_PLANNER" for x in trace)
+        assert any(x.get("event") == "controller_ready" for x in trace)
+        ingress = [x for x in trace if x["event"] == "p2_request_ingress"]
+        assert len(ingress) == 1 and ingress[0]["source_kind"] == "WEB_UI"
+        assert ingress[0]["hybrid_eligible"] is True
+        rej = [x for x in trace if x["event"] == "protocol_rejected"][0]
+        assert rej["rejection_stage"] == "TRANSPORT_PARSE"
+        assert rej["reason_categories"] == ["MISSING_TOOL_ENVELOPE"]
+
 def test_p2_hook_and_sanitizer():
     class Adapter:
         def durable_turn_id(self, turn):
@@ -168,5 +289,7 @@ def test_p2_hook_and_sanitizer():
 
 if __name__ == "__main__":
     test_hybrid_writer()
+    test_hybrid_task_scope()
+    test_latest_controller_run_scope()
     test_p2_hook_and_sanitizer()
     print("HYBRID_P2_OFFLINE_OK: strict prefix, fast tail, fail-closed, sanitized collector")
