@@ -228,6 +228,50 @@ def test_latest_controller_run_scope():
         assert rej["rejection_stage"] == "TRANSPORT_PARSE"
         assert rej["reason_categories"] == ["MISSING_TOOL_ENVELOPE"]
 
+
+def test_answer_only_receipt_collected_without_tool_events():
+    # P2 evidence must prove the distinct answer-only terminal category.
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        logdir = root / "localdata" / "logs"
+        (logdir / "p2-readonly").mkdir(parents=True)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        events = [
+            {"timestamp": timestamp, "event":"controller_started"},
+            {"timestamp": timestamp, "event":"controller_ready", "session_mode":"SESSION_ATTACH"},
+            {"timestamp": timestamp, "event":"tri_one_text_only_scope",
+             "request_id":"WA-TEXT", "eligible":True, "reason":"bounded_text_only_intent"},
+            {"timestamp": timestamp, "event":"tri_one_answer_only_candidate",
+             "request_id":"WA-TEXT", "eligible":True,
+             "reason":"ANSWER_ONLY_RESPONSE_ADMITTED"},
+            {"timestamp": timestamp, "event":"runtime_terminal_accepted",
+             "request_id":"WA-TEXT", "completion_kind":"ANSWER_ONLY",
+             "admission_reason":"ANSWER_ONLY_RESPONSE_ADMITTED",
+             "answer_text":"PRIVATE_SECRET"},
+            {"timestamp": timestamp, "event":"request_completed",
+             "request_id":"WA-TEXT", "final_content":"PRIVATE_SECRET"},
+        ]
+        (logdir / "webagent_runtime.jsonl").write_text(
+            "\n".join(json.dumps(item) for item in events)+"\n", encoding="utf-8",
+        )
+        (logdir / "p2-readonly" / "turn_readback.jsonl").write_text(
+            json.dumps({"schema":"P2_READONLY_TURN_V1","utc":timestamp,
+                        "request_id":"WA-TEXT","stage":"COMMIT_READY"})+"\n",
+            encoding="utf-8",
+        )
+        with patch.object(collector, "log_root", return_value=logdir):
+            package = collector.make_p2_evidence(root)
+        summary = json.loads(package["p2_terminal_summary.json"])
+        trace = json.loads(package["p2_admission_trace.json"])["events"]
+        assert summary["status"] == "ACCEPTED_AND_COMPLETED"
+        assert summary["answer_only_accepted_request_ids"] == ["WA-TEXT"]
+        assert [x for x in trace if x.get("event") == "tool_started"] == []
+        assert [x for x in trace if x.get("event") == "tri_one_text_only_scope"
+                and x.get("eligible")] 
+        assert [x for x in trace if x.get("event") == "runtime_terminal_accepted"
+                and x.get("completion_kind") == "ANSWER_ONLY"]
+        assert b"PRIVATE_SECRET" not in b"".join(package.values())
+
 def test_p2_hook_and_sanitizer():
     class Adapter:
         def durable_turn_id(self, turn):
@@ -291,5 +335,6 @@ if __name__ == "__main__":
     test_hybrid_writer()
     test_hybrid_task_scope()
     test_latest_controller_run_scope()
+    test_answer_only_receipt_collected_without_tool_events()
     test_p2_hook_and_sanitizer()
     print("HYBRID_P2_OFFLINE_OK: strict prefix, fast tail, fail-closed, sanitized collector")
