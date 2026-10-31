@@ -22,7 +22,7 @@ TOTAL_LIMIT = 64 * 1024 * 1024
 CAPTURE_FILES = frozenset({
     "capture.json", "extracted_response.txt", "dom_turn_inner_text.txt",
     "dom_selected_structure.json", "dom_turn_text_content.txt",
-    "turn_identity.json",
+    "turn_identity.json", "turn_observation.json",
 })
 REGRESSION_FILES = frozenset({
     "summary.txt", "validate_shared_runtime_sr02_sr03.log",
@@ -77,6 +77,21 @@ def _capture_integrity_report(captures: Path) -> list[dict]:
                 problems.append(name + ":BYTE_MISMATCH")
             if not rec.get("matches_original") and not rec.get("truncated"):
                 problems.append(name + ":NOT_ORIGINAL")
+        # Optional for historical captures, mandatory structural validity if present.
+        roster_file = folder / "turn_observation.json"
+        if roster_file.exists():
+            if roster_file.is_symlink() or not roster_file.is_file():
+                problems.append("turn_observation.json:UNSAFE_PATH")
+            else:
+                try:
+                    roster = json.loads(roster_file.read_text(encoding="utf-8"))
+                    if (roster.get("schema") != "SR05_TURN_OBSERVATION_V1"
+                            or not isinstance(roster.get("before_submit"), dict)
+                            or not isinstance(roster.get("after_completion"), dict)
+                            or not isinstance(roster.get("delta"), dict)):
+                        problems.append("turn_observation.json:INVALID_SCHEMA")
+                except (OSError, ValueError, AttributeError):
+                    problems.append("turn_observation.json:INVALID_JSON")
         records.append({
             "folder": folder.name,
             "request_id": str(info.get("request_id", "")),
