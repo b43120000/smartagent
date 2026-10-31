@@ -122,7 +122,13 @@ def _sr05_pair_report(captures: Path) -> dict:
                                   prev_b.get("durable_id_sha256"))
     different_request = (bool(a.get("request_id") and b.get("request_id"))
                          and a.get("request_id") != b.get("request_id"))
-    if not different_request or assistant_same is True or scope_same is True:
+    markers_both_present = all(
+        (row.get("test_case") or {}).get("status") == "MARKER_PRESENT"
+        for row in (a, b)
+    )
+    if not markers_both_present:
+        assessment = "SR05_MARKER_MISSING_IN_MODEL_CONTENT"
+    elif not different_request or assistant_same is True or scope_same is True:
         assessment = "POSSIBLE_REUSED_TURN_REVIEW_REQUIRED"
     elif content_same is False:
         assessment = "MODEL_CONTENT_DIFFERS"
@@ -135,6 +141,7 @@ def _sr05_pair_report(captures: Path) -> dict:
         "status": assessment,
         "first_capture": name_a, "second_capture": name_b,
         "distinct_request_ids": different_request,
+        "both_sr05_markers_present": markers_both_present,
         "decoded_final_content_sha_equal": content_same,
         "assistant_id_sha_equal": assistant_same,
         "request_scope_sha_equal": scope_same,

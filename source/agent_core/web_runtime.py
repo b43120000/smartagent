@@ -2283,6 +2283,12 @@ class WebLLMScraper:
             enabled as sr_gate_enabled, capture_pre_submit_identity,
         )
         if sr_gate_enabled():
+            # Identity the test from the ORIGINAL outbound prompt, so an
+            # assistant that omits every marker is still diagnosable.
+            snapshot["_sr_case_hint"] = (
+                "SR-04" if ("SR04_BEGIN" in prompt or "SR04_SECTION_20" in prompt)
+                else "SR-05" if "SR05_END" in prompt else ""
+            )
             snapshot["_sr_pre_submit_identity"] = capture_pre_submit_identity(
                 self._web_ui_adapter(), snapshot,
             )
@@ -3814,6 +3820,7 @@ class WebLLMScraper:
                                     ),
                                 },
                                 adapter=adapter,
+                                test_case_hint=str(snapshot.get("_sr_case_hint", "")),
                             )
                             self._log_stage(
                                 "sr_first_readback_captured",

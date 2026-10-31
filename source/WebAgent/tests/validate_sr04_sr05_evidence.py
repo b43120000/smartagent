@@ -120,6 +120,14 @@ class SR04SR05IT(unittest.TestCase):
         self.assertEqual(result["expected_marker_count"], 22)
         self.assertTrue(result["markers_in_order"])
 
+    def test_case_hint_preserves_missing_marker_diagnostic(self):
+        long = _case_and_markers("模型漏掉了全部標記", expected_case="SR-04")
+        self.assertEqual(long["test_case"], "SR-04")
+        self.assertEqual(len(long["missing_markers"]), 22)
+        short = _case_and_markers("相同內容但缺結尾", expected_case="SR-05")
+        self.assertEqual(short["test_case"], "SR-05")
+        self.assertEqual(short["status"], "MARKER_MISSING")
+
     def test_sr04_missing_middle_is_not_a_pass(self):
         broken = sr04().replace("SR04_SECTION_11", "SECTION_LOST")
         result = _case_and_markers(broken)

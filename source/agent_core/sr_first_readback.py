@@ -199,10 +199,11 @@ def _write_exact_text(target: Path, text: str) -> dict:
     return result
 
 
-def _case_and_markers(final_content: str | None) -> dict:
+def _case_and_markers(final_content: str | None, *, expected_case: str = "") -> dict:
     if not isinstance(final_content, str):
-        return {"test_case": "UNCLASSIFIED", "status": "NO_FINAL_CONTENT"}
-    if "SR04_" in final_content or "SR04_END" in final_content:
+        return {"test_case": expected_case if expected_case in {"SR-04", "SR-05"}
+                else "UNCLASSIFIED", "status": "NO_FINAL_CONTENT"}
+    if expected_case == "SR-04" or "SR04_" in final_content or "SR04_END" in final_content:
         required = ["SR04_BEGIN", *[f"SR04_SECTION_{i:02d}" for i in range(1, 21)],
                     "SR04_END"]
         missing = [marker for marker in required if marker not in final_content]
@@ -216,8 +217,10 @@ def _case_and_markers(final_content: str | None) -> dict:
             "markers_in_order": not missing and positions == sorted(positions),
             "content_characters": len(final_content),
         }
-    if "SR05_END" in final_content:
-        return {"test_case": "SR-05", "status": "MARKER_PRESENT",
+    if expected_case == "SR-05" or "SR05_END" in final_content:
+        return {"test_case": "SR-05",
+                "status": "MARKER_PRESENT" if "SR05_END" in final_content
+                          else "MARKER_MISSING",
                 "content_characters": len(final_content)}
     return {"test_case": "OTHER", "status": "NOT_SR04_OR_SR05"}
 
@@ -301,6 +304,7 @@ def capture_first_readback(
     pre_submit_identity: dict | None = None,
     snapshot_summary: dict | None = None,
     adapter=None,
+    test_case_hint: str = "",
 ) -> SRFirstReadbackCaptured:
     """Persist evidence BEFORE any normal parser recovery or tool admission."""
     root_value = os.environ.get(EVIDENCE_ENV, "").strip()
@@ -397,7 +401,7 @@ def capture_first_readback(
         "dom_turn_text_content_status": dom_content_status,
         "final_content_sha256": final_sha,
         "final_content_state": final_content_state,
-        "test_case": _case_and_markers(final_content),
+        "test_case": _case_and_markers(final_content, expected_case=test_case_hint),
         "turn_identity": {
             "before_submit": previous,
             "current_assistant": current,
