@@ -331,10 +331,56 @@ def test_p2_hook_and_sanitizer():
             assert b"PRIVATE" not in z.read("p2/p2_admission_trace.json")
 
 
+def test_p2_runtime_mode_evidence():
+    # The same one-click P2 ZIP must report the effective Controller mode,
+    # never infer it solely from the launcher's environment variable text.
+    def collect(events):
+        with tempfile.TemporaryDirectory(prefix="p2-mode-") as directory:
+            root = Path(directory)
+            folder = root / "localdata" / "logs"
+            folder.mkdir(parents=True)
+            (folder / "webagent_runtime.jsonl").write_text(
+                "\n".join(json.dumps(e) for e in events) + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(collector, "log_root", return_value=folder):
+                return collector.make_p2_evidence(root)
+    at = datetime.now(timezone.utc).isoformat()
+    started = {"event": "controller_started", "timestamp": at}
+    mode = {"event": "controller_mode_attestation", "timestamp": at,
+            "mode_status": "P2", "sr_gate_active": False,
+            "p2_diagnostic_active": True, "hybrid_once_active": True,
+            "PRIVATE_COOKIE": "SECRET"}
+    clean = collect([started, mode, {"event": "request_started",
+                                    "timestamp": at, "request_id": "WA-P2"}])
+    summary = json.loads(clean["p2_terminal_summary.json"])
+    trace = json.loads(clean["p2_admission_trace.json"])["events"]
+    assert summary["p2_mode_attested"] is True
+    assert summary["mode_attestations"][0]["mode_status"] == "P2"
+    assert [e for e in trace if e["event"] == "controller_mode_attestation"]
+    assert b"SECRET" not in b"".join(clean.values())
+
+    conflict = collect([started, {**mode, "mode_status": "CONFLICT",
+                                  "sr_gate_active": True},
+                        {"event": "controller_mode_rejected", "timestamp": at,
+                         "reason": "SR_P2_MODE_CONFLICT"}])
+    summary = json.loads(conflict["p2_terminal_summary.json"])
+    assert summary["status"] == "MODE_CONFLICT"
+    assert summary["p2_mode_attested"] is False
+
+    stop = collect([started, mode, {"event": "sr_first_readback_captured",
+                                     "timestamp": at, "request_id": "WA-P2"}])
+    summary = json.loads(stop["p2_terminal_summary.json"])
+    assert summary["status"] == "P2_SR_GATE_CAPTURED"
+    assert summary["sr_first_readback_event_count"] == 1
+    assert summary["p2_mode_attested"] is False
+
+
 if __name__ == "__main__":
     test_hybrid_writer()
     test_hybrid_task_scope()
     test_latest_controller_run_scope()
     test_answer_only_receipt_collected_without_tool_events()
     test_p2_hook_and_sanitizer()
+    test_p2_runtime_mode_evidence()
     print("HYBRID_P2_OFFLINE_OK: strict prefix, fast tail, fail-closed, sanitized collector")
