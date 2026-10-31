@@ -71,7 +71,20 @@ call :TEST validate_protocol_recovery_readback
 call :TEST validate_tri_one_5a_protocol_it
 call :TEST validate_sr_first_readback_gate
 call :TEST validate_sr04_sr05_evidence
-call :MANIFEST
+set /a TOTAL+=1
+set "NAME=strict_manifest"
+set "LOG=%LOGDIR%\%NAME%.log"
+echo [%TOTAL%/10] %NAME%
+"%PY%" -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="0" (
+  set /a PASSED+=1
+  >> "%LOGDIR%\summary.txt" echo PASS %NAME% exit=0
+) else (
+  set /a FAILED+=1
+  >> "%LOGDIR%\summary.txt" echo FAIL %NAME% exit=%RC%
+  echo [FAIL] %NAME% exit=%RC%
+)
 (
   echo commands=%TOTAL%
   echo passed=%PASSED%
@@ -89,6 +102,10 @@ if %FAILED% GTR 0 (
   echo [SR-GATE][FAIL] Do not run Live.
   exit /b 1
 )
+if not "%TOTAL%"=="10" (
+  echo [SR-GATE][ERROR] Expected 10 commands, actually %TOTAL%.
+  exit /b 2
+)
 echo [SR-GATE][PASS] OFFLINE ONLY; SR-04 / SR-05 Live remain unverified.
 exit /b 0
 
@@ -98,23 +115,6 @@ set "NAME=%~1"
 set "LOG=%LOGDIR%\%NAME%.log"
 echo [%TOTAL%/10] %NAME%
 "%PY%" -B "source\WebAgent\tests\%NAME%.py" > "%LOG%" 2>&1
-set "RC=%ERRORLEVEL%"
-if "%RC%"=="0" (
-  set /a PASSED+=1
-  >> "%LOGDIR%\summary.txt" echo PASS %NAME% exit=0
-) else (
-  set /a FAILED+=1
-  >> "%LOGDIR%\summary.txt" echo FAIL %NAME% exit=%RC%
-  echo [FAIL] %NAME% exit=%RC%
-)
-exit /b 0
-
-:MANIFEST
-set /a TOTAL+=1
-set "NAME=strict_manifest"
-set "LOG=%LOGDIR%\%NAME%.log"
-echo [%TOTAL%/10] %NAME%
-"%PY%" -B -c "from agent_core.protocol_manifest import require_protocol_manifest; r=require_protocol_manifest('.'); print(r); assert r['core_file_count']==203 and r['hash_verification']=='PASS' and not r['hash_mismatches'],r" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" (
   set /a PASSED+=1
