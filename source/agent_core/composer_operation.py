@@ -647,7 +647,27 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=102
             raise ComposerOperationError('composer_prefix_changed')
         focus_end()
         prefix, data = checkpoint(len(prompt), phase='bulk_tail')
+        # Coalesce adjacent text into <=4096-character old-style inserts.
+        # Keep each newline as Shift+Enter; no interim DOM or journal reads.
+        bulk_events = []
+        pending = None
         for unit in rest:
+            start, end, value, soft_break = unit
+            if soft_break:
+                if pending is not None:
+                    bulk_events.append(pending)
+                    pending = None
+                bulk_events.append(unit)
+            elif pending is None:
+                pending = unit
+            elif len(pending[2]) + len(value) <= 4096:
+                pending = (pending[0], end, pending[2] + value, False)
+            else:
+                bulk_events.append(pending)
+                pending = unit
+        if pending is not None:
+            bulk_events.append(pending)
+        for unit in bulk_events:
             type_unit(unit)
         deadline = time.monotonic() + 8.0
         while not scraper._composer_matches_prompt(prefix):
@@ -659,7 +679,7 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=102
     elapsed = round(time.monotonic() - started, 3)
     scraper._log_stage('composer_hybrid_verified',
                        f"prefix_chars={first[-1][1] if first else 0} "
-                       f"tail_units={len(rest)} total_chars={len(prompt)} "
+                       f"tail_units={len(rest)} tail_events={len(bulk_events) if rest else 0} total_chars={len(prompt)} "
                        f"elapsed_sec={elapsed:.3f}")
     # Bounded writer instrumentation, no content, URL, user data or DOM HTML.
     try:
