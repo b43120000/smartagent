@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -132,6 +133,16 @@ def test_p2_hook_and_sanitizer():
         assert b"PRIVATE" not in data and b"C:\\private" not in data
         assert json.loads(bundle["p2_terminal_summary.json"])["status"]=="ACCEPTED_AND_COMPLETED"
         assert len(json.loads(bundle["p2_turn_observation.json"])["records"])==1
+        # Real one-click bundler must also work without any P1 captures.
+        from WebAgent.tests.collect_sr_readback_bundle import bundle as collect_zip
+        with patch.object(collector,"log_root",return_value=logdir):
+            archive = collect_zip(root)
+        with zipfile.ZipFile(archive) as z:
+            assert z.testzip() is None
+            assert "p2/p2_terminal_summary.json" in z.namelist()
+            assert "p2/p2_admission_trace.json" in z.namelist()
+            assert not any(n.startswith("captures/") for n in z.namelist())
+            assert b"PRIVATE" not in z.read("p2/p2_admission_trace.json")
 
 
 if __name__ == "__main__":
