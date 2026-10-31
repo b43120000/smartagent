@@ -6,6 +6,17 @@ if errorlevel 1 exit /b 2
 rem P2 NORMAL Runtime, never First Readback controlled stop.
 set "SMARTAGENT_SR_FIRST_READBACK_ONLY_V1=0"
 set "SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1=1"
+rem Fail closed if the caller or a later launcher overwrote the intended mode.
+rem Controller also attests effective flags before browser attach; Runtime
+rem repeats this check before any Prompt is submitted.
+if not "%SMARTAGENT_SR_FIRST_READBACK_ONLY_V1%"=="0" (
+  echo [P2][ERROR] SR First Readback Only must be OFF.
+  exit /b 2
+)
+if not "%SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1%"=="1" (
+  echo [P2][ERROR] P2 readonly instrumentation must be ON.
+  exit /b 2
+)
 rem First eligible (>512 chars) real task Planner write after READY only;
 rem Session Bootstrap/Attach and final ACK do not consume the grant.
 set "SMARTAGENT_COMPOSER_HYBRID_ONCE_V1=1"
@@ -16,7 +27,7 @@ set "TRI_ONE_TEXT_ONLY_WEB_DIRECT=1"
 echo ============================================================
 echo  P2 Hybrid Writer + Readonly Diagnostic (NORMAL Runtime)
 echo ============================================================
-echo [P2] First Readback Only=OFF
+echo [P2] Expected Controller Mode=P2; SR_FIRST_READBACK=0
 echo [P2] Readonly Evidence=ON
 echo [P2] Tri-One 5A Answer-only=ON for WEB_DIRECT
 echo [P2] Hybrid Writer=ONCE after READY, first real task Planner >512 chars
