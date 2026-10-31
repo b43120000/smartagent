@@ -344,6 +344,32 @@ def main(argv: list[str] | None = None) -> int:
         atexit.register(lifecycle.close, reason="webdirect_controller_exit")
     runtime_log = WebAgentRuntimeLog(log_root(runtime_root) / "webagent_runtime.jsonl")
     runtime_log.emit("controller_started", workspace=workspace)
+    # Verify the *effective* process flags before browser attach or any model
+    # submission. P1 is still supported in its dedicated diagnostic Launcher.
+    from agent_core.sr_first_readback import (
+        assert_sr_p2_isolated, SRModeConflictError, runtime_mode_attestation,
+    )
+    sr_p2_mode = runtime_mode_attestation()
+    runtime_log.emit("controller_mode_attestation", **sr_p2_mode)
+    print(
+        "[WebAgent][MODE] "
+        + "mode=" + sr_p2_mode["mode_status"]
+        + " P2=" + str(int(sr_p2_mode["p2_diagnostic_active"]))
+        + " SR_FIRST_READBACK=" + str(int(sr_p2_mode["sr_gate_active"]))
+        + " HYBRID_ONCE=" + str(int(sr_p2_mode["hybrid_once_active"])),
+        flush=True,
+    )
+    try:
+        assert_sr_p2_isolated()
+    except SRModeConflictError as exc:
+        runtime_log.emit(
+            "controller_mode_rejected",
+            reason="SR_P2_MODE_CONFLICT", mode_status="CONFLICT",
+        )
+        print("[WebAgent][MODE][ERROR] " + str(exc), flush=True)
+        if lifecycle is not None:
+            lifecycle.emit("ERROR", message="SR_P2_MODE_CONFLICT")
+        return 2
     # A0 is purely opt-in instrumentation; never reconfigure a live process.
     from agent_core.source_attestation import gar_a0_enabled
     a0_diag = gar_a0_enabled()
