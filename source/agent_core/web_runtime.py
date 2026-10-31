@@ -1532,7 +1532,7 @@ class WebLLMScraper:
         hybrid_once = (
             os.environ.get("SMARTAGENT_COMPOSER_HYBRID_ONCE_V1", "") == "1"
             and not getattr(self, "_composer_hybrid_once_used", False)
-            and len(prompt) > 1024
+            and len(prompt) > 512
         )
         if hybrid_once:
             self._composer_hybrid_once_used = True
