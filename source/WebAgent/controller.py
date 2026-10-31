@@ -394,6 +394,8 @@ def main(argv: list[str] | None = None) -> int:
     if bridge is None:
         return 2
     scraper = adopt_page(page, context, attached_pw)
+    # Hybrid is never armed while the initial Session Bootstrap/Attach runs.
+    scraper._composer_hybrid_task_enabled = False
     atexit.register(scraper.release_conversation_owner)
     client = WebAgentBrowserClient(scraper, event_sink=runtime_log.emit)
     runtime_log.emit("browser_attached", mode=mode, conversation_url=selected_url)
@@ -583,6 +585,16 @@ def main(argv: list[str] | None = None) -> int:
                     message=request,
                 )
             runtime_log.emit("request_captured", request=request, captured_at=item.get("captured_at"))
+            if os.environ.get("SMARTAGENT_P2_READONLY_DIAGNOSTIC_V1", "") == "1":
+                # No request body; classify ingress before task request ID is allocated.
+                runtime_log.emit(
+                    "p2_request_ingress",
+                    source_kind=("BOOTSTRAP_PROVISION" if bootstrap_active else
+                                 "LOCAL_TEST" if test_envelope is not None else "WEB_UI"),
+                    request_chars=len(request),
+                    request_sha256=hashlib.sha256(request.encode("utf-8")).hexdigest(),
+                    hybrid_eligible=(not bootstrap_active and test_envelope is None),
+                )
             try:
                 if lifecycle is not None:
                     lifecycle.emit("VALIDATING", request_id=(test_envelope.request_id if test_envelope is not None else ""))
@@ -616,6 +628,11 @@ def main(argv: list[str] | None = None) -> int:
                             eligible=(not bootstrap_active and test_envelope is None
                                       and not scraper._composer_attachment_count()),
                         )
+                        # Real task execution only; a Session Attach already completed
+                        # before READY. Final render ACK is outside this window.
+                        scraper._composer_hybrid_task_enabled = bool(
+                            not bootstrap_active and test_envelope is None
+                        )
                         final_content = loop.run(
                             request,
                             request_id=(
@@ -630,6 +647,7 @@ def main(argv: list[str] | None = None) -> int:
                             ),
                         )
                     finally:
+                        scraper._composer_hybrid_task_enabled = False
                         d1_fault.disarm()
                         scraper._execution_page_lease_owned = previous_lease_owned
                 runtime_log.emit("request_local_loop_completed", request_id=loop.run_id, final_content=final_content)
