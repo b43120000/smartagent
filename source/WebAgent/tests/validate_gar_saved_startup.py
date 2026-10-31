@@ -1,126 +1,106 @@
-"""Offline GAR WebGPT1/WebGPT2 saved startup and workspace-manager regression."""
+"""Shared GAR WebGPT2 target: offline persistence, migration and cross-agent regression."""
 from __future__ import annotations
-
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_core.startup_preferences import (
-    load_startup_preferences, save_startup_preferences, validate_gar_webgpt2_url,
-)
 from agent_core import workspace_manager
-from WebAgent.controller import apply_saved_gar_webgpt2_url
+from agent_core.gar_webgpt2_settings import SCHEMA, ENV_KEY, apply_target, load_target, save_target
+from agent_core.startup_preferences import save_startup_preferences
 
-WEBGPT1 = "https://chatgpt.com/c/primary-1"
-WEBGPT1_PROJECT = "https://chatgpt.com/g/g-p-team/c/primary-1"
-WEBGPT2 = "https://chatgpt.com/g/g-p-team/c/fresh-2"
+PRIMARY = "https://chatgpt.com/c/primary"
+FRESH = "https://chatgpt.com/g/g-p-team/c/fresh"
 
 
-class SavedGARBindingTests(unittest.TestCase):
-    def test_legacy_v1_migration_keep_replace_and_clear(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "startup_preferences.json"
-            path.write_text(json.dumps({
-                "version": 1, "selected": {
-                    "workspace": directory, "gpt_url": WEBGPT1,
-                    "planner_key": "web_chatgpt", "executor_key": "cloud_gptoss",
-                }
-            }), encoding="utf-8")
-            old = load_startup_preferences(path)
-            self.assertNotIn("gar_webgpt2_url", old)
-            options = dict(workspace=directory, gpt_url=WEBGPT1,
-                           planner_key="web_chatgpt", executor_key="cloud_gptoss",
-                           path=path)
-            saved = save_startup_preferences(**options, gar_webgpt2_url=WEBGPT2)
-            self.assertEqual(saved["gar_webgpt2_url"], WEBGPT2)
-            self.assertEqual(load_startup_preferences(path)["gar_webgpt2_url"], WEBGPT2)
-            self.assertEqual(save_startup_preferences(**options)["gar_webgpt2_url"], WEBGPT2)
-            # Rebind WebGPT1 to another distinct conversation without losing WebGPT2.
-            other = save_startup_preferences(**{**options,
-                "gpt_url": "https://chatgpt.com/c/primary-3"})
-            self.assertEqual(other["gar_webgpt2_url"], WEBGPT2)
-            empty = save_startup_preferences(**options, gar_webgpt2_url="")
-            self.assertEqual(empty["gar_webgpt2_url"], "")
-            self.assertEqual(load_startup_preferences(path)["gar_webgpt2_url"], "")
+class SharedGARTests(unittest.TestCase):
+    def test_global_store_and_explicit_clear(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            self.assertEqual(save_target(FRESH,path=p),FRESH)
+            self.assertEqual(load_target(path=p),FRESH)
+            self.assertEqual(json.loads(p.read_text(encoding="utf-8"))["schema"],SCHEMA)
+            save_target("",path=p)
+            self.assertEqual(load_target(path=p),"")
 
-    def test_reject_same_conversation_wrong_provider_or_missing_id(self):
-        for candidate in (
-            WEBGPT1, WEBGPT1_PROJECT, "https://chatgpt.com/",
-            "https://example.com/c/other", "https://claude.ai/chat/other",
-        ):
-            with self.subTest(candidate=candidate):
-                with self.assertRaises(ValueError):
-                    validate_gar_webgpt2_url(WEBGPT1, candidate)
-        self.assertEqual(validate_gar_webgpt2_url(WEBGPT1, ""), "")
-        self.assertEqual(validate_gar_webgpt2_url(WEBGPT1, WEBGPT2), WEBGPT2)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "pref.json"
-            with self.assertRaises(ValueError):
-                save_startup_preferences(
-                    workspace=directory, gpt_url=WEBGPT1,
-                    planner_key="web_chatgpt", executor_key="cloud_gptoss",
-                    gar_webgpt2_url=WEBGPT1_PROJECT, path=path)
-            self.assertFalse(path.exists())
+    def test_legacy_local_setting_migrates(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            legacy=Path(d)/"startup_preferences.json"
+            legacy.write_text(json.dumps({"version":1,"selected":{
+                "workspace":d,"gpt_url":PRIMARY,"gar_webgpt2_url":FRESH}}),encoding="utf-8")
+            self.assertEqual(load_target(path=p,legacy_path=legacy),FRESH)
+            saved=save_startup_preferences(workspace=d,gpt_url=FRESH,
+                 planner_key="web_chatgpt",executor_key="cloud_gptoss",path=legacy)
+            self.assertEqual(saved["gar_webgpt2_url"],FRESH)
+            save_target("",path=p)
+            self.assertEqual(load_target(path=p,legacy_path=legacy),"")
 
-    def test_load_process_override_and_saved_url_validation(self):
-        saved = {"gpt_url": WEBGPT1, "gar_webgpt2_url": WEBGPT2}
-        env = {}
-        self.assertEqual(apply_saved_gar_webgpt2_url(saved, WEBGPT1, environ=env), WEBGPT2)
-        self.assertEqual(env["SMARTAGENT_GAR_FRESH_CONTEXT_URL"], WEBGPT2)
-        self.assertNotIn("SMARTAGENT_GAR_V1", env)
-        explicit = {"SMARTAGENT_GAR_FRESH_CONTEXT_URL": "https://chatgpt.com/c/manual"}
-        self.assertEqual(apply_saved_gar_webgpt2_url(saved, WEBGPT1, environ=explicit),
-                         explicit["SMARTAGENT_GAR_FRESH_CONTEXT_URL"])
-        off = {"SMARTAGENT_GAR_FRESH_CONTEXT_URL": ""}
-        self.assertEqual(apply_saved_gar_webgpt2_url(saved, WEBGPT1, environ=off), "")
-        self.assertEqual(off["SMARTAGENT_GAR_FRESH_CONTEXT_URL"], "")
-        with self.assertRaisesRegex(ValueError, "gar_webgpt2_must_differ"):
-            apply_saved_gar_webgpt2_url(saved, WEBGPT2, environ={})
-        legacy = {}
-        self.assertEqual(apply_saved_gar_webgpt2_url({"gpt_url": WEBGPT1}, WEBGPT1, environ=legacy), "")
-        self.assertNotIn("SMARTAGENT_GAR_FRESH_CONTEXT_URL", legacy)
+    def test_shared_target_three_independent_primary_conversations(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            save_target(FRESH,path=p)
+            for primary in (PRIMARY,"https://chatgpt.com/c/remote","https://chatgpt.com/c/local"):
+                env={}
+                self.assertEqual(apply_target(primary,environ=env,path=p),FRESH)
+                self.assertEqual(env[ENV_KEY],FRESH)
+                self.assertNotIn("SMARTAGENT_GAR_V1",env)
+            with self.assertRaisesRegex(ValueError,"must_differ"):
+                apply_target(FRESH,environ={},path=p)
 
-    def test_local_menu_keep_clear_and_remote_unchanged(self):
-        state = {
-            "security_status": "CONFIGURED", "writable_workspaces": ["C:/workspace"],
-            "local": {"gpt_url": WEBGPT1, "gar_webgpt2_url": WEBGPT2},
-            "remote": {"gpt_url": WEBGPT1},
-        }
-        for gar_input, expected in (("", None), ("-", ""), (WEBGPT2, WEBGPT2)):
-            with self.subTest(raw=gar_input), patch.object(
-                workspace_manager, "_binding_snapshot", return_value=state
-            ), patch.object(workspace_manager, "_choose_workspace",
-                            return_value="C:/workspace"), patch(
-                "builtins.input", side_effect=["1", WEBGPT1, gar_input]
-            ), patch.object(workspace_manager, "_save_binding",
-                            return_value={"status": "APPLIED"}) as write:
-                self.assertEqual(workspace_manager._binding_menu(), 0)
-                self.assertEqual(write.call_args.kwargs["gar_webgpt2_url"], expected)
-        with patch.object(workspace_manager, "_binding_snapshot", return_value=state), \
-             patch.object(workspace_manager, "_choose_workspace", return_value="C:/workspace"), \
-             patch("builtins.input", side_effect=["2", WEBGPT1]), \
-             patch.object(workspace_manager, "_save_binding",
-                          return_value={"status": "APPLIED"}) as write:
-            self.assertEqual(workspace_manager._binding_menu(), 0)
-            self.assertNotIn("gar_webgpt2_url", write.call_args.kwargs)
+    def test_explicit_env_override_and_blank_disable(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            save_target(FRESH,path=p)
+            manual="https://chatgpt.com/c/manual"
+            self.assertEqual(apply_target(PRIMARY,environ={ENV_KEY:manual},path=p),manual)
+            self.assertEqual(apply_target(PRIMARY,environ={ENV_KEY:""},path=p),"")
+            with self.assertRaisesRegex(ValueError,"must_differ"):
+                apply_target(PRIMARY,environ={ENV_KEY:PRIMARY},path=p)
 
-    def test_local_cli_supports_explicit_clear(self):
-        with patch.object(workspace_manager, "_install_apply_crash_logger"), \
-             patch.object(workspace_manager, "_write_apply_log"), \
-             patch.object(workspace_manager, "_save_binding",
-                          return_value={"status": "APPLIED"}) as write:
-            self.assertEqual(workspace_manager.main([
-                "--set-binding", "local", "--workspace", "C:/workspace",
-                "--url", WEBGPT1, "--gar-webgpt2-url", "",
-            ]), 0)
-            self.assertEqual(write.call_args.kwargs["gar_webgpt2_url"], "")
-            self.assertEqual(workspace_manager.main([
-                "--set-binding", "local", "--workspace", "C:/workspace",
-                "--url", WEBGPT1,
-            ]), 0)
-            self.assertIsNone(write.call_args.kwargs["gar_webgpt2_url"])
+    def test_fail_closed_on_invalid_url_or_schema(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"gar.json"
+            save_target(FRESH,path=p)
+            for value in ("https://chatgpt.com/","https://claude.ai/chat/x","https://example.com/c/x","bad"):
+                with self.subTest(value=value),self.assertRaises(ValueError):
+                    save_target(value,path=p)
+                self.assertEqual(load_target(path=p),FRESH)
+            p.write_text('{"schema":"invalid","url":"x"}',encoding="utf-8")
+            with self.assertRaisesRegex(ValueError,"schema_invalid"):
+                load_target(path=p)
+
+    def test_independent_menu_and_cli(self):
+        with patch.object(workspace_manager,"load_gar_webgpt2",return_value=FRESH),\
+             patch.object(workspace_manager,"save_gar_webgpt2",return_value="") as save,\
+             patch("builtins.input",return_value="-"):
+            self.assertEqual(workspace_manager._gar_webgpt2_menu(),0)
+            save.assert_called_once_with("")
+        with patch.object(workspace_manager,"_install_apply_crash_logger"),\
+             patch.object(workspace_manager,"_write_apply_log"),\
+             patch.object(workspace_manager,"save_gar_webgpt2",return_value=FRESH) as save:
+            self.assertEqual(workspace_manager.main(["--set-gar-webgpt2-url",FRESH]),0)
+            save.assert_called_once_with(FRESH)
+
+    def test_original_local_and_remote_binding_menu_unchanged(self):
+        snapshot={"security_status":"CONFIGURED","writable_workspaces":["C:/ws"],
+                  "local":{"gpt_url":PRIMARY},"remote":{"gpt_url":PRIMARY}}
+        for raw in ("1","2"):
+            with patch.object(workspace_manager,"_binding_snapshot",return_value=snapshot),\
+                 patch.object(workspace_manager,"_choose_workspace",return_value="C:/ws"),\
+                 patch("builtins.input",side_effect=[raw,PRIMARY]),\
+                 patch.object(workspace_manager,"_save_binding",return_value={"status":"APPLIED"}) as save:
+                self.assertEqual(workspace_manager._binding_menu(),0)
+                self.assertEqual(save.call_args.args,(("local" if raw=="1" else "remote"),"C:/ws",PRIMARY))
+
+    def test_source_wires_shared_url_for_three_interfaces(self):
+        root=Path(__file__).resolve().parents[3]/"source"
+        self.assertIn("apply_target(args.webgpt_url)",(root/"WebAgent/controller.py").read_text(encoding="utf-8"))
+        remote=(root/"RemoteAgent/telegram_webagent_worker.py").read_text(encoding="utf-8")
+        self.assertIn("gar_fresh_url = apply_target(execution_url)",remote)
+        self.assertIn("page_lease_held=True",remote)
+        self.assertIn("apply_gar_target(selected_gpt_url)",(root/"smart_agent.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
