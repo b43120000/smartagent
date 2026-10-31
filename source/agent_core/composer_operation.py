@@ -811,7 +811,7 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=512
     try:
         from datetime import datetime, timezone
         from .paths import log_root
-        target = log_root() / "p2-readonly" / "hybrid_writer.jsonl"
+        target = log_root() / "composer-writer" / "hybrid_writer.jsonl"
         target.parent.mkdir(parents=True, exist_ok=True)
         item = dict(schema="COMPOSER_HYBRID_WRITER_V1",
                     utc=datetime.now(timezone.utc).isoformat(),
