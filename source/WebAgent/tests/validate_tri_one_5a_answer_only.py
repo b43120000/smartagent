@@ -12,6 +12,7 @@ from unittest.mock import patch
 from agent_core.tri_one_answer_only import (
     accept_terminal_candidate, classify_original_request, enabled,
     explicit_tool_restrictions, tool_restriction_diagnostic,
+    classify_answer_only_evidence_refs,
 )
 from agent_core.tri_one_task_result import (
     TaskResultContractError, make_task_result, validate_task_result,
@@ -145,6 +146,49 @@ class AnswerOnlyPolicyTests(unittest.TestCase):
             request, [{"tool": "read_file"}]))
         self.assertIsNotNone(tool_restriction_diagnostic(
             request, [{"tool": "run_command"}]))
+
+    def test_5a_reference_classification_is_type_only_not_pass(self):
+        classify = classify_answer_only_evidence_refs
+        self.assertEqual(classify([]), "NO_EVIDENCE")
+        for refs in (
+            ["REQUEST_ACCEPTED"], ["RUNTIME_STATUS"],
+            ["REQUEST_ACCEPTED", "RUNTIME_STATUS"],
+        ):
+            with self.subTest(refs=refs):
+                self.assertEqual(classify(refs), "RUNTIME_CONTEXT")
+        self.assertEqual(classify(["PROTOCOL_SPEC_REJECTION"]), "PROTOCOL_CONTROL")
+        self.assertEqual(
+            classify(["REQUEST_ACCEPTED", "ACT-1"],
+                     action_result_ids={"ACT-1"}),
+            "ACTION_RESULT",
+        )
+        self.assertEqual(
+            classify(["COND-1"], condition_result_ids={"COND-1"}),
+            "CONDITION_VERIFICATION",
+        )
+        for refs in (
+            ["ACT-1"], ["ACT-OLD"], ["RUNTIME_STATUS", "ACT-UNKNOWN"],
+            ["REQUEST_ACCEPTED", "PROTOCOL_SPEC_REJECTION"],
+        ):
+            with self.subTest(refs=refs):
+                self.assertNotEqual(classify(refs), "RUNTIME_CONTEXT")
+        for refs in (["ACT-1"], ["RUNTIME_STATUS", "UNKNOWN"], None, "RUNTIME_STATUS"):
+            self.assertEqual(classify(refs), "INVALID_OR_UNTRUSTED")
+
+    def test_5a_gate_still_refuses_unnormalized_action_evidence(self):
+        progress = {"decision": "COMPLETE", "outcome": "SUCCESS"}
+        final = {"tool": "final_response", "content": "RAII is scope-bound."}
+        for refs in (["REQUEST_ACCEPTED"], ["RUNTIME_STATUS"],
+                     ["ACT-1"], ["PROTOCOL_SPEC_REJECTION"]):
+            with self.subTest(refs=refs):
+                self.assertEqual(
+                    accept_terminal_candidate(
+                        _loop("Explain RAII."), {**progress, "evidence_refs": refs},
+                        final,
+                    )[1], "action_evidence_cannot_be_answer_only"
+                )
+        # Only protocol_loop's tightly scoped, clean-runtime normalization
+        # may produce [] before this unchanged admission gate is reached.
 
     def test_terminal_gate_positive_and_no_action_evidence_fabricated(self):
         progress = {"decision":"COMPLETE", "outcome":"SUCCESS", "evidence_refs":[]}
