@@ -1527,6 +1527,15 @@ class WebLLMScraper:
             return self._write_prompt_to_composer_legacy(prompt, timeout_sec)
         from .composer_operation import prepare_composer
         from .paths import runtime_root
+        # One eligible write per scraper instance; claim before mutation so
+        # failure does not trigger a second hybrid attempt.
+        hybrid_once = (
+            os.environ.get("SMARTAGENT_COMPOSER_HYBRID_ONCE_V1", "") == "1"
+            and not getattr(self, "_composer_hybrid_once_used", False)
+            and len(prompt) > 1024
+        )
+        if hybrid_once:
+            self._composer_hybrid_once_used = True
         self._composer_io_unconfirmed = True
         self._composer_operation_url = self._page.url
         # The verified 4-KiB writes include native UI/readback latency.
@@ -1542,6 +1551,7 @@ class WebLLMScraper:
                 journal_root=runtime_root() / "composer_operations",
                 timeout_sec=timeout_sec, observation_timeout_sec=observation_timeout_sec,
                 cancel_check=lambda: self._check_cancel_requested("composer"),
+                hybrid_once=hybrid_once,
             )
         except KeyboardInterrupt:
             self._set_request_state("RECOVERY_REQUIRED", "composer_cancelled_unconfirmed")
@@ -3760,6 +3770,13 @@ class WebLLMScraper:
                             "ui_confirmed_idle",
                             f"idle_for={idle_for:.2f}s turn_id={(protocol_expected or {}).get('turn_id', '')}",
                         )
+                        if protocol_expected:
+                            from .sr_first_readback import capture_p2_readonly_turn
+                            capture_p2_readonly_turn(
+                                stage="UI_IDLE", expected=protocol_expected,
+                                snapshot=snapshot, assistant_turn=assistant_turn,
+                                text="", adapter=self._web_ui_adapter(),
+                            )
 
                     text = self._current_new_response_text(snapshot, assistant_turn)
 
@@ -3897,6 +3914,12 @@ class WebLLMScraper:
                                                 sort_keys=True,
                                             ),
                                         )
+                                    from .sr_first_readback import capture_p2_readonly_turn
+                                    capture_p2_readonly_turn(
+                                        stage="COMMIT_READY", expected=protocol_expected,
+                                        snapshot=snapshot, assistant_turn=assistant_turn,
+                                        text=text, adapter=self._web_ui_adapter(),
+                                    )
                                     self._log_stage(
                                         "protocol_commit_complete",
                                         f"protocol_version=9 action_count={matching_commit.get('action_count')} chars={len(text)} "
