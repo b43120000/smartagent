@@ -3758,6 +3758,55 @@ class WebAgentProtocolLoop:
                     "detail": "current_step=total_steps may continue only while an evidence-producing final-step action is present",
                     "suggestion": "保留最後一步 IN_PROGRESS，並在同輪輸出補驗證或修正 action；否則改為 COMPLETE。",
                 }]
+        # 5A-only classification of fixed Runtime status markers. An empty
+        # Action Evidence set is permitted only after the *existing* strict
+        # answer-only preflight accepts the request and clean Runtime state.
+        # Never change the ordinary Action/Condition verification path.
+        if (
+            decision == "COMPLETE" and outcome == "SUCCESS"
+            and len(operational) == 1
+            and operational[0].get("tool") == "final_response"
+        ):
+            from agent_core.tri_one_answer_only import (
+                classify_answer_only_evidence_refs,
+                accept_terminal_candidate as _accept_answer_only,
+                enabled as _answer_only_enabled,
+            )
+            from agent_core.tri_one_task_result import enabled as _task_result_enabled
+            if (_task_result_enabled()
+                    and _answer_only_enabled(source=getattr(self, "_tri_one_origin", ""))):
+                original_refs = list(normalized_progress["evidence_refs"])
+                ref_class = classify_answer_only_evidence_refs(
+                    original_refs, action_result_ids=self.action_result_ledger,
+                    condition_result_ids=self.condition_result_ledger,
+                )
+                safely_normalized = False
+                if ref_class == "RUNTIME_CONTEXT":
+                    no_action_progress = {
+                        **normalized_progress, "evidence_refs": [],
+                    }
+                    safe, _ = _accept_answer_only(
+                        self, no_action_progress, operational[0],
+                    )
+                    if safe:
+                        # Only semantic Progress may be normalized; source
+                        # transport remains available in the original response.
+                        # Receipt will honestly contain zero Action refs and
+                        # evidence_verdict=UNVERIFIED, never fabricated PASS.
+                        normalized_progress["evidence_refs"] = []
+                        progress_actions[0]["evidence_refs"] = []
+                        safely_normalized = True
+                self._emit(
+                    "tri_one_answer_only_evidence_classified",
+                    request_id=self.run_id, round=self.turn_id,
+                    evidence_class=ref_class,
+                    original_ref_count=len(original_refs),
+                    context_ref_count=sum(
+                        ref in {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}
+                        for ref in original_refs
+                    ),
+                    normalized=safely_normalized,
+                )
         evidence_refs = set(normalized_progress["evidence_refs"])
         unknown_refs = sorted(evidence_refs - self._runtime_evidence_refs())
         if unknown_refs:
@@ -4554,9 +4603,10 @@ class WebAgentProtocolLoop:
                     "If it needs no external information or side effects, emit ONE "
                     "canonical v9 turn: complete report_progress, final_response "
                     "and turn_commit. Set every completed step to COMPLETED. "
-                    "For an Answer-only terminal OMIT evidence_refs entirely "
-                    "(or explicitly use []). Do not cite REQUEST_ACCEPTED or "
-                    "RUNTIME_STATUS: these are status markers, NOT Action Evidence. "
+                    "For an Answer-only terminal use evidence_refs=[] (or omit it). "
+                    "REQUEST_ACCEPTED and RUNTIME_STATUS are status markers, not "
+                    "verification evidence; Runtime safely classifies only these "
+                    "fixed refs for clean zero-tool text requests. "
                     "The shared Runtime alone checks whether omission is safe; "
                     "any tool or external-information need requires the ordinary "
                     "Action Loop and action-scoped evidence_refs.\n"
