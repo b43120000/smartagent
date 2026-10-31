@@ -156,6 +156,42 @@ def classify_original_request(
     return True, "bounded_text_only_intent"
 
 
+# Reference *type* is independent from execution/verification status.
+# Fixed control-plane refs only describe Runtime state; they never constitute
+# Action Evidence or PASS. Unknown/mixed refs must not be silently discarded.
+ANSWER_ONLY_RUNTIME_CONTEXT_REFS = frozenset({"REQUEST_ACCEPTED", "RUNTIME_STATUS"})
+
+
+def classify_answer_only_evidence_refs(
+    refs: object, *, action_result_ids=(), condition_result_ids=(),
+) -> str:
+    """Classify one validated Progress ref set for the 5A-only terminal lane.
+
+    This helper never grants admission. Normal Action/Condition evidence
+    always retains its original identifiers for the existing evidence gate.
+    """
+    if not isinstance(refs, list):
+        return "INVALID_OR_UNTRUSTED"
+    if not refs:
+        return "NO_EVIDENCE"
+    if any(not isinstance(ref, str) or not ref for ref in refs):
+        return "INVALID_OR_UNTRUSTED"
+    if all(ref in ANSWER_ONLY_RUNTIME_CONTEXT_REFS for ref in refs):
+        return "RUNTIME_CONTEXT"
+    action_ids, condition_ids = set(action_result_ids), set(condition_result_ids)
+    known = (
+        ANSWER_ONLY_RUNTIME_CONTEXT_REFS | action_ids | condition_ids
+        | {"PROTOCOL_SPEC_REJECTION"}
+    )
+    if any(ref not in known for ref in refs):
+        return "INVALID_OR_UNTRUSTED"
+    if any(ref in action_ids for ref in refs):
+        return "ACTION_RESULT"
+    if any(ref in condition_ids for ref in refs):
+        return "CONDITION_VERIFICATION"
+    return "PROTOCOL_CONTROL"
+
+
 def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
                               final_action: Mapping[str, object]) -> tuple[bool, str]:
     """Read Runtime-owned state only; never create evidence or a receipt."""
@@ -203,4 +239,5 @@ def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
 
 __all__ = ["FEATURE_FLAG", "enabled", "classify_original_request",
            "accept_terminal_candidate", "explicit_tool_restrictions",
-           "tool_restriction_diagnostic"]
+           "tool_restriction_diagnostic", "ANSWER_ONLY_RUNTIME_CONTEXT_REFS",
+           "classify_answer_only_evidence_refs"]
