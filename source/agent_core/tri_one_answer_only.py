@@ -138,6 +138,35 @@ def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
     return True, "ANSWER_ONLY_RESPONSE_ADMITTED"
 
 
+ANSWER_ONLY_RUNTIME_CONTEXT_REFS = frozenset({"REQUEST_ACCEPTED", "RUNTIME_STATUS"})
+
+
+def classify_answer_only_evidence_refs(
+    refs: object, *, action_result_ids=(), condition_result_ids=(),
+) -> str:
+    """Reference types only; never create an ActionResult or Verification PASS."""
+    if not isinstance(refs, list) or any(
+        not isinstance(ref, str) or not ref for ref in refs
+    ):
+        return "INVALID_OR_UNTRUSTED"
+    if not refs:
+        return "NO_EVIDENCE"
+    if all(ref in ANSWER_ONLY_RUNTIME_CONTEXT_REFS for ref in refs):
+        return "RUNTIME_CONTEXT"
+    action_ids, condition_ids = set(action_result_ids), set(condition_result_ids)
+    known = (
+        ANSWER_ONLY_RUNTIME_CONTEXT_REFS | action_ids | condition_ids
+        | {"PROTOCOL_SPEC_REJECTION"}
+    )
+    if any(ref not in known for ref in refs):
+        return "INVALID_OR_UNTRUSTED"
+    if any(ref in action_ids for ref in refs):
+        return "ACTION_RESULT"
+    if any(ref in condition_ids for ref in refs):
+        return "CONDITION_VERIFICATION"
+    return "PROTOCOL_CONTROL"
+
+
 def authorize_omitted_terminal_evidence(
     loop: object, progress: Mapping[str, object],
     operational: list[dict], *, source: str,
@@ -160,4 +189,5 @@ def authorize_omitted_terminal_evidence(
 
 
 __all__ = ["FEATURE_FLAG", "enabled", "classify_original_request",
-           "accept_terminal_candidate", "authorize_omitted_terminal_evidence"]
+           "accept_terminal_candidate", "authorize_omitted_terminal_evidence",
+           "ANSWER_ONLY_RUNTIME_CONTEXT_REFS", "classify_answer_only_evidence_refs"]
