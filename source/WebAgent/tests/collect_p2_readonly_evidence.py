@@ -27,6 +27,10 @@ EVENTS = frozenset({
     "interruption_render_unavailable", "action_dependency_blocked",
     "gar_safe_pause", "bounded_repair_observed",
     "protocol_rejected", "protocol_loop_paused",
+    "controller_started", "controller_ready",
+    "webagent_initial_session_settle_completed",
+    "browser_send_started", "p2_request_ingress",
+    "planner_round_started", "protocol_transport_interrupted",
 })
 FIELDS = frozenset({
     "request_id", "task_id", "round", "action_id", "tool",
@@ -34,8 +38,34 @@ FIELDS = frozenset({
     "action_count", "error_type", "evidence_status", "protocol_version",
     "commit_state", "response_stable", "action_executed", "ack_id",
     "source_interface", "request_phase", "completion_status",
+    "session_mode", "source_kind", "request_chars", "request_sha256",
+    "hybrid_eligible",
 })
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# Convert runtime browser phase text to a fixed enum. Never expose an
+# arbitrary model/user string as a source label or request text.
+KNOWN_BROWSER_STAGES = {
+    "協議初始化": "SESSION_BOOTSTRAP",
+    "協議附著確認": "SESSION_ATTACH",
+    "smartagent_tool 規劃回合": "TASK_PLANNER",
+    "最終自然語言 ACK": "FINAL_RENDER_ACK",
+}
+def _within_latest_run(row, start):
+    if start is None:
+        return True
+    try:
+        value = row.get("utc") or row.get("timestamp")
+        if not value:
+            return False
+        # P2 turn/writer rows are timezone-aware UTC; controller log rows
+        # include local offset. Do not compare raw ISO strings.
+        from datetime import datetime
+        moment = datetime.fromisoformat(str(value))
+        return moment >= datetime.fromisoformat(start)
+    except (ValueError, TypeError):
+        return False
+
+
 # Fixed classifications only. Runtime errors, diagnostics, model text and
 # arbitrary reason strings are NEVER copied verbatim.
 KNOWN_REASONS = {
@@ -58,10 +88,16 @@ def _reason_categories(value):
 
 
 def _safe_field(key: str, value):
-    if key in {"round", "action_count", "protocol_version"}:
+    if key in {"round", "action_count", "protocol_version", "request_chars"}:
         return value if type(value) is int and 0 <= value <= 1000000 else None
-    if key in {"response_stable", "action_executed"}:
+    if key in {"response_stable", "action_executed", "hybrid_eligible"}:
         return value if type(value) is bool else None
+    if key == "request_sha256":
+        return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+    if key == "source_kind":
+        return value if value in {"WEB_UI", "LOCAL_TEST", "BOOTSTRAP_PROVISION"} else None
+    if key == "session_mode":
+        return value if value in {"BOOTSTRAP", "SESSION_ATTACH"} else None
     if isinstance(value, str) and SAFE_TOKEN.fullmatch(value):
         return value
     return None
@@ -110,14 +146,45 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
     writer_path = logs / "p2-readonly" / "hybrid_writer.jsonl"
     if not trace_path.is_file() and not writer_path.is_file():
         return {}
-    turns = _safe_turns(_read_jsonl(trace_path, 120))
-    raw_events = _read_jsonl(logs / "webagent_runtime.jsonl", 1500)
+    raw_events = _read_jsonl(logs / "webagent_runtime.jsonl", 2500)
+    # Always isolate the latest controller process; don't let historical
+    # failed requests masquerade as the new P2 outcome.
+    latest_start_idx = next(
+        (i for i in range(len(raw_events) - 1, -1, -1)
+         if raw_events[i].get("event") == "controller_started"),
+        None,
+    )
+    latest_start = None
+    if latest_start_idx is not None:
+        latest_start = raw_events[latest_start_idx].get("timestamp")
+        raw_events = raw_events[latest_start_idx:]
+    turns = _safe_turns([
+        row for row in _read_jsonl(trace_path, 120)
+        if _within_latest_run(row, latest_start)
+    ])
     events = []
     for row in raw_events:
         kind = str(row.get("event", ""))
         if kind not in EVENTS:
             continue
         result = {"event": kind}
+        if kind in {"browser_send_started", "browser_response_completed",
+                    "browser_response_failed"}:
+            result["browser_stage"] = KNOWN_BROWSER_STAGES.get(
+                row.get("stage"), "OTHER_OR_UNKNOWN",
+            )
+        if kind == "protocol_rejected":
+            diagnostics = row.get("diagnostics")
+            if isinstance(diagnostics, list):
+                is_parse = any(
+                    isinstance(diag, dict) and
+                    diag.get("marker") == "[WEBAGENT_V8_PARSE_ERROR]"
+                    for diag in diagnostics
+                )
+                result["rejection_stage"] = (
+                    "TRANSPORT_PARSE" if is_parse else "ACK_OR_CONTRACT_ADMISSION"
+                )
+                result["diagnostic_count"] = min(len(diagnostics), 1000)
         ts = row.get("timestamp")
         if isinstance(ts, str) and len(ts) <= 64:
             result["timestamp"] = ts
@@ -186,6 +253,8 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
         "accepted_request_ids": accepted, "completed_request_ids": completed,
         "failed_request_ids": failed, "admission_event_count": len(events),
         "turn_observations": len(turns),
+        "latest_controller_started": latest_start,
+        "scope": "LATEST_CONTROLLER_RUN" if latest_start is not None else "NO_CONTROLLER_BOUNDARY_AVAILABLE",
         "limits": ["Events are a bounded window; no full history proof",
                    "Missing records must be treated as UNKNOWN",
                    "This does not assert tool effects or admission PASS on its own"],
@@ -194,6 +263,8 @@ def make_p2_evidence(root: Path) -> dict[str, bytes]:
     # apply a second explicit allowlist as defense in depth.
     writers = []
     for row in _read_jsonl(writer_path, 50):
+        if not _within_latest_run(row, latest_start):
+            continue
         if row.get("schema") != "COMPOSER_HYBRID_WRITER_V1":
             continue
         names = ("utc", "mode", "prefix_chars", "tail_units", "prompt_chars",
