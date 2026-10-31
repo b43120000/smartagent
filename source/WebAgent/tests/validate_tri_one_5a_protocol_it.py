@@ -91,6 +91,69 @@ class AnswerOnlyV9IT(unittest.TestCase):
     def test_webcopilot_original_route_candidate(self):
         self._loop_case("Explain RAII in C++.", "REMOTEAGENT_WEBCOPILOT_V9")
 
+
+    def test_webdirect_no_tools_first_turn_terminal(self):
+        self._loop_case(
+            "請說明 C++ RAII 的概念，以及 std::unique_ptr 如何實現 RAII。"
+            "給出簡短的 C++ 範例。本任務不需要操作本機檔案或執行任何命令。",
+            "",
+        )
+
+    def test_tool_filler_is_rejected_without_executing_then_answer_only(self):
+        request = (
+            "請說明 C++ RAII 的概念，以及 std::unique_ptr 如何實現 RAII。"
+            "本任務不需要操作本機檔案或執行任何命令。"
+        )
+        with tempfile.TemporaryDirectory(prefix="tri5a-blocked-tool-") as directory:
+            root = Path(directory)
+            turns, events = [], []
+            illicit = answer_only_response().replace(
+                '"tool":"final_response"', '"tool":"run_command"', 1
+            )
+            def planner(prompt, expected, attachments):
+                turns.append(prompt)
+                return illicit if len(turns) == 1 else answer_only_response()
+            loop = WebAgentProtocolLoop(
+                root, planner, event_sink=lambda event, **kw: events.append(
+                    (event, kw)), progress_root=root, max_turns=3,
+            )
+            with patch.dict(os.environ, {
+                "TRI_ONE_TASK_RESULT_V1": "1",
+                "TRI_ONE_TEXT_ONLY_V1": "1",
+            }), patch.object(loop.tools, "execute",
+                           side_effect=AssertionError("no tool must execute")) as execute:
+                answer = loop.run(request, request_id="WA-5A-NOTOOLS")
+            self.assertEqual(answer, "RAII releases owned resources.")
+            self.assertEqual(len(turns), 2)
+            self.assertEqual(execute.call_count, 0)
+            self.assertTrue(loop._answer_only_admitted)
+            self.assertEqual(loop.action_result_ledger, {})
+            self.assertEqual(loop.terminal_acceptance["completion_kind"], "ANSWER_ONLY")
+            rejected = [v for e,v in events if e == "protocol_rejected"]
+            self.assertEqual(len(rejected), 1)
+            self.assertTrue(any(d.get("reason") == "text_only_tool_forbidden"
+                                for d in rejected[0]["diagnostics"]))
+
+    def test_direct_execution_boundary_no_side_effect(self):
+        request = "請解釋 RAII。本任務不需要操作本機檔案或執行任何命令。"
+        with tempfile.TemporaryDirectory(prefix="tri5a-direct-guard-") as directory:
+            root = Path(directory)
+            loop = WebAgentProtocolLoop(
+                root, lambda *_: "", progress_root=root,
+            )
+            loop.task_request = request
+            loop._answer_only_scope = True
+            loop.run_id = "WA-DIRECT-GUARD"
+            with patch.object(loop.tools, "execute",
+                              side_effect=AssertionError("tool was dispatched")) as execute:
+                outcome = loop._execute_action({
+                    "tool":"run_command", "action_id":"NO-EXEC",
+                    "command":"echo never executed",
+                })
+            self.assertIn("TEXT_ONLY_TOOL_FORBIDDEN", outcome)
+            execute.assert_not_called()
+            self.assertFalse(loop.action_ledger)
+
     def test_external_facts_never_use_answer_only_terminal(self):
         with tempfile.TemporaryDirectory(prefix="goal1-negative-") as directory:
             root = Path(directory)
