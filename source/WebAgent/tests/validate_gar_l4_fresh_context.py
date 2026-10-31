@@ -276,6 +276,23 @@ class FreshStartupPageTests(unittest.TestCase):
         self.assertEqual(self.visited, [self.target])
         self.assertEqual(self.old.focused, 2)
 
+    def test_remote_existing_lease_does_not_reacquire(self):
+        from WebAgent.fresh_context import ensure_fresh_context_page
+        context = self.BrowserContext(self.old)
+        with patch("WebAgent.browser_bridge.execution_page_lease",
+                   side_effect=AssertionError("nested_page_lease")) as acquire, \
+             patch("WebAgent.browser_bridge._conversation_ready",
+                   side_effect=lambda page, url: setattr(page, "url", url)), \
+             patch("agent_core.conversation_ownership.ConversationOwnershipRegistry",
+                   Registry), \
+             patch("agent_core.shared_browser.shared_browser_enabled",
+                   return_value=False):
+            result = ensure_fresh_context_page(
+                context=context, original_page=self.old, target_url=self.target,
+                page_lease_held=True)
+            self.assertTrue(result["created"])
+            acquire.assert_not_called()
+
     def test_already_open_target_is_reused_without_navigation(self):
         existing = self.BrowserPage("https://chatgpt.com/c/fresh")
         context = self.BrowserContext(self.old, existing)
