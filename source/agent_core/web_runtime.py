@@ -1527,6 +1527,13 @@ class WebLLMScraper:
             return self._write_prompt_to_composer_legacy(prompt, timeout_sec)
         from .composer_operation import prepare_composer, composer_write_unit_count
         from .paths import runtime_root
+        # Only a real task Planner turn, never Session Bootstrap/Attach, final
+        # render ACK, or a non-ChatGPT/isolated browser uses Hybrid.
+        hybrid = (
+            os.environ.get("SMARTAGENT_COMPOSER_HYBRID_V1", "0") == "1"
+            and getattr(self, "_composer_hybrid_task_enabled", False) is True
+            and len(prompt) > 1024
+        )
         self._composer_io_unconfirmed = True
         self._composer_operation_url = self._page.url
         # The verified 4-KiB writes include native UI/readback latency.
@@ -1540,7 +1547,7 @@ class WebLLMScraper:
             timeout_sec = min(240.0, max(timeout_sec, 30.0 + units * 1.5))
         observation_timeout_sec = max(8.0, (len(prompt) / 4096.0) * 1.5 + 4.0)
         self._log_stage("composer_bounded_begin",
-                        f"prompt_len={len(prompt)} units={units} timeout_sec={timeout_sec:.1f}")
+                        f"prompt_len={len(prompt)} units={units} timeout_sec={timeout_sec:.1f} hybrid={int(hybrid)}")
         try:
             result = prepare_composer(
                 endpoint=self.get_cdp_endpoint(),
@@ -1548,6 +1555,7 @@ class WebLLMScraper:
                 journal_root=runtime_root() / "composer_operations",
                 timeout_sec=timeout_sec, observation_timeout_sec=observation_timeout_sec,
                 cancel_check=lambda: self._check_cancel_requested("composer"),
+                hybrid=hybrid,
             )
         except KeyboardInterrupt:
             self._set_request_state("RECOVERY_REQUIRED", "composer_cancelled_unconfirmed")
