@@ -533,6 +533,65 @@ class WebAgentProtocolLoop:
             self._emit("gar_checkpoint_persist_failed", request_id=self.run_id,
                        round=self.turn_id, error_type=type(exc).__name__)
 
+    def _gar_unadmitted_progress_repair_safe(self, pending: dict) -> bool:
+        """Classify ONLY this request's preserved, never-executed Progress repair.
+
+        A held candidate is not an admitted/started tool and must still pass
+        the full existing V9 gates after a corrected report_progress. This
+        exception only permits bounded L1 protocol repair, never execution,
+        rebase, replan or a terminal evidence claim.
+        """
+        held = self.pending_progress_repair_actions
+        if (not isinstance(held, list) or not 1 <= len(held) <= 32
+                or self.continuation_source is not None
+                or self.execution_state != "NOT_STARTED"
+                or self.action_ledger or self.action_result_ledger
+                or self.condition_result_ledger or self.v8_admitted_actions
+                or (self.action_loop_state or {}).get("blockers")
+                or any(value for name, value in pending.items()
+                       if name != "pending_progress_repair_actions")):
+            return False
+        # The pending list is written only by _preserve_progress_repair_actions
+        # following canonical envelope and request-scoped V8 admission checks.
+        # Recheck structural identity here to fail closed on accidental state
+        # corruption; do not trust a model-supplied operation label.
+        from agent_core.smartagent_protocol import validate_tool_envelope
+        seen: set[str] = set()
+        for index, action in enumerate(held, 1):
+            if not isinstance(action, dict):
+                return False
+            action_id = str(action.get("action_id", "") or "").strip()
+            if (not action_id or action_id in seen
+                    or action_id in self.action_ledger
+                    or action_id in self.action_result_ledger
+                    or action_id in self.v8_admitted_actions
+                    or action.get("tool") in {"report_progress", "final_response", "turn_commit"}
+                    or not validate_tool_envelope(action, block_index=index)[0]):
+                return False
+            seen.add(action_id)
+        # A previously prepared/executing transaction might precede the
+        # in-memory Action Ledger; do not classify it as a mere protocol hold.
+        if self.continuation_store is not None:
+            try:
+                saved = self.continuation_store.get(self.task_id)
+            except (OSError, ValueError, KeyError, TypeError):
+                return False
+            if (not isinstance(saved, dict)
+                    or saved.get("task_id") != self.task_id
+                    or saved.get("request_id") != self.run_id
+                    or saved.get("epoch") != self.task_epoch
+                    or saved.get("prepared") or saved.get("actions")
+                    or saved.get("results") or saved.get("pending_actions")):
+                return False
+        if self.durable_ledger is not None:
+            try:
+                durable = self.durable_ledger.load_action_state(self.task_id)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                return False
+            if not isinstance(durable, dict) or durable.get("actions"):
+                return False
+        return True
+
     def _gar_snapshot(self):
         if self._gar is None:
             return None
@@ -545,6 +604,10 @@ class WebAgentProtocolLoop:
             "active_stage_manifest",
         )
         pending = {name: bool(getattr(self, name, None)) for name in pending_names}
+        protocol_only_progress_repair = bool(
+            pending["pending_progress_repair_actions"]
+            and self._gar_unadmitted_progress_repair_safe(pending)
+        )
         from agent_core.goal_anchored_recovery import (
             is_unverified_nonexecuted_terminal_requirement,
         )
@@ -562,9 +625,15 @@ class WebAgentProtocolLoop:
                 request_id=self.run_id, round=self.turn_id,
                 pending_kinds=sorted(k for k, v in pending.items() if v),
                 terminal_precondition_advisory=bool(advisory_verification),
+                unadmitted_progress_repair_advisory=protocol_only_progress_repair,
+                preserved_action_count=len(self.pending_progress_repair_actions),
                 executed_action_count=len(self.action_ledger),
                 recorded_result_count=len(self.action_result_ledger),
             )
+        if protocol_only_progress_repair:
+            # Preserve held actions in Runtime memory; do not convert their
+            # existence into a fictitious UNKNOWN execution in GAR.
+            pending["pending_progress_repair_actions"] = False
         if advisory_verification:
             # Only a rejected no-tool terminal SUCCESS claim. It is still a
             # V9 verification prerequisite, not evidence of a real in-flight
@@ -590,9 +659,10 @@ class WebAgentProtocolLoop:
             blockers=list((self.action_loop_state or {}).get("blockers") or []),
             pending_operations=pending,
             progress=progress,
-            verification_preconditions=(
-                ("UNVERIFIED_TERMINAL_NO_EXECUTION",)
-                if advisory_verification else ()
+            verification_preconditions=tuple(
+                (["UNVERIFIED_TERMINAL_NO_EXECUTION"] if advisory_verification else [])
+                + (["PRESERVED_UNADMITTED_PROGRESS_REPAIR"]
+                   if protocol_only_progress_repair else [])
             ),
         )
 
