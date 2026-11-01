@@ -47,13 +47,27 @@ jobs:
       - name: Existing collect.bat sanitized PR-A bundle smoke
         shell: pwsh
         run: |
+          $sample = @'
+          from agent_core.prerequisite_graph_v3 import RequirementLedger, build_requirement_graph
+          from agent_core.task_requirement import assess_task_requirement
+          graph = build_requirement_graph(
+              task_id="TASK-PR-A-CI", request_id="RR-PR-A-CI", task_epoch="epoch-ci",
+              assessment=assess_task_requirement("Review GitHub PR #42")
+          )
+          RequirementLedger(".").initialize(graph)
+          '@
+          $sample | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmd.exe /c "collect.bat TASK-PR-A-CI RR-PR-A-CI"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $zip = Get-ChildItem -Path ".\localdata\diagnostics\gar_live_rca" -Filter "*TASK-PR-A-CI.zip" | Select-Object -First 1
           if (-not $zip) { throw "Collector ZIP missing" }
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath ".\localdata\pr_a_ci_bundle" -Force
-          if (-not (Test-Path ".\localdata\pr_a_ci_bundle\pr_a_requirement_ledger_summary.json")) {
-            throw "Collector PR-A summary missing"
+          $summaryFile = ".\localdata\pr_a_ci_bundle\pr_a_requirement_ledger_summary.json"
+          if (-not (Test-Path $summaryFile)) { throw "Collector PR-A summary missing" }
+          $summary = Get-Content -LiteralPath $summaryFile -Raw | ConvertFrom-Json
+          if (-not $summary.found -or $summary.node_count -lt 1) {
+            throw "Collector failed to summarize the real PR-A ledger"
           }
       - name: PR-0 routing and task requirement regression
         shell: pwsh
