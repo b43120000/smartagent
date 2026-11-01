@@ -96,7 +96,8 @@ $scalarKeys = @(
     'unadmitted_progress_repair_advisory','preserved_action_count',
     'executed_action_count','recorded_result_count','evidence_ref_count',
     'action_history_present','condition_history_present',
-    'current_step','total_steps','repair_scope','previous_ack_id'
+    'current_step','total_steps','repair_scope','previous_ack_id',
+    'revision','node_count','graph_digest'
 )
 $numericTypes = @('System.Int32','System.Int64','System.Double','System.Decimal','System.Single')
 $timeline = New-Object 'System.Collections.Generic.List[object]'
@@ -212,6 +213,35 @@ try {
         }
     }
     Write-Json (Join-Path $stage 'gar_snapshot_summaries.json') $snapshots
+    $prAFile = if ($task) { Join-Path $root ('localdata\runtime\prerequisite_v3\' + $task + '.json') } else { '' }
+    $prA = if ($prAFile) { Read-Json $prAFile } else { $null }
+    $prASummary = [ordered]@{ found=$false }
+    if ($prA -and $prA.schema -eq 'SMARTAGENT_PREREQ_V3_GRAPH_LEDGER_V1' -and $prA.nodes) {
+        $nodeStates = [ordered]@{}
+        $nodeKinds = [ordered]@{}
+        foreach ($node in $prA.nodes.PSObject.Properties) {
+            $kind = Safe-Code $node.Value.kind
+            $state = Safe-Code $node.Value.state
+            if (-not $nodeKinds.Contains($kind)) { $nodeKinds[$kind] = 0 }
+            if (-not $nodeStates.Contains($state)) { $nodeStates[$state] = 0 }
+            $nodeKinds[$kind]++
+            $nodeStates[$state]++
+        }
+        $prASummary = [ordered]@{
+            found=$true
+            schema='SMARTAGENT_PREREQ_V3_GRAPH_LEDGER_V1'
+            revision=$prA.revision
+            digest=(Safe-Code $prA.digest)
+            task_id=(Safe-Code $prA.identity.task_id)
+            request_id=(Safe-Code $prA.identity.request_id)
+            node_count=@($prA.nodes.PSObject.Properties).Count
+            event_count=@($prA.events).Count
+            node_kinds=$nodeKinds
+            node_states=$nodeStates
+            raw_paths_included=$false
+        }
+    }
+    Write-Json (Join-Path $stage 'pr_a_requirement_ledger_summary.json') $prASummary
     Write-Json (Join-Path $stage 'timeline.json') @($timeline.ToArray())
 
     $head = ''
@@ -241,6 +271,7 @@ try {
         request_id=(Safe-Code $request)
         event_count=$timeline.Count
         snapshot_count=@($snapshots).Count
+        pr_a_ledger_found=[bool]$prASummary.found
         log_sources=$sourceInfo.ToArray()
         source_sha256=$fingerprints
         warnings=$warnings.ToArray()
@@ -250,7 +281,7 @@ try {
         'SmartAgent GAR Live RCA / sanitized diagnostic bundle',
         'Read-only collection. Runtime/Source/Task state was not modified.',
         'Data: request-scoped timeline (event codes, counters, model tool/operation names only),',
-        'task progress state, correlated GAR checkpoint summary, installed HEAD and SHA256 fingerprints.',
+        'task progress state, correlated GAR checkpoint and PR-A DAG summaries, installed HEAD and SHA256 fingerprints.'
         'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram payloads,',
         'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
         'Scan-window limit: most recent 25000 lines per known JSONL source.',
