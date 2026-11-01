@@ -57,11 +57,24 @@ jobs:
           $sample = @'
           from agent_core.prerequisite_graph_v3 import RequirementLedger, build_requirement_graph
           from agent_core.task_requirement import assess_task_requirement
+          from agent_core.prerequisite_runtime_v3 import RecoveryLedger, probe_requirements
           graph = build_requirement_graph(
               task_id="TASK-PR-A-CI", request_id="RR-PR-A-CI", task_epoch="epoch-ci",
               assessment=assess_task_requirement("Review GitHub PR #42")
           )
           RequirementLedger(".").initialize(graph)
+          probe = probe_requirements(
+              request="Read only GitHub PR #42", authorized_paths=[],
+              environment_snapshot={"tools":{
+                  "python":{"status":"AVAILABLE","version":"Python 3.11.7"},
+                  "git":{"status":"AVAILABLE","version":"git version 2.43.1"}
+              }}, install_root=".",
+          )
+          RecoveryLedger(".").initialize(
+              task_id="TASK-PR-A-CI",request_id="RR-PR-A-CI",
+              task_epoch="epoch-ci",intent_sha256="a"*64,
+              probe=probe,graph_digest="b"*64,
+          )
           '@
           $sample | python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -101,6 +114,12 @@ jobs:
           }
           if (-not $summary.nodes -or $summary.nodes.Count -ne $summary.node_count) {
             throw "Collector DAG edge summary missing"
+          }
+          $bcdFile = ".\localdata\pr_a_ci_bundle\pr_bcd_recovery_summary.json"
+          if (-not (Test-Path $bcdFile)) { throw "PR-B/C/D collector summary missing" }
+          $bcd = Get-Content -LiteralPath $bcdFile -Raw | ConvertFrom-Json
+          if (-not $bcd.found -or $bcd.phase -ne "PROBED" -or $bcd.revision -ne 1) {
+            throw "PR-B/C/D collector reported invalid durable recovery state"
           }
           $timeline = Get-Content -LiteralPath ".\localdata\pr_a_ci_bundle\timeline.json" -Raw | ConvertFrom-Json
           if (-not ($timeline | Where-Object { $_.event -eq 'protocol_rejected' -and $_.stage -eq 'protocol_rejected' })) {
