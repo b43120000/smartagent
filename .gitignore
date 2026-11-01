@@ -21,6 +21,7 @@
 *.bak
 *.smartagent_pre_snapshot_fix
 /config/debug_config.json
+/config/feature_flags.json
 /source/run_t16_*.py
 /SmartAgentv2_1/
 /.env*
