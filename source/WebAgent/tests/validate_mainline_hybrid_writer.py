@@ -168,11 +168,25 @@ class HybridMainlineTests(unittest.TestCase):
             old.assert_called_once()
 
     def test_launcher_defaults_on_but_preserves_explicit_off(self):
+        from agent_core.runtime_config import resolve_features
+        from agent_core.paths import install_root
+        defaults = install_root() / "config" / "feature_flags.defaults.json"
+        with tempfile.TemporaryDirectory(prefix="hybrid-registry-") as directory:
+            missing_user_file = Path(directory) / "feature_flags.json"
+            enabled = resolve_features(
+                "web_direct", environ={}, defaults_file=defaults,
+                user_file=missing_user_file)
+            disabled = resolve_features(
+                "web_direct", environ={"SMARTAGENT_COMPOSER_HYBRID_V1": "0"},
+                defaults_file=defaults, user_file=missing_user_file)
+            self.assertTrue(enabled["flags"]["composer_hybrid"])
+            self.assertFalse(disabled["flags"]["composer_hybrid"])
         launcher = (Path(__file__).resolve().parents[3] /
                     "launch_webcopilot.bat").read_text(encoding="utf-8")
-        self.assertIn('if not defined SMARTAGENT_COMPOSER_HYBRID_V1 set "SMARTAGENT_COMPOSER_HYBRID_V1=1"', launcher)
+        self.assertNotIn('set "SMARTAGENT_COMPOSER_HYBRID_V1=1"', launcher)
         controller = (Path(__file__).resolve().parents[1] /
                       "controller.py").read_text(encoding="utf-8")
+        self.assertIn('apply_process_config("web_direct")', controller)
         self.assertIn("scraper._composer_hybrid_task_enabled = False", controller)
         self.assertIn("scraper._composer_hybrid_task_enabled = bool(", controller)
 
