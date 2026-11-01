@@ -1,0 +1,116 @@
+{
+  "schema": "SMARTAGENT_FEATURE_CONFIG_V1",
+  "features": {
+    "tri_one_task_result": {
+      "env": "TRI_ONE_TASK_RESULT_V1",
+      "default": true,
+      "agents": [
+        "remote_agent",
+        "web_direct"
+      ],
+      "requires": []
+    },
+    "tri_one_text_only": {
+      "env": "TRI_ONE_TEXT_ONLY_V1",
+      "default": true,
+      "agents": [
+        "remote_agent",
+        "web_direct"
+      ],
+      "requires": [
+        "tri_one_task_result"
+      ]
+    },
+    "tri_one_text_only_telegram": {
+      "env": "TRI_ONE_TEXT_ONLY_TELEGRAM",
+      "default": true,
+      "agents": [
+        "remote_agent"
+      ],
+      "requires": [
+        "tri_one_text_only"
+      ]
+    },
+    "tri_one_text_only_web_copilot": {
+      "env": "TRI_ONE_TEXT_ONLY_WEB_COPILOT",
+      "default": true,
+      "agents": [
+        "remote_agent"
+      ],
+      "requires": [
+        "tri_one_text_only"
+      ]
+    },
+    "tri_one_text_only_local_test": {
+      "env": "TRI_ONE_TEXT_ONLY_LOCAL_TEST",
+      "default": true,
+      "agents": [
+        "remote_agent"
+      ],
+      "requires": [
+        "tri_one_text_only"
+      ]
+    },
+    "tri_one_text_only_web_direct": {
+      "env": "TRI_ONE_TEXT_ONLY_WEB_DIRECT",
+      "default": true,
+      "agents": [
+        "web_direct"
+      ],
+      "requires": [
+        "tri_one_text_only"
+      ]
+    },
+    "tri_one_shared_worker": {
+      "env": "TRI_ONE_WEBCOPILOT_V9_V1",
+      "default": true,
+      "agents": [
+        "remote_agent"
+      ],
+      "requires": []
+    },
+    "composer_hybrid": {
+      "env": "SMARTAGENT_COMPOSER_HYBRID_V1",
+      "default": true,
+      "agents": [
+        "local_agent",
+        "remote_agent",
+        "web_direct"
+      ],
+      "requires": []
+    },
+    "gar_l4_supervisor": {
+      "env": "SMARTAGENT_GAR_L4_SUPERVISOR_V1",
+      "default": true,
+      "agents": [
+        "remote_agent",
+        "web_direct"
+      ],
+      "requires": []
+    }
+  },
+  "derived": {
+    "gar_v1": {
+      "env": "SMARTAGENT_GAR_V1",
+      "source": "effective_shared_webgpt2_url",
+      "owner": "agent_core.gar_webgpt2_settings.apply_target",
+      "note": "Not independently writable; a distinct valid WebGPT2 URL makes GAR=1, otherwise GAR=0."
+    }
+  },
+  "restricted_not_feature_flags": [
+    "SMARTAGENT_SUPERVISOR_TOKEN",
+    "SMARTAGENT_RUNTIME_GENERATION",
+    "SMARTAGENT_REMOTE_WORKER_TASK",
+    "SMARTAGENT_CHATGPT_CDP",
+    "SMARTAGENT_SECURITY_PROFILE",
+    "SMARTAGENT_TELEGRAM_BOT_TOKEN",
+    "SMARTAGENT_IT10_PATH_TRACE",
+    "SMARTAGENT_TEST_INGRESS",
+    "composer_verification.unsafe_force_pass"
+  ],
+  "compatibility": {
+    "legacy_env_switches": "honor_explicit_0_or_1",
+    "local_agent_v9_answer_only": "not_implemented",
+    "user_config": "config/feature_flags.json"
+  }
+}
