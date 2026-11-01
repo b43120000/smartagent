@@ -39,19 +39,6 @@ jobs:
         run: |
           python -m pip install -r install_smart_agent/requirements-webdirect.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: GAR R1 local handoff and R3 L4 independent controls
-        shell: pwsh
-        run: |
-          python -B source/WebAgent/tests/validate_gar_r1_r3_controls.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B source/WebAgent/tests/validate_gar_shared_runtime.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B source/WebAgent/tests/validate_gar_l4_supervision.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B source/WebAgent/tests/validate_runtime_feature_registry.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: PR-A DAG and durable ledger regression
         shell: pwsh
         run: |
@@ -147,4 +134,18 @@ jobs:
           python -B source/WebAgent/tests/validate_runtime_dependency_loop.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: GAR R1 local handoff and R3 L4 independent controls
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_gar_r1_r3_controls.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_shared_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_l4_supervision.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_runtime_feature_registry.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
