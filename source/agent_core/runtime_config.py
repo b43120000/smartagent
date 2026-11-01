@@ -237,6 +237,23 @@ def log_feature_config(snapshot: Mapping[str, object], *,
         pass
 
 
+def log_derived_gar(*, enabled: bool, source: str) -> None:
+    """Record the independently derived GAR gate; omit all conversation URLs."""
+    try:
+        inherited = json.loads(os.environ.get(INHERITED_KEY, "{}"))
+        agent = str(inherited.get("agent", "unknown"))
+        path = log_root() / "feature_flags_runtime.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        row = {"event": "FEATURE_GAR_DERIVED", "schema": SCHEMA,
+               "epoch": time.time(), "pid": os.getpid(),
+               "agent": agent, "SMARTAGENT_GAR_V1": bool(enabled),
+               "source": source}
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+
+
 def save_feature(name: str, enabled: bool, *, agent: str = "",
                  path: Path | None = None, defaults_file: Path | None = None) -> dict:
     registry = load_registry(path=defaults_file)
@@ -276,4 +293,5 @@ __all__ = [
     "SCHEMA", "AGENTS", "INHERITED_KEY", "defaults_path", "user_path",
     "load_registry", "load_user_values", "resolve_features",
     "apply_process_config", "save_feature", "log_feature_config",
+    "log_derived_gar",
 ]
