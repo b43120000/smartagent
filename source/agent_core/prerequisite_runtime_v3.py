@@ -36,6 +36,12 @@ WRITE_INTENT = re.compile(
     r"\b(?:install|setup|repair|remediate|update|modify|write|create)\b|"
     r"安裝|補救|修復|新增|寫入|建立|修改", re.I
 )
+NEGATED_REMEDIATION = re.compile(
+    r"(?:do not|don't|never|must not|without|禁止|不要|請勿|不得|不准|無須|不需要)"
+    r"\s*(?:(?:any|to|the|a|任何|自行|執行)\s*)?"
+    r"(?:install|setup|repair|remediate|update|modify|write|create|安裝|補救|修復|寫入|建立|修改)",
+    re.I,
+)
 
 
 class PrerequisiteRecoveryError(ValueError):
@@ -155,7 +161,8 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     missing = [row["id"] for row in facts if row["state"]=="MISSING"]
     unknown = [row["id"] for row in facts if row["state"]=="UNKNOWN"]
     # Only a positive, explicit remediation request may enter PR-C.
-    remediation_requested = bool(WRITE_INTENT.search(text)) and bool(paths)
+    remediation_requested = (bool(WRITE_INTENT.search(text)) and bool(paths)
+                             and not bool(NEGATED_REMEDIATION.search(text)))
     return {"schema":"SMARTAGENT_PREREQ_V3_PROBE_V1",
             "facts":facts, "missing":missing,"unknown":unknown,
             "remediation_requested":remediation_requested,
