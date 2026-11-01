@@ -85,6 +85,18 @@ class RemoteWorkerLauncher:
             "--remote-cdp", self.cdp,
         ]
         env = os.environ.copy()
+        # Dispatch always supplies the canonical RemoteAgent feature snapshot,
+        # including 5A/2A flags, to both V9 and legacy Worker entries.
+        from agent_core.runtime_config import apply_process_config
+        feature_snapshot = apply_process_config(
+            "remote_agent", environ=env, write_log=False
+        )
+        self._log("STATUS", stage="FEATURE_FLAGS_WORKER_HANDOFF",
+                  task_id=task.task_id, request_id=task.request_id,
+                  effective_sha256=feature_snapshot["effective_sha256"],
+                  config_sha256=feature_snapshot["config_sha256"],
+                  sources=feature_snapshot["sources"],
+                  flags=feature_snapshot["flags"])
         from agent_core import path_integrity_trace as PIT
         trace_handoff_env = PIT.worker_env_from_handoff(task)
         if trace_handoff_env:
