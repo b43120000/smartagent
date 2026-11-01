@@ -101,7 +101,8 @@ class PRBCDTests(unittest.TestCase):
         independent = self.action(verify,ref="RES-VERIFY")
         self.assertEqual(independent["phase"],"VERIFIED")
         self.assertFalse(self.ledger.terminal_ready(self.ids["task_id"])[0])
-        retry = {"tool":"run_command","operation":"INSPECT","action_id":"RETRY-1"}
+        retry = {"tool":"run_command","operation":"INSPECT","action_id":"RETRY-1",
+                 "depends_on":["VERIFY-1"]}
         resumed = self.action(retry,ref="RES-RETRY")
         self.assertEqual(resumed["phase"],"RESUMED")
         restarted = RecoveryLedger(self.root)
