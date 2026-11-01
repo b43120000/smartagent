@@ -4,14 +4,8 @@ chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 call "%~dp0install_smart_agent\launchers\ensure_portable_runtime.bat"
 if errorlevel 1 exit /b %ERRORLEVEL%
-rem Mainline ChatGPT Hybrid Composer: verified 512-char prefix + bulk tail.
-rem Set SMARTAGENT_COMPOSER_HYBRID_V1=0 to opt out for this process.
-if not defined SMARTAGENT_COMPOSER_HYBRID_V1 set "SMARTAGENT_COMPOSER_HYBRID_V1=1"
-rem Enable 5A text-only reply path and its common Task Result contract by default.
-rem Explicit caller overrides are retained (set each flag to 0 to disable).
-if not defined TRI_ONE_TASK_RESULT_V1 set "TRI_ONE_TASK_RESULT_V1=1"
-if not defined TRI_ONE_TEXT_ONLY_V1 set "TRI_ONE_TEXT_ONLY_V1=1"
-if not defined TRI_ONE_TEXT_ONLY_WEB_DIRECT set "TRI_ONE_TEXT_ONLY_WEB_DIRECT=1"
+rem Feature defaults and explicit opt-outs are resolved centrally by
+rem agent_core.runtime_config in WebAgent.controller, never hard-coded here.
 set "SMARTAGENT_SOURCE=%~dp0source"
 if not exist "%SMARTAGENT_SOURCE%\agent_core\__init__.py" (
     echo [SmartAgent] ERROR Canonical source is missing: %SMARTAGENT_SOURCE%
