@@ -22,6 +22,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Prepare SmartAgent bundled runtime paths for isolated CI
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $gitRoot = Join-Path $env:ProgramFiles "Git"
+          if (-not (Test-Path (Join-Path $gitRoot "cmd\git.exe"))) {
+            throw "Windows runner Git binary not found"
+          }
+          New-Item -ItemType Junction -Path ".venv\git" -Target $gitRoot -Force | Out-Null
+          .\.venv\Scripts\python.exe --version
+          .\.venv\git\cmd\git.exe --version
       - name: Install WebDirect dependencies
         shell: pwsh
         run: |
