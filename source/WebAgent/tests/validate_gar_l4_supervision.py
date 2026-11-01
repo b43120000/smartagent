@@ -140,6 +140,7 @@ class SupervisorRuntimeIT(unittest.TestCase):
                 )
         return Adapter()
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_review_returns_to_original_v9_executor(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-supervisor-") as tmp:
             calls, reviews, releases, events = [], [], [], []
@@ -181,6 +182,7 @@ class SupervisorRuntimeIT(unittest.TestCase):
             self.assertIn("gar_l4_webgpt1_resumed", names)
             self.assertNotIn("gar_fresh_planner_activated", names)
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_invalid_webgpt2_review_pauses_without_old_replay(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-review-rejected-") as tmp:
             calls, reviews, releases = [], [], []
