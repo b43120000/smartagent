@@ -29,10 +29,10 @@ _CONCEPT = re.compile(
 )
 _CHAIN = re.compile(
     r"\b(?:and\s+(?:then\s+)?|then\s+)(?:run|read|write|edit|save|"
-    r"download|upload|send|post|check|fetch|execute|test|clone|push|deploy)\b|"
+    r"download|upload|send|post|check|fetch|execute|test|clone|push|deploy|commit)\b|"
     r"(?:然後|接著|之後|並且|並|再|順便|但|不過|另外|也要|還要|仍要|仍需|還是要|卻要|依然|但是|but)[^。！？\n]{0,40}?"
     r"(?:讀取|閱讀|檢查|修改|編輯|寫入|執行|測試|查詢|"
-    r"搜尋|下載|上傳|推送|發送|寄送|建立|刪除|部署|同步|貼到|push|run|test|write|read|send|upload|download)", re.I,
+    r"搜尋|下載|上傳|推送|發送|寄送|建立|刪除|部署|同步|貼到|push|run|test|write|read|send|upload|download|commit)", re.I,
 )
 _FOLLOWUP_ACTION = re.compile(
     r"(?:[，,。；;！!？?\n])\s*(?:再|另外|同時|接著|然後)?\s*"
@@ -40,7 +40,7 @@ _FOLLOWUP_ACTION = re.compile(
     r"[^。！？!?\n]{0,40}?(?:讀取|閱讀|檢查|修改|編輯|寫入|執行|測試|"
     r"查詢|搜尋|下載|上傳|推送|發送|寄送|建立|刪除|部署|"
     r"同步|貼到|傳給|寄給|寄到|發給|分享至|通知|安裝|開啟|儲存|驗證|run\b|read\b|"
-    r"modify\b|push\b|send\b|upload\b|download\b)",
+    r"modify\b|push\b|send\b|upload\b|download\b|commit\b)",
     re.I,
 )
 _ACTIONS = {
@@ -50,8 +50,10 @@ _ACTIONS = {
         r"(?:讀取|閱讀|查看|檢視|開啟|拉取|下載|同步|查詢|搜尋|"
         r"檢查(?:這個|該|本地|遠端)?(?:檔案|專案|repo|PR))", re.I),
     "WRITE": re.compile(
-        r"\b(?:edit|modify|update|delete|overwrite|save|commit|push|"
+        r"\b(?:edit|modify|update|delete|overwrite|save|push|"
         r"upload|install|deploy|publish|create\s+(?:a\s+)?(?:file|folder|repo))\b|"
+        r"\b(?:git\s+commit|commit\s+(?:changes?|files?|code|this|these|my))\b|"
+        r"(?:幫我|請|再|需要)\s*commit\b|"
         r"(?:修改|編輯|寫入|刪除|儲存|上傳|安裝|部署|推送|提交|"
         r"建立(?:檔案|資料夾|專案|repo)|更新(?:檔案|專案|repo))", re.I),
     "EXECUTE": re.compile(r"\b(?:run|execute|compile|build|test|launch)\b|"
@@ -90,6 +92,39 @@ _INLINE = re.compile(r"(?:以下(?:文字|程式碼|內容)|這段(?:文字|程�
 _ARTIFACT = re.compile(r"\b(?:powerpoint|presentation|pptx|pdf|spreadsheet|xlsx|"
                        r"image|picture|video)\b|(?:簡報|投影片|試算表|圖片|影片|"
                        r"產生(?:檔案|文件|圖|報表))", re.I)
+# Interpret only complete explicit prohibitions as restrictions, never as
+# requested actions. Mixed positive/negative clauses remain untouched.
+_PROHIBITED_VERB = (
+    r"(?:修改|推送|提交|寫入|編輯|刪除|上傳|儲存|部署|安裝|"
+    r"執行|讀取|閱讀|下載|測試|編譯|開啟|建立|"
+    r"(?:git\s+)?(?:push|commit|modify|edit|write|delete|upload|"
+    r"save|execute|run|read|fetch|download|install|deploy)\b)"
+)
+_PROHIBITED_TARGET = (
+    r"(?:任何)?(?:資料|檔案|文件|內容|程式碼|程式|命令|"
+    r"分支|repository|repo|data|files?)?"
+)
+_PROHIBITED_CLAUSE = re.compile(
+    r"^\s*(?:不需要|不用|不必|無須|無需|不要|請勿|禁止|不得|不可|不允許)"
+    r"\s*(?:實際\s*|真的\s*|自行\s*|額外\s*)?"
+    + _PROHIBITED_VERB + _PROHIBITED_TARGET
+    + r"(?:\s*(?:或|、|及|和|與|以及|/|／|or|and)\s*"
+    + _PROHIBITED_VERB + _PROHIBITED_TARGET + r")*\s*$",
+    re.I,
+)
+_PROHIBITION_DELIMITER = re.compile(r"(?<=[，,。；;！!？?\n])")
+
+
+def _without_prohibited_action_clauses(request: str) -> str:
+    """Mask only complete negative clauses, preserving positive operations."""
+    segments = _PROHIBITION_DELIMITER.split(request)
+    retained = []
+    for segment in segments:
+        clause = segment.strip().rstrip("，,。；;！!？?").strip()
+        retained.append(" " if _PROHIBITED_CLAUSE.fullmatch(clause) else segment)
+    return "".join(retained)
+
+
 _NO_ACTION = re.compile(r"(?:不需要|不用|不必|無須|不要|請勿|禁止)\s*"
                         r"(?:實際\s*|自行\s*|額外\s*)?"
                         r"(?:執行|讀取|修改|測試|編譯|下載|上傳|安裝|部署|"
@@ -152,7 +187,9 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
     # Keep the existing narrowly scoped negative clause parser, never
     # delete positive operations hidden in mixed instructions.
     from .tri_one_answer_only import _without_explicit_noop_clauses
-    cleaned = _without_explicit_noop_clauses(original)
+    cleaned = _without_prohibited_action_clauses(
+        _without_explicit_noop_clauses(original)
+    )
     if attachments or authorized_paths or image_or_artifact_request or continuation:
         return _result(
             original, "AMBIGUOUS" if continuation else "RESOURCE_REQUIRED",
@@ -180,7 +217,13 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
                     if re.search(r"https?://|www\.", cleaned, re.I) else "LOCAL")
         ops.add("READ")
     if _CURRENT.search(cleaned):
-        sources.add("EXTERNAL")
+        # Fresh repository state belongs to GITHUB, not an unrelated
+        # external source. Explicit weather/rates still need EXTERNAL.
+        general_current = bool(re.search(
+            r"\b(?:weather|exchange\s+rate|stock\s+price)\b|(?:天氣|匯率|股價)",
+            cleaned, re.I,
+        ))
+        sources.add("GITHUB" if github and not general_current else "EXTERNAL")
         ops.add("READ")
     if _ARTIFACT.search(cleaned) and not concept:
         sources.add("EXTERNAL")
