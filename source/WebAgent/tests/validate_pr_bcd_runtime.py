@@ -119,10 +119,9 @@ class PRBCDTests(unittest.TestCase):
             p = self.probe("Only inspect package synthetic_pr_bcd>=1.0")
         self.assertFalse(p["remediation_requested"])
         self.init(p)
-        unchanged = self.ledger.before_action(
-            **self.ids,action=self.mutate(),scope_allowed=True)
-        self.assertEqual(unchanged["phase"],"MISSING")
-        self.assertEqual(unchanged["remediation_action"],"")
+        with self.assertRaisesRegex(PrerequisiteRecoveryError, "authorization_required"):
+            self.ledger.before_action(**self.ids,action=self.mutate(),scope_allowed=True)
+        self.assertEqual(self.ledger.read(self.ids["task_id"])["phase"],"MISSING")
 
     def test_c_negative_authorization_is_not_remediation_permission(self):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
@@ -142,10 +141,9 @@ class PRBCDTests(unittest.TestCase):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
                    return_value=("MISSING","")):
             self.init(self.probe())
-        doc = self.ledger.before_action(
-            **self.ids,action=self.mutate(),scope_allowed=False)
-        self.assertEqual(doc["phase"],"MISSING")
-        self.assertFalse(doc["remediation_action"])
+        with self.assertRaisesRegex(PrerequisiteRecoveryError, "authorization_required"):
+            self.ledger.before_action(**self.ids,action=self.mutate(),scope_allowed=False)
+        self.assertEqual(self.ledger.read(self.ids["task_id"])["phase"],"MISSING")
 
     def test_c_mutation_failure_blocks_synthetic_success(self):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
@@ -155,6 +153,15 @@ class PRBCDTests(unittest.TestCase):
         failed = self.action(self.mutate(),executed=False,status="REJECTED")
         self.assertEqual(failed["phase"],"BLOCKED")
         self.assertFalse(self.ledger.terminal_ready(self.ids["task_id"])[0])
+
+    def test_c_duplicate_remediation_replay_is_rejected(self):
+        with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                   return_value=("MISSING","")):
+            self.init(self.probe())
+        self.ledger.before_action(**self.ids,action=self.mutate(),scope_allowed=True)
+        with self.assertRaisesRegex(PrerequisiteRecoveryError,"replay_blocked"):
+            self.ledger.before_action(**self.ids,action=self.mutate("MUT-NEW"),scope_allowed=True)
+        self.assertEqual(self.ledger.read(self.ids["task_id"])["phase"],"REMEDIATING")
 
     def test_d_unrelated_verify_cannot_release(self):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
