@@ -1,0 +1,356 @@
+"""PR-B/PR-C/PR-D: bounded request-scoped probes and verified recovery ledger.
+
+Only canonical Runtime Actions can mutate. This module never executes a
+remediation, grants a path, imports a package, or creates a success receipt.
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib.metadata
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+from collections.abc import Mapping, Sequence
+
+from .json_state_io import read_json_retry, write_json_atomic
+from .paths import runtime_root
+from .process_file_lock import exclusive_process_lock
+from .prerequisite_graph_v3 import _require_id
+from .runtime_environment import runtime_tool_paths
+
+SCHEMA = "SMARTAGENT_PREREQ_V3_BCD_LEDGER_V1"
+PHASES = frozenset({
+    "NOT_REQUIRED", "PROBED", "MISSING", "REMEDIATING",
+    "REMEDIATED_PENDING_VERIFY", "VERIFIED", "RESUMED", "BLOCKED", "UNKNOWN",
+})
+VERSION = re.compile(r"^(?:[0-9]+)(?:\.[0-9]+){0,3}$")
+PACKAGE = re.compile(
+    r"(?:\b(?:package|dependency|distribution)\s+|(?:套件|相依套件)\s*)"
+    r"([a-zA-Z][a-zA-Z0-9_.-]{0,65})\s*(==|>=|<=)\s*([0-9]+(?:\.[0-9]+){0,3})",
+    re.I,
+)
+TOOL_VERSION = re.compile(r"\b(python|git)\s*(==|>=|<=)\s*([0-9]+(?:\.[0-9]+){0,3})", re.I)
+WRITE_INTENT = re.compile(
+    r"\b(?:install|setup|repair|remediate|update|modify|write|create)\b|"
+    r"安裝|補救|修復|新增|寫入|建立|修改", re.I
+)
+
+
+class PrerequisiteRecoveryError(ValueError):
+    pass
+
+
+def _digest(obj: Mapping[str, object]) -> str:
+    raw = json.dumps(obj, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(v) for v in value.split("."))
+
+
+def _satisfies(found: str, operator: str, required: str) -> bool:
+    a, b = _version_tuple(found), _version_tuple(required)
+    size = max(len(a), len(b))
+    aa = a + (0,) * (size-len(a))
+    bb = b + (0,) * (size-len(b))
+    return {"==":aa == bb, ">=":aa >= bb, "<=":aa <= bb}[operator]
+
+
+def _version_in_text(raw: str) -> str:
+    m = re.search(r"(?<!\d)(\d+(?:\.\d+){0,3})(?!\d)", raw)
+    return m.group(1) if m else ""
+
+
+def _probe_package(package: str, python_binary: Path) -> tuple[str, str]:
+    """No import of the requested module, no pip and no arbitrary command."""
+    if not python_binary.is_file():
+        return "UNKNOWN", ""
+    script = (
+        "import importlib.metadata,sys;"
+        "name=sys.argv[1];"
+        "print(importlib.metadata.version(name))"
+    )
+    try:
+        result = subprocess.run(
+            [str(python_binary), "-I", "-c", script, package],
+            cwd=str(python_binary.parent), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=8, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "UNKNOWN", ""
+    if result.returncode == 0:
+        version = _version_in_text((result.stdout or "").strip())
+        return ("AVAILABLE", version) if version else ("UNKNOWN", "")
+    if result.returncode == 1 and "PackageNotFoundError" in (result.stderr or ""):
+        return "MISSING", ""
+    return "UNKNOWN", ""
+
+
+def probe_requirements(*, request: str, authorized_paths: Sequence[str],
+                       environment_snapshot: Mapping[str, object],
+                       install_root: str | Path) -> dict:
+    """Only trusted request text, scoped paths and Runtime-owned probes.
+
+    Never probe an arbitrary model-provided target; filesystem inspection is
+    constrained to exact authorized path identities, not directory traversal.
+    """
+    text = str(request or "")
+    paths = tuple(str(p) for p in authorized_paths if isinstance(p, (str, Path)))
+    if len(paths) > 64:
+        raise PrerequisiteRecoveryError("pr_b_scope_limit")
+    tools = environment_snapshot.get("tools", {})
+    if not isinstance(tools, Mapping):
+        tools = {}
+    facts = []
+    for name in ("python", "git"):
+        entry = tools.get(name, {})
+        entry = entry if isinstance(entry, Mapping) else {}
+        status = str(entry.get("status", "UNKNOWN")).upper()
+        if status not in {"AVAILABLE", "MISSING", "INVALID"}:
+            status = "UNKNOWN"
+        facts.append({"id":"tool:"+name, "kind":"ENVIRONMENT",
+                      "state":"SATISFIED" if status=="AVAILABLE" else
+                               "MISSING" if status=="MISSING" else "UNKNOWN",
+                      "status":status,
+                      "version":_version_in_text(str(entry.get("version", ""))),
+                      "source":"RUNTIME_PROBE"})
+    for idx, raw in enumerate(paths):
+        normalized = Path(raw).expanduser().resolve(strict=False)
+        # Report *only* the explicit authorized target; no enumeration.
+        exists = normalized.exists()
+        facts.append({"id":"path:"+str(idx), "kind":"PATH",
+                      "path_sha256":_digest({"path":str(normalized).casefold()}),
+                      "state":"SATISFIED" if exists else "MISSING",
+                      "status":"EXISTS" if exists else "MISSING",
+                      "source":"AUTHORIZED_SCOPE_PROBE"})
+    seen = set()
+    for m in list(TOOL_VERSION.finditer(text))[:8]:
+        name, op, required = m.group(1).lower(), m.group(2), m.group(3)
+        fact = next(x for x in facts if x["id"]=="tool:"+name)
+        available = fact["state"] == "SATISFIED" and bool(fact["version"])
+        status = ("SATISFIED" if available and _satisfies(fact["version"],op,required)
+                  else "MISSING" if available else "UNKNOWN")
+        key = "version:"+name
+        if key not in seen:
+            facts.append({"id":key,"kind":"VERSION","state":status,
+                         "observed_version":fact["version"],"constraint":op+required,
+                         "source":"RUNTIME_VERSION_PROBE"})
+            seen.add(key)
+    python_binary = runtime_tool_paths(install_root)["python"]
+    for m in list(PACKAGE.finditer(text))[:4]:
+        package, op, required = m.group(1).lower(), m.group(2), m.group(3)
+        if package in seen:
+            continue
+        seen.add(package)
+        status, observed = _probe_package(package, python_binary)
+        state = ("MISSING" if status=="MISSING" or
+                 (status=="AVAILABLE" and not _satisfies(observed,op,required))
+                 else "SATISFIED" if status=="AVAILABLE" else "UNKNOWN")
+        facts.append({"id":"package:"+package,"kind":"PACKAGE","state":state,
+                      "observed_version":observed,"constraint":op+required,
+                      "source":"BUNDLED_PYTHON_METADATA_PROBE"})
+    missing = [row["id"] for row in facts if row["state"]=="MISSING"]
+    unknown = [row["id"] for row in facts if row["state"]=="UNKNOWN"]
+    # Only a positive, explicit remediation request may enter PR-C.
+    remediation_requested = bool(WRITE_INTENT.search(text)) and bool(paths)
+    return {"schema":"SMARTAGENT_PREREQ_V3_PROBE_V1",
+            "facts":facts, "missing":missing,"unknown":unknown,
+            "remediation_requested":remediation_requested,
+            "authorization_granted":False,"verification_complete":False,
+            "executed":False}
+
+
+def _validate(doc: dict) -> None:
+    if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
+        raise PrerequisiteRecoveryError("pr_v3_schema_invalid")
+    identity = doc.get("identity", {})
+    if not isinstance(identity, dict):
+        raise PrerequisiteRecoveryError("pr_v3_identity_invalid")
+    for key in ("task_id","request_id","task_epoch"):
+        _require_id(identity.get(key), key)
+    if not isinstance(identity.get("intent_sha256"), str) or not re.fullmatch(
+        r"[a-f0-9]{64}", identity["intent_sha256"]
+    ):
+        raise PrerequisiteRecoveryError("pr_v3_intent_invalid")
+    if doc.get("phase") not in PHASES:
+        raise PrerequisiteRecoveryError("pr_v3_phase_invalid")
+    events = doc.get("events")
+    if not isinstance(events, list) or len(events)>2048:
+        raise PrerequisiteRecoveryError("pr_v3_events_invalid")
+    if len(events) != doc.get("revision") or any(
+        not isinstance(e,dict) or e.get("seq")!=i for i,e in enumerate(events,1)
+    ):
+        raise PrerequisiteRecoveryError("pr_v3_revision_invalid")
+    if doc.get("digest") != _digest({k:v for k,v in doc.items() if k!="digest"}):
+        raise PrerequisiteRecoveryError("pr_v3_digest_invalid")
+
+
+def _seal(doc: dict) -> dict:
+    doc["revision"] = len(doc["events"])
+    doc["digest"] = _digest({k:v for k,v in doc.items() if k!="digest"})
+    _validate(doc)
+    return doc
+
+
+class RecoveryLedger:
+    def __init__(self, root: str | Path):
+        self.path_root = runtime_root(root) / "prerequisite_v3_recovery"
+
+    def _path(self, task_id: str) -> Path:
+        return self.path_root / (_require_id(task_id,"task_id")+".json")
+
+    def read(self, task_id: str) -> dict | None:
+        path = self._path(task_id)
+        if not path.exists():
+            return None
+        doc = read_json_retry(path)
+        _validate(doc)
+        if doc["identity"]["task_id"] != task_id:
+            raise PrerequisiteRecoveryError("pr_v3_cross_task")
+        return doc
+
+    def initialize(self, *, task_id: str, request_id: str, task_epoch: str,
+                   intent_sha256: str, probe: Mapping[str, object],
+                   graph_digest: str) -> dict:
+        identity = {"task_id":_require_id(task_id,"task_id"),
+                    "request_id":_require_id(request_id,"request_id"),
+                    "task_epoch":_require_id(task_epoch,"task_epoch"),
+                    "intent_sha256":intent_sha256}
+        if not isinstance(probe,Mapping) or probe.get("schema")!="SMARTAGENT_PREREQ_V3_PROBE_V1":
+            raise PrerequisiteRecoveryError("pr_b_probe_required")
+        facts = list(probe["facts"])
+        if len(facts)>80:
+            raise PrerequisiteRecoveryError("pr_b_probe_limit")
+        phase = "MISSING" if probe["missing"] else (
+            "UNKNOWN" if probe["unknown"] else "PROBED")
+        new = {"schema":SCHEMA,"identity":identity,"graph_digest":graph_digest,
+               "phase":phase,"initial_facts":facts,
+               "missing_ids":list(probe["missing"]),"unknown_ids":list(probe["unknown"]),
+               "remediation_requested":bool(probe["remediation_requested"]),
+               "remediation_action":"","verification_action":"","resumed_action":"",
+               "remediation_evidence_sha256":"","verification_evidence_sha256":"",
+               "resume_evidence_sha256":"","revision":0,
+               "events":[{"seq":1,"type":"PROBED","state":phase}]}
+        _seal(new)
+        path = self._path(task_id)
+        with exclusive_process_lock(path.with_suffix(".lock"),timeout_sec=10,
+                                    label="PR-B/C/D ledger",legacy_kind="smartagent-prbcd-lock-v1"):
+            old = self.read(task_id)
+            if old is not None:
+                if old["identity"] != identity:
+                    raise PrerequisiteRecoveryError("pr_v3_identity_mismatch")
+                return old
+            write_json_atomic(path,new)
+            return new
+
+    def _transition(self, *, task_id: str, request_id: str, task_epoch: str, fn):
+        path = self._path(task_id)
+        with exclusive_process_lock(path.with_suffix(".lock"),timeout_sec=10,
+                                    label="PR-B/C/D ledger",legacy_kind="smartagent-prbcd-lock-v1"):
+            doc = self.read(task_id)
+            if doc is None:
+                raise PrerequisiteRecoveryError("pr_v3_not_initialized")
+            if (doc["identity"]["request_id"] != request_id
+                    or doc["identity"]["task_epoch"] != task_epoch):
+                raise PrerequisiteRecoveryError("pr_v3_request_epoch_mismatch")
+            changed = fn(doc)
+            if changed:
+                if len(doc["events"]) >= 2048:
+                    raise PrerequisiteRecoveryError("pr_v3_event_budget")
+                doc["events"].append({
+                    "seq":len(doc["events"])+1,"type":changed,"state":doc["phase"]
+                })
+                _seal(doc)
+                write_json_atomic(path,doc)
+            return doc
+
+    def before_action(self, *, task_id: str, request_id: str, task_epoch: str,
+                      action: Mapping[str, object], scope_allowed: bool) -> dict:
+        """Record intent; no permission is granted and no tool is executed."""
+        action_id = _require_id(str(action.get("action_id", "")), "action_id")
+        tool, operation = str(action.get("tool","")),str(action.get("operation","")).upper()
+        def transition(doc):
+            if not (tool=="run_command" and operation=="MUTATE"):
+                return ""
+            if doc["phase"] not in {"MISSING","UNKNOWN"}:
+                return ""
+            if not (doc["missing_ids"] and doc["remediation_requested"]
+                    and scope_allowed):
+                return ""
+            if doc["remediation_action"] and doc["remediation_action"] != action_id:
+                raise PrerequisiteRecoveryError("pr_c_remediation_replay_blocked")
+            doc["remediation_action"] = action_id
+            doc["phase"] = "REMEDIATING"
+            return "REMEDIATION_ADMITTED"
+        return self._transition(task_id=task_id,request_id=request_id,
+                                task_epoch=task_epoch,fn=transition)
+
+    def action_result(self, *, task_id: str, request_id: str, task_epoch: str,
+                      action: Mapping[str, object], result: Mapping[str, object],
+                      evidence_ref: str) -> dict:
+        """Transitions require actual Runtime-owned result and verification."""
+        action_id = _require_id(str(action.get("action_id","")), "action_id")
+        operation = str(action.get("operation","")).upper()
+        tool = str(action.get("tool",""))
+        executed = result.get("executed") is True
+        status = str(result.get("result_status","")).upper()
+        verified = str(result.get("effective_verification_status","")).upper()=="PASS"
+        evidence = _digest({"ref":evidence_ref}) if evidence_ref else ""
+        def transition(doc):
+            phase = doc["phase"]
+            if phase=="REMEDIATING" and doc["remediation_action"]==action_id:
+                if executed and status=="SUCCEEDED":
+                    doc["remediation_evidence_sha256"]=evidence
+                    doc["phase"]="REMEDIATED_PENDING_VERIFY"
+                    return "REMEDIATION_RESULT"
+                doc["phase"]="BLOCKED"
+                return "REMEDIATION_FAILED_OR_UNKNOWN"
+            if phase=="REMEDIATED_PENDING_VERIFY" and tool=="run_command" and operation=="VERIFY":
+                # Only independent action with an explicit backlink qualifies.
+                if (action_id==doc["remediation_action"] or
+                        str(action.get("verifies_action_id","")) != doc["remediation_action"]):
+                    return ""
+                doc["verification_action"]=action_id
+                if executed and status=="SUCCEEDED" and verified:
+                    doc["verification_evidence_sha256"]=evidence
+                    doc["phase"]="VERIFIED"
+                    return "INDEPENDENT_VERIFY_PASS"
+                doc["phase"]="BLOCKED"
+                return "INDEPENDENT_VERIFY_FAILED"
+            if phase=="VERIFIED" and action_id not in {
+                doc["remediation_action"],doc["verification_action"]
+            } and operation not in {"MUTATE","VERIFY"}:
+                if executed and status=="SUCCEEDED" and verified:
+                    doc["resumed_action"]=action_id
+                    doc["resume_evidence_sha256"]=evidence
+                    doc["phase"]="RESUMED"
+                    return "ORIGINAL_ACTION_RESUMED"
+            return ""
+        return self._transition(task_id=task_id,request_id=request_id,
+                                task_epoch=task_epoch,fn=transition)
+
+    def terminal_ready(self, task_id: str) -> tuple[bool, str]:
+        doc = self.read(task_id)
+        if not doc:
+            return True,"NO_PR_V3_LEDGER"
+        # Existing V9 admission and TaskResult remain the only success gates.
+        if doc["remediation_action"] and doc["phase"]!="RESUMED":
+            return False,"PR_D_INDEPENDENT_VERIFY_OR_RESUME_REQUIRED"
+        return True,"PR_D_RECOVERY_RESUMED" if doc["phase"]=="RESUMED" else "PR_D_NO_REMEDIATION"
+
+
+def summary(doc: Mapping[str, object]) -> dict:
+    _validate(dict(doc))
+    return {"schema":SCHEMA,"phase":doc["phase"],"revision":doc["revision"],
+            "task_id":doc["identity"]["task_id"],"digest":doc["digest"],
+            "missing_count":len(doc["missing_ids"]),
+            "unknown_count":len(doc["unknown_ids"]),
+            "remediation_action":doc["remediation_action"],
+            "verification_action":doc["verification_action"],
+            "resumed_action":doc["resumed_action"],
+            "authorization_granted":False,
+            "verified":doc["phase"] in {"VERIFIED","RESUMED"},
+            "task_result_issued":False}
