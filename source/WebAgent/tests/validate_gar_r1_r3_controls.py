@@ -120,13 +120,14 @@ class GARR1R3Regression(unittest.TestCase):
         self.assertTrue(enabled(env))
         self.assertFalse(l4_enabled(env))
         self.assertTrue(l4_enabled({"SMARTAGENT_GAR_L4_ENABLED":"1"}))
-        self.assertTrue(l4_enabled({}))
+        self.assertFalse(l4_enabled({}))
+        self.assertFalse(l4_enabled({"SMARTAGENT_GAR_L4_ENABLED":""}))
 
     def test_l4_flag_registered_for_remote_and_webdirect(self):
         registry = load_registry()
         spec = registry["features"]["gar_l4_enabled"]
         self.assertEqual(spec["env"],"SMARTAGENT_GAR_L4_ENABLED")
-        self.assertTrue(spec["default"])
+        self.assertFalse(spec["default"])
         self.assertEqual(set(spec["agents"]),{"remote_agent","web_direct"})
         root = Path(__file__).resolve().parents[2]
         with patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"0"}):
@@ -137,6 +138,23 @@ class GARR1R3Regression(unittest.TestCase):
         self.assertIn("if gar_fresh_url and l4_enabled():", remote)
         self.assertIn("if fresh_target and l4_enabled():", controller)
         self.assertIn("gar_enabled() and l4_enabled()", controller)
+
+    def test_default_disabled_without_url_mutation(self):
+        from agent_core.runtime_config import resolve_features
+        self.assertFalse(l4_enabled({}))
+        self.assertFalse(resolve_features("remote_agent", environ={})["flags"]["gar_l4_enabled"])
+        self.assertFalse(resolve_features("web_direct", environ={})["flags"]["gar_l4_enabled"])
+        self.assertTrue(l4_enabled({"SMARTAGENT_GAR_L4_ENABLED":"1"}))
+        engine = self.engine()
+        budget = BoundedRepairBudget()
+        with patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"0"}):
+            decisions = []
+            for idx in range(8):
+                reason = "PROGRESS_" + str(idx)
+                state = budget.observe([{"reason":reason}], evidence_generation=0)
+                decisions.append(self.decision(engine,state,reason))
+        self.assertEqual([x.level for x in decisions[-3:]], ["L2","L3","L5"])
+        self.assertEqual(decisions[-1].reason, "GAR_L4_DISABLED")
 
     def test_v9_targeted_repair_guidance_is_present(self):
         source = (Path(__file__).resolve().parents[1]/"protocol_loop.py").read_text(encoding="utf-8")
