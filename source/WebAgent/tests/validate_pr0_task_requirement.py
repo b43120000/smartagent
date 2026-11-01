@@ -72,6 +72,21 @@ class PR0ContractTests(unittest.TestCase):
                 self.assertEqual(row["required_operations"], operations, row)
                 self.assertFalse(classify_original_request(request)[0])
 
+    def test_independent_followup_action_never_becomes_answer_only(self):
+        cases = (
+            ("請解釋 RAII。請修改本地檔案", "WRITE"),
+            ("請解釋 RAII。\n請把答案寄給 Slack", "DELIVER"),
+            ("請解釋 RAII，接著請幫我讀取檔案", "READ"),
+            ("請解釋 RAII，不需要執行程式，仍要修改資料", "WRITE"),
+            ("請解釋 GitHub branch。\n請幫我 push repo", "WRITE"),
+        )
+        for request, operation in cases:
+            with self.subTest(request=request):
+                row = self.assess(request)
+                self.assertEqual(row["route"], "RESOURCE_REQUIRED", row)
+                self.assertIn(operation, row["required_operations"])
+                self.assertFalse(classify_original_request(request)[0])
+
     def test_uncertain_and_trusted_scope_fail_closed(self):
         for request in (
             "Hello", "幫我處理一下剛才的問題",
