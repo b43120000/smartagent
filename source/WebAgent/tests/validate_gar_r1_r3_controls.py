@@ -130,8 +130,8 @@ class GARR1R3Regression(unittest.TestCase):
         self.assertEqual(set(spec["agents"]),{"remote_agent","web_direct"})
         root = Path(__file__).resolve().parents[2]
         with patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"0"}):
-            self.assertFalse(resolve_features("remote_agent")["effective"]["gar_l4_enabled"])
-            self.assertFalse(resolve_features("web_direct")["effective"]["gar_l4_enabled"])
+            self.assertFalse(resolve_features("remote_agent")["flags"]["gar_l4_enabled"])
+            self.assertFalse(resolve_features("web_direct")["flags"]["gar_l4_enabled"])
         remote = (root/"RemoteAgent"/"telegram_webagent_worker.py").read_text(encoding="utf-8")
         controller = (root/"WebAgent"/"controller.py").read_text(encoding="utf-8")
         self.assertIn("if gar_fresh_url and l4_enabled():", remote)
