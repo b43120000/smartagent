@@ -213,7 +213,7 @@
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
-    "source/agent_core/prerequisite_runtime_v3.py": "e2cf53072500fd53170d4c3e54e3b506ac23ce7704323ba51e0e70bb1645f84f"
+    "source/agent_core/prerequisite_runtime_v3.py": "937cd4becdbfa9646d6f6941e2b06bf5851437af23d8a62ffeba2f1405340509"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
