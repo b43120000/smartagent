@@ -93,8 +93,8 @@ class AnswerOnlyV9IT(unittest.TestCase):
         # Runtime must admit this no-side-effect answer in one V9 turn.
         request = (
             "請解釋 C++ RAII（Resource Acquisition Is Initialization）的設計原理，"
-            "並提供一個使用 std::unique_ptr 的簡短範例。\\n"
-            "只需要文字解釋與程式碼範例，不需要執行程式、讀取檔案或修改任何資料。\\n"
+            "並提供一個使用 std::unique_ptr 的簡短範例。\n"
+            "只需要文字解釋與程式碼範例，不需要執行程式、讀取檔案或修改任何資料。\n"
             "請完成後直接回報結果。"
         )
         for source in ("REMOTEAGENT_TELEGRAM", "REMOTEAGENT_WEBCOPILOT_V9", "WEB_DIRECT"):
