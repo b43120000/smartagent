@@ -34,6 +34,15 @@ _CHAIN = re.compile(
     r"(?:讀取|閱讀|檢查|修改|編輯|寫入|執行|測試|查詢|"
     r"搜尋|下載|上傳|推送|發送|寄送|建立|刪除|部署|同步|貼到|push|run|test|write|read|send|upload|download)", re.I,
 )
+_FOLLOWUP_ACTION = re.compile(
+    r"(?:[，,。；;！!？?\n])\s*(?:再|另外|同時|接著|然後)?\s*"
+    r"(?:請|請你|幫我|請幫我|可以幫我|務必|需要)?\s*"
+    r"(?:實際\s*)?(?:讀取|閱讀|檢查|修改|編輯|寫入|執行|測試|"
+    r"查詢|搜尋|下載|上傳|推送|發送|寄送|建立|刪除|部署|"
+    r"同步|貼到|傳給|通知|安裝|開啟|儲存|驗證|run\b|read\b|"
+    r"modify\b|push\b|send\b|upload\b|download\b)",
+    re.I,
+)
 _ACTIONS = {
     "READ": re.compile(
         r"\b(?:read|fetch|clone|checkout|inspect|open\s+(?:the\s+)?file|"
@@ -156,7 +165,8 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
     github = bool(_GITHUB.search(cleaned))
     sources: set[str] = set()
     ops: set[str] = set()
-    concept = bool(_CONCEPT.search(cleaned)) and not _CHAIN.search(cleaned)
+    concept = (bool(_CONCEPT.search(cleaned)) and not _CHAIN.search(cleaned)
+               and not _FOLLOWUP_ACTION.search(cleaned))
     # The payload of an explicit inline translation is input DATA, not
     # instructions. URLs and paths still require the non-fast-path route.
     transform = bool(re.match(
