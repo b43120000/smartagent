@@ -43,7 +43,7 @@ def enabled(env: Mapping[str, str] | None = None) -> bool:
 def l4_enabled(env: Mapping[str, str] | None = None) -> bool:
     """Disable L4 independently of the shared GAR-v1/WebGPT2 URL gate."""
     values = os.environ if env is None else env
-    return str(values.get(L4_FEATURE_FLAG, "1") or "").strip().lower() in {
+    return str(values.get(L4_FEATURE_FLAG, "0") or "").strip().lower() in {
         "1", "true", "yes", "on"
     }
 
