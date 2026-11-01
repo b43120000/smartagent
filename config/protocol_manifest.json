@@ -207,9 +207,9 @@
     "source/agent_core/tri_one_shared_worker.py": "bddb403263eee2d1f2f5ec3675b873dd91f24d3158a7d5f77db21fe0e30c4c86",
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/agent_core/current_conversation_adapter.py": "47f7eb37ed40a5558d7e03c09f3ac8b455b617513dd3a998e37935abb77a22ee",
-    "source/agent_core/gar_webgpt2_settings.py": "83c61ae5b47231ef58a865df6a0acb136f0045e86d4b4f7a67b3c8b0a43cfdc8",
+    "source/agent_core/gar_webgpt2_settings.py": "5d5da874036a0c4c7a88ebe884385a549e1d4ac317cc846a2828e689283fc448",
     "config/feature_flags.defaults.json": "fe64d1d10a0d8fee28032cc386a3c40bbc92613016c8becf2150c3c4d7c2b476",
-    "source/agent_core/runtime_config.py": "299f3980768ebf2b1648c150340a96489ef8f3989edff00def8f9a9654603c4b"
+    "source/agent_core/runtime_config.py": "dfeee66ae630d8448169f84bfc4311164f7532c039aedd873b715706f48977a3"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
