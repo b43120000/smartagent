@@ -112,6 +112,41 @@ class RegistryIT(unittest.TestCase):
         self.assertEqual(child_env["SMARTAGENT_COMPOSER_HYBRID_V1"], "1")
         self.assertNotIn("SMARTAGENT_GAR_V1", child_env)
 
+    def test_local_supervisor_to_remote_worker_recomputes_capability_gates(self):
+        env = {}
+        local = cfg.apply_process_config("local_agent", environ=env,
+                                         user_file=self.override, write_log=False)
+        self.assertFalse(local["flags"]["tri_one_text_only"])
+        remote = cfg.apply_process_config("remote_agent", environ=env,
+                                          user_file=self.override, write_log=False)
+        self.assertTrue(remote["flags"]["tri_one_text_only"])
+        self.assertTrue(remote["flags"]["tri_one_task_result"])
+        self.assertEqual(remote["sources"]["tri_one_text_only"], "tracked_default")
+        self.assertEqual(env["TRI_ONE_TEXT_ONLY_V1"], "1")
+
+    def test_genuine_explicit_override_survives_agent_role_switch(self):
+        env = {"TRI_ONE_TASK_RESULT_V1": "0"}
+        cfg.apply_process_config("local_agent", environ=env,
+                                 user_file=self.override, write_log=False)
+        remote = cfg.apply_process_config("remote_agent", environ=env,
+                                          user_file=self.override, write_log=False)
+        self.assertFalse(remote["flags"]["tri_one_task_result"])
+        self.assertFalse(remote["flags"]["tri_one_text_only"])
+        self.assertEqual(remote["sources"]["tri_one_task_result"],
+                         "process_environment")
+
+    def test_inherited_configuration_version_change_requires_restart(self):
+        env = {}
+        cfg.apply_process_config("remote_agent", environ=env,
+                                 user_file=self.override, write_log=False)
+        self.override.write_text(json.dumps({
+            "schema": cfg.SCHEMA,
+            "features": {"composer_hybrid": False},
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "config_changed_since_parent"):
+            cfg.apply_process_config("remote_agent", environ=env,
+                                     user_file=self.override, write_log=False)
+
     def test_env_change_after_parent_snapshot_is_explicit(self):
         parent_env = {}
         cfg.apply_process_config("remote_agent", environ=parent_env,
