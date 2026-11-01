@@ -5,6 +5,7 @@ on:
     branches:
       - fix/gar-progress-collector-l4-control-20261102
       - release/pr-a-gar-l4-default-off-20261102
+      - feat/prerequisite-v3-prb-prc-prd-20261102
   workflow_dispatch:
 
 permissions:
@@ -39,6 +40,11 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install -r install_smart_agent/requirements-webdirect.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: PR-B/C/D scoped probe and independent verification regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_pr_bcd_runtime.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: PR-A DAG and durable ledger regression
         shell: pwsh
