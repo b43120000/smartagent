@@ -142,6 +142,38 @@ class PRAGraphRegression(unittest.TestCase):
         self.assertEqual(len(set(event["seq"] for event in graph["events"])),
                          graph["revision"])
 
+    def test_v9_runtime_emits_graph_and_preserves_answer_only(self):
+        import os
+        from unittest.mock import patch
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from WebAgent.tests.validate_tri_one_5a_protocol_it import answer_only_response
+        events = []
+        def planner(prompt, expected, attachments):
+            self.assertIn("[SMARTAGENT_TASK_REQUIREMENT_V1]", prompt)
+            return answer_only_response()
+        loop = WebAgentProtocolLoop(
+            Path(self.tmp.name), planner, progress_root=Path(self.tmp.name),
+            max_turns=2, event_sink=lambda event, **fields: events.append((event, fields)),
+        )
+        with patch.dict(os.environ, {
+            "SMARTAGENT_PR0_V1": "1",
+            "SMARTAGENT_PREREQ_V3_PR_A": "1",
+            "TRI_ONE_TASK_RESULT_V1": "1",
+            "TRI_ONE_TEXT_ONLY_V1": "1",
+        }), patch.object(loop.tools, "execute",
+                        side_effect=AssertionError("PR-A must not execute tools")):
+            outcome = loop.run(
+                "請幫我解釋 RAII，並提供 C++ std::unique_ptr 範例。",
+                source_tag="REMOTEAGENT_TELEGRAM",
+            )
+        self.assertIn("RAII", outcome)
+        saved = self.store.read(loop.task_id)
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved["identity"]["request_id"], loop.run_id)
+        self.assertTrue(any(name == "pr_a_graph_initialized" for name, _ in events))
+        self.assertFalse(any(name == "pr_a_graph_unavailable" for name, _ in events))
+        self.assertEqual(loop.action_result_ledger, {})
+
     def test_invalid_unknown_scope_and_identity(self):
         with self.assertRaises(PrerequisiteGraphError):
             build_requirement_graph(task_id="../bad", request_id="RR-1",
