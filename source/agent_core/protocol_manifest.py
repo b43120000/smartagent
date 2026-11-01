@@ -163,6 +163,7 @@ CORE_FILES = (
     'source/agent_core/gar_webgpt2_settings.py',
     'source/agent_core/gar_l4_supervision.py',
     'source/WebAgent/fresh_context.py',
+    'source/agent_core/task_requirement.py',
     'source/agent_core/tri_one_answer_only.py',
     'source/agent_core/tri_one_shared_worker.py',
     'source/agent_core/current_conversation_adapter.py',
