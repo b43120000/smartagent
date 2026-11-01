@@ -1388,6 +1388,9 @@ def main(argv=None):
     mode.add_argument("--remote-only", action="store_true")
     mode.add_argument("--dispatcher-only", action="store_true")
     args = parser.parse_args(argv)
+    from .runtime_config import apply_process_config
+    apply_process_config("remote_agent" if args.remote_only or args.dispatcher_only
+                         else "local_agent")
 
     from .protocol_manifest import require_protocol_manifest
     require_protocol_manifest(install_root())
