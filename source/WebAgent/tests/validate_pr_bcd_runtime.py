@@ -124,6 +124,20 @@ class PRBCDTests(unittest.TestCase):
         self.assertEqual(unchanged["phase"],"MISSING")
         self.assertEqual(unchanged["remediation_action"],"")
 
+    def test_c_negative_authorization_is_not_remediation_permission(self):
+        with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                   return_value=("MISSING","")):
+            for text in (
+                "Do not install package synthetic_pr_bcd>=1.0",
+                "Please inspect package synthetic_pr_bcd>=1.0 without installation",
+                "不要安裝 package synthetic_pr_bcd>=1.0",
+            ):
+                with self.subTest(text=text):
+                    fact = self.probe(text)
+                    self.assertTrue(fact["missing"])
+                    self.assertFalse(fact["remediation_requested"])
+                    self.assertFalse(fact["authorization_granted"])
+
     def test_c_denied_scope_no_remediation_tracking(self):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
                    return_value=("MISSING","")):
