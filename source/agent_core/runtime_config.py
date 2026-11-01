@@ -81,6 +81,19 @@ def load_registry(*, path: Path | None = None) -> dict:
         deps = spec.get("requires")
         if not isinstance(deps, list) or any(d not in features or d == name for d in deps):
             raise ValueError("feature_defaults_dependencies_invalid:" + name)
+    visited = set()
+    def visit(name: str, visiting: set[str]) -> None:
+        if name in visiting:
+            raise ValueError("feature_defaults_dependency_cycle")
+        if name in visited:
+            return
+        visiting.add(name)
+        for dep in features[name]["requires"]:
+            visit(dep, visiting)
+        visiting.remove(name)
+        visited.add(name)
+    for name in features:
+        visit(name, set())
     return data
 
 
@@ -117,7 +130,7 @@ def _inherited_sources(values: Mapping[str, str], registry: dict) -> dict:
         if any(k not in keys or str(values.get(k, "")) != str(v)
                for k, v in originals.items()):
             return {}
-        return dict(inherited["sources"])
+        return inherited
     except (ValueError, TypeError, AttributeError):
         return {}
 
@@ -131,6 +144,8 @@ def resolve_features(agent: str, *, environ: Mapping[str, str] | None = None,
     user = load_user_values(path=user_file, registry=registry)
     values = os.environ if environ is None else environ
     inherited = _inherited_sources(values, registry)
+    inherited_sources = inherited.get("sources", {})
+    inherited_role = str(inherited.get("agent", "") or "")
     effective, sources, env_names = {}, {}, {}
     for name, spec in registry["features"].items():
         key = spec["env"]
@@ -141,9 +156,14 @@ def resolve_features(agent: str, *, environ: Mapping[str, str] | None = None,
             value, source = user["features"][name], "user_config"
         if name in user["agent_overrides"].get(agent, {}):
             value, source = user["agent_overrides"][agent][name], "agent_override:" + agent
-        if key in values:
+        # Do not inherit feature gates imposed only by the parent's agent role.
+        # An actual explicit environment override still follows the child.
+        if key in values and (
+            not inherited_role or inherited_role == agent
+            or inherited_sources.get(name) == "process_environment"
+        ):
             value = _parse_bool(values[key], key=key)
-            source = inherited.get(name, "process_environment")
+            source = inherited_sources.get(name, "process_environment")
         if agent not in spec["agents"]:
             value, source = False, "unsupported_agent:" + agent
         effective[name], sources[name] = value, source
@@ -163,6 +183,8 @@ def resolve_features(agent: str, *, environ: Mapping[str, str] | None = None,
     setting_digest = hashlib.sha256(json.dumps(
         {"registry": registry, "user": user}, ensure_ascii=True,
         sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if inherited.get("config_sha256") and inherited["config_sha256"] != setting_digest:
+        raise ValueError("feature_config_changed_since_parent_restart_required")
     effective_digest = hashlib.sha256(json.dumps(
         {"agent": agent, "flags": effective}, sort_keys=True,
         separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -187,7 +209,9 @@ def apply_process_config(agent: str, *, environ: MutableMapping[str, str] | None
     # The worker inherits a resolved snapshot; its provenance remains the
     # parent's persisted/explicit source when the values match.
     env[INHERITED_KEY] = json.dumps(
-        {"schema": SCHEMA, "values": applied, "sources": snapshot["sources"]},
+        {"schema": SCHEMA, "agent": agent,
+         "config_sha256": snapshot["config_sha256"],
+         "values": applied, "sources": snapshot["sources"]},
         sort_keys=True, separators=(",", ":"))
     if write_log:
         log_feature_config(snapshot)
