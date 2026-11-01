@@ -7,6 +7,7 @@ on:
       - feat/gar-webgpt2-saved-startup-20261101
       - feat/shared-gar-webgpt2-all-agents-20261101
       - feat/gar-auto-enable-from-webgpt2-20261101
+      - feat/gar-split-browser-webgpt1-webgpt2-20261101
       - main
   workflow_dispatch:
 
@@ -63,8 +64,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_gar_l4_fresh_context.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: GAR L4 non-interference
+      - name: Dual browser roles and GAR L4 non-interference
         shell: pwsh
         run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_dual_browser_roles.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_gar_l4_supervision.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
