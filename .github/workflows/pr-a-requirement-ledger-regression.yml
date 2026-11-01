@@ -46,6 +46,19 @@ jobs:
         run: |
           python -B source/WebAgent/tests/validate_pr_bcd_runtime.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare offline PR-B/C/D Live fixture (no install or network)
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/prepare_pr_bcd_live_fixture.py --root ".\\localdata\\SmartAgent_PR_BCD_LIVE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $target = ".\\localdata\\SmartAgent_PR_BCD_LIVE"
+          if (-not (Test-Path "$target\\wheelhouse\\smartagent_pr_bcd_live-1.0-py3-none-any.whl")) {
+            throw "Synthetic wheel missing"
+          }
+          $check = python -I -B "$target\\inspect_dependency.py"
+          if ($LASTEXITCODE -ne 0 -or -not ($check -match "PR_BCD_DEPENDENCY_MISSING")) {
+            throw "Fixture unexpectedly has preinstalled dependency"
+          }
       - name: PR-A DAG and durable ledger regression
         shell: pwsh
         run: |
