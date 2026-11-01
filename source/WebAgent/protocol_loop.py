@@ -583,9 +583,10 @@ class WebAgentProtocolLoop:
                     or saved.get("prepared") or saved.get("actions")
                     or saved.get("results") or saved.get("pending_actions")):
                 return False
-        if self.durable_ledger is not None:
+        durable_ledger = getattr(self, "durable_ledger", None)
+        if durable_ledger is not None:
             try:
-                durable = self.durable_ledger.load_action_state(self.task_id)
+                durable = durable_ledger.load_action_state(self.task_id)
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 return False
             if not isinstance(durable, dict) or durable.get("actions"):
