@@ -19,6 +19,7 @@ if str(SOURCE_ROOT) not in sys.path:
 
 from agent_core.json_state_io import write_json_atomic
 from agent_core.runtime_environment import runtime_tool_paths
+from agent_core.prerequisite_runtime_v3 import RecoveryLedger
 from agent_core.tool_result_contract import decode_result
 from WebAgent.protocol_loop import WebAgentProtocolLoop
 from WebAgent.tool_context import WebAgentToolContext
@@ -243,9 +244,22 @@ def run() -> None:
         output = loop.run(
             "IT-R only: discover the missing synthetic dependency locally, install only the supplied offline wheel "
             "into the authorized fixture, explicitly verify its import, then retry the original operation with a new ID.\n"
+            + "Required package " + distribution + ">=1.0; "
             + str(fixture)
         )
         assert output == "RUNTIME_DEPENDENCY_LOOP_PASS", output
+        recovery = RecoveryLedger(APP_ROOT).read(loop.task_id)
+        assert recovery is not None and recovery["phase"] == "RESUMED", recovery
+        assert recovery["remediation_action"] == mutate["action_id"]
+        assert recovery["verification_action"] == verify["action_id"]
+        assert recovery["resumed_action"] == retry["action_id"]
+        assert recovery["remediation_evidence_sha256"] and recovery["verification_evidence_sha256"]
+        assert RecoveryLedger(APP_ROOT).terminal_ready(loop.task_id)[0]
+        state["phases"]["PR-B/C/D"] = {"status":"PASS",
+            "phase":recovery["phase"],"revision":recovery["revision"],
+            "remediation_action":recovery["remediation_action"],
+            "verification_action":recovery["verification_action"],
+            "resumed_action":recovery["resumed_action"]}
         rows = {}
         for action in (inspect, mutate, verify, retry):
             raw, decoded = _result(loop, action["action_id"])
