@@ -88,6 +88,63 @@ class AnswerOnlyV9IT(unittest.TestCase):
             self.assertTrue(receipt["receipt_id"].startswith("TERM-"))
             self.assertIn("[TRI_ONE_ANSWER_ONLY_CANDIDATE]", turns[0][0])
 
+    def test_real_telegram_raii_negative_noop_live_text_acceptance(self):
+        # Exact wording from a previously failed RemoteAgent Live IT. The
+        # Runtime must admit this no-side-effect answer in one V9 turn.
+        request = (
+            "請解釋 C++ RAII（Resource Acquisition Is Initialization）的設計原理，"
+            "並提供一個使用 std::unique_ptr 的簡短範例。\\n"
+            "只需要文字解釋與程式碼範例，不需要執行程式、讀取檔案或修改任何資料。\\n"
+            "請完成後直接回報結果。"
+        )
+        for source in ("REMOTEAGENT_TELEGRAM", "REMOTEAGENT_WEBCOPILOT_V9", "WEB_DIRECT"):
+            with self.subTest(source=source):
+                self._loop_case(request, source)
+                self._loop_case(request, source, omit_evidence=True)
+
+    def test_previous_no_tool_terminal_prerequisite_can_be_released(self):
+        with tempfile.TemporaryDirectory(prefix="goal1-advisory-") as directory:
+            root = Path(directory)
+            turns, events = [], []
+            def planner(prompt, expected, attachments):
+                turns.append(prompt)
+                # An unverified boast is not a pure text answer; it creates
+                # the legacy advisory no-execution prerequisite first.
+                if len(turns) == 1:
+                    return answer_only_response(text="I checked your files.")
+                return answer_only_response(text="RAII ties ownership to scope.")
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=3,
+                event_sink=lambda name, **fields: events.append((name, fields)),
+            )
+            with patch.dict(os.environ, {
+                "TRI_ONE_TASK_RESULT_V1":"1",
+                "TRI_ONE_TEXT_ONLY_V1":"1",
+            }), patch.object(loop.tools, "execute",
+                             side_effect=AssertionError("tools must not run")):
+                answer = loop.run(
+                    "請解釋 RAII，不需要執行程式、讀取檔案或修改任何資料。",
+                    request_id="RR-ADVISORY-5A", task_id="TASK-ADVISORY-5A",
+                    task_epoch="EPOCH-ADVISORY-5A",
+                    source_tag="REMOTEAGENT_TELEGRAM",
+                )
+            self.assertEqual(answer, "RAII ties ownership to scope.")
+            self.assertEqual(len(turns), 2)
+            self.assertFalse(loop.pending_verification_requirement)
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.action_result_ledger, {})
+            self.assertEqual(loop.condition_result_ledger, {})
+            self.assertEqual(loop.terminal_acceptance["completion_kind"], "ANSWER_ONLY")
+            self.assertEqual(loop.terminal_acceptance["evidence_refs"], [])
+            self.assertEqual(loop.terminal_acceptance["evidence_verdict"], "UNVERIFIED")
+            self.assertEqual(len([1 for name, _ in events if name ==
+                                  "tri_one_answer_only_advisory_prerequisite_released"]), 1)
+            candidates = [row for name, row in events
+                          if name == "tri_one_answer_only_candidate"]
+            self.assertFalse(candidates[0]["eligible"])
+            self.assertTrue(candidates[-1]["eligible"])
+            self.assertTrue(all(row["response_received"] for row in candidates))
+
     def test_telegram_original_route_candidate(self):
         self._loop_case("Explain RAII in C++.", "REMOTEAGENT_TELEGRAM")
 
