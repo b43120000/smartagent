@@ -327,6 +327,21 @@ class TaskContinuationStore:
             record['authorized_paths'] = list(loop.authorized_paths)
             record['pending'] = {key: copy.deepcopy(getattr(loop, key, {})) for key in
                 ('pending_result_recovery', 'pending_command_field_repairs', 'deferred_action_repairs', 'pending_verification_requirement')}
+            # Protocol-only Action holds are never authorized, never replayed
+            # across a new request/epoch, and never silently forgotten on a
+            # crash. Persist metadata/digest, NOT the unadmitted command body.
+            held = getattr(loop, 'pending_progress_repair_actions', [])
+            if held:
+                encoded = json.dumps(held, ensure_ascii=False, sort_keys=True,
+                                     separators=(',', ':'), default=str)
+                record['pending']['unadmitted_progress_repair_hold'] = {
+                    'status': 'INVALIDATE_ON_CONTINUATION',
+                    'request_id': loop.run_id, 'task_epoch': loop.task_epoch,
+                    'count': len(held),
+                    'action_ids': [str(row.get('action_id', '') or '')
+                                   for row in held if isinstance(row, dict)],
+                    'content_sha256': hashlib.sha256(encoded.encode('utf-8')).hexdigest(),
+                }
             record['ack_ids'] = list(loop.accepted_ack_ids)
             self._save(data)
 
