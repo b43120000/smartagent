@@ -450,7 +450,11 @@ class RecoveryEngine:
         # after the Bounded Repair LOCAL limit is reached.
         if local_repair_budget is not None and not self._local_repair_exhausted:
             return self._record("L1", "REPAIR", "GAR_LOCAL_REPAIR_ACTIVE")
-        if self.same_blocker <= 1:
+        # After the canonical BoundedRepair LOCAL handoff, progress to L2
+        # regardless of changes in the rejected field/reason. The hard budget
+        # and snapshot/no-unknown-side-effects checks above remain unchanged.
+        # Preserve legacy no-budget behavior for existing call sites.
+        if local_repair_budget is None and self.same_blocker <= 1:
             return self._record("L1", "REPAIR", code)
         if self.rebases < self.max_rebases:
             self.rebases += 1
