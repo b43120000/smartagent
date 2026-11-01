@@ -350,6 +350,14 @@ class WebAgentProtocolLoop:
         request, Task/epoch, Action Ledger, Progress and Outbox remain intact.
         """
         from agent_core.task_progress import set_runtime_state
+        from agent_core.goal_anchored_recovery import l4_enabled
+        if not l4_enabled():
+            reason = "GAR_L4_DISABLED"
+            set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                              root=self.progress_root)
+            self._emit("gar_l4_disabled", request_id=self.run_id,
+                       round=self.turn_id, reason=reason)
+            raise RuntimeError("GAR safely paused: " + reason)
         adapter = self._gar_fresh_adapter
         if adapter is None:
             reason = self._gar.refuse_fresh_context(
@@ -501,7 +509,8 @@ class WebAgentProtocolLoop:
 
     def _gar_semantic_supervision(self, reason: str) -> str:
         """Review a trusted runtime-observed stall without faking V9 rejection."""
-        if self._gar is None or os.environ.get(
+        from agent_core.goal_anchored_recovery import l4_enabled
+        if self._gar is None or not l4_enabled() or os.environ.get(
             "SMARTAGENT_GAR_L4_SUPERVISOR_V1", "1"
         ).strip().lower() in {"0", "false", "no", "off"}:
             return ""
@@ -4917,10 +4926,33 @@ class WebAgentProtocolLoop:
                 gar_prompt = self._gar_rejection(
                     diagnostics, repair_budget=repair_budget,
                 )
+                # Only deterministic schema/evidence correction; never suggest
+                # executing an action merely to satisfy a malformed response.
+                reject_reasons = {
+                    str(row.get("reason", "")) for row in diagnostics
+                    if isinstance(row, dict)
+                }
+                contract_hint = (
+                    "\n[PROGRESS_TERMINAL_CONTRACT]\n"
+                    "Do not claim terminal SUCCESS without Runtime-verifiable "
+                    "evidence_refs. If actions are pending, use CONTINUE with "
+                    "valid report_progress and canonical actions. "
+                    "For report_progress, step statuses are PENDING, IN_PROGRESS, "
+                    "COMPLETED; the decision COMPLETE is not a step status. "
+                    "Do not replay an already executed or unknown action."
+                    "\n[/PROGRESS_TERMINAL_CONTRACT]"
+                    if reject_reasons.intersection({
+                        "terminal_success_verification_missing",
+                        "invalid_progress_payload",
+                        "partial_not_supported_or_recoverable_work",
+                        "missing_context_requires_runtime_read",
+                    }) else ""
+                )
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
                     + "\n修正 transport/schema 後重送同一決策；不得假設 action 已執行。"
+                    + contract_hint
                 )
                 pending_recovery = self._result_recovery_guidance([])
                 if pending_recovery:
@@ -5131,6 +5163,27 @@ class WebAgentProtocolLoop:
                         "\n這是 PROGRESS_TO_ACTION_REPAIR：只修正 action emission。"
                         "next_action 宣告的 canonical tool 必須在同一輪以完整 action 出現；"
                         "不得聲稱它已執行或預測其結果。"
+                    )
+                rejected_reasons = {
+                    str(item.get("reason", "")) for item in ack_diagnostics
+                    if isinstance(item, dict)
+                }
+                if "terminal_success_verification_missing" in rejected_reasons:
+                    repair_note += (
+                        "\n[TERMINAL_EVIDENCE_REPAIR] Runtime 尚無足以證明 "
+                        "SUCCESS 的 verified evidence_refs。不得由模型自行補造；"
+                        "先使用 CONTINUE 並提出尚未執行的必要讀取／驗證 Action，"
+                        "或在確定無法安全繼續時回報 INTERRUPT/UNKNOWN。"
+                    )
+                if "missing_context_requires_runtime_read" in rejected_reasons:
+                    repair_note += (
+                        "\n[CONTEXT_READ_REPAIR] 所缺事實需要 Runtime "
+                        "執行合法唯讀 Action；不可用 Progress 敘述代替證據。"
+                    )
+                if "partial_not_supported_or_recoverable_work" in rejected_reasons:
+                    repair_note += (
+                        "\n[PARTIAL_REPAIR] PARTIAL 不能作為未查證完成的捷徑；"
+                        "請只使用 Runtime 已支持且有實際 Evidence 的狀態。"
                     )
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
