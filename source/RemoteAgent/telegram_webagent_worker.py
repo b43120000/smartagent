@@ -429,16 +429,19 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 display_name="RemoteAgent",
             )
             if gar_fresh_url:
-                from WebAgent.fresh_context import ensure_fresh_context_page
+                from WebAgent.fresh_context import (
+                    ensure_fresh_context_page, prepare_gar_browser_context,
+                )
+                second_context = prepare_gar_browser_context(scraper)
                 prepared = ensure_fresh_context_page(
                     context=context, original_page=page, target_url=gar_fresh_url,
-                    page_lease_held=True,
+                    page_lease_held=True, target_context=second_context,
                 )
                 runtime_log.write(
                     "CONNECT", component="telegram_webagent_worker",
                     stage="GAR_WEBGPT2_TAB_READY", task_id=task.task_id,
                     request_id=task.request_id, created=prepared["created"],
-                    bootstrap_sent=False,
+                    same_context=prepared["same_context"], bootstrap_sent=False,
                 )
             tool_context = WebAgentToolContext(
                 task.workspace, interface_name="remote"
