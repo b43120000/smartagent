@@ -58,6 +58,7 @@ class ReviewContractTests(unittest.TestCase):
         advice = parse_review_response(review_reply(prompt), nonce="a" * 32)
         self.assertEqual(advice["completed_steps"][1], "2. validation complete")
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_runtime_observed_semantic_stall_can_request_single_review(self):
         from agent_core.goal_anchored_recovery import RecoveryEngine
         e = RecoveryEngine(request_id="RR", task_id="TASK", task_epoch="E",
