@@ -1,0 +1,53 @@
+name: PR-A Requirement Graph Durable Ledger Regression
+
+on:
+  push:
+    branches:
+      - feat/prerequisite-v3-pr-a-graph-ledger-20261101
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pr-a-windows-regression:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: source
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install WebDirect dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r install_smart_agent/requirements-webdirect.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: PR-A DAG and durable ledger regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_pr_a_requirement_graph.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: PR-0 routing and task requirement regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_pr0_task_requirement.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: V9 and GAR Progress Repair regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_tri_one_5a_protocol_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_progress_hold_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Dependency loop and manifest integrity regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_runtime_dependency_loop.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
