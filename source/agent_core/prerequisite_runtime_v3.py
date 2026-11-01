@@ -307,6 +307,8 @@ class RecoveryLedger:
         operation = str(action.get("operation","")).upper()
         tool = str(action.get("tool",""))
         executed = result.get("executed") is True
+        if not isinstance(evidence_ref,str) or not evidence_ref or len(evidence_ref)>256:
+            raise PrerequisiteRecoveryError("pr_d_runtime_evidence_id_required")
         status = str(result.get("result_status","")).upper()
         verified = str(result.get("effective_verification_status","")).upper()=="PASS"
         evidence = _digest({"ref":evidence_ref}) if evidence_ref else ""
@@ -334,7 +336,13 @@ class RecoveryLedger:
             if phase=="VERIFIED" and action_id not in {
                 doc["remediation_action"],doc["verification_action"]
             } and operation not in {"MUTATE","VERIFY"}:
-                if executed and status=="SUCCEEDED" and verified:
+                # A random later PASS must not masquerade as the resumed
+                # original operation. The retry must explicitly depend on
+                # the independent verifier in the accepted V9 action DAG.
+                dependencies = action.get("depends_on") or []
+                linked = (isinstance(dependencies,list) and
+                          doc["verification_action"] in dependencies)
+                if linked and executed and status=="SUCCEEDED" and verified:
                     doc["resumed_action"]=action_id
                     doc["resume_evidence_sha256"]=evidence
                     doc["phase"]="RESUMED"
