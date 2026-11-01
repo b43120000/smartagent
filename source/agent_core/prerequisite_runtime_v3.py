@@ -282,11 +282,15 @@ class RecoveryLedger:
         def transition(doc):
             if not (tool=="run_command" and operation=="MUTATE"):
                 return ""
-            if doc["phase"] not in {"MISSING","UNKNOWN"}:
+            if doc["phase"] in {"REMEDIATING","REMEDIATED_PENDING_VERIFY",
+                                "VERIFIED","BLOCKED"} and doc["remediation_action"]:
+                raise PrerequisiteRecoveryError("pr_c_remediation_replay_blocked")
+            if doc["phase"] != "MISSING":
                 return ""
-            if not (doc["missing_ids"] and doc["remediation_requested"]
-                    and scope_allowed):
-                return ""
+            if not doc["remediation_requested"] or not scope_allowed:
+                raise PrerequisiteRecoveryError("pr_c_explicit_authorization_required")
+            if not doc["missing_ids"]:
+                raise PrerequisiteRecoveryError("pr_c_missing_probe_required")
             if doc["remediation_action"] and doc["remediation_action"] != action_id:
                 raise PrerequisiteRecoveryError("pr_c_remediation_replay_blocked")
             doc["remediation_action"] = action_id
