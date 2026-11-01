@@ -235,6 +235,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--use-saved-startup", action="store_true")
     parser.add_argument("--bootstrap-provision", action="store_true")
     args = parser.parse_args(argv)
+    # Resolve the same persisted feature policy as LocalAgent / RemoteAgent
+    # before any Controller session or hybrid Composer runtime is initialized.
+    from agent_core.runtime_config import apply_process_config
+    apply_process_config("web_direct")
 
     if args.prepare_startup_only:
         if args.workspace and args.webgpt_url:
