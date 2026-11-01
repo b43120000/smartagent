@@ -102,7 +102,7 @@ class AnswerOnlyPolicyTests(unittest.TestCase):
         request = (
             "請解釋 C++ RAII（Resource Acquisition Is Initialization）的設計原理，"
             "並提供一個使用 std::unique_ptr 的簡短範例。\n"
-            "只需要文字解釋與程式碼範例，不需要執行程式、讀取檔案或修改任何資料。\\n"
+            "只需要文字解釋與程式碼範例，不需要執行程式、讀取檔案或修改任何資料。\n"
             "請完成後直接回報結果。"
         )
         self.assertEqual(classify_original_request(request),
