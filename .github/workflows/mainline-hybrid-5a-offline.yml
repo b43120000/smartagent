@@ -9,6 +9,7 @@ on:
       - feat/gar-auto-enable-from-webgpt2-20261101
       - feat/gar-split-browser-webgpt1-webgpt2-20261101
       - feat/global-runtime-feature-registry-20261101
+      - fix/tri-one-5a-negated-noop-answer-only-20261101
       - main
   workflow_dispatch:
 
