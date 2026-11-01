@@ -118,6 +118,23 @@ class FreshBrowserAdmissionTests(unittest.TestCase):
         self.assertEqual(old._released, 0)
         self.assertEqual(old._page.url, "https://chatgpt.com/c/old")
 
+    def test_dedicated_browser_context_can_attest_l4_without_touching_original(self):
+        old, fresh, adapter = make()
+        original_context = old._browser
+        original_context.pages = [old._page]
+        dedicated = types.SimpleNamespace(pages=[fresh])
+        old._gar_second_context = dedicated
+        old._gar_second_endpoint = "http://127.0.0.1:12802"
+        binding = prepare(adapter)
+        self.assertEqual(len(original_context.pages), 1)
+        self.assertEqual(len(dedicated.pages), 1)
+        self.assertTrue(binding.proof.page_ownership_verified)
+        self.assertEqual(Scraper.instances[-1]._browser, dedicated)
+        self.assertEqual(Scraper.instances[-1]._active_cdp_endpoint,
+                         "http://127.0.0.1:12802")
+        self.assertEqual(old._page.url, "https://chatgpt.com/c/old")
+        binding.close()
+
     def test_reject_missing_or_matching_target_without_submission(self):
         for target in ("", "https://chatgpt.com/", "https://chatgpt.com/c/old",
                        "https://claude.ai/chat/other"):
@@ -275,6 +292,33 @@ class FreshStartupPageTests(unittest.TestCase):
         self.assertEqual(len(context.created), 1)
         self.assertEqual(self.visited, [self.target])
         self.assertEqual(self.old.focused, 2)
+
+    def test_dedicated_context_page_creation_preserves_original_context(self):
+        from contextlib import nullcontext
+        from WebAgent.fresh_context import ensure_fresh_context_page
+        primary = self.BrowserContext(self.old)
+        other = self.BrowserContext(self.BrowserPage("about:blank"))
+        with patch("WebAgent.browser_bridge.execution_page_lease",
+                   side_effect=lambda **kw: nullcontext()), \
+             patch("WebAgent.browser_bridge._conversation_ready",
+                   side_effect=lambda page, url: setattr(page, "url", url)), \
+             patch("agent_core.conversation_ownership.ConversationOwnershipRegistry",
+                   Registry), \
+             patch("agent_core.shared_browser.shared_browser_enabled",
+                   return_value=False):
+            result = ensure_fresh_context_page(
+                context=primary, original_page=self.old, target_url=self.target,
+                target_context=other)
+            self.assertTrue(result["created"])
+            self.assertFalse(result["same_context"])
+            self.assertEqual(len(primary.pages), 1)
+            self.assertEqual(other.pages[-1].url, self.target)
+            self.assertEqual(self.old.focused, 1)
+            with self.assertRaisesRegex(RuntimeError, "DUPLICATE_IN_ORIGINAL_CONTEXT"):
+                primary.pages.append(self.BrowserPage(self.target))
+                ensure_fresh_context_page(
+                    context=primary, original_page=self.old, target_url=self.target,
+                    target_context=other)
 
     def test_remote_existing_lease_does_not_reacquire(self):
         from WebAgent.fresh_context import ensure_fresh_context_page
