@@ -1022,11 +1022,25 @@ def _telegram_menu() -> int:
 
 
 def _browser_menu() -> int:
-    from .browser_preferences import load_browser_preferences, save_browser_preferences, browser_launch_selection
+    from .browser_preferences import (
+        load_browser_preferences, save_browser_preferences, browser_launch_selection,
+    )
     current = load_browser_preferences()
-    print('\n瀏覽器設定（Agent / WebCopilot / DOM 校準共用）')
-    print(f"目前：{current['browser']}，瀏覽器 {current['instance']}")
-    print('[1] Chrome（預設）\n[2] Edge\n[0] 取消')
+    first = browser_launch_selection(current, role='webgpt1')
+    second = browser_launch_selection(current, role='webgpt2')
+    print('\n瀏覽器設定（Agent / WebCopilot / DOM 校準）')
+    print(f"WebGPT1：{first['browser']}，瀏覽器 {first['instance']}，CDP {first['port']}")
+    print(f"GAR WebGPT2：{second['browser']}，瀏覽器 {second['instance']}，CDP {second['port']}")
+    print('[1] 設定 WebGPT1 的瀏覽器\n[2] 設定 GAR WebGPT2 的瀏覽器\n[0] 取消')
+    while True:
+        role_choice = input('請選擇要設定的對話 [1]: ').strip() or '1'
+        if role_choice == '0':
+            return 0
+        if role_choice in {'1', '2'}:
+            break
+        print('[!] 請輸入 1、2 或 0。')
+    role = 'webgpt1' if role_choice == '1' else 'webgpt2'
+    print('[1] Chrome\n[2] Edge\n[0] 取消')
     while True:
         choice = input('請選擇瀏覽器 [1]: ').strip() or '1'
         if choice == '0':
@@ -1043,12 +1057,15 @@ def _browser_menu() -> int:
         if raw in {'1', '2', '3', '4', '5'}:
             break
         print('[!] 請輸入 1～5。')
-    saved = save_browser_preferences(browser, int(raw))
-    launch = browser_launch_selection(saved)
-    print(f"[OK] 已設定 {browser}，瀏覽器 {raw}。")
-    print(f"登入資料夾：{launch['profile_dir']}")
-    print('下次啟動 Agent 或校準時生效；已執行的程式請重新啟動。')
-    print('每個瀏覽器環境首次使用需登入網站一次，之後 Agent 與校準共用登入。')
+    saved = save_browser_preferences(browser, int(raw), role=role)
+    launch = browser_launch_selection(
+        {**current, **(saved if role == 'webgpt1' else {'webgpt2': saved})},
+        role=role,
+    )
+    print(f"[OK] 已設定 {'WebGPT1' if role == 'webgpt1' else 'GAR WebGPT2'}：{browser}，瀏覽器 {raw}。")
+    print(f"登入資料夾：{launch['profile_dir']}，CDP Port：{launch['port']}")
+    print('下次啟動 Agent 生效；兩個不同實例須分別登入 ChatGPT。')
+    print('GAR WebGPT2 的 URL 仍由主選單 [6] 管理。')
     return 0
 
 
