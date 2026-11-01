@@ -45,6 +45,12 @@ function Hash-Text([string]$text) {
         return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
     } finally { $sha.Dispose() }
 }
+function Hash-File([string]$path) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($path)
+    try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
 function Write-Json([string]$path, $object) {
     $json = ConvertTo-Json -InputObject $object -Depth 16
     [IO.File]::WriteAllText($path, $json, (New-Object Text.UTF8Encoding $false))
@@ -257,7 +263,7 @@ try {
                              'config\protocol_manifest.json')) {
         $fp = Join-Path $root $relative
         if (Test-Path -LiteralPath $fp -PathType Leaf) {
-            $fingerprints[$relative.Replace('\','/')] = (Get-FileHash -LiteralPath $fp -Algorithm SHA256).Hash.ToLowerInvariant()
+            $fingerprints[$relative.Replace('\','/')] = (Hash-File $fp)
         }
     }
     $metadata = [ordered]@{
