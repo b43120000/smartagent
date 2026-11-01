@@ -87,6 +87,16 @@
         "web_direct"
       ],
       "requires": []
+    },
+    "pr0_task_requirement": {
+      "env": "SMARTAGENT_PR0_V1",
+      "default": true,
+      "agents": [
+        "local_agent",
+        "remote_agent",
+        "web_direct"
+      ],
+      "requires": []
     }
   },
   "derived": {
