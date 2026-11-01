@@ -8,6 +8,7 @@ on:
       - feat/shared-gar-webgpt2-all-agents-20261101
       - feat/gar-auto-enable-from-webgpt2-20261101
       - feat/gar-split-browser-webgpt1-webgpt2-20261101
+      - feat/global-runtime-feature-registry-20261101
       - main
   workflow_dispatch:
 
@@ -38,6 +39,11 @@ jobs:
         run: |
           .\.venv\Scripts\python.exe -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Global feature flags defaults, precedence and three-agent inheritance
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_runtime_feature_registry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Hybrid Composer dispatcher, 512 prefix and bulk-tail
         shell: pwsh
         run: |
@@ -56,6 +62,11 @@ jobs:
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_tri_one_5a_protocol_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_tri_one_5a_answer_only.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: GAR protocol loop safety and answer-only recovery
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: GAR saved WebGPT1/WebGPT2 startup regression
         shell: pwsh
