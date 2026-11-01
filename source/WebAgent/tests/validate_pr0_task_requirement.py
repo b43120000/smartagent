@@ -62,7 +62,7 @@ class PR0ContractTests(unittest.TestCase):
              ["GITHUB"], ["READ", "WRITE"]),
             ("What is the exchange rate today?", ["EXTERNAL"], ["READ"]),
             ("Explain the latest GitHub status of my repository.",
-             ["EXTERNAL"], ["READ"]),
+             ["GITHUB"], ["READ"]),
         )
         for request, sources, operations in samples:
             with self.subTest(request=request):
