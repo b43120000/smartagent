@@ -92,6 +92,7 @@ class GARProtocolIT(unittest.TestCase):
                         request_id="GAR-C1-WEB-RR", task_id="GAR-C1-WEB-TASK",
                         task_epoch="GAR-C1-WEB-EPOCH",
                     )
+                    print("GAR_STATUS_REF_PROBE_C1", "accepted="+str(bool(loop.terminal_acceptance)), "state="+str(loop.protocol_state), "events="+repr([(n, x.get("reason"), x.get("diagnostics")) for n,x in events if n in {"protocol_rejected","tri_one_answer_only_candidate","runtime_terminal_accepted"}]), flush=True)
             rejected = [row for name, row in events if name == "protocol_rejected"]
             self.assertGreaterEqual(len(rejected), 1)
             # Shared Answer-only now returns an explicit model-repair
@@ -158,6 +159,7 @@ class GARProtocolIT(unittest.TestCase):
                              request_id="GAR-D1-MARKER-RR",
                              task_id="GAR-D1-MARKER-TASK",
                              task_epoch="GAR-D1-MARKER-EPOCH")
+                    print("GAR_STATUS_REF_PROBE_D1", "accepted="+str(bool(loop.terminal_acceptance)), "state="+str(loop.protocol_state), "events="+repr([(n, x.get("reason"), x.get("diagnostics")) for n,x in events if n in {"protocol_rejected","tri_one_answer_only_candidate","runtime_terminal_accepted"}]), flush=True)
             # The strict shared Answer-only contract explicitly rejects a
             # model's RUNTIME_STATUS citation before constructing an Action
             # verification requirement. The rejection is a repair prompt.
