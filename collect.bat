@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($env:SA_COLLECT_ROOT)
 $task = [string]$env:SA_COLLECT_TASK
 $request = [string]$env:SA_COLLECT_REQUEST
-$baseSha = '0491a8153d8c3c55cc33517f15317422af44d92a'
+$baseSha = '2f91c3a0d88b6db16b5563c22792996a9103cb9d'
 
 function Assert-Id([string]$id, [string]$kind) {
     if ($id -and $id -notmatch '^[A-Za-z0-9_-]{1,160}$') {
@@ -328,7 +328,7 @@ try {
         event_count=$timeline.Count
         snapshot_count=@($snapshots).Count
         pr_a_ledger_found=[bool]$prASummary.found
-        gar_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
+        collector_process_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
         log_sources=$sourceInfo.ToArray()
         source_sha256=$fingerprints
         warnings=$warnings.ToArray()
@@ -341,6 +341,7 @@ try {
 'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
         'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram payloads,',
         'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
+        'Note: collector_process_l4_enabled reflects this CLI process, not a previously started Worker.',
         'Scan-window limit: most recent 25000 lines per known JSONL source.',
         'If the wrong task was auto-selected, rerun collect.bat TASK-... RR-... .',
         'Review ZIP contents before sharing.'
