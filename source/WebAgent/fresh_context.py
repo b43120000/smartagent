@@ -1,13 +1,10 @@
-"""GAR L4: transport-verified fresh Planner context in the SAME browser profile.
+"""GAR L4: transport-verified fresh Planner bound to an existing conversation.
 
-No new browser profile, login, L4-time tab creation, or old-request replay.
-When SMARTAGENT_GAR_FRESH_CONTEXT_URL is explicitly set, the WebDirect
-Controller prepares exactly one DISTINCT existing conversation tab at startup
-(reuses it if already open); the L4 Adapter still only attaches to the verified
-pre-existing tab under the original worker's page lease. Startup preparation
-never sends an L4 bootstrap or acquires a fresh task owner.
-
-The original response/outbox stays attached to the original request route.
+Default: WebGPT1 and WebGPT2 are distinct tabs in one BrowserContext.
+Optional: WebGPT2 has its own configured Chrome/Edge profile and CDP context.
+Both modes prepare the second conversation BEFORE L4 and verify its identity,
+ownership and idle state without replaying original actions or changing routes.
+The original response/outbox stays attached to WebGPT1.
 """
 from __future__ import annotations
 
@@ -22,13 +19,48 @@ from agent_core.conversation_identity import (
 )
 from agent_core.goal_anchored_recovery import FreshContextProof
 
-def ensure_fresh_context_page(*, context, original_page, target_url: str,
-                              page_lease_held: bool = False) -> dict:
-    """Prepare exactly one second tab in the existing BrowserContext at startup.
+def prepare_gar_browser_context(scraper):
+    """Return selected WebGPT2 context; browser is kept alive by the original scraper.
 
-    No bootstrap, no task replay, no owner claim, no original-page navigation.
-    Existing pages are not closed or navigated. Fail closed on duplicates and
-    foreign ownership. The actual L4 adapter still checks every admission gate.
+    Never silently attach to the WebGPT1 context if a dedicated profile fails.
+    The independently configured browser must be authenticated separately.
+    """
+    from agent_core.browser_preferences import browser_launch_selection
+    first = browser_launch_selection(role="webgpt1")
+    second = browser_launch_selection(role="webgpt2")
+    original_context = getattr(scraper, "_browser", None)
+    if original_context is None:
+        raise RuntimeError("GAR_L4_ORIGINAL_BROWSER_CONTEXT_MISSING")
+    if (first["browser"], first["instance"]) == (second["browser"], second["instance"]):
+        return original_context
+    existing = getattr(scraper, "_gar_second_context", None)
+    if existing is not None:
+        return existing
+    playwright = getattr(scraper, "_pw", None)
+    if playwright is None:
+        raise RuntimeError("GAR_L4_SECOND_BROWSER_PLAYWRIGHT_UNAVAILABLE")
+    from agent_core.web_ui.manual_browser import ensure_agent_browser
+    endpoint, _ = ensure_agent_browser(playwright, role="webgpt2")
+    if endpoint == str(getattr(scraper, "_active_cdp_endpoint", "") or ""):
+        raise RuntimeError("GAR_L4_SECOND_BROWSER_ENDPOINT_NOT_DISTINCT")
+    browser = playwright.chromium.connect_over_cdp(endpoint, timeout=60000)
+    if not browser.contexts or browser.contexts[0] is original_context:
+        raise RuntimeError("GAR_L4_SECOND_BROWSER_CONTEXT_UNAVAILABLE")
+    # Hold the CDP browser across the entire task, including the delayed L4
+    # review; stopping the original worker Playwright will detach it.
+    scraper._gar_second_browser_connection = browser
+    scraper._gar_second_context = browser.contexts[0]
+    scraper._gar_second_endpoint = endpoint
+    return browser.contexts[0]
+
+
+def ensure_fresh_context_page(*, context, original_page, target_url: str,
+                              page_lease_held: bool = False,
+                              target_context=None) -> dict:
+    """Prepare one verified second conversation in its configured context.
+
+    No bootstrap, no task replay, no owner claim or original-page navigation.
+    The L4 adapter independently verifies ownership and identity again.
     """
     from contextlib import nullcontext
     from agent_core.conversation_ownership import ConversationOwnershipRegistry
@@ -55,10 +87,21 @@ def ensure_fresh_context_page(*, context, original_page, target_url: str,
     with lease:
         if not getattr(context, "pages", None) or original_page not in context.pages:
             raise RuntimeError("GAR_L4_STARTUP_ORIGINAL_PAGE_NOT_ATTACHED")
+        chosen_context = target_context if target_context is not None else context
+        if not getattr(chosen_context, "pages", None) and not callable(
+            getattr(chosen_context, "new_page", None)
+        ):
+            raise RuntimeError("GAR_L4_STARTUP_SECOND_CONTEXT_UNAVAILABLE")
+        if chosen_context is not context and any(
+            same_conversation(str(getattr(item, "url", "") or ""), target)
+            for item in list(context.pages)
+            if not bool(item.is_closed())
+        ):
+            raise RuntimeError("GAR_L4_STARTUP_TARGET_DUPLICATE_IN_ORIGINAL_CONTEXT")
         if bool(original_page.is_closed()):
             raise RuntimeError("GAR_L4_STARTUP_ORIGINAL_PAGE_CLOSED")
         matches = [
-            page for page in list(context.pages)
+            page for page in list(chosen_context.pages)
             if not bool(page.is_closed())
             and same_conversation(str(getattr(page, "url", "") or ""), target)
         ]
@@ -72,7 +115,7 @@ def ensure_fresh_context_page(*, context, original_page, target_url: str,
             if created:
                 # This creates only a TAB, not a browser profile or a new
                 # conversation. Navigation is to the operator's existing /c/ ID.
-                page = context.new_page()
+                page = chosen_context.new_page()
                 if shared_browser_enabled():
                     mark_shared_page(page)
                 _conversation_ready(page, target)
@@ -82,7 +125,7 @@ def ensure_fresh_context_page(*, context, original_page, target_url: str,
             if page is original_page or bool(page.is_closed()):
                 raise RuntimeError("GAR_L4_STARTUP_TARGET_UNAVAILABLE")
             duplicates = [
-                item for item in list(context.pages)
+                item for item in list(chosen_context.pages)
                 if not bool(item.is_closed())
                 and same_conversation(str(getattr(item, "url", "") or ""), target)
             ]
@@ -101,7 +144,7 @@ def ensure_fresh_context_page(*, context, original_page, target_url: str,
         return {
             "created": created,
             "target_conversation_id": expected_id,
-            "same_context": True,
+            "same_context": chosen_context is context,
             "bootstrap_sent": False,
         }
 
@@ -154,7 +197,12 @@ class ExistingConversationFreshAdapter:
             raise RuntimeError("GAR_L4_OLD_GENERATION_NOT_ATTESTED") from exc
         if old_generation_active:
             raise RuntimeError("GAR_L4_OLD_GENERATION_ACTIVE")
-        context = getattr(original, "_browser", None)
+        original_context = getattr(original, "_browser", None)
+        context = getattr(original, "_gar_second_context", None) or original_context
+        if original_context is None or not any(
+            item is original_page for item in getattr(original_context, "pages", ())
+        ):
+            raise RuntimeError("GAR_L4_ORIGINAL_CONTEXT_NOT_ATTESTED")
         pages = list(getattr(context, "pages", ()) or ())
         matching = [
             page for page in pages
@@ -182,6 +230,14 @@ class ExistingConversationFreshAdapter:
         scraper._browser = context
         scraper._page = page
         scraper._attached_over_cdp = True
+        scraper._active_cdp_endpoint = (
+            getattr(original, "_gar_second_endpoint", None)
+            or getattr(original, "_active_cdp_endpoint", None)
+        )
+        scraper._cdp_browser = (
+            getattr(original, "_gar_second_browser_connection", None)
+            or getattr(original, "_cdp_browser", None)
+        )
         scraper._execution_page_lease_owned = True
         scraper._expected_execution_url = target
         scraper._rate_governor = self.client.governor
@@ -288,4 +344,4 @@ class ExistingConversationFreshAdapter:
 
 
 __all__ = ["ExistingConversationFreshAdapter", "FreshPlannerBinding",
-           "ensure_fresh_context_page"]
+           "ensure_fresh_context_page", "prepare_gar_browser_context"]
