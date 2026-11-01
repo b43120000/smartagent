@@ -30,7 +30,7 @@ _CONCEPT = re.compile(
 _CHAIN = re.compile(
     r"\b(?:and\s+(?:then\s+)?|then\s+)(?:run|read|write|edit|save|"
     r"download|upload|send|post|check|fetch|execute|test|clone|push|deploy)\b|"
-    r"(?:然後|接著|之後|並且|並|再|順便|但|不過|另外|也要|還要|but)[^。！？\n]{0,40}?"
+    r"(?:然後|接著|之後|並且|並|再|順便|但|不過|另外|也要|還要|仍要|仍需|還是要|卻要|依然|但是|but)[^。！？\n]{0,40}?"
     r"(?:讀取|閱讀|檢查|修改|編輯|寫入|執行|測試|查詢|"
     r"搜尋|下載|上傳|推送|發送|寄送|建立|刪除|部署|同步|貼到|push|run|test|write|read|send|upload|download)", re.I,
 )
