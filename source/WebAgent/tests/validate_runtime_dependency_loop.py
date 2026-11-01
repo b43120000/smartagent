@@ -150,6 +150,7 @@ def run() -> None:
     retry = {
         **inspect,
         "action_id": "DEP-RETRY-" + suffix,
+        "depends_on": [verify["action_id"]],
         "success_criteria": "The retried original inspection observes the installed dependency import.",
         "verify": [{
             "action": "run_command", "command": import_command,
