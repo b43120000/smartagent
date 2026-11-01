@@ -210,7 +210,7 @@
     "source/agent_core/gar_webgpt2_settings.py": "5d5da874036a0c4c7a88ebe884385a549e1d4ac317cc846a2828e689283fc448",
     "config/feature_flags.defaults.json": "a144e9015f3f1bb02261ca1d573f9980a20afb0b2354b19c2f9e22db5569c682",
     "source/agent_core/runtime_config.py": "dfeee66ae630d8448169f84bfc4311164f7532c039aedd873b715706f48977a3",
-    "source/agent_core/task_requirement.py": "6e557fa228e073802c5760952b45c6eaee318f9c3b237ffe494fe8ec15b38f18"
+    "source/agent_core/task_requirement.py": "caeea50562c4bf38add2ffec1ea594bcc14d9758dde3f7f0b1d5e059c5f8068a"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
