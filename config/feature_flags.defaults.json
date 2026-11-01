@@ -81,7 +81,7 @@
     },
     "gar_l4_enabled": {
       "env": "SMARTAGENT_GAR_L4_ENABLED",
-      "default": true,
+      "default": false,
       "agents": [
         "remote_agent",
         "web_direct"
