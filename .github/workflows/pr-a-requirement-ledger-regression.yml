@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/gar-progress-collector-l4-control-20261102
+      - release/pr-a-gar-l4-default-off-20261102
   workflow_dispatch:
 
 permissions:
