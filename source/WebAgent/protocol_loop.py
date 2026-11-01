@@ -4729,6 +4729,52 @@ class WebAgentProtocolLoop:
                 "tools": {},
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
+        # PR-B/C/D complements PR-A; never authorizes operations by probing.
+        self._pr_v3_ledger = None
+        if (self._pr_a_ledger is not None and self.task_requirement
+                and self.task_requirement.get("route") != "ANSWER_ONLY"
+                and os.environ.get("SMARTAGENT_PREREQ_V3_BCD","1").strip().lower()
+                not in {"0","off","false","no"}):
+            try:
+                from agent_core.prerequisite_runtime_v3 import (
+                    RecoveryLedger, probe_requirements, summary as pr_v3_summary,
+                )
+                base = self.progress_root if self.progress_root is not None else self.workspace
+                graph = self._pr_a_ledger.read(self.task_id)
+                probe = probe_requirements(
+                    request=request, authorized_paths=self.authorized_paths,
+                    environment_snapshot=environment_snapshot, install_root=base,
+                )
+                ledger = RecoveryLedger(base)
+                doc = ledger.initialize(
+                    task_id=self.task_id, request_id=self.run_id,
+                    task_epoch=self.task_epoch,
+                    intent_sha256=self.task_requirement["intent_sha256"],
+                    probe=probe, graph_digest=graph["digest"] if graph else "",
+                )
+                self._pr_v3_ledger = ledger
+                self._emit("pr_b_probe_completed", request_id=self.run_id,
+                           task_id=self.task_id, phase=doc["phase"],
+                           missing_count=len(doc["missing_ids"]),
+                           unknown_count=len(doc["unknown_ids"]),
+                           revision=doc["revision"],authorization_granted=False)
+                prompt += ("\n[SMARTAGENT_PREREQUISITE_V3_RUNTIME]\n"
+                    + json.dumps({
+                        "phase":doc["phase"],
+                        "missing_ids":doc["missing_ids"],
+                        "unknown_ids":doc["unknown_ids"],
+                        "remediation_requested":doc["remediation_requested"],
+                        "authorization_granted":False,
+                        "remediation_rule":"Use only separately admitted canonical run_command MUTATE "
+                            "with explicit request-owned authorization and existing scoped paths. "
+                            "Follow with a distinct VERIFY action linked by verifies_action_id, "
+                            "then retry the original operation using a new action_id. "
+                            "Never infer permission from probe results."
+                    },ensure_ascii=False,separators=(",",":"))
+                    + "\n[/SMARTAGENT_PREREQUISITE_V3_RUNTIME]")
+            except Exception as exc:
+                self._emit("pr_b_probe_unavailable",request_id=self.run_id,
+                           task_id=self.task_id,reason=type(exc).__name__)
         prompt += "\n" + render_initial_planner_toolkit(environment_snapshot)
         if self.task_requirement:
             # Planner sees a bounded Runtime observation, not permission or
@@ -5279,6 +5325,25 @@ class WebAgentProtocolLoop:
                     + terminal_receipt["receipt_id"] + "：" + content)
 
             if len(actions) == 1 and actions[0].get("tool") == "final_response":
+                if (getattr(self,"_pr_v3_ledger",None) is not None and
+                        self.progress_ledger.outcome == "SUCCESS"):
+                    try:
+                        ready, reason = self._pr_v3_ledger.terminal_ready(self.task_id)
+                    except Exception:
+                        ready, reason = False, "PR_D_LEDGER_UNVERIFIED"
+                    if not ready:
+                        # No terminal receipt is issued on missing independent
+                        # VERIFY/RESUME. Never replace missing evidence with prose.
+                        self._emit("pr_d_terminal_blocked",
+                            request_id=self.run_id,task_id=self.task_id,
+                            round=self.turn_id,reason=reason)
+                        set_runtime_state(self.task_id,"PAUSED",reason=reason,
+                            root=self.progress_root)
+                        raise RuntimeError("PR-D success prohibited without "
+                            "independent verification and original-task retry: "+reason)
+                    self._emit("pr_d_terminal_observed",request_id=self.run_id,
+                               task_id=self.task_id,round=self.turn_id,
+                               reason=reason,claim_is_runtime_receipt=False)
                 if float(self.progress_ledger.current_step) < float(self.progress_ledger.total_steps):
                     prompt = (
                         "[WEBAGENT_PROGRESS_COMPLETION_GATE]\n"
@@ -5520,6 +5585,30 @@ class WebAgentProtocolLoop:
                         self._emit("pr_a_action_unavailable", request_id=self.run_id,
                                    task_id=self.task_id, action_id=action.get("action_id", ""),
                                    reason=type(exc).__name__)
+                if getattr(self,"_pr_v3_ledger",None) is not None:
+                    try:
+                        pr_v3_state = self._pr_v3_ledger.before_action(
+                            task_id=self.task_id,request_id=self.run_id,
+                            task_epoch=self.task_epoch,action=action,
+                            scope_allowed=bool(scope.get("allowed",False)))
+                        if pr_v3_state["phase"]=="REMEDIATING":
+                            self._emit("pr_c_remediation_admitted",
+                                request_id=self.run_id,task_id=self.task_id,
+                                action_id=action.get("action_id",""),
+                                revision=pr_v3_state["revision"],
+                                authorizes_execution=False)
+                    except Exception as exc:
+                        self._emit("pr_c_remediation_unavailable",
+                            request_id=self.run_id,task_id=self.task_id,
+                            action_id=action.get("action_id",""),
+                            reason=type(exc).__name__)
+                        # An accounting failure is never approval to execute
+                        # an explicitly tracked remediation.
+                        if (str(action.get("tool",""))=="run_command" and
+                                str(action.get("operation","")).upper()=="MUTATE"):
+                            from agent_core.tool_result_contract import encode_result
+                            return encode_result("REJECTED","PR_C_LEDGER_UNAVAILABLE",
+                                tool="run_command",executed=False)
                 self._emit(
                     "tool_started",
                     request_id=self.run_id,
@@ -5615,6 +5704,25 @@ class WebAgentProtocolLoop:
                             self._emit("pr_a_evidence_unavailable", request_id=self.run_id,
                                        task_id=self.task_id, action_id=action.get("action_id", ""),
                                        reason=type(exc).__name__)
+                    if getattr(self,"_pr_v3_ledger",None) is not None:
+                        try:
+                            previous = self._pr_v3_ledger.read(self.task_id)
+                            recovered = self._pr_v3_ledger.action_result(
+                                task_id=self.task_id, request_id=self.run_id,
+                                task_epoch=self.task_epoch, action=action,
+                                result=ledger_entry,
+                                evidence_ref=action_result_id)
+                            if recovered["revision"] != previous["revision"]:
+                                self._emit("pr_v3_recovery_transition",
+                                    request_id=self.run_id,task_id=self.task_id,
+                                    action_id=action.get("action_id",""),
+                                    phase=recovered["phase"],
+                                    revision=recovered["revision"])
+                        except Exception as exc:
+                            self._emit("pr_v3_recovery_unavailable",
+                                request_id=self.run_id,task_id=self.task_id,
+                                action_id=action.get("action_id",""),
+                                reason=type(exc).__name__)
                     if self.continuation_store:
                         self.continuation_store.snapshot(self)
                     if self.request_context and ledger_entry.get('result_status') == 'SUCCEEDED' and ledger_entry.get('executed') is True:
