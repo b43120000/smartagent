@@ -65,18 +65,23 @@ class GARProtocolIT(unittest.TestCase):
             self.assertIn("UNVERIFIED_TERMINAL_NO_EXECUTION",
                           checkpoint["verification_preconditions"])
 
-    def test_request_accepted_only_is_advisory_in_real_web_direct_v9(self):
-        # Live C1 reproduction: Progress cites REQUEST_ACCEPTED without tools.
-        # V9 must reject SUCCESS, but GAR must not invent an UNKNOWN side effect.
-        with tempfile.TemporaryDirectory(prefix="gar-c1-request-accepted-") as directory:
+    def test_request_accepted_is_normalized_without_fabricating_action_evidence(self):
+        self._verify_answer_only_runtime_marker("REQUEST_ACCEPTED")
+
+    def test_runtime_status_is_normalized_without_fabricating_action_evidence(self):
+        self._verify_answer_only_runtime_marker("RUNTIME_STATUS")
+
+    def _verify_answer_only_runtime_marker(self, marker):
+        # The latest canonical shared V9 / Tri-One policy normalizes only
+        # trusted Runtime-context markers for a strictly text-only response.
+        # This is NOT Tool Action evidence or verified Terminal PASS.
+        with tempfile.TemporaryDirectory(prefix="gar-runtime-marker-") as directory:
             root = Path(directory)
             events, planner_calls = [], []
             def planner(prompt, expected, attachments):
                 planner_calls.append(prompt)
-                reply = answer_only_response(text="RAII releases resources.")
-                marker = '"evidence_refs":[]'
-                assert reply.count(marker) == 1
-                return reply.replace(marker, '"evidence_refs":["REQUEST_ACCEPTED"]', 1)
+                return answer_only_response(text="RAII releases resources.",
+                                            evidence_refs=[marker])
             loop = WebAgentProtocolLoop(
                 root, planner, progress_root=root, max_turns=2,
                 event_sink=lambda name, **fields: events.append((name, fields)),
@@ -86,95 +91,32 @@ class GARProtocolIT(unittest.TestCase):
                 "TRI_ONE_TASK_RESULT_V1": "1",
                 "TRI_ONE_TEXT_ONLY_V1": "1",
             }):
-                with self.assertRaises(Exception):
-                    loop.run(
-                        "Explain RAII.", source_tag="",
-                        request_id="GAR-C1-WEB-RR", task_id="GAR-C1-WEB-TASK",
-                        task_epoch="GAR-C1-WEB-EPOCH",
-                    )
-            rejected = [row for name, row in events if name == "protocol_rejected"]
-            self.assertGreaterEqual(len(rejected), 1)
-            # Shared Answer-only now returns an explicit model-repair
-            # diagnostic for non-action status refs. It must NEVER convert
-            # them into verified Action Evidence or terminal SUCCESS.
-            self.assertTrue(any(d.get("reason") == "answer_only_status_markers_not_action_evidence"
-                                for d in rejected[0].get("diagnostics", [])))
-            candidates = [row for name, row in events
-                          if name == "tri_one_answer_only_candidate"]
-            self.assertTrue(candidates)
-            self.assertFalse(candidates[0]["eligible"])
-            self.assertEqual(candidates[0]["reason"],
-                             "action_evidence_cannot_be_answer_only")
-            classified = [row for name, row in events
-                          if name == "gar_pending_classification"]
-            # GAR still emits classification telemetry; it must report no
-            # pending Action, no Action/Result history and not misclassify a
-            # model status-marker correction as verified execution evidence.
+                answer = loop.run(
+                    "Explain RAII.", source_tag="",
+                    request_id="GAR-STATUS-RR-" + marker,
+                    task_id="GAR-STATUS-TASK-" + marker,
+                    task_epoch="GAR-STATUS-EPOCH-" + marker,
+                )
+            self.assertEqual(answer, "RAII releases resources.")
+            self.assertEqual(len(planner_calls), 1)
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.action_result_ledger, {})
+            self.assertEqual(loop.condition_result_ledger, {})
+            self.assertFalse(loop.pending_verification_requirement)
+            receipt = loop.terminal_acceptance
+            self.assertEqual(receipt["completion_kind"], "ANSWER_ONLY")
+            self.assertEqual(receipt["evidence_refs"], [])
+            self.assertEqual(receipt["evidence_verdict"], "UNVERIFIED")
+            self.assertEqual(loop._gar.rejected_rounds, 0)
+            decisions = [row for name,row in events
+                         if name == "gar_recovery_decision"]
+            self.assertFalse(decisions)
+            classified = [row for name,row in events
+                          if name == "tri_one_answer_only_evidence_classified"]
             self.assertTrue(classified)
-            self.assertTrue(all(not row["terminal_precondition_advisory"]
-                                and row["executed_action_count"] == 0
-                                and row["recorded_result_count"] == 0
-                                and not row["pending_kinds"] for row in classified))
-            decisions = [row for name, row in events
-                         if name == "gar_recovery_decision"]
-            self.assertTrue(decisions)
-            self.assertEqual((decisions[0]["level"], decisions[0]["last_reason"]),
-                             ("L1", "GAR_LOCAL_REPAIR_ACTIVE"))
-            self.assertGreaterEqual(loop._gar.rejected_rounds, 1)
-            self.assertFalse(loop.pending_verification_requirement)
-            self.assertFalse(loop.terminal_acceptance)
-            self.assertFalse(loop.action_ledger)
-            self.assertFalse(loop.action_result_ledger)
-            import json
-            checkpoints = list((root / "localdata" / "runtime" /
-                               "gar_snapshots").glob("*.json"))
-            self.assertEqual(len(checkpoints), 1)
-            checkpoint = json.loads(checkpoints[0].read_text(encoding="utf-8"))
-            self.assertEqual(checkpoint["pending_operations"], [])
-            self.assertEqual(checkpoint["checkpoint"]["verified_evidence"], [])
-            self.assertFalse(checkpoint["checkpoint"]["verified_evidence"])
-            self.assertGreaterEqual(len(planner_calls), 2)
-
-    def test_narrative_status_marker_is_advisory_in_real_web_direct_v9(self):
-        with tempfile.TemporaryDirectory(prefix="gar-d1-marker-") as directory:
-            root = Path(directory)
-            events = []
-            def planner(prompt, expected, attachments):
-                reply = answer_only_response(text="RAII releases resources.")
-                marker = '"evidence_refs":[]'
-                assert reply.count(marker) == 1
-                return reply.replace(marker, '"evidence_refs":["RUNTIME_STATUS"]', 1)
-            loop = WebAgentProtocolLoop(
-                root, planner, progress_root=root, max_turns=2,
-                event_sink=lambda name, **fields: events.append((name, fields)),
-            )
-            with patch.dict(os.environ, {
-                "SMARTAGENT_GAR_V1": "1",
-                "TRI_ONE_TASK_RESULT_V1": "1",
-                "TRI_ONE_TEXT_ONLY_V1": "1",
-            }):
-                with self.assertRaises(Exception):
-                    loop.run("Explain RAII.", source_tag="",
-                             request_id="GAR-D1-MARKER-RR",
-                             task_id="GAR-D1-MARKER-TASK",
-                             task_epoch="GAR-D1-MARKER-EPOCH")
-            # The strict shared Answer-only contract explicitly rejects a
-            # model's RUNTIME_STATUS citation before constructing an Action
-            # verification requirement. The rejection is a repair prompt.
-            rejections = [data for name, data in events if name == "protocol_rejected"]
-            self.assertTrue(rejections)
-            self.assertTrue(any(
-                d.get("reason") == "answer_only_status_markers_not_action_evidence"
-                for d in rejections[0].get("diagnostics", [])
-            ))
-            decisions = [data for name, data in events
-                         if name == "gar_recovery_decision"]
-            self.assertTrue(decisions)
-            self.assertEqual((decisions[0]["level"], decisions[0]["last_reason"]),
-                             ("L1", "GAR_LOCAL_REPAIR_ACTIVE"))
-            self.assertFalse(loop.terminal_acceptance)
-            self.assertFalse(loop.action_result_ledger)
-            self.assertFalse(loop.pending_verification_requirement)
+            self.assertTrue(any(row.get("normalized") and
+                                row.get("evidence_class") == "RUNTIME_CONTEXT"
+                                for row in classified))
 
     def test_stale_readback_cannot_reexecute_or_complete(self):
         with tempfile.TemporaryDirectory(prefix="gar-stale-") as directory:
@@ -214,6 +156,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertTrue(any(name == "gar_transport_integrity"
                                 for name, _ in events))
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_fresh_planner_can_complete_text_only_goal(self):
         # Explicit backward-compatibility test; new v1 defaults to supervisor.
         with tempfile.TemporaryDirectory(prefix="gar-l4-success-") as directory:
@@ -275,6 +218,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(loop.action_ledger, {})
             self.assertEqual(loop.action_result_ledger, {})
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_new_planner_replaces_old_after_verified_preparation(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-it-") as directory:
             root = Path(directory)
@@ -327,6 +271,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(loop.action_ledger, {})
             self.assertEqual(loop.terminal_acceptance, {})
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_invalid_proof_never_switches_planner(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-negative-") as directory:
             root = Path(directory)
@@ -393,6 +338,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(loop.action_ledger, {})
             self.assertEqual(loop.terminal_acceptance, {})
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_duplicate_invalid_fresh_planner_reply_bounded(self):
         with tempfile.TemporaryDirectory(prefix="gar-fresh-") as directory:
             root = Path(directory)

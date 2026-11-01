@@ -9,6 +9,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_core.goal_anchored_recovery import (
     RecoveryEngine, FreshContextProof, classify_failure, enabled, mutation_fingerprint,
@@ -231,6 +232,7 @@ class GARSharedRuntimeTests(unittest.TestCase):
             self.assertEqual((result.level, result.status, result.reason),
                              ("L5", "PAUSED", "GAR_PENDING_OR_BLOCKED_OPERATION"))
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_only_repairs_new_session_without_second_context(self):
         from agent_core.goal_anchored_recovery import FreshContextProof
         engine = make()
@@ -330,6 +332,7 @@ class GARSharedRuntimeTests(unittest.TestCase):
             error="anything", response_fresh=False,
         ), ("L0", "STALE_TRANSPORT_READBACK"))
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_bounded_l1_l2_l3_l5_with_one_goal(self):
         engine = make()
         got = []
@@ -357,6 +360,7 @@ class GARSharedRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(exhaustion.reason, "GAR_FRESH_CONTEXT_UNAVAILABLE")
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_local_exhaustion_hands_off_before_l4(self):
         engine = make()
         local = BoundedRepairBudget()
@@ -522,6 +526,7 @@ class GARSharedRuntimeTests(unittest.TestCase):
         self.assertEqual((first.level, second.level), ("L1", "L1"))
         self.assertEqual(engine.rejected_rounds, 2)
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_proof_and_old_planner_fence(self):
         engine = make()
         for _ in range(4):
@@ -551,6 +556,7 @@ class GARSharedRuntimeTests(unittest.TestCase):
             response_fresh=True, evidence_generation="zero",
         ).status, "REPAIR")
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_negative_proofs_and_pending_side_effect(self):
         good = dict(
             request_id="GAR-RR-1", task_id="GAR-TASK-1",

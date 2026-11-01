@@ -350,6 +350,14 @@ class WebAgentProtocolLoop:
         request, Task/epoch, Action Ledger, Progress and Outbox remain intact.
         """
         from agent_core.task_progress import set_runtime_state
+        from agent_core.goal_anchored_recovery import l4_enabled
+        if not l4_enabled():
+            reason = "GAR_L4_DISABLED"
+            set_runtime_state(self.task_id, "PAUSED", reason=reason,
+                              root=self.progress_root)
+            self._emit("gar_l4_disabled", request_id=self.run_id,
+                       round=self.turn_id, reason=reason)
+            raise RuntimeError("GAR safely paused: " + reason)
         adapter = self._gar_fresh_adapter
         if adapter is None:
             reason = self._gar.refuse_fresh_context(
@@ -501,7 +509,8 @@ class WebAgentProtocolLoop:
 
     def _gar_semantic_supervision(self, reason: str) -> str:
         """Review a trusted runtime-observed stall without faking V9 rejection."""
-        if self._gar is None or os.environ.get(
+        from agent_core.goal_anchored_recovery import l4_enabled
+        if self._gar is None or not l4_enabled() or os.environ.get(
             "SMARTAGENT_GAR_L4_SUPERVISOR_V1", "1"
         ).strip().lower() in {"0", "false", "no", "off"}:
             return ""
@@ -4634,6 +4643,32 @@ class WebAgentProtocolLoop:
                 intent_sha256=self.task_requirement["intent_sha256"],
                 grants_authorization=False,
             )
+        # PR-A is an advisory durable graph, not a new permission/terminal gate.
+        self._pr_a_ledger = None
+        if (self.task_requirement
+                and os.environ.get("SMARTAGENT_PREREQ_V3_PR_A", "1").strip().lower()
+                not in {"0", "off", "false", "no"}):
+            try:
+                from agent_core.prerequisite_graph_v3 import (
+                    RequirementLedger, build_requirement_graph, graph_summary,
+                )
+                pr_a_root = self.progress_root if self.progress_root is not None else self.workspace
+                pr_a_ledger = RequirementLedger(pr_a_root)
+                pr_a_graph = pr_a_ledger.initialize(build_requirement_graph(
+                    task_id=self.task_id, request_id=self.run_id,
+                    task_epoch=self.task_epoch, assessment=self.task_requirement,
+                    authorized_paths=self.authorized_paths,
+                ))
+                self._pr_a_ledger = pr_a_ledger
+                summary = graph_summary(pr_a_graph)
+                self._emit("pr_a_graph_initialized", request_id=self.run_id,
+                           task_id=self.task_id, task_epoch=self.task_epoch,
+                           revision=summary["revision"], node_count=summary["node_count"],
+                           graph_digest=summary["digest"], authorizes_execution=False)
+            except Exception as exc:
+                # PR-A cannot affect existing V9 tool authorization/dispatch.
+                self._emit("pr_a_graph_unavailable", request_id=self.run_id,
+                           task_id=self.task_id, reason=type(exc).__name__)
         self.tools.artifact_delivery_mode = str(self.image_delivery_plan.get("delivery", ""))
         if initial_attachments:
             queued = self.tools.queue_attachments(list(initial_attachments))
@@ -4891,10 +4926,33 @@ class WebAgentProtocolLoop:
                 gar_prompt = self._gar_rejection(
                     diagnostics, repair_budget=repair_budget,
                 )
+                # Only deterministic schema/evidence correction; never suggest
+                # executing an action merely to satisfy a malformed response.
+                reject_reasons = {
+                    str(row.get("reason", "")) for row in diagnostics
+                    if isinstance(row, dict)
+                }
+                contract_hint = (
+                    "\n[PROGRESS_TERMINAL_CONTRACT]\n"
+                    "Do not claim terminal SUCCESS without Runtime-verifiable "
+                    "evidence_refs. If actions are pending, use CONTINUE with "
+                    "valid report_progress and canonical actions. "
+                    "For report_progress, step statuses are PENDING, IN_PROGRESS, "
+                    "COMPLETED; the decision COMPLETE is not a step status. "
+                    "Do not replay an already executed or unknown action."
+                    "\n[/PROGRESS_TERMINAL_CONTRACT]"
+                    if reject_reasons.intersection({
+                        "terminal_success_verification_missing",
+                        "invalid_progress_payload",
+                        "partial_not_supported_or_recoverable_work",
+                        "missing_context_requires_runtime_read",
+                    }) else ""
+                )
                 prompt = (
                     "[WEBAGENT_PROTOCOL_REJECTED]\n"
                     + format_tool_parse_diagnostics(diagnostics)
                     + "\n修正 transport/schema 後重送同一決策；不得假設 action 已執行。"
+                    + contract_hint
                 )
                 pending_recovery = self._result_recovery_guidance([])
                 if pending_recovery:
@@ -5105,6 +5163,27 @@ class WebAgentProtocolLoop:
                         "\n這是 PROGRESS_TO_ACTION_REPAIR：只修正 action emission。"
                         "next_action 宣告的 canonical tool 必須在同一輪以完整 action 出現；"
                         "不得聲稱它已執行或預測其結果。"
+                    )
+                rejected_reasons = {
+                    str(item.get("reason", "")) for item in ack_diagnostics
+                    if isinstance(item, dict)
+                }
+                if "terminal_success_verification_missing" in rejected_reasons:
+                    repair_note += (
+                        "\n[TERMINAL_EVIDENCE_REPAIR] Runtime 尚無足以證明 "
+                        "SUCCESS 的 verified evidence_refs。不得由模型自行補造；"
+                        "先使用 CONTINUE 並提出尚未執行的必要讀取／驗證 Action，"
+                        "或在確定無法安全繼續時回報 INTERRUPT/UNKNOWN。"
+                    )
+                if "missing_context_requires_runtime_read" in rejected_reasons:
+                    repair_note += (
+                        "\n[CONTEXT_READ_REPAIR] 所缺事實需要 Runtime "
+                        "執行合法唯讀 Action；不可用 Progress 敘述代替證據。"
+                    )
+                if "partial_not_supported_or_recoverable_work" in rejected_reasons:
+                    repair_note += (
+                        "\n[PARTIAL_REPAIR] PARTIAL 不能作為未查證完成的捷徑；"
+                        "請只使用 Runtime 已支持且有實際 Evidence 的狀態。"
                     )
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
@@ -5424,6 +5503,23 @@ class WebAgentProtocolLoop:
                     return encode_result('REJECTED','ACTION_DEPENDENCY_UNSATISFIED',
                         tool=action.get('tool',''),executed=False,data={'depends_on':blocked})
                 scope = self.tools.preview_tool_scope(action)
+                if getattr(self, "_pr_a_ledger", None) is not None:
+                    try:
+                        pr_a_graph = self._pr_a_ledger.bind_action(
+                            task_id=self.task_id, request_id=self.run_id,
+                            task_epoch=self.task_epoch,
+                            action_id=str(action.get("action_id", "")),
+                            depends_on=list(action.get("depends_on") or []),
+                            scope_paths=list(scope.get("resolved_paths") or []),
+                            tool=str(action.get("tool", "")),
+                        )
+                        self._emit("pr_a_action_bound", request_id=self.run_id,
+                                   task_id=self.task_id, action_id=action.get("action_id", ""),
+                                   revision=pr_a_graph["revision"])
+                    except Exception as exc:
+                        self._emit("pr_a_action_unavailable", request_id=self.run_id,
+                                   task_id=self.task_id, action_id=action.get("action_id", ""),
+                                   reason=type(exc).__name__)
                 self._emit(
                     "tool_started",
                     request_id=self.run_id,
@@ -5493,6 +5589,32 @@ class WebAgentProtocolLoop:
                     )
                     ledger_entry.update(action_evidence)
                     ledger_entry = self._record_action_result_evidence(action, ledger_entry)
+                    if getattr(self, "_pr_a_ledger", None) is not None:
+                        try:
+                            pr_a_verified = (
+                                ledger_entry.get("executed") is True
+                                and ledger_entry.get("result_status") == "SUCCEEDED"
+                                and ledger_entry.get("effective_verification_status") == "PASS"
+                            )
+                            pr_a_failed = (
+                                ledger_entry.get("result_status") in {"FAILED", "REJECTED"}
+                                or ledger_entry.get("effective_verification_status") == "FAIL"
+                            )
+                            pr_a_status = ("SATISFIED" if pr_a_verified
+                                           else "FAILED" if pr_a_failed else "UNKNOWN")
+                            self._pr_a_ledger.record_action_evidence(
+                                task_id=self.task_id, request_id=self.run_id,
+                                task_epoch=self.task_epoch,
+                                action_id=str(action.get("action_id", "")),
+                                status=pr_a_status, evidence_ref=action_result_id,
+                            )
+                            self._emit("pr_a_evidence_recorded", request_id=self.run_id,
+                                       task_id=self.task_id, action_id=action.get("action_id", ""),
+                                       status=pr_a_status)
+                        except Exception as exc:
+                            self._emit("pr_a_evidence_unavailable", request_id=self.run_id,
+                                       task_id=self.task_id, action_id=action.get("action_id", ""),
+                                       reason=type(exc).__name__)
                     if self.continuation_store:
                         self.continuation_store.snapshot(self)
                     if self.request_context and ledger_entry.get('result_status') == 'SUCCEEDED' and ledger_entry.get('executed') is True:

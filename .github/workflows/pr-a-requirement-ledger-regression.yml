@@ -1,0 +1,152 @@
+name: GAR R1 R2 R3 and PR-A Full Windows Regression
+
+on:
+  push:
+    branches:
+      - fix/gar-progress-collector-l4-control-20261102
+      - release/pr-a-gar-l4-default-off-20261102
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pr-a-windows-regression:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: source
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare SmartAgent bundled runtime paths for isolated CI
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $gitRoot = Join-Path $env:ProgramFiles "Git"
+          if (-not (Test-Path (Join-Path $gitRoot "cmd\git.exe"))) {
+            throw "Windows runner Git binary not found"
+          }
+          New-Item -ItemType Junction -Path ".venv\git" -Target $gitRoot -Force | Out-Null
+          .\.venv\Scripts\python.exe --version
+          .\.venv\git\cmd\git.exe --version
+      - name: Install WebDirect dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r install_smart_agent/requirements-webdirect.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: PR-A DAG and durable ledger regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_pr_a_requirement_graph.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Existing collect.bat sanitized PR-A bundle smoke
+        shell: pwsh
+        run: |
+          $sample = @'
+          from agent_core.prerequisite_graph_v3 import RequirementLedger, build_requirement_graph
+          from agent_core.task_requirement import assess_task_requirement
+          graph = build_requirement_graph(
+              task_id="TASK-PR-A-CI", request_id="RR-PR-A-CI", task_epoch="epoch-ci",
+              assessment=assess_task_requirement("Review GitHub PR #42")
+          )
+          RequirementLedger(".").initialize(graph)
+          '@
+          $sample | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $fakeEvents = @'
+          import json
+          from pathlib import Path
+          root = Path('localdata')
+          log = root/'logs'/'remote_runtime.jsonl'
+          log.parent.mkdir(parents=True, exist_ok=True)
+          task, request = "TASK-PR-A-CI","RR-PR-A-CI"
+          events = [
+              dict(timestamp=1793510000.1,event="STATUS",stage="pr_a_graph_initialized",task_id=task,request_id=request,revision=1,node_count=5),
+              dict(timestamp=1793510001.2,event="STATUS",stage="protocol_rejected",task_id=task,request_id=request,round=1,diagnostics=[{"reason":"invalid_progress_payload","field_issues":[{"field":"steps.status","code":"INVALID_STEP_STATUS","detail":"SENSITIVE_SENTINEL"}]}]),
+              dict(timestamp=1793510002.3,event="STATUS",stage="gar_checkpoint_persisted",task_id=task,request_id=request,round=1,checkpoint_name="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"),
+              dict(timestamp=1793510003.4,event="STATUS",stage="pr_a_action_bound",task_id=task,request_id=request,action_id="ACT-CI-1",revision=2),
+              dict(timestamp=1793510004.5,event="STATUS",stage="tool_started",task_id=task,request_id=request,action_id="ACT-CI-1",tool="read_file",command="SENSITIVE_SENTINEL"),
+              dict(timestamp=1793510005.6,event="STATUS",stage="planner_response_received",task_id=task,request_id=request,response="SENSITIVE_SENTINEL"),
+          ]
+          with log.open('a',encoding='utf-8') as f:
+              for ev in events: f.write(json.dumps(ev)+'\n')
+          snaps = root/'runtime'/'gar_snapshots'
+          snaps.mkdir(parents=True,exist_ok=True)
+          (snaps/('a'*40+'.json')).write_text(json.dumps({"schema":"SMARTAGENT_GAR_SNAPSHOT_V1","recovery_budget":{"rejected_rounds":1,"rebases":0,"replans":0,"fresh_sessions":0},"pending_operations":[],"checkpoint":{"verified_evidence":[]},"verification_preconditions":[],"blockers":[]}))
+          '@
+          $fakeEvents | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmd.exe /c "collect.bat TASK-PR-A-CI RR-PR-A-CI"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Get-ChildItem -Path ".\localdata\diagnostics\gar_live_rca" -Filter "*TASK-PR-A-CI.zip" | Select-Object -First 1
+          if (-not $zip) { throw "Collector ZIP missing" }
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath ".\localdata\pr_a_ci_bundle" -Force
+          $summaryFile = ".\localdata\pr_a_ci_bundle\pr_a_requirement_ledger_summary.json"
+          if (-not (Test-Path $summaryFile)) { throw "Collector PR-A summary missing" }
+          $summary = Get-Content -LiteralPath $summaryFile -Raw | ConvertFrom-Json
+          if (-not $summary.found -or $summary.node_count -lt 1) {
+            throw "Collector failed to summarize the real PR-A ledger"
+          }
+          if (-not $summary.nodes -or $summary.nodes.Count -ne $summary.node_count) {
+            throw "Collector DAG edge summary missing"
+          }
+          $timeline = Get-Content -LiteralPath ".\localdata\pr_a_ci_bundle\timeline.json" -Raw | ConvertFrom-Json
+          if (-not ($timeline | Where-Object { $_.event -eq 'protocol_rejected' -and $_.stage -eq 'protocol_rejected' })) {
+            throw "Collector failed to resolve RemoteAgent STATUS/stage event"
+          }
+          if (-not ($timeline | Where-Object { $_.event -eq 'tool_started' -and $_.action_id -eq 'ACT-CI-1' })) {
+            throw "Collector lost Action/Tool identity"
+          }
+          if (-not ($timeline | Where-Object { $_.event -eq 'protocol_rejected' -and $_.diagnostic_reasons -contains 'invalid_progress_payload' })) {
+            throw "Collector lost bounded Progress diagnostic codes"
+          }
+          $snaps = Get-Content -LiteralPath ".\localdata\pr_a_ci_bundle\gar_snapshot_summaries.json" -Raw | ConvertFrom-Json
+          if (@($snaps).Count -ne 1) { throw "Collector failed to correlate GAR checkpoint" }
+          $manifest = Get-Content -LiteralPath ".\localdata\pr_a_ci_bundle\manifest.json" -Raw | ConvertFrom-Json
+          if ($manifest.schema -ne 'SMARTAGENT_LIVE_RCA_V2' -or $manifest.event_count -lt 6) {
+            throw "Collector V2 manifest incomplete"
+          }
+          $stageRaw = Get-ChildItem ".\localdata\pr_a_ci_bundle" -File |
+             ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw } | Out-String
+          if ($stageRaw.Contains('SENSITIVE_SENTINEL')) {
+            throw "Collector leaked unredacted prompt/command/diagnostic detail"
+          }
+      - name: PR-0 routing and task requirement regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_pr0_task_requirement.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: V9 and GAR Progress Repair regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_tri_one_5a_protocol_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_progress_hold_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Dependency loop and manifest integrity regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_runtime_dependency_loop.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: GAR R1 local handoff and R3 L4 independent controls
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_gar_r1_r3_controls.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_shared_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_gar_l4_supervision.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_runtime_feature_registry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

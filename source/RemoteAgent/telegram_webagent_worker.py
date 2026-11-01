@@ -428,7 +428,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 send_prompt=client.ask,
                 display_name="RemoteAgent",
             )
-            if gar_fresh_url:
+            from agent_core.goal_anchored_recovery import l4_enabled
+            if gar_fresh_url and l4_enabled():
                 from WebAgent.fresh_context import (
                     ensure_fresh_context_page, prepare_gar_browser_context,
                 )
@@ -509,7 +510,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                         client=client, workspace=task.workspace, session_root=root,
                         display_name="RemoteAgent",
                     )
-                    if os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+                    if os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip() and l4_enabled()
                     else None
                 ),
             )
