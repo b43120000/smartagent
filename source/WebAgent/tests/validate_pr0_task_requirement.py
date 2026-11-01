@@ -72,6 +72,50 @@ class PR0ContractTests(unittest.TestCase):
                 self.assertEqual(row["required_operations"], operations, row)
                 self.assertFalse(classify_original_request(request)[0])
 
+    def test_live_b_github_main_read_only_explicit_no_write(self):
+        # Original Telegram Live B task: a metadata noun and prohibitions
+        # must not become WRITE prerequisites.
+        request = (
+            "請查詢 GitHub 上 b43120000/smartagent Repository 的 main branch 最新 Commit，"
+            "僅做唯讀查詢，不要修改或推送任何資料。"
+        )
+        row = self.assess(request)
+        self.assertEqual(row["route"], "RESOURCE_REQUIRED")
+        self.assertEqual(row["resource_sources"], ["GITHUB"])
+        self.assertEqual(row["required_operations"], ["READ"])
+        self.assertEqual(row["required_capabilities"], ["GITHUB_REPOSITORY_ACCESS"])
+        self.assertFalse(row["side_effect_required"])
+        self.assertFalse(row["grants_authorization"])
+        self.assertIn("EXPLICIT_NO_OPERATION_CONSTRAINTS", row["restrictions"])
+        self.assertFalse(classify_original_request(request)[0])
+
+    def test_prohibited_operations_do_not_erase_positive_instructions(self):
+        cases = (
+            ("請查詢 GitHub main 最新 Commit，不要修改任何資料。",
+             ["GITHUB"], ["READ"]),
+            ("請查詢 GitHub main 最新 commit，請勿 push。",
+             ["GITHUB"], ["READ"]),
+            ("請查詢 GitHub main 最新 commit，不得 git commit 或 push。",
+             ["GITHUB"], ["READ"]),
+            ("請查詢 GitHub main 最新 Commit，並且修改本地檔案。",
+             ["GITHUB", "LOCAL"], ["READ", "WRITE"]),
+            ("請查詢 GitHub main 最新 Commit，不要修改資料，但要推送變更。",
+             ["GITHUB"], ["READ", "WRITE"]),
+            ("請修改本地檔案，不要推送資料。",
+             ["LOCAL"], ["WRITE"]),
+            ("請解釋 GitHub branch 和 commit 的差異。",
+             ["NONE"], []),
+            ("請查詢 GitHub main HEAD，然後 git commit changes。",
+             ["GITHUB"], ["READ", "WRITE"]),
+        )
+        for request, sources, operations in cases:
+            with self.subTest(request=request):
+                row = self.assess(request)
+                self.assertEqual(row["resource_sources"], sources, row)
+                self.assertEqual(row["required_operations"], operations, row)
+                self.assertEqual(row["route"],
+                                 "ANSWER_ONLY" if not operations else "RESOURCE_REQUIRED")
+
     def test_independent_followup_action_never_becomes_answer_only(self):
         cases = (
             ("請解釋 RAII。請修改本地檔案", "WRITE"),
