@@ -61,14 +61,14 @@ _NEGATED_OPERATION = (
     r")"
 )
 _NEGATED_NON_ACTION_CLAUSE = re.compile(
-    r"^\\s*(?:不需要|不必|無須|不用|不要|請勿|禁止)\\s*"
-    r"(?:實際\\s*|自行\\s*|額外\\s*)?"
+    r"^\s*(?:不需要|不必|無須|不用|不要|請勿|禁止)\s*"
+    r"(?:實際\s*|自行\s*|額外\s*)?"
     + _NEGATED_OPERATION
-    + r"(?:\\s*(?:、|或|及|以及|與|/|／)\\s*" + _NEGATED_OPERATION + r")*\\s*$"
+    + r"(?:\s*(?:、|或|及|以及|與|/|／)\s*" + _NEGATED_OPERATION + r")*\s*$"
 )
 # Preserve every clause not matching that exact form for normal fail-closed
 # action detection. Commas inside a negative clause are NOT auto-ignored.
-_CLAUSE_DELIMITER = re.compile(r"(?<=[，,。；;！!？?\\n])")
+_CLAUSE_DELIMITER = re.compile(r"(?<=[，,。；;！!？?\n])")
 
 def _without_explicit_noop_clauses(text: str) -> str:
     segments = _CLAUSE_DELIMITER.split(text)
