@@ -2496,6 +2496,8 @@ def main():
     require_protocol_manifest(install_root())
     remote_worker = _remote_worker_cli()
     remote_worker_mode = bool(remote_worker["task_id"])
+    from agent_core.runtime_config import apply_process_config
+    apply_process_config("remote_agent" if remote_worker_mode else "local_agent")
     adopted_remote_task = None
     worker_startup_heartbeat_stop = None
     worker_runtime_log = None
