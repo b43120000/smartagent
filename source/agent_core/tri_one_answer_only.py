@@ -116,6 +116,22 @@ def classify_original_request(
     """
     if attachments or authorized_paths or image_or_artifact_request or continuation:
         return False, "structured_tool_or_continuation_required"
+    from .task_requirement import enabled as pr0_enabled, assess_task_requirement
+    if pr0_enabled():
+        assessed = assess_task_requirement(
+            request, attachments=attachments,
+            authorized_paths=authorized_paths,
+            image_or_artifact_request=image_or_artifact_request,
+            continuation=continuation,
+        )
+        if assessed["route"] == "ANSWER_ONLY":
+            return True, "bounded_text_only_intent"
+        reason = str(assessed["reason"])
+        if reason in ("structured_tool_or_continuation_required",
+                      "empty_or_unbounded_input",
+                      "text_intent_not_unambiguously_classified"):
+            return False, reason
+        return False, "external_information_or_action_indicated"
     text = str(request or "").strip()
     if not text or len(text) > 12000:
         return False, "empty_or_unbounded_input"
@@ -178,13 +194,32 @@ def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
         return False, "continuation_requires_normal_route"
     if getattr(loop, "_tri_one_has_attached_context", False):
         return False, "attachment_or_skill_requires_normal_route"
-    eligible, reason = classify_original_request(
-        getattr(loop, "task_request", ""),
-        authorized_paths=bool(getattr(loop, "authorized_paths", [])),
-        image_or_artifact_request=bool(getattr(loop, "image_delivery_plan", {})),
-    )
-    if not eligible:
-        return False, reason
+    from .task_requirement import enabled as pr0_enabled, assess_task_requirement
+    task_request = str(getattr(loop, "task_request", "") or "").strip()
+    if pr0_enabled():
+        import hashlib
+        cached = getattr(loop, "task_requirement", None)
+        expected_sha = hashlib.sha256(task_request.encode("utf-8")).hexdigest()
+        if (not isinstance(cached, Mapping)
+                or cached.get("intent_sha256") != expected_sha
+                or cached.get("decision_owner") != "RUNTIME_POLICY"):
+            cached = assess_task_requirement(
+                task_request,
+                attachments=bool(getattr(loop, "_tri_one_has_attached_context", False)),
+                authorized_paths=bool(getattr(loop, "authorized_paths", [])),
+                image_or_artifact_request=bool(getattr(loop, "image_delivery_plan", {})),
+                continuation=bool(getattr(loop, "continuation_source", None)),
+            )
+        if cached["route"] != "ANSWER_ONLY":
+            return False, "task_requirement_" + str(cached["reason"])
+    else:
+        eligible, reason = classify_original_request(
+            task_request,
+            authorized_paths=bool(getattr(loop, "authorized_paths", [])),
+            image_or_artifact_request=bool(getattr(loop, "image_delivery_plan", {})),
+        )
+        if not eligible:
+            return False, reason
     if _UNSUPPORTED_CLAIM.search(str(final_action.get("content") or "")):
         return False, "final_text_claims_unverified_external_action"
     return True, "ANSWER_ONLY_RESPONSE_ADMITTED"
