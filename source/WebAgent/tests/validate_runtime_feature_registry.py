@@ -134,6 +134,14 @@ class RegistryIT(unittest.TestCase):
         self.assertFalse(remote["flags"]["tri_one_text_only"])
         self.assertEqual(remote["sources"]["tri_one_task_result"],
                          "process_environment")
+        env = {"TRI_ONE_TEXT_ONLY_V1": "0"}
+        cfg.apply_process_config("local_agent", environ=env,
+                                 user_file=self.override, write_log=False)
+        remote = cfg.apply_process_config("remote_agent", environ=env,
+                                          user_file=self.override, write_log=False)
+        self.assertFalse(remote["flags"]["tri_one_text_only"])
+        self.assertEqual(remote["sources"]["tri_one_text_only"],
+                         "process_environment")
 
     def test_inherited_configuration_version_change_requires_restart(self):
         env = {}
