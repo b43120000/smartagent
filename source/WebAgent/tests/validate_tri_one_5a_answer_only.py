@@ -98,6 +98,56 @@ class AnswerOnlyPolicyTests(unittest.TestCase):
         self.assertFalse(classify_original_request(
             "Explain RAII", continuation=True)[0])
 
+    def test_original_remoteagent_raii_request_with_explicit_noop_clauses(self):
+        request = (
+            "請解釋 C++ RAII（Resource Acquisition Is Initialization）的設計原理，"
+            "並提供一個使用 std::unique_ptr 的簡短範例。\n"
+            "只需要文字解釋與程式碼範例，不需要執行程式、讀取檔案或修改任何資料。\\n"
+            "請完成後直接回報結果。"
+        )
+        self.assertEqual(classify_original_request(request),
+                         (True, "bounded_text_only_intent"))
+        progress = {"decision":"COMPLETE", "outcome":"SUCCESS", "evidence_refs":[]}
+        final = {"tool":"final_response",
+                 "content":"RAII releases owned resources when their owner leaves scope."}
+        self.assertEqual(
+            accept_terminal_candidate(_loop(request), progress, final),
+            (True, "ANSWER_ONLY_RESPONSE_ADMITTED"),
+        )
+        with patch.dict(os.environ, {
+            "TRI_ONE_TASK_RESULT_V1": "1", "TRI_ONE_TEXT_ONLY_V1": "1",
+        }):
+            allowed, reason = authorize_omitted_terminal_evidence(
+                _loop(request), {**progress, "evidence_refs": []},
+                [final], source="TELEGRAM")
+            self.assertFalse(allowed)
+            self.assertEqual(reason, "evidence_refs_explicit")
+            allowed, reason = authorize_omitted_terminal_evidence(
+                _loop(request),
+                {"decision":"COMPLETE","outcome":"SUCCESS"},
+                [final], source="TELEGRAM")
+            self.assertTrue(allowed, reason)
+
+    def test_negative_action_clauses_cannot_hide_positive_tools(self):
+        cases = (
+            "請解釋 RAII，並修改檔案，不需要執行程式。",
+            "請解釋 RAII，不需要執行程式，但請讀取檔案。",
+            "請解釋 RAII，不需要執行程式或讀取檔案，仍要修改資料。",
+            "請解釋 RAII，不需要執行程式、讀取檔案或修改任何資料。請下載附件。",
+            "請解釋 RAII，不需要執行程式、讀取檔案或修改任何資料。請讀取 ./note.txt",
+            "請解釋 RAII，不需要執行程式和修改檔案，另外幫我搜尋資料。",
+            "請解釋 RAII，不需要執行程式、讀取檔案或修改任何資料，接著請修改檔案。",
+        )
+        for request in cases:
+            with self.subTest(request=request):
+                self.assertFalse(classify_original_request(request)[0])
+        self.assertFalse(classify_original_request(
+            "請解釋 RAII，不需要執行程式、讀取檔案或修改任何資料。",
+            attachments=True)[0])
+        self.assertFalse(classify_original_request(
+            "請解釋 RAII，不需要執行程式、讀取檔案或修改任何資料。",
+            continuation=True)[0])
+
     def test_terminal_gate_positive_and_no_action_evidence_fabricated(self):
         progress = {"decision":"COMPLETE", "outcome":"SUCCESS", "evidence_refs":[]}
         final = {"tool":"final_response", "content":"RAII releases resources on scope exit."}
