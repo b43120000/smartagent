@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .json_state_io import read_json_retry, write_json_atomic
 from .process_file_lock import exclusive_process_lock
+from .paths import runtime_root
 
 SCHEMA = "SMARTAGENT_PREREQ_V3_GRAPH_LEDGER_V1"
 STATES = frozenset({"PENDING", "SATISFIED", "FAILED", "UNKNOWN"})
@@ -185,7 +186,7 @@ class RequirementLedger:
 
     def __init__(self, install_root: str | Path):
         base = Path(install_root).expanduser().resolve()
-        self.directory = base / "localdata" / "runtime" / "prerequisite_v3"
+        self.directory = runtime_root(base) / "prerequisite_v3"
 
     def _path(self, task_id: str) -> Path:
         return self.directory / (_require_id(task_id, "task_id") + ".json")
