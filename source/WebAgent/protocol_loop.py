@@ -4526,6 +4526,30 @@ class WebAgentProtocolLoop:
             source_tag=source_tag,
             request_id=self.run_id,
         )
+        from agent_core.task_requirement import (
+            enabled as pr0_enabled, assess_task_requirement, render_task_requirement,
+        )
+        self.task_requirement = (
+            assess_task_requirement(
+                request, attachments=self._tri_one_has_attached_context,
+                authorized_paths=bool(authorized),
+                image_or_artifact_request=bool(self.image_delivery_plan),
+                continuation=bool(self.continuation_source),
+            ) if pr0_enabled() else {}
+        )
+        if self.task_requirement:
+            self._emit(
+                "task_requirement_assessed",
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch,
+                route=self.task_requirement["route"],
+                resource_sources=self.task_requirement["resource_sources"],
+                required_operations=self.task_requirement["required_operations"],
+                required_capabilities=self.task_requirement["required_capabilities"],
+                reason=self.task_requirement["reason"],
+                intent_sha256=self.task_requirement["intent_sha256"],
+                grants_authorization=False,
+            )
         self.tools.artifact_delivery_mode = str(self.image_delivery_plan.get("delivery", ""))
         if initial_attachments:
             queued = self.tools.queue_attachments(list(initial_attachments))
@@ -4587,6 +4611,10 @@ class WebAgentProtocolLoop:
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
         prompt += "\n" + render_initial_planner_toolkit(environment_snapshot)
+        if self.task_requirement:
+            # Planner sees a bounded Runtime observation, not permission or
+            # a bypass of Protocol/Tool/Terminal admission.
+            prompt += "\n" + render_task_requirement(self.task_requirement)
         from agent_core.prerequisite_resolution import render_prerequisites
         prompt += "\n" + render_prerequisites(
             request, self.authorized_paths, environment_snapshot
