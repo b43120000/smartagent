@@ -876,6 +876,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--remote-worker-token", required=True)
     parser.add_argument("--remote-cdp", default="")
     args = parser.parse_args(argv)
+    from agent_core.runtime_config import apply_process_config
+    apply_process_config("remote_agent")
     return run_task(
         task_id=args.remote_worker_task,
         token=args.remote_worker_token,
