@@ -57,6 +57,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_composer_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: PR-0 Assessment contract and V9 safety regression
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_pr0_task_requirement.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: 5A Answer-only integration and policy
         shell: pwsh
         run: |
