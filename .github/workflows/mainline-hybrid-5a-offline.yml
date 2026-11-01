@@ -63,10 +63,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_tri_one_5a_answer_only.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: GAR protocol loop safety and answer-only recovery
+      - name: GAR targeted safe pause, verified L4 and answer-only completion
         shell: pwsh
         run: |
-          .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_gar_protocol_loop_it.py
+          .\.venv\Scripts\python.exe -B -m unittest WebAgent.tests.validate_gar_protocol_loop_it.GARProtocolIT.test_unverified_terminal_precondition_is_not_unknown_side_effect WebAgent.tests.validate_gar_protocol_loop_it.GARProtocolIT.test_l4_invalid_proof_never_switches_planner WebAgent.tests.validate_gar_protocol_loop_it.GARProtocolIT.test_l4_fresh_planner_can_complete_text_only_goal WebAgent.tests.validate_gar_protocol_loop_it.GARProtocolIT.test_gar_off_keeps_legacy_repeated_rejection_pause WebAgent.tests.validate_gar_protocol_loop_it.GARProtocolIT.test_duplicate_invalid_fresh_planner_reply_bounded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: GAR saved WebGPT1/WebGPT2 startup regression
         shell: pwsh
