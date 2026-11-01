@@ -355,7 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     # L4 target URL is an explicit operator request to prepare a second tab.
     # No fresh Bootstrap is submitted until the real GAR L4 decision.
     fresh_target = os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
-    if fresh_target:
+    from agent_core.goal_anchored_recovery import l4_enabled
+    if fresh_target and l4_enabled():
         from WebAgent.fresh_context import (
             ensure_fresh_context_page, prepare_gar_browser_context,
         )
@@ -398,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
                 client=client, workspace=workspace, session_root=runtime_root,
                 display_name="WebDirect",
             )
-            if os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
+            if os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip() and l4_enabled()
             else None
         ),
     )
@@ -497,11 +498,11 @@ def main(argv: list[str] | None = None) -> int:
                 # RemoteAgent, including while its fresh Planner is active.
                 # No lease is acquired for ordinary legacy/flag-OFF tasks.
                 from contextlib import nullcontext
-                from agent_core.goal_anchored_recovery import enabled as gar_enabled
+                from agent_core.goal_anchored_recovery import enabled as gar_enabled, l4_enabled
                 from agent_core.paths import remote_execution_page_lock_path
                 from WebAgent.browser_bridge import execution_page_lease
                 use_gar_fresh_lease = (
-                    gar_enabled()
+                    gar_enabled() and l4_enabled()
                     and bool(os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip())
                 )
                 page_guard = (
