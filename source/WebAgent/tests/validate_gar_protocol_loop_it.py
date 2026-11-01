@@ -156,6 +156,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertTrue(any(name == "gar_transport_integrity"
                                 for name, _ in events))
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_fresh_planner_can_complete_text_only_goal(self):
         # Explicit backward-compatibility test; new v1 defaults to supervisor.
         with tempfile.TemporaryDirectory(prefix="gar-l4-success-") as directory:
@@ -217,6 +218,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(loop.action_ledger, {})
             self.assertEqual(loop.action_result_ledger, {})
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_new_planner_replaces_old_after_verified_preparation(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-it-") as directory:
             root = Path(directory)
@@ -269,6 +271,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(loop.action_ledger, {})
             self.assertEqual(loop.terminal_acceptance, {})
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_l4_invalid_proof_never_switches_planner(self):
         with tempfile.TemporaryDirectory(prefix="gar-l4-negative-") as directory:
             root = Path(directory)
@@ -335,6 +338,7 @@ class GARProtocolIT(unittest.TestCase):
             self.assertEqual(loop.action_ledger, {})
             self.assertEqual(loop.terminal_acceptance, {})
 
+    @patch.dict(os.environ, {"SMARTAGENT_GAR_L4_ENABLED":"1"})
     def test_duplicate_invalid_fresh_planner_reply_bounded(self):
         with tempfile.TemporaryDirectory(prefix="gar-fresh-") as directory:
             root = Path(directory)
