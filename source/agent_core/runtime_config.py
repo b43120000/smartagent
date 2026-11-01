@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Mapping, MutableMapping
 
-from .paths import install_root, log_root
+from .paths import install_root, log_root, runtime_root
 from .process_file_lock import exclusive_process_lock
 
 SCHEMA = "SMARTAGENT_FEATURE_CONFIG_V1"
@@ -146,6 +146,7 @@ def resolve_features(agent: str, *, environ: Mapping[str, str] | None = None,
     inherited = _inherited_sources(values, registry)
     inherited_sources = inherited.get("sources", {})
     inherited_role = str(inherited.get("agent", "") or "")
+    explicit_original = inherited.get("explicit_values", {})
     effective, sources, env_names = {}, {}, {}
     for name, spec in registry["features"].items():
         key = spec["env"]
@@ -158,10 +159,11 @@ def resolve_features(agent: str, *, environ: Mapping[str, str] | None = None,
             value, source = user["agent_overrides"][agent][name], "agent_override:" + agent
         # Do not inherit feature gates imposed only by the parent's agent role.
         # An actual explicit environment override still follows the child.
-        if key in values and (
-            not inherited_role or inherited_role == agent
-            or inherited_sources.get(name) == "process_environment"
-        ):
+        if inherited_role and inherited_role != agent:
+            if name in explicit_original:
+                value = _parse_bool(explicit_original[name], key=key)
+                source = "process_environment"
+        elif key in values:
             value = _parse_bool(values[key], key=key)
             source = inherited_sources.get(name, "process_environment")
         if agent not in spec["agents"]:
@@ -201,6 +203,13 @@ def apply_process_config(agent: str, *, environ: MutableMapping[str, str] | None
     env = os.environ if environ is None else environ
     snapshot = resolve_features(agent, environ=env, defaults_file=defaults_file,
                                 user_file=user_file)
+    # Remember genuine caller overrides separately from agent-specific
+    # capability gates. An explicit '0' must survive Local -> Remote.
+    parent = _inherited_sources(env, load_registry(path=defaults_file))
+    explicit = dict(parent.get("explicit_values", {}))
+    if not parent:
+        explicit = {name: str(env[key]) for name, key in snapshot["env_names"].items()
+                    if key in env}
     applied = {}
     for name, key in snapshot["env_names"].items():
         value = "1" if snapshot["flags"][name] else "0"
@@ -211,7 +220,8 @@ def apply_process_config(agent: str, *, environ: MutableMapping[str, str] | None
     env[INHERITED_KEY] = json.dumps(
         {"schema": SCHEMA, "agent": agent,
          "config_sha256": snapshot["config_sha256"],
-         "values": applied, "sources": snapshot["sources"]},
+         "values": applied, "sources": snapshot["sources"],
+         "explicit_values": explicit},
         sort_keys=True, separators=(",", ":"))
     if write_log:
         log_feature_config(snapshot)
@@ -263,7 +273,9 @@ def save_feature(name: str, enabled: bool, *, agent: str = "",
         raise ValueError("feature_agent_invalid")
     target = Path(path) if path is not None else user_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    with exclusive_process_lock(target.with_suffix(".lock"), timeout_sec=10,
+    if agent and agent not in registry["features"][name]["agents"] and enabled:
+        raise ValueError("feature_agent_unsupported")
+    with exclusive_process_lock(runtime_root() / "feature_flags.lock", timeout_sec=10,
                                 label="feature config update"):
         user = load_user_values(path=target, registry=registry)
         dest = user["agent_overrides"].setdefault(agent, {}) if agent else user["features"]
