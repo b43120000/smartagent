@@ -904,6 +904,19 @@ class WebAgentProtocolLoop:
             for key, value in source.get('pending', {}).items():
                 if key in {'pending_result_recovery', 'deferred_action_repairs', 'pending_verification_requirement'}:
                     setattr(self, key, copy.deepcopy(value))
+            # Do not import or replay a prior epoch's progress-held Actions.
+            # They never passed V9 admission. Fresh continuation must plan
+            # under its own identity and existing scope/permission gates.
+            hold = source.get('pending', {}).get('unadmitted_progress_repair_hold')
+            if hold:
+                self._emit(
+                    'progress_repair_hold_invalidated_on_continuation',
+                    request_id=self.run_id, task_id=self.task_id,
+                    source_task_id=source['task_id'],
+                    source_action_count=hold.get('count', 0)
+                    if isinstance(hold, dict) else 0,
+                    reason='new_request_epoch_requires_new_admission',
+                )
             # Pending field repairs are bound to old request/epoch. Keep the
             # original action, but explicitly rebind them through this link.
             for key, value in source.get('pending', {}).get('pending_command_field_repairs', {}).items():
