@@ -3943,6 +3943,9 @@ class WebAgentProtocolLoop:
                 )
                 self._emit("tri_one_answer_only_candidate",
                            request_id=self.run_id, round=self.turn_id,
+                           # This is a Runtime observation of an actual model
+                           # response, NOT tool evidence or a PASS assertion.
+                           response_received=True,
                            eligible=answer_only_admission, reason=answer_reason)
                 # A status marker is NOT a tool result. If it was explicitly
                 # cited in an otherwise eligible no-action final, reject with
@@ -4104,6 +4107,26 @@ class WebAgentProtocolLoop:
             return [], diagnostics
         if getattr(self, '_action_admission_probe', False):
             return actions, []
+        if answer_only_admission and self.pending_verification_requirement:
+            # Only a prior no-execution terminal protocol prerequisite may
+            # be dismissed, after the new full V9 terminal has passed schema,
+            # request scope, Action Ledger and receipt preconditions. Never
+            # clear real/unknown operation or condition-verification state.
+            from agent_core.goal_anchored_recovery import (
+                is_unverified_nonexecuted_terminal_requirement,
+            )
+            assert is_unverified_nonexecuted_terminal_requirement(
+                self.pending_verification_requirement,
+                has_action_history=bool(self.action_ledger or self.action_result_ledger),
+                has_condition_results=bool(self.condition_result_ledger),
+            )
+            self.pending_verification_requirement = {}
+            self.terminal_candidate = {}
+            self._emit(
+                "tri_one_answer_only_advisory_prerequisite_released",
+                request_id=self.run_id, round=self.turn_id,
+                release_reason="verified_no_action_answer_only_admission",
+            )
         self._answer_only_admitted = answer_only_admission
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
