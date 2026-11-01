@@ -47,6 +47,41 @@ _URI_OR_PATH = re.compile(
     r"(?:https?://|www\.|[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|"
     r"(?:^|[\s(])(?:\.{1,2}[/\\]|~/))", re.IGNORECASE,
 )
+# Only an entire, explicitly negative *non-operation clause* is ignored.
+# Never erase individual action words within a positive/mixed request.
+# A requirement such as "不要執行，但要讀取檔案" keeps its positive clause.
+# A file path, URL, attachment or continuation is always checked first.
+_NEGATED_OPERATION = (
+    r"(?:執行(?:任何)?(?:程式|程式碼|命令|指令)?"
+    r"|讀取(?:任何)?(?:檔案|文件|資料)?"
+    r"|修改(?:任何)?(?:檔案|文件|資料)?"
+    r"|測試(?:任何)?(?:程式|程式碼)?"
+    r"|編譯(?:任何)?(?:程式|程式碼)?"
+    r"|(?:下載|上傳|安裝|部署|開啟|建立|儲存|刪除)(?:任何)?(?:檔案|資料|程式)?"
+    r")"
+)
+_NEGATED_NON_ACTION_CLAUSE = re.compile(
+    r"^\\s*(?:不需要|不必|無須|不用|不要|請勿|禁止)\\s*"
+    r"(?:實際\\s*|自行\\s*|額外\\s*)?"
+    + _NEGATED_OPERATION
+    + r"(?:\\s*(?:、|或|及|以及|與|/|／)\\s*" + _NEGATED_OPERATION + r")*\\s*$"
+)
+# Preserve every clause not matching that exact form for normal fail-closed
+# action detection. Commas inside a negative clause are NOT auto-ignored.
+_CLAUSE_DELIMITER = re.compile(r"(?<=[，,。；;！!？?\\n])")
+
+def _without_explicit_noop_clauses(text: str) -> str:
+    segments = _CLAUSE_DELIMITER.split(text)
+    retained = []
+    for segment in segments:
+        candidate = segment.strip().rstrip("，,。；;！!？?").strip()
+        if _NEGATED_NON_ACTION_CLAUSE.fullmatch(candidate):
+            retained.append(" ")
+        else:
+            retained.append(segment)
+    return "".join(retained)
+
+
 _UNSUPPORTED_CLAIM = re.compile(
     r"\b(?:I\s+(?:checked|verified|ran|executed|saved|sent|downloaded|"
     r"uploaded|read\s+the\s+file|opened)|"
@@ -86,7 +121,10 @@ def classify_original_request(
         return False, "empty_or_unbounded_input"
     if _URI_OR_PATH.search(text):
         return False, "external_resource_or_path"
-    if _EXTERNAL_OR_ACTION.search(text):
+    # A genuine prohibition of external actions is not a request to perform
+    # those actions. Do not grant terminal authority: all other constraints
+    # and the live, signed V9 no-tool terminal must still pass independently.
+    if _EXTERNAL_OR_ACTION.search(_without_explicit_noop_clauses(text)):
         return False, "external_information_or_action_indicated"
     if not _TEXT_INTENT.search(text):
         return False, "text_intent_not_unambiguously_classified"
@@ -106,11 +144,25 @@ def accept_terminal_candidate(loop: object, progress: Mapping[str, object],
         return False, "missing_final_text"
     if list(progress.get("evidence_refs") or []):
         return False, "action_evidence_cannot_be_answer_only"
+    # A prior zero-tool SUCCESS rejection may have left an advisory VERIFY
+    # prerequisite. It has no Action/Condition evidence and must not force a
+    # purely textual answer into run_command. Other pending operations block.
+    requirement = getattr(loop, "pending_verification_requirement", None)
+    from .goal_anchored_recovery import is_unverified_nonexecuted_terminal_requirement
+    advisory_requirement = is_unverified_nonexecuted_terminal_requirement(
+        requirement,
+        has_action_history=bool(
+            getattr(loop, "action_ledger", None)
+            or getattr(loop, "action_result_ledger", None)
+        ),
+        has_condition_results=bool(getattr(loop, "condition_result_ledger", None)),
+    )
+    if requirement and not advisory_requirement:
+        return False, "runtime_actions_or_recovery_pending"
     if any((
         getattr(loop, "action_ledger", None),
         getattr(loop, "action_result_ledger", None),
         getattr(loop, "condition_result_ledger", None),
-        getattr(loop, "pending_verification_requirement", None),
         getattr(loop, "pending_result_recovery", None),
         getattr(loop, "deferred_action_repairs", None),
         getattr(loop, "pending_progress_repair_actions", None),
