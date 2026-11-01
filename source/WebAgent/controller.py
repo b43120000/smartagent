@@ -352,10 +352,14 @@ def main(argv: list[str] | None = None) -> int:
     # No fresh Bootstrap is submitted until the real GAR L4 decision.
     fresh_target = os.environ.get("SMARTAGENT_GAR_FRESH_CONTEXT_URL", "").strip()
     if fresh_target:
-        from WebAgent.fresh_context import ensure_fresh_context_page
+        from WebAgent.fresh_context import (
+            ensure_fresh_context_page, prepare_gar_browser_context,
+        )
         try:
+            second_context = prepare_gar_browser_context(scraper)
             prepared = ensure_fresh_context_page(
                 context=context, original_page=page, target_url=fresh_target,
+                target_context=second_context,
             )
         except Exception as exc:
             runtime_log.emit("gar_fresh_context_page_prepare_failed",
@@ -369,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         runtime_log.emit("gar_fresh_context_page_prepared",
                          created=prepared["created"], reused=not prepared["created"],
                          target_conversation_digest=target_digest,
-                         same_context=True, bootstrap_sent=False)
+                         same_context=prepared["same_context"],
+                         bootstrap_sent=False)
         print("[WebAgent] GAR L4 target tab ready "
               f"({'created' if prepared['created'] else 'reused'}; no bootstrap sent).",
               flush=True)
