@@ -69,6 +69,7 @@ def save_target(url: str, *, path: Path | None = None) -> str:
 def apply_target(primary_url: str, *, environ: MutableMapping[str, str] | None = None,
                  path: Path | None = None, legacy_path: Path | None = None) -> str:
     values = os.environ if environ is None else environ
+    explicit_target = ENV_KEY in values
     target = (validate_target(values[ENV_KEY]) if ENV_KEY in values else
               load_target(path=path, legacy_path=legacy_path))
     if target and same_conversation(primary_url, target):
@@ -78,6 +79,12 @@ def apply_target(primary_url: str, *, environ: MutableMapping[str, str] | None =
     # Apply at each agent/worker startup. A previous explicit GAR flag must
     # not silently disagree with the effective WebGPT2 configuration.
     values[GAR_FLAG] = "1" if target else "0"
+    if environ is None:
+        from .runtime_config import log_derived_gar
+        log_derived_gar(enabled=bool(target), source=(
+            "explicit_target_environment" if explicit_target
+            else "shared_webgpt2_configuration"
+        ))
     return target
 
 
