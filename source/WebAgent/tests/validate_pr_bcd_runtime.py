@@ -73,6 +73,18 @@ class PRBCDTests(unittest.TestCase):
         self.assertNotIn("path:0",ids)
         self.assertFalse(found["remediation_requested"])
 
+    def test_c_missing_output_file_not_reclassified_as_environment_remediation(self):
+        target=self.authorized/"result.txt"
+        fact=self.probe("Create result.txt within the allowed directory",
+                        paths=[str(target)])
+        self.assertEqual(fact["missing"],["path:0"])
+        self.assertFalse(fact["remediation_requested"])
+        self.init(fact)
+        state=self.ledger.before_action(
+            **self.ids,action=self.mutate(),scope_allowed=True)
+        self.assertEqual(state["phase"],"MISSING")
+        self.assertEqual(state["remediation_action"],"")
+
     def test_b_distribution_is_probed_with_bundled_python_only(self):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
                    return_value=("MISSING","")) as probe:
