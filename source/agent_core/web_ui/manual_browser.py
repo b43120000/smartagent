@@ -29,48 +29,55 @@ def active_agent_endpoint(provider: str = '') -> str:
     return next((endpoint for endpoint in endpoints if _available(endpoint)), '')
 
 
-def agent_browser_launch_options(playwright, *, headless: bool = False) -> list[str]:
-    """Use exactly WebCopilot's browser binary/channel and persistent profile."""
+def agent_browser_launch_options(playwright, *, headless: bool = False,
+                                 role: str = "webgpt1") -> list[str]:
+    """Launch only the selected persistent browser/profile for one role."""
+    from ..browser_preferences import browser_launch_selection
+    launch = browser_launch_selection(role=role)
     from ..paths import browser_profile_root
-    from ..web_runtime import CHATGPT_BROWSER_CHANNEL, CHATGPT_BROWSER_PROFILE, CHATGPT_CDP_PORT
-    if not CHATGPT_BROWSER_CHANNEL:
+    browser_channel, browser_profile, browser_port = (
+        launch["channel"], launch["profile"], launch["port"]
+    )
+    if not browser_channel:
         executable = Path(playwright.chromium.executable_path)
     else:
         suffix = {'chrome': 'Google/Chrome/Application/chrome.exe',
-                  'msedge': 'Microsoft/Edge/Application/msedge.exe'}.get(CHATGPT_BROWSER_CHANNEL)
+                  'msedge': 'Microsoft/Edge/Application/msedge.exe'}.get(browser_channel)
         if suffix is None:
-            raise RuntimeError('unsupported_agent_browser_channel:' + CHATGPT_BROWSER_CHANNEL)
+            raise RuntimeError('unsupported_agent_browser_channel:' + browser_channel)
         candidates = [Path(os.environ.get(key, '')) / suffix for key in ('PROGRAMFILES', 'PROGRAMFILES(X86)', 'LOCALAPPDATA')]
         executable = next((path for path in candidates if path.is_file()), None)
         if executable is None:
-            raise RuntimeError('agent_browser_executable_not_found:' + CHATGPT_BROWSER_CHANNEL)
-    return [str(executable), f'--user-data-dir={browser_profile_root() / CHATGPT_BROWSER_PROFILE}',
-            f'--remote-debugging-port={CHATGPT_CDP_PORT}', '--remote-debugging-address=127.0.0.1',
+            raise RuntimeError('agent_browser_executable_not_found:' + browser_channel)
+    return [str(executable), f'--user-data-dir={browser_profile_root() / browser_profile}',
+            f'--remote-debugging-port={browser_port}', '--remote-debugging-address=127.0.0.1',
             '--no-first-run', '--no-default-browser-check', '--disable-blink-features=AutomationControlled',
             '--hide-crash-restore-bubble', '--disable-session-crashed-bubble', '--no-startup-window',
             '--headless=new' if headless else '--start-maximized']
 
 
-def ensure_agent_browser(playwright, *, headless: bool = False) -> tuple[str, bool]:
-    """Start a reusable app-profile browser independently of calibration lifetime."""
+def ensure_agent_browser(playwright, *, headless: bool = False,
+                         role: str = "webgpt1") -> tuple[str, bool]:
+    """Start/reuse only this role's persistent browser without touching other profiles."""
     from ..paths import runtime_root
     from ..process_file_lock import exclusive_process_lock
-    from ..web_runtime import CHATGPT_CDP_ENDPOINT
+    from ..browser_preferences import browser_launch_selection
+    endpoint = browser_launch_selection(role=role)["endpoint"]
     with exclusive_process_lock(runtime_root() / 'calibration_browser_start.lock', timeout_sec=40,
-                                label='calibration Agent browser startup'):
-        if _available(CHATGPT_CDP_ENDPOINT):
-            return CHATGPT_CDP_ENDPOINT, False
-        args = agent_browser_launch_options(playwright, headless=headless)
+                                label=f'{role} Agent browser startup'):
+        if _available(endpoint):
+            return endpoint, False
+        args = agent_browser_launch_options(playwright, headless=headless, role=role)
         _launched_browsers[:] = [child for child in _launched_browsers if child.poll() is None]
-        print('[manualBrowser] 開啟與 WebCopilot 相同的瀏覽器及登入資料夾。', flush=True)
+        print(f'[manualBrowser] 開啟 {role} 專用瀏覽器及登入資料夾。', flush=True)
         flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0
         process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            if _available(CHATGPT_CDP_ENDPOINT):
+            if _available(endpoint):
                 _launched_browsers.append(process)
-                return CHATGPT_CDP_ENDPOINT, True
+                return endpoint, True
             time.sleep(0.2)
         # A launcher may exit after forwarding to another startup. Give the
         # endpoint its full deadline; only clean up our exact live child.
