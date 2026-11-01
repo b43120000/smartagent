@@ -161,7 +161,14 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     missing = [row["id"] for row in facts if row["state"]=="MISSING"]
     unknown = [row["id"] for row in facts if row["state"]=="UNKNOWN"]
     # Only a positive, explicit remediation request may enter PR-C.
-    remediation_requested = (bool(WRITE_INTENT.search(text)) and bool(paths)
+    # A missing *output* file is not automatically an environment
+    # prerequisite. PR-C targets missing runtime/dependency capabilities;
+    # ordinary output writes keep their existing V9 action/receipt path.
+    dependency_missing = any(
+        item.startswith(("tool:","version:","package:")) for item in missing
+    )
+    remediation_requested = (dependency_missing and
+                             bool(WRITE_INTENT.search(text)) and bool(paths)
                              and not bool(NEGATED_REMEDIATION.search(text)))
     return {"schema":"SMARTAGENT_PREREQ_V3_PROBE_V1",
             "facts":facts, "missing":missing,"unknown":unknown,
@@ -286,6 +293,9 @@ class RecoveryLedger:
                                 "VERIFIED","BLOCKED"} and doc["remediation_action"]:
                 raise PrerequisiteRecoveryError("pr_c_remediation_replay_blocked")
             if doc["phase"] != "MISSING":
+                return ""
+            if not any(item.startswith(("tool:","version:","package:"))
+                       for item in doc["missing_ids"]):
                 return ""
             if not doc["remediation_requested"] or not scope_allowed:
                 raise PrerequisiteRecoveryError("pr_c_explicit_authorization_required")
