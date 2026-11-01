@@ -1069,6 +1069,47 @@ def _browser_menu() -> int:
     return 0
 
 
+def _feature_flags_menu() -> int:
+    """Edit production feature flags, never debug/security bypasses."""
+    from .runtime_config import AGENTS, load_registry, resolve_features, save_feature
+    registry = load_registry()
+    labels = list(registry["features"])
+    while True:
+        print("\n全域 Runtime Feature Flags（config/feature_flags.json）")
+        print("設定優先序：tracked defaults < user config < Agent override < process environment")
+        print("GAR_V1 由 [6] WebGPT2 URL 衍生；LocalAgent 的 V9 5A/L4 不支援。")
+        snapshots = {agent: resolve_features(agent) for agent in AGENTS}
+        for index, name in enumerate(labels, 1):
+            spec = registry["features"][name]
+            owner = next(a for a in AGENTS if a in spec["agents"])
+            enabled = snapshots[owner]["flags"][name]
+            print(f"[{index}] {name}: {'ON' if enabled else 'OFF'} "
+                  f"(eligible={','.join(spec['agents'])})")
+        print("[0] 返回")
+        choice = input("請選擇功能編號 [0]: ").strip() or "0"
+        if choice == "0":
+            return 0
+        if not choice.isdigit() or not 1 <= int(choice) <= len(labels):
+            print("[!] 無效編號。")
+            continue
+        name = labels[int(choice)-1]
+        print("設定範圍：[0] 全域 [1] LocalAgent [2] RemoteAgent [3] WebDirect")
+        role = input("請選擇 [0]: ").strip() or "0"
+        if role not in ("0", "1", "2", "3"):
+            print("[!] 無效 Agent。")
+            continue
+        agent = "" if role == "0" else AGENTS[int(role)-1]
+        if agent and agent not in registry["features"][name]["agents"]:
+            print(f"[!] {name} 尚未支援 {agent}；無法在該 Agent 啟用。")
+            continue
+        value = input("設定 [1] 啟用 [0] 關閉 [Enter] 取消: ").strip()
+        if value not in ("0", "1"):
+            continue
+        save_feature(name, value == "1", agent=agent)
+        print(f"[OK] {name} = {value} ({agent or 'global'})；重啟 Agent 後生效。")
+        print("注意：顯式 process environment 仍具最高優先權。")
+
+
 def _interactive() -> int:
     snapshot = _binding_snapshot()
     print("\nSmartAgent Workspace Manager")
@@ -1091,6 +1132,7 @@ def _interactive() -> int:
     print("[4] 管理已設定的 Telegram")
     print("[5] 瀏覽器設定")
     print("[6] 設定共用 GAR WebGPT2 URL")
+    print("[7] 設定全域 Runtime Feature Flags")
     print("[0] Exit")
     choice = input("Select: ").strip()
     if choice == "1":
@@ -1107,6 +1149,8 @@ def _interactive() -> int:
         return _browser_menu()
     if choice == "6":
         return _gar_webgpt2_menu()
+    if choice == "7":
+        return _feature_flags_menu()
     return 0
 
 
@@ -1123,10 +1167,24 @@ def main(argv=None) -> int:
     parser.add_argument("--set-gar-webgpt2-url", default=None,
                         help="Shared GAR WebGPT2 URL; empty string clears the setting")
     parser.add_argument("--browser-settings", action="store_true")
+    parser.add_argument("--set-feature", default="")
+    parser.add_argument("--feature-enabled", choices=("0", "1"), default=None)
+    parser.add_argument("--feature-agent", choices=("local_agent","remote_agent","web_direct"), default="")
     args = parser.parse_args(argv)
     if args.show:
         print(json.dumps(_binding_snapshot(), ensure_ascii=False, indent=2)); return 0
     if args.browser_settings: return _browser_menu()
+    if args.set_feature:
+        from .runtime_config import save_feature
+        if args.feature_enabled is None:
+            raise ValueError("feature_enabled_required")
+        save_feature(args.set_feature, args.feature_enabled == "1",
+                     agent=args.feature_agent)
+        print(json.dumps({"status":"APPLIED", "feature":args.set_feature,
+                          "enabled":args.feature_enabled=="1",
+                          "agent":args.feature_agent or "global"},
+                          ensure_ascii=False))
+        return 0
     if args.security_menu: return _security_menu()
     if args.initialize_security:
         if not _is_admin():
