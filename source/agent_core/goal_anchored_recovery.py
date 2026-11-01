@@ -361,6 +361,13 @@ class RecoveryEngine:
         if self._unsafe(snapshot):
             return self._record("L5", "PAUSED",
                                 "GAR_PENDING_OR_BLOCKED_OPERATION")
+        # A Runtime-attested unadmitted Progress hold is a protocol-only
+        # precondition, NOT UNKNOWN execution. Only local bounded L1 repair
+        # may use this lane: no rebases/replans/fresh sessions or side effects.
+        held_progress_repair = (
+            "PRESERVED_UNADMITTED_PROGRESS_REPAIR"
+            in (snapshot.get("verification_preconditions") or [])
+        )
         if not original_goal_in_prompt or len(self._original_request) > 4096:
             return self._record("L5", "PAUSED", "GAR_GOAL_PROMPT_UNSAFE")
         # A single BoundedRepairBudget observes each rejected Planner turn.
@@ -397,6 +404,14 @@ class RecoveryEngine:
         self._last_signature = signature
         if self.rejected_rounds > self.max_rejections:
             return self._record("L5", "PAUSED", "GAR_SHARED_BUDGET_EXHAUSTED")
+        if held_progress_repair:
+            # Do not promote a preserved action into a replan or reset the
+            # repair budget. In particular, EXHAUSTED always stops here.
+            if local_repair_budget is None or self._local_repair_exhausted:
+                return self._record("L5", "PAUSED",
+                                    "GAR_PRESERVED_PROGRESS_REPAIR_EXHAUSTED")
+            return self._record("L1", "REPAIR",
+                                "GAR_PRESERVED_PROGRESS_REPAIR_LOCAL")
         # A successfully fenced L4 context may return a newly generated but
         # malformed V9 response. Permit at most TWO in-place protocol repairs,
         # using the SAME Planner session and the SAME cumulative budget.
