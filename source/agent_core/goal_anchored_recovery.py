@@ -22,6 +22,7 @@ from typing import Any
 
 SCHEMA = "SMARTAGENT_GAR_SNAPSHOT_V1"
 FEATURE_FLAG = "SMARTAGENT_GAR_V1"
+L4_FEATURE_FLAG = "SMARTAGENT_GAR_L4_ENABLED"
 _LEVELS = {"L0", "L1", "L2", "L3", "L4", "L5"}
 _PENDING = {"OPEN", "RUNNING", "QUEUED", "UNKNOWN", "PARTIAL", "PAUSING"}
 _READBACK = ("WEB_PROTOCOL_RECOVERY_STALE_READBACK", "RESPONSE_SHA_UNCHANGED",
@@ -35,6 +36,14 @@ _SECRETS = re.compile(
 def enabled(env: Mapping[str, str] | None = None) -> bool:
     values = os.environ if env is None else env
     return str(values.get(FEATURE_FLAG, "") or "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def l4_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Disable L4 independently of the shared GAR-v1/WebGPT2 URL gate."""
+    values = os.environ if env is None else env
+    return str(values.get(L4_FEATURE_FLAG, "1") or "").strip().lower() in {
         "1", "true", "yes", "on"
     }
 
@@ -451,6 +460,8 @@ class RecoveryEngine:
             self.replans += 1
             return self._record("L3", "REPLAN", "GAR_BOUNDED_REPLAN",
                                 self._prompt("L3", snapshot, code))
+        if not l4_enabled():
+            return self._record("L5", "PAUSED", "GAR_L4_DISABLED")
         # L4 is a *request* for a trusted adapter, not permission to send a
         # prompt or create another browser. The Runtime validates and fences
         # the adapter proof before any further Planner operation.
@@ -471,6 +482,8 @@ class RecoveryEngine:
             return self._record("L5", "PAUSED", "GAR_SNAPSHOT_UNVERIFIED")
         if self._unsafe(snapshot):
             return self._record("L5", "PAUSED", "GAR_PENDING_OR_BLOCKED_OPERATION")
+        if not l4_enabled():
+            return self._record("L5", "PAUSED", "GAR_L4_DISABLED")
         if (self.level == "L5" or self._l4_requested or self.fresh_sessions
                 or self._l4_advice_delivered or self.rejected_rounds >= self.max_rejections):
             return self._record("L5", "PAUSED", "GAR_SEMANTIC_REVIEW_UNAVAILABLE")
@@ -487,6 +500,8 @@ class RecoveryEngine:
     def activate_fresh_context(self, *, proof: FreshContextProof,
                                snapshot: Mapping[str, object]) -> RecoveryDecision:
         """Admit one new context only against a trusted, same-task proof."""
+        if not l4_enabled():
+            return self._record("L5", "PAUSED", "GAR_L4_DISABLED")
         if not self._l4_requested or self.fresh_sessions >= 1:
             return self._record("L5", "PAUSED", "GAR_L4_NOT_REQUESTED")
         if not self.validate_snapshot(snapshot) or self._unsafe(snapshot):
@@ -599,6 +614,6 @@ class RecoveryEngine:
         }
 
 
-__all__ = ["FEATURE_FLAG", "SCHEMA", "RecoveryDecision", "RecoveryEngine",
+__all__ = ["FEATURE_FLAG", "L4_FEATURE_FLAG", "l4_enabled", "SCHEMA", "RecoveryDecision", "RecoveryEngine",
            "FreshContextProof", "enabled", "classify_failure", "mutation_fingerprint",
            "is_unverified_nonexecuted_terminal_requirement"]
