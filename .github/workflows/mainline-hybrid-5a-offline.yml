@@ -11,6 +11,7 @@ on:
       - feat/global-runtime-feature-registry-20261101
       - fix/tri-one-5a-negated-noop-answer-only-20261101
       - main
+      - feat/pr-bcd-evidence-adapters-20261102
   workflow_dispatch:
 
 permissions:
