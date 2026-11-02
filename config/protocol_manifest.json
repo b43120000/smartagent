@@ -100,7 +100,7 @@
     "source/agent_core/remote_binding_manager.py": "fffffe0b54d08bfb5e9a2a492d826d0c02da0ec48e2f100eabad70d65a28ec45",
     "source/agent_core/remote_binding.py": "52a5acc9e82e6f3946b906c256814d4f8e93e0ad43c8cd74fdbfd9efcc17814f",
     "source/agent_core/remote_clean_start.py": "ae88a95be93a617ef5e692e3dad2426bfb2f977608c310f93cbec7f8d4c29610",
-    "source/agent_core/remote_control_dispatcher.py": "897b06cf813c00abdc0aa5af255efe6d9dea17bd42f947859d5f024fdce6cc4a",
+    "source/agent_core/remote_control_dispatcher.py": "923c35c490c828b01f18b04998bf8aba84300752796ec60090563524942c5c6c",
     "source/agent_core/remote_events.py": "961d3a1b092243a6892b6c53d6687d962173bf9dd3aee664fb09e5a31b566716",
     "source/agent_core/remote_execution_coordinator.py": "8270829b4419200c90784720d77b50420471c5cb5c77ef0047ba3f11dd50a724",
     "source/agent_core/remote_skill_manager.py": "4985f448a8d55dae9d1c2de14db2ab8cd4a0d9b6606e624380c75846ff395f63",
@@ -209,11 +209,12 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "9729665603d1b076650e1c56c5bbde26478d60acddf4a403fa66e7f67760e3f7",
+    "source/WebAgent/protocol_loop.py": "0dfdfd69a2bc674c778c13e1c13789574e53ae44afe068c07f0bdf35d77b096a",
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
-    "source/agent_core/prerequisite_runtime_v3.py": "a19482c51d005d1a09e1a878a986fe5c6a8bc1474725ad716304cd559f69fbe7"
+    "source/agent_core/prerequisite_runtime_v3.py": "a19482c51d005d1a09e1a878a986fe5c6a8bc1474725ad716304cd559f69fbe7",
+    "source/agent_core/repair_stagnation.py": "5dbe5b31629f56774b564cef88336b601237c49aa51e5441482b096fd943c9ba"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
