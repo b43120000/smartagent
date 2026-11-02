@@ -88,6 +88,31 @@ class PRBCDTests(unittest.TestCase):
         self.assertEqual(state["phase"],"MISSING")
         self.assertEqual(state["remediation_action"],"")
 
+    def test_b_bare_distribution_constraint_probed_from_actual_live_wording(self):
+        request = "確認 smartagent-pr-bcd-live>=1.0 是否缺失，禁止任何補救。"
+        with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                   return_value=("MISSING", "")) as probe:
+            result = self.probe(request, paths=[str(self.authorized)])
+        self.assertEqual(probe.call_count, 1)
+        fact = next(x for x in result["facts"]
+                    if x["id"] == "package:smartagent-pr-bcd-live")
+        self.assertEqual(fact["state"], "MISSING")
+        self.assertFalse(result["remediation_requested"])
+
+    def test_b_unspecified_wheel_request_stays_unknown_and_cannot_install(self):
+        request = ("使用 E:\\SmartAgent_PR_BCD_LIVE 已準備的 Wheel，"
+                   "依序完成 INSPECT、MUTATE、獨立 VERIFY、重新 INSPECT。")
+        probe = self.probe(request, paths=[str(self.authorized)])
+        self.assertIn("package:unspecified", probe["unknown"])
+        self.assertFalse(probe["remediation_eligible"])
+        self.init(probe)
+        with self.assertRaisesRegex(
+            PrerequisiteRecoveryError, "pr_c_missing_probe_required"
+        ):
+            self.ledger.before_action(
+                **self.ids, action=self.mutate(), scope_allowed=True,
+            )
+
     def test_b_distribution_is_probed_with_bundled_python_only(self):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
                    return_value=("MISSING","")) as probe:
