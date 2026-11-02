@@ -17,7 +17,7 @@ from .json_state_io import read_json_retry, write_json_atomic
 from .paths import runtime_root
 
 SCHEMA = "SMARTAGENT_REPAIR_STAGNATION_V1"
-TASK_ID = re.compile(r"^TASK-[A-Za-z0-9-]{8,96}$")
+TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 CODE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,119}$")
 
 
