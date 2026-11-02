@@ -111,7 +111,7 @@ def run() -> None:
         retried = _run_python(bundled, project, "-I", "-B", "inspect_dependency.py")
         assert retried.returncode == 0 and "PR_BCD_DEPENDENCY_PRESENT" in retried.stdout, (retried.stdout, retried.stderr)
         assert _result(ledger, ids, resume, retried, "EVIDENCE-RESUME")["phase"] == "RESUMED"
-        assert ledger.terminal_ready(ids["task_id"])[0]
+        assert not ledger.terminal_ready(ids["task_id"])[0], "Project Environment proof still required"
 
         # Persistence uses a separately authorized project write, never PR-B.
         status, version = _probe_project_package("smartagent-pr-bcd-live", bundled, str(target))
@@ -122,6 +122,17 @@ def run() -> None:
             evidence_ref="EVIDENCE-RESUME", authorized_project_write=True,
         )
         assert saved["status"] == "VERIFIED" and index.is_file()
+        ledger.record_verified_environment(
+            **ids, distribution="smartagent-pr-bcd-live", version=version,
+            evidence_ref="EVIDENCE-RESUME",
+        )
+        current = ledger.read(ids["task_id"])
+        original = next(x for x in current["initial_facts"]
+                        if x["id"] == "package:smartagent-pr-bcd-live")
+        effective = next(x for x in current["current_facts"]
+                         if x["id"] == "package:smartagent-pr-bcd-live")
+        assert original["state"] == "MISSING" and effective["state"] == "SATISFIED"
+        assert ledger.terminal_ready(ids["task_id"])[0]
         assert Path(read_project_environment(project)["dependencies"]["smartagent-pr-bcd-live"]["location"]).samefile(target)
         # SDK/toolchain can be outside the project, but merely recording its
         # path never grants execution permission to any subsequent task.
