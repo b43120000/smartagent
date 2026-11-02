@@ -9,6 +9,7 @@ on:
       - feat/request-first-workspace-routing-20261102
       - feat/prerequisite-v3-prb-prc-prd-20261102
       - fix/pr-bcd-project-environment-20261102
+      - fix/pr-bcd-live-observation-terminal-20261102
   workflow_dispatch:
 
 permissions:
