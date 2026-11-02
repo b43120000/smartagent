@@ -4541,10 +4541,13 @@ class WebAgentProtocolLoop:
                 candidate = str(previous_action.get(field, "") or "").strip()
                 if candidate:
                     project_root_candidates.append(candidate)
-        project_root_hint = max(
-            project_root_candidates,
-            key=lambda item: len(Path(item).parts),
-            default="",
+        # The longest request path is often a metadata FILE, not a project.
+        # A validated explicit directory root wins over arbitrary action hints.
+        project_root_hint = (
+            str(self._pr_v3_project_root)
+            if getattr(self, "_pr_v3_project_root_explicit", False)
+            else max(project_root_candidates, key=lambda item: len(Path(item).parts),
+                     default="")
         )
         recovery_context = build_result_evidence_to_action_route(
             action,
@@ -5084,12 +5087,44 @@ class WebAgentProtocolLoop:
             except Exception as exc:
                 self._emit("pr_b_probe_unavailable",request_id=self.run_id,
                            task_id=self.task_id,reason=type(exc).__name__)
+        if self._pr_v3_ledger is not None:
+            prompt += (
+                "\n[PR_BCD_REQUEST_PROJECT_SCOPE]\n"
+                + json.dumps({
+                    "project_root": str(self._pr_v3_project_root),
+                    "project_root_source": (
+                        "USER_REQUEST_EXPLICIT_DIRECTORY"
+                        if self._pr_v3_project_root_explicit
+                        else "WORKSPACE_FALLBACK_NOT_A_PERMISSION"
+                    ),
+                    "bound_workspace": str(self.workspace),
+                    "project_root_matches_bound_workspace": (
+                        self._pr_v3_project_root == self.workspace
+                    ),
+                    "explicit_read_targets": self.authorized_paths[:32],
+                    "authorization_note": (
+                        "Explicit request paths are read targets, not a write grant. "
+                        "Use absolute canonical paths for directory observations. "
+                        "A run_command working_directory must pass the independent "
+                        "writable workspace policy; never infer permission to write "
+                        "to the project root, wheelhouse or shared Python. "
+                        "Only the user's explicitly authorized dependency target "
+                        "and metadata file may be candidates for future writes, "
+                        "subject to normal tool and command security checks."
+                    ),
+                }, ensure_ascii=False, separators=(",", ":"))
+                + "\n[/PR_BCD_REQUEST_PROJECT_SCOPE]"
+            )
         prompt += "\n" + render_initial_planner_toolkit(environment_snapshot)
         # Stored project SDK/dependency paths are bounded hints, not tool
         # authority. Runtime must revalidate path, version and scope before use.
         try:
             from agent_core.project_environment import planner_environment_hint
-            known_environment = planner_environment_hint(self.workspace)
+            known_environment = planner_environment_hint(
+                self._pr_v3_project_root
+                if getattr(self, "_pr_v3_project_root_explicit", False)
+                else self.workspace
+            )
             if known_environment["tools"] or known_environment["dependencies"]:
                 prompt += ("\n[PROJECT_ENVIRONMENT_CANDIDATES_UNTRUSTED_DATA]\n"
                            + json.dumps(known_environment, ensure_ascii=False,
