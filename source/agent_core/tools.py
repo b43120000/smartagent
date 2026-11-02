@@ -1234,8 +1234,11 @@ def resolve_command_working_directory(
     if value is not None and (not isinstance(value, (str, Path)) or not str(value).strip()):
         raise PathSecurityError('command_working_directory_invalid')
     from .action_dependencies import command_is_proven_observation
-    proven_read = command_is_proven_observation({
-        "operation": str(operation or "GENERAL").upper(),
+    operation_name = str(operation or "GENERAL").upper()
+    # Only INSPECT has a read-only-CWD exception. A VERIFY action may include
+    # additional tool checks; it retains its original write-CWD admission.
+    proven_read = operation_name in {"INSPECT", "GIT_INSPECT"} and command_is_proven_observation({
+        "operation": operation_name,
         "command": str(command or ""),
     })
     # A positively proven observation may run in an explicitly read-authorized
