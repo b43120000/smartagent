@@ -98,6 +98,7 @@ class RepairStagnation:
         self.latest_step: float | None = None
         self.gar_level = "L0"
         self._seen_action_ids: set[str] = set()
+        self.effective_generation = 0
         self._rejection_seen = False
         self._persist()
 
@@ -117,9 +118,11 @@ class RepairStagnation:
             "rejected_turns_since_progress":self.rejected_turns_since_progress,
             "rejected_turns_total":self.rejected_turns_total,
             "latest_step":self.latest_step,"gar_level":self.gar_level,
+            "effective_generation":self.effective_generation,
         }
 
     def _effective(self, now: float) -> None:
+        self.effective_generation += 1
         self.last_effective_progress_at = now
         self.repair_stall_since = None
         self.rejected_turns_since_progress = 0
