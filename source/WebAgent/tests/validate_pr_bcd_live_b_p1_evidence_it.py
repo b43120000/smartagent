@@ -154,6 +154,34 @@ class LiveBP1EvidenceIT(unittest.TestCase):
             {**safe, "operation": "VERIFY", "action_id": "p1-verify"}
         )["allowed"])
 
+    def test_real_windows_inspect_exit_zero_from_read_authorized_cwd(self):
+        import os
+        if os.name != "nt":
+            self.skipTest("Windows PowerShell INSPECT integration")
+        action = {
+            "tool": "run_command", "operation": "INSPECT",
+            "working_directory": str(self.project),
+            "command": f"Test-Path -LiteralPath '{self.wheel}'",
+            "timeout": 15, "verify": [],
+            "action_id": "p1-real-inspect",
+        }
+        before = self.wheel.read_bytes()
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False):
+            response = execute_tool(action, agent=self.agent)
+        outcome = decode_result(response) or {}
+        self.assertEqual(outcome.get("status"), "SUCCEEDED", response)
+        data = outcome.get("data") or {}
+        self.assertEqual(data.get("exit_code"), 0)
+        self.assertIs(data.get("observation_confirmed"), True)
+        self.assertEqual(data.get("process_state"), "EXITED")
+        receipt = observation_receipt(
+            action, response, self._entry(verification_status="UNVERIFIED"))
+        self.assertEqual(receipt, {"admitted": True,
+                                  "reason": "PROVEN_INSPECT_EXIT_ZERO"})
+        self.assertEqual(self.wheel.read_bytes(), before)
+        self.assertFalse(any(self.deps.iterdir()))
+
     def test_proven_inspect_receipt_still_requires_real_process_exit(self):
         command = f"Test-Path -LiteralPath '{self.wheel}'"
         action = {"tool": "run_command", "operation": "INSPECT",
