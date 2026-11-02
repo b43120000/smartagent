@@ -62,6 +62,7 @@ def publish_verified_dependency(
     action_id: str,
     evidence_ref: str,
     authorized_project_write: bool,
+    restricted_metadata_write: bool = False,
 ) -> dict:
     """Record a confirmed PR-D resume, never infer permission from the ledger.
 
@@ -87,7 +88,15 @@ def publish_verified_dependency(
         raise ValueError("project_environment_field_length_invalid")
     from .process_file_lock import exclusive_process_lock
     from .project_ledger import append_project_event
-    lock_path = destination.with_name("environment.lock")
+    if restricted_metadata_write:
+        # Use Runtime-owned locks; no ancillary files in the user project.
+        import hashlib
+        from .paths import runtime_root
+        lock_root = runtime_root() / "project_environment_locks"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_root / (hashlib.sha256(str(destination).casefold().encode("utf-8")).hexdigest() + ".lock")
+    else:
+        lock_path = destination.with_name("environment.lock")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_process_lock(lock_path, timeout_sec=10.0, label="project environment"):
         doc = read_project_environment(root)
@@ -105,23 +114,32 @@ def publish_verified_dependency(
         payload = json.dumps(doc, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
         if len(payload.encode("utf-8")) > MAX_BYTES:
             raise ValueError("project_environment_index_limit")
-        handle, temporary = tempfile.mkstemp(prefix="environment.", suffix=".tmp", dir=destination.parent)
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fp:
+        if restricted_metadata_write:
+            # Only the authorized environment.json path is written. Do not
+            # create project-local temporary/lock/journal files.
+            with destination.open("w", encoding="utf-8", newline="\n") as fp:
                 fp.write(payload)
                 fp.flush()
                 os.fsync(fp.fileno())
-            os.replace(temporary, destination)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-    append_project_event(
-        root, "environment_verified", operation_result="VERIFIED",
-        changed_files=[], request_id=request_id,
-        details={"distribution": key, "version": version, "location": str(location),
-                 "action_id": action_id, "evidence_ref": evidence_ref},
-        event_key="environment:" + request_id + ":" + action_id,
-    )
+        else:
+            handle, temporary = tempfile.mkstemp(prefix="environment.", suffix=".tmp", dir=destination.parent)
+            try:
+                with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fp:
+                    fp.write(payload)
+                    fp.flush()
+                    os.fsync(fp.fileno())
+                os.replace(temporary, destination)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+    if not restricted_metadata_write:
+        append_project_event(
+            root, "environment_verified", operation_result="VERIFIED",
+            changed_files=[], request_id=request_id,
+            details={"distribution": key, "version": version, "location": str(location),
+                     "action_id": action_id, "evidence_ref": evidence_ref},
+            event_key="environment:" + request_id + ":" + action_id,
+        )
     return entry
 
 
