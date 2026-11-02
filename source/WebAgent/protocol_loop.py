@@ -4988,16 +4988,18 @@ class WebAgentProtocolLoop:
                             "then retry the original operation using a new action_id. "
                             "Never infer permission from probe results.",
                         "readonly_negative_probe_rule":
-                            "If the requested fact is whether a package is ABSENT, "
-                            "a confirmed PackageNotFoundError is a positive factual "
-                            "MISSING observation, not a failed user goal. Prefer a "
-                            "read-only probe with an explicit MISSING marker, exit 0 "
-                            "for the expected absent case and scoped success_criteria. "
-                            "If any earlier command has FAILED, do not hide its evidence; "
-                            "use a new explicit verifying Action with verifies_action_id "
-                            "for the relevant original action and cite its effective "
-                            "PASS evidence. Do not claim SUCCESS while an unresolved "
-                            "FAILED action remains part of terminal evidence.",
+                            "When the user goal is to determine whether a package is "
+                            "missing, an authoritative Runtime PACKAGE ENVFACT with "
+                            "observed state MISSING is a valid factual observation. "
+                            "Planner decides whether this fulfills the goal via its "
+                            "own completion_contract.success and fact_assertion. "
+                            "Cite only that matching ENVFACT reference and use "
+                            "fact_assertion.condition_text=matched_condition for "
+                            "the first turn; do not invent condition_id or repeat "
+                            "the already-confirmed probe. If the fact is absent "
+                            "or UNKNOWN, choose a separately authorized read-only "
+                            "Action instead. Never conceal an earlier failed Action "
+                            "or claim MUTATE/installation was completed.",
                         "unspecified_wheel_rule":
                             "If the user refers only to a Wheel without a distribution "
                             "and version, inspect the authorized wheelhouse first. "
