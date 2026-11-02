@@ -168,7 +168,7 @@ def run() -> None:
             pass
         else:
             raise AssertionError("Escaping the project was authorized")
-        assert resolve_install_target(project, explicit_target="deps") == target
+        assert resolve_install_target(project, explicit_target="deps").samefile(target)
 
     print("PR_BCD_PROJECT_ENVIRONMENT_OFFLINE_IT_PASS")
 
