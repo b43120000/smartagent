@@ -60,9 +60,10 @@ def verify_fact_assertion(*, assertion: object, evidence_refs: list[str],
         return "NONE", "NO_ENVIRONMENT_FACT_REFERENCED"
     if len(cited) != 1 or len(evidence_refs) != 1:
         return "UNVERIFIED", "ENVIRONMENT_FACT_MIXED_EVIDENCE"
-    if not isinstance(assertion, Mapping) or set(assertion) != {
-        "evidence_ref", "expected_state", "condition_id",
-    }:
+    if not isinstance(assertion, Mapping) or set(assertion) not in (
+        {"evidence_ref", "expected_state", "condition_id"},
+        {"evidence_ref", "expected_state", "condition_text"},
+    ):
         return "UNVERIFIED", "ENVIRONMENT_FACT_ASSERTION_REQUIRED"
     ref = assertion.get("evidence_ref")
     state = assertion.get("expected_state")
