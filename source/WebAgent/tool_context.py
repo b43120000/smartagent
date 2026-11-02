@@ -30,6 +30,7 @@ class WebAgentToolContext:
             self.planner_key: {"provider": "web_scraper", "model": "chatgpt"}
         }
         self._authorized_local_paths: list[str] = []
+        self._request_write_ceiling: dict | None = None
         self._pending_attachments: list[str] = []
         self._attachment_sha_ledger: dict[str, StagedAttachment] = {}
         self._outbound_artifacts: list[dict] = []
@@ -136,6 +137,7 @@ class WebAgentToolContext:
         self._runtime_completion_binding = {}
         self.last_verification_status = None
         self._authorized_local_paths = list(dict.fromkeys(str(x) for x in authorized_paths if str(x)))
+        self._request_write_ceiling = None  # No cross-request policy inheritance.
         self._pending_attachments.clear()
         self._attachment_sha_ledger.clear()
         self._outbound_artifacts.clear()
