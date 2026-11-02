@@ -661,9 +661,27 @@ class WebAgentProtocolLoop:
                 and ref not in self.action_ledger
                 and ref not in self.action_result_ledger
             )
-        all_field_repairs_safe = bool(deferred) and all(
-            safe_unexecuted_field_repair(ref) for ref in deferred
-        ) and set(repairs) == set(deferred)
+        # A completed or never-attempted read-only sibling is not an unsafe
+        # in-flight operation. Preserve it in the repair ledger, but allow the
+        # bounded repair of a separate, unexecuted run_command schema error.
+        from agent_core.action_dependencies import OBSERVATION_TOOLS
+        def safe_unexecuted_read_sibling(ref, row):
+            if not isinstance(row, dict):
+                return False
+            action = row.get("action") if isinstance(row.get("action"), dict) else row
+            return bool(
+                row.get("executed") is False
+                and str(action.get("tool", "")) in OBSERVATION_TOOLS
+                and ref not in self.action_ledger
+                and ref not in self.action_result_ledger
+                and row.get("status") in {"REPAIR_REQUIRED", "BLOCKED_DEPENDENCY"}
+            )
+        all_field_repairs_safe = (
+            bool(repairs) and set(repairs).issubset(deferred)
+            and all(safe_unexecuted_field_repair(ref) for ref in repairs)
+            and all(safe_unexecuted_read_sibling(ref, row)
+                    for ref, row in deferred.items() if ref not in repairs)
+        )
         if all_field_repairs_safe:
             pending["pending_command_field_repairs"] = False
             pending["deferred_action_repairs"] = False
