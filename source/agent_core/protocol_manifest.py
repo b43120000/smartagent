@@ -214,6 +214,7 @@ CORE_FILES = (
     'source/agent_core/remote_execution_coordinator.py',
     'source/agent_core/remote_control_dispatcher.py',
     'source/RemoteAgent/telegram_direct_cmd.py',
+    'source/RemoteAgent/telegram_cmd_settings.py',
     'source/RemoteAgent/remote_feature_catalog.py',
     'source/agent_core/remote_events.py',
     'source/agent_core/google_drive.py',
