@@ -45,7 +45,8 @@ class PRBCDTests(unittest.TestCase):
 
     def mutate(self, action_id="MUT-1"):
         return {"tool":"run_command","operation":"MUTATE",
-                "action_id":action_id}
+                "action_id":action_id,
+                "command":"python -m pip install --no-index --target deps synthetic_pr_bcd.whl"}
 
     def action(self, obj, status="SUCCEEDED", executed=True, verify="PASS", ref="RES-1"):
         return self.ledger.action_result(
@@ -81,7 +82,9 @@ class PRBCDTests(unittest.TestCase):
         self.assertFalse(fact["remediation_requested"])
         self.init(fact)
         state=self.ledger.before_action(
-            **self.ids,action=self.mutate(),scope_allowed=True)
+            **self.ids,action={"tool":"run_command","operation":"MUTATE",
+                               "action_id":"MUT-OUTPUT","command":"echo write result.txt"},
+            scope_allowed=True)
         self.assertEqual(state["phase"],"MISSING")
         self.assertEqual(state["remediation_action"],"")
 
