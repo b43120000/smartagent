@@ -156,14 +156,47 @@ class RemoteControlDispatcher:
     def _run_direct_cmd_control(self, message: Any) -> dict[str, Any]:
         """Explicit high-privilege local software route; no Agent/Task Queue."""
         from RemoteAgent.telegram_direct_cmd import (
-            CmdControlError, execute_cmd_request,
+            CmdControlError, CmdControlPolicy, execute_cmd_request,
         )
         identity = getattr(message, "reply_context", {}) or {}
-        chat_id = int(identity.get("chat_id", 0) or 0)
         try:
+            chat_id = int(identity.get("chat_id", 0) or 0)
             user_id = int(getattr(message, "sender_id", "0") or 0)
-        except ValueError:
-            user_id = 0
+        except (TypeError, ValueError):
+            chat_id, user_id = 0, 0
+        # Re-check the SAME Telegram authorization used by other bot controls:
+        # an existing static allowlist OR the current paired private chat.
+        # Do not introduce a second CMD-specific ID list or login.
+        if (
+            chat_id <= 0 or user_id <= 0
+            or getattr(message, "transport", None) != "TELEGRAM"
+            or getattr(message, "endpoint", None) != "api.telegram.org"
+            or getattr(message, "conversation_key", None)
+            != f"telegram://chat/{chat_id}"
+        ):
+            return {"message": "🔴 執行cmd拒絕：未通過 Telegram 私訊來源驗證。"}
+        try:
+            from RemoteAgent.telegram_transport import (
+                TelegramReceiverConfig, TelegramUpdateAdapter,
+            )
+            from RemoteAgent.telegram_pairing import TelegramPairingStore
+            from .paths import telegram_pairing_path
+            config = TelegramReceiverConfig.from_env()
+            pairing = (
+                TelegramPairingStore(telegram_pairing_path(self.root))
+                if config.pairing_enabled else None
+            )
+            if not config.enabled or not TelegramUpdateAdapter(
+                config, pairing_store=pairing
+            ).is_authorized(user_id=user_id, chat_id=chat_id):
+                return {"message": "🔴 執行cmd拒絕：此 Telegram 私訊未授權。"}
+        except Exception:
+            return {"message": "🔴 執行cmd拒絕：無法確認 Telegram 私訊授權。"}
+        # The existing Telegram admission determines the transient policy.
+        # No SMARTAGENT_TG_CMD_* variables or local CMD ID JSON are needed.
+        approved_sender = CmdControlPolicy(
+            True, frozenset({user_id}), frozenset({chat_id}),
+        )
         # Refuse concurrent batches from this process to avoid overlapping
         # independent administrative effects.
         if not self._direct_cmd_lock.acquire(blocking=False):
@@ -172,6 +205,7 @@ class RemoteControlDispatcher:
             result = execute_cmd_request(
                 str(getattr(message, "text", "") or ""),
                 user_id=user_id, chat_id=chat_id,
+                policy=approved_sender,
                 trusted_install_root=self.root,
             )
             self.runtime_log.write(
