@@ -47,7 +47,7 @@ def build_fact_refs(*, request_id: str, task_id: str, task_epoch: str,
 
 
 def verify_fact_assertion(*, assertion: object, evidence_refs: list[str],
-                          matched_condition_id: str,
+                          matched_condition_id: str, matched_condition: str = "",
                           request_id: str, task_id: str, task_epoch: str,
                           fact_refs: Mapping[str, dict]) -> tuple[str, str]:
     """Verify the Planner's explicit condition/state binding, not goal semantics.
