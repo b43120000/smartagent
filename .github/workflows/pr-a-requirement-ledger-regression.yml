@@ -187,6 +187,8 @@ jobs:
         run: |
           python -B source/WebAgent/tests/validate_request_first_workspace_routing.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_dynamic_task_transport_binding.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_multi_workspace_access.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_authorized_path_extraction.py
