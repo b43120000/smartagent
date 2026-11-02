@@ -4772,9 +4772,12 @@ class WebAgentProtocolLoop:
                 )
                 base = self.progress_root if self.progress_root is not None else self.workspace
                 graph = self._pr_a_ledger.read(self.task_id)
+                from agent_core.paths import install_root as smartagent_install_root
                 probe = probe_requirements(
                     request=request, authorized_paths=self.authorized_paths,
-                    environment_snapshot=environment_snapshot, install_root=base,
+                    environment_snapshot=environment_snapshot,
+                    install_root=smartagent_install_root(),
+                    project_root=self.workspace,
                 )
                 ledger = RecoveryLedger(base)
                 doc = ledger.initialize(
@@ -5753,6 +5756,44 @@ class WebAgentProtocolLoop:
                                     action_id=action.get("action_id",""),
                                     phase=recovered["phase"],
                                     revision=recovered["revision"])
+                            if (recovered["phase"] == "RESUMED"
+                                    and previous["phase"] != "RESUMED"):
+                                # The installation and independent verification
+                                # are complete. Project persistence is a
+                                # separately authorized write, never a reason to
+                                # escalate a read-only task's permissions.
+                                from agent_core.project_environment import publish_verified_dependency
+                                from agent_core.prerequisite_runtime_v3 import PACKAGE
+                                distribution = next((
+                                    row["id"].split(":",1)[1]
+                                    for row in recovered["initial_facts"]
+                                    if str(row.get("id","")).startswith("package:")
+                                    and row.get("state") == "MISSING"
+                                ), "")
+                                target = str(getattr(self, "workspace", ""))
+                                # Only a project-local install under this task's
+                                # explicitly authorized root may be persisted.
+                                # No implicit shared .venv mutation is allowed.
+                                if distribution and recovered.get("remediation_requested"):
+                                    command = str(action.get("command",""))
+                                    source_text = str(getattr(self,"task_request",""))
+                                    project_local_target = Path(target) / "deps"
+                                    if (project_local_target.is_dir()
+                                            and str(project_local_target).casefold() in source_text.casefold()
+                                            and str(getattr(self, "workspace", ""))):
+                                        publish_verified_dependency(
+                                            target, distribution=distribution,
+                                            version=str(next((
+                                                row.get("observed_version")
+                                                for row in recovered["initial_facts"]
+                                                if row.get("id")=="package:"+distribution
+                                            ), "") or "verified_by_runtime"),
+                                            target=project_local_target,
+                                            request_id=self.run_id,
+                                            action_id=str(action.get("action_id","")),
+                                            evidence_ref=action_result_id,
+                                            authorized_project_write=True,
+                                        )
                         except Exception as exc:
                             self._emit("pr_v3_recovery_unavailable",
                                 request_id=self.run_id,task_id=self.task_id,
