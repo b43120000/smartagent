@@ -17,6 +17,7 @@ on:
       - feat/tgcmd-20261103
       - feat/tg-cmd-persistent-settings-20261103
       - feat/tg-cmd-acl-off-dev-default-20261103
+      - fix/tg-cmd-reuse-telegram-auth-20261103
   workflow_dispatch:
 
 permissions:
@@ -63,7 +64,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_telegram_direct_cmd_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B source/WebAgent/tests/validate_telegram_cmd_settings_it.py
+          python -B source/WebAgent/tests/validate_telegram_cmd_shared_auth_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
