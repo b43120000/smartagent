@@ -90,6 +90,32 @@ def run():
     }]}
     assert_safe(y._gar_snapshot())
 
+    # Completed past reads and an unrelated never-attempted observation may
+    # coexist with a safely repairable, never-executed command schema error.
+    sibling = mock_loop()
+    sibling.pending_command_field_repairs = dict(y.pending_command_field_repairs)
+    sibling.deferred_action_repairs = dict(y.deferred_action_repairs)
+    sibling.deferred_action_repairs["READ-DEFERRED"] = {
+        "action_id": "READ-DEFERRED", "tool": "list_directory",
+        "status": "REPAIR_REQUIRED", "executed": False,
+        "action": {"tool": "list_directory", "path": "deferred"},
+    }
+    sibling.action_ledger = {"READ-DONE": {
+        "action": {"tool": "list_directory"}, "execution_status": "SUCCEEDED",
+    }}
+    sibling.action_result_ledger = {"READ-DONE": {
+        "result_status": "SUCCEEDED", "execution_status": "SUCCEEDED",
+        "effective_verification_status": "PASS", "executed": True,
+    }}
+    assert_safe(sibling._gar_snapshot())
+    # But a deferred mutation must remain hard-blocked.
+    sibling.deferred_action_repairs["MUTATE-DEFERRED"] = {
+        "action_id": "MUTATE-DEFERRED", "tool": "run_command",
+        "status": "BLOCKED_DEPENDENCY", "executed": False,
+        "action": {"tool": "run_command", "operation": "MUTATE"},
+    }
+    assert sibling._gar_snapshot()["pending_operations"]["deferred_action_repairs"]
+
     # One real in-flight/unknown mutation remains an immediate GAR blocker.
     z = mock_loop()
     z.action_ledger = {"MUTATE-OLD": {
