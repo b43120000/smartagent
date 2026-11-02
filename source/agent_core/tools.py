@@ -1277,10 +1277,15 @@ def resolve_command_working_directory(
         )
         if target_match:
             literal = target_match.group(1)[1:-1].replace("''", "'")
-            if not Path(literal).is_absolute():
-                raise PathSecurityError('proven_inspect_absolute_literal_required')
+            target = Path(literal).expanduser()
+            # Existing VERIFY steps may legitimately use a relative literal
+            # inside their already-bound cwd. Resolve it there, then enforce
+            # the SAME read-authorization and original request boundary.
+            # No arbitrary relative path can escape through '..' or symlinks.
+            if not target.is_absolute():
+                target = cwd / target
             resolved = context.require_read(
-                literal, require_absolute=True, forbid_glob=True)
+                target, require_absolute=True, forbid_glob=True)
             if requested and not any(is_within(resolved, root) for root in requested):
                 raise PathSecurityError('proven_inspect_literal_outside_request_scope')
     return cwd
