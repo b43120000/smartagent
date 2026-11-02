@@ -1893,7 +1893,12 @@ class WebAgentProtocolLoop:
             if entry.get('evidence_status') == 'STALE':
                 continue
             successor = self.action_result_ledger.get(str(entry.get('superseded_by_action_id','')))
-            if successor is not None and entry.get('evidence_status') == 'SUPERSEDED' and successor.get('evidence_status','ACTIVE') == 'ACTIVE':
+            if (successor is not None and entry.get('evidence_status') == 'SUPERSEDED'
+                    and successor.get('evidence_status','ACTIVE') == 'ACTIVE'
+                    and (not successor.get('request_id') or successor.get('request_id') == self.run_id)
+                    and (not successor.get('task_epoch') or successor.get('task_epoch') == getattr(self,'task_epoch',''))
+                    and str(successor.get('execution_status','UNKNOWN')).upper() == 'SUCCEEDED'
+                    and self._entry_verification_status(successor) == 'PASS'):
                 resolved[str(entry['superseded_by_action_id'])] = successor
                 continue
             effective_ref = ref
@@ -1931,15 +1936,17 @@ class WebAgentProtocolLoop:
         if refs:
             entries = [item for _action_id, item in self._resolve_effective_evidence_entries(refs)]
         else:
-            # A verifier copies its newest status onto the target action.  Do
-            # not count the verifier entry again during the request-wide
-            # summary or an obsolete verifier FAIL can poison a later PASS.
-            entries = [
-                item for item in self.action_result_ledger.values()
+            # Keep each non-verifier action, but resolve explicitly superseded
+            # entries to their request-scoped successor. An unrelated later
+            # PASS still cannot erase an independent FAIL.
+            roots = [
+                action_id for action_id, item in self.action_result_ledger.items()
                 if not str(item.get("verifies_action_id", "") or "").strip()
             ]
-            if not entries and self.action_result_ledger:
-                entries = [next(reversed(self.action_result_ledger.values()))]
+            if not roots and self.action_result_ledger:
+                roots = [next(reversed(self.action_result_ledger))]
+            entries = [item for _action_id, item
+                       in self._resolve_effective_evidence_entries(roots)]
         condition = str(matched_condition or "").strip()
         canonical_condition_id = self._canonical_condition_id(condition)
         condition_entry = self.condition_result_ledger.get(canonical_condition_id)
@@ -5873,7 +5880,7 @@ class WebAgentProtocolLoop:
                                 # separately authorized write, never a reason to
                                 # escalate a read-only task's permissions.
                                 from agent_core.project_environment import publish_verified_dependency
-                                from agent_core.prerequisite_runtime_v3 import _probe_project_package
+                                from agent_core.prerequisite_runtime_v3 import _probe_project_package, _satisfies
                                 from agent_core.runtime_environment import runtime_tool_paths
                                 from agent_core.paths import install_root as smartagent_install_root
                                 import re as _re
@@ -5905,7 +5912,21 @@ class WebAgentProtocolLoop:
                                             runtime_tool_paths(smartagent_install_root())["python"],
                                             str(target_path),
                                         )
-                                        if status == "AVAILABLE" and version:
+                                        required = next((
+                                            row.get("constraint", "")
+                                            for row in recovered["initial_facts"]
+                                            if row.get("id") == "package:" + distribution
+                                        ), "")
+                                        constraint = _re.fullmatch(
+                                            r"(==|>=|<=)([0-9]+(?:\\.[0-9]+){0,3})",
+                                            str(required),
+                                        )
+                                        valid_version = bool(
+                                            status == "AVAILABLE" and version and constraint
+                                            and _satisfies(version, constraint.group(1),
+                                                           constraint.group(2))
+                                        )
+                                        if valid_version:
                                             publish_verified_dependency(
                                                 root, distribution=distribution,
                                                 version=version, target=target_path,
@@ -5913,6 +5934,21 @@ class WebAgentProtocolLoop:
                                                 action_id=str(action.get("action_id","")),
                                                 evidence_ref=action_result_id,
                                                 authorized_project_write=True,
+                                            )
+                                            self._pr_v3_ledger.record_verified_environment(
+                                                task_id=self.task_id,
+                                                request_id=self.run_id,
+                                                task_epoch=self.task_epoch,
+                                                distribution=distribution,
+                                                version=version,
+                                                evidence_ref=action_result_id,
+                                            )
+                                            self._emit(
+                                                "pr_d_current_environment_verified",
+                                                request_id=self.run_id,
+                                                task_id=self.task_id,
+                                                distribution=distribution,
+                                                version=version,
                                             )
                                         else:
                                             self._emit("project_environment_index_not_published",
