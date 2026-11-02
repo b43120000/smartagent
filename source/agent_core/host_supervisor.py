@@ -1414,9 +1414,7 @@ def main(argv=None):
 
     if args.remote_only:
         from RemoteAgent.local_telegram_config import apply_saved_telegram_environment
-        from RemoteAgent.telegram_cmd_settings import apply_saved_telegram_cmd_environment
         telegram = apply_saved_telegram_environment(root=AGENT_PROJECT_ROOT)
-        telegram_cmd = apply_saved_telegram_cmd_environment(root=AGENT_PROJECT_ROOT)
         from .remote_binding import activate
         binding = activate(AGENT_PROJECT_ROOT)
         print(f"[RemoteAgent-0] Binding: workspace={binding['workspace']} URL={binding['gpt_url']}", flush=True)
@@ -1428,18 +1426,6 @@ def main(argv=None):
         elif telegram.get("reason") not in {"not_configured", ""}:
             print(
                 f"[RemoteAgent-0] Telegram saved configuration unavailable: {telegram.get('reason')}",
-                flush=True,
-            )
-        if telegram_cmd.get("loaded"):
-            print(
-                "[RemoteAgent-0] Telegram CMD local settings: "
-                + ("ENABLED" if telegram_cmd.get("enabled") else "DISABLED"),
-                flush=True,
-            )
-        elif telegram_cmd.get("reason") != "not_configured":
-            print(
-                "[RemoteAgent-0] Telegram CMD local settings rejected; "
-                "direct command execution DISABLED.",
                 flush=True,
             )
     # Remote-only is a listener-only resident process. Agent0 remains
