@@ -129,12 +129,14 @@ def execute_cmd_request(
     lines = [f"CMD 執行結果 {tracking}", f"cmd path: {cwd}"]
     results = []
     for index, command in enumerate(commands, 1):
-        if time.monotonic() - started > 120:
+        remaining = 120 - (time.monotonic() - started)
+        if remaining <= 0:
             lines.append("總執行期限已到，後續命令不執行。")
             break
         info = executor(
             [exe, "/d", "/s", "/c", command],
-            cwd=cwd, shell=False, timeout=20, max_stream_bytes=10000,
+            cwd=cwd, shell=False, timeout=min(20, max(1, int(remaining))),
+            max_stream_bytes=10000,
             security_command=command,
         )
         passed = (
