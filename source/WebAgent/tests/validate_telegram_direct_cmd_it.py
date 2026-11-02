@@ -178,6 +178,38 @@ class TelegramDirectCmdIT(unittest.TestCase):
             self.assertEqual(bad["status"], "FAILED")
             self.assertIn("Exit Code: 7", bad["message"])
 
+    def test_real_windows_cmd_echo_smoke_no_side_effects(self):
+        import subprocess
+        actual_text = (
+            f'run cmd by TG\ncmd path: "{self.root}"\n'
+            'command:\n"echo hello"\n"echo time"'
+        )
+        def benign_cmd_runner(argv, **kwargs):
+            process = subprocess.run(
+                argv, cwd=kwargs["cwd"], capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
+                timeout=kwargs["timeout"], check=False,
+            )
+            return {
+                "process_started": True, "exit_code": process.returncode,
+                "stdout": process.stdout.strip(), "stderr": process.stderr.strip(),
+                "timed_out": False,
+            }
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=True), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": (str(self.root),)}):
+            reply = execute_cmd_request(
+                actual_text, user_id=11, chat_id=22,
+                policy=self.policy, runner=benign_cmd_runner,
+            )
+        self.assertEqual(reply["status"], "SUCCESS")
+        self.assertIn("hello", reply["message"])
+        self.assertIn("time", reply["message"])
+        self.assertEqual(len(reply["results"]), 2)
+        self.assertEqual(sorted(self.root.iterdir()), [self.root / "offset.json"]
+                         if (self.root / "offset.json").exists() else [])
+
     def test_unknown_workspace_and_blocked_command(self):
         with patch("agent_core.windows_security.restricted_executor_required",
                    return_value=True), \
