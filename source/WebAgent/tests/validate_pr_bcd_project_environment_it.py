@@ -122,7 +122,7 @@ def run() -> None:
             evidence_ref="EVIDENCE-RESUME", authorized_project_write=True,
         )
         assert saved["status"] == "VERIFIED" and index.is_file()
-        assert read_project_environment(project)["dependencies"]["smartagent-pr-bcd-live"]["location"] == str(target)
+        assert Path(read_project_environment(project)["dependencies"]["smartagent-pr-bcd-live"]["location"]).samefile(target)
         # SDK/toolchain can be outside the project, but merely recording its
         # path never grants execution permission to any subsequent task.
         tool = publish_verified_tool(
@@ -130,7 +130,7 @@ def run() -> None:
             request_id=ids["request_id"], evidence_ref="EVIDENCE-PYTHON",
             authorized_project_write=True,
         )
-        assert tool["path"] == str(bundled)
+        assert Path(tool["path"]).samefile(bundled)
         hints = planner_environment_hint(project)
         assert any(row["name"] == "python" for row in hints["tools"])
         assert hints["authority"] == "CANDIDATES_REQUIRING_RUNTIME_REPROBE"
