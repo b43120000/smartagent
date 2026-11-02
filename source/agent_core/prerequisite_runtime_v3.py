@@ -464,7 +464,7 @@ class RecoveryLedger:
             if not original:
                 raise PrerequisiteRecoveryError("pr_d_missing_package_fact_required")
             constraint = str(original.get("constraint", ""))
-            match = re.fullmatch(r"(==|>=|<=)([0-9]+(?:\\.[0-9]+){0,3})", constraint)
+            match = re.fullmatch(r"(==|>=|<=)([0-9]+(?:\.[0-9]+){0,3})", constraint)
             if not match or not _satisfies(version, match.group(1), match.group(2)):
                 raise PrerequisiteRecoveryError("pr_d_installed_version_unsatisfied")
             if doc.get("project_environment_verified"):
