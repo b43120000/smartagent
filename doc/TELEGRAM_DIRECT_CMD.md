@@ -1,108 +1,66 @@
-# Telegram 執行cmd
+# Telegram「執行cmd」— 與一般 Bot 功能共用授權
 
-這是獨立於 Planner/WebGPT/Task Queue 的管理員軟體操作。
+## 不需要第二次登入，也不需要 CMD 專用 User ID / Chat ID
 
-在 Telegram 點選「查詢遠端功能 → 執行cmd」，Bot 回傳可編輯範例：
+本功能直接使用 **現有 Telegram Bot 的身分與回覆路由**：
+
+1. 在已配對的 SmartAgent Bot 私人對話點選「查詢遠端功能 → 執行cmd」。
+2. Bot 傳送一份可修改的固定範例。
+3. 把範例傳回同一個 Bot 私人對話。
+4. 既有 Telegram Receiver 檢查：private chat、非 Bot 發送者、
+   且 **User ID + Chat ID 已通過原本的配對或原本的靜態白名單**。
+5. 固定軟體流程識別 `run cmd by TG`、執行命令，並用收到訊息的
+   `chat_id` 和 `message_id` 回覆**原本的 Telegram 對話**。
+   不經過 Agent Task Queue / Planner / WebGPT。
+
+範例（`cmd path` 由目前 SmartAgent 安裝根目錄自動填入）：
 
 ```text
 run cmd by TG
-cmd path: "C:\\Users\\user\\Desktop\\remoteagent\\smartagent"
+cmd path: "C:\Users\user\Desktop\remoteagent\smartagent"
 command:
 "echo hello"
-"echo time"
+"echo %TIME%"
 ```
 
-每行使用 Windows cmd.exe，在指定目錄各執行一次。
-回報每行 stdout、stderr、Exit Code，第一筆失敗後停止後續行。
-不會開啟可見的互動 CMD 視窗；`cd`/`set` 的設定不跨行保留。
+**不需要設定** `telegram_cmd_settings.json`、
+`SMARTAGENT_TG_CMD_ALLOWED_USER_IDS`、
+`SMARTAGENT_TG_CMD_ALLOWED_CHAT_IDS`、
+`SMARTAGENT_TG_CMD_ENABLED`。這些是早期試作的重複設定，
+這一版不再讀取。若你的 `localdata` 有舊檔案，它不影響目前授權。
 
-## 本機固定設定（推薦）
+現有 Bot Token、Telegram 配對/原本白名單仍照舊運作；
+Telegram Bot 的顯示名稱不需要放在這個指令的任何欄位。
 
-設定檔固定放在：
+## ACL 模式和安全界線
 
-`<SmartAgent 根目錄>\localdata\secure\telegram_cmd_settings.json`
+新安裝仍採 **ACL OFF**，既有 ACL ON 安裝不會被更新自行切換。
 
-只需編輯一次，後續啟動 `launch_remote_agent.bat` 時，
-HostSupervisor 自動載入，不用每次設定 PowerShell `$env:`。
-此路徑在 Git 忽略的 `localdata` 內，一般 Git 更新不會覆蓋它。
+- **ACL OFF：** SmartAgent `bounded_process` + Software Guard；
+  主機使用者的 Windows 權限仍存在，不等同 OS sandbox。
+- **ACL ON：** `bounded_process` 呼叫 Windows Restricted Executor。
+- **兩種模式都必須先通過原本的 Telegram 私人對話授權**。
+  CMD 控制會在執行前重讀目前配對或原本白名單的驗證結果；
+  非 Telegram、未配對、非私人對話均拒絕。
+- 自訂工作路徑仍須受 Workspace Access Policy 授權；
+  原 SmartAgent 安裝根目錄可當作固定模板的工作目錄。
+- 命令安全分類、每行 20 秒、每批 120 秒、最多 12 行、
+  輸出量上限、失敗即停止後續行仍保留。
 
-第一次在 SmartAgent 根目錄執行：
-
-```powershell
-New-Item -ItemType Directory -Force ".\localdata\secure" | Out-Null
-if (-not (Test-Path ".\localdata\secure\telegram_cmd_settings.json")) {
-    Copy-Item ".\config\telegram_cmd_settings.example.json" ".\localdata\secure\telegram_cmd_settings.json"
-}
-notepad ".\localdata\secure\telegram_cmd_settings.json"
-```
-
-填入自己的 Telegram 數字 ID：
-
-```json
-{
-  "schema": "SMARTAGENT_TG_CMD_SETTINGS_V1",
-  "enabled": true,
-  "allowed_user_ids": [123456789],
-  "allowed_chat_ids": [123456789]
-}
-```
-
-**123456789 僅為範例。** 必須填入自己的 User ID 和私人 Chat ID。
-設定數字不加引號、尖括號，勿把本機設定檔提交到 Git。
-
-儲存後完整關閉原 RemoteAgent，重新執行 `launch_remote_agent.bat`。
-啟動時會顯示 `Telegram CMD local settings: ENABLED`，
-不會把 ID 印到 Log。
-
-設定檔中的 `enabled: false` 可以永久關閉此功能。
-如果 JSON 損壞、欄位缺失或 ID 無效，Runtime 一律關閉執行權限，
-不會退回舊的允許執行環境變數。若完全沒有設定檔，
-才保留先前臨時 PowerShell `SMARTAGENT_TG_CMD_*` 模式。
-
-仍需符合原本 Telegram 私訊授權、獨立 CMD 管理員白名單、
-Workspace 寫入政策；配對本身不授予 CMD 權限。
-
-## ACL ON／OFF 執行模式
-
-SmartAgent **新安裝預設 ACL OFF**（開發模式），安裝器會在本機
-`localdata\\secure\\windows_security\\acl_mode.json` 記錄
-`mode: off`。單純 `git clone` 尚未完成安裝，並不會自動配置
-Windows Restricted Executor。需要 ACL ON 時才明確執行
-`ACLstatus.bat on`；現有 ACL ON 安裝不會被更新自動切成 OFF。
-
-- **ACL OFF**：由 SmartAgent 既有 `bounded_process` 透過
-  Software Guard 驗證後執行；不需要先打開 ACL ON。
-- **ACL ON**：`bounded_process` 會呼叫 Restricted Executor。
-- **兩種模式**：仍受 Telegram 身分、CMD 獨立白名單、
-  Workspace Access Policy、Command Security、輸出大小與期限限制。
-  Telegram 只回報使用中的執行模式，不會更改 ACL 設定。
-
-`cmd path` 預設是目前執行中的 SmartAgent 安裝根目錄。
-管理員固定流程允許**這個根目錄本身**作為工作目錄，
-不必另外把安裝目錄加入 Workspace 寫入清單；這不是一般
-Workspace 寫入權限的擴充。若自行改成其他目錄，仍須先經
-Workspace Access Policy 授權。ACL ON 時安裝目錄原有的 NTFS
-寫入限制仍然生效。
-
-請注意：**Software Guard 不是 Windows OS Sandbox**。
-ACL OFF 執行的 shell／子程序使用目前 Host 權限，對複雜命令、
-重導向和間接呼叫不保證能限制所有副作用。僅由已授權的管理員
-手動提交已確認過的命令；這是開發期刻意接受的風險，不應對
-未信任的 Bot 使用者開放。
-
-每批最多 12 行、每行 20 秒、總時間 120 秒；沿用既有
-SmartAgent Command Security 拒絕已知危險命令。
+注意：由於 ACL OFF 使用一般 Windows 使用者權限，
+Shell 的複雜重導向或間接呼叫並非全面 OS 層隔離。
+**只讓可信任且有權操作本機的 Telegram 帳號配對**。
 
 ## Windows Regression
 
 ```powershell
-$env:PYTHONPATH="source"
+$env:PYTHONPATH = "source"
 & .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_telegram_direct_cmd_it.py
-& .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_telegram_cmd_settings_it.py
+& .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_telegram_cmd_shared_auth_it.py
 & .\.venv\Scripts\python.exe -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
 ```
 
-先用 `echo hello` 及 `echo %TIME%` 做 Telegram Live Smoke Test。
-ACL OFF 預期回覆 `ACL OFF / Software Guard`、兩筆 Exit Code 0；
-ACL ON 預期回覆 `ACL ON / Restricted Executor`。兩種模式的真實
-Telegram Transport／宿主權限仍需在你的 Windows 部署環境驗證。
+實機 Telegram Live 測試：從已配對的 Bot 私人對話傳送上述
+`echo hello`、`echo %TIME%` 範例，應回覆到同一個對話，
+每行 Exit Code 0，並顯示 ACL OFF / Software Guard
+或 ACL ON / Restricted Executor。
