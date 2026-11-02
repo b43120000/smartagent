@@ -93,6 +93,7 @@ class RepairStagnation:
         self.last_rejection_at: float | None = None
         self.last_rejection_reason = "NONE"
         self.repair_stall_since: float | None = None
+        self._stall_monotonic: float | None = None
         self.rejected_turns_since_progress = 0
         self.rejected_turns_total = 0
         self.latest_step: float | None = None
@@ -125,6 +126,7 @@ class RepairStagnation:
         self.effective_generation += 1
         self.last_effective_progress_at = now
         self.repair_stall_since = None
+        self._stall_monotonic = None
         self.rejected_turns_since_progress = 0
         self._rejection_seen = False
 
@@ -167,6 +169,7 @@ class RepairStagnation:
         stamp = time.time() if now is None else float(now)
         if not self._rejection_seen:
             self.repair_stall_since = stamp
+            self._stall_monotonic = time.monotonic() if now is None else stamp
             self._rejection_seen = True
         self.rejected_turns_since_progress += 1
         # This is informational only. The canonical BoundedRepairBudget
@@ -186,13 +189,13 @@ class RepairStagnation:
 
     def stalled(self, *, now: float | None = None, min_rejections: int = 3,
                 seconds: float = 600) -> bool:
-        stamp = time.time() if now is None else float(now)
+        stamp = time.monotonic() if now is None else float(now)
         return (
-            self.repair_stall_since is not None
+            self._stall_monotonic is not None
             and self.rejected_turns_since_progress >= min_rejections
-            and stamp - self.repair_stall_since >= seconds
+            and stamp - self._stall_monotonic >= seconds
         )
 
     def idle_seconds(self, *, now: float | None = None) -> float:
-        stamp = time.time() if now is None else float(now)
-        return max(0.0, stamp - self.repair_stall_since) if self.repair_stall_since is not None else 0.0
+        stamp = time.monotonic() if now is None else float(now)
+        return max(0.0, stamp - self._stall_monotonic) if self._stall_monotonic is not None else 0.0
