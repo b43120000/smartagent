@@ -73,9 +73,11 @@ def check_action_against_write_ceiling(
     """Fail closed without executing anything; this never approves a write."""
     if ceiling is None:
         return True, "NO_REQUEST_SPECIFIC_CEILING"
-    if not ceiling.get("valid"):
-        return False, "REQUEST_WRITE_CEILING_UNRESOLVED"
     tool = str(action.get("tool", ""))
+    if not ceiling.get("valid"):
+        if tool in _READ_TOOLS:
+            return True, "READ_ONLY_ACTION_INVALID_WRITE_CEILING"
+        return False, "REQUEST_WRITE_CEILING_UNRESOLVED"
     if tool in _READ_TOOLS:
         return True, "READ_ONLY_ACTION"
     if tool == "run_command":
