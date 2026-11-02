@@ -21,7 +21,7 @@ MAX_RECENT_TASKS = 3
 # Conservative shell-path recognizer. In commands, the first whitespace ends
 # an unquoted executable path: "collect.bat TASK-..." must not become one path.
 _WINDOWS_PATH = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/])(?:[^\s'\"，,；;。\r\n]*)")
-_QUOTED_PATH = re.compile(r"""(["'])([A-Za-z]:[\\/][^"'\\r\\n]+)\1""")
+_QUOTED_PATH = re.compile(r"""(["'])([A-Za-z]:[\\/][^"'\r\n]+)\1""")
 _RECOVERABLE = frozenset({"COMPLETED", "FAILED", "PAUSED", "INTERRUPTED"})
 
 
