@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/evidence-terminal-boundary
+      - feat/pr-bcd-evidence-adapters-20261102
   workflow_dispatch:
 
 permissions:
