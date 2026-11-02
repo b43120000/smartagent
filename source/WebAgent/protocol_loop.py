@@ -689,6 +689,11 @@ class WebAgentProtocolLoop:
         def is_safe_replan_blocker(row):
             if not isinstance(row, dict):
                 return False
+            # An entirely completed observation (including a rejected read)
+            # is not an in-flight side effect. It may be truthfully reported as
+            # FAILED/PARTIAL or re-planned inside the SAME authorized scope.
+            # In particular, a denied list_directory MUST NOT be replayed as
+            # a mutation, and no successful terminal claim is fabricated here.
             if (row.get("reason") != "REPLAN_REQUIRED"
                     or row.get("execution_status") != "FAILED"):
                 return False
@@ -696,13 +701,24 @@ class WebAgentProtocolLoop:
             ledger_entry = dict(self.action_ledger.get(ref) or {})
             action = dict(ledger_entry.get("action") or {})
             evidence = self.action_result_ledger.get(ref)
+            tool = str(action.get("tool", ""))
+            safe_read = (
+                (tool == "run_command" and action.get("operation") == "INSPECT")
+                or tool in {"list_directory", "read_file", "find_file", "inspect_directory"}
+            )
             return bool(
-                action.get("tool") == "run_command"
-                and action.get("operation") == "INSPECT"
+                safe_read
                 and ledger_entry.get("execution_status") == "FAILED"
                 and isinstance(evidence, dict)
-                and evidence.get("executed") is True
-                and evidence.get("result_status") == "FAILED"
+                and evidence.get("result_status") in {"FAILED", "REJECTED"}
+                and evidence.get("execution_status") not in {
+                    "RUNNING", "QUEUED", "UNKNOWN", "PARTIAL"
+                }
+                and str(evidence.get("effective_verification_status", "")) != "UNKNOWN"
+                # Rejected read with a complete terminal error is safe to
+                # *classify* as finished even when it never executed.
+                and (evidence.get("executed") is True
+                     or evidence.get("result_status") == "REJECTED")
             )
         safe_repair_blockers = [
             row for row in blockers
