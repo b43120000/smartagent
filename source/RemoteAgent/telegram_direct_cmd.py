@@ -1,11 +1,10 @@
-"""Opt-in, restricted Telegram software-only CMD controls."""
+"""Telegram-authenticated software-only CMD controls."""
 from __future__ import annotations
 
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 CONTROL_LABEL = "執行cmd"
 HEADER = "run cmd by TG"
@@ -16,28 +15,11 @@ class CmdControlError(ValueError):
     pass
 
 
-def _parse_ids(raw: str) -> frozenset[int]:
-    try:
-        ids = frozenset(int(x.strip()) for x in raw.replace(";", ",").split(",") if x.strip())
-    except ValueError:
-        return frozenset()
-    return ids if all(x > 0 for x in ids) else frozenset()
-
-
 @dataclass(frozen=True)
 class CmdControlPolicy:
     enabled: bool
     user_ids: frozenset[int]
     chat_ids: frozenset[int]
-
-    @classmethod
-    def from_env(cls, values: Mapping[str, str] | None = None):
-        env = os.environ if values is None else values
-        return cls(
-            str(env.get("SMARTAGENT_TG_CMD_ENABLED", "0")).lower() in {"1", "true", "on"},
-            _parse_ids(env.get("SMARTAGENT_TG_CMD_ALLOWED_USER_IDS", "")),
-            _parse_ids(env.get("SMARTAGENT_TG_CMD_ALLOWED_CHAT_IDS", "")),
-        )
 
     def assert_authorized(self, user_id: int, chat_id: int) -> None:
         if not self.enabled:
@@ -105,7 +87,12 @@ def execute_cmd_request(
     from agent_core.windows_security import restricted_executor_required
     from agent_core.bounded_process import run_bounded_process
 
-    (policy or CmdControlPolicy.from_env()).assert_authorized(user_id, chat_id)
+    # The dispatcher constructs this transient policy only after the normal
+    # Telegram private-chat identity / pairing authorization. No second
+    # JSON file, extra IDs or environment-variable opt-in is required.
+    if policy is None:
+        raise CmdControlError("TG_CMD_RECEIVER_AUTH_REQUIRED")
+    policy.assert_authorized(user_id, chat_id)
     if os.name != "nt":
         raise CmdControlError("TG_CMD_WINDOWS_REQUIRED")
     # Match the installation's effective ACL mode. ACL ON is enforced by
