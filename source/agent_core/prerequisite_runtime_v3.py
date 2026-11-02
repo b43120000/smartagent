@@ -444,6 +444,48 @@ class RecoveryLedger:
         return self._transition(task_id=task_id,request_id=request_id,
                                 task_epoch=task_epoch,fn=transition)
 
+    def record_verified_environment(
+        self, *, task_id: str, request_id: str, task_epoch: str,
+        distribution: str, version: str, evidence_ref: str,
+    ) -> dict:
+        """Update current facts only after independent re-probe and publication."""
+        package_id = "package:" + distribution.casefold().replace("_", "-")
+        evidence_digest = _digest({"ref":evidence_ref})
+        def transition(doc):
+            if doc["phase"] != "RESUMED":
+                raise PrerequisiteRecoveryError("pr_d_resume_required")
+            if evidence_digest != doc["resume_evidence_sha256"]:
+                raise PrerequisiteRecoveryError("pr_d_resume_evidence_mismatch")
+            original = next(
+                (row for row in doc["initial_facts"]
+                 if str(row.get("id","")).casefold().replace("_", "-") == package_id
+                 and row.get("state") == "MISSING"), None,
+            )
+            if not original:
+                raise PrerequisiteRecoveryError("pr_d_missing_package_fact_required")
+            constraint = str(original.get("constraint", ""))
+            match = re.fullmatch(r"(==|>=|<=)([0-9]+(?:\\.[0-9]+){0,3})", constraint)
+            if not match or not _satisfies(version, match.group(1), match.group(2)):
+                raise PrerequisiteRecoveryError("pr_d_installed_version_unsatisfied")
+            if doc.get("project_environment_verified"):
+                if doc.get("project_environment_evidence_sha256") != evidence_digest:
+                    raise PrerequisiteRecoveryError("pr_d_environment_replay_mismatch")
+                return ""
+            doc["current_facts"] = [
+                {**row, "state":"SATISFIED", "observed_version":version,
+                 "source":"PROJECT_ENVIRONMENT_REPROBED"}
+                if str(row.get("id","")).casefold().replace("_", "-") == package_id
+                else row
+                for row in doc["current_facts"]
+            ]
+            doc["project_environment_verified"] = True
+            doc["project_environment_evidence_sha256"] = evidence_digest
+            return "CURRENT_ENVIRONMENT_VERIFIED"
+        return self._transition(
+            task_id=task_id, request_id=request_id, task_epoch=task_epoch,
+            fn=transition,
+        )
+
     def terminal_ready(self, task_id: str) -> tuple[bool, str]:
         doc = self.read(task_id)
         if not doc:
@@ -451,6 +493,9 @@ class RecoveryLedger:
         # Existing V9 admission and TaskResult remain the only success gates.
         if doc["remediation_action"] and doc["phase"]!="RESUMED":
             return False,"PR_D_INDEPENDENT_VERIFY_OR_RESUME_REQUIRED"
+        if (doc["remediation_action"] and doc.get("project_environment_required")
+                and not doc.get("project_environment_verified")):
+            return False, "PR_D_PROJECT_ENVIRONMENT_VERIFICATION_REQUIRED"
         return True,"PR_D_RECOVERY_RESUMED" if doc["phase"]=="RESUMED" else "PR_D_NO_REMEDIATION"
 
 
