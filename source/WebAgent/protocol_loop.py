@@ -5918,7 +5918,7 @@ class WebAgentProtocolLoop:
                                             if row.get("id") == "package:" + distribution
                                         ), "")
                                         constraint = _re.fullmatch(
-                                            r"(==|>=|<=)([0-9]+(?:\\.[0-9]+){0,3})",
+                                            r"(==|>=|<=)([0-9]+(?:\.[0-9]+){0,3})",
                                             str(required),
                                         )
                                         valid_version = bool(
