@@ -1,6 +1,0 @@
-{
-  "schema": "SMARTAGENT_TG_CMD_SETTINGS_V1",
-  "enabled": false,
-  "allowed_user_ids": [],
-  "allowed_chat_ids": []
-}
