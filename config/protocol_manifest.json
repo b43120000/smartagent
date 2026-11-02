@@ -92,7 +92,7 @@
     "source/agent_core/project_sync_runner.py": "7a7c17e9b376b2f26b869a8acfdb9e4dd325cd2924579cfd58cb8109bd3f8d46",
     "source/agent_core/project_sync_transaction.py": "2e8514576da80223d521ab716226ebd0a2a14a4077cc68b00807148c7be5543f",
     "source/agent_core/project_sync.py": "614aad90249e003b5cb6a5d96ffdc95069819777c6f9c6d967286a4dd8d38c82",
-    "source/agent_core/protocol_manifest.py": "88de725262cb3431f7c15e83827b9233138af43abce34d03ec1c240d17c4aa02",
+    "source/agent_core/protocol_manifest.py": "aec49131aab4249b9188df9e45fafe9f9dbe451ec51a477a1fca91cfafd292e5",
     "source/agent_core/protocol_v8.py": "31f08b070bbfd2cb67c1323af9f18c6d6c5527036b8131abd7b9cc70fbcb9608",
     "source/agent_core/protocol_v9.py": "26932c3fa2bc41edfc16bc80613953e4c16f0e3a4ecfa42c6d7af5fdb3d8e51a",
     "source/agent_core/query_expected_outcome.py": "fa74ed8331ba794f0c14f3c06ef8d9bd8447788fbf51e02ec72bed99204821bd",
@@ -209,7 +209,7 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "c47e9f5af65e8c43eb9e15cca947df61e3ce674343da1992a23297bfa908f508",
+    "source/WebAgent/protocol_loop.py": "f51558d75179747b3f8d78b7f10faae8885ee05e6afc13ee74c45064c0c6939c",
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
@@ -219,7 +219,8 @@
     "source/agent_core/task_workspace_resolver.py": "519e26068464784fd005e8857eede24d3096ff4dd6f0612726811d6c6834294d",
     "source/agent_core/task_transport.py": "57089b1bce75c87e71260637099ecd97a223b2f4b3550bf9c91aa326f1ecab06",
     "source/agent_core/project_environment.py": "a8ea927b448fa28dbbbc61b31654952dfd17e621edd7c95edee57770a6fd14e2",
-    "source/agent_core/environment_fact_contract.py": "bd4716ab4df37b01b5df4a498a2f8886a1f772f3540e68292381294f6f53d420"
+    "source/agent_core/environment_fact_contract.py": "bd4716ab4df37b01b5df4a498a2f8886a1f772f3540e68292381294f6f53d420",
+    "source/agent_core/evidence_identity_audit.py": "3a89f90e0836a8fa5b81071b38e1eff43cfe7c1527ffe7967f7fb226fd99f238"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
