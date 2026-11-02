@@ -114,6 +114,90 @@ class LiveBP0ScopeIT(unittest.TestCase):
                 })
                 self.assertFalse(cmd_scope["allowed"], cmd_scope)
 
+    def test_write_ceiling_denies_all_unverified_writes_without_execution(self):
+        from agent_core.pr_bcd_request_scope import (
+            parse_bounded_project_writes, check_action_against_write_ceiling,
+        )
+        from agent_core.tool_result_contract import decode_result
+        with tempfile.TemporaryDirectory(prefix="sa-live-b-p0-") as temp:
+            base = Path(temp)
+            project = base / "SmartAgent_PR_BCD_LIVE"
+            (project / "wheelhouse").mkdir(parents=True)
+            (project / "deps").mkdir()
+            (project / ".agents" / "project_context").mkdir(parents=True)
+            default = base / "default"
+            default.mkdir()
+            request = live_b_request(project)
+            explicit = extract_authorized_paths(request)
+            ceiling = parse_bounded_project_writes(
+                request, explicit_paths=explicit, project_root=project,
+            )
+            self.assertIsNotNone(ceiling)
+            self.assertTrue(ceiling["valid"], ceiling)
+            self.assertFalse(ceiling["grants_authorization"])
+            tool = WebAgentToolContext(default)
+            tool.begin_run("RR-P0-WRITE-SCOPE", request, explicit)
+            tool._request_write_ceiling = ceiling
+            scope = tool.preview_tool_scope({
+                "tool": "list_directory", "path": str(project)
+            })
+            self.assertTrue(scope["allowed"], scope)
+            rejected = [
+                {"tool": "write_file", "path": str(project / "unapproved.txt"),
+                 "content": "SHOULD_NOT_WRITE"},
+                {"tool": "write_file", "path": str(project / "deps" / "some.txt"),
+                 "content": "SHOULD_NOT_WRITE"},
+                {"tool": "write_file", "path": str(project / ".agents" /
+                  "project_context" / "environment.json"), "content": "{}"},
+                {"tool": "run_command", "operation": "MUTATE",
+                 "command": "python -m pip install --no-index --target deps example.whl",
+                 "working_directory": str(project)},
+                {"tool": "run_command", "operation": "INSPECT",
+                 "command": "Set-Content -Path 'unapproved.txt' -Value dangerous",
+                 "working_directory": str(project)},
+                {"tool": "delete_path", "path": str(project / "deps")},
+            ]
+            for action in rejected:
+                with self.subTest(action=action):
+                    self.assertFalse(check_action_against_write_ceiling(
+                        action, ceiling)[0])
+                    self.assertFalse(tool.preview_tool_scope(action)["allowed"])
+                    result = decode_result(tool.execute({
+                        **action, "action_id": "P0-DENIED",
+                    }))
+                    self.assertIsNotNone(result)
+                    self.assertEqual(result["status"], "REJECTED")
+                    self.assertIs(result["executed"], False)
+            self.assertEqual([p for p in project.rglob("*") if p.is_file()], [])
+
+            # Restrictions must not leak into a new request.
+            tool.begin_run("RR-P0-NEXT", "Verify a separate ordinary task.", [])
+            self.assertIsNone(tool._request_write_ceiling)
+
+    def test_unparseable_write_ceiling_fails_closed_for_mutation(self):
+        from agent_core.pr_bcd_request_scope import (
+            parse_bounded_project_writes, check_action_against_write_ceiling,
+        )
+        with tempfile.TemporaryDirectory(prefix="sa-live-b-p0-") as temp:
+            root = Path(temp) / "SmartAgent_PR_BCD_LIVE"
+            root.mkdir()
+            malformed = (
+                f"在 {root} 執行 PR-B/C/D。"
+                "禁止其他專案路徑寫入。未提供必要的寫入目標。"
+            )
+            ceiling = parse_bounded_project_writes(
+                malformed, explicit_paths=extract_authorized_paths(malformed),
+                project_root=root,
+            )
+            self.assertFalse(ceiling["valid"])
+            self.assertFalse(check_action_against_write_ceiling({
+                "tool": "run_command", "operation": "MUTATE",
+                "command": "python -m pip install example.whl",
+            }, ceiling)[0])
+            self.assertTrue(check_action_against_write_ceiling({
+                "tool": "list_directory", "path": str(root),
+            }, ceiling)[0])
+
     def test_registered_project_workspace_is_request_first_not_default(self):
         with tempfile.TemporaryDirectory(prefix="sa-live-b-p0-") as temp:
             base = Path(temp)
