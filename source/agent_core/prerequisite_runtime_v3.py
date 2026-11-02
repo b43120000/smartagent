@@ -206,7 +206,9 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     )
     # Intent survives UNKNOWN probes; eligibility is checked separately by PR-C.
     positive_intent = bool(WRITE_INTENT.search(text)) and not bool(NEGATED_REMEDIATION.search(text))
-    remediation_requested = bool(positive_intent and paths)
+    # Ordinary output writes are not PR-C dependency remediation.
+    has_dependency_requirement = any(row.get("kind") in {"PACKAGE", "VERSION"} for row in facts)
+    remediation_requested = bool(positive_intent and paths and has_dependency_requirement)
     return {"schema":"SMARTAGENT_PREREQ_V3_PROBE_V1",
             "facts":facts, "missing":missing,"unknown":unknown,
             "remediation_requested":remediation_requested,
