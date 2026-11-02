@@ -222,7 +222,7 @@
     "source/agent_core/environment_fact_contract.py": "0e13079d94747fcdb7a5d1f290db19ddb2b9139760a70e1a89e87cdf8ddd6d70",
     "source/agent_core/evidence_identity_audit.py": "3a89f90e0836a8fa5b81071b38e1eff43cfe7c1527ffe7967f7fb226fd99f238",
     "source/agent_core/pr_bcd_request_scope.py": "5566da70e22babb8f7dfebfb5dc80347aa3d507ebe47db30591a6acad6902c65",
-    "source/RemoteAgent/telegram_direct_cmd.py": "b233e2ed40b8d7768627d3bf0a60b5768b2c022f48d2a46c685c1ce8bd5ce2e3"
+    "source/RemoteAgent/telegram_direct_cmd.py": "556f306a2d0ec17d5e16ee1fde5883c8346ad0b071eb3a62d85eb35dd3c3bb02"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
