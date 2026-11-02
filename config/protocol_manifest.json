@@ -133,7 +133,7 @@
     "source/agent_core/tool_capabilities.py": "0a7eb8e39181d9d8bba28429fa1dee0d7730eeece3c93e5b6ef4a7d43bdb9423",
     "source/agent_core/tool_result_contract.py": "ea343a3a6dbdcc1b563e5776bdff1564169dac296d3d12fc4187eca519481830",
     "source/agent_core/tool_result_policy.py": "99b9646655ae630a3e8917fd00f52aa5555fdc3c34ba692874caa352c59195df",
-    "source/agent_core/tools.py": "253546df67a2be75acfc73a00e3c69dec316d4c8a05cbb0eac325283bcae30dd",
+    "source/agent_core/tools.py": "f00a8725dba0f1009d546a0277c66bb00c3018aa3497a9f007cee8782931872a",
     "source/agent_core/tri_one_answer_only.py": "907d9f14208545f2058808ea014fb6a54524de512c4900f9983a3828f5c483e8",
     "source/agent_core/tri_one_shared_worker.py": "bddb403263eee2d1f2f5ec3675b873dd91f24d3158a7d5f77db21fe0e30c4c86",
     "source/agent_core/tri_one_task_result.py": "fcb248515174f9406492bc56f8d64bae14d9b5b9a50edb6fc7fac3b86a2029f1",
