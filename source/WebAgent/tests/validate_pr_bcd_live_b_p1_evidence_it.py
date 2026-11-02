@@ -148,6 +148,11 @@ class LiveBP1EvidenceIT(unittest.TestCase):
         self.assertFalse(self.agent.preview_tool_scope(
             {**safe, "operation": "MUTATE", "action_id": "p1-mutate"}
         )["allowed"])
+        # A VERIFY action can carry additional checks and therefore must not
+        # inherit the INSPECT-only read-CWD exception.
+        self.assertFalse(self.agent.preview_tool_scope(
+            {**safe, "operation": "VERIFY", "action_id": "p1-verify"}
+        )["allowed"])
 
     def test_proven_inspect_receipt_still_requires_real_process_exit(self):
         command = f"Test-Path -LiteralPath '{self.wheel}'"
@@ -246,6 +251,18 @@ class LiveBP1EvidenceIT(unittest.TestCase):
         loop._record_action_result_evidence(
             action, self._entry(execution_status="FAILED",
                                 result_status="FAILED", executed=True))
+        self.assertEqual(
+            loop.action_result_ledger["p1-prior"]["evidence_status"], "STALE")
+
+        # UNKNOWN/indeterminate execution is not a safe no-op assertion.
+        loop.action_result_ledger["p1-prior"]["evidence_status"] = "ACTIVE"
+        action["action_id"] = "p1-uncertain"
+        loop.action_ledger["p1-uncertain"] = {"result": encode_result(
+            "UNKNOWN", "PROCESS_EXECUTION_UNCONFIRMED", tool="run_command",
+            executed=False)}
+        loop._record_action_result_evidence(
+            action, self._entry(execution_status="UNKNOWN",
+                                result_status="UNKNOWN", executed=False))
         self.assertEqual(
             loop.action_result_ledger["p1-prior"]["evidence_status"], "STALE")
 
