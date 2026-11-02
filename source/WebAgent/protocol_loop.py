@@ -4274,6 +4274,67 @@ class WebAgentProtocolLoop:
                                 ),
                             }]
         if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED" and not answer_only_admission:
+            # A matching trusted PR-B fact may already exist, while the first
+            # Planner response used incorrect refs or an unissued condition ID.
+            # Repair the *claim*, never make a new probe or a false PASS.
+            # No outstanding operations or previous action history are allowed.
+            fact_candidates = [
+                (ref, row["fact"]) for ref, row in
+                getattr(self, "_environment_fact_refs", {}).items()
+                if row["fact"].get("kind") == "PACKAGE"
+                and row["fact"].get("state") in {"MISSING", "SATISFIED"}
+            ]
+            fact_repair_safe = bool(
+                fact_candidates
+                and not self.action_ledger and not self.action_result_ledger
+                and not self.condition_result_ledger
+                and not self.pending_verification_requirement
+                and not self.pending_result_recovery
+                and not self.pending_action_repair
+                and not self.deferred_action_repairs
+                and not self.pending_command_field_repairs
+                and not self.pending_progress_repair_actions
+                and not self.active_stage_manifest
+                and getattr(self, "_pr_v3_ledger", None) is not None
+            )
+            if fact_repair_safe:
+                try:
+                    fact_repair_safe = not self._pr_v3_ledger.read(self.task_id)["remediation_requested"]
+                except (OSError, ValueError, KeyError, TypeError):
+                    fact_repair_safe = False
+            if fact_repair_safe:
+                self._emit("environment_fact_binding_repair_requested",
+                           request_id=self.run_id, round=self.turn_id,
+                           candidate_count=len(fact_candidates),
+                           executed_action_count=0)
+                return [], [{
+                    "marker": "[WEBAGENT_ENVIRONMENT_FACT_BINDING_REPAIR]",
+                    "reason": "environment_fact_binding_required",
+                    "detail": json.dumps({
+                        "matched_condition": normalized_progress.get("matched_condition", ""),
+                        "available_fact_refs": [
+                            {"evidence_ref": ref, "id": fact.get("id"),
+                             "name": fact.get("name"),
+                             "constraint": fact.get("constraint"),
+                             "state": fact.get("state")}
+                            for ref, fact in fact_candidates[:12]
+                        ],
+                        "expected_evidence_refs": "one matching ENVFACT reference only",
+                        "fact_assertion_fields": [
+                            "evidence_ref", "expected_state", "condition_text"
+                        ],
+                    }, ensure_ascii=False, separators=(",", ":")),
+                    "suggestion": (
+                        "The Runtime has already confirmed a dependency fact. "
+                        "Reissue the same truthful Planner completion condition, "
+                        "cite exactly the corresponding ENVFACT reference, and set "
+                        "fact_assertion={evidence_ref,expected_state,condition_text} "
+                        "where condition_text equals matched_condition verbatim. "
+                        "Do not add REQUEST_ACCEPTED/RUNTIME_STATUS or invent "
+                        "a condition_id; do not run a redundant command or mutate. "
+                        "The whole revised turn must still pass V9 admission."
+                    ),
+                }]
             final_action = next(
                 (item for item in operational if item.get("tool") == "final_response"),
                 {},
