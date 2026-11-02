@@ -4868,6 +4868,19 @@ class WebAgentProtocolLoop:
         )
         self.authorized_paths = list(authorized)
         self._pr_v3_project_root = self._authorized_project_root(self.authorized_paths, self.workspace)
+        self._pr_v3_project_root_explicit = any(
+            Path(raw).expanduser().resolve() == self._pr_v3_project_root
+            for raw in self.authorized_paths
+        )
+        self._emit(
+            "request_project_scope_resolved", request_id=self.run_id,
+            task_id=self.task_id, task_epoch=self.task_epoch,
+            scope_source=("USER_REQUEST_EXPLICIT_DIRECTORY" if
+                          self._pr_v3_project_root_explicit else "WORKSPACE_FALLBACK"),
+            project_root_matches_workspace=self._pr_v3_project_root == self.workspace,
+            explicit_path_count=len(self.authorized_paths),
+            request_paths_grant_write=False,
+        )
         self.tools.begin_run(self.run_id, request, authorized)
         if self.continuation_source:
             self._restore_continuation()
