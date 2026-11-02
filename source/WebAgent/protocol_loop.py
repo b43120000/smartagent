@@ -2797,9 +2797,11 @@ class WebAgentProtocolLoop:
             "matched_condition_id": progress.matched_condition_id,
             "evidence_refs": refs,
             "evidence_verdict": self._terminal_evidence_verdict(
-                refs, matched_condition=progress.matched_condition),
+                refs, matched_condition=progress.matched_condition,
+                fact_assertion=getattr(progress, "fact_assertion", {})),
             "verification_status": self._effective_verification_status(
-                refs, matched_condition=progress.matched_condition),
+                refs, matched_condition=progress.matched_condition,
+                fact_assertion=getattr(progress, "fact_assertion", {})),
         }
         # Include the distinct answer-only admission type in the receipt ID.
         # An evidence-free text reply cannot collide with an ordinary receipt.
