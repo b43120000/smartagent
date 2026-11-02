@@ -11,6 +11,7 @@ on:
       - fix/pr-bcd-project-environment-20261102
       - fix/pr-bcd-live-observation-terminal-20261102
       - feat/pr-bcd-evidence-adapters-20261102
+      - fix/pr-bcd-fact-contract-live-ab-20261103
   workflow_dispatch:
 
 permissions:
@@ -50,6 +51,8 @@ jobs:
         shell: pwsh
         run: |
           python -B source/WebAgent/tests/validate_pr_bcd_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_fact_contract_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_gar_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
