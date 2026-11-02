@@ -25,6 +25,11 @@ if not exist "%SMARTAGENT_PYTHON%" (
     exit /b 2
 )
 
+rem Persistent Telegram CMD admin IDs are read by HostSupervisor, not executed
+rem as batch commands. The file is localdata-only and excluded from Git.
+if exist "%~dp0localdata\secure\telegram_cmd_settings.json" (
+    echo [RemoteAgent-0] Saved Telegram CMD settings detected; HostSupervisor will validate and load.
+)
 set "SMARTAGENT_LAUNCH_LOG="
 for /f "delims=" %%P in ('""%SMARTAGENT_PYTHON%" -m agent_core.path_cli remote_restart_log --root "%~dp0.""') do set "SMARTAGENT_LAUNCH_LOG=%%P"
 if not defined SMARTAGENT_LAUNCH_LOG (
