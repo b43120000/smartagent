@@ -206,6 +206,52 @@ class LiveBP1EvidenceIT(unittest.TestCase):
                 "evidence_status": "STALE"}}, self.request_id, self.epoch),
             [action_id])
 
+    def test_v9_runtime_persists_real_native_pr_a_satisfied_without_task_pass(self):
+        from WebAgent.tests.validate_flexible_progress_admission import initial
+        from WebAgent.tests.validate_action_scoped_admission import finished
+        from WebAgent.tests.validate_progress_terminal_lifecycle import response
+        from agent_core.prerequisite_graph_v3 import RequirementLedger
+
+        seen = []
+        action_id = "P1-V9-LIST-PROOF"
+        events = []
+        def planner(_prompt, _expected, _attachments):
+            seen.append(1)
+            if len(seen) == 1:
+                return response(initial(), {
+                    "tool": "list_directory", "action_id": action_id,
+                    "path": str(self.wheelhouse),
+                })
+            return response(
+                finished([action_id]),
+                {"tool": "final_response", "action_id": "P1-V9-FINAL",
+                 "content": "P1_READ_ONLY_PASS"},
+            )
+
+        loop = WebAgentProtocolLoop(
+            self.workspace, planner, progress_root=self.workspace,
+            max_turns=3, event_sink=lambda name, **kwargs: events.append((name, kwargs)),
+        )
+        with patch.dict("os.environ", {"SMARTAGENT_PREREQ_V3_PR_A": "1"}):
+            answer = loop.run(
+                "請唯讀列出目錄\n" + str(self.project),
+                trusted_authorized_paths=[str(self.project)],
+                request_id="RR-BP1-INTEGRATION",
+                task_id="TASK-BP1-INTEGRATION",
+                task_epoch="EPOCH-BP1-INTEGRATION",
+            )
+        self.assertEqual(answer, "P1_READ_ONLY_PASS")
+        proof = loop.action_result_ledger[action_id]
+        self.assertTrue(proof.get("observation_proof_admitted"), proof)
+        self.assertEqual(proof["verification_status"], "UNKNOWN")
+        self.assertNotEqual(proof.get("effective_verification_status"), "PASS")
+        saved = RequirementLedger(self.workspace).read("TASK-BP1-INTEGRATION")
+        self.assertEqual(saved["nodes"]["action:" + action_id.lower()]["state"], "SATISFIED")
+        self.assertTrue(any(name == "pr_b1_observation_admitted" for name, _ in events))
+        self.assertTrue(any(name == "pr_a_evidence_recorded" and
+                            payload.get("status") == "SATISFIED"
+                            for name, payload in events))
+
     def _loop(self):
         loop = WebAgentProtocolLoop.__new__(WebAgentProtocolLoop)
         loop.run_id = self.request_id
