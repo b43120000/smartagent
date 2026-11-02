@@ -18,6 +18,7 @@ on:
       - feat/tgcmd-20261103
       - feat/tg-cmd-persistent-settings-20261103
       - feat/tg-cmd-acl-off-dev-default-20261103
+      - fix/tg-cmd-reuse-telegram-auth-20261103
   workflow_dispatch:
 
 permissions:
