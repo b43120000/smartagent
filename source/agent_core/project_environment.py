@@ -125,6 +125,85 @@ def publish_verified_dependency(
     return entry
 
 
+def publish_verified_tool(
+    project_root: str | Path, *, name: str, path: str | Path,
+    version: str, request_id: str, evidence_ref: str,
+    authorized_project_write: bool,
+) -> dict:
+    """Persist a proven existing SDK/compiler path, not a new authorization.
+
+    Referenced tools may be outside the project and may be used only if the
+    future Task's read/execute policy permits them. The index never grants it.
+    """
+    if not authorized_project_write:
+        raise PermissionError("project_environment_write_not_authorized")
+    if not all(str(v).strip() for v in (name, path, version, request_id, evidence_ref)):
+        raise ValueError("project_tool_verification_evidence_required")
+    if len(name) > 80 or len(version) > 80:
+        raise ValueError("project_tool_fields_invalid")
+    root = Path(project_root).expanduser().resolve()
+    candidate = Path(path).expanduser().resolve()
+    if not root.is_dir() or not candidate.exists():
+        raise ValueError("project_tool_path_missing")
+    from .process_file_lock import exclusive_process_lock
+    from .project_ledger import append_project_event
+    destination = environment_index_path(root)
+    reject_reparse_components(destination, root)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with exclusive_process_lock(destination.with_name("environment.lock"), timeout_sec=10,
+                                label="project environment"):
+        doc = read_project_environment(root)
+        entry = {
+            "path": str(candidate), "version": version,
+            "status": "VERIFIED", "source": "RUNTIME_TOOL_PROBE",
+            "request_id": request_id, "evidence_ref": evidence_ref,
+        }
+        doc["tools"][name.casefold()] = entry
+        payload = json.dumps(doc, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        if len(payload.encode("utf-8")) > MAX_BYTES:
+            raise ValueError("project_environment_index_limit")
+        descriptor, temporary = tempfile.mkstemp(prefix="environment.", suffix=".tmp", dir=destination.parent)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as fp:
+                fp.write(payload)
+                fp.flush()
+                os.fsync(fp.fileno())
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    append_project_event(
+        root, "environment_tool_verified", operation_result="VERIFIED",
+        request_id=request_id, changed_files=[],
+        details={"tool": name.casefold(), "path": str(candidate),
+                 "version": version, "evidence_ref": evidence_ref},
+        event_key="tool:" + request_id + ":" + name.casefold(),
+    )
+    return entry
+
+
+def planner_environment_hint(project_root: str | Path) -> dict:
+    """Bounded, untrusted candidates only; revalidate before any use."""
+    doc = read_project_environment(project_root)
+    result = {"schema": SCHEMA, "authority": "CANDIDATES_REQUIRING_RUNTIME_REPROBE",
+              "dependencies": [], "tools": []}
+    for name, row in list(sorted(doc["dependencies"].items()))[:20]:
+        if isinstance(row, dict) and row.get("status") == "VERIFIED":
+            result["dependencies"].append({
+                "name": name, "version": str(row.get("version", ""))[:80],
+                "location": str(row.get("location", ""))[:500],
+                "last_evidence_ref": str(row.get("evidence_ref", ""))[:200],
+            })
+    for name, row in list(sorted(doc["tools"].items()))[:20]:
+        if isinstance(row, dict) and row.get("status") == "VERIFIED":
+            result["tools"].append({
+                "name": name, "version": str(row.get("version", ""))[:80],
+                "path": str(row.get("path", ""))[:500],
+                "last_evidence_ref": str(row.get("evidence_ref", ""))[:200],
+            })
+    return result
+
+
 def resolve_install_target(
     project_root: str | Path, *, explicit_target: str | Path | None = None,
     shared_venv: str | Path | None = None, authorize_shared_venv: bool = False,
