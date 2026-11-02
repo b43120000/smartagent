@@ -6,6 +6,7 @@ on:
       - fix/gar-progress-collector-l4-control-20261102
       - release/pr-a-gar-l4-default-off-20261102
       - fix/repair-stall-effective-progress-20261102
+      - feat/request-first-workspace-routing-20261102
       - feat/prerequisite-v3-prb-prc-prd-20261102
   workflow_dispatch:
 
@@ -180,6 +181,17 @@ jobs:
         shell: pwsh
         run: |
           python -B source/WebAgent/tests/validate_repair_stagnation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Request-first workspace and three-task context routing regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_request_first_workspace_routing.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_multi_workspace_access.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_authorized_path_extraction.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_task_continuation.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: GAR R1 local handoff and R3 L4 independent controls
         shell: pwsh
