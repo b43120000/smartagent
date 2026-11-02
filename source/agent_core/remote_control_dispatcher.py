@@ -465,6 +465,7 @@ class RemoteControlDispatcher:
     ) -> dict[str, Any]:
         """Return one task's ledger without accessing the browser session."""
         from .task_progress import format_telegram_status_view, read_progress
+        from .repair_stagnation import format_status as repair_status, read_observation
         from .task_state import RemoteTaskQueue, TaskStateStore
 
         chat_id = int(
@@ -494,6 +495,7 @@ class RemoteControlDispatcher:
                 "message": (
                     f"{note}\nrequest_id: {task.request_id}\n"
                     f"task_id: {task.task_id}\ntask_state: {state}"
+                    + repair_status(read_observation(self.root, task.task_id, task.request_id))
                 ),
                 "generation_active": not terminal,
                 "status_source": "task_progress_ledger",
@@ -505,6 +507,7 @@ class RemoteControlDispatcher:
                 format_telegram_status_view(ledger)
                 + f"\n\nrequest_id: {task.request_id}"
                 + f"\ntask_id: {task.task_id}\ntask_state: {state}"
+                + repair_status(read_observation(self.root, task.task_id, task.request_id))
             ),
             "generation_active": ledger.runtime_state == "PROCESSING",
             "status_source": "task_progress_ledger",
@@ -523,10 +526,12 @@ class RemoteControlDispatcher:
         execution = self._execution_status_for_task(task)
         if task is not None:
             from .task_progress import format_telegram_status_view, read_progress
+            from .repair_stagnation import format_status as repair_status, read_observation
             progress = read_progress(task.task_id, root=self.root)
             if progress is not None:
                 task_state = getattr(getattr(task, "state", ""), "value", getattr(task, "state", ""))
                 text = format_telegram_status_view(progress)
+                text += repair_status(read_observation(self.root, task.task_id, task.request_id))
                 text += f"\n\nTask\nID: {task.task_id}\nState: {task_state}"
                 if execution:
                     started = float(execution.get("started_at", 0) or 0)
@@ -570,6 +575,8 @@ class RemoteControlDispatcher:
             text = "WebGPT：目前沒有可操作的 browser session。" if unavailable else "WebGPT：目前無法取得 browser 狀態。"
 
         if task is not None:
+            from .repair_stagnation import format_status as repair_status, read_observation
+            text += repair_status(read_observation(self.root, task.task_id, task.request_id))
             task_state = getattr(getattr(task, "state", ""), "value", getattr(task, "state", ""))
             text += f"\n\nTask\nID: {task.task_id}\nState: {task_state}"
 
