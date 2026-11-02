@@ -4885,6 +4885,24 @@ class WebAgentProtocolLoop:
             request_paths_grant_write=False,
         )
         self.tools.begin_run(self.run_id, request, authorized)
+        # Negative user write constraints must narrow tool execution even
+        # when the configured workspace policy is broader. This request-owned
+        # ceiling never creates new write permission or performs remediation.
+        from agent_core.pr_bcd_request_scope import parse_bounded_project_writes
+        self._request_write_ceiling = parse_bounded_project_writes(
+            request, explicit_paths=self.authorized_paths,
+            project_root=self._pr_v3_project_root,
+        )
+        self.tools._request_write_ceiling = self._request_write_ceiling
+        if self._request_write_ceiling is not None:
+            self._emit(
+                "request_write_ceiling_bound", request_id=self.run_id,
+                task_id=self.task_id, task_epoch=self.task_epoch,
+                ceiling_active=True,
+                ceiling_valid=bool(self._request_write_ceiling["valid"]),
+                ceiling_reason=self._request_write_ceiling["reason"],
+                grants_authorization=False,
+            )
         if self.continuation_source:
             self._restore_continuation()
         from agent_core.request_context import RequestContextStore, RequestContextError
@@ -5990,6 +6008,9 @@ class WebAgentProtocolLoop:
                             "resolved_scope_expands_beyond_explicit_path",
                             "path_independent_command_cwd_outside_bound_workspace",
                             "directory_listing_requires_list_directory",
+                            "request_write_ceiling_unresolved",
+                            "request_write_ceiling_command_unverified",
+                            "request_write_ceiling_tool_not_authorized",
                             "outside_authorized", "unauthorized", "not_found",
                         ) if code in str(scope.get("error", "")).lower()),
                         "OTHER_SCOPE_REJECTION") if not scope.get("allowed", True)
