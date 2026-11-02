@@ -290,10 +290,19 @@ class TelegramUpdateAdapter:
             return None, "sender_not_allowed"
         attachments = self._attachments(message)
         raw_text = str(message.get("text") or message.get("caption") or "")
-        PIT.begin(raw_text, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
-        PIT.record("02_telegram_message_text", raw_text, extra={"update_id": update_id, "message_id": message.get("message_id"), "entities": message.get("entities", []), "caption_entities": message.get("caption_entities", [])})
+        is_admin_cmd = is_direct_cmd_request(raw_text)
+        visible_trace = "[TG_DIRECT_CMD_REDACTED]" if is_admin_cmd else raw_text
+        PIT.begin(visible_trace, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
+        PIT.record("02_telegram_message_text", visible_trace, extra={
+            "update_id": update_id, "message_id": message.get("message_id"),
+            "direct_cmd_redacted": is_admin_cmd,
+            "entities": [] if is_admin_cmd else message.get("entities", []),
+            "caption_entities": [] if is_admin_cmd else message.get("caption_entities", []),
+        })
         text = raw_text.strip()
-        PIT.record("03_receiver_normalized", text, evidence_status="NORMALIZED_INPUT")
+        PIT.record("03_receiver_normalized",
+                   "[TG_DIRECT_CMD_REDACTED]" if is_admin_cmd else text,
+                   evidence_status="NORMALIZED_INPUT")
         if not text and not attachments:
             return None, "empty_message"
         if not text: text = "請處理附件"
