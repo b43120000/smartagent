@@ -820,6 +820,26 @@ class TelegramReceiver:
                         update_id=update_id,
                     )
                 continue
+            if is_direct_cmd_request(message.text):
+                # Authenticated Telegram software control, same as other
+                # buttons and direct controls. The general Agent-task preflight
+                # is not a prerequisite; bounded_process enforces its own
+                # ACL-mode and Software Guard command restrictions.
+                # Never enqueue an Agent task or send content to WebGPT.
+                self.offset_store.commit(update_id)
+                if self.control_handler is None or message.attachments:
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 執行cmd不可用或不能附帶檔案。",
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                else:
+                    self._dispatch_control_async(
+                        message, control_key="direct_cmd",
+                        control_stage="CONTROL_DIRECT_CMD_EXECUTE",
+                        update_id=update_id,
+                    )
+                continue
             if self.task_admission_guard is not None:
                 try:
                     admission = self.task_admission_guard(message)
@@ -841,24 +861,6 @@ class TelegramReceiver:
                         update_id=update_id, error=reason,
                     )
                     continue
-            if is_direct_cmd_request(message.text):
-                # Dedicated software route, after normal Telegram sender
-                # authorization and host task-admission safety preflight.
-                # Never enqueue an Agent task or send content to WebGPT.
-                self.offset_store.commit(update_id)
-                if self.control_handler is None or message.attachments:
-                    self._send_message(
-                        int(message.reply_context["chat_id"]),
-                        "🔴 執行cmd不可用或不能附帶檔案。",
-                        reply_to_message_id=int(message.reply_context["message_id"]),
-                    )
-                else:
-                    self._dispatch_control_async(
-                        message, control_key="direct_cmd",
-                        control_stage="CONTROL_DIRECT_CMD_EXECUTE",
-                        update_id=update_id,
-                    )
-                continue
             if RemoteSkillManager.looks_like_invocation(message.text):
                 try:
                     from agent_core.remote_binding import active, load
