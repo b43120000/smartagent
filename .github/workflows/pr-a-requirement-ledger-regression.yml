@@ -8,6 +8,7 @@ on:
       - fix/repair-stall-effective-progress-20261102
       - feat/request-first-workspace-routing-20261102
       - feat/prerequisite-v3-prb-prc-prd-20261102
+      - fix/pr-bcd-project-environment-20261102
   workflow_dispatch:
 
 permissions:
@@ -47,6 +48,10 @@ jobs:
         shell: pwsh
         run: |
           python -B source/WebAgent/tests/validate_pr_bcd_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_gar_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_project_environment_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Prepare offline PR-B/C/D Live fixture (no install or network)
         shell: pwsh
