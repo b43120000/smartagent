@@ -1979,7 +1979,8 @@ class WebAgentProtocolLoop:
         expected_id = condition_id_for("success", str(matched_condition or ""))
         status, _reason = verify_fact_assertion(
             assertion=fact_assertion or {}, evidence_refs=[str(item) for item in refs],
-            matched_condition_id=expected_id, request_id=self.run_id,
+            matched_condition_id=expected_id, matched_condition=str(matched_condition or ""),
+            request_id=self.run_id,
             task_id=self.task_id, task_epoch=self.task_epoch,
             fact_refs=getattr(self, "_environment_fact_refs", {}),
         )
