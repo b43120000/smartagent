@@ -124,6 +124,76 @@ class EnvironmentFactContractIT(unittest.TestCase):
             self.assertFalse(loop._answer_only_admitted)
             self.assertEqual(len(loop._environment_fact_refs) >= 1, True)
 
+    def test_live_a_repair_mixed_refs_without_gar_l5_or_tool(self):
+        # Regression for real Live A: first terminal cites a Runtime fact plus
+        # unrelated status ref. No tool has run, so repair the assertion only.
+        from agent_core import prerequisite_runtime_v3
+        with tempfile.TemporaryDirectory(prefix="smartagent-live-a-repair-") as temp:
+            root = Path(temp).resolve()
+            turns, events = [], []
+            goal = "可信 Runtime 事實確認依賴是否缺失"
+            def planner(prompt, _expected, _attachments):
+                turns.append(prompt)
+                match = re.search(r"ENVFACT-[A-F0-9]{24}", prompt)
+                self.assertIsNotNone(match)
+                ref = match.group()
+                progress = {
+                    "tool": "report_progress", "action_id": "PROGRESS-A-REPAIR",
+                    "total_steps": 1, "current_step": 1,
+                    "steps": [{"step": 1, "desc": "引用 Runtime 套件狀態",
+                               "status": "COMPLETED"}],
+                    "base_evaluation": "唯讀確認依賴缺失，不允許安裝。",
+                    "current_focus": "確認依賴結果", "next_action": "回覆",
+                    "completion_contract": {
+                        "success": [goal], "failure": ["探測失敗"],
+                        "in_progress": ["等待探測"], "interrupted": ["無法觀測"],
+                    },
+                    "decision": "COMPLETE", "outcome": "SUCCESS",
+                    "matched_condition": goal,
+                    "evidence_refs": [ref, "RUNTIME_STATUS"] if len(turns) == 1 else [ref],
+                    "fact_assertion": {
+                        "evidence_ref": ref, "expected_state": "MISSING",
+                        "condition_text": goal,
+                    },
+                    "decision_reason": "可信套件缺失事實已取得。",
+                }
+                return "\n".join(_fence(x) for x in (
+                    progress,
+                    {"tool": "final_response", "action_id": "FINAL-A-REPAIR",
+                     "content": "smartagent-pr-bcd-live>=1.0 MISSING"},
+                    {"tool": "turn_commit", "action_count": 2},
+                ))
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=3,
+                event_sink=lambda name, **fields: events.append((name, fields)),
+            )
+            with patch.object(prerequisite_runtime_v3, "_probe_package",
+                              return_value=("MISSING", "")), \
+                 patch.dict(os.environ, {
+                     "SMARTAGENT_PR0_V1": "1",
+                     "SMARTAGENT_PREREQ_V3_PR_A": "1",
+                     "SMARTAGENT_PREREQ_V3_BCD": "1",
+                     "TRI_ONE_TASK_RESULT_V1": "1",
+                     "TRI_ONE_TEXT_ONLY_V1": "1",
+                 }), \
+                 patch.object(loop.tools, "execute",
+                              side_effect=AssertionError("Fact reuse must not execute tools")):
+                result = loop.run(
+                    "確認 Bundled Python 環境中 smartagent-pr-bcd-live>=1.0 是否缺失。"
+                    "僅允許唯讀檢查，禁止安裝、下載、修改或任何補救。",
+                    request_id="RR-LIVE-A-REPAIR",
+                    task_id="TASK-LIVE-A-REPAIR",
+                    task_epoch="EPOCH-LIVE-A-REPAIR",
+                    source_tag="REMOTEAGENT_TELEGRAM",
+                )
+            self.assertIn("MISSING", result)
+            self.assertEqual(len(turns), 2)
+            self.assertEqual(loop.terminal_outcome, "SUCCESS")
+            self.assertEqual(loop.terminal_acceptance["evidence_verdict"], "PASS")
+            self.assertEqual(loop.action_result_ledger, {})
+            self.assertIn("environment_fact_binding_repair_requested",
+                          [name for name, _fields in events])
+
     def test_requested_root_preferred_over_default_workspace(self):
         with tempfile.TemporaryDirectory(prefix="smartagent-root-it-") as temp:
             base = Path(temp)
