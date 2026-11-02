@@ -155,6 +155,14 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
         "scope_source": "none",
         "error": "",
     }
+    from .pr_bcd_request_scope import check_action_against_write_ceiling
+    request_allowed, request_reason = check_action_against_write_ceiling(
+        tool_call, getattr(agent, "_request_write_ceiling", None)
+    )
+    if not request_allowed:
+        info.update(allowed=False, scope_source="request_write_ceiling",
+                    error=request_reason)
+        return info
     if tool == 'run_command':
         try:
             context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
@@ -1523,6 +1531,14 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
 def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) -> str:
     models = models or getattr(agent, "_models_registry", {}) or {}
     tool = tool_call.get("tool", "")
+    from .pr_bcd_request_scope import check_action_against_write_ceiling
+    request_allowed, request_reason = check_action_against_write_ceiling(
+        tool_call, getattr(agent, "_request_write_ceiling", None)
+    )
+    if not request_allowed:
+        from .tool_result_contract import encode_result
+        return encode_result("REJECTED", request_reason, tool=str(tool),
+                             executed=False, data={"terminal_eligible": False})
     security_context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
     scope = preview_tool_scope(tool_call, agent)
     if tool in _SCOPED_INSPECTION_TOOLS and not scope["allowed"]:
