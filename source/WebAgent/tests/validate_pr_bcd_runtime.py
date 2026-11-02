@@ -113,6 +113,83 @@ class PRBCDTests(unittest.TestCase):
                 **self.ids, action=self.mutate(), scope_allowed=True,
             )
 
+    def test_b_non_python_dependencies_are_unknown_not_python_missing(self):
+        request = ("Inspect cpp:OpenCV>=4.8 and "
+                   "maven:org.slf4j:slf4j-api>=2.0")
+        with patch("agent_core.prerequisite_runtime_v3._probe_package") as python_probe:
+            report = self.probe(request)
+        python_probe.assert_not_called()
+        ids = {row["id"]:row for row in report["facts"]}
+        self.assertEqual(ids["dependency:cpp:opencv"]["state"], "UNKNOWN")
+        self.assertEqual(ids["dependency:java:org.slf4j:slf4j-api"]["state"], "UNKNOWN")
+        self.assertEqual(ids["dependency:cpp:opencv"]["source"], "UNSUPPORTED_ECOSYSTEM_PROBE")
+        self.assertFalse(report["remediation_eligible"])
+
+    def test_b_native_tool_versions_use_runtime_snapshot(self):
+        self.env["tools"]["cmake"] = {"status":"AVAILABLE","version":"cmake version 3.28.1"}
+        self.env["tools"]["javac"] = {"status":"AVAILABLE","version":"javac 21.0.1"}
+        self.env["tools"]["gcc"] = {"status":"MISSING","version":""}
+        report = self.probe("cmake>=3.20 javac>=21 gcc>=12")
+        ids = {row["id"]:row for row in report["facts"]}
+        self.assertEqual(ids["version:cmake"]["state"], "SATISFIED")
+        self.assertEqual(ids["version:javac"]["state"], "SATISFIED")
+        self.assertEqual(ids["version:gcc"]["state"], "MISSING")
+
+    def test_b_read_only_missing_fact_is_a_valid_terminal_observation(self):
+        with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                   return_value=("MISSING","")):
+            report = self.probe("確認 smartagent-pr-bcd-live>=1.0 是否缺失，禁止任何補救。")
+        state = self.init(report)
+        self.assertIn("package:smartagent-pr-bcd-live",state["missing_ids"])
+        self.assertFalse(state["remediation_requested"])
+        self.assertEqual(self.ledger.terminal_ready(self.ids["task_id"]), (True,"PR_D_NO_REMEDIATION"))
+
+    def test_d_current_state_replaces_missing_fact_only_with_linked_proof(self):
+        with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                   return_value=("MISSING","")):
+            report = self.probe()
+        report["project_environment_required"] = True
+        self.init(report)
+        mutate = self.mutate()
+        self.ledger.before_action(**self.ids, action=mutate, scope_allowed=True)
+        self.action(mutate, ref="MUTATE-PROOF")
+        verify = {"tool":"run_command","operation":"VERIFY","action_id":"VER-1",
+                  "verifies_action_id":"MUT-1"}
+        self.action(verify, ref="VERIFY-PROOF")
+        resume = {"tool":"run_command","operation":"INSPECT","action_id":"RES-1",
+                  "depends_on":["VER-1"]}
+        self.action(resume, ref="RESUME-PROOF")
+        self.assertFalse(self.ledger.terminal_ready(self.ids["task_id"])[0])
+        with self.assertRaisesRegex(PrerequisiteRecoveryError, "evidence_mismatch"):
+            self.ledger.record_verified_environment(
+                **self.ids,distribution="synthetic_pr_bcd",
+                version="1.0",evidence_ref="WRONG")
+        with self.assertRaisesRegex(PrerequisiteRecoveryError, "version_unsatisfied"):
+            self.ledger.record_verified_environment(
+                **self.ids,distribution="synthetic_pr_bcd",
+                version="0.9",evidence_ref="RESUME-PROOF")
+        updated = self.ledger.record_verified_environment(
+            **self.ids,distribution="synthetic_pr_bcd",
+            version="1.0",evidence_ref="RESUME-PROOF")
+        initial = next(x for x in updated["initial_facts"] if x["id"] == "package:synthetic_pr_bcd")
+        current = next(x for x in updated["current_facts"] if x["id"] == "package:synthetic_pr_bcd")
+        self.assertEqual(initial["state"], "MISSING")
+        self.assertEqual(current["state"], "SATISFIED")
+        self.assertEqual(current["observed_version"], "1.0")
+        self.assertTrue(self.ledger.terminal_ready(self.ids["task_id"])[0])
+
+    def test_c_other_ecosystem_install_cannot_use_python_recovery(self):
+        with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                   return_value=("MISSING","")):
+            report = self.probe()
+        self.init(report)
+        with self.assertRaisesRegex(PrerequisiteRecoveryError, "unsupported_dependency_adapter"):
+            self.ledger.before_action(
+                **self.ids,scope_allowed=True,
+                action={"tool":"run_command","operation":"MUTATE","action_id":"OTHER",
+                        "command":"vcpkg install opencv"},
+            )
+
     def test_b_distribution_is_probed_with_bundled_python_only(self):
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
                    return_value=("MISSING","")) as probe:
