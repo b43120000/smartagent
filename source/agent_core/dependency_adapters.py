@@ -86,9 +86,29 @@ def parse_requirements(request: str, *, limit: int = 20) -> list[DependencyRequi
         for match in pattern.finditer(text):
             add(match, DependencyRequirement("python", match.group(1).lower(),
                                              match.group(2), match.group(3)))
+    # For legacy unqualified names, infer only a uniquely identified
+    # ecosystem. If several language toolchains are mentioned, fail closed
+    # as UNKNOWN instead of misreporting a C++/Java dependency as pip-missing.
+    contexts = set()
+    if re.search(r"(?i)\b(?:python|pip|wheel)\b|requirements[.]txt", text):
+        contexts.add("python")
+    if re.search(r"(?i)c\+\+|\b(?:cmake|vcpkg|conan)\b", text):
+        contexts.add("cpp")
+    if re.search(r"(?i)\b(?:java|maven|gradle|javac)\b|pom[.]xml|build[.]gradle", text):
+        contexts.add("java")
+    implied = next(iter(contexts)) if len(contexts) == 1 else (
+        "unknown" if len(contexts) > 1 else "python"
+    )
     unique: list[DependencyRequirement] = []
     seen: set[str] = set()
     for _start, _end, row in sorted(matches, key=lambda item: item[0]):
+        if row.kind == "PACKAGE" and row.ecosystem == "python":
+            # Explicit package syntax is not itself a Python ecosystem claim.
+            # Fully qualified constraints retain the ecosystem parsed above.
+            raw = text[_start:_end].lower()
+            if not re.match(r"\s*(python|pip)\s*:", raw):
+                row = DependencyRequirement(implied, row.name, row.operator,
+                                            row.required_version)
         if row.fact_id not in seen:
             seen.add(row.fact_id)
             unique.append(row)
