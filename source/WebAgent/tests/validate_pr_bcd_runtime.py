@@ -125,6 +125,20 @@ class PRBCDTests(unittest.TestCase):
         self.assertEqual(ids["dependency:cpp:opencv"]["source"], "UNSUPPORTED_ECOSYSTEM_PROBE")
         self.assertFalse(report["remediation_eligible"])
 
+    def test_b_unqualified_cpp_and_java_are_not_assumed_python(self):
+        for request, identifier in (
+            ("C++ project requires OpenCV>=4.8", "dependency:cpp:opencv"),
+            ("Java project requires slf4j>=2.0", "dependency:java:slf4j"),
+            ("Python and C++ require opencv>=4.8", "dependency:unknown:opencv"),
+        ):
+            with self.subTest(request=request):
+                with patch("agent_core.prerequisite_runtime_v3._probe_package") as python_probe:
+                    report = self.probe(request)
+                python_probe.assert_not_called()
+                found = {row["id"]:row for row in report["facts"]}
+                self.assertEqual(found[identifier]["state"], "UNKNOWN")
+                self.assertFalse(report["remediation_eligible"])
+
     def test_b_native_tool_versions_use_runtime_snapshot(self):
         self.env["tools"]["cmake"] = {"status":"AVAILABLE","version":"cmake version 3.28.1"}
         self.env["tools"]["javac"] = {"status":"AVAILABLE","version":"javac 21.0.1"}
