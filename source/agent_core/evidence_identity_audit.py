@@ -15,6 +15,8 @@ def audit_terminal_references(
     task_epoch: str,
     *,
     protocol_spec_rejection: Mapping[str, object] | None = None,
+    runtime_fact_refs: Mapping[str, Mapping] | None = None,
+    task_id: str = "",
 ) -> dict[str, object]:
     """Audit action results and a separately verified protocol rejection.
 
@@ -35,9 +37,12 @@ def audit_terminal_references(
         and isinstance(record.get("action_id"), str)
         and bool(record.get("action_id"))
     )
+    fact_refs = dict(runtime_fact_refs or {})
+    cited_facts = [str(ref) for ref in refs if str(ref) in fact_refs]
     action_refs = [
         str(ref) for ref in refs
         if str(ref) not in {"REQUEST_ACCEPTED", "RUNTIME_STATUS", control_ref}
+        and str(ref) not in fact_refs
     ]
     control_refs = [str(ref) for ref in refs if str(ref) == control_ref]
     unknown = [ref for ref in action_refs if ref not in action_result_ledger]
@@ -45,6 +50,16 @@ def audit_terminal_references(
         unknown.extend(control_refs)
     foreign = []
     incomplete = []
+    for ref in cited_facts:
+        fact = fact_refs[ref]
+        if not isinstance(fact, Mapping):
+            incomplete.append(ref)
+        elif (fact.get("request_id") != request_id
+                or fact.get("task_epoch") != task_epoch
+                or (task_id and fact.get("task_id") != task_id)):
+            foreign.append(ref)
+        elif not fact.get("fact_digest"):
+            incomplete.append(ref)
     for ref in action_refs:
         if ref not in action_result_ledger:
             continue
@@ -65,6 +80,7 @@ def audit_terminal_references(
     return {
         "schema": "SMARTAGENT_TERMINAL_REFERENCE_AUDIT_V2",
         "action_ref_count": len(action_refs),
+        "runtime_fact_ref_count": len(cited_facts),
         "protocol_ref_count": len(control_refs) if scoped_control else 0,
         "unknown_ref_count": len(unknown),
         "foreign_ref_count": len(foreign),
