@@ -2771,6 +2771,8 @@ class WebAgentProtocolLoop:
         identity_audit = audit_terminal_references(
             refs, self.action_result_ledger, self.run_id, self.task_epoch,
             protocol_spec_rejection=self._safe_protocol_spec_rejection(),
+            runtime_fact_refs=getattr(self, "_environment_fact_refs", {}),
+            task_id=self.task_id,
         )
         self._emit("terminal_evidence_identity_audit",
             request_id=self.run_id, task_id=self.task_id, round=self.turn_id,
