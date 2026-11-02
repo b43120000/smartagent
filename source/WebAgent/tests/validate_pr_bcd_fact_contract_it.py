@@ -39,6 +39,13 @@ class EnvironmentFactContractIT(unittest.TestCase):
                       request_id="RR-1", task_id="TASK-1",
                       task_epoch="E-1", fact_refs=refs)
         self.assertEqual(verify_fact_assertion(assertion=assertion, **kwargs)[0], "PASS")
+        text_bound = {"evidence_ref": ref, "expected_state": "MISSING",
+                      "condition_text": "missing is observed"}
+        self.assertEqual(verify_fact_assertion(
+            assertion=text_bound, matched_condition="missing is observed", **kwargs)[0], "PASS")
+        self.assertNotEqual(verify_fact_assertion(
+            assertion={**text_bound, "condition_text": "unrelated condition"},
+            matched_condition="missing is observed", **kwargs)[0], "PASS")
         self.assertNotEqual(verify_fact_assertion(
             assertion={**assertion, "expected_state": "SATISFIED"}, **kwargs)[0], "PASS")
         self.assertNotEqual(verify_fact_assertion(
@@ -78,7 +85,7 @@ class EnvironmentFactContractIT(unittest.TestCase):
                     "matched_condition": success,
                     "fact_assertion": {
                         "evidence_ref": ref, "expected_state": "MISSING",
-                        "condition_id": condition_id_for("success", success),
+                        "condition_text": success,
                     },
                     "evidence_refs": [ref],
                     "decision_reason": "已引用 request-scoped PR-B 缺失事實。",
