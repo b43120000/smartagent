@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -44,6 +45,7 @@ class RemoteControlDispatcher:
         self._binding_update_allowed = binding_update_allowed
         self._run_command = run_command
         self._terminate_process_tree = terminate_process_tree
+        self._direct_cmd_lock = threading.Lock()
 
     def handle(self, message=None):
         from .remote_binding_manager import (
@@ -59,6 +61,13 @@ class RemoteControlDispatcher:
         from RemoteAgent.remote_restart import RECONNECT_COMMAND
 
         raw_text = str(getattr(message, "text", "") or "").strip()
+        from RemoteAgent.telegram_direct_cmd import (
+            CONTROL_LABEL, is_direct_cmd_request, render_cmd_template,
+        )
+        if raw_text.casefold() == CONTROL_LABEL.casefold():
+            return {"message": render_cmd_template(self.root)}
+        if is_direct_cmd_request(raw_text):
+            return self._run_direct_cmd_control(message)
         binding_manager = RemoteBindingManager(self.root)
         chat_id = int(
             (getattr(message, "reply_context", {}) or {}).get("chat_id", 0) or 0
@@ -143,6 +152,51 @@ class RemoteControlDispatcher:
         if text in {"snapshot webgpt", "refresh", "重新整理"}:
             return self._run_browser_control(text)
         return self._run_queued_control(text, message)
+
+    def _run_direct_cmd_control(self, message: Any) -> dict[str, Any]:
+        """Explicit high-privilege local software route; no Agent/Task Queue."""
+        from RemoteAgent.telegram_direct_cmd import (
+            CmdControlError, execute_cmd_request,
+        )
+        identity = getattr(message, "reply_context", {}) or {}
+        chat_id = int(identity.get("chat_id", 0) or 0)
+        try:
+            user_id = int(getattr(message, "sender_id", "0") or 0)
+        except ValueError:
+            user_id = 0
+        # Refuse concurrent batches from this process to avoid overlapping
+        # independent administrative effects.
+        if not self._direct_cmd_lock.acquire(blocking=False):
+            return {"message": "⚠️ 已有執行cmd批次正在執行，請先等目前批次結束。"}
+        try:
+            result = execute_cmd_request(
+                str(getattr(message, "text", "") or ""),
+                user_id=user_id, chat_id=chat_id,
+            )
+            self.runtime_log.write(
+                "CONNECT", component="remote_control_dispatcher",
+                stage="DIRECT_CMD_COMPLETED",
+                control_id=result["control_id"],
+                status=result["status"],
+                command_count=len(result["results"]),
+                exit_codes=[item.get("exit_code") for item in result["results"]],
+                # Never write raw shell text or captured output to log.
+            )
+            return result
+        except CmdControlError as exc:
+            self.runtime_log.write(
+                "ERROR", component="remote_control_dispatcher",
+                stage="DIRECT_CMD_REJECTED", reason=str(exc)[:120],
+            )
+            return {"message": "🔴 執行cmd安全拒絕：" + str(exc)[:180]}
+        except Exception as exc:
+            self.runtime_log.write(
+                "ERROR", component="remote_control_dispatcher",
+                stage="DIRECT_CMD_EXCEPTION", kind=type(exc).__name__,
+            )
+            return {"message": "🔴 執行cmd失敗：" + type(exc).__name__}
+        finally:
+            self._direct_cmd_lock.release()
 
     def _active_telegram_task(self, message: Any):
         from .task_state import (
