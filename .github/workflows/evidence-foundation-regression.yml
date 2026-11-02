@@ -9,6 +9,7 @@ on:
       - fix/pr-bcd-live-a-first-turn-fact-binding-20261103
       - fix/live-b-p0-scope-20261103
       - feat/tgcmd-20261103
+      - feat/tg-cmd-persistent-settings-20261103
   workflow_dispatch:
 
 permissions:
