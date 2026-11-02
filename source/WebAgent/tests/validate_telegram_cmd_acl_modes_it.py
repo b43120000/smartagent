@@ -108,6 +108,43 @@ class TelegramCmdAclModesIT(unittest.TestCase):
                     runner=lambda *args, **kwargs: self.fail("No process should start"),
                 )
 
+    def test_default_install_root_cwd_is_accepted_without_workspace_grant(self):
+        invoked = []
+        def benign_runner(*args, **kwargs):
+            invoked.append((args, kwargs))
+            return {"process_started": True, "exit_code": 0,
+                    "stdout": "ok", "stderr": "", "timed_out": False}
+        # New-install default policy typically permits a separate default
+        # workspace, not the SmartAgent source/installation root. The actual
+        # Telegram dispatcher supplies its root as a trusted argument.
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": ()}), \
+             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
+            reply = execute_cmd_request(
+                self.request, user_id=11, chat_id=22, policy=self.policy,
+                runner=benign_runner, trusted_install_root=self.root,
+            )
+        self.assertEqual(reply["status"], "SUCCESS")
+        self.assertEqual(len(invoked), 2)
+        self.assertIn("ACL OFF / Software Guard", reply["message"])
+
+    def test_install_root_exception_does_not_cover_sibling_or_parent(self):
+        sibling = self.root.parent
+        altered = self.request.replace(str(self.root), str(sibling))
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": ()}), \
+             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
+            with self.assertRaisesRegex(CmdControlError, "WORKSPACE_NOT_AUTHORIZED"):
+                execute_cmd_request(
+                    altered, user_id=11, chat_id=22, policy=self.policy,
+                    trusted_install_root=self.root,
+                    runner=lambda *args, **kwargs: self.fail("must not execute"),
+                )
+
     def test_acl_off_requires_preexisting_authorized_workspace(self):
         with patch("agent_core.windows_security.restricted_executor_required",
                    return_value=False), \
