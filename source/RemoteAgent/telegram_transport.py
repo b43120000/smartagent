@@ -26,8 +26,9 @@ from RemoteAgent.remote_feature_catalog import (
     FEATURE_QUERY_COMMAND, canonical_remote_control, command_for_remote_callback,
     remote_feature_inline_keyboard, remote_feature_reply_keyboard,
     render_remote_feature_list, INTERRUPT_COMMAND, LIST_SKILLS_COMMAND,
-    MANAGER_COMMAND, STATUS_COMMAND,
+    MANAGER_COMMAND, STATUS_COMMAND, CMD_CONTROL_LABEL,
 )
+from RemoteAgent.telegram_direct_cmd import is_direct_cmd_request
 from RemoteAgent.remote_restart import RECONNECT_COMMAND
 from agent_core.remote_binding_manager import RemoteBindingManager
 from agent_core.paths import workspace_telegram_inbox_root
@@ -724,6 +725,7 @@ class TelegramReceiver:
                     STATUS_COMMAND.casefold(): "CONTROL_STATUS_WEBGPT",
                     INTERRUPT_COMMAND.casefold(): "CONTROL_INTERRUPT_TASK",
                     RECONNECT_COMMAND.casefold(): "CONTROL_RESTART_REMOTE",
+                    CMD_CONTROL_LABEL.casefold(): "CONTROL_DIRECT_CMD_TEMPLATE",
                 }
                 security_decision = (
                     control_key.startswith("確認刪除 ")
@@ -778,7 +780,7 @@ class TelegramReceiver:
                     reply_markup=remote_feature_inline_keyboard(),
                 )
                 continue
-            control_stages={MANAGER_COMMAND.casefold():"CONTROL_BINDING_MANAGER",LIST_SKILLS_COMMAND.casefold():"CONTROL_LIST_SKILLS","關閉任務":"CONTROL_CLOSE_TASK","snapshot webgpt":"CONTROL_SNAPSHOT_WEBGPT","refresh":"CONTROL_REFRESH_WEBGPT","重新整理":"CONTROL_REFRESH_WEBGPT",STATUS_COMMAND.casefold():"CONTROL_STATUS_WEBGPT",INTERRUPT_COMMAND.casefold():"CONTROL_INTERRUPT_TASK",RECONNECT_COMMAND.casefold():"CONTROL_RESTART_REMOTE"}
+            control_stages={MANAGER_COMMAND.casefold():"CONTROL_BINDING_MANAGER",LIST_SKILLS_COMMAND.casefold():"CONTROL_LIST_SKILLS","關閉任務":"CONTROL_CLOSE_TASK","snapshot webgpt":"CONTROL_SNAPSHOT_WEBGPT","refresh":"CONTROL_REFRESH_WEBGPT","重新整理":"CONTROL_REFRESH_WEBGPT",STATUS_COMMAND.casefold():"CONTROL_STATUS_WEBGPT",INTERRUPT_COMMAND.casefold():"CONTROL_INTERRUPT_TASK",RECONNECT_COMMAND.casefold():"CONTROL_RESTART_REMOTE",CMD_CONTROL_LABEL.casefold():"CONTROL_DIRECT_CMD_TEMPLATE"}
             binding_update = RemoteBindingManager.is_update(message.text)
             security_decision = (
                 control_key.startswith("確認刪除 ")
@@ -830,6 +832,24 @@ class TelegramReceiver:
                         update_id=update_id, error=reason,
                     )
                     continue
+            if is_direct_cmd_request(message.text):
+                # Dedicated software route, after normal Telegram sender
+                # authorization and host task-admission safety preflight.
+                # Never enqueue an Agent task or send content to WebGPT.
+                self.offset_store.commit(update_id)
+                if self.control_handler is None or message.attachments:
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 執行cmd不可用或不能附帶檔案。",
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                else:
+                    self._dispatch_control_async(
+                        message, control_key="direct_cmd",
+                        control_stage="CONTROL_DIRECT_CMD_EXECUTE",
+                        update_id=update_id,
+                    )
+                continue
             if RemoteSkillManager.looks_like_invocation(message.text):
                 try:
                     from agent_core.remote_binding import active, load
