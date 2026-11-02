@@ -93,6 +93,7 @@ $sources = @(
 $scalarKeys = @(
     'action_id','tool','operation','verification_status','result_status','effective_verification_status',
     'execution_status','last_reason','repair_status','diagnostic_reason','error_type',
+    'scope_allowed','scope_error_code','scope_source','runtime_fact_ref_count',
     'pid','round','attempt','request_id','task_id','task_epoch',
     'execution_state','protocol_state','status','level','decision',
     'reason','reason_code','classification','marker','evidence_marker_class',
