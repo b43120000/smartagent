@@ -14,6 +14,7 @@ on:
       - fix/pr-bcd-fact-contract-live-ab-20261103
       - fix/pr-bcd-live-a-first-turn-fact-binding-20261103
       - fix/live-b-p0-scope-20261103
+      - feat/tgcmd-20261103
   workflow_dispatch:
 
 permissions:
@@ -57,6 +58,8 @@ jobs:
           python -B source/WebAgent/tests/validate_pr_bcd_fact_contract_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_live_b_p0_scope_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_telegram_direct_cmd_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_gar_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
