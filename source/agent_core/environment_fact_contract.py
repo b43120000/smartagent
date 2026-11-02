@@ -68,6 +68,7 @@ def verify_fact_assertion(*, assertion: object, evidence_refs: list[str],
     ref = assertion.get("evidence_ref")
     state = assertion.get("expected_state")
     condition = assertion.get("condition_id")
+    condition_text = assertion.get("condition_text")
     if ref != cited[0] or state not in {"MISSING", "SATISFIED"}:
         return "UNVERIFIED", "ENVIRONMENT_FACT_ASSERTION_INVALID"
     if not matched_condition_id or condition != matched_condition_id:
