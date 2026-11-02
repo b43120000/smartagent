@@ -765,7 +765,11 @@ class WebAgentProtocolLoop:
     def _admit_bounded_repair(self, diagnostics) -> dict:
         # Never treat an Action ID/prose change as progress. Only Runtime
         # records marked executed are considered a new evidence generation.
-        evidence_generation = sum(
+        # Only Runtime-accepted step advances and verified Action facts
+        # reset the local no-progress streak; changing Action IDs, prose or
+        # merely executed=True without verification does not count.
+        tracker = getattr(self, "_repair_stagnation", None)
+        evidence_generation = tracker.effective_generation if tracker else sum(
             1 for entry in self.action_result_ledger.values()
             if entry.get("executed") is True
         )
