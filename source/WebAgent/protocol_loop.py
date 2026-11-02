@@ -5847,6 +5847,18 @@ class WebAgentProtocolLoop:
                     resolved_paths=scope.get("resolved_paths", []),
                     scope_source=scope.get("scope_source", "none"),
                     scope_allowed=scope.get("allowed", True),
+                    scope_error_code=(
+                        next((code for code in (
+                            "explicit_path_scope_requires_workspace",
+                            "explicit_path_scope_requires_path",
+                            "resolved_scope_expands_beyond_explicit_path",
+                            "path_independent_command_cwd_outside_bound_workspace",
+                            "directory_listing_requires_list_directory",
+                            "outside_authorized", "unauthorized", "not_found",
+                        ) if code in str(scope.get("error", "")).lower()),
+                        "OTHER_SCOPE_REJECTION") if not scope.get("allowed", True)
+                        else "SCOPE_ALLOWED"
+                    ),
                     scope_error=scope.get("error", ""),
                 )
                 resolved_scope = ", ".join(scope.get("resolved_paths", [])) or "(none)"
