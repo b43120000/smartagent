@@ -4882,7 +4882,23 @@ class WebAgentProtocolLoop:
                             "with explicit request-owned authorization and existing scoped paths. "
                             "Follow with a distinct VERIFY action linked by verifies_action_id, "
                             "then retry the original operation using a new action_id. "
-                            "Never infer permission from probe results."
+                            "Never infer permission from probe results.",
+                        "readonly_negative_probe_rule":
+                            "If the requested fact is whether a package is ABSENT, "
+                            "a confirmed PackageNotFoundError is a positive factual "
+                            "MISSING observation, not a failed user goal. Prefer a "
+                            "read-only probe with an explicit MISSING marker, exit 0 "
+                            "for the expected absent case and scoped success_criteria. "
+                            "If any earlier command has FAILED, do not hide its evidence; "
+                            "use a new explicit verifying Action with verifies_action_id "
+                            "for the relevant original action and cite its effective "
+                            "PASS evidence. Do not claim SUCCESS while an unresolved "
+                            "FAILED action remains part of terminal evidence.",
+                        "unspecified_wheel_rule":
+                            "If the user refers only to a Wheel without a distribution "
+                            "and version, inspect the authorized wheelhouse first. "
+                            "Do not infer that PR-B is MISSING or install while "
+                            "UNKNOWN; report an objective blocker if scope is denied."
                     },ensure_ascii=False,separators=(",",":"))
                     + "\n[/SMARTAGENT_PREREQUISITE_V3_RUNTIME]")
             except Exception as exc:
