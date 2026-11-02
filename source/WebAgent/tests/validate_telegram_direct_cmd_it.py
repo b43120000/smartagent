@@ -109,6 +109,9 @@ class TelegramDirectCmdIT(unittest.TestCase):
         self.assertEqual(self.client.acks[-1], ("CBA-7", "已收到"))
 
         with patch(
+            "RemoteAgent.telegram_transport.TelegramReceiverConfig.from_env",
+            return_value=self.receiver.config,
+        ), patch(
             "RemoteAgent.telegram_direct_cmd.execute_cmd_request",
             return_value={"message": "CMD 執行結果 TEST\n狀態：SUCCESS",
                           "control_id": "TEST", "status": "SUCCESS",
@@ -120,6 +123,10 @@ class TelegramDirectCmdIT(unittest.TestCase):
             self.assertTrue(self.receiver.wait_for_controls(5))
             self.assertEqual(execute.call_count, 1)
             self.assertEqual(execute.call_args.kwargs["trusted_install_root"], self.root)
+            validated = execute.call_args.kwargs["policy"]
+            validated.assert_authorized(11, 22)
+            with self.assertRaises(CmdControlError):
+                validated.assert_authorized(99, 22)
         self.assertIn("狀態：SUCCESS", self.client.sent[-1][1])
 
     def test_invalid_sender_and_nonprivate_rejected(self):
@@ -136,7 +143,9 @@ class TelegramDirectCmdIT(unittest.TestCase):
         self.assertEqual(cwd, self.root)
         self.assertEqual(commands, ("echo hello", "echo time"))
         with self.assertRaises(CmdControlError):
-            CmdControlPolicy.from_env({}).assert_authorized(11, 22)
+            CmdControlPolicy(False, frozenset({11}), frozenset({22})).assert_authorized(11, 22)
+        with self.assertRaisesRegex(CmdControlError, "TG_CMD_RECEIVER_AUTH_REQUIRED"):
+            execute_cmd_request(self.message, user_id=11, chat_id=22)
         with self.assertRaises(CmdControlError):
             self.policy.assert_authorized(12, 22)
         with self.assertRaises(CmdControlError):
