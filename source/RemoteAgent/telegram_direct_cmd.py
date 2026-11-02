@@ -94,6 +94,7 @@ def parse_cmd_request(text: str) -> tuple[Path, tuple[str, ...]]:
 def execute_cmd_request(
     text: str, *, user_id: int, chat_id: int,
     policy: CmdControlPolicy | None = None, runner=None,
+    trusted_install_root: str | Path | None = None,
 ) -> dict:
     """Sequential bounded cmd.exe invocation through the existing OS executor."""
     import time
@@ -115,6 +116,14 @@ def execute_cmd_request(
     cwd, commands = parse_cmd_request(text)
     roots = tuple(Path(p).resolve() for p in access_snapshot().get("writable_workspaces", ()))
     root = next((p for p in roots if is_within(cwd, p)), None)
+    # The callback template defaults to the SmartAgent installation directory.
+    # Permit exactly that trusted host-owned cwd for the authenticated admin
+    # control; it is a working directory, not a new general Workspace grant.
+    # Arbitrary user-supplied cmd paths still require the workspace allowlist.
+    if root is None and trusted_install_root is not None:
+        installed = Path(trusted_install_root).expanduser().resolve()
+        if cwd == installed:
+            root = installed
     if root is None:
         raise CmdControlError("TG_CMD_WORKSPACE_NOT_AUTHORIZED")
     reject_reparse_components(cwd, root)
