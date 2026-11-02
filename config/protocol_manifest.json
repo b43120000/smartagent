@@ -213,7 +213,7 @@
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
-    "source/agent_core/dependency_adapters.py": "20740a7e2c7e9cebee94a3ecbfdee99cab1999bd563a7c7273c3b7b42a827079",
+    "source/agent_core/dependency_adapters.py": "62ce738c21f4abf3dab1c0486312fae6027886aa105ffb6cdaad554b48568df4",
     "source/agent_core/prerequisite_runtime_v3.py": "3af64b26607d1aabca2ee1ae264bdc9e5e7345e9e82d04a67e1192bded11b6d0",
     "source/agent_core/repair_stagnation.py": "5011bd11bf11c8660e24aab7a850b75cb56a6657a21989bf38b04e01a49cf0ae",
     "source/agent_core/task_workspace_resolver.py": "519e26068464784fd005e8857eede24d3096ff4dd6f0612726811d6c6834294d",
