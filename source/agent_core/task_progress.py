@@ -463,7 +463,7 @@ def validate_model_progress(
     # Planner assertions never replace a Runtime observation.
     fact_assertion = payload.get("fact_assertion") or {}
     if (not isinstance(fact_assertion, Mapping) or
-            (fact_assertion and (set(fact_assertion) != {"evidence_ref", "expected_state", "condition_id"}
+            (fact_assertion and (set(fact_assertion) not in ({"evidence_ref", "expected_state", "condition_id"}, {"evidence_ref", "expected_state", "condition_text"})
              or any(not isinstance(v, str) or not v.strip() or len(v) > 256
                     for v in fact_assertion.values())))):
         raise TaskProgressError("fact_assertion_invalid", field="fact_assertion")
