@@ -2294,10 +2294,14 @@ class WebAgentProtocolLoop:
         # confirmed read observations. Unknown effects may stale evidence only
         # when Runtime confirms execution actually began; a model-supplied
         # INSPECT label by itself is never proof of read-only behavior.
+        state = str(ledger_entry.get('execution_status', 'UNKNOWN')).upper()
+        # A definitive pre-execution denial is non-mutating. An ambiguous
+        # UNKNOWN/PARTIAL outcome remains conservative even if the producer
+        # cannot establish whether a process started.
         may_have_changed = (
-            ledger_entry.get('executed') is True
-            and ledger_entry.get('execution_status')
-            in {'SUCCEEDED', 'PARTIAL', 'UNKNOWN', 'FAILED'}
+            (ledger_entry.get('executed') is True
+             and state in {'SUCCEEDED', 'PARTIAL', 'UNKNOWN', 'FAILED'})
+            or state in {'PARTIAL', 'UNKNOWN'}
         )
         if changed and may_have_changed:
             touched = [Path(value) for value in ledger_entry['resource_paths']]
