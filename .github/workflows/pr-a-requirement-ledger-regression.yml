@@ -16,6 +16,7 @@ on:
       - fix/live-b-p0-scope-20261103
       - feat/tgcmd-20261103
       - feat/tg-cmd-persistent-settings-20261103
+      - feat/tg-cmd-acl-off-dev-default-20261103
   workflow_dispatch:
 
 permissions:
@@ -64,6 +65,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_telegram_cmd_settings_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_gar_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_project_environment_it.py
@@ -71,6 +74,13 @@ jobs:
           python -B source/WebAgent/tests/validate_evidence_terminal_boundaries.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_result_evidence_to_action_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Fresh-install ACL OFF default and opt-in contract
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File install_smart_agent/tests/validate_installer_acl_opt_in.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_acl_off_software_guard.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Prepare offline PR-B/C/D Live fixture (no install or network)
         shell: pwsh
