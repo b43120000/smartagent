@@ -1297,6 +1297,7 @@ class WebAgentProtocolLoop:
     def _runtime_evidence_refs(self) -> set[str]:
         refs = {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}
         refs.update(str(action_id) for action_id in self.action_result_ledger)
+        refs.update(getattr(self, "_environment_fact_refs", {}))
         if self._safe_protocol_spec_rejection():
             refs.add('PROTOCOL_SPEC_REJECTION')
         return refs
@@ -1344,6 +1345,22 @@ class WebAgentProtocolLoop:
             filtered_refs = sorted(all_refs)
         payload = {
             "available_refs": filtered_refs,
+            "environment_facts": [
+                {"evidence_ref": ref, **{key: fact.get(key) for key in
+                 ("id", "kind", "ecosystem", "name", "state", "source",
+                  "observed_version", "constraint", "probe_status") if key in fact}}
+                for ref, record in list(getattr(self, "_environment_fact_refs", {}).items())[:20]
+                for fact in [record["fact"]]
+            ],
+            "environment_fact_binding_rule": (
+                "Planner owns success/failure condition semantics. For a verified Runtime "
+                "environment fact, cite its ENVFACT evidence_ref in report_progress.evidence_refs "
+                "and bind an accepted completion condition using fact_assertion="
+                "{evidence_ref,expected_state,condition_id}. condition_id must equal "
+                "matched_condition_id; expected_state must match the pinned Runtime fact. "
+                "Do not repeat an environment probe solely to obtain Action Evidence. "
+                "A fact alone does not authorize MUTATE or establish recovery SUCCESS."
+            ),
             "non_action_status_markers": ["REQUEST_ACCEPTED", "RUNTIME_STATUS"],
             "answer_only_rule": "Status markers are not tool evidence. An eligible no-action COMPLETE/SUCCESS may omit evidence_refs; normal actions require real Action Result evidence.",
             "verification_status": self._effective_verification_status(),
@@ -1920,11 +1937,28 @@ class WebAgentProtocolLoop:
             resolved[effective_ref] = effective_entry
         return list(resolved.items())
 
+    def _runtime_environment_fact_verdict(self, refs, matched_condition, fact_assertion) -> str:
+        from agent_core.environment_fact_contract import verify_fact_assertion
+        from agent_core.task_progress import condition_id_for
+        expected_id = condition_id_for("success", str(matched_condition or ""))
+        status, _reason = verify_fact_assertion(
+            assertion=fact_assertion or {}, evidence_refs=[str(item) for item in refs],
+            matched_condition_id=expected_id, request_id=self.run_id,
+            task_id=self.task_id, task_epoch=self.task_epoch,
+            fact_refs=getattr(self, "_environment_fact_refs", {}),
+        )
+        if status != "NONE" and self.action_result_ledger:
+            # A prior rejected/unknown action cannot be concealed by a good
+            # preflight fact. Use the ordinary action evidence path instead.
+            return "UNVERIFIED"
+        return status
+
     def _effective_verification_status(
         self,
         evidence_refs: list[str] | set[str] | tuple[str, ...] | None = None,
         *,
         matched_condition: str = "",
+        fact_assertion: dict | None = None,
     ) -> str:
         """Resolve terminal verification from request-scoped action evidence.
 
@@ -1933,6 +1967,9 @@ class WebAgentProtocolLoop:
         available, an unrelated later PASS cannot erase a referenced FAIL.
         """
         refs = [str(item) for item in list(evidence_refs or [])]
+        fact_result = self._runtime_environment_fact_verdict(refs, matched_condition, fact_assertion)
+        if fact_result != "NONE":
+            return "PASS" if fact_result == "PASS" else "UNVERIFIED"
         if refs:
             entries = [item for _action_id, item in self._resolve_effective_evidence_entries(refs)]
         else:
@@ -1985,9 +2022,13 @@ class WebAgentProtocolLoop:
         self, evidence_refs: list[str] | set[str] | tuple[str, ...] | None,
         *,
         matched_condition: str = "",
+        fact_assertion: dict | None = None,
     ) -> str:
         """Return PASS/FAIL/UNVERIFIED from action-scoped Runtime evidence."""
         refs = [str(item) for item in list(evidence_refs or [])]
+        fact_result = self._runtime_environment_fact_verdict(refs, matched_condition, fact_assertion)
+        if fact_result != "NONE":
+            return "PASS" if fact_result == "PASS" else "UNVERIFIED"
         canonical_condition_id = self._canonical_condition_id(matched_condition)
         condition_entry = self.condition_result_ledger.get(canonical_condition_id)
         if condition_entry and bool(condition_entry.get('terminal_eligible',True)) and str(condition_entry.get("action_id", "") or "") in refs and (
@@ -4093,10 +4134,12 @@ class WebAgentProtocolLoop:
         verification_status = self._effective_verification_status(
             evidence_refs,
             matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
+            fact_assertion=normalized_progress.get("fact_assertion"),
         )
         terminal_evidence_verdict = self._terminal_evidence_verdict(
             evidence_refs,
             matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
+            fact_assertion=normalized_progress.get("fact_assertion"),
         )
         live_blockers = [item for item in self.action_loop_state.get('blockers',[]) if not item.get('satisfied')]
         if decision == 'COMPLETE' and outcome == 'SUCCESS' and live_blockers:
@@ -4848,6 +4891,7 @@ class WebAgentProtocolLoop:
             }
         # PR-B/C/D complements PR-A; never authorizes operations by probing.
         self._pr_v3_ledger = None
+        self._environment_fact_refs = {}
         if (self._pr_a_ledger is not None and self.task_requirement
                 and self.task_requirement.get("route") != "ANSWER_ONLY"
                 and os.environ.get("SMARTAGENT_PREREQ_V3_BCD","1").strip().lower()
@@ -4873,6 +4917,11 @@ class WebAgentProtocolLoop:
                     probe=probe, graph_digest=graph["digest"] if graph else "",
                 )
                 self._pr_v3_ledger = ledger
+                from agent_core.environment_fact_contract import build_fact_refs
+                self._environment_fact_refs = build_fact_refs(
+                    request_id=self.run_id, task_id=self.task_id,
+                    task_epoch=self.task_epoch, facts=doc["initial_facts"],
+                )
                 self._emit("pr_b_probe_completed", request_id=self.run_id,
                            task_id=self.task_id, phase=doc["phase"],
                            missing_count=len(doc["missing_ids"]),
@@ -5510,6 +5559,7 @@ class WebAgentProtocolLoop:
                 verification_status = self._effective_verification_status(
                     getattr(self.progress_ledger, "evidence_refs", []) or [],
                     matched_condition=str(getattr(self.progress_ledger, "matched_condition", "") or ""),
+                    fact_assertion=getattr(self.progress_ledger, "fact_assertion", {}),
                 )
                 self.terminal_outcome = self.progress_ledger.outcome
                 self.protocol_state = "CLOSED"
