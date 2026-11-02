@@ -2290,8 +2290,15 @@ class WebAgentProtocolLoop:
         if action.get('tool') == 'run_command' and action.get('operation') in {'INSPECT','GIT_INSPECT'}:
             from agent_core.action_dependencies import command_is_proven_observation
             changed = not command_is_proven_observation(action)
-        may_have_changed = ledger_entry.get('execution_status') in {'SUCCEEDED','PARTIAL','UNKNOWN'} or (
-            ledger_entry.get('execution_status') == 'FAILED' and ledger_entry.get('executed') is True)
+        # A rejected/unstarted INSPECT does not invalidate previously
+        # confirmed read observations. Unknown effects may stale evidence only
+        # when Runtime confirms execution actually began; a model-supplied
+        # INSPECT label by itself is never proof of read-only behavior.
+        may_have_changed = (
+            ledger_entry.get('executed') is True
+            and ledger_entry.get('execution_status')
+            in {'SUCCEEDED', 'PARTIAL', 'UNKNOWN', 'FAILED'}
+        )
         if changed and may_have_changed:
             touched = [Path(value) for value in ledger_entry['resource_paths']]
             if not touched:
@@ -6075,6 +6082,21 @@ class WebAgentProtocolLoop:
                     )
                     ledger_entry.update(action_evidence)
                     ledger_entry = self._record_action_result_evidence(action, ledger_entry)
+                    from agent_core.pr_bcd_observation_evidence import observation_receipt
+                    receipt = observation_receipt(action, result, ledger_entry)
+                    ledger_entry["observation_proof_admitted"] = bool(
+                        receipt.get("admitted", False))
+                    ledger_entry["observation_proof_reason"] = str(
+                        receipt.get("reason", "OBSERVATION_UNAVAILABLE"))
+                    if receipt["admitted"]:
+                        self._emit(
+                            "pr_b1_observation_admitted", request_id=self.run_id,
+                            task_id=self.task_id, round=self.turn_id,
+                            action_id=action.get("action_id", ""),
+                            tool=action.get("tool", ""),
+                            proof_code=receipt["reason"],
+                            task_condition_verified=False,
+                        )
                     if getattr(self, "_pr_a_ledger", None) is not None:
                         try:
                             pr_a_verified = (
@@ -6086,7 +6108,8 @@ class WebAgentProtocolLoop:
                                 ledger_entry.get("result_status") in {"FAILED", "REJECTED"}
                                 or ledger_entry.get("effective_verification_status") == "FAIL"
                             )
-                            pr_a_status = ("SATISFIED" if pr_a_verified
+                            pr_a_status = ("SATISFIED"
+                                           if pr_a_verified or receipt["admitted"]
                                            else "FAILED" if pr_a_failed else "UNKNOWN")
                             self._pr_a_ledger.record_action_evidence(
                                 task_id=self.task_id, request_id=self.run_id,
@@ -6096,7 +6119,9 @@ class WebAgentProtocolLoop:
                             )
                             self._emit("pr_a_evidence_recorded", request_id=self.run_id,
                                        task_id=self.task_id, action_id=action.get("action_id", ""),
-                                       status=pr_a_status)
+                                       status=pr_a_status,
+                                       observation_proof_code=receipt["reason"],
+                                       task_condition_verified=pr_a_verified)
                         except Exception as exc:
                             self._emit("pr_a_evidence_unavailable", request_id=self.run_id,
                                        task_id=self.task_id, action_id=action.get("action_id", ""),
@@ -6235,6 +6260,8 @@ class WebAgentProtocolLoop:
                         action_id=action.get("action_id", ""),
                         **action_evidence,
                         effective_verification_status=ledger_entry.get("effective_verification_status", "UNKNOWN"),
+                        observation_proof_admitted=ledger_entry.get("observation_proof_admitted", False),
+                        observation_proof_reason=ledger_entry.get("observation_proof_reason", "OBSERVATION_UNAVAILABLE"),
                         effective_verification_id=ledger_entry.get("effective_verification_id", ""),
                         verifies_action_id=ledger_entry.get("verifies_action_id", ""),
                     )
