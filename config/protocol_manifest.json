@@ -209,7 +209,7 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "f1332f0ba12f56fbfdb9114750fc1d944d4a82b2b7765ccf65d22bdf8cc57965",
+    "source/WebAgent/protocol_loop.py": "28d3a7734082ef0c70e8e68190dca9d1d1742837a3d30534e43003e92f492cc5",
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
@@ -217,7 +217,7 @@
     "source/agent_core/repair_stagnation.py": "5011bd11bf11c8660e24aab7a850b75cb56a6657a21989bf38b04e01a49cf0ae",
     "source/agent_core/task_workspace_resolver.py": "519e26068464784fd005e8857eede24d3096ff4dd6f0612726811d6c6834294d",
     "source/agent_core/task_transport.py": "57089b1bce75c87e71260637099ecd97a223b2f4b3550bf9c91aa326f1ecab06",
-    "source/agent_core/project_environment.py": "8bc73efa0f80962952b136b618b0409d4b6e4c97ae68f07c23a8fe9448cedd9a"
+    "source/agent_core/project_environment.py": "0fa7ebdff4d843df731133492fc5357c680359713916ba4348e50e55fffb95d5"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
