@@ -77,6 +77,13 @@ Windows Restricted Executor。需要 ACL ON 時才明確執行
   Workspace Access Policy、Command Security、輸出大小與期限限制。
   Telegram 只回報使用中的執行模式，不會更改 ACL 設定。
 
+`cmd path` 預設是目前執行中的 SmartAgent 安裝根目錄。
+管理員固定流程允許**這個根目錄本身**作為工作目錄，
+不必另外把安裝目錄加入 Workspace 寫入清單；這不是一般
+Workspace 寫入權限的擴充。若自行改成其他目錄，仍須先經
+Workspace Access Policy 授權。ACL ON 時安裝目錄原有的 NTFS
+寫入限制仍然生效。
+
 請注意：**Software Guard 不是 Windows OS Sandbox**。
 ACL OFF 執行的 shell／子程序使用目前 Host 權限，對複雜命令、
 重導向和間接呼叫不保證能限制所有副作用。僅由已授權的管理員
