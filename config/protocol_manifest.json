@@ -214,7 +214,7 @@
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "5f47667d2c5968d446029a8e7772a221a9405c433355dadb874cdd0adca51d66",
     "source/agent_core/prerequisite_runtime_v3.py": "a19482c51d005d1a09e1a878a986fe5c6a8bc1474725ad716304cd559f69fbe7",
-    "source/agent_core/repair_stagnation.py": "5dbe5b31629f56774b564cef88336b601237c49aa51e5441482b096fd943c9ba"
+    "source/agent_core/repair_stagnation.py": "5011bd11bf11c8660e24aab7a850b75cb56a6657a21989bf38b04e01a49cf0ae"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
