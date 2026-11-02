@@ -53,6 +53,26 @@ def run():
     }]}
     assert_safe(x._gar_snapshot())
 
+    # Live B: a denied list_directory with known REJECTED outcome is not an
+    # in-flight operation. GAR may repair or give a truthful failure report.
+    read = mock_loop()
+    read.action_ledger = {"LIST-REJECTED": {
+        "action": {"tool": "list_directory", "action_id": "LIST-REJECTED"},
+        "execution_status": "FAILED",
+    }}
+    read.action_result_ledger = {"LIST-REJECTED": {
+        "executed": False, "execution_status": "FAILED",
+        "result_status": "REJECTED", "effective_verification_status": "UNKNOWN",
+    }}
+    read.action_loop_state = {"blockers": [{
+        "blocking_action_id": "LIST-REJECTED",
+        "reason": "REPLAN_REQUIRED", "execution_status": "FAILED",
+        "satisfied": False,
+    }]}
+    assert_safe(read._gar_snapshot())
+    # The same rejected operation cannot become a fabricated SUCCESS.
+    assert read.action_result_ledger["LIST-REJECTED"]["result_status"] == "REJECTED"
+
     # A malformed, never-executed command is allowed bounded field repair.
     y = mock_loop()
     y.pending_command_field_repairs = {"MUTATE-1": {
