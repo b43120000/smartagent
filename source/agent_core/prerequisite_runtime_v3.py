@@ -19,6 +19,7 @@ from .paths import runtime_root
 from .process_file_lock import exclusive_process_lock
 from .prerequisite_graph_v3 import _require_id
 from .runtime_environment import runtime_tool_paths
+from .dependency_adapters import parse_requirements, probe_dependency, tool_snapshot_status, classify_remediation
 
 SCHEMA = "SMARTAGENT_PREREQ_V3_BCD_LEDGER_V1"
 PHASES = frozenset({
@@ -143,8 +144,11 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     tools = environment_snapshot.get("tools", {})
     if not isinstance(tools, Mapping):
         tools = {}
+    requirements = parse_requirements(text)
+    requested_tools = tuple(row.name for row in requirements if row.kind == "TOOL"
+                            and row.name not in {"python", "git"})
     facts = []
-    for name in ("python", "git"):
+    for name in ("python", "git", *requested_tools):
         entry = tools.get(name, {})
         entry = entry if isinstance(entry, Mapping) else {}
         status = str(entry.get("status", "UNKNOWN")).upper()
@@ -165,48 +169,43 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
                       "state":"SATISFIED" if exists else "MISSING",
                       "status":"EXISTS" if exists else "MISSING",
                       "source":"AUTHORIZED_SCOPE_PROBE"})
-    seen = set()
-    for m in list(TOOL_VERSION.finditer(text))[:8]:
-        name, op, required = m.group(1).lower(), m.group(2), m.group(3)
-        fact = next(x for x in facts if x["id"]=="tool:"+name)
-        available = fact["state"] == "SATISFIED" and bool(fact["version"])
-        status = ("SATISFIED" if available and _satisfies(fact["version"],op,required)
-                  else "MISSING" if available else "UNKNOWN")
-        key = "version:"+name
-        if key not in seen:
-            facts.append({"id":key,"kind":"VERSION","state":status,
-                         "observed_version":fact["version"],"constraint":op+required,
-                         "source":"RUNTIME_VERSION_PROBE"})
-            seen.add(key)
+    for req in requirements:
+        if req.kind != "TOOL":
+            continue
+        state, observed = tool_snapshot_status(
+            req, tools, version_satisfies=_satisfies,
+            version_extract=_version_in_text,
+        )
+        facts.append({"id":req.fact_id, "kind":"VERSION", "state":state,
+                      "ecosystem":"tool", "name":req.name,
+                      "observed_version":observed,
+                      "constraint":req.operator + req.required_version,
+                      "source":"RUNTIME_VERSION_PROBE"})
     python_binary = runtime_tool_paths(install_root)["python"]
     from .project_environment import verified_candidate
-    # Explicit prefixes and bare package constraints share the same runtime
-    # metadata probe. Python/Git constraints have their own tool-version lane.
-    package_matches = list(PACKAGE.finditer(text)) + [
-        m for m in BARE_PACKAGE.finditer(text)
-        if m.group(1).lower() not in {"python", "git"}
-    ]
-    for m in package_matches[:12]:
-        package, op, required = m.group(1).lower(), m.group(2), m.group(3)
-        if package in seen:
+    for req in requirements:
+        if req.kind != "PACKAGE":
             continue
-        seen.add(package)
-        status, observed = _probe_package(package, python_binary)
-        origin = "BUNDLED_PYTHON_METADATA_PROBE"
-        if status != "AVAILABLE" and project_root is not None:
-            candidate = verified_candidate(project_root, package)
+        status, observed, origin = probe_dependency(
+            req, python_probe=lambda package: _probe_package(package, python_binary),
+        )
+        if req.ecosystem == "python" and status != "AVAILABLE" and project_root is not None:
+            candidate = verified_candidate(project_root, req.name)
             if candidate:
                 checked, project_version = _probe_project_package(
-                    package, python_binary, str(candidate["location"])
+                    req.name, python_binary, str(candidate["location"])
                 )
                 if checked == "AVAILABLE":
                     status, observed = checked, project_version
                     origin = "PROJECT_ENVIRONMENT_REPROBED"
-        state = ("MISSING" if status=="MISSING" or
-                 (status=="AVAILABLE" and not _satisfies(observed,op,required))
-                 else "SATISFIED" if status=="AVAILABLE" else "UNKNOWN")
-        facts.append({"id":"package:"+package,"kind":"PACKAGE","state":state,
-                      "observed_version":observed,"constraint":op+required,
+        state = ("MISSING" if status == "MISSING" or
+                 (status == "AVAILABLE" and not _satisfies(
+                     observed, req.operator, req.required_version))
+                 else "SATISFIED" if status == "AVAILABLE" else "UNKNOWN")
+        facts.append({"id":req.fact_id, "kind":"PACKAGE", "state":state,
+                      "ecosystem":req.ecosystem, "name":req.name,
+                      "observed_version":observed,
+                      "constraint":req.operator + req.required_version,
                       "source":origin, "probe_status":status})
     # An install request referring only to "the wheel" is underspecified.
     # Do not mark it PROBED/ready or infer a distribution from task history.
@@ -225,7 +224,7 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     # prerequisite. PR-C targets missing runtime/dependency capabilities;
     # ordinary output writes keep their existing V9 action/receipt path.
     dependency_missing = any(
-        item.startswith(("tool:","version:","package:")) for item in missing
+        item.startswith(("tool:","version:","package:","dependency:")) for item in missing
     )
     # Intent survives UNKNOWN probes; eligibility is checked separately by PR-C.
     positive_intent = bool(WRITE_INTENT.search(text)) and not bool(NEGATED_REMEDIATION.search(text))
@@ -236,6 +235,11 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
             "facts":facts, "missing":missing,"unknown":unknown,
             "remediation_requested":remediation_requested,
             "remediation_eligible":bool(remediation_requested and dependency_missing),
+            "project_environment_required":bool(
+                remediation_requested and project_root is not None and
+                any(row.get("ecosystem") == "python" and row.get("kind") == "PACKAGE"
+                    and row.get("state") == "MISSING" for row in facts)
+            ),
             "authorization_granted":False,"verification_complete":False,
             "executed":False}
 
@@ -305,6 +309,10 @@ class RecoveryLedger:
             "UNKNOWN" if probe["unknown"] else "PROBED")
         new = {"schema":SCHEMA,"identity":identity,"graph_digest":graph_digest,
                "phase":phase,"initial_facts":facts,
+               "current_facts":[dict(row) for row in facts],
+               "project_environment_required":bool(probe.get("project_environment_required")),
+               "project_environment_verified":False,
+               "project_environment_evidence_sha256":"",
                "missing_ids":list(probe["missing"]),"unknown_ids":list(probe["unknown"]),
                "remediation_requested":bool(probe["remediation_requested"]),
                "remediation_action":"","verification_action":"","resumed_action":"",
@@ -355,7 +363,12 @@ class RecoveryLedger:
             command = str(action.get("command", "") or "")
             # Only dependency installation/remediation commands belong to PR-C;
             # unrelated authorized file edits remain in the V9 security lane.
-            if not re.search(r"(?i)(?:\bpip(?:\d+)?\s+install\b|\b(?:python|py)(?:\.exe)?\s+-m\s+pip\s+install\b)", command):
+            adapter = classify_remediation(command)
+            if adapter is None:
+                return ""
+            if adapter != "python":
+                if doc["remediation_requested"]:
+                    raise PrerequisiteRecoveryError("pr_c_unsupported_dependency_adapter")
                 return ""
             if doc["phase"] not in {"MISSING","REMEDIATING","REMEDIATED_PENDING_VERIFY","VERIFIED","BLOCKED"}:
                 raise PrerequisiteRecoveryError("pr_c_missing_probe_required")
