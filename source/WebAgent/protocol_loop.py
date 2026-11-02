@@ -1294,6 +1294,22 @@ class WebAgentProtocolLoop:
             + local_commit_line(expected)
         )
 
+    @staticmethod
+    def _authorized_project_root(paths: list[str], fallback: Path) -> Path:
+        """Select only an explicitly authorized project directory, never infer a parent."""
+        candidates = []
+        for raw in paths:
+            path = Path(raw).expanduser().resolve()
+            if path.is_dir():
+                candidates.append(path)
+        if not candidates:
+            return fallback
+        # Prefer the containing explicitly listed root, not its wheelhouse/deps.
+        qualifying = [candidate for candidate in candidates
+                      if all(candidate == path or candidate in path.parents
+                             for path in candidates)]
+        return min(qualifying, key=lambda path: len(path.parts)) if qualifying else fallback
+
     def _runtime_evidence_refs(self) -> set[str]:
         refs = {"REQUEST_ACCEPTED", "RUNTIME_STATUS"}
         refs.update(str(action_id) for action_id in self.action_result_ledger)
@@ -1938,6 +1954,8 @@ class WebAgentProtocolLoop:
         return list(resolved.items())
 
     def _runtime_environment_fact_verdict(self, refs, matched_condition, fact_assertion) -> str:
+        if not any(str(ref).startswith("ENVFACT-") for ref in refs):
+            return "NONE"
         from agent_core.environment_fact_contract import verify_fact_assertion
         from agent_core.task_progress import condition_id_for
         expected_id = condition_id_for("success", str(matched_condition or ""))
@@ -4759,6 +4777,7 @@ class WebAgentProtocolLoop:
             trusted_authorized_paths=trusted_authorized_paths,
         )
         self.authorized_paths = list(authorized)
+        self._pr_v3_project_root = self._authorized_project_root(self.authorized_paths, self.workspace)
         self.tools.begin_run(self.run_id, request, authorized)
         if self.continuation_source:
             self._restore_continuation()
@@ -4907,7 +4926,7 @@ class WebAgentProtocolLoop:
                     request=request, authorized_paths=self.authorized_paths,
                     environment_snapshot=environment_snapshot,
                     install_root=smartagent_install_root(),
-                    project_root=self.workspace,
+                    project_root=self._pr_v3_project_root,
                 )
                 ledger = RecoveryLedger(base)
                 doc = ledger.initialize(
@@ -5940,7 +5959,7 @@ class WebAgentProtocolLoop:
                                     if str(row.get("id","")).startswith("package:")
                                     and row.get("state") == "MISSING"
                                 ), "")
-                                root = Path(self.workspace).resolve()
+                                root = Path(self._pr_v3_project_root).resolve()
                                 previous_action = dict((
                                     self.action_ledger.get(recovered["remediation_action"]) or {}
                                 ).get("action") or {})
@@ -5977,13 +5996,24 @@ class WebAgentProtocolLoop:
                                                            constraint.group(2))
                                         )
                                         if valid_version:
+                                            from agent_core.project_environment import environment_index_path
+                                            metadata_target = environment_index_path(root)
+                                            explicit_metadata_grant = any(
+                                                Path(raw).expanduser().resolve() == metadata_target
+                                                for raw in self.authorized_paths
+                                            )
                                             publish_verified_dependency(
                                                 root, distribution=distribution,
                                                 version=version, target=target_path,
                                                 request_id=self.run_id,
                                                 action_id=str(action.get("action_id","")),
                                                 evidence_ref=action_result_id,
-                                                authorized_project_write=True,
+                                                authorized_project_write=bool(
+                                                    explicit_metadata_grant or root in
+                                                    [Path(raw).expanduser().resolve()
+                                                     for raw in self.authorized_paths]
+                                                ),
+                                                restricted_metadata_write=explicit_metadata_grant,
                                             )
                                             self._pr_v3_ledger.record_verified_environment(
                                                 task_id=self.task_id,
