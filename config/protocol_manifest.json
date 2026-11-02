@@ -100,7 +100,7 @@
     "source/agent_core/remote_binding_manager.py": "fffffe0b54d08bfb5e9a2a492d826d0c02da0ec48e2f100eabad70d65a28ec45",
     "source/agent_core/remote_binding.py": "52a5acc9e82e6f3946b906c256814d4f8e93e0ad43c8cd74fdbfd9efcc17814f",
     "source/agent_core/remote_clean_start.py": "ae88a95be93a617ef5e692e3dad2426bfb2f977608c310f93cbec7f8d4c29610",
-    "source/agent_core/remote_control_dispatcher.py": "4464699c7568dcb1810bbde858fc341df26bca6fd355ee920f97d2f05ec607d1",
+    "source/agent_core/remote_control_dispatcher.py": "bfce7b5e46545e610cfbefe1d4911be419bfbf646408f72eabe4c74574ce1f2b",
     "source/agent_core/remote_events.py": "961d3a1b092243a6892b6c53d6687d962173bf9dd3aee664fb09e5a31b566716",
     "source/agent_core/remote_execution_coordinator.py": "8270829b4419200c90784720d77b50420471c5cb5c77ef0047ba3f11dd50a724",
     "source/agent_core/remote_skill_manager.py": "4985f448a8d55dae9d1c2de14db2ab8cd4a0d9b6606e624380c75846ff395f63",
@@ -222,7 +222,7 @@
     "source/agent_core/environment_fact_contract.py": "0e13079d94747fcdb7a5d1f290db19ddb2b9139760a70e1a89e87cdf8ddd6d70",
     "source/agent_core/evidence_identity_audit.py": "3a89f90e0836a8fa5b81071b38e1eff43cfe7c1527ffe7967f7fb226fd99f238",
     "source/agent_core/pr_bcd_request_scope.py": "5566da70e22babb8f7dfebfb5dc80347aa3d507ebe47db30591a6acad6902c65",
-    "source/RemoteAgent/telegram_direct_cmd.py": "556f306a2d0ec17d5e16ee1fde5883c8346ad0b071eb3a62d85eb35dd3c3bb02",
+    "source/RemoteAgent/telegram_direct_cmd.py": "d155e3d3ed76832e2b234a119ea2cf8629cef3bb73605d6d2095381319383ab2",
     "source/RemoteAgent/telegram_cmd_settings.py": "31abdf45fb1ab6596a78be2dea90bbe7e01161fe24785a37950e02f4c41bd70d"
   },
   "manifest_schema_version": 1,
