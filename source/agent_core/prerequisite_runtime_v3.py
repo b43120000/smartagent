@@ -95,9 +95,35 @@ def _probe_package(package: str, python_binary: Path) -> tuple[str, str]:
     return "UNKNOWN", ""
 
 
+def _probe_project_package(package: str, python_binary: Path, target: str) -> tuple[str, str]:
+    """Revalidate a cached project-local distribution with isolated Bundled Python."""
+    if not python_binary.is_file() or not Path(target).is_dir():
+        return "UNKNOWN", ""
+    script = (
+        "import importlib.metadata,sys;"
+        "target=sys.argv[1];name=sys.argv[2];"
+        "found=next((d.version for d in importlib.metadata.distributions(path=[target]) "
+        "if (d.metadata.get('Name','').lower().replace('_','-')==name.replace('_','-'))),None);"
+        "print(found) if found else sys.exit(3)"
+    )
+    try:
+        result = subprocess.run(
+            [str(python_binary), "-I", "-B", "-c", script, str(target), package],
+            cwd=str(python_binary.parent), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=8, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "UNKNOWN", ""
+    if result.returncode == 0:
+        value = _version_in_text((result.stdout or "").strip())
+        return ("AVAILABLE", value) if value else ("UNKNOWN", "")
+    return "UNKNOWN", ""
+
+
 def probe_requirements(*, request: str, authorized_paths: Sequence[str],
                        environment_snapshot: Mapping[str, object],
-                       install_root: str | Path) -> dict:
+                       install_root: str | Path,
+                       project_root: str | Path | None = None) -> dict:
     """Only trusted request text, scoped paths and Runtime-owned probes.
 
     Never probe an arbitrary model-provided target; filesystem inspection is
@@ -146,18 +172,29 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
                          "source":"RUNTIME_VERSION_PROBE"})
             seen.add(key)
     python_binary = runtime_tool_paths(install_root)["python"]
+    from .project_environment import verified_candidate
     for m in list(PACKAGE.finditer(text))[:4]:
         package, op, required = m.group(1).lower(), m.group(2), m.group(3)
         if package in seen:
             continue
         seen.add(package)
         status, observed = _probe_package(package, python_binary)
+        origin = "BUNDLED_PYTHON_METADATA_PROBE"
+        if status != "AVAILABLE" and project_root is not None:
+            candidate = verified_candidate(project_root, package)
+            if candidate:
+                checked, project_version = _probe_project_package(
+                    package, python_binary, str(candidate["location"])
+                )
+                if checked == "AVAILABLE":
+                    status, observed = checked, project_version
+                    origin = "PROJECT_ENVIRONMENT_REPROBED"
         state = ("MISSING" if status=="MISSING" or
                  (status=="AVAILABLE" and not _satisfies(observed,op,required))
                  else "SATISFIED" if status=="AVAILABLE" else "UNKNOWN")
         facts.append({"id":"package:"+package,"kind":"PACKAGE","state":state,
                       "observed_version":observed,"constraint":op+required,
-                      "source":"BUNDLED_PYTHON_METADATA_PROBE"})
+                      "source":origin, "probe_status":status})
     missing = [row["id"] for row in facts if row["state"]=="MISSING"]
     unknown = [row["id"] for row in facts if row["state"]=="UNKNOWN"]
     # Only a positive, explicit remediation request may enter PR-C.
@@ -167,12 +204,13 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     dependency_missing = any(
         item.startswith(("tool:","version:","package:")) for item in missing
     )
-    remediation_requested = (dependency_missing and
-                             bool(WRITE_INTENT.search(text)) and bool(paths)
-                             and not bool(NEGATED_REMEDIATION.search(text)))
+    # Intent survives UNKNOWN probes; eligibility is checked separately by PR-C.
+    positive_intent = bool(WRITE_INTENT.search(text)) and not bool(NEGATED_REMEDIATION.search(text))
+    remediation_requested = bool(positive_intent and paths)
     return {"schema":"SMARTAGENT_PREREQ_V3_PROBE_V1",
             "facts":facts, "missing":missing,"unknown":unknown,
             "remediation_requested":remediation_requested,
+            "remediation_eligible":bool(remediation_requested and dependency_missing),
             "authorization_granted":False,"verification_complete":False,
             "executed":False}
 
@@ -289,14 +327,21 @@ class RecoveryLedger:
         def transition(doc):
             if not (tool=="run_command" and operation=="MUTATE"):
                 return ""
+            command = str(action.get("command", "") or "")
+            # Only dependency installation/remediation commands belong to PR-C;
+            # unrelated authorized file edits remain in the V9 security lane.
+            if not re.search(r"(?i)(?:\bpip(?:\d+)?\s+install\b|\b(?:python|py)(?:\.exe)?\s+-m\s+pip\s+install\b)", command):
+                return ""
+            if doc["phase"] not in {"MISSING","REMEDIATING","REMEDIATED_PENDING_VERIFY","VERIFIED","BLOCKED"}:
+                raise PrerequisiteRecoveryError("pr_c_missing_probe_required")
             if doc["phase"] in {"REMEDIATING","REMEDIATED_PENDING_VERIFY",
                                 "VERIFIED","BLOCKED"} and doc["remediation_action"]:
                 raise PrerequisiteRecoveryError("pr_c_remediation_replay_blocked")
             if doc["phase"] != "MISSING":
-                return ""
+                raise PrerequisiteRecoveryError("pr_c_remediation_not_in_missing_phase")
             if not any(item.startswith(("tool:","version:","package:"))
                        for item in doc["missing_ids"]):
-                return ""
+                raise PrerequisiteRecoveryError("pr_c_dependency_missing_not_proven")
             if not doc["remediation_requested"] or not scope_allowed:
                 raise PrerequisiteRecoveryError("pr_c_explicit_authorization_required")
             if not doc["missing_ids"]:
