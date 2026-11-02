@@ -1,10 +1,11 @@
-name: GAR R1 R2 R3 and PR-A Full Windows Regression
+name: Repair Stagnation Effective Progress Windows Regression
 
 on:
   push:
     branches:
       - fix/gar-progress-collector-l4-control-20261102
       - release/pr-a-gar-l4-default-off-20261102
+      - fix/repair-stall-effective-progress-20261102
       - feat/prerequisite-v3-prb-prc-prd-20261102
   workflow_dispatch:
 
@@ -175,6 +176,11 @@ jobs:
           python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Evidence-backed repair stagnation and sanitized status regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_repair_stagnation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: GAR R1 local handoff and R3 L4 independent controls
         shell: pwsh
         run: |
