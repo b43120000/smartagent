@@ -119,6 +119,7 @@ class TelegramDirectCmdIT(unittest.TestCase):
             ])
             self.assertTrue(self.receiver.wait_for_controls(5))
             self.assertEqual(execute.call_count, 1)
+            self.assertEqual(execute.call_args.kwargs["trusted_install_root"], self.root)
         self.assertIn("狀態：SUCCESS", self.client.sent[-1][1])
 
     def test_invalid_sender_and_nonprivate_rejected(self):
