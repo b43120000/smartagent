@@ -1265,14 +1265,14 @@ def resolve_command_working_directory(
         # substitution/pipe/sequence.
         text = str(command or "").strip()
         wrapper = re.fullmatch(
-            r'(?:powershell(?:\\.exe)?|pwsh(?:\\.exe)?)\\s+'
-            r'(?:(?:-NoProfile|-NonInteractive)\\s+)*-Command\\s+"([^"\\r\\n]+)"',
+            r'(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+'
+            r'(?:(?:-NoProfile|-NonInteractive)\s+)*-Command\s+"([^"\r\n]+)"',
             text, re.I,
         )
         if wrapper:
             text = wrapper.group(1)
         target_match = re.search(
-            r"(?:-LiteralPath\\s+|git\\s+-C\\s+)('(?:[^'\\r\\n]|'')*')",
+            r"(?:-LiteralPath\s+|git\s+-C\s+)('(?:[^'\r\n]|'')*')",
             text, re.I,
         )
         if target_match:
