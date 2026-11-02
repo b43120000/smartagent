@@ -645,6 +645,28 @@ class WebAgentProtocolLoop:
             # Preserve held actions in Runtime memory; do not convert their
             # existence into a fictitious UNKNOWN execution in GAR.
             pending["pending_progress_repair_actions"] = False
+        # An action rejected by schema has NOT executed. It is safe to repair
+        # the original fields inside the existing bounded local protocol loop.
+        # Unknown/running operations, blocked dependencies and real pending
+        # verification still fail closed in GAR.
+        repairs = dict(getattr(self, "pending_command_field_repairs", {}) or {})
+        deferred = dict(getattr(self, "deferred_action_repairs", {}) or {})
+        def safe_unexecuted_field_repair(ref):
+            row = deferred.get(ref)
+            return bool(
+                ref in repairs and isinstance(row, dict)
+                and row.get("status") == "REPAIR_REQUIRED"
+                and row.get("executed") is False
+                and row.get("tool") == "run_command"
+                and ref not in self.action_ledger
+                and ref not in self.action_result_ledger
+            )
+        all_field_repairs_safe = bool(deferred) and all(
+            safe_unexecuted_field_repair(ref) for ref in deferred
+        ) and set(repairs) == set(deferred)
+        if all_field_repairs_safe:
+            pending["pending_command_field_repairs"] = False
+            pending["deferred_action_repairs"] = False
         if advisory_verification:
             # Only a rejected no-tool terminal SUCCESS claim. It is still a
             # V9 verification prerequisite, not evidence of a real in-flight
@@ -663,11 +685,51 @@ class WebAgentProtocolLoop:
                 "UNKNOWN", "OPEN", "PENDING", "RUNNING"
             } for row in self.action_ledger.values() if isinstance(row, dict)
         )
+        blockers = list((self.action_loop_state or {}).get("blockers") or [])
+        def is_safe_replan_blocker(row):
+            if not isinstance(row, dict):
+                return False
+            if (row.get("reason") != "REPLAN_REQUIRED"
+                    or row.get("execution_status") != "FAILED"):
+                return False
+            ref = str(row.get("blocking_action_id", ""))
+            ledger_entry = dict(self.action_ledger.get(ref) or {})
+            action = dict(ledger_entry.get("action") or {})
+            evidence = self.action_result_ledger.get(ref)
+            return bool(
+                action.get("tool") == "run_command"
+                and action.get("operation") == "INSPECT"
+                and ledger_entry.get("execution_status") == "FAILED"
+                and isinstance(evidence, dict)
+                and evidence.get("executed") is True
+                and evidence.get("result_status") == "FAILED"
+            )
+        safe_repair_blockers = [
+            row for row in blockers
+            if isinstance(row, dict) and str(row.get("blocking_action_id", "")) in repairs
+            and all_field_repairs_safe
+            and row.get("execution_status") == "NOT_EXECUTED"
+            and row.get("reason") == "REPAIR_REQUIRED"
+        ]
+        gar_blockers = [
+            row for row in blockers
+            if row not in safe_repair_blockers and not is_safe_replan_blocker(row)
+        ]
+        if self._gar is not None and self.turn_id and len(blockers) != len(gar_blockers):
+            self._emit(
+                "gar_safe_repair_classification",
+                request_id=self.run_id, round=self.turn_id,
+                omitted_known_failed_inspect_count=sum(
+                    1 for row in blockers if is_safe_replan_blocker(row)
+                ),
+                omitted_unexecuted_schema_repair_count=len(safe_repair_blockers),
+                remaining_unsafe_blocker_count=len(gar_blockers),
+            )
         return self._gar.snapshot(
             identity={"request_id": self.run_id, "task_id": self.task_id,
                       "task_epoch": self.task_epoch},
             verified_evidence=dict(self.action_result_ledger),
-            blockers=list((self.action_loop_state or {}).get("blockers") or []),
+            blockers=gar_blockers,
             pending_operations=pending,
             progress=progress,
             verification_preconditions=tuple(
@@ -5763,37 +5825,51 @@ class WebAgentProtocolLoop:
                                 # separately authorized write, never a reason to
                                 # escalate a read-only task's permissions.
                                 from agent_core.project_environment import publish_verified_dependency
-                                from agent_core.prerequisite_runtime_v3 import PACKAGE
+                                from agent_core.prerequisite_runtime_v3 import _probe_project_package
+                                from agent_core.runtime_environment import runtime_tool_paths
+                                from agent_core.paths import install_root as smartagent_install_root
+                                import re as _re
                                 distribution = next((
                                     row["id"].split(":",1)[1]
                                     for row in recovered["initial_facts"]
                                     if str(row.get("id","")).startswith("package:")
                                     and row.get("state") == "MISSING"
                                 ), "")
-                                target = str(getattr(self, "workspace", ""))
-                                # Only a project-local install under this task's
-                                # explicitly authorized root may be persisted.
-                                # No implicit shared .venv mutation is allowed.
-                                if distribution and recovered.get("remediation_requested"):
-                                    command = str(action.get("command",""))
-                                    source_text = str(getattr(self,"task_request",""))
-                                    project_local_target = Path(target) / "deps"
-                                    if (project_local_target.is_dir()
-                                            and str(project_local_target).casefold() in source_text.casefold()
-                                            and str(getattr(self, "workspace", ""))):
-                                        publish_verified_dependency(
-                                            target, distribution=distribution,
-                                            version=str(next((
-                                                row.get("observed_version")
-                                                for row in recovered["initial_facts"]
-                                                if row.get("id")=="package:"+distribution
-                                            ), "") or "verified_by_runtime"),
-                                            target=project_local_target,
-                                            request_id=self.run_id,
-                                            action_id=str(action.get("action_id","")),
-                                            evidence_ref=action_result_id,
-                                            authorized_project_write=True,
+                                root = Path(self.workspace).resolve()
+                                previous_action = dict((
+                                    self.action_ledger.get(recovered["remediation_action"]) or {}
+                                ).get("action") or {})
+                                command = str(previous_action.get("command",""))
+                                install_target = _re.search(
+                                    r'(?i)(?:^|\s)--target(?:=|\s+)(["\']?)([^"\'\s]+)\1',
+                                    command,
+                                )
+                                if distribution and install_target and recovered.get("remediation_requested"):
+                                    target_name = install_target.group(2)
+                                    target_path = Path(target_name)
+                                    if not target_path.is_absolute():
+                                        target_path = root / target_path
+                                    target_path = target_path.resolve()
+                                    from agent_core.path_security import is_within
+                                    if target_path.is_dir() and is_within(target_path, root):
+                                        status, version = _probe_project_package(
+                                            distribution,
+                                            runtime_tool_paths(smartagent_install_root())["python"],
+                                            str(target_path),
                                         )
+                                        if status == "AVAILABLE" and version:
+                                            publish_verified_dependency(
+                                                root, distribution=distribution,
+                                                version=version, target=target_path,
+                                                request_id=self.run_id,
+                                                action_id=str(action.get("action_id","")),
+                                                evidence_ref=action_result_id,
+                                                authorized_project_write=True,
+                                            )
+                                        else:
+                                            self._emit("project_environment_index_not_published",
+                                                request_id=self.run_id,task_id=self.task_id,
+                                                reason="INDEPENDENT_DISTRIBUTION_REPROBE_UNAVAILABLE")
                         except Exception as exc:
                             self._emit("pr_v3_recovery_unavailable",
                                 request_id=self.run_id,task_id=self.task_id,
