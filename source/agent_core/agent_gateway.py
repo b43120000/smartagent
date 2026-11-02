@@ -54,11 +54,6 @@ class AgentIngressGateway:
         return f"RR-{message.transport.upper()}-{digest[:16].upper()}"
 
     def accept(self, message: NormalizedInboundMessage, *, workspace: str) -> IngressResult:
-        root = Path(workspace).resolve()
-        if not root.is_dir():
-            self._log("ERROR", message, stage="AUTHORIZATION", error="authorized_workspace_unavailable")
-            raise ValueError("authorized_workspace_unavailable")
-
         PIT.begin(message.text, request_id=self._request_id(message), transport=message.transport)
         PIT.record("04_gateway_input", message.text)
         text = str(message.text or "").strip()
@@ -68,6 +63,15 @@ class AgentIngressGateway:
         force_new = text == "/new" or text.startswith("/new ")
         if force_new:
             text = text[4:].strip()
+        from .task_workspace_resolver import resolve_task_workspace
+        resolved_workspace = resolve_task_workspace(
+            text,
+            conversation_key=message.conversation_key,
+            transport=message.transport,
+            sender_id=message.sender_id,
+            store=self.task_queue.store,
+        )
+        root = Path(resolved_workspace["workspace"]).resolve()
         session = self.session_router.resolve(message, workspace=str(root), force_new=force_new)
         if not text:
             return IngressResult(
@@ -142,6 +146,8 @@ class AgentIngressGateway:
             "source_plan_task_id": str((source_plan or {}).get("task_id", "") or ""),
             "source_user_command": original_text,
             "request_kind": "EXECUTE_SAVED_PLAN" if source_plan_id else "USER_REQUEST",
+            "workspace_resolution": resolved_workspace,
+            "workspace_resolution_version": 1,
             "plan_execution_authorized": bool(source_plan_id and source_plan),
             "plan_execution_request_sha256": (
                 PlanLedger.execution_request_sha256(source_plan) if source_plan else ""
@@ -168,6 +174,8 @@ class AgentIngressGateway:
                 request_id=task.request_id,
                 task_id=task.task_id,
                 session_id=session.session_id,
+                workspace=str(root),
+                workspace_source=resolved_workspace["source"],
             )
         return IngressResult(task=task, created=created, session_id=session.session_id)
 
