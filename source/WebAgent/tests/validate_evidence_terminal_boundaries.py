@@ -248,6 +248,41 @@ def check():
         assert unexecuted_entry["verification_history"] == []
         assert unexecuted_loop.condition_result_ledger[unexecuted_action["condition_id"]]["expectation_status"] == ""
 
+        # An explicitly superseded FAIL may be resolved by an independently
+        # verified successor, but not by an unrelated or cross-request PASS.
+        supersession = WebAgentProtocolLoop(root, lambda *_a: "")
+        supersession.run_id = "RR-SUPERSESSION"
+        supersession.task_epoch = "EPOCH-SUPERSESSION"
+        old = {
+            "execution_status": "SUCCEEDED",
+            "effective_verification_status": "FAIL",
+            "evidence_status": "SUPERSEDED",
+            "superseded_by_action_id": "NEW",
+            "request_id": supersession.run_id,
+            "task_epoch": supersession.task_epoch,
+        }
+        fresh = {
+            "execution_status": "SUCCEEDED",
+            "effective_verification_status": "PASS",
+            "evidence_status": "ACTIVE",
+            "request_id": supersession.run_id,
+            "task_epoch": supersession.task_epoch,
+            "terminal_eligible": True,
+        }
+        supersession.action_result_ledger = {"OLD": old, "NEW": fresh}
+        assert supersession._effective_verification_status() == "PASS"
+        assert supersession._terminal_evidence_verdict(["OLD", "NEW"]) == "PASS"
+        supersession.action_result_ledger["UNRELATED"] = {
+            **old, "evidence_status": "ACTIVE",
+            "superseded_by_action_id": "",
+        }
+        assert supersession._effective_verification_status() == "FAIL"
+        assert supersession._terminal_evidence_verdict(["OLD", "NEW", "UNRELATED"]) == "FAIL"
+        supersession.action_result_ledger.pop("UNRELATED")
+        supersession.action_result_ledger["NEW"]["request_id"] = "RR-OTHER"
+        assert supersession._effective_verification_status(["OLD"]) == "FAIL"
+        assert supersession._terminal_evidence_verdict(["OLD"]) == "FAIL"
+
         # Scope rejection is never a successful negative observation.
         forbidden = {**action, "action_id": "BOUNDARY-REJECTED",
                      "path": str(root.parent / "outside.txt")}
