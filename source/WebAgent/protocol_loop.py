@@ -83,7 +83,7 @@ _PATH_PROSE_BOUNDARY_RE = re.compile(
     # An unquoted path cannot consume a following natural-language predicate
     # or task instruction. Keep explicit quotes intact in _authorized_path_end;
     # never guess a shortened path from a genuine path containing spaces.
-    r"\s+(?=(?:然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後"
+    r"\s+(?=(?:執行(?=\s)|檢查(?=\s)|確認(?=\s)|驗證(?=\s)|使用(?=\s)|透過(?=\s)|然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後"
     r"|再(?:去|執行|看|讀|修改|處理)|是否(?:不存在|存在|為)"
     r"|\s*的\s*(?=(?:(?:事前\s+)?file\.exists|結構化(?:狀態|查詢)|查詢結果|狀態|驗證結果)(?=\s|$|[,，；。;]))"
     r"|內(?=\s*[,，；。;]|\s+(?:使用|透過|執行|查詢|讀取|建立|檢查|確認|請))"
