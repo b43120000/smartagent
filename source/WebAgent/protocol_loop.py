@@ -334,6 +334,7 @@ class WebAgentProtocolLoop:
         self.action_loop_state = build_action_loop_state()
         from agent_core.bounded_repair import BoundedRepairBudget
         self._bounded_repair = BoundedRepairBudget()
+        self._repair_stagnation = None
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
@@ -771,6 +772,9 @@ class WebAgentProtocolLoop:
         budget = self._bounded_repair.observe(
             diagnostics, evidence_generation=evidence_generation
         )
+        if getattr(self, "_repair_stagnation", None) is not None:
+            self._repair_stagnation.rejected(
+                list(diagnostics), total=budget["rejected_turns_total"])
         self._emit(
             "bounded_repair_observed",
             request_id=self.run_id,
@@ -949,6 +953,25 @@ class WebAgentProtocolLoop:
     def _emit(self, event: str, **fields) -> None:
         if getattr(self, '_action_admission_probe', False):
             return
+        tracker = getattr(self, "_repair_stagnation", None)
+        if tracker is not None:
+            if event == "task_progress_updated" and fields.get("progress_accepted", True):
+                advanced = tracker.accepted_progress(fields.get("current_step"))
+                if advanced and self.event_sink is not None:
+                    self.event_sink("repair_effective_progress",
+                        request_id=self.run_id, round=self.turn_id,
+                        evidence_kind="ACCEPTED_STEP_ADVANCE")
+            elif event == "action_evidence_recorded":
+                advanced = tracker.accepted_evidence(
+                    action_id=fields.get("action_id"),
+                    executed=fields.get("executed"),
+                    verification_status=fields.get("effective_verification_status"))
+                if advanced and self.event_sink is not None:
+                    self.event_sink("repair_effective_progress",
+                        request_id=self.run_id, round=self.turn_id,
+                        evidence_kind="VERIFIED_ACTION_RESULT")
+            elif event == "gar_recovery_decision":
+                tracker.level(fields.get("level"))
         if event == "tool_completed":
             PIT.record("15_runtime_tool_result", fields.get("result", ""), evidence_status="RUNTIME_OBSERVATION", extra={"action_id": fields.get("action_id"), "round": fields.get("round")})
         elif event == "runtime_terminal_accepted":
@@ -4592,6 +4615,10 @@ class WebAgentProtocolLoop:
             if gar_enabled() else None
         )
         self._request_started_monotonic = time.monotonic()
+        from agent_core.repair_stagnation import RepairStagnation
+        repair_base = self.progress_root if self.progress_root is not None else self.workspace
+        self._repair_stagnation = RepairStagnation(
+            root=repair_base, task_id=self.task_id, request_id=self.run_id)
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         authorized = resolve_authorized_paths(
@@ -4852,17 +4879,20 @@ class WebAgentProtocolLoop:
 
         for _ in range(self.max_turns):
             self._check_cancelled()
-            from agent_core.bounded_repair import repair_deadline_expired
-            if repair_deadline_expired(
-                self._bounded_repair.rejected_turns,
-                time.monotonic() - self._request_started_monotonic,
-            ):
-                reason = "bounded_repair:request_elapsed_soft_deadline"
+            # Only a continuous stretch of rejected Planner turns without
+            # newly admitted step advancement or Runtime-verifiable evidence
+            # consumes the repair stall clock. Total rejection / GAR hard
+            # budgets remain independent and unchanged.
+            if self._repair_stagnation.stalled():
+                reason = "bounded_repair:repair_stagnation_soft_deadline"
                 set_runtime_state(self.task_id, "PAUSED", reason=reason,
                                   root=self.progress_root)
                 self._emit("protocol_loop_paused", request_id=self.run_id,
                     round=self.turn_id, reason=reason,
-                    rejected_turns=self._bounded_repair.rejected_turns)
+                    rejected_turns=self._bounded_repair.rejected_turns,
+                    rejected_since_progress=self._repair_stagnation.rejected_turns_since_progress,
+                    stagnation_seconds=int(self._repair_stagnation.idle_seconds()),
+                    last_rejection_reason=self._repair_stagnation.last_rejection_reason)
                 # This checkpoint never kills an in-flight process or declares
                 # the task terminal, and cannot create a fake success receipt.
                 raise RuntimeError("Repair elapsed budget exhausted; task safely paused. " + reason)
@@ -5295,6 +5325,7 @@ class WebAgentProtocolLoop:
                 outcome=self.progress_ledger.outcome,
                 matched_condition=self.progress_ledger.matched_condition,
                 evidence_refs=self.progress_ledger.evidence_refs,
+                progress_accepted=not self.read_only_progress_deferred,
             )
             actions = [action for action in actions if action.get("tool") != "report_progress"]
 
