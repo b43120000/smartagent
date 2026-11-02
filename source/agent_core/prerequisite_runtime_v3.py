@@ -213,7 +213,8 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     # Runtime/Planner must inspect the explicitly authorized wheel first.
     if (not any(row["kind"] == "PACKAGE" for row in facts)
             and re.search(r"(?i)\bwheel\b|輪檔|輪子檔", text)
-            and bool(WRITE_INTENT.search(text))):
+            and (bool(WRITE_INTENT.search(text))
+                 or bool(re.search(r"(?i)\bMUTATE\b|使用.{0,100}\bWheel\b", text)))):
         facts.append({"id":"package:unspecified","kind":"PACKAGE",
                       "state":"UNKNOWN","source":"REQUEST_DISTRIBUTION_UNSPECIFIED",
                       "probe_status":"NOT_PROBED"})
