@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from agent_core.goal_anchored_recovery import GoalAnchoredRecovery
 from WebAgent.protocol_loop import WebAgentProtocolLoop
 
 
