@@ -6,6 +6,7 @@ on:
       - fix/evidence-terminal-boundary
       - feat/pr-bcd-evidence-adapters-20261102
       - fix/pr-bcd-fact-contract-live-ab-20261103
+      - fix/pr-bcd-live-a-first-turn-fact-binding-20261103
   workflow_dispatch:
 
 permissions:
