@@ -107,8 +107,11 @@ def execute_cmd_request(
     (policy or CmdControlPolicy.from_env()).assert_authorized(user_id, chat_id)
     if os.name != "nt":
         raise CmdControlError("TG_CMD_WINDOWS_REQUIRED")
-    if not restricted_executor_required():
-        raise CmdControlError("TG_CMD_RESTRICTED_EXECUTOR_REQUIRED")
+    # Match the installation's effective ACL mode. ACL ON is enforced by
+    # bounded_process via the OS Restricted Executor. ACL OFF uses the same
+    # bounded_process with the existing Software Guard command admission.
+    # A manually submitted Telegram command never changes ACL mode.
+    use_restricted_executor = restricted_executor_required()
     cwd, commands = parse_cmd_request(text)
     roots = tuple(Path(p).resolve() for p in access_snapshot().get("writable_workspaces", ()))
     root = next((p for p in roots if is_within(cwd, p)), None)
@@ -126,7 +129,14 @@ def execute_cmd_request(
     exe = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "cmd.exe")
     started = time.monotonic()
     tracking = "TG-CMD-" + uuid.uuid4().hex[:12].upper()
-    lines = [f"CMD 執行結果 {tracking}", f"cmd path: {cwd}"]
+    lines = [
+        f"CMD 執行結果 {tracking}",
+        f"cmd path: {cwd}",
+        "執行模式：" + (
+            "ACL ON / Restricted Executor"
+            if use_restricted_executor else "ACL OFF / Software Guard"
+        ),
+    ]
     results = []
     for index, command in enumerate(commands, 1):
         remaining = 120 - (time.monotonic() - started)
