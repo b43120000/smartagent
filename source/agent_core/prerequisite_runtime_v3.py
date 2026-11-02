@@ -31,6 +31,13 @@ PACKAGE = re.compile(
     r"([a-zA-Z][a-zA-Z0-9_.-]{0,65})\s*(==|>=|<=)\s*([0-9]+(?:\.[0-9]+){0,3})",
     re.I,
 )
+# Users frequently specify PEP-508-style version constraints without
+# the English prefix "package" (e.g. 確認 smartagent-pr-bcd-live>=1.0 是否缺失).
+# The bare constraint is a probe candidate only, never an install grant.
+BARE_PACKAGE = re.compile(
+    r"(?<![A-Za-z0-9_.-])([a-zA-Z][a-zA-Z0-9_.-]{0,65})\s*(==|>=|<=)\s*([0-9]+(?:\.[0-9]+){0,3})(?![A-Za-z0-9_.-])",
+    re.I,
+)
 TOOL_VERSION = re.compile(r"\b(python|git)\s*(==|>=|<=)\s*([0-9]+(?:\.[0-9]+){0,3})", re.I)
 WRITE_INTENT = re.compile(
     r"\b(?:install|setup|repair|remediate|update|modify|write|create)\b|"
@@ -173,7 +180,13 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
             seen.add(key)
     python_binary = runtime_tool_paths(install_root)["python"]
     from .project_environment import verified_candidate
-    for m in list(PACKAGE.finditer(text))[:4]:
+    # Explicit prefixes and bare package constraints share the same runtime
+    # metadata probe. Python/Git constraints have their own tool-version lane.
+    package_matches = list(PACKAGE.finditer(text)) + [
+        m for m in BARE_PACKAGE.finditer(text)
+        if m.group(1).lower() not in {"python", "git"}
+    ]
+    for m in package_matches[:12]:
         package, op, required = m.group(1).lower(), m.group(2), m.group(3)
         if package in seen:
             continue
@@ -195,6 +208,15 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
         facts.append({"id":"package:"+package,"kind":"PACKAGE","state":state,
                       "observed_version":observed,"constraint":op+required,
                       "source":origin, "probe_status":status})
+    # An install request referring only to "the wheel" is underspecified.
+    # Do not mark it PROBED/ready or infer a distribution from task history.
+    # Runtime/Planner must inspect the explicitly authorized wheel first.
+    if (not any(row["kind"] == "PACKAGE" for row in facts)
+            and re.search(r"(?i)\bwheel\b|輪檔|輪子檔", text)
+            and bool(WRITE_INTENT.search(text))):
+        facts.append({"id":"package:unspecified","kind":"PACKAGE",
+                      "state":"UNKNOWN","source":"REQUEST_DISTRIBUTION_UNSPECIFIED",
+                      "probe_status":"NOT_PROBED"})
     missing = [row["id"] for row in facts if row["state"]=="MISSING"]
     unknown = [row["id"] for row in facts if row["state"]=="UNKNOWN"]
     # Only a positive, explicit remediation request may enter PR-C.
