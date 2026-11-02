@@ -714,7 +714,8 @@ class WebAgentProtocolLoop:
                 and evidence.get("execution_status") not in {
                     "RUNNING", "QUEUED", "UNKNOWN", "PARTIAL"
                 }
-                and str(evidence.get("effective_verification_status", "")) != "UNKNOWN"
+                and (evidence.get("result_status") == "REJECTED"
+                     or str(evidence.get("effective_verification_status", "")) != "UNKNOWN")
                 # Rejected read with a complete terminal error is safe to
                 # *classify* as finished even when it never executed.
                 and (evidence.get("executed") is True
