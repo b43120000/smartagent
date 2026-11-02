@@ -51,7 +51,7 @@ def run() -> None:
     assert bundled.is_file(), f"Bundled Python unavailable: {bundled}"
     with tempfile.TemporaryDirectory(prefix="sa-prbcd-project-env-") as td:
         root = Path(td)
-        project = root / "project"
+        project = root / "SmartAgent_PR_BCD_LIVE"
         project.mkdir()
         prepare(str(project))
         target = project / "deps"
