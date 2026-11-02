@@ -172,6 +172,7 @@ class RemoteControlDispatcher:
             result = execute_cmd_request(
                 str(getattr(message, "text", "") or ""),
                 user_id=user_id, chat_id=chat_id,
+                trusted_install_root=self.root,
             )
             self.runtime_log.write(
                 "CONNECT", component="remote_control_dispatcher",
