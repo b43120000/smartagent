@@ -1388,11 +1388,17 @@ class WebAgentProtocolLoop:
             ],
             "environment_fact_binding_rule": (
                 "Planner owns success/failure condition semantics. For a verified Runtime "
-                "environment fact, cite its ENVFACT evidence_ref in report_progress.evidence_refs "
-                "and bind an accepted completion condition using fact_assertion="
-                "{evidence_ref,expected_state,condition_id}. condition_id must equal "
-                "matched_condition_id; expected_state must match the pinned Runtime fact. "
-                "Do not repeat an environment probe solely to obtain Action Evidence. "
+                "environment fact, cite only the matching single ENVFACT evidence_ref "
+                "in report_progress.evidence_refs, never include REQUEST_ACCEPTED or "
+                "RUNTIME_STATUS in the same evidence_refs. On the initial turn "
+                "use fact_assertion={evidence_ref,expected_state,condition_text} "
+                "where condition_text exactly equals the Planner-authored "
+                "completion_contract.success matched_condition. Runtime computes "
+                "condition_id after accepting the condition; do not invent its hash. "
+                "On later turns an already issued canonical condition_id may replace "
+                "condition_text. Match fact id/name, ecosystem and constraint to the "
+                "original goal, and expected_state to the observed Runtime fact. "
+                "Do not repeat a trusted Runtime probe solely for Action Evidence. "
                 "A fact alone does not authorize MUTATE or establish recovery SUCCESS."
             ),
             "non_action_status_markers": ["REQUEST_ACCEPTED", "RUNTIME_STATUS"],
