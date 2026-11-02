@@ -11,8 +11,8 @@ from pathlib import Path
 
 from agent_core.paths import install_root
 from agent_core.project_environment import (
-    environment_index_path, publish_verified_dependency, read_project_environment,
-    resolve_install_target,
+    environment_index_path, publish_verified_dependency, publish_verified_tool,
+    planner_environment_hint, read_project_environment, resolve_install_target,
 )
 from agent_core.prerequisite_runtime_v3 import (
     RecoveryLedger, PrerequisiteRecoveryError, _probe_project_package,
@@ -123,6 +123,27 @@ def run() -> None:
         )
         assert saved["status"] == "VERIFIED" and index.is_file()
         assert read_project_environment(project)["dependencies"]["smartagent-pr-bcd-live"]["location"] == str(target)
+        # SDK/toolchain can be outside the project, but merely recording its
+        # path never grants execution permission to any subsequent task.
+        tool = publish_verified_tool(
+            project, name="python", path=bundled, version="3.11",
+            request_id=ids["request_id"], evidence_ref="EVIDENCE-PYTHON",
+            authorized_project_write=True,
+        )
+        assert tool["path"] == str(bundled)
+        hints = planner_environment_hint(project)
+        assert any(row["name"] == "python" for row in hints["tools"])
+        assert hints["authority"] == "CANDIDATES_REQUIRING_RUNTIME_REPROBE"
+        try:
+            publish_verified_tool(
+                project, name="untrusted", path=bundled, version="3.11",
+                request_id="RR-READONLY", evidence_ref="NONE",
+                authorized_project_write=False,
+            )
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("Read-only task modified environment index")
 
         reuse = probe_requirements(
             request="Only inspect " + package_request,
