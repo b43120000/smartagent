@@ -156,6 +156,13 @@ class ReuseIntegrityTests(unittest.TestCase):
         self.assertTrue(explicit_remediation_intent(
             "請安裝 package synthetic_pr_bcd>=1.0 到 deps。禁止其他專案路徑寫入"
         ))
+        self.assertTrue(explicit_remediation_intent(
+            "Discover the missing local dependency, install only the supplied offline wheel "
+            "into the authorized target, verify and retry."
+        ))
+        self.assertFalse(explicit_remediation_intent(
+            "Inspect dependency; install target: deps; never install or write."
+        ))
 
     def test_missing_index_is_valid_readonly_environment_discovery(self):
         before = set(self.project.rglob("*"))
