@@ -322,6 +322,9 @@ try {
             missing_count=@($prBCD.missing_ids).Count
             unknown_count=@($prBCD.unknown_ids).Count
             remediation_requested=[bool]$prBCD.remediation_requested
+            project_environment_required=[bool]$prBCD.project_environment_required
+            project_environment_verified=[bool]$prBCD.project_environment_verified
+            project_environment_evidence_present=(-not [string]::IsNullOrWhiteSpace([string]$prBCD.project_environment_evidence_sha256))
             remediation_action=(Safe-Code $prBCD.remediation_action)
             verification_action=(Safe-Code $prBCD.verification_action)
             resumed_action=(Safe-Code $prBCD.resumed_action)
@@ -346,6 +349,12 @@ try {
     foreach ($relative in @('source\WebAgent\protocol_loop.py',
                              'source\agent_core\bounded_repair.py',
                              'source\agent_core\goal_anchored_recovery.py',
+                             'source\agent_core\prerequisite_runtime_v3.py',
+                             'source\agent_core\project_environment.py',
+                             'source\agent_core\pr_bcd_request_scope.py',
+                             'source\agent_core\dependency_adapters.py',
+                             'source\agent_core\bp1_observation_terminal.py',
+                             'collect.bat',
                              'config\protocol_manifest.json')) {
         $fp = Join-Path $root $relative
         if (Test-Path -LiteralPath $fp -PathType Leaf) {
