@@ -106,7 +106,7 @@ class ReuseIntegrityTests(unittest.TestCase):
     def test_tampered_external_candidate_is_never_probed(self):
         self.save_candidate()
         doc = read_project_environment(self.project)
-        doc["dependencies"]["synthetic_pr_bcd"]["location"] = str(self.other)
+        doc["dependencies"]["synthetic-pr-bcd"]["location"] = str(self.other)
         self.index.write_text(json.dumps(doc), encoding="utf-8")
         with patch("agent_core.prerequisite_runtime_v3._probe_package",
                    return_value=("MISSING", "")), patch(
@@ -195,7 +195,7 @@ class ReuseIntegrityTests(unittest.TestCase):
 
     def test_index_only_records_candidates_not_future_authorization(self):
         self.save_candidate()
-        entry = read_project_environment(self.project)["dependencies"]["synthetic_pr_bcd"]
+        entry = read_project_environment(self.project)["dependencies"]["synthetic-pr-bcd"]
         self.assertEqual(entry["status"], "VERIFIED")
         self.assertEqual(entry["request_id"], "RR-FIRST")
         tool = self.tool(self.other)
