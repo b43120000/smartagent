@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($env:SA_COLLECT_ROOT)
 $task = [string]$env:SA_COLLECT_TASK
 $request = [string]$env:SA_COLLECT_REQUEST
-$baseSha = '2f91c3a0d88b6db16b5563c22792996a9103cb9d'
+$baseSha = '4982c6df335c26cbf027b05c385682f130fe963b'
 
 function Assert-Id([string]$id, [string]$kind) {
     if ($id -and $id -notmatch '^[A-Za-z0-9_-]{1,160}$') {
@@ -103,6 +103,14 @@ $ledger = if ($ledgerPath) { Read-Json $ledgerPath } else { $null }
 if (-not $request -and $null -ne $ledger -and $ledger.request_id) {
     $request = [string]$ledger.request_id
 }
+# Completed tasks can delete Task Progress. Resolve only the exact Task's
+# durable PR-B/C/D identity; do not pick a neighboring Telegram conversation.
+if (-not $request -and $task) {
+    $prBCDIdentity = Read-Json (Join-Path $root ('localdata\runtime\prerequisite_v3_recovery\' + $task + '.json'))
+    if ($prBCDIdentity -and [string]$prBCDIdentity.identity.task_id -ceq $task) {
+        $request = [string]$prBCDIdentity.identity.request_id
+    }
+}
 Assert-Id $request 'request'
 if (-not $task -and -not $request) { throw 'Need a Task ID or Request ID.' }
 
@@ -118,7 +126,7 @@ $sources = @(
     @{ name = 'webgpt_outbound'; path = (Join-Path $root 'localdata\runtime\webgpt_outbound_turns.jsonl') }
 )
 $scalarKeys = @(
-    'action_id','tool','operation','verification_status','result_status','effective_verification_status',
+    'action_id','tool','operation','verification_status','result_status','result_reason','executed','effective_verification_status',
     'execution_status','last_reason','repair_status','diagnostic_reason','error_type',
     'scope_allowed','scope_error_code','scope_source','runtime_fact_ref_count',
     'project_root_matches_workspace','explicit_path_count','request_paths_grant_write',
