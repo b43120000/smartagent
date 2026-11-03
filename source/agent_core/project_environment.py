@@ -22,6 +22,35 @@ def environment_index_path(project_root: str | Path) -> Path:
     return Path(project_root).expanduser().resolve() / ".agents" / "project_context" / "environment.json"
 
 
+def observe_project_environment_index(project_root: str | Path) -> dict:
+    """Read-only existence and validity fact for the *known project* index.
+
+    ABSENT is a valid discovery result, not evidence that remediation is
+    allowed. UNKNOWN read errors and INVALID records are not conflated with
+    absence or with a verified dependency candidate.
+    """
+    root = Path(project_root).expanduser().resolve()
+    target = environment_index_path(root)
+    try:
+        reject_reparse_components(target, root)
+        if not target.exists():
+            return {"state": "ABSENT", "reason": "ENVIRONMENT_INDEX_ABSENT"}
+        if not target.is_file():
+            return {"state": "INVALID", "reason": "ENVIRONMENT_INDEX_NOT_FILE"}
+        if target.stat().st_size > MAX_BYTES:
+            return {"state": "INVALID", "reason": "ENVIRONMENT_INDEX_OVERSIZED"}
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return {"state": "UNKNOWN", "reason": "ENVIRONMENT_INDEX_UNREADABLE"}
+    except (ValueError, TypeError):
+        return {"state": "INVALID", "reason": "ENVIRONMENT_INDEX_INVALID_FORMAT"}
+    if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
+        return {"state": "INVALID", "reason": "ENVIRONMENT_INDEX_INVALID_SCHEMA"}
+    if not isinstance(raw.get("dependencies"), dict) or not isinstance(raw.get("tools"), dict):
+        return {"state": "INVALID", "reason": "ENVIRONMENT_INDEX_INVALID_STRUCTURE"}
+    return {"state": "PRESENT", "reason": "ENVIRONMENT_INDEX_CANDIDATES_UNTRUSTED"}
+
+
 def read_project_environment(project_root: str | Path) -> dict:
     """Read a bounded candidate index; never mutate a read-only project."""
     path = environment_index_path(project_root)
@@ -259,8 +288,12 @@ def publish_verified_tool(
 
 def planner_environment_hint(project_root: str | Path) -> dict:
     """Bounded, untrusted candidates only; revalidate before any use."""
-    doc = read_project_environment(project_root)
+    index_fact = observe_project_environment_index(project_root)
+    doc = read_project_environment(project_root) if index_fact["state"] == "PRESENT" else {
+        "schema": SCHEMA, "dependencies": {}, "tools": {},
+    }
     result = {"schema": SCHEMA, "authority": "CANDIDATES_REQUIRING_RUNTIME_REPROBE",
+              "index_status": index_fact["state"], "index_reason": index_fact["reason"],
               "dependencies": [], "tools": []}
     for name, row in list(sorted(doc["dependencies"].items()))[:20]:
         if isinstance(row, dict) and row.get("status") == "VERIFIED":
