@@ -110,8 +110,14 @@ def evaluate_bp1_terminal(loop, progress: dict) -> dict:
                 tool == "run_command"
                 and str(action.get("operation", "")).upper() == "INSPECT"
                 and _winpath(action.get("working_directory")) == root
-                and str(action.get("command", "")) ==
-                    "Get-Item -LiteralPath '" + wheel + "'"
+                and bool(re.fullmatch(
+                    r"(?i)Get-Item\\s+-LiteralPath\\s+'([^']+)'",
+                    str(action.get("command", "")).strip(),
+                ))
+                and _winpath(re.fullmatch(
+                    r"(?i)Get-Item\\s+-LiteralPath\\s+'([^']+)'",
+                    str(action.get("command", "")).strip(),
+                ).group(1)) == wheel
                 and action.get("verify", []) == []
             )
         else:
