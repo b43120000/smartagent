@@ -57,7 +57,8 @@ class StubGraph:
         self.ids = ids
     def read(self, task_id):
         return {
-            "request_id": "RR-R17", "task_id": task_id,
+            "identity": {"request_id": "RR-R17", "task_id": task_id,
+                         "task_epoch": "EPOCH-R17"},
             "nodes": {"action:" + key.lower(): {"state": "SATISFIED"}
                       for key in self.ids},
         }
