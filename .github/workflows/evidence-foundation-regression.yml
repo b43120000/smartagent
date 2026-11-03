@@ -14,6 +14,7 @@ on:
       - fix/tg-cmd-reuse-telegram-auth-20261103
       - feat/live-b-p1-observation-evidence-20261103
       - fix/live-b-p1-progress-terminal-r17-20261103
+      - fix/pr-b-foundation-reuse-auth-integrity-20261103
   workflow_dispatch:
 
 permissions:
