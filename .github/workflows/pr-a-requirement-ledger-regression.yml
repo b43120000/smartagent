@@ -21,6 +21,7 @@ on:
       - feat/live-b-p1-observation-evidence-20261103
       - fix/live-b-p1-progress-terminal-r17-20261103
       - fix/pr-b-foundation-reuse-auth-integrity-20261103
+      - fix/collect-telegram-terminal-evidence-20261103
   pull_request:
     branches:
       - fix/live-b-p1-progress-terminal-r17-20261103
@@ -112,6 +113,11 @@ jobs:
         shell: pwsh
         run: |
           python -B source/WebAgent/tests/validate_pr_a_requirement_graph.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Telegram terminal ZIP collector regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_collect_telegram_terminal_rca.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Existing collect.bat sanitized PR-A bundle smoke
         shell: pwsh
