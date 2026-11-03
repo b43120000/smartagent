@@ -30,7 +30,7 @@ def request(root: str = ROOT) -> str:
         "本輪只驗證 Runtime Observation、PR-A Action Evidence 與 Evidence Freshness。\n"
         "禁止任何實際寫入、安裝、網路下載、MUTATE、VERIFY、Resume。\n"
         f"允許套件安裝目標：{root}\\deps\n"
-        f"另允許 metadata 寫入：{root}\\.agents\\project_context\\environment.json\n"
+        f"另允許必要的 Project Environment metadata 寫入：{root}\\.agents\\project_context\\environment.json\n"
         "禁止其他專案路徑寫入。\n"
         "依賴：smartagent-pr-bcd-live>=1.0\n"
         "Wheel：wheelhouse\\smartagent_pr_bcd_live-1.0-py3-none-any.whl"
