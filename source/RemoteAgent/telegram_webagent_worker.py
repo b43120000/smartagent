@@ -801,8 +801,10 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             original_request=getattr(locals().get('loop'), 'task_request', task.request),
             base=str(getattr(progress, 'base_evaluation', '') or ''),
             conclusion=conclusion, task_id=task.task_id, request_id=task.request_id,
-            state='INTERRUPTED' if protocol_only_interruption else 'FAILED',
-            outcome=loop_outcome if protocol_only_interruption else '',
+            state=('PAUSED' if has_pause_checkpoint and not acceptance else
+                   'INTERRUPTED' if protocol_only_interruption else 'FAILED'),
+            outcome=('UNKNOWN' if has_pause_checkpoint and not acceptance else
+                     loop_outcome if protocol_only_interruption else ''),
             terminal_acceptance=acceptance if protocol_only_interruption else None)
         # Keep Queue, Progress, continuation and sender observations
         # consistent. No acceptance receipt exists for this checkpoint.
