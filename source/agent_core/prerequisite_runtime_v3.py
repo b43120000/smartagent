@@ -73,7 +73,7 @@ def explicit_remediation_intent(request: str) -> bool:
         r"(?:(?:任何|一切|實際|執行|進行|自行|所有)\s*){0,4}"
         r"(?:安裝|補救|修復|寫入|修改|MUTATE|install|repair|remediate|write)|"
         r"不(?:安裝|補救|修復|寫入|修改)|"
-        r"\b(?:do\s+not|don't|never|without|must\s+not)\s+"
+        r"\b(?:do\s+not|don't|never|without|must\s+not|no)\s+"
         r"(?:(?:any|to|the)\s+)?(?:install|repair|remediate|write|modify)\b",
         re.I,
     )
@@ -83,7 +83,8 @@ def explicit_remediation_intent(request: str) -> bool:
         r"(?:請|幫我|允許|授權|同意|現在|直接|執行|進行|需要)\s*"
         r"(?:(?:先|立即|進行|執行|使用|離線)\s*){0,3}"
         r"(?:安裝|修復|補救|更新)|"
-        r"(?im:^\s*(?:please\s+)?(?:install|repair|remediate|set\s+up)\b)",
+        r"\b(?:please\s+)?(?:install|repair|remediate|set\s+up)\b"
+        r"(?!\s+(?:target|path|directory|location|command|example)\b)",
         re.I,
     )
     return bool(positive.search(relevant))
