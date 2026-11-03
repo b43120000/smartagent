@@ -6,6 +6,8 @@ assert package installation, independent VERIFY, remediation or resumed work.
 from __future__ import annotations
 
 import ntpath
+import os
+from pathlib import Path
 import re
 
 
@@ -38,6 +40,15 @@ def _winpath(value: object) -> str:
     text = str(value or "").strip()
     if not re.match(r"^[A-Za-z]:\\", text):
         return ""
+    # Windows admission may expose 8.3 aliases for the authorized CWD.
+    # Resolve only existing filesystem targets; this never grants scope.
+    if os.name == "nt":
+        try:
+            candidate = Path(text)
+            if candidate.exists():
+                text = str(candidate.resolve(strict=True))
+        except (OSError, ValueError):
+            pass
     return ntpath.normcase(ntpath.normpath(text))
 
 
