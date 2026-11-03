@@ -88,6 +88,17 @@ def main() -> int:
             "recursive": False,
         })
         assert not outside["allowed"], outside
+        tools.begin_run(
+            "RUN-MIXED-NEGATIVE",
+            f"列出檔案；禁止使用 inspect_directory。\\n{requested}",
+            [str(requested)],
+        )
+        negated = tools.preview_tool_scope({
+            "tool": "inspect_directory", "action_id": "BAD-NEGATED-METADATA",
+            "paths": [str(requested)], "recursive": False,
+        })
+        assert not negated["allowed"], negated
+        assert negated["error"] == "directory_listing_requires_list_directory", negated
         tools.begin_run("RUN-LIST", f"先列出這個路徑下有哪些檔案\\n{requested}",
                         [str(requested)])
 
