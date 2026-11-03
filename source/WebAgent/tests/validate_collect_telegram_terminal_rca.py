@@ -139,6 +139,36 @@ class CollectTelegramRcaIT(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, entire, forbidden)
 
+    def test_completed_task_recovers_request_from_exact_ledger_and_keeps_action_reason(self):
+        task, request = "TASK-COLLECT-TG-A", "RR-COLLECT-TG-A"
+        recovery = self.root / "localdata" / "runtime" / "prerequisite_v3_recovery"
+        recovery.mkdir(parents=True, exist_ok=True)
+        (recovery / (task + ".json")).write_text(json.dumps({
+            "schema": "SMARTAGENT_PREREQ_V3_BCD_LEDGER_V1",
+            "identity": {"task_id": task, "request_id": request},
+        }), encoding="utf-8")
+        events = self.root / "localdata" / "logs" / "remote_runtime.jsonl"
+        events.parent.mkdir(parents=True, exist_ok=True)
+        events.write_text(json.dumps({
+            "event": "STATUS", "stage": "action_evidence_recorded",
+            "task_id": task, "request_id": request, "action_id": "READ-ABSENT",
+            "tool": "read_file", "result_status": "FAILED",
+            "execution_status": "FAILED", "result_reason": "FILE_NOT_FOUND",
+            "executed": False, "timestamp": 1793719100.0,
+        }) + "\n", encoding="utf-8")
+        details, _, manifest, _ = self.collect([
+            event(eid="EVT-TG-FINAL", task=task, request=request),
+        ], request="")
+        self.assertTrue(details["request_task_bound"], details)
+        self.assertEqual(manifest["request_id"], request)
+        zipped = next((self.root / "localdata" / "diagnostics" / "gar_live_rca").glob("*.zip"))
+        with zipfile.ZipFile(zipped) as archive:
+            timeline = json.loads(archive.read("timeline.json").decode("utf-8-sig"))
+        matches = [row for row in timeline if row.get("event") == "action_evidence_recorded"]
+        self.assertEqual(len(matches), 1, timeline)
+        self.assertEqual(matches[0]["result_reason"], "FILE_NOT_FOUND")
+        self.assertIs(matches[0]["executed"], False)
+
     def test_pending_delivery_never_claims_confirmed(self):
         data, text, manifest, _ = self.collect([
             event(eid="EVT-TG-PENDING", task="TASK-COLLECT-TG-A",
