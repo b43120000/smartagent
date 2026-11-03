@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from agent_core.remote_binding_manager import LIST_SKILLS_COMMAND, MANAGER_COMMAND
+from RemoteAgent.telegram_direct_cmd import CONTROL_LABEL as CMD_CONTROL_LABEL
 
 FEATURE_QUERY_COMMAND = "查詢遠端功能"
 INTERRUPT_COMMAND = "任務中斷"
@@ -28,6 +29,7 @@ REMOTE_FEATURES = (
     (7, INTERRUPT_COMMAND, "已實作"),
     (8, "重啟連線", "已實作"),
     (9, LIST_SKILLS_COMMAND, "已實作"),
+    (10, CMD_CONTROL_LABEL, "需本機啟用"),
 )
 
 # These controls already have deterministic software-owned execution paths.
@@ -46,6 +48,7 @@ REMOTE_CONTROL_BUTTONS = (
     (STATUS_COMMAND, STATUS_COMMAND, "status"),
     (INTERRUPT_COMMAND, INTERRUPT_COMMAND, "interrupt"),
     ("重啟連線", "重啟連線", "reconnect"),
+    (CMD_CONTROL_LABEL, CMD_CONTROL_LABEL, "direct_cmd"),
 )
 
 
@@ -133,7 +136,7 @@ def render_remote_feature_list() -> str:
 
 
 __all__ = [
-    "FEATURE_QUERY_COMMAND", "INTERRUPT_COMMAND", "LIST_SKILLS_COMMAND",
+    "CMD_CONTROL_LABEL", "FEATURE_QUERY_COMMAND", "INTERRUPT_COMMAND", "LIST_SKILLS_COMMAND",
     "MANAGER_COMMAND", "REMOTE_CONTROL_BUTTONS",
     "REMOTE_CONTROL_CALLBACK_PREFIX", "REMOTE_FEATURES", "SNAPSHOT_COMMAND",
     "STATUS_COMMAND", "SECURITY_APPROVAL_CALLBACK_PREFIX", "SECURITY_REJECT_CALLBACK_PREFIX",

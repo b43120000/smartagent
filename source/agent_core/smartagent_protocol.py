@@ -341,6 +341,7 @@ TOOL_ENVELOPE_SCHEMAS = {
             "outcome": str,
             "matched_condition": str,
             "matched_condition_id": str,
+            "fact_assertion": dict,
             "evidence_refs": list,
             "decision_reason": str,
             "runtime_state_ref": str,

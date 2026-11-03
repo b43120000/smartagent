@@ -42,7 +42,11 @@ def unsatisfied_dependencies(action, result_ledger, request_id, task_epoch):
             or record.get('evidence_status', 'ACTIVE') != 'ACTIVE'
             or record.get('execution_status') != 'SUCCEEDED'
             or record.get('executed') is not True
-            or (not linked_check and record.get('effective_verification_status',record.get('verification_status')) in {'UNVERIFIED','SPEC_INVALID','FAIL'})
+            or (not linked_check
+                and not (record.get('observation_proof_admitted') is True
+                         and record.get('evidence_status', 'ACTIVE') == 'ACTIVE')
+                and record.get('effective_verification_status',record.get('verification_status'))
+                in {'UNVERIFIED','SPEC_INVALID','FAIL'})
             or record.get('result_status') != 'SUCCEEDED'):
             blocked.append(ref)
     return blocked

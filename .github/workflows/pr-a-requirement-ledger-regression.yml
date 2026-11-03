@@ -1,10 +1,24 @@
-name: GAR R1 R2 R3 and PR-A Full Windows Regression
+name: Repair Stagnation Effective Progress Windows Regression
 
 on:
   push:
     branches:
       - fix/gar-progress-collector-l4-control-20261102
       - release/pr-a-gar-l4-default-off-20261102
+      - fix/repair-stall-effective-progress-20261102
+      - feat/request-first-workspace-routing-20261102
+      - feat/prerequisite-v3-prb-prc-prd-20261102
+      - fix/pr-bcd-project-environment-20261102
+      - fix/pr-bcd-live-observation-terminal-20261102
+      - feat/pr-bcd-evidence-adapters-20261102
+      - fix/pr-bcd-fact-contract-live-ab-20261103
+      - fix/pr-bcd-live-a-first-turn-fact-binding-20261103
+      - fix/live-b-p0-scope-20261103
+      - feat/tgcmd-20261103
+      - feat/tg-cmd-persistent-settings-20261103
+      - feat/tg-cmd-acl-off-dev-default-20261103
+      - fix/tg-cmd-reuse-telegram-auth-20261103
+      - feat/live-b-p1-observation-evidence-20261103
   workflow_dispatch:
 
 permissions:
@@ -40,6 +54,51 @@ jobs:
         run: |
           python -m pip install -r install_smart_agent/requirements-webdirect.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: PR-B/C/D scoped probe and independent verification regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_pr_bcd_runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_fact_contract_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_live_b_p0_scope_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_live_b_p1_evidence_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_telegram_direct_cmd_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_telegram_cmd_shared_auth_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_gar_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_project_environment_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_evidence_terminal_boundaries.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_result_evidence_to_action_recovery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Fresh-install ACL OFF default and opt-in contract
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File install_smart_agent/tests/validate_installer_acl_opt_in.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_acl_off_software_guard.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare offline PR-B/C/D Live fixture (no install or network)
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/prepare_pr_bcd_live_fixture.py --root ".\\localdata\\SmartAgent_PR_BCD_LIVE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $target = ".\\localdata\\SmartAgent_PR_BCD_LIVE"
+          if (-not (Test-Path "$target\\wheelhouse\\smartagent_pr_bcd_live-1.0-py3-none-any.whl")) {
+            throw "Synthetic wheel missing"
+          }
+          $check = python -I -B "$target\\inspect_dependency.py"
+          if ($LASTEXITCODE -ne 0 -or -not ($check -match "PR_BCD_DEPENDENCY_MISSING")) {
+            throw "Fixture unexpectedly has preinstalled dependency"
+          }
       - name: PR-A DAG and durable ledger regression
         shell: pwsh
         run: |
@@ -51,11 +110,24 @@ jobs:
           $sample = @'
           from agent_core.prerequisite_graph_v3 import RequirementLedger, build_requirement_graph
           from agent_core.task_requirement import assess_task_requirement
+          from agent_core.prerequisite_runtime_v3 import RecoveryLedger, probe_requirements
           graph = build_requirement_graph(
               task_id="TASK-PR-A-CI", request_id="RR-PR-A-CI", task_epoch="epoch-ci",
               assessment=assess_task_requirement("Review GitHub PR #42")
           )
           RequirementLedger(".").initialize(graph)
+          probe = probe_requirements(
+              request="Read only GitHub PR #42", authorized_paths=[],
+              environment_snapshot={"tools":{
+                  "python":{"status":"AVAILABLE","version":"Python 3.11.7"},
+                  "git":{"status":"AVAILABLE","version":"git version 2.43.1"}
+              }}, install_root=".",
+          )
+          RecoveryLedger(".").initialize(
+              task_id="TASK-PR-A-CI",request_id="RR-PR-A-CI",
+              task_epoch="epoch-ci",intent_sha256="a"*64,
+              probe=probe,graph_digest="b"*64,
+          )
           '@
           $sample | python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -95,6 +167,12 @@ jobs:
           }
           if (-not $summary.nodes -or $summary.nodes.Count -ne $summary.node_count) {
             throw "Collector DAG edge summary missing"
+          }
+          $bcdFile = ".\localdata\pr_a_ci_bundle\pr_bcd_recovery_summary.json"
+          if (-not (Test-Path $bcdFile)) { throw "PR-B/C/D collector summary missing" }
+          $bcd = Get-Content -LiteralPath $bcdFile -Raw | ConvertFrom-Json
+          if (-not $bcd.found -or $bcd.phase -ne "PROBED" -or $bcd.revision -ne 1) {
+            throw "PR-B/C/D collector reported invalid durable recovery state"
           }
           $timeline = Get-Content -LiteralPath ".\localdata\pr_a_ci_bundle\timeline.json" -Raw | ConvertFrom-Json
           if (-not ($timeline | Where-Object { $_.event -eq 'protocol_rejected' -and $_.stage -eq 'protocol_rejected' })) {
@@ -137,6 +215,24 @@ jobs:
           python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; print(validate_protocol_manifest('.'))"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Evidence-backed repair stagnation and sanitized status regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_repair_stagnation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Request-first workspace and three-task context routing regression
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/validate_request_first_workspace_routing.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_dynamic_task_transport_binding.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_multi_workspace_access.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_authorized_path_extraction.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_task_continuation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: GAR R1 local handoff and R3 L4 independent controls
         shell: pwsh
         run: |

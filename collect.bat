@@ -93,6 +93,11 @@ $sources = @(
 $scalarKeys = @(
     'action_id','tool','operation','verification_status','result_status','effective_verification_status',
     'execution_status','last_reason','repair_status','diagnostic_reason','error_type',
+    'scope_allowed','scope_error_code','scope_source','runtime_fact_ref_count',
+    'project_root_matches_workspace','explicit_path_count','request_paths_grant_write',
+    'ceiling_active','ceiling_valid','ceiling_reason','grants_authorization',
+    'observation_proof_admitted','observation_proof_reason',
+    'observation_proof_code','task_condition_verified',
     'pid','round','attempt','request_id','task_id','task_epoch',
     'execution_state','protocol_state','status','level','decision',
     'reason','reason_code','classification','marker','evidence_marker_class',
@@ -298,6 +303,37 @@ try {
         }
     }
     Write-Json (Join-Path $stage 'pr_a_requirement_ledger_summary.json') $prASummary
+    # PR-B/C/D sanitized summary; never include raw commands, package names,
+    # full paths, environment variables or model output.
+    $prBCDSummary = [ordered]@{ found=$false }
+    $prBCDLedger = if ($task) {
+        Join-Path $root ('localdata\runtime\prerequisite_v3_recovery\' + $task + '.json')
+    } else { '' }
+    $prBCD = if ($prBCDLedger) { Read-Json $prBCDLedger } else { $null }
+    if ($prBCD -and $prBCD.schema -eq 'SMARTAGENT_PREREQ_V3_BCD_LEDGER_V1') {
+        $prBCDSummary = [ordered]@{
+            found=$true
+            schema='SMARTAGENT_PREREQ_V3_BCD_LEDGER_V1'
+            phase=(Safe-Code $prBCD.phase)
+            revision=$prBCD.revision
+            digest=(Safe-Code $prBCD.digest)
+            task_id=(Safe-Code $prBCD.identity.task_id)
+            request_id=(Safe-Code $prBCD.identity.request_id)
+            missing_count=@($prBCD.missing_ids).Count
+            unknown_count=@($prBCD.unknown_ids).Count
+            remediation_requested=[bool]$prBCD.remediation_requested
+            remediation_action=(Safe-Code $prBCD.remediation_action)
+            verification_action=(Safe-Code $prBCD.verification_action)
+            resumed_action=(Safe-Code $prBCD.resumed_action)
+            evidence_digest_present=@{
+                remediation=(-not [string]::IsNullOrWhiteSpace([string]$prBCD.remediation_evidence_sha256))
+                verification=(-not [string]::IsNullOrWhiteSpace([string]$prBCD.verification_evidence_sha256))
+                resumed=(-not [string]::IsNullOrWhiteSpace([string]$prBCD.resume_evidence_sha256))
+            }
+            transition_codes=@($prBCD.events | ForEach-Object { Safe-Code $_.type } | Select-Object -First 100)
+        }
+    }
+    Write-Json (Join-Path $stage 'pr_bcd_recovery_summary.json') $prBCDSummary
     Write-Json (Join-Path $stage 'timeline.json') @($timeline.ToArray())
 
     $head = ''
@@ -328,6 +364,7 @@ try {
         event_count=$timeline.Count
         snapshot_count=@($snapshots).Count
         pr_a_ledger_found=[bool]$prASummary.found
+        pr_bcd_ledger_found=[bool]$prBCDSummary.found
         collector_process_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
         log_sources=$sourceInfo.ToArray()
         source_sha256=$fingerprints

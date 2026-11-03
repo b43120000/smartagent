@@ -11,6 +11,15 @@ on:
       - feat/global-runtime-feature-registry-20261101
       - fix/tri-one-5a-negated-noop-answer-only-20261101
       - main
+      - feat/pr-bcd-evidence-adapters-20261102
+      - fix/pr-bcd-fact-contract-live-ab-20261103
+      - fix/pr-bcd-live-a-first-turn-fact-binding-20261103
+      - fix/live-b-p0-scope-20261103
+      - feat/tgcmd-20261103
+      - feat/tg-cmd-persistent-settings-20261103
+      - feat/tg-cmd-acl-off-dev-default-20261103
+      - fix/tg-cmd-reuse-telegram-auth-20261103
+      - feat/live-b-p1-observation-evidence-20261103
   workflow_dispatch:
 
 permissions:

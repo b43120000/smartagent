@@ -312,6 +312,25 @@ def _normalize_task_origin(message: dict[str, Any], metadata: dict[str, Any] | N
     return "REMOTE_AGENT"
 
 
+def _allowed_task_binding(task, allowed: set[tuple[str, str]]) -> bool:
+    """Verify the conversation route while accepting authorized dynamic workspaces."""
+    current = (os.path.normcase(os.path.abspath(task.workspace)), task.conversation_url)
+    if current in allowed:
+        return True  # Legacy fixed-binding tasks.
+    if int((task.metadata or {}).get("workspace_resolution_version", 0) or 0) != 1:
+        return False
+    if not any(url == task.conversation_url for _, url in allowed):
+        return False
+    try:
+        from .task_workspace_resolver import _authorized, _policy_roots
+        from pathlib import Path
+        writable, _ = _policy_roots()
+        target = Path(task.workspace).resolve()
+        return target.is_dir() and _authorized(target, writable)
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 class RemoteTaskQueue:
     """Persistent queue for bounded request-scoped RemoteAgent workers."""
     def __init__(self, store: TaskStateStore):
@@ -440,10 +459,7 @@ class RemoteTaskQueue:
                         (os.path.normcase(os.path.abspath(workspace)), url)
                         for workspace, url in allowed_bindings
                     }
-                    queued = [
-                        task for task in queued
-                        if (os.path.normcase(os.path.abspath(task.workspace)), task.conversation_url) in allowed
-                    ]
+                    queued = [task for task in queued if _allowed_task_binding(task, allowed)]
                 if not queued:
                     return None
                 task = queued[0]
@@ -525,13 +541,7 @@ class RemoteTaskQueue:
                         (os.path.normcase(os.path.abspath(bound_workspace)), bound_url)
                         for bound_workspace, bound_url in allowed_bindings
                     }
-                    queued = [
-                        task for task in queued
-                        if (
-                            os.path.normcase(os.path.abspath(task.workspace)),
-                            task.conversation_url,
-                        ) in allowed
-                    ]
+                    queued = [task for task in queued if _allowed_task_binding(task, allowed)]
                 if workspace:
                     wanted_workspace = os.path.normcase(os.path.abspath(workspace))
                     queued = [

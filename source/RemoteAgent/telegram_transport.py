@@ -26,8 +26,9 @@ from RemoteAgent.remote_feature_catalog import (
     FEATURE_QUERY_COMMAND, canonical_remote_control, command_for_remote_callback,
     remote_feature_inline_keyboard, remote_feature_reply_keyboard,
     render_remote_feature_list, INTERRUPT_COMMAND, LIST_SKILLS_COMMAND,
-    MANAGER_COMMAND, STATUS_COMMAND,
+    MANAGER_COMMAND, STATUS_COMMAND, CMD_CONTROL_LABEL,
 )
+from RemoteAgent.telegram_direct_cmd import is_direct_cmd_request
 from RemoteAgent.remote_restart import RECONNECT_COMMAND
 from agent_core.remote_binding_manager import RemoteBindingManager
 from agent_core.paths import workspace_telegram_inbox_root
@@ -289,10 +290,19 @@ class TelegramUpdateAdapter:
             return None, "sender_not_allowed"
         attachments = self._attachments(message)
         raw_text = str(message.get("text") or message.get("caption") or "")
-        PIT.begin(raw_text, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
-        PIT.record("02_telegram_message_text", raw_text, extra={"update_id": update_id, "message_id": message.get("message_id"), "entities": message.get("entities", []), "caption_entities": message.get("caption_entities", [])})
+        is_admin_cmd = is_direct_cmd_request(raw_text)
+        visible_trace = "[TG_DIRECT_CMD_REDACTED]" if is_admin_cmd else raw_text
+        PIT.begin(visible_trace, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
+        PIT.record("02_telegram_message_text", visible_trace, extra={
+            "update_id": update_id, "message_id": message.get("message_id"),
+            "direct_cmd_redacted": is_admin_cmd,
+            "entities": [] if is_admin_cmd else message.get("entities", []),
+            "caption_entities": [] if is_admin_cmd else message.get("caption_entities", []),
+        })
         text = raw_text.strip()
-        PIT.record("03_receiver_normalized", text, evidence_status="NORMALIZED_INPUT")
+        PIT.record("03_receiver_normalized",
+                   "[TG_DIRECT_CMD_REDACTED]" if is_admin_cmd else text,
+                   evidence_status="NORMALIZED_INPUT")
         if not text and not attachments:
             return None, "empty_message"
         if not text: text = "請處理附件"
@@ -724,6 +734,7 @@ class TelegramReceiver:
                     STATUS_COMMAND.casefold(): "CONTROL_STATUS_WEBGPT",
                     INTERRUPT_COMMAND.casefold(): "CONTROL_INTERRUPT_TASK",
                     RECONNECT_COMMAND.casefold(): "CONTROL_RESTART_REMOTE",
+                    CMD_CONTROL_LABEL.casefold(): "CONTROL_DIRECT_CMD_TEMPLATE",
                 }
                 security_decision = (
                     control_key.startswith("確認刪除 ")
@@ -778,7 +789,7 @@ class TelegramReceiver:
                     reply_markup=remote_feature_inline_keyboard(),
                 )
                 continue
-            control_stages={MANAGER_COMMAND.casefold():"CONTROL_BINDING_MANAGER",LIST_SKILLS_COMMAND.casefold():"CONTROL_LIST_SKILLS","關閉任務":"CONTROL_CLOSE_TASK","snapshot webgpt":"CONTROL_SNAPSHOT_WEBGPT","refresh":"CONTROL_REFRESH_WEBGPT","重新整理":"CONTROL_REFRESH_WEBGPT",STATUS_COMMAND.casefold():"CONTROL_STATUS_WEBGPT",INTERRUPT_COMMAND.casefold():"CONTROL_INTERRUPT_TASK",RECONNECT_COMMAND.casefold():"CONTROL_RESTART_REMOTE"}
+            control_stages={MANAGER_COMMAND.casefold():"CONTROL_BINDING_MANAGER",LIST_SKILLS_COMMAND.casefold():"CONTROL_LIST_SKILLS","關閉任務":"CONTROL_CLOSE_TASK","snapshot webgpt":"CONTROL_SNAPSHOT_WEBGPT","refresh":"CONTROL_REFRESH_WEBGPT","重新整理":"CONTROL_REFRESH_WEBGPT",STATUS_COMMAND.casefold():"CONTROL_STATUS_WEBGPT",INTERRUPT_COMMAND.casefold():"CONTROL_INTERRUPT_TASK",RECONNECT_COMMAND.casefold():"CONTROL_RESTART_REMOTE",CMD_CONTROL_LABEL.casefold():"CONTROL_DIRECT_CMD_TEMPLATE"}
             binding_update = RemoteBindingManager.is_update(message.text)
             security_decision = (
                 control_key.startswith("確認刪除 ")
@@ -806,6 +817,26 @@ class TelegramReceiver:
                             "CONTROL_BINDING_UPDATE"
                             if binding_update else control_stages.get(control_key, "CONTROL_SECURITY_APPROVAL")
                         ),
+                        update_id=update_id,
+                    )
+                continue
+            if is_direct_cmd_request(message.text):
+                # Authenticated Telegram software control, same as other
+                # buttons and direct controls. The general Agent-task preflight
+                # is not a prerequisite; bounded_process enforces its own
+                # ACL-mode and Software Guard command restrictions.
+                # Never enqueue an Agent task or send content to WebGPT.
+                self.offset_store.commit(update_id)
+                if self.control_handler is None or message.attachments:
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 執行cmd不可用或不能附帶檔案。",
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                else:
+                    self._dispatch_control_async(
+                        message, control_key="direct_cmd",
+                        control_stage="CONTROL_DIRECT_CMD_EXECUTE",
                         update_id=update_id,
                     )
                 continue

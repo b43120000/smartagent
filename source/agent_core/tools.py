@@ -155,10 +155,21 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
         "scope_source": "none",
         "error": "",
     }
+    from .pr_bcd_request_scope import check_action_against_write_ceiling
+    request_allowed, request_reason = check_action_against_write_ceiling(
+        tool_call, getattr(agent, "_request_write_ceiling", None)
+    )
+    if not request_allowed:
+        info.update(allowed=False, scope_source="request_write_ceiling",
+                    error=request_reason)
+        return info
     if tool == 'run_command':
         try:
             context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
-            cwd = resolve_command_working_directory(tool_call.get('working_directory'), context, agent, command=tool_call.get('command', ''))
+            cwd = resolve_command_working_directory(
+                tool_call.get('working_directory'), context, agent,
+                command=tool_call.get('command', ''),
+                operation=tool_call.get('operation', 'GENERAL'))
             info.update(requested_paths=[tool_call.get('working_directory') or str(context.workspace_root)],
                 resolved_paths=[str(cwd)],scope_source='working_directory' if 'working_directory' in tool_call else 'workspace_default')
         except (PathSecurityError, ValueError, OSError) as exc:
@@ -469,7 +480,8 @@ def tool_run_command(
         except ValueError as exc:
             from .tool_result_contract import encode_result
             return encode_result('REJECTED','EXPECTED_VERIFICATION_INVALID',tool='run_command',executed=False,detail=str(exc))
-    cwd = resolve_command_working_directory(working_directory, security_context)
+    cwd = resolve_command_working_directory(
+        working_directory, security_context, command=command, operation=operation)
     from .action_dependencies import command_is_proven_observation
     observation_confirmed = command_is_proven_observation({'operation':operation,'command':command})
     def finish(operation_result):
@@ -1214,11 +1226,26 @@ def _path_independent_command_must_use_bound_workspace(command: object) -> bool:
     return False
 
 
-def resolve_command_working_directory(value, security_context: SecurityContext | None, agent=None, *, command: object = None) -> Path:
+def resolve_command_working_directory(
+    value, security_context: SecurityContext | None, agent=None, *,
+    command: object = None, operation: str = "GENERAL",
+) -> Path:
     context = security_context or SecurityContext.for_workspace(Path.cwd())
-    if value is not None and (not isinstance(value, (str,Path)) or not str(value).strip()):
+    if value is not None and (not isinstance(value, (str, Path)) or not str(value).strip()):
         raise PathSecurityError('command_working_directory_invalid')
-    cwd = context.require_write(value or context.workspace_root, require_absolute=True, forbid_glob=True)
+    from .action_dependencies import command_is_proven_observation
+    operation_name = str(operation or "GENERAL").upper()
+    # Only INSPECT has a read-only-CWD exception. A VERIFY action may include
+    # additional tool checks; it retains its original write-CWD admission.
+    proven_read = operation_name in {"INSPECT", "GIT_INSPECT"} and command_is_proven_observation({
+        "operation": operation_name,
+        "command": str(command or ""),
+    })
+    # A positively proven observation may run in an explicitly read-authorized
+    # project root. The exception is strictly read-CWD; it never grants write,
+    # and unknown INSPECT or all mutation commands still require write CWD.
+    gate = context.require_read if proven_read else context.require_write
+    cwd = gate(value or context.workspace_root, require_absolute=True, forbid_glob=True)
     if not cwd.is_dir():
         raise PathSecurityError('command_working_directory_not_directory:' + str(cwd))
     is_bound_command = _path_independent_command_must_use_bound_workspace(command)
@@ -1227,12 +1254,43 @@ def resolve_command_working_directory(value, security_context: SecurityContext |
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
     if requested and not any(is_within(cwd, root) for root in requested):
-        # An unrelated original fixture path is not itself a command target.
-        # Exception is ONLY a literal bounded path-free wait in the already
-        # authorized default workspace; do not authorize the fixture or
-        # arbitrary commands/working-directory changes.
-        if cwd != context.workspace_root or not (_bounded_path_independent_wait(command) or str(command or '').strip().casefold() in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}):
+        if cwd != context.workspace_root or not (
+            _bounded_path_independent_wait(command)
+            or str(command or '').strip().casefold()
+            in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}
+        ):
             raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
+
+    if proven_read:
+        # Positive grammar includes a few literal-path reads. Do not let a
+        # read-only work directory authorize reading an unrelated host path.
+        # The admissible command is a single exact grammar match, never shell
+        # substitution/pipe/sequence.
+        text = str(command or "").strip()
+        wrapper = re.fullmatch(
+            r'(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+'
+            r'(?:(?:-NoProfile|-NonInteractive)\s+)*-Command\s+"([^"\r\n]+)"',
+            text, re.I,
+        )
+        if wrapper:
+            text = wrapper.group(1)
+        target_match = re.search(
+            r"(?:-LiteralPath\s+|git\s+-C\s+)('(?:[^'\r\n]|'')*')",
+            text, re.I,
+        )
+        if target_match:
+            literal = target_match.group(1)[1:-1].replace("''", "'")
+            target = Path(literal).expanduser()
+            # Existing VERIFY steps may legitimately use a relative literal
+            # inside their already-bound cwd. Resolve it there, then enforce
+            # the SAME read-authorization and original request boundary.
+            # No arbitrary relative path can escape through '..' or symlinks.
+            if not target.is_absolute():
+                target = cwd / target
+            resolved = context.require_read(
+                target, require_absolute=True, forbid_glob=True)
+            if requested and not any(is_within(resolved, root) for root in requested):
+                raise PathSecurityError('proven_inspect_literal_outside_request_scope')
     return cwd
 
 
@@ -1523,16 +1581,31 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
 def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) -> str:
     models = models or getattr(agent, "_models_registry", {}) or {}
     tool = tool_call.get("tool", "")
+    from .pr_bcd_request_scope import check_action_against_write_ceiling
+    request_allowed, request_reason = check_action_against_write_ceiling(
+        tool_call, getattr(agent, "_request_write_ceiling", None)
+    )
+    if not request_allowed:
+        from .tool_result_contract import encode_result
+        return encode_result("REJECTED", request_reason, tool=str(tool),
+                             executed=False, data={"terminal_eligible": False})
     security_context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
     scope = preview_tool_scope(tool_call, agent)
     if tool in _SCOPED_INSPECTION_TOOLS and not scope["allowed"]:
         return "[TOOL_SCOPE_REJECTED] " + json.dumps(
             scope, ensure_ascii=False, separators=(",", ":")
         )
+    if tool == "run_command" and not scope["allowed"]:
+        from .tool_result_contract import encode_result
+        return encode_result('REJECTED', 'COMMAND_SCOPE_REJECTED', tool=tool,
+                             executed=False, detail=str(scope.get("error", "")))
     if tool == "run_command":
         workspace = security_context.workspace_root
         try:
-            cwd = resolve_command_working_directory(tool_call.get('working_directory'), security_context, agent, command=tool_call.get('command', ''))
+            cwd = resolve_command_working_directory(
+                tool_call.get('working_directory'), security_context, agent,
+                command=tool_call.get('command', ''),
+                operation=tool_call.get('operation', 'GENERAL'))
             approval_manifest = _execution_approval_manifest(tool_call, agent, security_context, cwd)
         except PathSecurityError as exc:
             from .tool_result_contract import encode_result

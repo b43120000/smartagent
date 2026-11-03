@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -44,6 +45,7 @@ class RemoteControlDispatcher:
         self._binding_update_allowed = binding_update_allowed
         self._run_command = run_command
         self._terminate_process_tree = terminate_process_tree
+        self._direct_cmd_lock = threading.Lock()
 
     def handle(self, message=None):
         from .remote_binding_manager import (
@@ -59,6 +61,13 @@ class RemoteControlDispatcher:
         from RemoteAgent.remote_restart import RECONNECT_COMMAND
 
         raw_text = str(getattr(message, "text", "") or "").strip()
+        from RemoteAgent.telegram_direct_cmd import (
+            CONTROL_LABEL, is_direct_cmd_request, render_cmd_template,
+        )
+        if raw_text.casefold() == CONTROL_LABEL.casefold():
+            return {"message": render_cmd_template(self.root)}
+        if is_direct_cmd_request(raw_text):
+            return self._run_direct_cmd_control(message)
         binding_manager = RemoteBindingManager(self.root)
         chat_id = int(
             (getattr(message, "reply_context", {}) or {}).get("chat_id", 0) or 0
@@ -143,6 +152,86 @@ class RemoteControlDispatcher:
         if text in {"snapshot webgpt", "refresh", "重新整理"}:
             return self._run_browser_control(text)
         return self._run_queued_control(text, message)
+
+    def _run_direct_cmd_control(self, message: Any) -> dict[str, Any]:
+        """Explicit high-privilege local software route; no Agent/Task Queue."""
+        from RemoteAgent.telegram_direct_cmd import (
+            CmdControlError, CmdControlPolicy, execute_cmd_request,
+        )
+        identity = getattr(message, "reply_context", {}) or {}
+        try:
+            chat_id = int(identity.get("chat_id", 0) or 0)
+            user_id = int(getattr(message, "sender_id", "0") or 0)
+        except (TypeError, ValueError):
+            chat_id, user_id = 0, 0
+        # Re-check the SAME Telegram authorization used by other bot controls:
+        # an existing static allowlist OR the current paired private chat.
+        # Do not introduce a second CMD-specific ID list or login.
+        if (
+            chat_id <= 0 or user_id <= 0
+            or getattr(message, "transport", None) != "TELEGRAM"
+            or getattr(message, "endpoint", None) != "api.telegram.org"
+            or getattr(message, "conversation_key", None)
+            != f"telegram://chat/{chat_id}"
+        ):
+            return {"message": "🔴 執行cmd拒絕：未通過 Telegram 私訊來源驗證。"}
+        try:
+            from RemoteAgent.telegram_transport import (
+                TelegramReceiverConfig, TelegramUpdateAdapter,
+            )
+            from RemoteAgent.telegram_pairing import TelegramPairingStore
+            from .paths import telegram_pairing_path
+            config = TelegramReceiverConfig.from_env()
+            pairing = (
+                TelegramPairingStore(telegram_pairing_path(self.root))
+                if config.pairing_enabled else None
+            )
+            if not config.enabled or not TelegramUpdateAdapter(
+                config, pairing_store=pairing
+            ).is_authorized(user_id=user_id, chat_id=chat_id):
+                return {"message": "🔴 執行cmd拒絕：此 Telegram 私訊未授權。"}
+        except Exception:
+            return {"message": "🔴 執行cmd拒絕：無法確認 Telegram 私訊授權。"}
+        # The existing Telegram admission determines the transient policy.
+        # No SMARTAGENT_TG_CMD_* variables or local CMD ID JSON are needed.
+        approved_sender = CmdControlPolicy(
+            True, frozenset({user_id}), frozenset({chat_id}),
+        )
+        # Refuse concurrent batches from this process to avoid overlapping
+        # independent administrative effects.
+        if not self._direct_cmd_lock.acquire(blocking=False):
+            return {"message": "⚠️ 已有執行cmd批次正在執行，請先等目前批次結束。"}
+        try:
+            result = execute_cmd_request(
+                str(getattr(message, "text", "") or ""),
+                user_id=user_id, chat_id=chat_id,
+                policy=approved_sender,
+                trusted_install_root=self.root,
+            )
+            self.runtime_log.write(
+                "CONNECT", component="remote_control_dispatcher",
+                stage="DIRECT_CMD_COMPLETED",
+                control_id=result["control_id"],
+                status=result["status"],
+                command_count=len(result["results"]),
+                exit_codes=[item.get("exit_code") for item in result["results"]],
+                # Never write raw shell text or captured output to log.
+            )
+            return result
+        except CmdControlError as exc:
+            self.runtime_log.write(
+                "ERROR", component="remote_control_dispatcher",
+                stage="DIRECT_CMD_REJECTED", reason=str(exc)[:120],
+            )
+            return {"message": "🔴 執行cmd安全拒絕：" + str(exc)[:180]}
+        except Exception as exc:
+            self.runtime_log.write(
+                "ERROR", component="remote_control_dispatcher",
+                stage="DIRECT_CMD_EXCEPTION", kind=type(exc).__name__,
+            )
+            return {"message": "🔴 執行cmd失敗：" + type(exc).__name__}
+        finally:
+            self._direct_cmd_lock.release()
 
     def _active_telegram_task(self, message: Any):
         from .task_state import (
@@ -465,6 +554,7 @@ class RemoteControlDispatcher:
     ) -> dict[str, Any]:
         """Return one task's ledger without accessing the browser session."""
         from .task_progress import format_telegram_status_view, read_progress
+        from .repair_stagnation import format_status as repair_status, read_observation
         from .task_state import RemoteTaskQueue, TaskStateStore
 
         chat_id = int(
@@ -494,6 +584,7 @@ class RemoteControlDispatcher:
                 "message": (
                     f"{note}\nrequest_id: {task.request_id}\n"
                     f"task_id: {task.task_id}\ntask_state: {state}"
+                    + repair_status(read_observation(self.root, task.task_id, task.request_id))
                 ),
                 "generation_active": not terminal,
                 "status_source": "task_progress_ledger",
@@ -505,6 +596,7 @@ class RemoteControlDispatcher:
                 format_telegram_status_view(ledger)
                 + f"\n\nrequest_id: {task.request_id}"
                 + f"\ntask_id: {task.task_id}\ntask_state: {state}"
+                + repair_status(read_observation(self.root, task.task_id, task.request_id))
             ),
             "generation_active": ledger.runtime_state == "PROCESSING",
             "status_source": "task_progress_ledger",
@@ -523,10 +615,12 @@ class RemoteControlDispatcher:
         execution = self._execution_status_for_task(task)
         if task is not None:
             from .task_progress import format_telegram_status_view, read_progress
+            from .repair_stagnation import format_status as repair_status, read_observation
             progress = read_progress(task.task_id, root=self.root)
             if progress is not None:
                 task_state = getattr(getattr(task, "state", ""), "value", getattr(task, "state", ""))
                 text = format_telegram_status_view(progress)
+                text += repair_status(read_observation(self.root, task.task_id, task.request_id))
                 text += f"\n\nTask\nID: {task.task_id}\nState: {task_state}"
                 if execution:
                     started = float(execution.get("started_at", 0) or 0)
@@ -570,6 +664,8 @@ class RemoteControlDispatcher:
             text = "WebGPT：目前沒有可操作的 browser session。" if unavailable else "WebGPT：目前無法取得 browser 狀態。"
 
         if task is not None:
+            from .repair_stagnation import format_status as repair_status, read_observation
+            text += repair_status(read_observation(self.root, task.task_id, task.request_id))
             task_state = getattr(getattr(task, "state", ""), "value", getattr(task, "state", ""))
             text += f"\n\nTask\nID: {task.task_id}\nState: {task_state}"
 

@@ -234,7 +234,14 @@ def _binding_menu() -> int:
         print("[!] 已取消。")
         return 1
     mode = "local" if mode_raw == "1" else "remote"
-    workspace = _choose_workspace("[2-1] 選擇可讀寫 Workspace", snapshot["writable_workspaces"])
+    # The binding's workspace is a transport/bootstrap fallback only.
+    # Per-task execution workspace is resolved from current request, then
+    # the recent three trusted tasks, then the configured primary writable root.
+    workspaces = list(snapshot["writable_workspaces"])
+    if not workspaces:
+        raise RuntimeError("workspace_writable_roots_not_configured")
+    workspace = workspaces[0]
+    print(f"工作路徑將由每次 Request 自動決定；傳輸預設目錄：{workspace}")
     current = snapshot[mode]
     print(f"目前 WebGPT1 URL：{current.get('gpt_url', '（尚未設定）')}")
     url = input("WebGPT1 對話頁面 URL: ").strip()

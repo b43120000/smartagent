@@ -486,10 +486,22 @@ def _wait_for_prewrite_stability(
     while clock() < deadline:
         attempts += 1
         current = _page_snapshot(scraper, prompt)
-        if not current.get("composer_empty") and not current.get("composer_matches"):
-            return dict(status="PREWRITE_FOREIGN_DRAFT",
-                        samples_observed=attempts,
-                        reason_code="FOREIGN_OR_UNKNOWN_DRAFT")
+        if not current.get("composer_empty"):
+            # TEMPORARY: reset the currently bound editor before every write.
+            if current.get("generation_active"):
+                return dict(status="PREWRITE_UNSTABLE", samples_observed=attempts,
+                            reason_code="GENERATION_ACTIVE")
+            candidates = scraper._read_composer_text_candidates()
+            primary = candidates[0] if candidates else None
+            if primary is None or not _atomic_clear_owned(scraper, primary):
+                return dict(status="PREWRITE_UNSTABLE", samples_observed=attempts,
+                            reason_code="TEMP_RESET_CLEAR_FAILED")
+            cleared = _page_snapshot(scraper, prompt)
+            if not cleared.get("composer_empty") or cleared.get("url") != current.get("url"):
+                return dict(status="PREWRITE_UNSTABLE", samples_observed=attempts,
+                            reason_code="TEMP_RESET_UNCONFIRMED")
+            consecutive, prior = 0, None
+            current = cleared
         try:
             editor = scraper._composer_locator()
             interactive = bool(
@@ -549,7 +561,9 @@ def _recover_page(scraper,record):
         and record.get('reason') == 'writer_exception_or_cancelled'
         and first['composer_empty'] and second['composer_empty']
         and first.get('url') == record.get('url') == second.get('url'))
-    if not _same_turns(first,second) or (not delivered and not pre_submit_empty and not _same_turns(record.get('baseline'),second)) or first['generation_active'] or second['generation_active']:
+    # TEMPORARY: ignore stale historical turn baseline after stable observations.
+    # Uncertain submit and active generation remain blocked below.
+    if not _same_turns(first,second) or first['generation_active'] or second['generation_active']:
         return dict(status='SCOPE_CHANGED_OR_BUSY',observation=second,
             comparison=dict(
                 recent_observations=_snapshot_difference(first,second),
@@ -570,7 +584,10 @@ def _recover_page(scraper,record):
     proof=[record.get('pending_prefix') or {},record.get('confirmed_prefix') or {}]
     owned=record.get('prompt_sha256') in draft['candidate_hashes'] or any(
         p.get('normalized_sha256') in draft['normalized_hashes'] for p in proof if p.get('normalized_sha256'))
-    if not owned:return dict(status='UNOWNED_DRAFT',observation=second)
+    # TEMPORARY: clear a foreign/unknown draft only on a stable, idle page.
+    # The atomic compare-and-clear still rejects concurrent manual edits.
+    if not owned and not _same_turns(first,second):
+        return dict(status='SCOPE_CHANGED_OR_BUSY',observation=second)
     if not _atomic_clear_owned(scraper,primary):
         return dict(status='DRAFT_CHANGED_BEFORE_CLEAR',observation=second)
     final=_page_snapshot(scraper,'')

@@ -58,6 +58,7 @@ class TaskProgressLedger:
     outcome: str = "PENDING"
     matched_condition: str = ""
     matched_condition_id: str = ""
+    fact_assertion: dict[str, str] = field(default_factory=dict)
     evidence_refs: list[str] = field(default_factory=list)
     decision_reason: str = ""
     runtime_state_ref: str = ""
@@ -96,6 +97,7 @@ class TaskProgressLedger:
             outcome=str(data.get("outcome", "PENDING") or "PENDING"),
             matched_condition=str(data.get("matched_condition", "") or ""),
             matched_condition_id=str(data.get("matched_condition_id", "") or ""),
+            fact_assertion=dict(data.get("fact_assertion") or {}),
             evidence_refs=[str(item) for item in list(data.get("evidence_refs") or [])],
             decision_reason=str(data.get("decision_reason", "") or ""),
             runtime_state_ref=str(data.get("runtime_state_ref", "") or ""),
@@ -458,6 +460,13 @@ def validate_model_progress(
             },
         )
     matched_condition_id = condition_id_for(condition_class, matched_condition)
+    # Planner assertions never replace a Runtime observation.
+    fact_assertion = payload.get("fact_assertion") or {}
+    if (not isinstance(fact_assertion, Mapping) or
+            (fact_assertion and (set(fact_assertion) not in ({"evidence_ref", "expected_state", "condition_id"}, {"evidence_ref", "expected_state", "condition_text"})
+             or any(not isinstance(v, str) or not v.strip() or len(v) > 256
+                    for v in fact_assertion.values())))):
+        raise TaskProgressError("fact_assertion_invalid", field="fact_assertion")
     # Empty evidence is only a *candidate* for a text-only terminal, never
     # verification evidence. V9 must still admit or reject the terminal.
     evidence_refs = _validate_evidence_refs(
@@ -485,6 +494,7 @@ def validate_model_progress(
         "decision": decision, "outcome": outcome,
         "matched_condition": matched_condition,
         "matched_condition_id": matched_condition_id,
+        "fact_assertion": dict(fact_assertion),
         "evidence_refs": evidence_refs,
         "decision_reason": decision_reason,
         "runtime_state_ref": runtime_state_ref,
@@ -514,6 +524,7 @@ def record_model_progress(
     outcome = normalized["outcome"]
     matched_condition = normalized["matched_condition"]
     matched_condition_id = normalized["matched_condition_id"]
+    fact_assertion = normalized["fact_assertion"]
     evidence_refs = normalized["evidence_refs"]
     decision_reason = normalized["decision_reason"]
     runtime_state_ref = normalized["runtime_state_ref"]
@@ -527,6 +538,7 @@ def record_model_progress(
         "decision": decision, "outcome": outcome,
         "matched_condition": matched_condition,
         "matched_condition_id": matched_condition_id,
+        "fact_assertion": dict(fact_assertion),
         "evidence_refs": evidence_refs,
         "runtime_state_ref": runtime_state_ref,
         "next_phase": next_phase,
@@ -542,7 +554,7 @@ def record_model_progress(
         repair_state=dict(ledger.repair_state),
         matched_condition=matched_condition,
         matched_condition_id=matched_condition_id,
-        evidence_refs=evidence_refs,
+        fact_assertion=fact_assertion, evidence_refs=evidence_refs,
         decision_reason=decision_reason,
         runtime_state_ref=runtime_state_ref, next_phase=next_phase,
         selected_action=selected_action,

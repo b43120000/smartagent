@@ -26,6 +26,38 @@ class TaskTransportContext:
         return self.transport in WEBGPT_TRANSPORTS
 
 
+def _dynamic_task_workspace_allowed(task: Any, workspace: Path) -> bool:
+    """Validate request-owned workspace without changing transport authority.
+
+    A dynamic task must carry Gateway-owned resolution provenance.  The workspace
+    must still exist inside a currently permitted writable root.  Neither a
+    WebGPT binding nor a task argument can add permission.
+    """
+    metadata = dict(getattr(task, "metadata", {}) or {})
+    if metadata.get("workspace_resolution_version") != 1:
+        return False
+    resolved = metadata.get("workspace_resolution")
+    if not isinstance(resolved, dict) or not resolved.get("workspace"):
+        raise RuntimeError("remote_task_workspace_resolution_missing")
+    from .path_security import is_within, reject_reparse_components, PathSecurityError
+    from .workspace_access import access_snapshot
+    expected = Path(str(resolved["workspace"])).expanduser().resolve()
+    if expected != workspace:
+        raise RuntimeError("remote_task_workspace_resolution_mismatch")
+    if not workspace.is_dir():
+        raise RuntimeError("remote_workspace_unavailable")
+    roots = access_snapshot().get("writable_workspaces", ())
+    for value in roots:
+        root = Path(value).expanduser().resolve()
+        if is_within(workspace, root):
+            try:
+                reject_reparse_components(workspace, root)
+            except PathSecurityError as exc:
+                raise RuntimeError("remote_task_workspace_not_authorized") from exc
+            return True
+    raise RuntimeError("remote_task_workspace_not_authorized")
+
+
 def task_transport(task: Any) -> str:
     metadata = dict(getattr(task, "metadata", {}) or {})
     reply_route = dict(getattr(task, "reply_route", {}) or metadata.get("reply_route") or {})
@@ -43,6 +75,7 @@ def validate_task_transport(task: Any, *, registry=None) -> TaskTransportContext
     if not workspace.is_dir():
         raise RuntimeError("remote_workspace_unavailable")
 
+    dynamic = _dynamic_task_workspace_allowed(task, workspace)
     metadata = dict(getattr(task, "metadata", {}) or {})
     reply_route = dict(getattr(task, "reply_route", {}) or metadata.get("reply_route") or {})
     conversation_key = str(
@@ -54,7 +87,13 @@ def validate_task_transport(task: Any, *, registry=None) -> TaskTransportContext
 
     if transport in WEBGPT_TRANSPORTS:
         chatgpt_url = str(getattr(task, "conversation_url", "") or "").strip()
-        if registry is None or registry.find(str(workspace), chatgpt_url) is None:
+        registered = (
+            registry.find_by_url(chatgpt_url)
+            if dynamic and registry is not None
+            else registry.find(str(workspace), chatgpt_url) if registry is not None
+            else None
+        )
+        if registered is None:
             raise RuntimeError("remote_task_origin_not_registered")
         return TaskTransportContext(
             transport=transport,
@@ -105,9 +144,14 @@ def resolve_task_execution_chatgpt_url(task: Any, *, registry) -> str:
     from .remote_binding import active
     binding = active()
     if binding:
-        if normalize_workspace_path(str(getattr(task, 'workspace', '') or '')) != binding['workspace']:
-            raise RuntimeError('remote_task_workspace_binding_mismatch')
-        return binding['gpt_url']
+        # The binding owns the execution WebGPT URL, NOT a dynamic Task's cwd.
+        # Preserve the strict equality rule for legacy tasks (no provenance).
+        workspace = normalize_workspace_path(str(getattr(task, "workspace", "") or ""))
+        if (task.metadata or {}).get("workspace_resolution_version") == 1:
+            validate_task_transport(task, registry=registry)
+        elif workspace != binding["workspace"]:
+            raise RuntimeError("remote_task_workspace_binding_mismatch")
+        return binding["gpt_url"]
     context = validate_task_transport(task, registry=registry)
     if context.chatgpt_url:
         return _new_chat_execution_url(context.chatgpt_url)
