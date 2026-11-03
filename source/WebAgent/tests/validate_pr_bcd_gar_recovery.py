@@ -73,6 +73,66 @@ def run():
     # The same rejected operation cannot become a fabricated SUCCESS.
     assert read.action_result_ledger["LIST-REJECTED"]["result_status"] == "REJECTED"
 
+    # Live L03: a known rejected metadata read plus two NOT_EXECUTED,
+    # read-only dependents is a safe *replanning* condition, not an unknown
+    # in-flight mutation. The blocked chain itself is never replayed by GAR.
+    chain = mock_loop()
+    chain.action_ledger = {"META-DENIED": {
+        "action": {"tool": "inspect_directory", "action_id": "META-DENIED"},
+        "execution_status": "FAILED",
+    }}
+    chain.action_result_ledger = {"META-DENIED": {
+        "executed": False, "result_status": "REJECTED",
+        "execution_status": "FAILED", "effective_verification_status": "UNKNOWN",
+    }}
+    for ref, parent, action in [
+        ("INSPECT-NOT-RUN", "META-DENIED", {
+            "tool": "run_command", "operation": "INSPECT",
+            "command": "Get-Item -LiteralPath 'C:\\\\fixture\\\\safe.whl'",
+        }),
+        ("DEPS-NOT-RUN", "INSPECT-NOT-RUN", {"tool": "list_directory", "path": "deps"}),
+    ]:
+        action.update({"action_id": ref, "depends_on": [parent]})
+        chain.deferred_action_repairs[ref] = {
+            "action_id": ref, "tool": action["tool"], "action": action,
+            "status": "BLOCKED_DEPENDENCY", "executed": False,
+        }
+    chain.action_loop_state = {"blockers": [
+        {"blocking_action_id": "META-DENIED", "reason": "REPLAN_REQUIRED",
+         "execution_status": "FAILED", "satisfied": False},
+        {"blocking_action_id": "INSPECT-NOT-RUN", "reason": "BLOCKED_DEPENDENCY",
+         "execution_status": "NOT_EXECUTED", "satisfied": False},
+        {"blocking_action_id": "DEPS-NOT-RUN", "reason": "BLOCKED_DEPENDENCY",
+         "execution_status": "NOT_EXECUTED", "satisfied": False},
+    ]}
+    assert_safe(chain._gar_snapshot())
+    # A blocked mutation is not covered by this exception.
+    chain.deferred_action_repairs["MUTATE-NOT-RUN"] = {
+        "action_id": "MUTATE-NOT-RUN", "tool": "run_command",
+        "status": "BLOCKED_DEPENDENCY", "executed": False,
+        "action": {"tool": "run_command", "operation": "MUTATE",
+                   "action_id": "MUTATE-NOT-RUN", "depends_on": ["META-DENIED"]},
+    }
+    assert chain._gar_snapshot()["pending_operations"]["deferred_action_repairs"]
+
+    # Live L05: a typed FILE_NOT_FOUND read is a completed observation of
+    # absence, even though it cannot be counted as a successful file read.
+    absent = mock_loop()
+    absent.action_ledger = {"MISSING-INDEX": {
+        "action": {"tool": "read_file", "action_id": "MISSING-INDEX"},
+        "execution_status": "FAILED",
+    }}
+    absent.action_result_ledger = {"MISSING-INDEX": {
+        "executed": False, "result_status": "FAILED",
+        "execution_status": "FAILED", "result_reason": "FILE_NOT_FOUND",
+        "effective_verification_status": "UNKNOWN",
+    }}
+    absent.action_loop_state = {"blockers": [{
+        "blocking_action_id": "MISSING-INDEX", "reason": "REPLAN_REQUIRED",
+        "execution_status": "FAILED", "satisfied": False,
+    }]}
+    assert_safe(absent._gar_snapshot())
+
     # A malformed, never-executed command is allowed bounded field repair.
     y = mock_loop()
     y.pending_command_field_repairs = {"MUTATE-1": {
