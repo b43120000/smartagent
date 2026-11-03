@@ -214,7 +214,7 @@
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "4c80713f9280f685d13592a381d6dceccdcab802f8337c19e8ea805b16badfd0",
     "source/agent_core/dependency_adapters.py": "62ce738c21f4abf3dab1c0486312fae6027886aa105ffb6cdaad554b48568df4",
-    "source/agent_core/prerequisite_runtime_v3.py": "02ed123342acc29c3e49ab8bf4adcb86fd7249952345d64e86f086991c253a48",
+    "source/agent_core/prerequisite_runtime_v3.py": "936c9c1b2efda8677b2f72f6ec464a79587f608bd44a21610d90e4c09883d5b7",
     "source/agent_core/repair_stagnation.py": "5011bd11bf11c8660e24aab7a850b75cb56a6657a21989bf38b04e01a49cf0ae",
     "source/agent_core/task_workspace_resolver.py": "519e26068464784fd005e8857eede24d3096ff4dd6f0612726811d6c6834294d",
     "source/agent_core/task_transport.py": "57089b1bce75c87e71260637099ecd97a223b2f4b3550bf9c91aa326f1ecab06",
