@@ -209,7 +209,7 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "e0489c524c36e712e42f886fd7b380c02d0ff38a60b101583f53f2fc3504086a",
+    "source/WebAgent/protocol_loop.py": "d159236e2c925ef306f87d7d1940242b9e0ca5463ae471138797347c4ede9a21",
     "source/WebAgent/protocol.py": "22db16ad441169a24e425de1d05d122d67d6af2d1e634db63864e530a5a2770a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "4c80713f9280f685d13592a381d6dceccdcab802f8337c19e8ea805b16badfd0",
@@ -223,7 +223,8 @@
     "source/agent_core/evidence_identity_audit.py": "3a89f90e0836a8fa5b81071b38e1eff43cfe7c1527ffe7967f7fb226fd99f238",
     "source/agent_core/pr_bcd_request_scope.py": "5566da70e22babb8f7dfebfb5dc80347aa3d507ebe47db30591a6acad6902c65",
     "source/RemoteAgent/telegram_direct_cmd.py": "d05e35d8aac9ac738e9606f3b6aa31b1b9dbb9d3af65b66507041b2a8f174380",
-    "source/agent_core/pr_bcd_observation_evidence.py": "3bb806780709bf7e758b00941c6356f5ebc9ca7dad062d13f283c379b65531a0"
+    "source/agent_core/pr_bcd_observation_evidence.py": "3bb806780709bf7e758b00941c6356f5ebc9ca7dad062d13f283c379b65531a0",
+    "source/agent_core/bp1_observation_terminal.py": "20373b7b1ea74826122d56907cf59824596c6e7bb1fcf8c3b045d1c8c5e792e0"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
