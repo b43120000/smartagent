@@ -172,6 +172,7 @@ CORE_FILES = (
     'source/agent_core/evidence_identity_audit.py',
     'source/agent_core/pr_bcd_request_scope.py',
     'source/agent_core/pr_bcd_observation_evidence.py',
+    'source/agent_core/bp1_observation_terminal.py',
     'source/agent_core/environment_fact_contract.py',
     'source/agent_core/prerequisite_runtime_v3.py',
     'source/agent_core/dependency_adapters.py',
