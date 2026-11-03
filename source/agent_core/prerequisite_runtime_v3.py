@@ -240,7 +240,7 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
     # install/write" clauses as a hard denial; never mint authorization here.
     scoped_restrictions = re.compile(
         r"禁止其他專案路徑寫入|"
-        r"(?:禁止|不得|不要|請勿)修改\\s*SmartAgent\\s*共用\\s*Python\\s*環境",
+        r"(?:禁止|不得|不要|請勿)修改[ ]*SmartAgent[ ]*共用[ ]*Python[ ]*環境",
         re.I,
     )
     remediation_intent_text = scoped_restrictions.sub("", text)
