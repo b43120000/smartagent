@@ -152,6 +152,62 @@ def observe_composer(payload, timeout_sec, cancel_check=None):
     return result
 
 
+def reset_initialization_composer(*, endpoint, url, journal_root, cancel_check=None):
+    """TEMPORARY: discard stale recovery state ONLY during WebAgent initialization.
+
+    A unique bound ChatGPT tab is observed, the editor is emptied, and the
+    previous journal is retired only after a confirmed empty readback.
+    Normal requests never call this function.
+    """
+    from .process_file_lock import exclusive_process_lock
+
+    parsed = urlsplit(endpoint)
+    if parsed.scheme not in {'http', 'ws'} or parsed.hostname not in {'127.0.0.1', 'localhost', '::1'}:
+        raise ComposerOperationError('composer_endpoint_not_local')
+    root = Path(journal_root)
+    root.mkdir(parents=True, exist_ok=True)
+    with exclusive_process_lock(root / (page_key(endpoint, url) + '.lock'),
+                                timeout_sec=1.0, label='composer_init_reset'):
+        journal = root / (page_key(endpoint, url) + '.json')
+        existed = journal.exists()
+        record = read_json_retry(journal) if existed else {
+            'operation_id': uuid.uuid4().hex,
+            'url': url,
+            'state': 'QUARANTINED',
+            'reason': 'initialization_reset_pending',
+        }
+        if not existed:
+            write_json_atomic(journal, record)
+        payload = dict(mode='initialization_reset', endpoint=endpoint, url=url,
+                       prompt='', journal=str(journal),
+                       operation_id=record['operation_id'])
+        result = run_helper(payload, 15.0, cancel_check)
+        if cancel_check:
+            cancel_check()
+        if result.get('status') != 'INIT_RESET_CONFIRMED':
+            raise ComposerOperationError(
+                'composer_initialization_reset_required:'
+                + str(result.get('status', 'UNKNOWN')), result)
+        latest = read_json_retry(journal)
+        if latest.get('operation_id') != record['operation_id']:
+            raise ComposerOperationError('composer_initialization_reset_identity_changed')
+        prior_state = latest.get('state')
+        if existed:
+            archive = journal.with_name(journal.stem + '.history')
+            archive.mkdir(exist_ok=True)
+            archived = dict(latest, initialization_reset_reason='user_authorized_init_only')
+            write_json_atomic(archive / (latest['operation_id'] + '.json'), archived)
+        latest.update(
+            state='RECOVERED',
+            initialization_reset=dict(status='INIT_RESET_CONFIRMED',
+                                      prior_state=prior_state,
+                                      cleared=bool(result.get('cleared'))),
+        )
+        write_json_atomic(journal, latest)
+        return dict(status='INIT_RESET_CONFIRMED',
+                    prior_state=prior_state, cleared=bool(result.get('cleared')))
+
+
 def prepare_composer(*,endpoint,url,prompt,journal_root,timeout_sec=30.0,
                      observation_timeout_sec=8.0,cancel_check=None,hybrid=False):
     from .process_file_lock import exclusive_process_lock
@@ -907,6 +963,39 @@ def helper_main():
             return
         scraper=WebLLMScraper('chatgpt',slow_mo=0)
         scraper._page=pages[0];scraper._browser=pages[0].context
+        if payload['mode']=='initialization_reset':
+            # Never follow a navigation, submit, or touch another tab.
+            first = _page_snapshot(scraper, '')
+            time.sleep(.35)
+            second = _page_snapshot(scraper, '')
+            editor = scraper._composer_locator()
+            try:
+                interactive = bool(editor is not None and editor.is_visible()
+                                   and editor.is_enabled() and editor.is_editable())
+            except Exception:
+                interactive = False
+            if (not interactive or not _same_turns(first, second)
+                    or first.get('generation_active') or second.get('generation_active')):
+                status = 'INIT_RESET_PAGE_NOT_STABLE'
+                print('COMPOSER_RESULT ' + json.dumps({'status': status}), flush=True)
+                return
+            changed = False
+            if not second['composer_empty']:
+                candidates = scraper._read_composer_text_candidates()
+                primary = candidates[0] if candidates else None
+                if primary is None or not _atomic_clear_owned(scraper, primary):
+                    print('COMPOSER_RESULT ' + json.dumps(
+                        {'status': 'INIT_RESET_CLEAR_FAILED'}), flush=True)
+                    return
+                changed = True
+            final = _page_snapshot(scraper, '')
+            ready = (final.get('composer_empty') is True
+                     and not final.get('generation_active')
+                     and _same_turns(second, final))
+            print('COMPOSER_RESULT ' + json.dumps(
+                {'status': 'INIT_RESET_CONFIRMED' if ready else 'INIT_RESET_UNCONFIRMED',
+                 'cleared': changed}), flush=True)
+            return
         if payload['mode']=='inspect':
             target=payload.get('prompt','')
             comparison=[]
