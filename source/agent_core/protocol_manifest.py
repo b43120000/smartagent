@@ -169,6 +169,7 @@ CORE_FILES = (
     'source/agent_core/tri_one_shared_worker.py',
     'source/agent_core/current_conversation_adapter.py',
     'source/agent_core/tool_capabilities.py',
+    'source/agent_core/semantic_capability_resolution.py',
     'source/agent_core/evidence_identity_audit.py',
     'source/agent_core/pr_bcd_request_scope.py',
     'source/agent_core/pr_bcd_observation_evidence.py',
