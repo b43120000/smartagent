@@ -195,6 +195,24 @@ class BP1TerminalR17(unittest.TestCase):
                          "command": f"Get-Item -LiteralPath '{wheel}'", "verify": []},
                         {"tool": "list_directory", "action_id": ids[3], "path": str(deps)},
                     ])
+                # Status-only CI diagnostic; never disclose project paths or raw tool output.
+                graph = loop._pr_a_ledger.read("TASK-R17-E2E") if loop._pr_a_ledger else {}
+                print("R17_PR_A_STATUS", {
+                    "id_ok": graph.get("task_id") == "TASK-R17-E2E",
+                    "request_ok": graph.get("request_id") == "RR-R17-E2E",
+                    "nodes": {
+                        k: (graph.get("nodes") or {}).get("action:" + k.lower(), {}).get("state")
+                        for k in ids
+                    },
+                    "evidence": {
+                        k: (
+                            (loop.action_result_ledger.get(k) or {}).get("observation_proof_reason"),
+                            (loop.action_result_ledger.get(k) or {}).get("observation_proof_admitted"),
+                            (loop.action_result_ledger.get(k) or {}).get("result_status"),
+                            (loop.action_result_ledger.get(k) or {}).get("evidence_status"),
+                        ) for k in ids
+                    },
+                }, flush=True)
                 return response({
                     "tool": "report_progress", "action_id": "P-R17-FINAL",
                     "decision": "COMPLETE", "outcome": "SUCCESS",
