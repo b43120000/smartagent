@@ -38,6 +38,33 @@ function Safe-CodeList($items) {
     }
     return ,@($result | Select-Object -First 40)
 }
+function Redact-TelegramFinal([string]$value) {
+    # Bounded outbound Telegram terminal prose only, never raw inbound messages,
+    # Bot API requests, browser DOM, unfiltered tool results, or credentials.
+    $safe = [string]$value
+    if ($safe.Length -gt 48000) {
+        $safe = $safe.Substring(0, 48000) + [Environment]::NewLine + '[TELEGRAM_SUMMARY_TRUNCATED]'
+        $script:telegramTextTruncated = $true
+    }
+    $patterns = @(
+        @{ p = '(?i)(?:/bot)?[0-9]{6,12}:[A-Za-z0-9_-]{20,}'; r = '[REDACTED_TELEGRAM_TOKEN]' },
+        @{ p = '(?i)(Bearer\s+)[A-Za-z0-9._~+/-]{12,}'; r = '$1[REDACTED_BEARER]' },
+        @{ p = '(?im)\b((?:bot[_-]?token|access[_-]?token|api[_-]?key|client[_-]?secret|password|passwd|authorization|session[_-]?key|secret)\s*[:=]\s*)[^\r\n]+'; r = '$1[REDACTED_SECRET]' },
+        @{ p = '(?i)([?&](?:api_key|access_token|token|secret|password|key)=)[^&#\s]+'; r = '$1[REDACTED_SECRET]' },
+        @{ p = '(?i)pair_[A-Za-z0-9_-]{16,}'; r = 'pair_[REDACTED]' },
+        @{ p = '(?is)-----BEGIN (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----.*?-----END (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----'; r = '[REDACTED_PRIVATE_KEY]' }
+    )
+    foreach ($rule in $patterns) {
+        $rx = New-Object System.Text.RegularExpressions.Regex([string]$rule.p)
+        $count = $rx.Matches($safe).Count
+        if ($count -gt 0) {
+            $script:telegramRedactionCount += $count
+            $safe = $rx.Replace($safe, [string]$rule.r)
+        }
+    }
+    return $safe
+}
+
 function Hash-Text([string]$text) {
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
@@ -339,6 +366,135 @@ try {
     Write-Json (Join-Path $stage 'pr_bcd_recovery_summary.json') $prBCDSummary
     Write-Json (Join-Path $stage 'timeline.json') @($timeline.ToArray())
 
+    # RemoteEventStore persists the Telegram OUTBOUND terminal summary after
+    # worker completion. Select by BOTH IDs when available; never include any
+    # reply_route/chat_id, raw Telegram update, or original event payload.
+    $script:telegramRedactionCount = 0
+    $script:telegramTextTruncated = $false
+    $telegramSummary = [ordered]@{
+        schema='SMARTAGENT_TELEGRAM_TERMINAL_RCA_V1'
+        found=$false
+        source='localdata/runtime/remote_events.json'
+        selection='NOT_FOUND'
+        request_task_bound=$false
+        delivery_confirmed=$false
+        summary_present=$false
+        summary_truncated=$false
+        redaction_count=0
+        terminal_event_type=''
+        event_id=''
+        delivery_state=''
+    }
+    $telegramMessage = '[TELEGRAM_TERMINAL_NOT_FOUND] No matching Telegram terminal event was persisted for the selected Task/Request.'
+    $tgStoreFile = Join-Path $root 'localdata\runtime\remote_events.json'
+    try {
+        if (Test-Path -LiteralPath $tgStoreFile -PathType Leaf) {
+            if ((Get-Item -LiteralPath $tgStoreFile).Length -gt 33554432) {
+                $telegramSummary.selection = 'SOURCE_OVERSIZED'
+                $warnings.Add('Telegram remote_events.json exceeds 32 MiB; skipped.')
+            } else {
+                $tgStore = Read-Json $tgStoreFile
+                if ($null -eq $tgStore -or $null -eq $tgStore.events) {
+                    $telegramSummary.selection = 'SOURCE_UNREADABLE'
+                    $warnings.Add('Telegram terminal source malformed or unreadable.')
+                } else {
+                    $matches = @()
+                    foreach ($entry in $tgStore.events.PSObject.Properties) {
+                        $ev = $entry.Value
+                        if ($null -eq $ev) { continue }
+                        if ($ev.event_type -notin @('TASK_COMPLETED','TASK_FAILED','TASK_PAUSED','TASK_INTERRUPTED')) { continue }
+                        if ([string]$ev.reply_route.transport -ne 'TELEGRAM') { continue }
+                        if ($task -and [string]$ev.task_id -cne $task) { continue }
+                        if ($request -and [string]$ev.request_id -cne $request) { continue }
+                        $matches += $ev
+                    }
+                    if ($matches.Count -gt 0) {
+                        $chosen = @($matches | Sort-Object -Property @{ Expression={ [double]$_.created_at }; Descending=$true })[0]
+                        $p = $chosen.payload
+                        $rawSummary = [string]$p.summary
+                        if (-not $rawSummary -and $chosen.event_type -eq 'TASK_FAILED') {
+                            $rawSummary = [string]$p.error
+                        }
+                        $telegramSummary.found = $true
+                        $telegramSummary.selection = 'MATCHED_TERMINAL_EVENT'
+                        $telegramSummary.request_task_bound = [bool]($task -and $request)
+                        $telegramSummary.task_id = (Safe-Code $chosen.task_id)
+                        $telegramSummary.request_id = (Safe-Code $chosen.request_id)
+                        $telegramSummary.event_id = (Safe-Code $chosen.event_id)
+                        $telegramSummary.terminal_event_type = (Safe-Code $chosen.event_type)
+                        $telegramSummary.status = (Safe-Code $chosen.status)
+                        $telegramSummary.delivery_state = (Safe-Code $chosen.delivery_state)
+                        $telegramSummary.delivery_confirmed = ([string]$chosen.delivery_state -eq 'DELIVERED')
+                        $telegramSummary.delivery_attempts = [int]$chosen.attempts
+                        $telegramSummary.created_at_unix = [double]$chosen.created_at
+                        $telegramSummary.delivered_at_unix = [double]$chosen.delivered_at
+                        $telegramSummary.task_outcome = (Safe-Code $p.task_outcome)
+                        $telegramSummary.summary_present = (-not [string]::IsNullOrWhiteSpace($rawSummary))
+                        if ($telegramSummary.summary_present) {
+                            $telegramSummary.raw_summary_sha256 = Hash-Text $rawSummary
+                            $rendered = Redact-TelegramFinal $rawSummary
+                            $lines = @(
+                                '[TELEGRAM_WORKER_TERMINAL_SUMMARY_REDACTED]',
+                                ('event_id: ' + $telegramSummary.event_id),
+                                ('event_type: ' + $telegramSummary.terminal_event_type),
+                                ('delivery_state: ' + $telegramSummary.delivery_state),
+                                ('request_id: ' + $telegramSummary.request_id),
+                                ('task_id: ' + $telegramSummary.task_id),
+                                '----- SUMMARY -----',
+                                $rendered
+                            )
+                            $telegramMessage = $lines -join [Environment]::NewLine
+                        } else {
+                            $telegramMessage = '[TELEGRAM_TERMINAL_EMPTY] Event exists but worker summary is empty.'
+                        }
+                        $telegramSummary.summary_truncated = [bool]$script:telegramTextTruncated
+                        $telegramSummary.redaction_count = [int]$script:telegramRedactionCount
+                        $terminal = $p.terminal_acceptance
+                        if ($null -ne $terminal) {
+                            $telegramSummary.terminal_acceptance = [ordered]@{
+                                admission_status=(Safe-Code $terminal.admission_status)
+                                decision=(Safe-Code $terminal.decision)
+                                outcome=(Safe-Code $terminal.outcome)
+                                runtime_state=(Safe-Code $terminal.runtime_state)
+                                receipt_id=(Safe-Code $terminal.receipt_id)
+                            }
+                        }
+                        $receipt = $p.delivery_receipt
+                        if ($null -ne $receipt) {
+                            $telegramSummary.delivery_receipt = [ordered]@{
+                                receipt_id=(Safe-Code $receipt.receipt_id)
+                                transport=(Safe-Code $receipt.transport)
+                                receipt_kind=(Safe-Code $receipt.receipt_kind)
+                                adapter_confirmed=[bool]$receipt.adapter_confirmed
+                                reconciled_observed=[bool]$receipt.reconciled_observed
+                                message_count=[int]$receipt.message_count
+                                provider_message_id_count=[int]$receipt.provider_message_id_count
+                            }
+                        }
+                        if (-not $telegramSummary.delivery_confirmed) {
+                            $warnings.Add('Telegram terminal exists but delivery_state is not DELIVERED.')
+                        }
+                    } else {
+                        $telegramSummary.selection = 'NO_MATCHING_TELEGRAM_TERMINAL_EVENT'
+                    }
+                }
+            }
+        } else {
+            $telegramSummary.selection = 'SOURCE_MISSING'
+        }
+    } catch {
+        $telegramSummary.selection = 'SOURCE_READ_ERROR'
+        $telegramSummary.found = $false
+        $telegramSummary.delivery_confirmed = $false
+        $telegramMessage = '[TELEGRAM_TERMINAL_UNAVAILABLE] Collector could not read the persisted Telegram event.'
+        $warnings.Add('Telegram outbound terminal extraction failed: ' + $_.Exception.GetType().Name)
+    }
+    Write-Json (Join-Path $stage 'telegram_terminal_summary.json') $telegramSummary
+    [IO.File]::WriteAllText(
+        (Join-Path $stage 'telegram_final_reply_redacted.txt'),
+        [string]$telegramMessage, (New-Object Text.UTF8Encoding $false)
+    )
+
     $head = ''
     $branch = ''
     try {
@@ -374,6 +530,10 @@ try {
         snapshot_count=@($snapshots).Count
         pr_a_ledger_found=[bool]$prASummary.found
         pr_bcd_ledger_found=[bool]$prBCDSummary.found
+        telegram_terminal_found=[bool]$telegramSummary.found
+        telegram_delivery_confirmed=[bool]$telegramSummary.delivery_confirmed
+        telegram_summary_present=[bool]$telegramSummary.summary_present
+        telegram_summary_truncated=[bool]$telegramSummary.summary_truncated
         collector_process_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
         log_sources=$sourceInfo.ToArray()
         source_sha256=$fingerprints
@@ -385,7 +545,8 @@ try {
         'Read-only collection. Runtime/Source/Task state was not modified.',
         'Data: request-scoped timeline (event codes, counters, model tool/operation names only),',
 'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
-        'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram payloads,',
+        'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
+        'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
         'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
         'Note: collector_process_l4_enabled reflects this CLI process, not a previously started Worker.',
         'Scan-window limit: most recent 25000 lines per known JSONL source.',
@@ -400,6 +561,7 @@ try {
     Write-Host ('[COLLECT] Request: ' + $request)
     Write-Host ('[COLLECT] Matched events: ' + $timeline.Count)
     Write-Host ('[COLLECT] GAR snapshots: ' + @($snapshots).Count)
+    Write-Host ('[COLLECT] Telegram terminal found: ' + [bool]$telegramSummary.found + '; delivery confirmed: ' + [bool]$telegramSummary.delivery_confirmed)
     Write-Host ('[COLLECT] ZIP: ' + $zip)
     if ($timeline.Count -eq 0) {
         Write-Warning 'No matching events found. Confirm that this is the checkout actually used for Live, or pass Task/Request IDs.'
