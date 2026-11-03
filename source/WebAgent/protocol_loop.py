@@ -3650,6 +3650,29 @@ class WebAgentProtocolLoop:
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
         operational = [action for action in actions if action.get("tool") != "report_progress"]
+        # Accept only finite semantic capabilities, with request/epoch identity.
+        from agent_core.semantic_capability_resolution import (
+            SCHEMA as SCR_SCHEMA, SemanticCapabilityError, verify_resolution_for_actions,
+        )
+        bound = getattr(self.tools, "_runtime_semantic_capability_resolution", None)
+        old_resolution = ({
+            "schema": SCR_SCHEMA,
+            "capabilities": sorted(bound["capabilities"]),
+        } if isinstance(bound, dict)
+          and bound.get("request_id") == self.run_id
+          and bound.get("task_epoch") == self.task_epoch else None)
+        if bound is not None and old_resolution is None:
+            return [], [{"marker": "[WEBAGENT_SEMANTIC_CAPABILITY_REJECTED]",
+                "reason": "semantic_capability_binding_identity_mismatch"}]
+        try:
+            verify_resolution_for_actions(
+                normalized_progress_action.get("capability_resolution"),
+                old_resolution, operational,
+            )
+        except SemanticCapabilityError as exc:
+            return [], [{"marker": "[WEBAGENT_SEMANTIC_CAPABILITY_REJECTED]",
+                "reason": str(exc), "suggestion":
+                "Use the finite read-only SCR registry. Do not change permission or scope."}]
         from agent_core.strict_observation_guard import strict_observation_action_diagnostic
         strict_diagnostic = strict_observation_action_diagnostic(
             getattr(self, "task_request", ""), operational,
@@ -5772,6 +5795,18 @@ class WebAgentProtocolLoop:
                     self.progress_ledger.completion_contract,
                     request_id=self.run_id, task_epoch=self.task_epoch,
                 )
+            # Commit SCR only after ACK and Progress acceptance; never in probes.
+            bind_semantics = getattr(self.tools, "bind_runtime_capability_resolution", None)
+            if bind_semantics is not None and "capability_resolution" in progress_action:
+                bind_semantics(
+                    progress_action["capability_resolution"],
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                )
+                self._emit("semantic_capability_resolution_bound",
+                    request_id=self.run_id, task_id=self.task_id,
+                    task_epoch=self.task_epoch,
+                    capabilities=list(progress_action["capability_resolution"]["capabilities"]),
+                    grants_authorization=False)
             if len(actions) == 1:
                 NarrativeDecisionBridge.mark_terminal_result(
                     action_id=str(progress_action.get("action_id", "")),
@@ -6128,7 +6163,8 @@ class WebAgentProtocolLoop:
                             "explicit_path_scope_requires_path",
                             "resolved_scope_expands_beyond_explicit_path",
                             "path_independent_command_cwd_outside_bound_workspace",
-                            "directory_listing_requires_list_directory",
+                            "semantic_capability_not_selected",
+                            "semantic_capability_binding_identity_mismatch",
                             "request_write_ceiling_unresolved",
                             "request_write_ceiling_command_unverified",
                             "request_write_ceiling_tool_not_authorized",

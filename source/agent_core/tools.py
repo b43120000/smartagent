@@ -109,59 +109,6 @@ def _read_bounded_bytes(path: Path) -> bytes:
         return stream.read(READ_FILE_TEXT_MAX_BYTES + 1)
 
 
-def _directory_listing_request(agent) -> bool:
-    text = str(getattr(agent, "current_request_text", "") or "")
-    # Negated mentions are not affirmative listing instructions. Keep any
-    # separate positive listing instruction intact; this never changes scope.
-    text = re.sub(r'(?:不是|並非|不要|禁止|不得|不需要|無需|不必)\s*(?:再|去|要)?\s*(?:列出|顯示)', '', text)
-    text = re.sub(r"\b(?:do not|don't|never|no need to)\s+(?:list (?:the )?files|show files|show directory contents)\b", '', text, flags=re.I)
-    lowered = text.casefold()
-    chinese_listing = any(token in text for token in ("列出", "顯示", "有哪些檔案", "有什麼檔案")) and any(
-        token in text for token in ("檔案", "文件", "目錄", "資料夾", "路徑下")
-    )
-    english_listing = any(
-        token in lowered
-        for token in ("list files", "list the files", "show files", "directory contents")
-    )
-    return bool(chinese_listing or english_listing)
-
-
-
-def _request_explicitly_requires_observation(agent, tool: str) -> bool:
-    """Do not collapse a multi-capability goal into a listing-only request.
-
-    User-requested metadata inspection is a separate read capability from
-    listing filenames. This grants *no* scope or write permission: every
-    action still passes the normal canonical-path and SecurityContext gates.
-    """
-    goal = str(getattr(agent, "current_request_text", "") or "")
-    lowered = goal.casefold()
-    # An explicit prohibition wins even if the tool name appears in a long
-    # context or a pasted example. Never treat "do not inspect" as a grant.
-    if re.search(
-        r"(?:禁止|不得|不要|請勿|不允許|do not|never)\s*"
-        r"(?:(?:使用|執行|呼叫|use|run|call)\s*)?"
-        + re.escape(tool) + r"\b",
-        goal, re.I,
-    ):
-        return False
-    names = {
-        "inspect_directory": (
-            "inspect_directory", "目錄統計", "資料夾統計", "目錄 metadata",
-            "directory metadata", "directory statistics",
-        ),
-        "inspect_project_scope": (
-            "inspect_project_scope", "專案範圍檢查", "project scope inspection",
-        ),
-        "inspect_project_working_set": (
-            "inspect_project_working_set", "工作集合檢查", "working set inspection",
-        ),
-        "find_file": ("find_file", "尋找檔案", "搜尋檔案", "find file"),
-    }
-    return any(token.casefold() in lowered for token in names.get(tool, ()))
-
-
-
 def _explicit_request_paths(agent) -> list[Path]:
     roots: list[Path] = []
     for raw in tuple(getattr(agent, "_authorized_local_paths", ()) or ()):
@@ -229,9 +176,16 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
 
     try:
         security_context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
-        if (_directory_listing_request(agent) and tool != "list_directory"
-                and not _request_explicitly_requires_observation(agent, tool)):
-            raise ValueError("directory_listing_requires_list_directory")
+        # SCR: bind only structured Runtime-validated capabilities, not prose.
+        from .semantic_capability_resolution import TOOL_TO_CAPABILITY
+        capability = TOOL_TO_CAPABILITY.get(tool)
+        binding = getattr(agent, "_runtime_semantic_capability_resolution", None)
+        if capability and isinstance(binding, dict):
+            if (binding.get("request_id") != getattr(agent, "current_request_id", None)
+                    or binding.get("task_epoch") != getattr(agent, "current_task_epoch", None)):
+                raise ValueError("semantic_capability_binding_identity_mismatch")
+            if capability not in binding.get("capabilities", ()):
+                raise ValueError("semantic_capability_not_selected:" + tool)
         if tool == "inspect_project_scope":
             unsupported = sorted(_PROJECT_SCOPE_UNSUPPORTED_FIELDS.intersection(tool_call))
             if unsupported:

@@ -10,6 +10,7 @@ from agent_core.tool_capabilities import get_allowed_tools, render_protocol_tool
 from agent_core.recovery_protocol import INITIALIZATION_CAPABILITY_MODE
 from agent_core.protocol_v9 import SINGLE_FENCE_TRANSPORT_CONTRACT
 from agent_core.task_plan import task_plan_schema_contract
+from agent_core.semantic_capability_resolution import render_planner_contract
 
 WEBAGENT_PROTOCOL_NAME = "web_agent_direct"
 WEBAGENT_PROTOCOL_VERSION = 9
@@ -64,6 +65,7 @@ def render_initial_planner_toolkit(environment: dict | None = None) -> str:
         "而是以這些 typed tools 指揮 Runtime。建立第一份 report_progress 前，先依原始目標與 Base "
         "判斷需要哪些客觀 evidence，並用下列工具能力規劃有限步驟。\n"
           "規劃規則：\n"
+        + render_planner_contract() + "\n"
           "INSPECT／GIT_INSPECT 成功取得觀察輸出、未提供 verify 時可保持 UNVERIFIED 並結束唯讀任務，不要多補驗證或建立 plan_id。"
           "負向後置驗證測試：在該 MUTATE／VERIFY 執行前提供 expected_verification={status:FAIL,failed_checks:[1]}，"
           "verify 索引從 1 起，且 success_criteria 必須逐字對應 completion_contract.success 的測試達標條件。"

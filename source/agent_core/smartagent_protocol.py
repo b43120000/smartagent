@@ -336,6 +336,7 @@ TOOL_ENVELOPE_SCHEMAS = {
             "steps": list,
             "next_action": str,
             "completion_contract": dict,
+            "capability_resolution": dict,
             "context_request": dict,
             "decision": str,
             "outcome": str,

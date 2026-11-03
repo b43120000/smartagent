@@ -46,6 +46,7 @@ class WebAgentToolContext:
         # Runtime-owned, request/epoch-bound admission snapshot.
         # The model cannot register a success condition through a tool action.
         self._runtime_completion_binding: dict = {}
+        self._runtime_semantic_capability_resolution: dict | None = None
         self._protocol_turn_seq = 0
         self.last_verification_status: str | None = None
         self._project_sync_transport = None
@@ -135,6 +136,7 @@ class WebAgentToolContext:
         self._protocol_turn_seq = 0
         self._v8_admitted_actions.clear()
         self._runtime_completion_binding = {}
+        self._runtime_semantic_capability_resolution = None
         self.last_verification_status = None
         self._authorized_local_paths = list(dict.fromkeys(str(x) for x in authorized_paths if str(x)))
         self._request_write_ceiling = None  # No cross-request policy inheritance.
@@ -167,6 +169,30 @@ class WebAgentToolContext:
         self._runtime_completion_binding = {
             "request_id": request_id, "task_epoch": task_epoch,
             "success_conditions": frozenset(values),
+        }
+
+    def bind_runtime_capability_resolution(
+        self, proposal: dict, *, request_id: str, task_epoch: str,
+    ) -> None:
+        """Bind a validated Planner semantic proposal within this request."""
+        if (not request_id or not task_epoch
+                or request_id != self.current_request_id
+                or task_epoch != self.current_task_epoch):
+            raise ValueError("semantic_capability_binding_request_identity_mismatch")
+        from agent_core.semantic_capability_resolution import (
+            normalize_resolution, verify_resolution_for_actions, SCHEMA,
+        )
+        current = normalize_resolution(proposal)
+        old = self._runtime_semantic_capability_resolution
+        if old is not None:
+            if old["request_id"] != request_id or old["task_epoch"] != task_epoch:
+                raise ValueError("semantic_capability_binding_request_identity_mismatch")
+            verify_resolution_for_actions(
+                current, {"schema": SCHEMA, "capabilities": sorted(old["capabilities"])}, []
+            )
+        self._runtime_semantic_capability_resolution = {
+            "request_id": request_id, "task_epoch": task_epoch,
+            "capabilities": frozenset(current["capabilities"]),
         }
 
     def preview_tool_scope(self, action: dict) -> dict:
