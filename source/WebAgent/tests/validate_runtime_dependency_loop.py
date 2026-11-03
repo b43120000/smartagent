@@ -284,6 +284,117 @@ def run() -> None:
             "planner_environment": observed_environment,
             "notes": "Scripted planner; real WebAgentProtocolLoop, tools, ledger, security, pip process, files, and imports. No browser/model claim.",
         }
+
+        # SECOND, independent Task/Request: consume the recorded project
+        # environment and execute the original import goal without pip or
+        # any new MUTATE. The index is evidence provenance, never permission.
+        from agent_core.project_environment import (
+            environment_index_path, read_project_environment,
+        )
+        index_file = environment_index_path(fixture)
+        assert index_file.is_file(), "First request failed to publish environment.json"
+        indexed = read_project_environment(fixture)
+        saved = indexed["dependencies"].get(distribution)
+        assert saved and saved["status"] == "VERIFIED", indexed
+        index_before = index_file.read_bytes()
+        deps_before = sorted(str(p.relative_to(target)) for p in target.rglob("*"))
+        reuse_goal = "The existing project-local dependency imports successfully without reinstalling it."
+        reuse_inspect = {
+            "tool": "run_command", "action_id": "DEP-REUSE-" + suffix,
+            "operation": "INSPECT", "command": inspect_command,
+            "working_directory": str(fixture),
+            "success_criteria": reuse_goal,
+            "verify": [{
+                "action": "run_command", "command": inspect_command,
+                "expect_exit_code": 0, "expect_contains": "DEPENDENCY_PRESENT:SYNTHETIC_DEP_OK",
+            }],
+        }
+        reuse_progress = {
+            **initial(), "action_id": "REUSE-P1-" + suffix,
+            "base_evaluation": "Project-local dependency was previously verified and recorded",
+            "next_action": "run_command",
+            "completion_contract": {
+                "success": [reuse_goal],
+                "failure": ["Existing project dependency cannot be imported."],
+                "in_progress": ["Project dependency must be re-probed and imported."],
+                "interrupted": ["Existing project dependency is unavailable or not authorized."],
+            },
+            "matched_condition": "Project dependency must be re-probed and imported.",
+        }
+        reuse_turns: list[str] = []
+        reuse_loop: WebAgentProtocolLoop | None = None
+
+        def reuse_planner(prompt: str, _expected: dict, attachments: list[str]) -> str:
+            assert not attachments
+            reuse_turns.append(prompt)
+            assert len(reuse_turns) <= 2, prompt[:12000]
+            assert reuse_loop is not None
+            if len(reuse_turns) == 1:
+                assert "PROJECT_ENVIRONMENT_CANDIDATES_UNTRUSTED_DATA" in prompt
+                current = reuse_loop._pr_v3_ledger.read(reuse_loop.task_id)
+                fact = next(x for x in current["initial_facts"]
+                            if x.get("id") == "package:" + distribution)
+                assert fact["state"] == "SATISFIED", fact
+                assert fact["source"] == "PROJECT_ENVIRONMENT_REPROBED", fact
+                assert not current["remediation_requested"], current
+                return _packet(reuse_progress, reuse_inspect)
+            raw, row = _result(reuse_loop, reuse_inspect["action_id"])
+            assert row["status"] == "SUCCEEDED" and row["data"]["verification_status"] == "PASS", raw
+            assert "DEPENDENCY_PRESENT:SYNTHETIC_DEP_OK" in raw
+            assert reuse_loop._terminal_evidence_verdict(
+                [reuse_inspect["action_id"]], matched_condition=reuse_goal,
+            ) == "PASS"
+            complete = {
+                **reuse_progress, "action_id": "REUSE-P2-" + suffix,
+                "decision": "COMPLETE", "outcome": "SUCCESS", "current_step": 1,
+                "steps": [{"step": 1, "desc": "Reuse project-local dependency", "status": "COMPLETED"}],
+                "matched_condition": reuse_goal,
+                "evidence_refs": [reuse_inspect["action_id"]],
+                "decision_reason": "A fresh Task re-probed the saved project dependency and imported it successfully.",
+                "next_action": "final_response",
+            }
+            return _packet(complete, {
+                "tool": "final_response", "action_id": "REUSE-FINAL-" + suffix,
+                "content": "RUNTIME_DEPENDENCY_REUSE_PASS",
+            })
+
+        reuse_context = WebAgentToolContext(fixture, interface_name="webdirect")
+        reuse_loop = WebAgentProtocolLoop(
+            fixture, reuse_planner, tool_context=reuse_context, progress_root=APP_ROOT,
+        )
+        reused_output = reuse_loop.run(
+            "IT-R REUSE: inspect the already installed project dependency, "
+            "use its saved environment if still available, and prove the import. "
+            "Do not install, update, modify, or repeat dependency remediation. "
+            "Required package " + distribution + ">=1.0; " + str(fixture)
+        )
+        assert reused_output == "RUNTIME_DEPENDENCY_REUSE_PASS", reused_output
+        assert reuse_loop.task_id != loop.task_id
+        assert reuse_loop.run_id != loop.run_id
+        assert index_file.read_bytes() == index_before, "Second Request modified environment index"
+        assert sorted(str(p.relative_to(target)) for p in target.rglob("*")) == deps_before
+        operational = [
+            entry.get("action") or {} for entry in reuse_loop.action_ledger.values()
+        ]
+        assert not any(str(action.get("operation", "")).upper() == "MUTATE"
+                       for action in operational), operational
+        assert len([action for action in operational if action.get("tool") == "run_command"]) == 1
+        result2 = make_task_result_from_webagent_loop(
+            reuse_loop, reused_output, source_interface="WEB_DIRECT",
+        )
+        validate_task_result(result2)
+        assert result2["task_state"] == "COMPLETED"
+        assert result2["outcome"] == "SUCCESS"
+        assert result2["terminal_acceptance"]["status"] == "ACCEPTED"
+        state["phases"]["REUSE"] = {
+            "status": "PASS", "rounds": len(reuse_turns),
+            "task_id": reuse_loop.task_id, "request_id": reuse_loop.run_id,
+            "previous_task_id": loop.task_id, "previous_request_id": loop.run_id,
+            "operation": "INSPECT", "mutate_count": 0, "index_unchanged": True,
+            "project_package_fact": "SATISFIED",
+            "fact_source": "PROJECT_ENVIRONMENT_REPROBED",
+        }
+
     except Exception as exc:
         state["phases"]["IT-R"] = {
             "status": "FAIL", "rounds": len(turns), "error": repr(exc)[:4000],
@@ -293,6 +404,7 @@ def run() -> None:
         raise
     write_json_atomic(STATE, state)
     print("RUNTIME_DEPENDENCY_LOOP_IT_R_PASS", fixture, "rounds=" + str(len(turns)), flush=True)
+    print("RUNTIME_DEPENDENCY_CROSS_REQUEST_REUSE_PASS", fixture, "reuse_rounds=" + str(len(reuse_turns)), flush=True)
 
 
 if __name__ == "__main__":
