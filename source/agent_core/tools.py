@@ -136,6 +136,15 @@ def _request_explicitly_requires_observation(agent, tool: str) -> bool:
     """
     goal = str(getattr(agent, "current_request_text", "") or "")
     lowered = goal.casefold()
+    # An explicit prohibition wins even if the tool name appears in a long
+    # context or a pasted example. Never treat "do not inspect" as a grant.
+    if re.search(
+        r"(?:禁止|不得|不要|請勿|不允許|do not|never)\s*"
+        r"(?:(?:使用|執行|呼叫|use|run|call)\s*)?"
+        + re.escape(tool) + r"\b",
+        goal, re.I,
+    ):
+        return False
     names = {
         "inspect_directory": (
             "inspect_directory", "目錄統計", "資料夾統計", "目錄 metadata",
