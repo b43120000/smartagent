@@ -13,6 +13,7 @@ on:
       - feat/tg-cmd-acl-off-dev-default-20261103
       - fix/tg-cmd-reuse-telegram-auth-20261103
       - feat/live-b-p1-observation-evidence-20261103
+      - fix/live-b-p1-progress-terminal-r17-20261103
   workflow_dispatch:
 
 permissions:
