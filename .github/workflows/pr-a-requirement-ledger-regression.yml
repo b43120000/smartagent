@@ -22,6 +22,7 @@ on:
       - fix/live-b-p1-progress-terminal-r17-20261103
       - fix/pr-b-foundation-reuse-auth-integrity-20261103
       - fix/collect-telegram-terminal-evidence-20261103
+      - fix/pr-b-goal-driven-live-rca-r18-20261103
   pull_request:
     branches:
       - fix/live-b-p1-progress-terminal-r17-20261103
@@ -78,6 +79,8 @@ jobs:
           python -B source/WebAgent/tests/validate_telegram_cmd_shared_auth_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_tool_scope_hardening.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_gar_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
