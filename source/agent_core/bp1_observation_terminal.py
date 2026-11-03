@@ -162,9 +162,11 @@ def evaluate_bp1_terminal(loop, progress: dict) -> dict:
     except (OSError, KeyError, TypeError, ValueError):
         return _result(False, "B_P1_PR_A_LEDGER_UNREADABLE", ids)
     nodes = graph.get("nodes") or {}
+    identity = graph.get("identity") or {}
     if (
-        str(graph.get("request_id", "")) != str(loop.run_id)
-        or str(graph.get("task_id", "")) != str(loop.task_id)
+        str(identity.get("request_id", "")) != str(loop.run_id)
+        or str(identity.get("task_id", "")) != str(loop.task_id)
+        or str(identity.get("task_epoch", "")) != str(loop.task_epoch)
         or any(
             (nodes.get("action:" + action_id.lower()) or {}).get("state") != "SATISFIED"
             for action_id in ids
