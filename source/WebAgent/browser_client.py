@@ -120,6 +120,12 @@ class WebAgentBrowserClient:
                 new_conversation=False,
                 attachment_paths=attachment_paths or None,
                 protocol_expected=protocol_expected,
+                # Scoped to session initialization/attach only. Normal task
+                # prompts retain strict Composer Recovery behavior.
+                initialization_composer_reset=stage in {
+                    "協議初始化", "協議初始化格式修復",
+                    "協議初始化精簡身分確認", "協議附著確認",
+                },
             )
             try:
                 self.governor.record_success()
