@@ -48,7 +48,17 @@ def verified_candidate(project_root: str | Path, distribution: str) -> dict | No
     if not isinstance(record, dict) or record.get("status") != "VERIFIED":
         return None
     target = str(record.get("location", ""))
-    if not target or not Path(target).is_dir():
+    if not target:
+        return None
+    try:
+        root = Path(project_root).expanduser().resolve()
+        location = Path(target).expanduser().resolve()
+        # environment.json is only a hint; a tampered absolute path must not
+        # redirect the future read-only probe outside the authorized project.
+        if not location.is_dir() or not is_within(location, root):
+            return None
+        reject_reparse_components(location, root)
+    except (OSError, ValueError, RuntimeError):
         return None
     return dict(record)
 
