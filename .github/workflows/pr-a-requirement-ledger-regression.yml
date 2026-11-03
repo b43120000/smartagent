@@ -19,6 +19,7 @@ on:
       - feat/tg-cmd-acl-off-dev-default-20261103
       - fix/tg-cmd-reuse-telegram-auth-20261103
       - feat/live-b-p1-observation-evidence-20261103
+      - fix/live-b-p1-progress-terminal-r17-20261103
   workflow_dispatch:
 
 permissions:
@@ -64,6 +65,8 @@ jobs:
           python -B source/WebAgent/tests/validate_pr_bcd_live_b_p0_scope_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_live_b_p1_evidence_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_bcd_b_p1_terminal_r17.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_telegram_direct_cmd_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
