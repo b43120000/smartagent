@@ -2846,6 +2846,12 @@ class WebAgentProtocolLoop:
         if self._answer_only_admitted:
             payload["completion_kind"] = "ANSWER_ONLY"
             payload["admission_reason"] = "ANSWER_ONLY_RESPONSE_ADMITTED"
+        if getattr(self, "_bp1_observation_admitted", False):
+            payload["completion_kind"] = "B_P1_OBSERVATION_ONLY"
+            payload["observation_acceptance"] = "PASS"
+            payload["full_pr_bcd"] = "NOT_VERIFIED"
+            # Never convert independent Runtime task verification into PASS.
+            payload["original_task_verification"] = "NOT_VERIFIED"
         signed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         payload["receipt_id"] = "TERM-" + hashlib.sha256(signed.encode('utf-8')).hexdigest()[:20].upper()
         self.terminal_acceptance = payload
@@ -4199,6 +4205,26 @@ class WebAgentProtocolLoop:
             matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
             fact_assertion=normalized_progress.get("fact_assertion"),
         )
+        # Explicit four-Action B-P1 observations have their own scope-limited
+        # success contract. PR-A Action SATISFIED does NOT verify PR-C/D.
+        bp1_observation_admission = False
+        if decision == "COMPLETE" and outcome == "SUCCESS":
+            from agent_core.bp1_observation_terminal import (
+                is_bp1_request, evaluate_bp1_terminal,
+            )
+            if is_bp1_request(getattr(self, "task_request", "")):
+                bp1_proof = evaluate_bp1_terminal(self, normalized_progress)
+                if not bp1_proof["admitted"]:
+                    return [], [{
+                        "marker": "[WEBAGENT_B_P1_TERMINAL_REJECTED]",
+                        "reason": "bp1_observation_completion_not_proven",
+                        "detail": bp1_proof["reason"],
+                        "suggestion": (
+                            "B-P1 僅可引用同 request/epoch 四筆實際已完成且 ACTIVE 的 "
+                            "Observation Action Evidence；禁止補造 PASS、安裝或重送 Action。"
+                        ),
+                    }]
+                bp1_observation_admission = True
         live_blockers = [item for item in self.action_loop_state.get('blockers',[]) if not item.get('satisfied')]
         if decision == 'COMPLETE' and outcome == 'SUCCESS' and live_blockers:
             return [], [{'marker':'[WEBAGENT_VERIFICATION_REQUIRED]', 'reason':'active_action_not_complete',
@@ -4284,7 +4310,9 @@ class WebAgentProtocolLoop:
                                     "If any action was executed, use the ordinary verified Action Loop."
                                 ),
                             }]
-        if decision == "COMPLETE" and outcome == "SUCCESS" and terminal_evidence_verdict == "UNVERIFIED" and not answer_only_admission:
+        if (decision == "COMPLETE" and outcome == "SUCCESS"
+                and terminal_evidence_verdict == "UNVERIFIED"
+                and not answer_only_admission and not bp1_observation_admission):
             # A matching trusted PR-B fact may already exist, while the first
             # Planner response used incorrect refs or an unissued condition ID.
             # Repair the *claim*, never make a new probe or a false PASS.
@@ -4496,6 +4524,15 @@ class WebAgentProtocolLoop:
                 release_reason="verified_no_action_answer_only_admission",
             )
         self._answer_only_admitted = answer_only_admission
+        self._bp1_observation_admitted = bp1_observation_admission
+        if bp1_observation_admission:
+            self._emit(
+                "bp1_observation_only_terminal_admitted",
+                request_id=self.run_id, task_id=self.task_id,
+                round=self.turn_id, observation_status="PASS",
+                original_task_verification="NOT_VERIFIED",
+                action_count=4,
+            )
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
         self.protocol_state = "ACCEPTED"
@@ -4809,6 +4846,7 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
+        self._bp1_observation_admitted = False
         # An already queued attachment or skill is an external dependency,
         # even if the original prose itself contains no file path.
         self._tri_one_has_attached_context = bool(initial_attachments or skill_context)
@@ -5502,12 +5540,24 @@ class WebAgentProtocolLoop:
                 if field_repairs:
                     repair_note += '\n[COMMAND_FIELD_REPAIR]\n' + json.dumps(field_repairs,ensure_ascii=False) + '\n[/COMMAND_FIELD_REPAIR]\n只回覆同一 tool/action_id 與 required_fields；不必重寫 command、operation、working_directory。仍需 report_progress 與 turn_commit。'
                 if any(item.get("reason") == "unexpected_field" for item in ack_diagnostics):
-                    repair_note = (
-                        "\n這不是 FIELD_REPAIR，而是 ACTION_REPLAN：原 action 含有未定義或放錯層級的欄位。"
-                        "請使用新的 action_id，依 tool 的 canonical schema 重建完整 action；"
-                        "不得保留 diagnostic 指出的欄位。query_project 的 operation/path/symbol "
-                        "只能放在 queries[] 物件內。"
-                    )
+                    if any(item.get("tool") == "report_progress"
+                           for item in ack_diagnostics if item.get("reason") == "unexpected_field"):
+                        repair_note = (
+                            "\n這是 PROGRESS_SCHEMA_REPAIR：只保留 report_progress 的 "
+                            "canonical 欄位（tool/action_id/decision/outcome/"
+                            "current_step/total_steps/current_focus/steps/"
+                            "completion_contract/matched_condition_id/"
+                            "evidence_refs/decision_reason 等）。"
+                            "刪除 diagnostic 的 fields 所列未知欄位；不要更動或重送已執行 Action。"
+                            "已接受的 Progress 計畫欄位可在 PATCH 省略並由 Runtime 沿用。"
+                        )
+                    else:
+                        repair_note = (
+                            "\n這不是 FIELD_REPAIR，而是 ACTION_REPLAN：原 action 含有未定義或放錯層級的欄位。"
+                            "請使用新的 action_id，依 tool 的 canonical schema 重建完整 action；"
+                            "不得保留 diagnostic 指出的欄位。query_project 的 operation/path/symbol "
+                            "只能放在 queries[] 物件內。"
+                        )
                 if any(item.get("reason") == "MISSING_OR_INVALID_FIELD" for item in ack_diagnostics):
                     repair_note = (
                         "\n這是 FIELD_REPAIR：保留原 tool、action_id 與所有已提供欄位，只補 diagnostic 指定欄位。"
@@ -5718,7 +5768,8 @@ class WebAgentProtocolLoop:
 
             if len(actions) == 1 and actions[0].get("tool") == "final_response":
                 if (getattr(self,"_pr_v3_ledger",None) is not None and
-                        self.progress_ledger.outcome == "SUCCESS"):
+                        self.progress_ledger.outcome == "SUCCESS"
+                        and not getattr(self, "_bp1_observation_admitted", False)):
                     try:
                         ready, reason = self._pr_v3_ledger.terminal_ready(self.task_id)
                     except Exception:
