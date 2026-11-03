@@ -60,8 +60,8 @@ def render_planner_contract():
     return (
         "SCR V1: For read-only directory/project inspection requests, "
         "translate the user's intent into report_progress.capability_resolution "
-        "on the first Progress: {\\\"schema\\\":\\\"" + SCHEMA
-        + "\\\",\\\"capabilities\\\":[\\\"directory.list\\\"]}. "
+        "on the first Progress, with schema " + SCHEMA
+        + " and capabilities selected from the finite registry. "
         "Use the relevant subset of these finite canonical capabilities: "
         + registry + ". Mixed goals need all required capabilities. "
         "Choose by meaning, never by matching literal user words. "
