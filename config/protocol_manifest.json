@@ -218,7 +218,7 @@
     "source/agent_core/repair_stagnation.py": "5011bd11bf11c8660e24aab7a850b75cb56a6657a21989bf38b04e01a49cf0ae",
     "source/agent_core/task_workspace_resolver.py": "519e26068464784fd005e8857eede24d3096ff4dd6f0612726811d6c6834294d",
     "source/agent_core/task_transport.py": "57089b1bce75c87e71260637099ecd97a223b2f4b3550bf9c91aa326f1ecab06",
-    "source/agent_core/project_environment.py": "ef3d071451ad0b68ffbc552d29c518413795cd33bd3d97e4f0b5ec678dce9daf",
+    "source/agent_core/project_environment.py": "39b76e1162b0f0673a7cd9e9c12d78f137e4c9b8a6935f5c3caa3797b4ca33ae",
     "source/agent_core/environment_fact_contract.py": "0e13079d94747fcdb7a5d1f290db19ddb2b9139760a70e1a89e87cdf8ddd6d70",
     "source/agent_core/evidence_identity_audit.py": "3a89f90e0836a8fa5b81071b38e1eff43cfe7c1527ffe7967f7fb226fd99f238",
     "source/agent_core/pr_bcd_request_scope.py": "5566da70e22babb8f7dfebfb5dc80347aa3d507ebe47db30591a6acad6902c65",
