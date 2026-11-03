@@ -587,6 +587,37 @@ def _wait_for_prewrite_stability(
                 reason_code=last_reason)
 
 
+
+def _reset_initialized_page(scraper, *, sleep=None):
+    """Reset one stable, idle bound editor without submitting or changing tabs."""
+    sleep = sleep if sleep is not None else time.sleep
+    first = _page_snapshot(scraper, '')
+    sleep(.35)
+    second = _page_snapshot(scraper, '')
+    editor = scraper._composer_locator()
+    try:
+        interactive = bool(editor is not None and editor.is_visible()
+                           and editor.is_enabled() and editor.is_editable())
+    except Exception:
+        interactive = False
+    if (not interactive or not _same_turns(first, second)
+            or first.get('generation_active') or second.get('generation_active')):
+        return dict(status='INIT_RESET_PAGE_NOT_STABLE', cleared=False)
+    changed = False
+    if not second['composer_empty']:
+        candidates = scraper._read_composer_text_candidates()
+        primary = candidates[0] if candidates else None
+        if primary is None or not _atomic_clear_owned(scraper, primary):
+            return dict(status='INIT_RESET_CLEAR_FAILED', cleared=False)
+        changed = True
+    final = _page_snapshot(scraper, '')
+    ready = (final.get('composer_empty') is True
+             and not final.get('generation_active')
+             and _same_turns(second, final))
+    return dict(status='INIT_RESET_CONFIRMED' if ready else 'INIT_RESET_UNCONFIRMED',
+                cleared=changed)
+
+
 def _recover_page(scraper,record):
     first=_page_snapshot(scraper,'')
     time.sleep(.35)
@@ -964,37 +995,8 @@ def helper_main():
         scraper=WebLLMScraper('chatgpt',slow_mo=0)
         scraper._page=pages[0];scraper._browser=pages[0].context
         if payload['mode']=='initialization_reset':
-            # Never follow a navigation, submit, or touch another tab.
-            first = _page_snapshot(scraper, '')
-            time.sleep(.35)
-            second = _page_snapshot(scraper, '')
-            editor = scraper._composer_locator()
-            try:
-                interactive = bool(editor is not None and editor.is_visible()
-                                   and editor.is_enabled() and editor.is_editable())
-            except Exception:
-                interactive = False
-            if (not interactive or not _same_turns(first, second)
-                    or first.get('generation_active') or second.get('generation_active')):
-                status = 'INIT_RESET_PAGE_NOT_STABLE'
-                print('COMPOSER_RESULT ' + json.dumps({'status': status}), flush=True)
-                return
-            changed = False
-            if not second['composer_empty']:
-                candidates = scraper._read_composer_text_candidates()
-                primary = candidates[0] if candidates else None
-                if primary is None or not _atomic_clear_owned(scraper, primary):
-                    print('COMPOSER_RESULT ' + json.dumps(
-                        {'status': 'INIT_RESET_CLEAR_FAILED'}), flush=True)
-                    return
-                changed = True
-            final = _page_snapshot(scraper, '')
-            ready = (final.get('composer_empty') is True
-                     and not final.get('generation_active')
-                     and _same_turns(second, final))
             print('COMPOSER_RESULT ' + json.dumps(
-                {'status': 'INIT_RESET_CONFIRMED' if ready else 'INIT_RESET_UNCONFIRMED',
-                 'cleared': changed}), flush=True)
+                _reset_initialized_page(scraper)), flush=True)
             return
         if payload['mode']=='inspect':
             target=payload.get('prompt','')
