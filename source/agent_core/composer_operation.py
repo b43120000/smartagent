@@ -584,7 +584,10 @@ def _recover_page(scraper,record):
     proof=[record.get('pending_prefix') or {},record.get('confirmed_prefix') or {}]
     owned=record.get('prompt_sha256') in draft['candidate_hashes'] or any(
         p.get('normalized_sha256') in draft['normalized_hashes'] for p in proof if p.get('normalized_sha256'))
-    if not owned:return dict(status='UNOWNED_DRAFT',observation=second)
+    # TEMPORARY: clear a foreign/unknown draft only on a stable, idle page.
+    # The atomic compare-and-clear still rejects concurrent manual edits.
+    if not owned and not _same_turns(first,second):
+        return dict(status='SCOPE_CHANGED_OR_BUSY',observation=second)
     if not _atomic_clear_owned(scraper,primary):
         return dict(status='DRAFT_CHANGED_BEFORE_CLEAR',observation=second)
     final=_page_snapshot(scraper,'')
