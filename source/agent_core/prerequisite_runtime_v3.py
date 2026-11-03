@@ -52,6 +52,43 @@ NEGATED_REMEDIATION = re.compile(
 )
 
 
+def explicit_remediation_intent(request: str) -> bool:
+    """Interpret the *goal's* requested operation, not paths or documentation.
+
+    Paths labelled as installation targets and mentions of the word "write"
+    must not become remediation intent. Negative task-wide instructions win
+    over positive mentions; narrower prohibitions on other targets retain an
+    explicit local install request. Authorization still remains Runtime-owned.
+    """
+    text = str(request or "")
+    scoped = re.compile(
+        r"禁止其他專案路徑寫入|"
+        r"(?:禁止|不得|不要|請勿)修改\\s*SmartAgent\\s*共用\\s*Python\\s*環境",
+        re.I,
+    )
+    # Remove only restrictions on distinctly *other* targets.
+    relevant = scoped.sub("", text)
+    deny = re.compile(
+        r"(?:禁止|不得|不要|請勿|不准|不允許)\\s*"
+        r"(?:(?:任何|一切|實際|執行|進行|自行|所有)\\s*){0,4}"
+        r"(?:安裝|補救|修復|寫入|修改|MUTATE|install|repair|remediate|write)|"
+        r"不(?:安裝|補救|修復|寫入|修改)|"
+        r"\\b(?:do\\s+not|don't|never|without|must\\s+not)\\s+"
+        r"(?:(?:any|to|the)\\s+)?(?:install|repair|remediate|write|modify)\\b",
+        re.I,
+    )
+    if deny.search(relevant):
+        return False
+    positive = re.compile(
+        r"(?:請|幫我|允許|授權|同意|現在|直接|執行|進行|需要)\\s*"
+        r"(?:(?:先|立即|進行|執行|使用|離線)\\s*){0,3}"
+        r"(?:安裝|修復|補救|更新)|"
+        r"(?im:^\\s*(?:please\\s+)?(?:install|repair|remediate|set\\s+up)\\b)",
+        re.I,
+    )
+    return bool(positive.search(relevant))
+
+
 class PrerequisiteRecoveryError(ValueError):
     pass
 
@@ -235,19 +272,8 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
         item.startswith(("tool:","version:","package:","dependency:")) for item in missing
     )
     # Intent survives UNKNOWN probes; eligibility is checked separately by PR-C.
-    # A restriction on *other* write targets is not a denial of the explicitly
-    # requested project-local remediation. Preserve unconditional "do not
-    # install/write" clauses as a hard denial; never mint authorization here.
-    scoped_restrictions = re.compile(
-        r"禁止其他專案路徑寫入|"
-        r"(?:禁止|不得|不要|請勿)修改[ ]*SmartAgent[ ]*共用[ ]*Python[ ]*環境",
-        re.I,
-    )
-    remediation_intent_text = scoped_restrictions.sub("", text)
-    positive_intent = (
-        bool(WRITE_INTENT.search(remediation_intent_text))
-        and not bool(NEGATED_REMEDIATION.search(remediation_intent_text))
-    )
+    # Intent belongs to the requested goal, not incidental path descriptions.
+    positive_intent = explicit_remediation_intent(text)
     # Ordinary output writes are not PR-C dependency remediation.
     has_dependency_requirement = any(row.get("kind") in {"PACKAGE", "VERSION"} for row in facts)
     remediation_requested = bool(positive_intent and paths and has_dependency_requirement)
