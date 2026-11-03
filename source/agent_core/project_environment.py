@@ -53,6 +53,53 @@ def verified_candidate(project_root: str | Path, distribution: str) -> dict | No
     return dict(record)
 
 
+def authorize_verified_environment_write(
+    project_root: str | Path, *, tool_context: object,
+    authorized_paths: list[str] | tuple[str, ...],
+    request_write_ceiling: Mapping | None = None,
+) -> tuple[bool, str]:
+    """Preflight a Runtime-owned environment.json write; never grant access.
+
+    Original-request paths are read scope only. Persistence requires an
+    independent writable ACL and, for a bounded PR-B/C/D request, the exact
+    valid metadata ceiling. This gate runs before creating any project file.
+    """
+    root = Path(project_root).expanduser().resolve()
+    destination = environment_index_path(root)
+    try:
+        declared = {
+            Path(raw).expanduser().resolve()
+            for raw in authorized_paths if str(raw).strip()
+        }
+    except (OSError, ValueError, RuntimeError, TypeError):
+        return False, "PROJECT_ENVIRONMENT_REQUEST_SCOPE_INVALID"
+    if root not in declared and destination not in declared:
+        return False, "PROJECT_ENVIRONMENT_NOT_IN_REQUEST_SCOPE"
+    if request_write_ceiling is not None:
+        ceiling = request_write_ceiling
+        if not isinstance(ceiling, Mapping) or not (
+            ceiling.get("active") is True and ceiling.get("valid") is True
+        ):
+            return False, "PROJECT_ENVIRONMENT_WRITE_CEILING_INVALID"
+        try:
+            ceiling_root = Path(str(ceiling.get("project_root", ""))).resolve()
+            ceiling_destination = Path(str(ceiling.get("metadata", ""))).resolve()
+        except (OSError, ValueError, RuntimeError):
+            return False, "PROJECT_ENVIRONMENT_WRITE_CEILING_INVALID"
+        if (ceiling_root != root or ceiling_destination != destination
+                or destination not in declared):
+            return False, "PROJECT_ENVIRONMENT_WRITE_CEILING_SCOPE_MISMATCH"
+    try:
+        from .security_context import SecurityContext
+        SecurityContext.from_agent(tool_context).require_write(
+            destination, require_absolute=True,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        # A readable path or model statement must never upgrade an ACL.
+        return False, "PROJECT_ENVIRONMENT_WRITE_ACL_DENIED"
+    return True, "PROJECT_ENVIRONMENT_WRITE_AUTHORIZED"
+
+
 def publish_verified_dependency(
     project_root: str | Path, *,
     distribution: str,
