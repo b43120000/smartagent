@@ -126,6 +126,33 @@ def _directory_listing_request(agent) -> bool:
     return bool(chinese_listing or english_listing)
 
 
+
+def _request_explicitly_requires_observation(agent, tool: str) -> bool:
+    """Do not collapse a multi-capability goal into a listing-only request.
+
+    User-requested metadata inspection is a separate read capability from
+    listing filenames. This grants *no* scope or write permission: every
+    action still passes the normal canonical-path and SecurityContext gates.
+    """
+    goal = str(getattr(agent, "current_request_text", "") or "")
+    lowered = goal.casefold()
+    names = {
+        "inspect_directory": (
+            "inspect_directory", "目錄統計", "資料夾統計", "目錄 metadata",
+            "directory metadata", "directory statistics",
+        ),
+        "inspect_project_scope": (
+            "inspect_project_scope", "專案範圍檢查", "project scope inspection",
+        ),
+        "inspect_project_working_set": (
+            "inspect_project_working_set", "工作集合檢查", "working set inspection",
+        ),
+        "find_file": ("find_file", "尋找檔案", "搜尋檔案", "find file"),
+    }
+    return any(token.casefold() in lowered for token in names.get(tool, ()))
+
+
+
 def _explicit_request_paths(agent) -> list[Path]:
     roots: list[Path] = []
     for raw in tuple(getattr(agent, "_authorized_local_paths", ()) or ()):
@@ -193,7 +220,8 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
 
     try:
         security_context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
-        if _directory_listing_request(agent) and tool != "list_directory":
+        if (_directory_listing_request(agent) and tool != "list_directory"
+                and not _request_explicitly_requires_observation(agent, tool)):
             raise ValueError("directory_listing_requires_list_directory")
         if tool == "inspect_project_scope":
             unsupported = sorted(_PROJECT_SCOPE_UNSUPPORTED_FIELDS.intersection(tool_call))
