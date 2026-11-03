@@ -58,6 +58,39 @@ def main() -> int:
         assert not wrong_directory_tool["allowed"], wrong_directory_tool
         assert wrong_directory_tool["error"] == "directory_listing_requires_list_directory", wrong_directory_tool
 
+        # A goal may genuinely require both listing and independent metadata
+        # inspection. A word such as "列出" elsewhere in the same request
+        # cannot cancel a separately requested read capability.
+        tools.begin_run(
+            "RUN-MIXED-OBSERVATIONS",
+            f"先列出檔案，再使用 inspect_directory 讀取目錄 metadata，"
+            f"禁止任何寫入。\\n{requested}",
+            [str(requested)],
+        )
+        metadata = tools.preview_tool_scope({
+            "tool": "inspect_directory",
+            "action_id": "GOOD-MIXED-METADATA",
+            "paths": [str(requested)],
+            "recursive": False,
+        })
+        assert metadata["allowed"], metadata
+        inspected = tools.execute({
+            "tool": "inspect_directory",
+            "action_id": "GOOD-MIXED-METADATA",
+            "paths": [str(requested)],
+            "recursive": False,
+        })
+        assert '"file_count":1' in inspected, inspected
+        outside = tools.preview_tool_scope({
+            "tool": "inspect_directory",
+            "action_id": "BAD-MIXED-OUTSIDE",
+            "paths": [str(workspace)],
+            "recursive": False,
+        })
+        assert not outside["allowed"], outside
+        tools.begin_run("RUN-LIST", f"先列出這個路徑下有哪些檔案\\n{requested}",
+                        [str(requested)])
+
         missing_path = tools.preview_tool_scope({
             "tool": "list_directory",
             "action_id": "BAD-SCOPE-3",
