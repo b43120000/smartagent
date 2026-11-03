@@ -1,0 +1,40 @@
+name: Initialization composer regression (temporary)
+on:
+  push:
+    branches:
+      - fix/init-only-composer-reset-13f1f7a-20261103
+  pull_request:
+    branches:
+      - baseline/init-composer-13f1f7-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  composer-regression:
+    name: Composer regression ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install minimal test dependency
+        run: python -m pip install --disable-pip-version-check playwright
+      - name: Compile modified source and tests
+        run: python -B -m compileall -q source/agent_core/composer_operation.py source/agent_core/web_runtime.py source/WebAgent/browser_client.py source/WebAgent/tests/validate_composer_init_reset.py
+      - name: Initialization reset regression
+        run: python -B source/WebAgent/tests/validate_composer_init_reset.py
+      - name: Existing composer recovery regression
+        run: python -B source/WebAgent/tests/validate_composer_recovery.py
+      - name: Existing composer operation regression
+        run: python -B source/WebAgent/tests/validate_composer_operation.py
+      - name: Tri-One 5A protocol integration regression
+        run: python -B source/WebAgent/tests/validate_tri_one_5a_protocol_it.py

@@ -4940,6 +4940,7 @@ class WebLLMScraper:
         attachment_paths: list = None,
         file_paths: list = None,
         protocol_expected: dict = None,
+        initialization_composer_reset: bool = False,
     ) -> str:
         """Send one prompt with composer acknowledgement and fresh-response gating.
 
@@ -4993,8 +4994,32 @@ class WebLLMScraper:
         # A new ask owns a fresh cancellation lifecycle. A previous cooperative
         # cancel must never poison the next user request.
         self._cancel_requested.clear()
-        # Recover before staging/uploading attachments or claiming a new draft.
-        self._recover_composer_before_request(prompt)
+        # Only WebAgent protocol initialization may discard a stale composer
+        # operation and reset the live editor. Ordinary turns are unchanged.
+        if initialization_composer_reset and self.service == "chatgpt" and not getattr(self, "_isolated_browser", None):
+            from .composer_operation import reset_initialization_composer
+            from .paths import runtime_root
+            try:
+                reset = reset_initialization_composer(
+                    endpoint=self.get_cdp_endpoint(), url=self._page.url,
+                    journal_root=runtime_root() / "composer_operations",
+                    cancel_check=lambda: self._check_cancel_requested("initialization_composer_reset"),
+                )
+            except Exception as exc:
+                self._composer_io_unconfirmed = True
+                self._set_request_state("RECOVERY_REQUIRED", "initialization_composer_reset_failed")
+                raise WebScraperStageError(
+                    "[WEB_INIT_COMPOSER_RESET_FAILED] 無法驗證初始化輸入框已清空；不送出。reason="
+                    + str(exc)[:160], stage="initialization_composer_reset", safe_to_retry=False,
+                ) from exc
+            self._composer_io_unconfirmed = False
+            self._pending_submit_context = None
+            self._submit_click_attempted = False
+            self._set_request_state("READY_IDLE", "initialization_composer_reset_confirmed")
+            self._log_stage("initialization_composer_reset", json.dumps(reset, ensure_ascii=False))
+        else:
+            # Recover before staging/uploading attachments or claiming a new draft.
+            self._recover_composer_before_request(prompt)
         # Do not discard a proven artifact merely because the same outer
         # request needs another control/progress repair ask.
         self._last_artifact_scope = self._artifact_scope_for_request(artifact_request_id)
