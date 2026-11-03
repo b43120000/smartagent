@@ -107,9 +107,12 @@ if (-not $request -and $null -ne $ledger -and $ledger.request_id) {
 # durable PR-B/C/D identity; do not pick a neighboring Telegram conversation.
 if (-not $request -and $task) {
     $prBCDIdentity = Read-Json (Join-Path $root ('localdata\runtime\prerequisite_v3_recovery\' + $task + '.json'))
-    if ($prBCDIdentity -and $prBCDIdentity.schema -eq 'SMARTAGENT_PREREQ_V3_BCD_LEDGER_V1' -and
+    if ($prBCDIdentity -and
+        $prBCDIdentity.schema -eq 'SMARTAGENT_PREREQ_V3_BCD_LEDGER_V1' -and
         [string]$prBCDIdentity.identity.task_id -ceq $task -and
-        [string]$prBCDIdentity.identity.request_id -match '^RR-[A-Za-z0-9_-]{1,156}
+        [string]$prBCDIdentity.identity.request_id -match '^RR-[A-Za-z0-9_-]{1,156}$') {
+        $request = [string]$prBCDIdentity.identity.request_id
+    }
 }
 Assert-Id $request 'request'
 if (-not $task -and -not $request) { throw 'Need a Task ID or Request ID.' }
