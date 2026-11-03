@@ -189,13 +189,21 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
         status, observed, origin = probe_dependency(
             req, python_probe=lambda package: _probe_package(package, python_binary),
         )
-        if req.ecosystem == "python" and status != "AVAILABLE" and project_root is not None:
+        # A bundled distribution can exist yet fail the requested version.
+        # Probe a recorded project-local candidate unless the bundled version
+        # already satisfies this specific request. A cache entry alone is never
+        # proof: a new Runtime metadata probe must confirm the candidate.
+        bundled_satisfies = (
+            status == "AVAILABLE" and bool(observed)
+            and _satisfies(observed, req.operator, req.required_version)
+        )
+        if req.ecosystem == "python" and not bundled_satisfies and project_root is not None:
             candidate = verified_candidate(project_root, req.name)
             if candidate:
                 checked, project_version = _probe_project_package(
                     req.name, python_binary, str(candidate["location"])
                 )
-                if checked == "AVAILABLE":
+                if checked == "AVAILABLE" and project_version:
                     status, observed = checked, project_version
                     origin = "PROJECT_ENVIRONMENT_REPROBED"
         state = ("MISSING" if status == "MISSING" or
@@ -227,7 +235,19 @@ def probe_requirements(*, request: str, authorized_paths: Sequence[str],
         item.startswith(("tool:","version:","package:","dependency:")) for item in missing
     )
     # Intent survives UNKNOWN probes; eligibility is checked separately by PR-C.
-    positive_intent = bool(WRITE_INTENT.search(text)) and not bool(NEGATED_REMEDIATION.search(text))
+    # A restriction on *other* write targets is not a denial of the explicitly
+    # requested project-local remediation. Preserve unconditional "do not
+    # install/write" clauses as a hard denial; never mint authorization here.
+    scoped_restrictions = re.compile(
+        r"禁止其他專案路徑寫入|"
+        r"(?:禁止|不得|不要|請勿)修改\\s*SmartAgent\\s*共用\\s*Python\\s*環境",
+        re.I,
+    )
+    remediation_intent_text = scoped_restrictions.sub("", text)
+    positive_intent = (
+        bool(WRITE_INTENT.search(remediation_intent_text))
+        and not bool(NEGATED_REMEDIATION.search(remediation_intent_text))
+    )
     # Ordinary output writes are not PR-C dependency remediation.
     has_dependency_requirement = any(row.get("kind") in {"PACKAGE", "VERSION"} for row in facts)
     remediation_requested = bool(positive_intent and paths and has_dependency_requirement)
