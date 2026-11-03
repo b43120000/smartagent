@@ -10,10 +10,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_core.prerequisite_runtime_v3 import probe_requirements
+from agent_core.prerequisite_runtime_v3 import probe_requirements, explicit_remediation_intent
 from agent_core.project_environment import (
     authorize_verified_environment_write,
     environment_index_path,
+    observe_project_environment_index,
+    planner_environment_hint,
     publish_verified_dependency,
     read_project_environment,
 )
@@ -133,6 +135,48 @@ class ReuseIntegrityTests(unittest.TestCase):
         self.assertTrue(allowed["remediation_eligible"])
         self.assertFalse(allowed["authorization_granted"])
         self.assertFalse(denied["remediation_requested"], denied)
+
+    def test_readonly_goal_not_remediation_despite_installation_targets(self):
+        requests = [
+            "在專案執行唯讀觀測。依賴 synthetic_pr_bcd>=1.0，"
+            "原始授權的安裝目標 deps，原始授權的寫入位置 environment.json。"
+            "本輪禁止一切實際寫入。請列出每個 Action 的結果。",
+            "在專案檢查 synthetic_pr_bcd>=1.0 的 environment.json。"
+            "本次不安裝、不修復、不修改任何檔案；如果紀錄不存在回報 NOT APPLICABLE。",
+            "檢查 package synthetic_pr_bcd>=1.0，請勿自行安裝或建立環境。",
+        ]
+        for request in requests:
+            self.assertFalse(explicit_remediation_intent(request), request)
+            with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                       return_value=("MISSING", "")):
+                probe = self.probe(request)
+            self.assertFalse(probe["remediation_requested"], probe)
+            self.assertFalse(probe["remediation_eligible"], probe)
+            self.assertFalse(probe["authorization_granted"], probe)
+        self.assertTrue(explicit_remediation_intent(
+            "請安裝 package synthetic_pr_bcd>=1.0 到 deps。禁止其他專案路徑寫入"
+        ))
+
+    def test_missing_index_is_valid_readonly_environment_discovery(self):
+        before = set(self.project.rglob("*"))
+        observation = observe_project_environment_index(self.project)
+        hint = planner_environment_hint(self.project)
+        self.assertEqual(observation["state"], "ABSENT")
+        self.assertEqual(hint["index_status"], "ABSENT")
+        self.assertEqual(hint["index_reason"], "ENVIRONMENT_INDEX_ABSENT")
+        self.assertFalse(hint["dependencies"])
+        self.assertEqual(before, set(self.project.rglob("*")))
+        self.index.parent.mkdir(parents=True, exist_ok=True)
+        self.index.write_text('{"schema":"WRONG"}', encoding="utf-8")
+        observation = observe_project_environment_index(self.project)
+        self.assertEqual(observation["state"], "INVALID")
+        self.assertEqual(planner_environment_hint(self.project)["index_status"], "INVALID")
+        self.index.write_text('{"schema":', encoding="utf-8")
+        self.assertEqual(observe_project_environment_index(self.project)["state"], "INVALID")
+        self.index.unlink()
+        self.save_candidate()
+        self.assertEqual(observe_project_environment_index(self.project)["state"], "PRESENT")
+        self.assertEqual(planner_environment_hint(self.project)["index_status"], "PRESENT")
 
     def test_read_scoped_path_cannot_upgrade_workspace_write_acl(self):
         tool = self.tool(self.other)
