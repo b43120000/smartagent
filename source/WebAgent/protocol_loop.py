@@ -661,6 +661,45 @@ class WebAgentProtocolLoop:
                 and ref not in self.action_ledger
                 and ref not in self.action_result_ledger
             )
+        # Resolve the dependency closure of known, never-executed observations.
+        # This is NOT a replay authorization or a terminal-success assertion.
+        # Unknown command effects and any pending mutation remain HARD blockers.
+        from agent_core.action_dependencies import is_observation
+        known_failed_reads = {
+            ref for ref, evidence in self.action_result_ledger.items()
+            if (isinstance(evidence, dict)
+                and evidence.get("result_status") in {"FAILED", "REJECTED"}
+                and evidence.get("execution_status") not in {
+                    "RUNNING", "QUEUED", "UNKNOWN", "PARTIAL",
+                }
+                and is_observation(
+                    dict((self.action_ledger.get(ref) or {}).get("action") or {})
+                ))
+        }
+        safe_blocked_read_ids = set()
+        unresolved_blocked_reads = dict(deferred)
+        for _ in range(len(unresolved_blocked_reads)):
+            changed = False
+            for ref, row in tuple(unresolved_blocked_reads.items()):
+                if (not isinstance(row, dict) or row.get("executed") is not False
+                        or row.get("status") != "BLOCKED_DEPENDENCY"
+                        or ref in self.action_ledger
+                        or ref in self.action_result_ledger):
+                    continue
+                action = row.get("action") if isinstance(row.get("action"), dict) else row
+                deps = action.get("depends_on", [])
+                if (not is_observation(action) or not isinstance(deps, list)
+                        or not deps or not all(isinstance(dep, str) and
+                            dep in known_failed_reads | safe_blocked_read_ids
+                            for dep in deps)):
+                    continue
+                safe_blocked_read_ids.add(ref)
+                unresolved_blocked_reads.pop(ref)
+                changed = True
+            if not changed:
+                break
+        if deferred and len(safe_blocked_read_ids) == len(deferred):
+            pending["deferred_action_repairs"] = False
         # A completed or never-attempted read-only sibling is not an unsafe
         # in-flight operation. Preserve it in the repair ledger, but allow the
         # bounded repair of a separate, unexecuted run_command schema error.
@@ -733,11 +772,16 @@ class WebAgentProtocolLoop:
                     "RUNNING", "QUEUED", "UNKNOWN", "PARTIAL"
                 }
                 and (evidence.get("result_status") == "REJECTED"
-                     or str(evidence.get("effective_verification_status", "")) != "UNKNOWN")
+                     or str(evidence.get("effective_verification_status", "")) != "UNKNOWN"
+                     or (tool == "read_file"
+                         and evidence.get("result_reason") in {"FILE_NOT_FOUND", "NOT_A_FILE"}
+                         and evidence.get("executed") is False))
                 # Rejected read with a complete terminal error is safe to
                 # *classify* as finished even when it never executed.
                 and (evidence.get("executed") is True
-                     or evidence.get("result_status") == "REJECTED")
+                     or evidence.get("result_status") == "REJECTED"
+                     or (tool == "read_file" and evidence.get("executed") is False
+                         and evidence.get("result_reason") in {"FILE_NOT_FOUND", "NOT_A_FILE"}))
             )
         safe_repair_blockers = [
             row for row in blockers
@@ -748,7 +792,11 @@ class WebAgentProtocolLoop:
         ]
         gar_blockers = [
             row for row in blockers
-            if row not in safe_repair_blockers and not is_safe_replan_blocker(row)
+            if (row not in safe_repair_blockers and not is_safe_replan_blocker(row)
+                and not (isinstance(row, dict)
+                         and row.get("reason") == "BLOCKED_DEPENDENCY"
+                         and row.get("execution_status") == "NOT_EXECUTED"
+                         and row.get("blocking_action_id") in safe_blocked_read_ids))
         ]
         if self._gar is not None and self.turn_id and len(blockers) != len(gar_blockers):
             self._emit(
