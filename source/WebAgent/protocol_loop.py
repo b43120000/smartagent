@@ -6249,40 +6249,54 @@ class WebAgentProtocolLoop:
                                                            constraint.group(2))
                                         )
                                         if valid_version:
-                                            from agent_core.project_environment import environment_index_path
+                                            from agent_core.project_environment import (
+                                                environment_index_path,
+                                                authorize_verified_environment_write,
+                                            )
                                             metadata_target = environment_index_path(root)
-                                            explicit_metadata_grant = any(
-                                                Path(raw).expanduser().resolve() == metadata_target
-                                                for raw in self.authorized_paths
-                                            )
-                                            publish_verified_dependency(
-                                                root, distribution=distribution,
-                                                version=version, target=target_path,
-                                                request_id=self.run_id,
-                                                action_id=str(action.get("action_id","")),
-                                                evidence_ref=action_result_id,
-                                                authorized_project_write=bool(
-                                                    explicit_metadata_grant or root in
-                                                    [Path(raw).expanduser().resolve()
-                                                     for raw in self.authorized_paths]
+                                            allowed, authorization_reason = authorize_verified_environment_write(
+                                                root, tool_context=self.tools,
+                                                authorized_paths=self.authorized_paths,
+                                                request_write_ceiling=getattr(
+                                                    self, "_request_write_ceiling", None,
                                                 ),
-                                                restricted_metadata_write=explicit_metadata_grant,
                                             )
-                                            self._pr_v3_ledger.record_verified_environment(
-                                                task_id=self.task_id,
-                                                request_id=self.run_id,
-                                                task_epoch=self.task_epoch,
-                                                distribution=distribution,
-                                                version=version,
-                                                evidence_ref=action_result_id,
-                                            )
-                                            self._emit(
-                                                "pr_d_current_environment_verified",
-                                                request_id=self.run_id,
-                                                task_id=self.task_id,
-                                                distribution=distribution,
-                                                version=version,
-                                            )
+                                            if not allowed:
+                                                self._emit(
+                                                    "project_environment_index_not_published",
+                                                    request_id=self.run_id,
+                                                    task_id=self.task_id,
+                                                    reason=authorization_reason,
+                                                )
+                                            else:
+                                                explicit_metadata_grant = any(
+                                                    Path(raw).expanduser().resolve() == metadata_target
+                                                    for raw in self.authorized_paths
+                                                )
+                                                publish_verified_dependency(
+                                                    root, distribution=distribution,
+                                                    version=version, target=target_path,
+                                                    request_id=self.run_id,
+                                                    action_id=str(action.get("action_id","")),
+                                                    evidence_ref=action_result_id,
+                                                    authorized_project_write=True,
+                                                    restricted_metadata_write=explicit_metadata_grant,
+                                                )
+                                                self._pr_v3_ledger.record_verified_environment(
+                                                    task_id=self.task_id,
+                                                    request_id=self.run_id,
+                                                    task_epoch=self.task_epoch,
+                                                    distribution=distribution,
+                                                    version=version,
+                                                    evidence_ref=action_result_id,
+                                                )
+                                                self._emit(
+                                                    "pr_d_current_environment_verified",
+                                                    request_id=self.run_id,
+                                                    task_id=self.task_id,
+                                                    distribution=distribution,
+                                                    version=version,
+                                                )
                                         else:
                                             self._emit("project_environment_index_not_published",
                                                 request_id=self.run_id,task_id=self.task_id,
