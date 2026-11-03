@@ -20,6 +20,7 @@ on:
       - fix/tg-cmd-reuse-telegram-auth-20261103
       - feat/live-b-p1-observation-evidence-20261103
       - fix/live-b-p1-progress-terminal-r17-20261103
+      - fix/pr-b-foundation-reuse-auth-integrity-20261103
   workflow_dispatch:
 
 permissions:
@@ -77,6 +78,8 @@ jobs:
           python -B source/WebAgent/tests/validate_pr_bcd_gar_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_pr_bcd_project_environment_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_pr_b_foundation_reuse_integrity.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_evidence_terminal_boundaries.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
