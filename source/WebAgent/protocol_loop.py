@@ -5192,6 +5192,17 @@ class WebAgentProtocolLoop:
                 if getattr(self, "_pr_v3_project_root_explicit", False)
                 else self.workspace
             )
+            if known_environment.get("index_status") in {"ABSENT", "INVALID", "UNKNOWN", "PRESENT"}:
+                prompt += ("\n[PROJECT_ENVIRONMENT_DISCOVERY_FACT]\n"
+                           + json.dumps({"index_status": known_environment["index_status"],
+                                         "index_reason": known_environment["index_reason"]},
+                                        ensure_ascii=False, separators=(",", ":"))
+                           + "\nThis is a Runtime read-only observation, not an installation grant. "
+                           "ABSENT means the index does not exist: report no previous project environment "
+                           "to reuse; do not read_file a known-absent index or create it to pass a read-only goal. "
+                           "INVALID/UNKNOWN means do not trust the record. PRESENT only means candidates "
+                           "may exist and still require fresh version and functional verification."
+                           "\n[/PROJECT_ENVIRONMENT_DISCOVERY_FACT]")
             if known_environment["tools"] or known_environment["dependencies"]:
                 prompt += ("\n[PROJECT_ENVIRONMENT_CANDIDATES_UNTRUSTED_DATA]\n"
                            + json.dumps(known_environment, ensure_ascii=False,
