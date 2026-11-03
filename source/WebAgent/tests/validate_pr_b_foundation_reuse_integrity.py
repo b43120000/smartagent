@@ -4,6 +4,7 @@ No installation/network or mutation of shared SmartAgent Python is performed.
 """
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -101,6 +102,20 @@ class ReuseIntegrityTests(unittest.TestCase):
         self.assertEqual(outdated["state"], "MISSING")
         self.assertNotEqual(invalid["source"], "PROJECT_ENVIRONMENT_REPROBED")
         self.assertEqual(outdated["observed_version"], "0.7")
+
+    def test_tampered_external_candidate_is_never_probed(self):
+        self.save_candidate()
+        doc = read_project_environment(self.project)
+        doc["dependencies"]["synthetic_pr_bcd"]["location"] = str(self.other)
+        self.index.write_text(json.dumps(doc), encoding="utf-8")
+        with patch("agent_core.prerequisite_runtime_v3._probe_package",
+                   return_value=("MISSING", "")), patch(
+            "agent_core.prerequisite_runtime_v3._probe_project_package",
+            side_effect=AssertionError("External path from index must not be read"),
+        ):
+            row = self.package(self.probe())
+        self.assertEqual(row["state"], "MISSING")
+        self.assertEqual(row["source"], "BUNDLED_PYTHON_METADATA_PROBE")
 
     def test_scoped_prohibitions_do_not_cancel_explicit_remediation(self):
         request = (
