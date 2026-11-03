@@ -224,7 +224,7 @@
     "source/agent_core/pr_bcd_request_scope.py": "5566da70e22babb8f7dfebfb5dc80347aa3d507ebe47db30591a6acad6902c65",
     "source/RemoteAgent/telegram_direct_cmd.py": "d05e35d8aac9ac738e9606f3b6aa31b1b9dbb9d3af65b66507041b2a8f174380",
     "source/agent_core/pr_bcd_observation_evidence.py": "3bb806780709bf7e758b00941c6356f5ebc9ca7dad062d13f283c379b65531a0",
-    "source/agent_core/bp1_observation_terminal.py": "02658aa33b337a58753dd82829e7fee21bd15be661873cf7b76e600bf637a42b"
+    "source/agent_core/bp1_observation_terminal.py": "c059bc55262f96d1ca7ca952a100376adf3faaac19ec27e0a98dcd16672a5abe"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
