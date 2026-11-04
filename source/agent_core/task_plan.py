@@ -102,6 +102,22 @@ def canonicalize_task_plan(plan: object) -> tuple[dict, list[dict]]:
         repairs.append({
             "path": "$.edit_plan", "code": "ARRAY_WRAPPED_AS_FILES_TO_MODIFY",
         })
+    # Only copy an existing acceptance condition; never invent file edits.
+    edit_plan = normalized.get("edit_plan")
+    acceptance = normalized.get("acceptance_criteria")
+    if (isinstance(edit_plan, dict)
+            and "expected_observable_result" not in edit_plan
+            and isinstance(acceptance, list)
+            and all(isinstance(item, str) for item in acceptance)):
+        observable = " AND ".join(item.strip() for item in acceptance if item.strip())
+        if observable:
+            normalized["edit_plan"] = {
+                **edit_plan, "expected_observable_result": observable,
+            }
+            repairs.append({
+                "path": "$.edit_plan.expected_observable_result",
+                "code": "EXISTING_ACCEPTANCE_CRITERIA_REUSED",
+            })
     return normalized, repairs
 
 

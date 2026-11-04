@@ -17,6 +17,10 @@ from .path_security import is_within
 from .project_artifact_policy import SOURCE_CODE, TEXT_DATA_CONFIG, classify_project_file
 from .tool_capabilities import describe_tools, get_allowed_tools
 from .task_plan import TASK_PLAN_SCHEMA, canonicalize_task_plan, task_plan_schema_contract
+from .plan_readiness import (
+    DISCOVER, classify_plan_readiness, discovery_observation,
+    transition_discovery_from_observation,
+)
 
 
 _LOCAL_ACCESS_REFUSAL_PATTERNS = (
@@ -523,12 +527,68 @@ def build_result_evidence_to_action_route(
             "terminal_if_no_action": "PAUSED: missing edit-plan source content produced no usable read_range evidence",
         }
 
+    if (tool == "inspect_project_scope"
+            and prior.get("reason") == "task_plan_prerequisite_discovery_required"):
+        return transition_discovery_from_observation(action, payload, prior)
+
     if tool in {"propose_task_plan", "repair_task_plan", "propose_task_plan_file"}:
         if status == "PLAN_FROZEN":
             return {"active": False}
         if status == "INVALID_PLAN":
             submitted_plan = action.get("plan")
             canonical_plan, canonical_repairs = canonicalize_task_plan(submitted_plan)
+            readiness = classify_plan_readiness(
+                submitted_plan, canonical_plan, payload, canonical_repairs,
+            )
+            if readiness["readiness"] == DISCOVER:
+                observation = discovery_observation(workspace)
+                unresolved = readiness["missing_fields"]
+                already_observed = prior.get("reason") == "task_plan_evidence_ready"
+                if already_observed and unresolved == list(prior.get("missing_fields") or []):
+                    return {
+                        **prior,
+                        "active": True, "reason": "task_plan_replan_unresolved",
+                        "readiness": DISCOVER,
+                        "blocking_reason": "NO_NEW_PLAN_FIELDS_AFTER_OBSERVATION",
+                        "next_actions": [], "required_action": "",
+                        "pause_immediately": True,
+                        "terminal_if_no_action": (
+                            "PLAN_READINESS: evidence was provided but the submitted "
+                            "plan still lacks the same required fields"
+                        ),
+                    }
+                return {
+                    "active": True,
+                    "reason": "task_plan_prerequisite_discovery_required",
+                    "readiness": DISCOVER,
+                    "runtime_state": "BLOCKED_ON_PREREQUISITE",
+                    "blocking_reason": "PLAN_SOURCE_EVIDENCE_REQUIRED",
+                    "observed": _result_summary(payload),
+                    "missing_fields": unresolved,
+                    "canonical_repairs": canonical_repairs,
+                    "diagnostic_signature": str(prior.get("diagnostic_signature", "")),
+                    "last_inventory_digest": str(prior.get("last_inventory_digest", "")),
+                    "blocked_tool": "propose_task_plan",
+                    "required_action": "",
+                    "forbidden_actions": [
+                        "propose_task_plan", "propose_task_plan_file",
+                        "repair_task_plan", "execute_frozen_plan",
+                    ],
+                    "prerequisite_satisfied": False,
+                    "next_actions": [observation] if observation is not None else [],
+                    "pause_immediately": observation is None,
+                    "terminal_if_no_action": (
+                        "PLAN_READINESS: no verified project workspace for a "
+                        "read-only prerequisite observation"
+                    ) if observation is None else "",
+                    "rules": [
+                        "Do not freeze or mutate an incomplete plan.",
+                        "Run the exact Runtime-scoped observation first, preserving request scope.",
+                        "After fresh evidence, propose a NEW complete TASK_PLAN_V1; "
+                        "do not replay an incomplete canonical repair payload.",
+                        "Do not invent files_to_modify or an observable success result.",
+                    ],
+                }
             diagnostics = list(payload.get("diagnostics") or [])
             diagnostic_basis = {
                 "reason": payload.get("reason", ""),
@@ -567,6 +627,7 @@ def build_result_evidence_to_action_route(
                 "expected_schema": payload.get("expected_schema", TASK_PLAN_SCHEMA),
                 "schema_contract": payload.get("schema_contract") or task_plan_schema_contract(),
                 "canonical_repairs": canonical_repairs,
+                "readiness": readiness["readiness"],
                 "diagnostic_signature": diagnostic_signature,
                 "same_diagnostic_count": same_diagnostic_count,
                 "blocked_tool": "propose_task_plan",

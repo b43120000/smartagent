@@ -3793,6 +3793,40 @@ class WebAgentProtocolLoop:
                         ),
                     }]
         pending_plan_recovery = dict(self.pending_result_recovery or {})
+        # Evidence-dependent plan fields cannot be repaired by replaying the
+        # same incomplete canonical payload. Permit only the exact observation
+        # before the next source-grounded plan proposal.
+        if (pending_plan_recovery.get("active")
+                and pending_plan_recovery.get("reason")
+                == "task_plan_prerequisite_discovery_required"
+                and not pending_plan_recovery.get("prerequisite_satisfied")):
+            expected_read = list(pending_plan_recovery.get("next_actions") or [])
+            from agent_core.action_dependencies import is_observation
+            permitted = bool(operational and expected_read and len(operational) == 1
+                             and is_observation(operational[0]))
+            if permitted:
+                expected_action = dict(expected_read[0])
+                actual_action = dict(operational[0])
+                expected_action.pop("action_id", None)
+                actual_action.pop("action_id", None)
+                permitted = actual_action == expected_action
+            if operational and not permitted:
+                return [], [{
+                    "marker": "[WEBAGENT_TASK_PLAN_READINESS_REQUIRED]",
+                    "reason": "task_plan_discovery_observation_required",
+                    "detail": "Only the exact Runtime-issued read-only observation is admitted.",
+                    "suggestion": render_result_evidence_to_action_guidance(
+                        pending_plan_recovery
+                    ),
+                }]
+        if (pending_plan_recovery.get("active")
+                and pending_plan_recovery.get("reason") == "task_plan_evidence_ready"
+                and any(item.get("tool") == "repair_task_plan" for item in operational)):
+            return [], [{
+                "marker": "[WEBAGENT_TASK_PLAN_READINESS_REQUIRED]",
+                "reason": "task_plan_fresh_proposal_required",
+                "detail": "Evidence is ready: submit a complete NEW propose_task_plan, not a stale repair.",
+            }]
         repair_actions = [
             action for action in operational
             if str(action.get("tool", "") or "") == "repair_task_plan"
