@@ -65,10 +65,12 @@ class TelegramVisibleConsoleIT(unittest.TestCase):
         self.assertTrue(rows["results"][0]["skipped_pause"])
         self.assertIn("AFTER_PAUSE", rows["results"][1]["stdout"])
 
-    def test_bat_with_pause_terminates_without_keyboard_input(self):
+    def test_cooperative_bat_pause_skips_without_keyboard_input(self):
         script = self.root / "inside_pause.bat"
         script.write_text(
-            "@echo off\necho BEFORE\npause\necho AFTER\n",
+            "@echo off\necho BEFORE\n"
+            "if not defined SMARTAGENT_NONINTERACTIVE pause\n"
+            "echo AFTER\n",
             encoding="ascii",
         )
         rows = run_visible_cmd_batch(
@@ -80,6 +82,56 @@ class TelegramVisibleConsoleIT(unittest.TestCase):
         self.assertIn("BEFORE", rows["results"][0]["stdout"])
         self.assertIn("AFTER", rows["results"][0]["stdout"])
         self.assertIn("FINISHED", rows["results"][1]["stdout"])
+
+    def test_requested_cmd_path_is_working_directory_not_userprofile(self):
+        rows = run_visible_cmd_batch(
+            ["echo %CD%", "echo %USERPROFILE%"],
+            cwd=self.root, command_timeout_seconds=10,
+            batch_timeout_seconds=30, require_interactive=False,
+        )
+        self.assertTrue(rows["completed"], rows)
+        self.assertEqual(
+            os.path.normcase(rows["results"][0]["stdout"].strip()),
+            os.path.normcase(str(self.root)),
+        )
+        self.assertNotEqual(
+            os.path.normcase(rows["results"][1]["stdout"].strip()),
+            os.path.normcase(str(self.root)),
+        )
+
+    def test_timeout_builtin_waits_without_redirected_stdin(self):
+        # Regression for the real-user failure:
+        # "ERROR: Input redirection is not supported, exiting".
+        import time
+        start = time.monotonic()
+        rows = run_visible_cmd_batch(
+            ["timeout /t 2 /nobreak", "echo AFTER_WAIT"],
+            cwd=self.root, command_timeout_seconds=10,
+            batch_timeout_seconds=30, require_interactive=False,
+        )
+        elapsed = time.monotonic() - start
+        self.assertTrue(rows["completed"], rows)
+        self.assertEqual([x["exit_code"] for x in rows["results"]], [0, 0])
+        self.assertGreaterEqual(elapsed, 1.3, rows)
+        self.assertIn("AFTER_WAIT", rows["results"][1]["stdout"])
+
+    def test_legacy_bat_pause_does_not_get_fake_skip(self):
+        # A non-cooperative BAT pause must not be silently rewritten or
+        # receive automatic keystrokes that could confirm unsafe actions.
+        legacy = self.root / "legacy_pause.bat"
+        legacy.write_text(
+            "@echo off\\necho BEFORE\\npause\\necho NEVER\\n",
+            encoding="ascii",
+        )
+        rows = run_visible_cmd_batch(
+            ["call legacy_pause.bat", "echo NEXT_NOT_RUN"],
+            cwd=self.root, command_timeout_seconds=1,
+            batch_timeout_seconds=9, require_interactive=False,
+        )
+        self.assertFalse(rows["completed"], rows)
+        self.assertEqual(rows["reason"], "TG_CMD_LINE_TIMEOUT", rows)
+        self.assertEqual(len(rows["results"]), 1, rows)
+        self.assertTrue(rows["results"][0]["timed_out"])
 
     def test_command_timeout_does_not_start_next_command(self):
         rows = run_visible_cmd_batch(
