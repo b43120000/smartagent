@@ -142,6 +142,70 @@ def analyze_preexecution_rejection(
     return receipt
 
 
+VERIFIED_FAILURE_SCHEMA = "SMARTAGENT_VERIFIED_PREREQUISITE_REPLAN_V1"
+_SAFE_OBSERVATIONS = frozenset({
+    "read_file", "list_directory", "find_file", "inspect_directory",
+    "query_project", "inspect_project_scope", "observe_fact",
+})
+
+
+def analyze_verified_prerequisite_failure(
+    *, action: Mapping[str, object], result: Mapping[str, object],
+    evidence_ref: str, request_id: str, task_epoch: str,
+    effects_pending: bool = False,
+) -> dict | None:
+    """Only a completed, verified failed *read/probe* may request replanning.
+
+    An aborted build, failed installer, or unknown/partial mutation might
+    already have effects. Such actions MUST be reconciled before replanning.
+    This receipt asserts only the failed probe, never that a particular
+    dependency is missing or an installer is authorized.
+    """
+    tool = str(action.get("tool", "") or "")
+    operation = str(action.get("operation", "") or "").upper()
+    if not (tool in _SAFE_OBSERVATIONS or
+            (tool == "run_command" and operation in {"INSPECT", "GIT_INSPECT"})):
+        return None
+    if effects_pending or result.get("executed") is not True:
+        return None
+    if (str(result.get("result_status", "")).upper() not in {"FAILED", "REJECTED"}
+            or str(result.get("execution_status", "")).upper()
+            not in {"FAILED", "REJECTED"}
+            or str(result.get("effective_verification_status", "")).upper()
+            != "FAIL" or str(result.get("expectation_status", "")).upper() == "PASS"):
+        return None
+    if not isinstance(evidence_ref, str) or not evidence_ref:
+        return None
+    receipt = {
+        "schema": VERIFIED_FAILURE_SCHEMA,
+        "request_id": request_id,
+        "task_epoch": task_epoch,
+        "rejected_action_id": str(action.get("action_id", "")),
+        "admission_reason": "VERIFIED_FAILED_PREREQUISITE_OBSERVATION",
+        "evidence_ref": evidence_ref,
+        "result_status": "FAILED",
+        "result_verification": "FAIL",
+        "scope_verified": True,
+        "executed": True,
+        "completion_verified": False,
+        "authorization_granted": False,
+        "routes": [{
+            "id": "INSPECT_ALTERNATIVE",
+            "tool": "run_command",
+            "rule": "Choose another already authorized, bounded probe to locate a usable capability or alternative toolchain.",
+        }, {
+            "id": "REMEDIATE_IF_AUTHORIZED",
+            "tool": "run_command",
+            "rule": "If the goal truly needs a missing dependency, remediate only after the Runtime has verified absence, trusted artifact/source, exact target, explicit installation/network/command authorization, and a bounded independent post-install verification plan. Workspace write access alone is never permission to download or execute installers.",
+        }],
+        "verification_required": True,
+    }
+    canonical = json.dumps(receipt, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":"))
+    receipt["evidence_digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return receipt
+
+
 def repeats_rejected_strategy(action: Mapping[str, object], blocked: Mapping[str, object]) -> bool:
     """Ignore a new Action ID if the rejected semantic command is identical."""
     return bool(
