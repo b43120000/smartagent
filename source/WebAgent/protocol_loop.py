@@ -324,6 +324,7 @@ class WebAgentProtocolLoop:
         self._answer_only_admitted = False
         self._preexec_strategy_blocked: dict = {}
         self._runtime_strategy_replan_note = ""
+        self._planner_context_diagnostics: list[dict] = []
         self._tri_one_origin = "WEB_DIRECT"
         self._tri_one_has_attached_context = False
         self.tools.configure_project_sync_transport(
@@ -1491,6 +1492,18 @@ class WebAgentProtocolLoop:
         ) if contract else ''
 
     def _with_commit(self, prompt: str, expected: dict) -> str:
+        from agent_core.planner_context_snapshot import render_planner_context_snapshot
+        planner_context, context_info = render_planner_context_snapshot(self)
+        self._emit(
+            "planner_context_prepared",
+            request_id=self.run_id, round=self.turn_id,
+            context_snapshot_id=context_info["context_snapshot_id"],
+            context_digest=context_info["context_digest"],
+            evidence_total=context_info["evidence_total"],
+            omitted_active_blocker_count=context_info["omitted_active_blocker_count"],
+            critical_context_omitted=context_info["critical_context_omitted"],
+            diagnostic_count=len(context_info["latest_protocol_diagnostics"]),
+        )
         trace = (
             "[WEBAGENT_REQUEST_TRACE]\n"
             f"request_id={expected['run_id']}\n"
@@ -1504,6 +1517,7 @@ class WebAgentProtocolLoop:
             + str(prompt).rstrip()
             + "\n\n"
             + self._runtime_evidence_context()
+            + "\n" + planner_context
             + ('\n' + self._runtime_strategy_replan_note
                if self._runtime_strategy_replan_note else '')
             + ('\n' + self._bound_cwd_command_guidance() if ('run_command' in str(getattr(self, 'task_request', '') or '').lower() and ( '等待' in str(getattr(self, 'task_request', '') or '') or 'sleep' in str(getattr(self, 'task_request', '') or '').lower() )) else '')
@@ -1566,6 +1580,9 @@ class WebAgentProtocolLoop:
                 'snapshot_id':item.get('snapshot_id',''),
                 'superseded_by_action_id':item.get('superseded_by_action_id',''),
                 "tool": str(item.get("tool", "") or ""),
+                "result_status": str(item.get("result_status", "UNKNOWN") or "UNKNOWN"),
+                "result_reason": str(item.get("result_reason", "") or "")[:120],
+                "executed": item.get("executed"),
                 "execution_status": str(item.get("execution_status", "UNKNOWN") or "UNKNOWN"),
                 "verification_status": str(item.get("verification_status", "UNKNOWN") or "UNKNOWN"),
                 "effective_verification_status": str(
@@ -5177,6 +5194,7 @@ class WebAgentProtocolLoop:
         self._answer_only_admitted = False
         self._preexec_strategy_blocked = {}
         self._runtime_strategy_replan_note = ""
+        self._planner_context_diagnostics = []
         self._bp1_observation_admitted = False
         # An already queued attachment or skill is an external dependency,
         # even if the original prose itself contains no file path.
@@ -5777,6 +5795,7 @@ class WebAgentProtocolLoop:
                         "WebAgent 連續回傳相同的無效協議內容，Runtime 已暫停重複問答"
                     )
                 last_rejected_exchange_signature = rejection_signature
+                self._planner_context_diagnostics = list(diagnostics)
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
                 repair_budget = self._admit_bounded_repair(diagnostics)
                 gar_prompt = self._gar_rejection(
@@ -5857,6 +5876,7 @@ class WebAgentProtocolLoop:
                         action_ids=invalidated_ids,
                         reason="non_progress_admission_rejection",
                     )
+                self._planner_context_diagnostics = list(ack_diagnostics)
                 self._emit(
                     "protocol_rejected",
                     request_id=self.run_id,
@@ -6074,6 +6094,7 @@ class WebAgentProtocolLoop:
                     prompt += "\n" + gar_prompt
                 continue
             last_rejected_exchange_signature = None
+            self._planner_context_diagnostics = []
 
             progress_action = next(action for action in actions if action.get("tool") == "report_progress")
             from agent_core.task_progress import record_progress_repair
