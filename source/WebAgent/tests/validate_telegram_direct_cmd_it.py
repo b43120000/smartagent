@@ -188,6 +188,161 @@ class TelegramDirectCmdIT(unittest.TestCase):
             self.assertEqual(bad["status"], "FAILED")
             self.assertIn("Exit Code: 7", bad["message"])
 
+    def test_glued_or_repeated_template_rejected_before_execution(self):
+        for suffix in (
+            '"git status --short"run cmd by TG',
+            'run cmd by TG',
+            'cmd path: "C:\\Other"',
+            'command:',
+        ):
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(
+                CmdControlError, "TG_CMD_DUPLICATE_TEMPLATE_OR_GLUED_HEADER"
+            ):
+                parse_cmd_request(self.message + "\n" + suffix)
+
+    def test_long_git_fetch_completes_before_next_command(self):
+        command_text = (
+            f'run cmd by TG\ncmd path: "{self.root}"\n'
+            'command:\ngit fetch origin\ngit status --short'
+        )
+        seen = []
+        def complete(cmd, **kwargs):
+            seen.append((cmd[-1], kwargs["timeout"], kwargs["noninteractive"]))
+            return {"process_started": True, "exit_code": 0,
+                    "stdout": "", "stderr": "", "timed_out": False}
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": (str(self.root),)}):
+            reply = execute_cmd_request(
+                command_text, user_id=11, chat_id=22,
+                policy=self.policy, runner=complete,
+            )
+        self.assertEqual(reply["status"], "SUCCESS", reply)
+        self.assertEqual(seen, [("git fetch origin", 300, True),
+                                ("git status --short", 300, True)])
+        self.assertIn("單筆上限 300s", reply["message"])
+
+    def test_fetch_dns_error_reports_environment_diagnostic_not_timeout(self):
+        text = (
+            f'run cmd by TG\ncmd path: "{self.root}"\n'
+            'command:\ngit fetch origin\necho NEVER_RUN'
+        )
+        seen = []
+        def dns_failed(cmd, **kwargs):
+            seen.append(cmd[-1])
+            return {"process_started": True, "exit_code": 128,
+                    "stdout": "",
+                    "stderr": "fatal: unable to access URL: Could not resolve host: github.com",
+                    "timed_out": False}
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": (str(self.root),)}):
+            reply = execute_cmd_request(
+                text, user_id=11, chat_id=22,
+                policy=self.policy, runner=dns_failed,
+            )
+        self.assertEqual(seen, ["git fetch origin"])
+        self.assertEqual(reply["status"], "FAILED")
+        self.assertIn("GIT_DNS_UNRESOLVED", reply["message"])
+        self.assertNotIn("TIMED_OUT", reply["message"])
+        self.assertEqual(len(reply["results"]), 1)
+
+    def test_fetch_missing_ref_is_not_retried_or_rewritten(self):
+        text = (
+            f'run cmd by TG\ncmd path: "{self.root}"\n'
+            'command:\ngit fetch origin feat\necho NEVER_RUN'
+        )
+        seen = []
+        def ref_failed(cmd, **kwargs):
+            seen.append(cmd[-1])
+            return {"process_started": True, "exit_code": 128, "stdout": "",
+                    "stderr": "fatal: couldn't find remote ref feat",
+                    "timed_out": False}
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": (str(self.root),)}):
+            reply = execute_cmd_request(
+                text, user_id=11, chat_id=22,
+                policy=self.policy, runner=ref_failed,
+            )
+        self.assertEqual(seen, ["git fetch origin feat"])
+        self.assertIn("GIT_REMOTE_REF_NOT_FOUND", reply["message"])
+        self.assertEqual(len(reply["results"]), 1)
+
+    def test_pause_line_skip_does_not_execute_itself(self):
+        text = (
+            f'run cmd by TG\ncmd path: "{self.root}"\n'
+            'command:\npause\necho finished'
+        )
+        seen = []
+        def completed(cmd, **kwargs):
+            seen.append(cmd[-1])
+            return {"process_started": True, "exit_code": 0,
+                    "stdout": "finished", "stderr": "", "timed_out": False}
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": (str(self.root),)}):
+            reply = execute_cmd_request(
+                text, user_id=11, chat_id=22,
+                policy=self.policy, runner=completed,
+            )
+        self.assertEqual(reply["status"], "SUCCESS", reply)
+        self.assertEqual(seen, ["echo finished"])
+        self.assertTrue(reply["results"][0]["skipped_pause"])
+        self.assertIn("SKIPPED_PAUSE", reply["message"])
+
+    def test_timeout_stops_batch_even_with_remaining_commands(self):
+        text = (
+            f'run cmd by TG\ncmd path: "{self.root}"\n'
+            'command:\necho slow\necho NEVER_RUN'
+        )
+        seen = []
+        def timed_out(cmd, **kwargs):
+            seen.append(cmd[-1])
+            return {"process_started": True, "exit_code": 1,
+                    "stdout": "", "stderr": "", "timed_out": True}
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   return_value={"writable_workspaces": (str(self.root),)}):
+            reply = execute_cmd_request(
+                text, user_id=11, chat_id=22,
+                policy=self.policy, runner=timed_out,
+            )
+        self.assertEqual(seen, ["echo slow"])
+        self.assertEqual(reply["status"], "FAILED")
+        self.assertIn("TIMED_OUT", reply["message"])
+        self.assertEqual(len(reply["results"]), 1)
+
+    def test_bat_pause_with_nul_stdin_completes_without_input(self):
+        import os
+        if os.name != "nt":
+            self.skipTest("Windows cmd.exe required")
+        from agent_core.bounded_process import run_bounded_process
+        script = self.root / "tg_pause_test.bat"
+        script.write_text(
+            "@echo off\necho BEFORE_PAUSE\npause\necho AFTER_PAUSE\n",
+            encoding="ascii",
+        )
+        exe = str(Path(os.environ.get("SystemRoot", r"C:\Windows"))
+                  / "System32" / "cmd.exe")
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   return_value=False):
+            info = run_bounded_process(
+                [exe, "/d", "/s", "/c", "tg_pause_test.bat"],
+                cwd=self.root, timeout=8, shell=False,
+                security_command="tg_pause_test.bat",
+                noninteractive=True,
+            )
+        self.assertEqual(info.get("exit_code"), 0, info)
+        self.assertFalse(info.get("timed_out"), info)
+        self.assertIn("BEFORE_PAUSE", info.get("stdout", ""))
+        self.assertIn("AFTER_PAUSE", info.get("stdout", ""))
+
     def test_real_windows_cmd_echo_smoke_no_side_effects(self):
         import subprocess
         actual_text = (
