@@ -80,7 +80,7 @@ def run():
     assert summary.endswith('調整需求：')
     telegram = TelegramDeliveryAdapter.render(event(kind='TASK_INTERRUPTED', summary=summary))
     assert telegram.count('🟣 需求修改建議') == 1
-    suggested = summary.split('📋 建議接續文字（請確認後整段複製傳送）：\n',1)[1].split('\n\ntask_id:',1)[0]
+    suggested = summary.split('📋 建議接續文字（請確認後整段複製傳送）：\n',1)[1].split('\n\n狀態：',1)[0]
     assert parse_continuation(suggested)['ids'] == ['TASK-CURRENT']
     assert parse_continuation(suggested)['goal'].startswith('請在 E:\ScreenOFF 建立')
     assert parse_continuation(telegram) == {'mode':'RESUME','ids':['TASK-CURRENT'],'goal':''}
