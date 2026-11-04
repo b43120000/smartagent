@@ -176,7 +176,7 @@ def run_visible_cmd_batch(
             main.extend([
                 f'echo {token} > {_batch_path(started)}',
                 f'echo [{i}/{len(commands)}] Running approved command...',
-                f'call {_batch_path(step)} 1>{_batch_path(output)} 2>{_batch_path(errors)}',
+                f'call {_batch_path(step)} <NUL 1>{_batch_path(output)} 2>{_batch_path(errors)}',
                 'set "SMARTAGENT_TG_LAST_RC=%errorlevel%"',
                 f'echo %SMARTAGENT_TG_LAST_RC% > {_batch_path(rc_path)}',
                 f'if exist {_batch_path(output)} type {_batch_path(output)}',
@@ -198,7 +198,10 @@ def run_visible_cmd_batch(
             process = subprocess.Popen(
                 [exe, "/d", "/q", "/c", str(script)],
                 cwd=str(cwd),
-                stdin=subprocess.DEVNULL,
+                # Leave CMD's standard handles attached to its new real
+                # console. Only each *individual command* reads from NUL so
+                # PAUSE cannot request a key or consume another command.
+                stdin=None,
                 stdout=None,
                 stderr=None,
                 shell=False,
