@@ -182,7 +182,9 @@ def execute_cmd_request(
             if use_restricted_executor else "ACL OFF / Software Guard"
         ),
         (f"逐筆同步等待；單筆上限 {command_timeout_seconds}s，"
-         f"整批上限 {batch_timeout_seconds}s；無人值守 stdin=NUL。"),
+         f"整批上限 {batch_timeout_seconds}s；"
+         + ("STDIN=Windows Console（timeout 可正常執行）。"
+            if runner is None else "STDIN=NUL（舊測試注入路徑）。")),
     ]
     if runner is None:
         # Production: actually open a desktop CMD window and keep one shell
