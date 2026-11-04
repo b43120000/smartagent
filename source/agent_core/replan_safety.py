@@ -99,7 +99,9 @@ def assess_recovery_routes(
             continue
         seen[route] = {
             "route_id": route, "result": result,
-            "reason_code": str(item.get("reason_code", "") or "UNKNOWN")[:96],
+            "reason_code": (str(item.get("reason_code", "") or "UNKNOWN")
+                            if _ROUTE_ID.fullmatch(str(item.get("reason_code", "") or "UNKNOWN"))
+                            else "REDACTED_CODE"),
             "action_ids": [action_id], "evidence_refs": [receipt_ref],
             "executed": executed is True,
         }
@@ -116,7 +118,10 @@ def assess_recovery_routes(
         if remaining:
             status, reason = "REPLAN", "AUTHORIZED_UNTRIED_ROUTE_AVAILABLE"
         elif attempts and all(x["result"] in {"FAILED", "BLOCKED"} for x in attempts):
-            status, reason = "EXHAUSTED", "AUTHORIZED_ROUTES_EXHAUSTED"
+            status = "EXHAUSTED"
+            reason = ("AUTHORIZED_ROUTES_BLOCKED_NO_NETWORK_ATTEMPT"
+                      if all(x["result"] == "BLOCKED" for x in attempts)
+                      else "AUTHORIZED_ROUTES_EXHAUSTED")
         else:
             status, reason = "PAUSE", "NO_VERIFIED_ROUTE_EVIDENCE"
     return {
