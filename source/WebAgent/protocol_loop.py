@@ -5877,6 +5877,12 @@ class WebAgentProtocolLoop:
                     task_epoch=self.task_epoch,
                     capabilities=list(progress_action["capability_resolution"]["capabilities"]),
                     grants_authorization=False)
+            if "path_resolution" in progress_action:
+                self._emit("semantic_path_planner_confirmed",
+                    request_id=self.run_id, task_id=self.task_id,
+                    task_epoch=self.task_epoch,
+                    selected_count=len(progress_action["path_resolution"]["selected_paths"]),
+                    grants_authorization=False)
             if len(actions) == 1:
                 NarrativeDecisionBridge.mark_terminal_result(
                     action_id=str(progress_action.get("action_id", "")),
