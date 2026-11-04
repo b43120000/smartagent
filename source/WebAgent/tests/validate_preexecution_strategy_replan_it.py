@@ -327,7 +327,7 @@ class PreexecutionReplanIT(unittest.TestCase):
                     progress("P-FILE-2", "write_file"),
                     {
                         "tool": "write_file", "action_id": "ACT-WRITE-2",
-                        "path": str(output), "content": "int main(){return 0;}\\n",
+                        "path": str(output), "content": "int main(){return 0;}\n",
                     },
                 )
             raise RuntimeError("STOP_AFTER_REPLANNED_WRITE")
@@ -350,7 +350,7 @@ class PreexecutionReplanIT(unittest.TestCase):
                 )
         self.assertTrue(output.is_file())
         self.assertEqual(output.read_text(encoding="utf-8"),
-                         "int main(){return 0;}\\n")
+                         "int main(){return 0;}\n")
         self.assertEqual(read_progress(
             loop.task_id, self.root).strategy_state["revision"], 2)
         self.assertTrue(any(name == "progress_strategy_revision_recorded"
