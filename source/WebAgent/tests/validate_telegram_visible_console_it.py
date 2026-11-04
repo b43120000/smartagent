@@ -120,7 +120,7 @@ class TelegramVisibleConsoleIT(unittest.TestCase):
         # receive automatic keystrokes that could confirm unsafe actions.
         legacy = self.root / "legacy_pause.bat"
         legacy.write_text(
-            "@echo off\\necho BEFORE\\npause\\necho NEVER\\n",
+            "@echo off\necho BEFORE\npause\necho NEVER\n",
             encoding="ascii",
         )
         rows = run_visible_cmd_batch(
