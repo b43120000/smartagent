@@ -246,6 +246,37 @@ class PreexecutionReplanIT(unittest.TestCase):
             request_id="RR-MISMATCH", task_epoch="EPOCH-1",
         ))
 
+    def test_request_narrower_than_existing_parent_recovers_only_exact_missing_target(self):
+        # The parent is software-writable, but command CWD is not inside the
+        # request's narrower explicit path. This must suggest native write,
+        # never grant execution in the parent directory.
+        attempted = {**self.action, "working_directory": str(self.allowed)}
+        diag = [{
+            "reason": "run_command_working_directory_rejected",
+            "detail": "command_working_directory_outside_request_scope:"
+                      + str(self.allowed),
+        }]
+        receipt = analyze_preexecution_rejection(
+            diagnostics=diag, submitted_actions=[attempted],
+            security_context=self.context,
+            original_request_paths=[str(self.target)],
+            request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
+        )
+        self.assertIsNotNone(receipt)
+        self.assertEqual(receipt["target"], str(self.target))
+        self.assertEqual(receipt["existing_writable_parent"], str(self.allowed))
+        self.assertEqual(receipt["admission_reason"],
+                         "command_working_directory_outside_request_scope")
+        self.assertFalse(receipt["authorization_granted"])
+        self.assertIsNone(analyze_preexecution_rejection(
+            diagnostics=diag, submitted_actions=[attempted],
+            security_context=self.context,
+            original_request_paths=[
+                str(self.target), str(self.allowed / "another_missing")
+            ],
+            request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
+        ))
+
     def test_existing_cwd_or_permission_error_is_not_missing_prerequisite(self):
         self.target.mkdir()
         self.assertIsNone(self.evidence())
