@@ -44,6 +44,7 @@ def run_bounded_process(
     telemetry: dict | None = None,
     approval_manifest: dict | None = None,
     security_command: str | None = None,
+    noninteractive: bool = False,
 ) -> dict:
     """Capture process streams to disk so large output cannot exhaust agent memory."""
     from .command_security import CommandSecurityError, require_command_allowed
@@ -76,7 +77,12 @@ def run_bounded_process(
             if telemetry_root and telemetry_task:
                 from .execution_telemetry import write_snapshot
                 write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="RUNNING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid())
-            result = execute_restricted(command, cwd=cwd, timeout=timeout, shell=shell, max_stream_bytes=max_stream_bytes, approval_manifest=approval_manifest, security_command=security_text)
+            result = execute_restricted(
+                command, cwd=cwd, timeout=timeout, shell=shell,
+                max_stream_bytes=max_stream_bytes,
+                approval_manifest=approval_manifest, security_command=security_text,
+                noninteractive=noninteractive,
+            )
             result.setdefault('process_started', True if result.get('exit_code') is not None else None)
             if telemetry_root and telemetry_task:
                 write_snapshot(telemetry_root, telemetry_task, state="TIMED_OUT" if result.get("timed_out") else "EXITED", ended_at=__import__("time").time(), exit_code=result.get("exit_code"), stdout_tail=str(result.get("stdout", ""))[-8192:], stderr_tail=str(result.get("stderr", ""))[-8192:])
@@ -110,6 +116,15 @@ def run_bounded_process(
     try:
         from .runtime_environment import build_runtime_environment
         child_environment = build_runtime_environment()
+        if noninteractive:
+            # No synthetic confirmation keystrokes. Git must fail explicitly
+            # if credentials require interactive input; cooperative BAT scripts
+            # can skip cosmetic PAUSE via SMARTAGENT_NONINTERACTIVE.
+            child_environment.update({
+                "SMARTAGENT_NONINTERACTIVE": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+                "GCM_INTERACTIVE": "Never",
+            })
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
             process = subprocess.Popen(
                 command,
@@ -117,6 +132,7 @@ def run_bounded_process(
                 shell=shell,
                 stdout=stdout_handle,
                 stderr=stderr_handle,
+                stdin=subprocess.DEVNULL if noninteractive else None,
                 env=child_environment,
             )
             process_started = True
