@@ -562,7 +562,7 @@ def _extract_planner_requirement_revision(conclusion: str) -> tuple[str, dict | 
     return cleaned, {"suggested_goal": goal, "suggested_method": method}
 
 
-def _render_requirement_revision(conclusion: str) -> tuple[str, str]:
+def _render_requirement_revision(conclusion: str, task_id: str) -> tuple[str, str]:
     cleaned, proposal = _extract_planner_requirement_revision(conclusion)
     if proposal is None:
         section = (
@@ -576,7 +576,11 @@ def _render_requirement_revision(conclusion: str) -> tuple[str, str]:
         "建議改寫：" + proposal["suggested_goal"] + "\n"
         "建議做法：" + proposal["suggested_method"] + "\n"
         "⚠️ 這只是模型建議，不是 Runtime 驗證或新授權。"
-        "請確認後把「建議改寫」貼到通知最後的「調整需求：」。"
+        "請確認後才手動複製以下接續內容；不會自動送出或執行。"
+        "\n\n📋 建議接續文字（請確認後整段複製傳送）：\n"
+        + "接續工作 " + task_id + "\n"
+        + "調整需求：" + proposal["suggested_goal"] + "\n"
+        + "建議做法：" + proposal["suggested_method"]
     )
     return cleaned, section
 
@@ -584,7 +588,7 @@ def _render_requirement_revision(conclusion: str) -> tuple[str, str]:
 def render_task_reply(*, original_request, base, conclusion, task_id, request_id, state, source_task_id='', ack_id='', outcome='', terminal_acceptance=None):
     advisory = ''
     if state in {'INTERRUPTED', 'PAUSED', 'FAILED'}:
-        conclusion, advisory = _render_requirement_revision(str(conclusion or ''))
+        conclusion, advisory = _render_requirement_revision(str(conclusion or ''), task_id)
     return (f'使用者原始需求：\n{original_request}\n\nBase：\n{base or "（尚無已接受的評估）"}'
             f'\n\n結果／中斷原因：\n{conclusion}'
             + (f'\n\n{advisory}' if advisory else '')
