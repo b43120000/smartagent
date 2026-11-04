@@ -75,9 +75,14 @@ def run():
     assert '建議做法：先由使用者確認' in summary
     assert '[SMARTAGENT_REVISION_SUGGESTION_V1]' not in summary
     assert '結果／中斷原因：\n目前尚未寫入' in summary
+    assert '📋 建議接續文字' in summary
+    assert '接續工作 TASK-CURRENT\n調整需求：請在 E:\ScreenOFF 建立' in summary
     assert summary.endswith('調整需求：')
     telegram = TelegramDeliveryAdapter.render(event(kind='TASK_INTERRUPTED', summary=summary))
     assert telegram.count('🟣 需求修改建議') == 1
+    suggested = summary.split('📋 建議接續文字（請確認後整段複製傳送）：\n',1)[1].split('\n\ntask_id:',1)[0]
+    assert parse_continuation(suggested)['ids'] == ['TASK-CURRENT']
+    assert parse_continuation(suggested)['goal'].startswith('請在 E:\ScreenOFF 建立')
     assert parse_continuation(telegram) == {'mode':'RESUME','ids':['TASK-CURRENT'],'goal':''}
     # The human must intentionally paste the proposal after 調整需求; the
     # bot must not promote a Planner-generated suggestion into authorization.
