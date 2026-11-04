@@ -1318,6 +1318,71 @@ class WebAgentProtocolLoop:
             "rule": "Continue only remaining content; OPEN is not a completed file. Do not replay accepted chunks.",
         }, ensure_ascii=False, sort_keys=True) + "\n[/RUNTIME_WRITE_CONTINUATION]"
 
+    def _runtime_preexecution_strategy_replan(self, diagnostics, calls) -> str:
+        """Escalate a verified missing CWD from field repair to new strategy.
+
+        This method never executes tools or widens the request/workspace.
+        It only provides a durable, evidence-bound revision to the Planner.
+        Normal Tool Admission remains mandatory for any NEW action.
+        """
+        if not any(
+            isinstance(row, dict) and row.get("reason") ==
+            "run_command_working_directory_rejected"
+            for row in diagnostics
+        ):
+            return ""
+        from agent_core.preexecution_replan import (
+            analyze_preexecution_rejection, render_preexecution_replan,
+        )
+        from agent_core.security_context import SecurityContext
+        from agent_core.task_progress import (
+            record_runtime_strategy_revision, TaskProgressError,
+        )
+        try:
+            context = SecurityContext.from_agent(
+                self.tools, fallback_workspace=self.workspace,
+            )
+            evidence = analyze_preexecution_rejection(
+                diagnostics=diagnostics,
+                submitted_actions=[
+                    item for item in calls
+                    if isinstance(item, dict)
+                    and item.get("tool") not in {"report_progress", "turn_commit"}
+                ],
+                security_context=context,
+                original_request_paths=list(self.authorized_paths),
+                request_id=self.run_id,
+                task_epoch=self.task_epoch,
+            )
+            if evidence is None:
+                return ""
+            self.progress_ledger, new_revision = record_runtime_strategy_revision(
+                self.task_id, request_id=self.run_id,
+                evidence=evidence, round_id=self.turn_id,
+                root=self.progress_root,
+            )
+        except (TaskProgressError, ValueError, OSError, RuntimeError) as exc:
+            self._emit(
+                "preexecution_strategy_revision_unavailable",
+                request_id=self.run_id, round=self.turn_id,
+                reason=type(exc).__name__,
+            )
+            return ""
+        state = dict(self.progress_ledger.strategy_state or {})
+        self._emit(
+            "progress_strategy_revision_recorded",
+            request_id=self.run_id, task_id=self.task_id,
+            round=self.turn_id,
+            revision=state.get("revision", 1),
+            evidence_digest=evidence["evidence_digest"],
+            rejected_action_id=evidence["rejected_action_id"],
+            new_revision=new_revision,
+            executed=False,
+            authorization_granted=False,
+        )
+        return (render_preexecution_replan(evidence) + "\n"
+                + format_prompt_context(self.progress_ledger))
+
     def _bound_cwd_command_contract(self, command: str = 'Start-Sleep -Seconds 4') -> dict:
         """Runtime-owned, no-execution scope preview for path-free commands.
 
@@ -5716,6 +5781,12 @@ class WebAgentProtocolLoop:
                     diagnostics=ack_diagnostics,
                 )
                 repair_budget = self._admit_bounded_repair(ack_diagnostics)
+                # Pre-execution missing-CWD evidence is a strategy blocker,
+                # not a reason to repeat the rejected command indefinitely.
+                # Keep ordinary Bounded Repair accounting unchanged.
+                strategy_replan_note = self._runtime_preexecution_strategy_replan(
+                    ack_diagnostics, calls,
+                )
                 from agent_core.task_progress import record_progress_repair
                 progress_diagnostic = next((row for row in ack_diagnostics if row.get('reason')=='invalid_progress_payload' and row.get('field_issues')), None)
                 if progress_diagnostic:
@@ -5754,6 +5825,8 @@ class WebAgentProtocolLoop:
                     ack_diagnostics, repair_budget=repair_budget,
                 )
                 repair_note = ""
+                if strategy_replan_note:
+                    repair_note += "\n" + strategy_replan_note
                 spec = self._safe_protocol_spec_rejection()
                 if spec:
                     repair_note += (
