@@ -175,7 +175,7 @@ def run_visible_cmd_batch(
             _write_batch(step, ["@echo off", command])
             main.extend([
                 f'echo {token} > {_batch_path(started)}',
-                f'echo [{i}/{len(commands)}] {command[:180]}',
+                f'echo [{i}/{len(commands)}] Running approved command...',
                 f'call {_batch_path(step)} 1>{_batch_path(output)} 2>{_batch_path(errors)}',
                 'set "SMARTAGENT_TG_LAST_RC=%errorlevel%"',
                 f'echo %SMARTAGENT_TG_LAST_RC% > {_batch_path(rc_path)}',
