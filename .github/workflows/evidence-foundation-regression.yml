@@ -18,6 +18,7 @@ on:
       - fix/collect-telegram-terminal-evidence-20261103
       - fix/pr-b-goal-driven-live-rca-r18-20261103
       - feat/scr-v1-semantic-capability-resolution-20261104
+      - feat/spr-v1-path-resolution-20261104
   pull_request:
     branches:
       - fix/live-b-p1-progress-terminal-r17-20261103
