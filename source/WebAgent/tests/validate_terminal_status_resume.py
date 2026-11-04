@@ -54,6 +54,54 @@ def run():
     assert parse_continuation('列出檔案') is None
     rejected(lambda:parse_continuation('🟠 任務中斷\nno id'), 'reference_required')
 
+    # Planner-owned revision text is only a suggestion. It is extracted
+    # from an accepted interruption's final prose, not original user input,
+    # and cannot silently become the next continuation request.
+    planner_block = (
+        '目前尚未寫入；原始路徑與敘述被混合解析。\n'
+        '[SMARTAGENT_REVISION_SUGGESTION_V1]\n'
+        '建議改寫：請在 E:\\ScreenOFF 建立資料夾與 main.cpp，內容輸出指定中文字串；先核對 Workspace 寫入授權。\n'
+        '建議做法：先由使用者確認精確目標與授權，完成授權後逐項建立並驗證；不得直接假定已授權。\n'
+        '[/SMARTAGENT_REVISION_SUGGESTION_V1]'
+    )
+    summary = render_task_reply(
+        original_request='在 E:\\ 建立 ScreenOFF/main.cpp',
+        base='目標不明，尚未寫入', conclusion=planner_block,
+        task_id='TASK-CURRENT', request_id='RR-CURRENT', state='INTERRUPTED',
+        outcome='UNKNOWN',
+    )
+    assert summary.count('🟣 需求修改建議') == 1
+    assert '建議改寫：請在 E:\\ScreenOFF 建立' in summary
+    assert '建議做法：先由使用者確認' in summary
+    assert '[SMARTAGENT_REVISION_SUGGESTION_V1]' not in summary
+    assert '結果／中斷原因：\n目前尚未寫入' in summary
+    assert summary.endswith('調整需求：')
+    telegram = TelegramDeliveryAdapter.render(event(kind='TASK_INTERRUPTED', summary=summary))
+    assert telegram.count('🟣 需求修改建議') == 1
+    assert parse_continuation(telegram) == {'mode':'RESUME','ids':['TASK-CURRENT'],'goal':''}
+    # The human must intentionally paste the proposal after 調整需求; the
+    # bot must not promote a Planner-generated suggestion into authorization.
+    pasted = telegram + '請在 E:\\ScreenOFF 建立資料夾與 main.cpp'
+    assert parse_continuation(pasted)['goal'] == '請在 E:\\ScreenOFF 建立資料夾與 main.cpp'
+    no_proposal = render_task_reply(
+        original_request='原始需求', base='Base', conclusion='未確認寫入權限',
+        task_id='TASK-CURRENT', request_id='RR-CURRENT', state='INTERRUPTED',
+    )
+    assert '🟣 需求修改建議（Planner 尚未提供具體提案）' in no_proposal
+    assert no_proposal.endswith('調整需求：')
+    finished = render_task_reply(
+        original_request='原始需求', base='Base', conclusion=planner_block,
+        task_id='TASK-CURRENT', request_id='RR-CURRENT',
+        state='COMPLETED', outcome='SUCCESS',
+    )
+    assert '🟣 需求修改建議' not in finished
+    malformed = render_task_reply(
+        original_request='原始需求', base='Base',
+        conclusion=planner_block.replace('建議做法：', '錯誤標籤：'),
+        task_id='TASK-CURRENT', request_id='RR-CURRENT', state='INTERRUPTED',
+    )
+    assert 'Planner 尚未提供具體提案' in malformed
+
     with tempfile.TemporaryDirectory(prefix='terminal-resume-') as temp:
         root=Path(temp); store=TaskContinuationStore(root)
         def parent(task_id,outcome,state='COMPLETED'):
