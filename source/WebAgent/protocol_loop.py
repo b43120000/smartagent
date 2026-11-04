@@ -323,6 +323,7 @@ class WebAgentProtocolLoop:
         self.terminal_acceptance: dict = {}
         self._answer_only_admitted = False
         self._preexec_strategy_blocked: dict = {}
+        self._runtime_strategy_replan_note = ""
         self._tri_one_origin = "WEB_DIRECT"
         self._tri_one_has_attached_context = False
         self.tools.configure_project_sync_transport(
@@ -1394,6 +1395,60 @@ class WebAgentProtocolLoop:
         return (render_preexecution_replan(evidence) + "\n"
                 + format_prompt_context(self.progress_ledger))
 
+    def _runtime_verified_failure_strategy_replan(
+        self, action: dict, action_result: dict, evidence_ref: str,
+    ) -> None:
+        """Replan only a completed, verified failed read/probe.
+
+        Runtime receipts are passed directly from the committed Action Result
+        path; no model-provided result dictionary or installer permission is
+        accepted. Unknown mutation effects remain subject to reconciliation.
+        """
+        from agent_core.preexecution_replan import (
+            analyze_verified_prerequisite_failure,
+            render_preexecution_replan,
+        )
+        from agent_core.task_progress import (
+            record_runtime_strategy_revision, TaskProgressError,
+        )
+        pending_effects = any(
+            str(row.get("execution_status", "")).upper()
+            in {"QUEUED", "RUNNING", "UNKNOWN", "PARTIAL", "OPEN"}
+            for row in self.action_ledger.values() if isinstance(row, dict)
+        )
+        receipt = analyze_verified_prerequisite_failure(
+            action=action, result=action_result, evidence_ref=evidence_ref,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            effects_pending=pending_effects,
+        )
+        if receipt is None:
+            return
+        try:
+            self.progress_ledger, new_revision = record_runtime_strategy_revision(
+                self.task_id, request_id=self.run_id, evidence=receipt,
+                round_id=self.turn_id, root=self.progress_root,
+            )
+        except (TaskProgressError, ValueError, OSError):
+            return
+        self._runtime_strategy_replan_note = (
+            render_preexecution_replan(receipt)
+            + "\nOriginal Goal is unchanged; inspect another verified toolchain "
+              "or prerequisite. Install only if the actual source, target, "
+              "network and execution rights are independently authorized. "
+              "An unsuccessful probe is not evidence that any particular "
+              "installer is safe or that the goal is satisfied."
+        )
+        self._emit(
+            "progress_strategy_revision_recorded",
+            request_id=self.run_id, task_id=self.task_id,
+            round=self.turn_id,
+            revision=self.progress_ledger.strategy_state.get("revision", 1),
+            evidence_digest=receipt["evidence_digest"],
+            evidence_ref=evidence_ref, new_revision=new_revision,
+            executed=True, completion_verified=False,
+            authorization_granted=False,
+        )
+
     def _bound_cwd_command_contract(self, command: str = 'Start-Sleep -Seconds 4') -> dict:
         """Runtime-owned, no-execution scope preview for path-free commands.
 
@@ -1449,6 +1504,8 @@ class WebAgentProtocolLoop:
             + str(prompt).rstrip()
             + "\n\n"
             + self._runtime_evidence_context()
+            + ('\n' + self._runtime_strategy_replan_note
+               if self._runtime_strategy_replan_note else '')
             + ('\n' + self._bound_cwd_command_guidance() if ('run_command' in str(getattr(self, 'task_request', '') or '').lower() and ( '等待' in str(getattr(self, 'task_request', '') or '') or 'sleep' in str(getattr(self, 'task_request', '') or '').lower() )) else '')
             + ('\n[REQUEST_CONTEXT_OBJECTS]\n'+json.dumps(self.request_context.catalog(),ensure_ascii=False)
                +'\n[/REQUEST_CONTEXT_OBJECTS]' if self.request_context else '')
@@ -5119,6 +5176,7 @@ class WebAgentProtocolLoop:
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
         self._preexec_strategy_blocked = {}
+        self._runtime_strategy_replan_note = ""
         self._bp1_observation_admitted = False
         # An already queued attachment or skill is an external dependency,
         # even if the original prose itself contains no file path.
@@ -6487,6 +6545,9 @@ class WebAgentProtocolLoop:
                     )
                     ledger_entry.update(action_evidence)
                     ledger_entry = self._record_action_result_evidence(action, ledger_entry)
+                    self._runtime_verified_failure_strategy_replan(
+                        action, ledger_entry, action_result_id,
+                    )
                     from agent_core.pr_bcd_observation_evidence import observation_receipt
                     receipt = observation_receipt(action, result, ledger_entry)
                     ledger_entry["observation_proof_admitted"] = bool(
