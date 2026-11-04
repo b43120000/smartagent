@@ -3686,6 +3686,24 @@ class WebAgentProtocolLoop:
             return [], [{"marker": "[WEBAGENT_SEMANTIC_CAPABILITY_REJECTED]",
                 "reason": str(exc), "suggestion":
                 "Use the finite read-only SCR registry. Do not change permission or scope."}]
+        # Model-proposed path selection cannot expand the trusted original
+        # request: compare against the request/epoch preflight's exact result.
+        proposal = normalized_progress_action.get("path_resolution")
+        if proposal is not None:
+            from agent_core.semantic_path_resolution import (
+                SemanticPathError, validate_planner_path_confirmation,
+            )
+            try:
+                validate_planner_path_confirmation(proposal, self._spr_path_resolution)
+            except SemanticPathError as exc:
+                return [], [{
+                    "marker": "[WEBAGENT_SEMANTIC_PATH_REJECTED]",
+                    "reason": str(exc),
+                    "suggestion": (
+                        "Select only a confirmed original-Request path. "
+                        "Model text cannot grant, broaden, or replace filesystem scope."
+                    ),
+                }]
         from agent_core.strict_observation_guard import strict_observation_action_diagnostic
         strict_diagnostic = strict_observation_action_diagnostic(
             getattr(self, "task_request", ""), operational,
