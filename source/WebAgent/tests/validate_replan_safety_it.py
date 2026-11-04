@@ -78,6 +78,7 @@ class EvidenceGatedReplanTests(unittest.TestCase):
         d = assess(rows)
         self.assertEqual(d["decision"], "EXHAUSTED")
         self.assertTrue(all(not x["executed"] for x in d["attempts"]))
+        self.assertEqual(d["reason"], "AUTHORIZED_ROUTES_BLOCKED_NO_NETWORK_ATTEMPT")
 
     def test_unknown_outcome_must_pause_not_claim_exhaustion(self):
         rows = {
@@ -142,6 +143,10 @@ class EvidenceGatedReplanTests(unittest.TestCase):
     def test_receipt_claim_from_unregistered_route_is_not_authority(self):
         with self.assertRaisesRegex(ReplanSafetyError, "replan_receipt_route_untrusted"):
             assess({"FAKE": receipt("url.new_private_host")})
+
+    def test_runtime_reason_code_cannot_echo_secret_or_raw_exception(self):
+        d = assess({"A1": receipt("url.direct", reason_code="auth token=SECRET")})
+        self.assertEqual(d["attempts"][0]["reason_code"], "REDACTED_CODE")
 
     def test_conflicting_probes_cannot_be_silently_overwritten(self):
         rows = {
