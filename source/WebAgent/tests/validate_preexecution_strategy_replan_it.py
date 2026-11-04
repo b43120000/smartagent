@@ -73,6 +73,18 @@ class PreexecutionReplanIT(unittest.TestCase):
         )
         self.assertIsNotNone(receipt)
         self.assertEqual(receipt["result_verification"], "FAIL")
+        negative_capability = analyze_verified_prerequisite_failure(
+            action=inspect, result={
+                **failed, "result_status": "SUCCEEDED",
+                "execution_status": "SUCCEEDED",
+            },
+            evidence_ref="RES-UNSUPPORTED-CXX20",
+            request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
+        )
+        self.assertIsNotNone(negative_capability)
+        self.assertEqual(negative_capability["result_status"], "SUCCEEDED")
+        self.assertEqual(negative_capability["result_verification"], "FAIL")
+
         self.assertFalse(receipt["authorization_granted"])
         self.assertTrue(receipt["executed"])
         self.assertIn("explicit installation", str(receipt["routes"]))
