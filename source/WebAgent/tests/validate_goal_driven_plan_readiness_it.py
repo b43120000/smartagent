@@ -60,6 +60,21 @@ def check() -> None:
             "expected_observable_result"] == "status.txt exists"
         assert repair_task_plan(workspace, plan)["status"] == "PLAN_FROZEN"
 
+        # Lossless format correction must not rewrite the user's command.
+        scalar = {
+            **plan,
+            "verification_commands": "python -c \\"print('ok')\\"",
+            "acceptance_criteria": "status.txt exists",
+        }
+        normalized, transforms = canonicalize_task_plan(scalar)
+        assert normalized["verification_commands"] == [
+            "python -c \\"print('ok')\\""], normalized
+        assert normalized["acceptance_criteria"] == ["status.txt exists"]
+        assert any(item["code"] == "SINGLE_STRING_WRAPPED_AS_ARRAY"
+                   for item in transforms)
+        assert validate_task_plan(workspace, normalized)["status"] == "VALID"
+
+
         # Missing concrete modification targets cannot be invented from goal.
         incomplete = {**plan, "edit_plan": {}}
         broken = validate_task_plan(workspace, incomplete)
