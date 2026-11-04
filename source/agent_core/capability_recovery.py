@@ -18,7 +18,8 @@ from .project_artifact_policy import SOURCE_CODE, TEXT_DATA_CONFIG, classify_pro
 from .tool_capabilities import describe_tools, get_allowed_tools
 from .task_plan import TASK_PLAN_SCHEMA, canonicalize_task_plan, task_plan_schema_contract
 from .plan_readiness import (
-    DISCOVER, classify_plan_readiness, discovery_observation,
+    DISCOVER, REPAIR, bounded_schema_revision_field,
+    classify_plan_readiness, discovery_observation,
     transition_discovery_from_observation,
 )
 
@@ -590,6 +591,49 @@ def build_result_evidence_to_action_route(
                     ],
                 }
             diagnostics = list(payload.get("diagnostics") or [])
+            # A malformed, present field is not the same as a missing source
+            # target. When lossless canonicalization cannot fix it, admit one
+            # narrowly constrained new proposal changing only the diagnosed
+            # top-level field. It still must pass the full Task Plan validator.
+            revision_field = (
+                bounded_schema_revision_field(payload)
+                if readiness["readiness"] == REPAIR and not canonical_repairs
+                else ""
+            )
+            if revision_field:
+                if (prior.get("reason") == "task_plan_schema_revision_required"
+                        and prior.get("schema_revision_field") == revision_field):
+                    return {
+                        **prior,
+                        "reason": "task_plan_schema_revision_stalled",
+                        "pause_immediately": True,
+                        "next_actions": [], "required_action": "",
+                        "terminal_if_no_action": (
+                            "PLAN_READINESS: corrected field still fails the same "
+                            "validator diagnostic; no silent second repair"
+                        ),
+                    }
+                return {
+                    "active": True,
+                    "reason": "task_plan_schema_revision_required",
+                    "readiness": REPAIR,
+                    "runtime_state": "SCHEMA_REVISION_REQUIRED",
+                    "blocking_reason": "PLAN_SCHEMA_FIELD_MALFORMED",
+                    "schema_revision_field": revision_field,
+                    "original_plan": canonical_plan,
+                    "observed": _result_summary(payload),
+                    "prerequisite_satisfied": False,
+                    "required_action": "propose_task_plan",
+                    "next_actions": [],
+                    "pause_immediately": False,
+                    "forbidden_actions": ["repair_task_plan", "execute_frozen_plan"],
+                    "rules": [
+                        "Create a new propose_task_plan with a fresh action_id.",
+                        "Change ONLY the Validator-identified field: " + revision_field,
+                        "Keep goal, edit targets, authorized scope and other fields unchanged.",
+                        "Do not invent evidence or bypass validation.",
+                    ],
+                }
             diagnostic_basis = {
                 "reason": payload.get("reason", ""),
                 "submitted_schema": payload.get("submitted_schema", ""),
