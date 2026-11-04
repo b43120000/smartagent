@@ -212,10 +212,10 @@ def execute_cmd_request(
             lines.extend([
                 "", f"[{index}/{len(commands)}] > {command}",
                 "Exit Code: " + str(row.get("exit_code")),
-                "stdout:\\n" + str(row.get("stdout") or "(empty)")[:10000],
+                "stdout:\n" + str(row.get("stdout") or "(empty)")[:10000],
             ])
             if row.get("stderr"):
-                lines.append("stderr:\\n" + str(row["stderr"])[:10000])
+                lines.append("stderr:\n" + str(row["stderr"])[:10000])
             if row.get("skipped_pause"):
                 lines.append("SKIPPED_PAUSE：獨立 pause 指令已跳過。")
             hint = _command_failure_hint(
@@ -229,12 +229,12 @@ def execute_cmd_request(
             lines.append("CMD 執行原因：" + str(batch["reason"]))
         if not batch["completed"]:
             lines.append("指令未完成，停止執行後續行。")
-        lines.append("\\n狀態：" + (
+        lines.append("\n狀態：" + (
             "SUCCESS" if batch["completed"] else "FAILED/PARTIAL"
         ))
-        reply = "\\n".join(lines)
+        reply = "\n".join(lines)
         if len(reply) > 24000:
-            reply = reply[:24000] + "\\n...[回覆過長，後段省略]"
+            reply = reply[:24000] + "\n...[回覆過長，後段省略]"
         return {
             "message": reply,
             "status": "SUCCESS" if batch["completed"] else "FAILED",
