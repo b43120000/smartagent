@@ -13,7 +13,7 @@ from WebAgent.protocol_loop import WebAgentProtocolLoop
 from WebAgent.tests.validate_progress_terminal_lifecycle import response
 
 
-def progress():
+def progress(selected_path):
     return {
         "tool": "report_progress", "action_id": "SPR-PROGRESS",
         "base_evaluation": "Bound the requested path and inspect its metadata.",
@@ -38,6 +38,10 @@ def progress():
             "schema": "SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1",
             "capabilities": ["directory.inspect_metadata"],
         },
+        "path_resolution": {
+            "schema": "SMARTAGENT_SEMANTIC_PATH_RESOLUTION_V1",
+            "selected_paths": [str(selected_path)],
+        },
     }
 
 
@@ -60,7 +64,7 @@ class SPRProtocolIT(unittest.TestCase):
                     self.assertIn("SMARTAGENT_SEMANTIC_PATH_RESOLUTION_V1", prompt)
                     self.assertIn(str(folder), prompt)
                     return response(
-                        progress(),
+                        progress(folder),
                         {"tool": "inspect_directory", "action_id": "SPR-INSPECT",
                          "paths": [str(folder)], "recursive": False},
                     )
@@ -84,11 +88,49 @@ class SPRProtocolIT(unittest.TestCase):
             self.assertTrue(any(name == "semantic_path_resolution_recorded"
                                 and data.get("status") == "VERIFIED_UNIQUE"
                                 for name, data in events), events)
+            self.assertTrue(any(name == "semantic_path_planner_confirmed"
+                                for name, data in events), events)
             index = root / "localdata" / "runtime" / "path_resolution" / "RR-SPR-V9-IT.json"
             doc = json.loads(index.read_text(encoding="utf-8"))
             self.assertEqual(doc["request_id"], "RR-SPR-V9-IT")
             self.assertEqual(doc["task_epoch"], "EPOCH-SPR-V9-IT")
             self.assertEqual(doc["paths"], [str(folder)])
+
+    def test_planner_cannot_substitute_existing_parent_for_verified_path(self):
+        with tempfile.TemporaryDirectory(prefix="spr-negative-") as dirname:
+            root = Path(dirname).resolve()
+            folder = root / "deps"
+            folder.mkdir()
+            turns, events = [], []
+
+            def planner(prompt, expected, attachments):
+                turns.append(prompt)
+                if len(turns) > 1:
+                    raise RuntimeError("SPR_REJECTION_CONFIRMED")
+                invalid = progress(root)  # verified target is root/deps, not root
+                return response(
+                    invalid,
+                    {"tool": "inspect_directory", "action_id": "SPR-UNAUTHORIZED",
+                     "paths": [str(folder)], "recursive": False},
+                )
+
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=3,
+                event_sink=lambda name, **data: events.append((name, data)),
+            )
+            with patch.dict(os.environ, {"SMARTAGENT_GAR_V1": "0",
+                                        "SMARTAGENT_PREREQ_V3_BCD": "0"}):
+                with self.assertRaisesRegex(RuntimeError, "SPR_REJECTION_CONFIRMED"):
+                    loop.run(
+                        "請分析 " + str(folder) + "的資料夾狀況。",
+                        request_id="RR-SPR-REJECT",
+                        task_id="TASK-SPR-REJECT", task_epoch="EPOCH-SPR-REJECT",
+                    )
+            self.assertNotIn("SPR-UNAUTHORIZED", loop.action_result_ledger)
+            self.assertFalse(any(name == "tool_started" and data.get("action_id") == "SPR-UNAUTHORIZED"
+                                 for name, data in events), events)
+            self.assertTrue(any("semantic_path_planner_selection_mismatch" in str(data)
+                                for _, data in events), events)
 
     def test_ambiguous_preflight_never_contacts_planner_or_tools(self):
         with tempfile.TemporaryDirectory(prefix="spr-amb-") as dirname:
