@@ -10,7 +10,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core.preexecution_replan import analyze_preexecution_rejection
+from agent_core.preexecution_replan import (
+    analyze_preexecution_rejection, analyze_verified_prerequisite_failure,
+    render_verified_prerequisite_replan, repeats_rejected_strategy,
+)
 from agent_core.security_context import SecurityContext
 from agent_core.task_progress import (
     TaskProgressError, initialize_progress, read_progress,
@@ -52,6 +55,89 @@ class PreexecutionReplanIT(unittest.TestCase):
             request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
             **kwargs,
         )
+
+    def test_verified_failed_compiler_probe_can_replan_but_cannot_install(self):
+        inspect = {
+            "tool": "run_command", "action_id": "PROBE-CXX-1",
+            "operation": "INSPECT", "command": "Get-Command clang++",
+        }
+        failed = {
+            "executed": True, "result_status": "FAILED",
+            "execution_status": "FAILED",
+            "effective_verification_status": "FAIL",
+            "expectation_status": "",
+        }
+        receipt = analyze_verified_prerequisite_failure(
+            action=inspect, result=failed, evidence_ref="RES-PROBE-CXX-1",
+            request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
+        )
+        self.assertIsNotNone(receipt)
+        self.assertEqual(receipt["result_verification"], "FAIL")
+        self.assertFalse(receipt["authorization_granted"])
+        self.assertTrue(receipt["executed"])
+        self.assertIn("explicit installation", str(receipt["routes"]))
+        display = render_verified_prerequisite_replan(receipt)
+        self.assertIn("RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED", display)
+        self.assertIn("not by itself prove a toolchain is missing", display)
+        self.assertIsNone(analyze_verified_prerequisite_failure(
+            action=inspect, result={**failed,
+                                    "effective_verification_status": "UNVERIFIED"},
+            evidence_ref="RES-UNVERIFIED", request_id="RR-PREEXEC-1",
+            task_epoch="EPOCH-1",
+        ))
+        self.assertIsNone(analyze_verified_prerequisite_failure(
+            action={**inspect, "operation": "MUTATE"},
+            result=failed, evidence_ref="RES-UNKNOWN-EFFECT",
+            request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
+        ))
+        self.assertIsNone(analyze_verified_prerequisite_failure(
+            action=inspect, result=failed, evidence_ref="RES-UNKNOWN-EFFECT",
+            request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
+            effects_pending=True,
+        ))
+        self.assertIsNone(analyze_verified_prerequisite_failure(
+            action=inspect, result={**failed, "expectation_status": "PASS"},
+            evidence_ref="RES-EXPECTED-FAIL", request_id="RR-PREEXEC-1",
+            task_epoch="EPOCH-1",
+        ))
+
+    def test_verified_probe_advances_progress_revision_without_goal_reset(self):
+        goal = "Compile C++20 after verified prerequisites"
+        original = initialize_progress(
+            "TASK-VERIFIED-CXX", request_id="RR-PREEXEC-1",
+            goal=goal, root=self.root,
+        )
+        inspect = {"tool": "run_command", "action_id": "CXX-PROBE",
+                   "operation": "INSPECT"}
+        evidence = analyze_verified_prerequisite_failure(
+            action=inspect,
+            result={"executed": True, "result_status": "FAILED",
+                    "execution_status": "FAILED",
+                    "effective_verification_status": "FAIL"},
+            evidence_ref="RES-FAILED-PROBE",
+            request_id="RR-PREEXEC-1", task_epoch="EPOCH-1",
+        )
+        revised, changed = record_runtime_strategy_revision(
+            original.task_id, request_id="RR-PREEXEC-1",
+            evidence=evidence, round_id=3, root=self.root,
+        )
+        self.assertTrue(changed)
+        self.assertEqual(revised.strategy_state["revision"], 2)
+        self.assertEqual(revised.goal, goal)
+        self.assertEqual(revised.strategy_state["history"][0]["trigger"],
+                         "VERIFIED_FAILED_PREREQUISITE")
+        self.assertFalse(revised.strategy_state["history"][0]["authorization_granted"])
+
+    def test_identical_rejected_command_with_new_action_id_is_not_replan(self):
+        blocked = {key: self.action.get(key) for key in
+                   ("tool", "command", "operation", "working_directory")}
+        self.assertTrue(repeats_rejected_strategy(
+            {**self.action, "action_id": "ACT-SAME-BUT-NEW-ID"}, blocked,
+        ))
+        self.assertFalse(repeats_rejected_strategy({
+            **self.action, "tool": "write_file",
+            "action_id": "ACT-NEW-STRATEGY",
+        }, blocked))
 
     def test_existing_parent_and_absent_target_are_eligible(self):
         receipt = self.evidence()
