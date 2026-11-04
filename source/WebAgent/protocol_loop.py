@@ -241,7 +241,16 @@ def resolve_authorized_paths(
 
     text = str(request or "")
     if _SAVED_PLAN_OPEN not in text and _SAVED_PLAN_CLOSE not in text:
-        return extract_authorized_paths(text)
+        from agent_core.semantic_path_resolution import (
+            analyze_request_paths, require_resolved_paths,
+        )
+        from agent_core.task_requirement import assess_task_requirement
+        assessment = assess_task_requirement(text)
+        snapshot = analyze_request_paths(
+            text, extract_authorized_paths(text),
+            allow_readonly_narrowing=not assessment["side_effect_required"],
+        )
+        return require_resolved_paths(snapshot)
     if text.count(_SAVED_PLAN_OPEN) != 1 or text.count(_SAVED_PLAN_CLOSE) != 1:
         raise ValueError("saved_plan_authorization_source_invalid")
     if text.count(_ORIGINAL_REQUEST_OPEN) != 1 or text.count(_ORIGINAL_REQUEST_CLOSE) != 1:
@@ -289,6 +298,7 @@ class WebAgentProtocolLoop:
         self.cancel_check = cancel_check
         self.progress_root = Path(progress_root).resolve() if progress_root is not None else None
         self.progress_ledger = None
+        self._spr_path_resolution = None
         self.continuation_store = continuation_store
         self.continuation_owner = continuation_owner
         self.continuation_source = None
@@ -1255,6 +1265,10 @@ class WebAgentProtocolLoop:
             "progress": progress,
             "latest_runtime_context": latest_context[-16000:] + "\n" + self._write_continuation_context(),
             "authorized_paths": list(self.authorized_paths),
+            "semantic_path_resolution": {
+                "status": self._spr_path_resolution.get("status"),
+                "paths": list(self._spr_path_resolution.get("paths", [])),
+            } if self._spr_path_resolution is not None else None,
             "context_capabilities": self._context_capabilities(),
             'request_context_epoch':self.task_epoch if self.request_context else '',
         }
@@ -4985,10 +4999,44 @@ class WebAgentProtocolLoop:
             root=repair_base, task_id=self.task_id, request_id=self.run_id)
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
-        authorized = resolve_authorized_paths(
-            request,
-            trusted_authorized_paths=trusted_authorized_paths,
-        )
+        # SPR V1 runs before first Planner Progress and before any Tool action.
+        # Saved-plan and external trusted scope are NEVER reconstructed from
+        # model prose. Original-request candidate evidence grants no write.
+        self._spr_path_resolution = None
+        if (trusted_authorized_paths is None
+                and _SAVED_PLAN_OPEN not in request
+                and _SAVED_PLAN_CLOSE not in request):
+            from agent_core.semantic_path_resolution import (
+                analyze_request_paths, require_resolved_paths,
+                persist_request_path_resolution,
+            )
+            from agent_core.task_requirement import assess_task_requirement
+            assessment = assess_task_requirement(request)
+            self._spr_path_resolution = analyze_request_paths(
+                request, extract_authorized_paths(request),
+                allow_readonly_narrowing=not assessment["side_effect_required"],
+            )
+            context_base = self.progress_root if self.progress_root is not None else self.workspace
+            path_ledger = persist_request_path_resolution(
+                context_base, request_id=self.run_id, task_epoch=self.task_epoch,
+                original_request=request, document=self._spr_path_resolution,
+            )
+            self._emit(
+                "semantic_path_resolution_recorded",
+                request_id=self.run_id, task_id=self.task_id, task_epoch=self.task_epoch,
+                status=self._spr_path_resolution["status"],
+                candidate_count=sum(len(item["candidates"])
+                                    for item in self._spr_path_resolution["records"]),
+                selected_count=len(self._spr_path_resolution["paths"]),
+                ledger_path=str(path_ledger),
+                grants_authorization=False,
+            )
+            authorized = require_resolved_paths(self._spr_path_resolution)
+        else:
+            authorized = resolve_authorized_paths(
+                request,
+                trusted_authorized_paths=trusted_authorized_paths,
+            )
         self.authorized_paths = list(authorized)
         self._pr_v3_project_root = self._authorized_project_root(self.authorized_paths, self.workspace)
         self._pr_v3_project_root_explicit = any(
@@ -5254,6 +5302,9 @@ class WebAgentProtocolLoop:
                 + "\n[/PR_BCD_REQUEST_PROJECT_SCOPE]"
             )
         prompt += "\n" + render_initial_planner_toolkit(environment_snapshot)
+        if self._spr_path_resolution is not None:
+            from agent_core.semantic_path_resolution import planner_path_context
+            prompt += "\n" + planner_path_context(self._spr_path_resolution)
         # Stored project SDK/dependency paths are bounded hints, not tool
         # authority. Runtime must revalidate path, version and scope before use.
         try:
