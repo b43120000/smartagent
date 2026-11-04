@@ -133,6 +133,7 @@ $scalarKeys = @(
     'execution_status','last_reason','repair_status','diagnostic_reason','error_type',
     'scope_allowed','scope_error_code','scope_source','runtime_fact_ref_count',
     'project_root_matches_workspace','explicit_path_count','request_paths_grant_write',
+    'candidate_count','selected_count',
     'ceiling_active','ceiling_valid','ceiling_reason','grants_authorization',
     'observation_proof_admitted','observation_proof_reason',
     'observation_proof_code','task_condition_verified',
