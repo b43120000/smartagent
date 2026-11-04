@@ -63,12 +63,12 @@ def check() -> None:
         # Lossless format correction must not rewrite the user's command.
         scalar = {
             **plan,
-            "verification_commands": "python -c \\"print('ok')\\"",
+            "verification_commands": 'python -c "print(123)"',
             "acceptance_criteria": "status.txt exists",
         }
         normalized, transforms = canonicalize_task_plan(scalar)
         assert normalized["verification_commands"] == [
-            "python -c \\"print('ok')\\""], normalized
+            'python -c "print(123)"'], normalized
         assert normalized["acceptance_criteria"] == ["status.txt exists"]
         assert any(item["code"] == "SINGLE_STRING_WRAPPED_AS_ARRAY"
                    for item in transforms)
