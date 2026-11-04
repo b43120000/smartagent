@@ -80,7 +80,15 @@ def analyze_preexecution_rejection(
     detail = str(reasons[0].get("detail", "") or "")
     if not detail.startswith("command_working_directory_not_directory:"):
         return None
-    target = Path(raw).expanduser().resolve()
+    prefix = "command_working_directory_not_directory:"
+    # The error must be about the same literal directory as this Action,
+    # not merely another similarly shaped diagnostic.
+    if Path(detail[len(prefix):]).expanduser().resolve() != Path(raw).expanduser().resolve():
+        return None
+    original_path = Path(raw).expanduser()
+    if original_path.is_symlink():
+        return None
+    target = original_path.resolve()
     if not _enclosed(target, original_request_paths):
         return None
     # Explicitly verify the same absence reported by the CWD admission.
@@ -132,6 +140,17 @@ def analyze_preexecution_rejection(
                            separators=(",", ":"))
     receipt["evidence_digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return receipt
+
+
+def repeats_rejected_strategy(action: Mapping[str, object], blocked: Mapping[str, object]) -> bool:
+    """Ignore a new Action ID if the rejected semantic command is identical."""
+    return bool(
+        blocked
+        and action.get("tool") == "run_command"
+        and str(action.get("command", "")) == str(blocked.get("command", ""))
+        and str(action.get("operation", "")) == str(blocked.get("operation", ""))
+        and str(action.get("working_directory", "")) == str(blocked.get("working_directory", ""))
+    )
 
 
 def render_preexecution_replan(receipt: Mapping[str, object]) -> str:
