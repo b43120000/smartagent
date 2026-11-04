@@ -215,15 +215,15 @@ def render_verified_prerequisite_replan(receipt: Mapping[str, object]) -> str:
                          "authorization_granted", "routes",
                          "verification_required", "evidence_digest"}}
     return (
-        "[RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED]\\n"
+        "[RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED]\n"
         + json.dumps(public, ensure_ascii=False, sort_keys=True,
                      separators=(",", ":"))
-        + "\\nThis completed read/probe failed with actual Runtime-verified "
+        + "\nThis completed read/probe failed with actual Runtime-verified "
           "FAIL evidence. That does NOT by itself prove a toolchain is missing, "
           "nor authorize downloading/installing it. Replan from the original "
           "Goal with a NEW, properly scoped observation or separately "
           "authorized remediation. Reconcile uncertain effects before any "
-          "mutation. Preserve existing evidence, step progress, and budgets.\\n"
+          "mutation. Preserve existing evidence, step progress, and budgets.\n"
           "[/RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED]"
     )
 
