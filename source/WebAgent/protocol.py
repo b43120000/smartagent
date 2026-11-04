@@ -133,6 +133,15 @@ def render_action_response_constraints() -> str:
         "8. Progress 修復時只補必要欄位；Runtime 保留原 action，不能提前 final_response 或換掉尚未執行的操作。"
         "STALE evidence 必須刷新，SUPERSEDED 依 Runtime 的新證據取代。數值仍優先用 JSON number；"
         "只有 schema 明確定義的數字欄位可由 Runtime 無歧義正規化，不會猜測路徑、ID、bool 或命令。\n"
+        "9. 當 report_progress 的終態決策是 INTERRUPT，且有客觀 Runtime 阻礙時，"
+        "在 final_response.content 的中斷原因後附加一個獨立四行區塊，每個內容標籤只寫一行：\n"
+        "[SMARTAGENT_REVISION_SUGGESTION_V1]\n"
+        "建議改寫：保留原本目標、但澄清路徑或必要條件的完整修訂需求（供使用者確認複製）\n"
+        "建議做法：依真實阻礙提出可行、合法的下一步；需要新的寫入授權時，只能請使用者明確授權\n"
+        "[/SMARTAGENT_REVISION_SUGGESTION_V1]\n"
+        "這只是模型建議，不是 Runtime 事實、執行結果或授權。不得捏造已授權路徑、"
+        "不可建議繞過 Workspace / ACL，不能因中斷而偷偷改寫原始需求。"
+        "如果無可靠可行的建議，可省略區塊。\n"
         "[/SMARTAGENT_ACTION_RESPONSE_CONSTRAINTS]\n" + render_write_budget()
     )
 
