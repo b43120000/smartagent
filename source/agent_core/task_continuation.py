@@ -523,9 +523,72 @@ def format_terminal_acceptance(terminal_acceptance, *, task_id, request_id):
             + f'\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}')
 
 
+_REVISION_MARKER_OPEN = "[SMARTAGENT_REVISION_SUGGESTION_V1]"
+_REVISION_MARKER_CLOSE = "[/SMARTAGENT_REVISION_SUGGESTION_V1]"
+
+
+def _extract_planner_requirement_revision(conclusion: str) -> tuple[str, dict | None]:
+    """Display-only proposal from accepted Planner terminal prose.
+
+    Model-authored text is never a Runtime permission, verified tool result,
+    accepted terminal receipt, or continuation goal. Only extract two bounded,
+    explicitly labeled single-line fields from the final-response body.
+    """
+    prose = str(conclusion or "")
+    pattern = (
+        re.escape(_REVISION_MARKER_OPEN)
+        + r"\r?\n(.*?)\r?\n"
+        + re.escape(_REVISION_MARKER_CLOSE)
+    )
+    matches = list(re.finditer(pattern, prose, re.S))
+    if len(matches) != 1:
+        return prose, None
+    match = matches[0]
+    raw = match.group(1)
+    if len(raw) > 1900:
+        return prose, None
+    lines = raw.splitlines()
+    if len(lines) != 2:
+        return prose, None
+    goal_prefix, method_prefix = "建議改寫：", "建議做法："
+    if not lines[0].startswith(goal_prefix) or not lines[1].startswith(method_prefix):
+        return prose, None
+    goal = lines[0][len(goal_prefix):].strip()
+    method = lines[1][len(method_prefix):].strip()
+    if (not goal or not method or len(goal) > 850 or len(method) > 850
+            or any(c in "\x00\r\n" for c in goal + method)):
+        return prose, None
+    cleaned = (prose[:match.start()] + prose[match.end():]).strip()
+    return cleaned, {"suggested_goal": goal, "suggested_method": method}
+
+
+def _render_requirement_revision(conclusion: str) -> tuple[str, str]:
+    cleaned, proposal = _extract_planner_requirement_revision(conclusion)
+    if proposal is None:
+        section = (
+            "🟣 需求修改建議（Planner 尚未提供具體提案）\n"
+            "目前沒有可直接採用的修訂文字。請先確認上方中斷原因；"
+            "不要把未知的路徑、授權或執行結果當成已確認。"
+        )
+        return cleaned, section
+    section = (
+        "🟣 需求修改建議（Planner 提案，尚未執行）\n"
+        "建議改寫：" + proposal["suggested_goal"] + "\n"
+        "建議做法：" + proposal["suggested_method"] + "\n"
+        "⚠️ 這只是模型建議，不是 Runtime 驗證或新授權。"
+        "請確認後把「建議改寫」貼到通知最後的「調整需求：」。"
+    )
+    return cleaned, section
+
+
 def render_task_reply(*, original_request, base, conclusion, task_id, request_id, state, source_task_id='', ack_id='', outcome='', terminal_acceptance=None):
+    advisory = ''
+    if state in {'INTERRUPTED', 'PAUSED', 'FAILED'}:
+        conclusion, advisory = _render_requirement_revision(str(conclusion or ''))
     return (f'使用者原始需求：\n{original_request}\n\nBase：\n{base or "（尚無已接受的評估）"}'
-            f'\n\n結果／中斷原因：\n{conclusion}\n\n狀態：{state}'
+            f'\n\n結果／中斷原因：\n{conclusion}'
+            + (f'\n\n{advisory}' if advisory else '')
+            + f'\n\n狀態：{state}'
             + (f'\n驗收結果：{outcome}' if outcome else '')
             + f'\n任務結果：{terminal_heading(state, outcome)}'
             + format_terminal_acceptance(terminal_acceptance, task_id=task_id, request_id=request_id)
