@@ -695,9 +695,15 @@ def record_runtime_strategy_revision(
     if current < 1 or current >= max_revisions:
         raise TaskProgressError("strategy_revision_budget_exhausted")
     revision = current + 1
-    trigger = ("PREEXECUTION_CWD_ABSENT"
-               if schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
-               else "VERIFIED_FAILED_PREREQUISITE")
+    trigger = (
+        "PREEXECUTION_REQUEST_CWD_SCOPE"
+        if (schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+            and evidence.get("admission_reason") ==
+            "command_working_directory_outside_request_scope")
+        else "PREEXECUTION_CWD_ABSENT"
+        if schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+        else "VERIFIED_FAILED_PREREQUISITE"
+    )
     row = {
         "revision": revision, "trigger": trigger,
         "round_id": int(round_id), "evidence_digest": digest,
