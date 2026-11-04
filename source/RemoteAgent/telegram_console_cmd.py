@@ -176,7 +176,13 @@ def run_visible_cmd_batch(
             main.extend([
                 f'echo {token} > {_batch_path(started)}',
                 f'echo [{i}/{len(commands)}] Running approved command...',
-                f'call {_batch_path(step)} <NUL 1>{_batch_path(output)} 2>{_batch_path(errors)}',
+                # Keep STDIN attached to the actual console. Windows
+                # timeout.exe rejects <NUL (ERROR: input redirection is not
+                # supported), even though the console itself is real.
+                # Standalone PAUSE remains a skip-only step; BAT-embedded
+                # PAUSE must use the cooperative SMARTAGENT_NONINTERACTIVE
+                # guard or it remains a genuine interactive wait.
+                f'call {_batch_path(step)} 1>{_batch_path(output)} 2>{_batch_path(errors)}',
                 'set "SMARTAGENT_TG_LAST_RC=%errorlevel%"',
                 f'echo %SMARTAGENT_TG_LAST_RC% > {_batch_path(rc_path)}',
                 f'if exist {_batch_path(output)} type {_batch_path(output)}',
@@ -198,9 +204,9 @@ def run_visible_cmd_batch(
             process = subprocess.Popen(
                 [exe, "/d", "/q", "/c", str(script)],
                 cwd=str(cwd),
-                # Leave CMD's standard handles attached to its new real
-                # console. Only each *individual command* reads from NUL so
-                # PAUSE cannot request a key or consume another command.
+                # New console owns the interactive input handle, so
+                # TIMEOUT waits normally. Never redirect STDIN to NUL or a
+                # PIPE for this desktop-console pathway.
                 stdin=None,
                 stdout=None,
                 stderr=None,
