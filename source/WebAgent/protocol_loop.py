@@ -242,13 +242,12 @@ def resolve_authorized_paths(
     text = str(request or "")
     if _SAVED_PLAN_OPEN not in text and _SAVED_PLAN_CLOSE not in text:
         from agent_core.semantic_path_resolution import (
-            analyze_request_paths, require_resolved_paths,
+            analyze_request_paths, require_resolved_paths, readonly_narrowing_allowed,
         )
-        from agent_core.task_requirement import assess_task_requirement
-        assessment = assess_task_requirement(text)
+        lexical = extract_authorized_paths(text)
         snapshot = analyze_request_paths(
-            text, extract_authorized_paths(text),
-            allow_readonly_narrowing=not assessment["side_effect_required"],
+            text, lexical,
+            allow_readonly_narrowing=readonly_narrowing_allowed(text, lexical),
         )
         return require_resolved_paths(snapshot)
     if text.count(_SAVED_PLAN_OPEN) != 1 or text.count(_SAVED_PLAN_CLOSE) != 1:
@@ -5008,13 +5007,12 @@ class WebAgentProtocolLoop:
                 and _SAVED_PLAN_CLOSE not in request):
             from agent_core.semantic_path_resolution import (
                 analyze_request_paths, require_resolved_paths,
-                persist_request_path_resolution,
+                persist_request_path_resolution, readonly_narrowing_allowed,
             )
-            from agent_core.task_requirement import assess_task_requirement
-            assessment = assess_task_requirement(request)
+            lexical = extract_authorized_paths(request)
             self._spr_path_resolution = analyze_request_paths(
-                request, extract_authorized_paths(request),
-                allow_readonly_narrowing=not assessment["side_effect_required"],
+                request, lexical,
+                allow_readonly_narrowing=readonly_narrowing_allowed(request, lexical),
             )
             context_base = self.progress_root if self.progress_root is not None else self.workspace
             path_ledger = persist_request_path_resolution(
