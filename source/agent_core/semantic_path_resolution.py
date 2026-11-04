@@ -175,6 +175,31 @@ def require_resolved_paths(document: dict) -> list[str]:
     return list(document["paths"])
 
 
+
+def validate_planner_path_confirmation(proposal: object, document: dict | None) -> dict:
+    """Validate a Planner's semantic choice against original-request proof.
+
+    This is never a source of new path or write authorization. The only
+    accepted selection is the one already established by read-only preflight.
+    A different (even existing) parent, child or sibling fails closed.
+    """
+    if (not isinstance(proposal, dict)
+            or set(proposal) != {"schema", "selected_paths"}
+            or proposal.get("schema") != SCHEMA):
+        raise SemanticPathError("semantic_path_planner_schema_invalid")
+    values = proposal.get("selected_paths")
+    if (not isinstance(values, list) or len(values) > _MAX_SPANS
+            or any(type(x) is not str or not x for x in values)
+            or len(set(values)) != len(values)):
+        raise SemanticPathError("semantic_path_planner_selection_invalid")
+    if not isinstance(document, dict) or document.get("status") == "AMBIGUOUS":
+        raise SemanticPathError("semantic_path_planner_preflight_unavailable")
+    if values != list(document.get("paths") or []):
+        raise SemanticPathError("semantic_path_planner_selection_mismatch")
+    return {"schema": SCHEMA, "selected_paths": list(values)}
+
+
+
 def persist_request_path_resolution(
     base: str | Path, *, request_id: str, task_epoch: str,
     original_request: str, document: dict,
