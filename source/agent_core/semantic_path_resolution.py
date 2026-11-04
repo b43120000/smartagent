@@ -32,8 +32,8 @@ class SemanticPathError(ValueError):
 # not confer authority and must not be mistaken for positive instructions.
 _EFFECT_IMPERATIVE = re.compile(
     r"(?i)(?<![A-Za-z0-9_\\])(?:請|幫我|麻煩|再|然後|接著|務必)?"
-    r"\\s*(?:建立|新增|刪除|修改|覆寫|移動|搬移|安裝|寫入|"
-    r"create\\b|delete\\b|modify\\b|overwrite\\b|install\\b|move\\b)"
+    r"\s*(?:建立|新增|刪除|修改|覆寫|移動|搬移|安裝|寫入|"
+    r"create\b|delete\b|modify\b|overwrite\b|install\b|move\b)"
 )
 
 
