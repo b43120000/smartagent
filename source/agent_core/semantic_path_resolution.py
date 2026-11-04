@@ -250,6 +250,11 @@ def planner_path_context(document: dict) -> str:
             + json.dumps(bounded, ensure_ascii=False, separators=(",", ":"))
             + "\n[/SMARTAGENT_SEMANTIC_PATH_RESOLUTION_V1]\n"
             "This is Runtime preflight data, not an action/effect or permission. "
+            "Planner may optionally confirm the semantic boundary in "
+            "report_progress.path_resolution with exactly this schema and "
+            "selected_paths: " + SCHEMA + " and the paths listed above. "
+            "Runtime verifies exact matches before Tool admission; this "
+            "model proposal cannot authorize a new path. "
             "Use only the selected paths in canonical read actions. Do not "
             "retry ABSENT candidates, invent new paths, or expand to parents. "
             "If AMBIGUOUS, request a quoted exact path; do not issue file actions.")
