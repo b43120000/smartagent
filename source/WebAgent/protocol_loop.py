@@ -1494,6 +1494,8 @@ class WebAgentProtocolLoop:
     def _with_commit(self, prompt: str, expected: dict) -> str:
         from agent_core.planner_context_snapshot import render_planner_context_snapshot
         planner_context, context_info = render_planner_context_snapshot(self)
+        self._last_planner_context_digest = context_info["context_digest"]
+        self._last_planner_context_snapshot_id = context_info["context_snapshot_id"]
         self._emit(
             "planner_context_prepared",
             request_id=self.run_id, round=self.turn_id,
@@ -5767,6 +5769,13 @@ class WebAgentProtocolLoop:
                 request_id=self.run_id,
                 round=self.turn_id,
                 response=response,
+            )
+            self._emit(
+                "planner_context_response_correlated",
+                request_id=self.run_id, round=self.turn_id,
+                context_snapshot_id=getattr(self, "_last_planner_context_snapshot_id", ""),
+                context_digest=getattr(self, "_last_planner_context_digest", ""),
+                planner_response_received=True,
             )
             action_id_seed = f"{expected.get('run_id', '')}:{expected.get('turn_id', '')}"
             calls, v8_parse_diagnostics = parse_v9_tool_transport(
