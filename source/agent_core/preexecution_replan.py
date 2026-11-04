@@ -75,25 +75,49 @@ def analyze_preexecution_rejection(
     raw = action.get("working_directory")
     if not isinstance(raw, str) or not raw or not Path(raw).is_absolute():
         return None
-    # Other CWD denials (out-of-scope, ACL, symlink, policy) are not
-    # permission to propose another path.
+    # Two distinct pre-execution blockers can have an alternative native
+    # strategy without granting command execution at a new directory:
+    # (a) missing requested command cwd itself, or
+    # (b) command cwd is an existing authorized parent but is outside the
+    #     more restrictive request-specific command CWD boundary.
+    # For (b) choose ONLY a uniquely identified absent original-request
+    # target nested inside that parent. Do not infer a path from command text.
     detail = str(reasons[0].get("detail", "") or "")
-    if not detail.startswith("command_working_directory_not_directory:"):
-        return None
-    prefix = "command_working_directory_not_directory:"
-    # The error must be about the same literal directory as this Action,
-    # not merely another similarly shaped diagnostic.
-    if Path(detail[len(prefix):]).expanduser().resolve() != Path(raw).expanduser().resolve():
+    codes = (
+        "command_working_directory_not_directory:",
+        "command_working_directory_outside_request_scope:",
+    )
+    prefix = next((code for code in codes if detail.startswith(code)), "")
+    if not prefix:
         return None
     original_path = Path(raw).expanduser()
-    if original_path.is_symlink():
+    if (original_path.is_symlink() or
+            Path(detail[len(prefix):]).expanduser().resolve()
+            != original_path.resolve()):
         return None
-    target = original_path.resolve()
-    if not _enclosed(target, original_request_paths):
-        return None
-    # Explicitly verify the same absence reported by the CWD admission.
-    if target.exists() or target.is_symlink():
-        return None
+    cwd = original_path.resolve()
+    if prefix == codes[0]:
+        target = cwd
+        if not _enclosed(target, original_request_paths):
+            return None
+        if target.exists() or target.is_symlink():
+            return None
+    else:
+        if not cwd.is_dir():
+            return None
+        eligible = []
+        for raw_scope in original_request_paths:
+            try:
+                scope = Path(raw_scope).expanduser().resolve()
+                if (is_within(scope, cwd, allow_root=False)
+                        and not scope.exists() and not scope.is_symlink()):
+                    eligible.append(scope)
+            except (OSError, RuntimeError, ValueError):
+                continue
+        eligible = list(dict.fromkeys(eligible))
+        if len(eligible) != 1:
+            return None
+        target = eligible[0]
     try:
         approved_target = security_context.require_write(
             target, require_absolute=True, forbid_glob=True,
@@ -114,7 +138,7 @@ def analyze_preexecution_rejection(
         "task_epoch": task_epoch,
         "rejected_action_id": str(action.get("action_id", "")),
         "rejected_action_tool": "run_command",
-        "admission_reason": "command_working_directory_not_directory",
+        "admission_reason": prefix[:-1],
         "target": str(target),
         "target_exists": False,
         "existing_writable_parent": str(parent),
