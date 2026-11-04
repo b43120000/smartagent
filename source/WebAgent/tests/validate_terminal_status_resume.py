@@ -94,12 +94,12 @@ def run():
     )
     assert '🟣 需求修改建議（Planner 尚未提供具體提案）' in no_proposal
     assert no_proposal.endswith('調整需求：')
-    finished = render_task_reply(
+    completed_notification = render_task_reply(
         original_request='原始需求', base='Base', conclusion=planner_block,
         task_id='TASK-CURRENT', request_id='RR-CURRENT',
         state='COMPLETED', outcome='SUCCESS',
     )
-    assert '🟣 需求修改建議' not in finished
+    assert '🟣 需求修改建議' not in completed_notification
     malformed = render_task_reply(
         original_request='原始需求', base='Base',
         conclusion=planner_block.replace('建議做法：', '錯誤標籤：'),
