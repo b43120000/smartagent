@@ -151,6 +151,33 @@ def run() -> dict:
         else:
             raise AssertionError(f"disguised ADS path must fail closed: {candidates}")
 
+    # Expected output absence is not a prerequisite failure. The write
+    # authority comes ONLY from the configured existing parent, and
+    # tool_write_file performs parent mkdir after the normal require_write gate.
+    import tempfile
+    from agent_core.security_context import SecurityContext
+    from agent_core.tools import tool_write_file
+    with tempfile.TemporaryDirectory(prefix="authorized-creation-it-") as temp:
+        base = Path(temp)
+        authorized_parent = base / "allowed"
+        authorized_parent.mkdir()
+        output = authorized_parent / "feature" / "main.cpp"
+        assert not output.parent.exists()
+        context = SecurityContext.for_workspace(authorized_parent)
+        created = tool_write_file(
+            str(output), '#include <iostream>\nint main() { return 0; }\n',
+            security_context=context,
+        )
+        assert "[成功]" in created, created
+        assert output.is_file()
+        assert '#include <iostream>' in output.read_text(encoding="utf-8")
+        unauthorized = base / "outside" / "main.cpp"
+        refused = tool_write_file(
+            str(unauthorized), "unapproved",
+            security_context=context,
+        )
+        assert "[錯誤]" in refused, refused
+        assert not unauthorized.exists()
     result = {
         "multi_path_request_split": True,
         "quoted_path_with_spaces": True,
@@ -161,6 +188,8 @@ def run() -> dict:
         "disguised_ads_guard_preserved": True,
         "saved_plan_scope_isolated": True,
         "authorized_root_allows_future_children": True,
+        "actual_missing_output_created_inside_authorized_parent": True,
+        "unauthorized_sibling_remains_unwritten": True,
     }
     print("AUTHORIZED_PATH_EXTRACTION_OK")
     print(result)
