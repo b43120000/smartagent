@@ -19,6 +19,7 @@ on:
       - fix/pr-b-goal-driven-live-rca-r18-20261103
       - feat/scr-v1-semantic-capability-resolution-20261104
       - feat/spr-v1-path-resolution-20261104
+      - feat/goal-driven-plan-readiness-repair-20261104
   pull_request:
     branches:
       - fix/live-b-p1-progress-terminal-r17-20261103
