@@ -56,7 +56,7 @@
     "source/RemoteAgent/remote_worker_launcher.py": "a79d267e10f3b8ae40b03bd11d492d5c9ee8d84c37f4a9dd3f1c630fc5c19b6a",
     "source/RemoteAgent/telegram_artifacts.py": "f187ad685d53882c2b413fbf2ddeb1e491855c14b20e4ea7a68c534d648e9310",
     "source/RemoteAgent/telegram_delivery.py": "f6a8ca2d77bd1edcbd5368cba99956737e3570aefb007e0556736650fed3fbe2",
-    "source/RemoteAgent/telegram_console_cmd.py": "c03bb786441e05024fec423f925bf76cc7af1e7639b96d8d01a0a881131eb3f9",
+    "source/RemoteAgent/telegram_console_cmd.py": "406c82f9c84f46e8209885e64e7d5b9cdac3c658b07b18a398e2db4a6590bf5b",
     "source/RemoteAgent/telegram_direct_cmd.py": "d976422358fd614bb834f97383138ca1ab0799095eeff4cd62575a2dea83b3b0",
     "source/RemoteAgent/telegram_listener.py": "1e89c683cac64bd85c792e2ff19b3d3dd9f50b0b1a3c9add5764df88687f4864",
     "source/RemoteAgent/telegram_transport.py": "24c1dff6ee88b217987d203b62561e052b3e4fa85a5f3cdcc43005313a56ab0f",
