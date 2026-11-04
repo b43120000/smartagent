@@ -284,6 +284,81 @@ class PreexecutionReplanIT(unittest.TestCase):
         self.diag[0]["detail"] = "path_outside_authorized_roots:" + str(self.target)
         self.assertIsNone(self.evidence())
 
+    def test_v9_planner_switches_from_failed_cwd_to_real_native_write(self):
+        import os
+        from unittest.mock import patch
+        from WebAgent.tests.validate_progress_terminal_lifecycle import response
+        output = self.target / "main.cpp"
+        turns = []
+        events = []
+        success_clause = "The requested main.cpp exists and contents are verified"
+        def progress(action_id, next_action):
+            return {
+                "tool": "report_progress", "action_id": action_id,
+                "base_evaluation": "Authorized parent exists; new file is required",
+                "total_steps": 2, "current_step": 1,
+                "steps": [
+                    {"step": 1, "desc": "Create output",
+                     "status": "IN_PROGRESS"},
+                    {"step": 2, "desc": "Verify final output",
+                     "status": "PENDING"},
+                ],
+                "current_focus": "Create file", "next_action": next_action,
+                "completion_contract": {
+                    "success": [success_clause],
+                    "failure": ["File creation failed"],
+                    "in_progress": ["File not created yet"],
+                    "interrupted": ["No permitted creation route"],
+                },
+                "decision": "CONTINUE", "outcome": "PENDING",
+                "matched_condition": "File not created yet",
+                "evidence_refs": ["REQUEST_ACCEPTED"],
+                "decision_reason": "Need actual file creation evidence.",
+            }
+        def planner(prompt, expected, attachments):
+            turns.append(prompt)
+            if len(turns) == 1:
+                return response(
+                    progress("P-CWD-1", "run_command"),
+                    {**self.action, "success_criteria": success_clause},
+                )
+            if "RUNTIME_PREEXECUTION_REPLAN_REQUIRED" in prompt:
+                return response(
+                    progress("P-FILE-2", "write_file"),
+                    {
+                        "tool": "write_file", "action_id": "ACT-WRITE-2",
+                        "path": str(output), "content": "int main(){return 0;}\\n",
+                    },
+                )
+            raise RuntimeError("STOP_AFTER_REPLANNED_WRITE")
+        loop = WebAgentProtocolLoop(
+            self.allowed, planner, progress_root=self.root,
+            max_turns=8, event_sink=lambda name, **data: events.append((name, data)),
+        )
+        with patch.dict(os.environ, {
+            "SMARTAGENT_GAR_V1": "0",
+            "SMARTAGENT_PREREQ_V3_BCD": "0",
+            "SMARTAGENT_PREREQ_V3_PR_A": "0",
+        }):
+            with self.assertRaisesRegex(RuntimeError,
+                                        "STOP_AFTER_REPLANNED_WRITE"):
+                loop.run(
+                    '請在 "' + str(self.allowed) + '" 下建立 feature/main.cpp',
+                    request_id="RR-PREEXEC-1",
+                    task_id="TASK-PREEXEC-E2E",
+                    task_epoch="EPOCH-1",
+                )
+        self.assertTrue(output.is_file())
+        self.assertEqual(output.read_text(encoding="utf-8"),
+                         "int main(){return 0;}\\n")
+        self.assertEqual(read_progress(
+            loop.task_id, self.root).strategy_state["revision"], 2)
+        self.assertTrue(any(name == "progress_strategy_revision_recorded"
+                            for name, data in events))
+        self.assertTrue(any(name == "tool_started"
+                            and data.get("action_id") == "ACT-WRITE-2"
+                            for name, data in events))
+
     def test_runtime_loop_produces_next_planner_guidance(self):
         loop = WebAgentProtocolLoop(
             self.allowed, lambda *_: "", progress_root=self.root,
