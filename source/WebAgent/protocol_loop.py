@@ -6545,6 +6545,9 @@ class WebAgentProtocolLoop:
                     )
                     ledger_entry.update(action_evidence)
                     ledger_entry = self._record_action_result_evidence(action, ledger_entry)
+                    if (ledger_entry.get("result_status") == "SUCCEEDED"
+                            and ledger_entry.get("effective_verification_status") == "PASS"):
+                        self._runtime_strategy_replan_note = ""
                     self._runtime_verified_failure_strategy_replan(
                         action, ledger_entry, action_result_id,
                     )
