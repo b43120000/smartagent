@@ -588,6 +588,8 @@ def render_action_loop_state(state: Mapping[str, Any]) -> str:
         + "此狀態由 Runtime 持有。完整使用其 evidence、限制與 prerequisite。"
         "runtime_state_ref、next_phase、selected_action、execution_status、verification_status "
         "皆為 Runtime-owned；模型不得複製或推測。模型只輸出語意 decision 欄位與本輪 canonical action。"
+        "allowed_next_actions 僅表示狀態機候選工具，並非已通過 SCR 選取、路徑授權或 Tool Admission；"
+        "請依 SMARTAGENT_PLANNER_CONTEXT_V1 的 tool_readiness 檢查額外前置條件。"
     )
 
 
