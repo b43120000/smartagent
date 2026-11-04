@@ -155,7 +155,6 @@ def run() -> dict:
     # authority comes ONLY from the configured existing parent, and
     # tool_write_file performs parent mkdir after the normal require_write gate.
     import tempfile
-    from agent_core.security_context import SecurityContext
     from agent_core.tools import tool_write_file
     with tempfile.TemporaryDirectory(prefix="authorized-creation-it-") as temp:
         base = Path(temp)
