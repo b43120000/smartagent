@@ -145,6 +145,23 @@ def _authorized_path_end(text: str, start: int, content_start: int) -> int:
         if quoted_end >= 0:
             return quoted_end
 
+    # A bare Windows drive root followed by a separate Chinese imperative
+    # names a *parent directory* and a creation task, not a gigantic path.
+    # Example: "在 E:\ 去生成一個 ScreenOFF 資料夾" means path E:\.
+    # Only truncate before the imperative when whitespace separates it; an
+    # actual subdirectory name (including spaces) must stay intact.
+    # This is lexical parsing ONLY, never an authorization or a write.
+    if (content_start - start == 3 and
+            re.match(r"[A-Za-z]:[\\/]", text[start:content_start])):
+        following = text[content_start:]
+        if re.match(
+            r"[ \t]+(?:去(?:建立|生成|創建|新增|做|製作)"
+            r"|(?:請|幫我|先|再)?(?:建立|生成|創建|新增|製作)"
+            r"|先去(?:建立|生成|創建|新增))(?=[ \t]|一個|資料夾|目錄|檔案|文件|[「『])",
+            following,
+        ):
+            return content_start
+
     end = len(text)
     boundary = _PATH_SENTENCE_BOUNDARY_RE.search(text, content_start)
     if boundary:
