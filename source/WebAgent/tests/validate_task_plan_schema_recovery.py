@@ -201,7 +201,16 @@ def run() -> None:
         proof._record_action_result_evidence(repair_action,facts)
         assert proof.action_result_ledger[original_id]['execution_status']=='FAILED'
         assert proof.action_result_ledger[original_id]['evidence_status']=='SUPERSEDED'
-        assert proof._terminal_evidence_verdict([original_id,repair_id])=='PASS'
+        diagnostic_verdict = proof._terminal_evidence_verdict([original_id,repair_id])
+        if diagnostic_verdict != 'PASS':
+            print('LEGACY_PLAN_REPAIR_EVIDENCE_DIAG', json.dumps({
+                'verdict': diagnostic_verdict,
+                'original': proof.action_result_ledger[original_id],
+                'successor': proof.action_result_ledger[repair_id],
+                'original_raw': rejected_raw,
+                'repair_raw': dispatched,
+            }, ensure_ascii=False, default=str), flush=True)
+        assert diagnostic_verdict == 'PASS'
         proof.action_result_ledger['unrelated']={**proof.action_result_ledger[original_id],
             'evidence_status':'ACTIVE','superseded_by_action_id':''}
         assert proof._terminal_evidence_verdict(['unrelated',repair_id])=='FAIL'
