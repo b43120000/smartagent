@@ -206,6 +206,28 @@ def analyze_verified_prerequisite_failure(
     return receipt
 
 
+def render_verified_prerequisite_replan(receipt: Mapping[str, object]) -> str:
+    """Only the failed *probe* is verified, not the missing dependency itself."""
+    public = {key: value for key, value in dict(receipt).items()
+              if key in {"schema", "rejected_action_id", "admission_reason",
+                         "evidence_ref", "result_status", "result_verification",
+                         "scope_verified", "executed", "completion_verified",
+                         "authorization_granted", "routes",
+                         "verification_required", "evidence_digest"}}
+    return (
+        "[RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED]\\n"
+        + json.dumps(public, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":"))
+        + "\\nThis completed read/probe failed with actual Runtime-verified "
+          "FAIL evidence. That does NOT by itself prove a toolchain is missing, "
+          "nor authorize downloading/installing it. Replan from the original "
+          "Goal with a NEW, properly scoped observation or separately "
+          "authorized remediation. Reconcile uncertain effects before any "
+          "mutation. Preserve existing evidence, step progress, and budgets.\\n"
+          "[/RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED]"
+    )
+
+
 def repeats_rejected_strategy(action: Mapping[str, object], blocked: Mapping[str, object]) -> bool:
     """Ignore a new Action ID if the rejected semantic command is identical."""
     return bool(
