@@ -55,6 +55,32 @@ def run() -> dict:
     assert authorize_path(extracted[0], [root], require_absolute=True) == plan.resolve()
     assert authorize_path(extracted[1], [root], require_absolute=True) == root.resolve()
 
+    # Requested creation under an already-existing authorized parent:
+    # the drive root is an input/root, and the following Chinese imperative
+    # must not be swallowed into a malformed path.
+    create_root_request = (
+        "你到這個路徑下 E:\\   去生成一個資料夾叫做 ScreenOFF的資料夾\n"
+        '然後先去做一個main.cpp 裡面print "tool 是用來對螢幕做關閉的功能"'
+    )
+    assert extract_authorized_paths(create_root_request) == ["E:\\"], (
+        extract_authorized_paths(create_root_request)
+    )
+    assert resolve_authorized_paths(create_root_request) == ["E:\\"]
+    # Existing folder names with spaces are not shortened just because the
+    # basename is absent, and spelling is never silently corrected.
+    explicit_output_request = (
+        '目標資料夾完整路徑：E:\\featrue。請在上述路徑建立 main.cpp，'
+        '輸出「tool 或應用程式開發區」。'
+    )
+    assert extract_authorized_paths(explicit_output_request) == [
+        r"E:\featrue"
+    ]
+    assert resolve_authorized_paths(explicit_output_request) == [
+        r"E:\featrue"
+    ]
+    assert extract_authorized_paths(r"列出 E:\ Camera Test Data") == [
+        r"E:\ Camera Test Data"
+    ]
     assert extract_authorized_paths(r"list C:\workspace\picture") == [r"C:\workspace\picture"]
     assert extract_authorized_paths(
         "列出 E:\\card\\runtime_it 第一層內容\n在 E:\\card\\runtime_it 建立 batch_large_probe.txt"
