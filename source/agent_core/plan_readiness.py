@@ -76,8 +76,9 @@ def classify_plan_readiness(
 # by the validator. Edit targets, goal, scope, and existing source evidence
 # are immutable; unknown defects must still fail closed.
 _FORMAT_FIELDS = frozenset({
-    "post_change_semantic", "affected_flows", "verification_commands",
-    "acceptance_criteria", "rollback_condition",
+    # Descriptive fields only. Verification commands, rollback policy and
+    # success criteria must never be silently rewritten by a schema fix.
+    "post_change_semantic", "affected_flows",
 })
 
 
