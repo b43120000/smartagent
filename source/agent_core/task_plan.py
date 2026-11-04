@@ -102,6 +102,17 @@ def canonicalize_task_plan(plan: object) -> tuple[dict, list[dict]]:
         repairs.append({
             "path": "$.edit_plan", "code": "ARRAY_WRAPPED_AS_FILES_TO_MODIFY",
         })
+    # Lossless scalar-to-array shape repairs use exactly the originally
+    # supplied string. Command/criteria semantics are not rewritten.
+    for field in ("affected_flows", "files_to_read",
+                  "verification_commands", "acceptance_criteria"):
+        source = normalized.get(field)
+        if isinstance(source, str) and source.strip():
+            normalized[field] = [source]
+            repairs.append({
+                "path": "$." + field,
+                "code": "SINGLE_STRING_WRAPPED_AS_ARRAY",
+            })
     # Only copy an existing acceptance condition; never invent file edits.
     edit_plan = normalized.get("edit_plan")
     acceptance = normalized.get("acceptance_criteria")
