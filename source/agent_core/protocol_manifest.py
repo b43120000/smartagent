@@ -160,6 +160,7 @@ CORE_FILES = (
     'source/agent_core/runtime_config.py',
     'config/feature_flags.defaults.json',
     'source/agent_core/goal_anchored_recovery.py',
+    'source/agent_core/preexecution_replan.py',
     'source/agent_core/task_continuation.py',
     'source/agent_core/gar_webgpt2_settings.py',
     'source/agent_core/gar_l4_supervision.py',
