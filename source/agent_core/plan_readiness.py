@@ -71,6 +71,42 @@ def classify_plan_readiness(
     }
 
 
+
+# A format revision may only change the schema field explicitly identified
+# by the validator. Edit targets, goal, scope, and existing source evidence
+# are immutable; unknown defects must still fail closed.
+_FORMAT_FIELDS = frozenset({
+    "post_change_semantic", "affected_flows", "verification_commands",
+    "acceptance_criteria", "rollback_condition",
+})
+
+
+def bounded_schema_revision_field(validator: Mapping[str, object]) -> str:
+    rows = validator.get("diagnostics")
+    if not isinstance(rows, list) or len(rows) != 1:
+        return ""
+    row = rows[0]
+    path = str(row.get("path", "")) if isinstance(row, Mapping) else ""
+    if not path.startswith("$."):
+        return ""
+    field = path[2:]
+    return field if field in _FORMAT_FIELDS else ""
+
+
+def is_bounded_schema_revision(
+    original: object, proposal: object, field: str,
+) -> bool:
+    """No silent change to goal, edit target, authorization or request scope."""
+    if (field not in _FORMAT_FIELDS or not isinstance(original, Mapping)
+            or not isinstance(proposal, Mapping)):
+        return False
+    old, new = dict(original), dict(proposal)
+    if set(old) != set(new) or old.get(field) == new.get(field):
+        return False
+    return all(old[key] == new[key] for key in old if key != field)
+
+
+
 def discovery_observation(workspace: str) -> dict | None:
     """Inventory only; source-content retrieval remains a separate Tool decision."""
     if not workspace or "<" in workspace or ">" in workspace:
