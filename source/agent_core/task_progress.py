@@ -600,6 +600,12 @@ def format_telegram_status_view(ledger: TaskProgressLedger | Mapping[str, Any]) 
     }
     lines = ["📋 任務執行進度", f"狀態：{labels.get(ledger.runtime_state, ledger.runtime_state)}"]
     lines.append(f"目標：{ledger.goal}")
+    strategy = dict(ledger.strategy_state or {})
+    if int(strategy.get("revision", 1) or 1) > 1:
+        lines.append(f"策略版本：Progress v{strategy['revision']}（Runtime Evidence-Gated Replan）")
+        records = list(strategy.get("history") or [])
+        if records:
+            lines.append("重新規劃原因：" + str(records[-1].get("trigger", "UNKNOWN")))
     lines.append(
         f"目前階段：{ledger.current_step} / {ledger.total_steps}"
         if ledger.total_steps else "目前階段：等待模型完成初始評估"
