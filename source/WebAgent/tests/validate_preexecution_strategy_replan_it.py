@@ -90,7 +90,7 @@ class PreexecutionReplanIT(unittest.TestCase):
         self.assertIn("explicit installation", str(receipt["routes"]))
         display = render_verified_prerequisite_replan(receipt)
         self.assertIn("RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED", display)
-        self.assertIn("not by itself prove a toolchain is missing", display)
+        self.assertIn("not by itself prove a toolchain is missing", display.lower())
         self.assertIsNone(analyze_verified_prerequisite_failure(
             action=inspect, result={**failed,
                                     "effective_verification_status": "UNVERIFIED"},
