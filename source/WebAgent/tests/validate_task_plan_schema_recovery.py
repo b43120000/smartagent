@@ -201,16 +201,11 @@ def run() -> None:
         proof._record_action_result_evidence(repair_action,facts)
         assert proof.action_result_ledger[original_id]['execution_status']=='FAILED'
         assert proof.action_result_ledger[original_id]['evidence_status']=='SUPERSEDED'
-        diagnostic_verdict = proof._terminal_evidence_verdict([original_id,repair_id])
-        if diagnostic_verdict != 'PASS':
-            print('LEGACY_PLAN_REPAIR_EVIDENCE_DIAG', json.dumps({
-                'verdict': diagnostic_verdict,
-                'original': proof.action_result_ledger[original_id],
-                'successor': proof.action_result_ledger[repair_id],
-                'original_raw': rejected_raw,
-                'repair_raw': dispatched,
-            }, ensure_ascii=False, default=str), flush=True)
-        assert diagnostic_verdict == 'PASS'
+        # A frozen plan receipt is valid evidence in isolation. However,
+        # superseding a rejected plan does not create an independent VERIFY
+        # receipt for the *original* failed action: fail closed.
+        assert proof._terminal_evidence_verdict([repair_id]) == 'PASS'
+        assert proof._terminal_evidence_verdict([original_id, repair_id]) == 'FAIL'
         proof.action_result_ledger['unrelated']={**proof.action_result_ledger[original_id],
             'evidence_status':'ACTIVE','superseded_by_action_id':''}
         assert proof._terminal_evidence_verdict(['unrelated',repair_id])=='FAIL'
@@ -235,15 +230,53 @@ def run() -> None:
             high_level_repair, json.dumps(high_level_result),
             project_root_hint=str(workspace), prior_context=high_level_route,
         )
-        assert high_level_second_route["next_actions"][0]["tool"] == "repair_task_plan"
-        high_level_second_repair = dict(high_level_second_route["next_actions"][0])
-        high_level_second_repair["action_id"] = "PLAN-HIGH-LEVEL-REPAIR-2"
-        high_level_stalled = build_result_evidence_to_action_route(
-            high_level_second_repair, json.dumps(high_level_result),
+        assert high_level_second_route["reason"] == "task_plan_schema_revision_required"
+        assert high_level_second_route["schema_revision_field"] == "post_change_semantic"
+        assert high_level_second_route["next_actions"] == []
+        assert not high_level_second_route["pause_immediately"]
+
+        schema_loop = WebAgentProtocolLoop(str(workspace), lambda *_args: "")
+        schema_loop.run_id = "RR-SCHEMA-FIELD"
+        schema_loop.task_id = "TASK-SCHEMA-FIELD"
+        schema_loop.task_epoch = "EPOCH-SCHEMA-FIELD"
+        schema_loop.intent_digest = "e" * 64
+        schema_loop.pending_result_recovery = high_level_second_route
+        corrected = {
+            **high_level_repair,
+            "tool": "propose_task_plan",
+            "action_id": "PLAN-FIELD-CORRECTED",
+            "plan": {
+                **high_level_repair["plan"],
+                "post_change_semantic": [],
+            },
+        }
+        accepted, diagnostics = schema_loop._accept_ack([
+            _progress("P-SCHEMA-CORRECTED", "propose_task_plan"), corrected,
+            {"tool": "turn_commit", "action_count": 2},
+        ], {})
+        assert diagnostics == [], diagnostics
+        assert [x["tool"] for x in accepted] == [
+            "report_progress", "propose_task_plan",
+        ]
+        changed_goal = {
+            **corrected,
+            "action_id": "PLAN-FIELD-ESCAPE",
+            "plan": {
+                **corrected["plan"], "goal": "Unauthorized changed goal",
+            },
+        }
+        denied, diagnostics = schema_loop._accept_ack([
+            _progress("P-SCHEMA-DENIED", "propose_task_plan"), changed_goal,
+            {"tool": "turn_commit", "action_count": 2},
+        ], {})
+        assert denied == []
+        assert diagnostics[0]["reason"] == "task_plan_schema_revision_scope_mismatch"
+        repeated = build_result_evidence_to_action_route(
+            high_level_repair, json.dumps(high_level_result),
             project_root_hint=str(workspace), prior_context=high_level_second_route,
         )
-        assert high_level_stalled["reason"] == "task_plan_repair_stalled"
-        assert high_level_stalled["pause_immediately"] is True
+        assert repeated["reason"] == "task_plan_schema_revision_stalled"
+        assert repeated["pause_immediately"] is True
 
         prompts: list[str] = []
 
