@@ -167,8 +167,21 @@ def build_planner_context_snapshot(runtime) -> dict:
         "omitted_older_action_count": len(ids) - len(retained),
         "omitted_active_blocker_count": len(omitted_ids),
         "omitted_active_blocker_refs": [str(x)[:160] for x in omitted_ids[-24:]],
-        "critical_context_omitted": len(omitted_ids) > 24,
+        "critical_context_omitted": bool(omitted_ids),
         "latest_protocol_diagnostics": diagnostics,
+        "environment_facts": [
+            {"evidence_ref": str(ref)[:160], "fact_state": _code((record.get("fact") or {}).get("state"), "UNKNOWN"),
+             "probe_status": _code((record.get("fact") or {}).get("probe_status"), "UNKNOWN")}
+            for ref, record in list(dict(getattr(runtime, "_environment_fact_refs", {}) or {}).items())[:20]
+            if isinstance(record, Mapping)
+        ],
+        "condition_evidence": [
+            {"condition_id": str(item.get("condition_id", "") or "")[:160],
+             "action_id": str(item.get("action_id", "") or "")[:160],
+             "status": _code(item.get("status"), "UNKNOWN")}
+            for item in list(dict(getattr(runtime, "condition_result_ledger", {}) or {}).values())[-16:]
+            if isinstance(item, Mapping)
+        ],
         "runtime_transition": _code(als.get("required_transition"), "UNKNOWN"),
         "action_loop_blockers": [
             {"blocking_action_id": str(b.get("blocking_action_id", "") or "")[:160],
@@ -191,6 +204,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         },
         "recovery": {
             "reason": _code(recovery.get("reason")),
+            "strategy_revision_applies_to_future_actions_only": True,
+            "budget_not_reset_by_revision": True,
             "required_action": _code(recovery.get("required_action")),
             "active": bool(recovery.get("active")),
             "pending_progress_action_ids": [str(a.get("action_id", ""))[:160]
