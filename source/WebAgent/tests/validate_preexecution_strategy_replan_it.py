@@ -210,6 +210,11 @@ class PreexecutionReplanIT(unittest.TestCase):
                                     "cannot move backwards"):
             validate_model_progress({
                 "total_steps": 3, "current_step": 0,
+                "decision": "CONTINUE", "outcome": "PENDING",
+                "current_focus": "Replan without progress rewind",
+                "next_action": "write_file",
+                "evidence_refs": ["REQUEST_ACCEPTED"],
+                "decision_reason": "Check invalid backwards step",
             }, updated)
 
         written = tool_write_file(
