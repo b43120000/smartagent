@@ -348,6 +348,10 @@ class PreexecutionReplanIT(unittest.TestCase):
                     task_id="TASK-PREEXEC-E2E",
                     task_epoch="EPOCH-1",
                 )
+        self.assertGreaterEqual(len(turns), 2)
+        self.assertTrue(all("[SMARTAGENT_PLANNER_CONTEXT_V1]" in prompt for prompt in turns))
+        self.assertIn("run_command_working_directory_rejected", turns[1])
+        self.assertEqual(turns[1].count("[SMARTAGENT_PLANNER_CONTEXT_V1]"), 1)
         self.assertTrue(output.is_file())
         self.assertEqual(output.read_text(encoding="utf-8"),
                          "int main(){return 0;}\\n")
