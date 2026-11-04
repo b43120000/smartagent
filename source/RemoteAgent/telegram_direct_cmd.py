@@ -184,6 +184,65 @@ def execute_cmd_request(
         (f"逐筆同步等待；單筆上限 {command_timeout_seconds}s，"
          f"整批上限 {batch_timeout_seconds}s；無人值守 stdin=NUL。"),
     ]
+    if runner is None:
+        # Production: actually open a desktop CMD window and keep one shell
+        # session for the entire Telegram batch. The injected runner path is
+        # retained only for deterministic/legacy software-control tests.
+        #
+        # Never use an unrestricted desktop process when ACL ON requires the
+        # independently attested Restricted Executor. Explicitly fail closed
+        # rather than silently switching to ACL OFF or a hidden process.
+        if use_restricted_executor:
+            raise CmdControlError("TG_CMD_VISIBLE_CONSOLE_ACL_ON_UNAVAILABLE")
+        from RemoteAgent.telegram_console_cmd import (
+            TelegramConsoleError, run_visible_cmd_batch,
+        )
+        try:
+            batch = run_visible_cmd_batch(
+                commands, cwd=cwd,
+                command_timeout_seconds=command_timeout_seconds,
+                batch_timeout_seconds=batch_timeout_seconds,
+            )
+        except TelegramConsoleError as exc:
+            raise CmdControlError(str(exc)) from exc
+        lines.append("執行方式：Windows CREATE_NEW_CONSOLE；同一 CMD 工作階段逐筆執行。")
+        actual_results = batch["results"]
+        for index, row in enumerate(actual_results, 1):
+            command = commands[index - 1]
+            lines.extend([
+                "", f"[{index}/{len(commands)}] > {command}",
+                "Exit Code: " + str(row.get("exit_code")),
+                "stdout:\\n" + str(row.get("stdout") or "(empty)")[:10000],
+            ])
+            if row.get("stderr"):
+                lines.append("stderr:\\n" + str(row["stderr"])[:10000])
+            if row.get("skipped_pause"):
+                lines.append("SKIPPED_PAUSE：獨立 pause 指令已跳過。")
+            hint = _command_failure_hint(
+                command, str(row.get("stderr") or ""), row.get("exit_code"),
+            )
+            if hint:
+                lines.append("診斷：" + hint)
+            if row.get("timed_out"):
+                lines.append("TIMED_OUT：前一筆指令未完成，不再執行後續指令。")
+        if batch.get("reason"):
+            lines.append("CMD 執行原因：" + str(batch["reason"]))
+        if not batch["completed"]:
+            lines.append("指令未完成，停止執行後續行。")
+        lines.append("\\n狀態：" + (
+            "SUCCESS" if batch["completed"] else "FAILED/PARTIAL"
+        ))
+        reply = "\\n".join(lines)
+        if len(reply) > 24000:
+            reply = reply[:24000] + "\\n...[回覆過長，後段省略]"
+        return {
+            "message": reply,
+            "status": "SUCCESS" if batch["completed"] else "FAILED",
+            "control_id": tracking,
+            "results": actual_results,
+        }
+    # Dependency-injected test executor: preserve the per-command contract.
+    # This path does not run in the authenticated production dispatcher.
     results = []
     for index, command in enumerate(commands, 1):
         remaining = batch_timeout_seconds - (time.monotonic() - started)
