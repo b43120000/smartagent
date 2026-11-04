@@ -65,7 +65,7 @@ be admitted safely, PAUSE with the runtime blocker and evidence.
 
 - Single timeout + another authorized untried route: REPLAN; cannot claim exhaustion.
 - All three independently verified authorized failures: EXHAUSTED, each evidence_ref preserved.
-- All methods rejected before network I/O by scope: EXHAUSTED_ACCESS, NOT site unreachable.
+- All methods rejected before network I/O by scope: EXHAUSTED with AUTHORIZED_ROUTES_BLOCKED_NO_NETWORK_ATTEMPT, NOT site unreachable.
 - A method with UNKNOWN execution or missing verification: PAUSE and do not repeat effect.
 - Same route with new action_id/progress revision but no new evidence: PAUSE; no infinite loop.
 - Retry budget exceeded: PAUSE; no reset via progress revision, fresh page or new task plan.
