@@ -65,6 +65,8 @@ def _security_self_test(profile:dict)->dict:
 def _run(req:dict,profile:dict)->dict:
  supplied=str(req.get('request_digest',''));unsigned={key:value for key,value in req.items() if key!='request_digest'}
  if supplied!=sha256_digest(unsigned):raise RuntimeError('restricted_executor_request_digest_mismatch')
+ noninteractive=req.get('noninteractive',False)
+ if type(noninteractive) is not bool:raise RuntimeError('restricted_executor_noninteractive_invalid')
  command=req.get('command')
  command_text=command if isinstance(command,str) else subprocess.list2cmdline([str(x) for x in command])
  workspace_roots=authorized_workspace_roots(profile)
@@ -82,9 +84,11 @@ def _run(req:dict,profile:dict)->dict:
   if str(binding.get('manifest_digest',''))!=str(approval_manifest.get('manifest_digest','')):raise RuntimeError('execution_approval_manifest_binding_mismatch')
   SecurityApprovalLedger(cwd).consume(approval_id,binding)
  from .runtime_environment import build_runtime_environment
- env=build_runtime_environment();env['SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE']='1';temp=Path(profile['runtime_root']).resolve();temp.mkdir(parents=True,exist_ok=True);env.update(TEMP=str(temp),TMP=str(temp))
+ env=build_runtime_environment();env['SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE']='1'
+ if noninteractive:env.update(SMARTAGENT_NONINTERACTIVE='1',GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='Never')
+ temp=Path(profile['runtime_root']).resolve();temp.mkdir(parents=True,exist_ok=True);env.update(TEMP=str(temp),TMP=str(temp))
  flags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=='nt' else 0
- cp=subprocess.Popen(req['command'],cwd=str(cwd),shell=bool(req.get('shell')),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,creationflags=flags)
+ cp=subprocess.Popen(req['command'],cwd=str(cwd),shell=bool(req.get('shell')),stdout=subprocess.PIPE,stderr=subprocess.PIPE,stdin=subprocess.DEVNULL if noninteractive else None,env=env,creationflags=flags)
  timed_out=False
  try:stdout,stderr=cp.communicate(timeout=int(req.get('timeout',30)))
  except subprocess.TimeoutExpired:
