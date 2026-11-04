@@ -168,9 +168,14 @@ def analyze_verified_prerequisite_failure(
         return None
     if effects_pending or result.get("executed") is not True:
         return None
-    if (str(result.get("result_status", "")).upper() not in {"FAILED", "REJECTED"}
+    # A probe can exit successfully but fail its declared capability
+    # predicate (e.g. compiler exists but does not support C++20).
+    # Both outcomes are a completed negative verification, not a partial
+    # mutation and not proof that an installer is authorized.
+    if (str(result.get("result_status", "")).upper()
+            not in {"SUCCEEDED", "FAILED"}
             or str(result.get("execution_status", "")).upper()
-            not in {"FAILED", "REJECTED"}
+            not in {"SUCCEEDED", "FAILED"}
             or str(result.get("effective_verification_status", "")).upper()
             != "FAIL" or str(result.get("expectation_status", "")).upper() == "PASS"):
         return None
@@ -183,7 +188,7 @@ def analyze_verified_prerequisite_failure(
         "rejected_action_id": str(action.get("action_id", "")),
         "admission_reason": "VERIFIED_FAILED_PREREQUISITE_OBSERVATION",
         "evidence_ref": evidence_ref,
-        "result_status": "FAILED",
+        "result_status": str(result.get("result_status", "FAILED")).upper(),
         "result_verification": "FAIL",
         "scope_verified": True,
         "executed": True,
