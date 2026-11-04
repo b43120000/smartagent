@@ -5002,14 +5002,17 @@ class WebAgentProtocolLoop:
         # Saved-plan and external trusted scope are NEVER reconstructed from
         # model prose. Original-request candidate evidence grants no write.
         self._spr_path_resolution = None
-        if (trusted_authorized_paths is None
-                and _SAVED_PLAN_OPEN not in request
-                and _SAVED_PLAN_CLOSE not in request):
+        spr_candidate_request = (
+            trusted_authorized_paths is None
+            and _SAVED_PLAN_OPEN not in request
+            and _SAVED_PLAN_CLOSE not in request
+        )
+        lexical = extract_authorized_paths(request) if spr_candidate_request else []
+        if spr_candidate_request and lexical:
             from agent_core.semantic_path_resolution import (
                 analyze_request_paths, require_resolved_paths,
                 persist_request_path_resolution, readonly_narrowing_allowed,
             )
-            lexical = extract_authorized_paths(request)
             self._spr_path_resolution = analyze_request_paths(
                 request, lexical,
                 allow_readonly_narrowing=readonly_narrowing_allowed(request, lexical),
