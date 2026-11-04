@@ -28,6 +28,32 @@ class SemanticPathError(ValueError):
     pass
 
 
+# Positive effect intentions constrain *path narrowing*. Negative phrases do
+# not confer authority and must not be mistaken for positive instructions.
+_EFFECT_IMPERATIVE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_\\])(?:請|幫我|麻煩|再|然後|接著|務必)?"
+    r"\\s*(?:建立|新增|刪除|修改|覆寫|移動|搬移|安裝|寫入|"
+    r"create\\b|delete\\b|modify\\b|overwrite\\b|install\\b|move\\b)"
+)
+
+
+def readonly_narrowing_allowed(request: str, lexical_paths: list[str]) -> bool:
+    """Classify the *instruction*, not incidental 'Test/Build' in path names.
+
+    This is only an opt-out for read-only preflight recovery. It never grants
+    a filesystem write (which remains subject to the original Runtime guards).
+    """
+    text = str(request or "")
+    # A positive imperative is sufficient to disable heuristic narrowing.
+    if _EFFECT_IMPERATIVE.search(text):
+        return False
+    masked = text
+    for literal in lexical_paths[:_MAX_SPANS]:
+        masked = masked.replace(literal, " <USER_PATH> ", 1)
+    from .task_requirement import assess_task_requirement
+    return not assess_task_requirement(masked)["side_effect_required"]
+
+
 def _path_exists(path: str, probe: Callable[[str], bool]) -> bool:
     try:
         return bool(probe(path))
