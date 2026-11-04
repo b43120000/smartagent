@@ -1,0 +1,220 @@
+"""Bounded, evidence-linked Runtime -> Planner decision context.
+
+This is a read-only projection of existing Runtime ledgers. It never admits an
+Action, changes the request scope, invents evidence, or selects a strategy.
+Do not include raw tool output, commands, credentials or model prose here.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping
+
+from .semantic_capability_resolution import CAPABILITY_TO_TOOL, TOOL_TO_CAPABILITY
+
+SCHEMA = "SMARTAGENT_PLANNER_CONTEXT_V1"
+MAX_RECENT_ACTIONS = 16
+MAX_OLDER_BLOCKERS = 8
+MAX_PROTOCOL_DIAGNOSTICS = 6
+_SCOPE_CODES = (
+    "resolved_scope_expands_beyond_explicit_path",
+    "command_working_directory_outside_request_scope",
+    "command_working_directory_not_directory",
+    "path_independent_command_cwd_outside_bound_workspace",
+    "explicit_path_scope_requires_workspace",
+    "explicit_path_scope_requires_paths",
+    "explicit_path_scope_requires_path",
+    "explicit_path_scope_requires_root",
+    "path_outside_authorized_roots",
+    "request_write_ceiling_unresolved",
+    "request_write_ceiling_tool_not_authorized",
+    "request_write_ceiling_command_unverified",
+    "semantic_capability_not_selected",
+    "semantic_capability_binding_identity_mismatch",
+)
+_TOKEN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.:-]{0,119}$")
+
+
+def _code(value: object, default: str = "") -> str:
+    """Do not propagate arbitrary error text or untrusted ToolResult prose."""
+    s = str(value or "").strip()
+    return s if _TOKEN.fullmatch(s) else default
+
+
+def _scope_code(*values: object) -> str:
+    for value in values:
+        content = str(value or "")
+        for code in _SCOPE_CODES:
+            if code in content:
+                return code
+    return ""
+
+
+def _record(action_id: str, row: Mapping, action_row: Mapping) -> dict:
+    tool = _code(row.get("tool") or (action_row.get("action") or {}).get("tool"))
+    reason = _code(row.get("result_reason") or action_row.get("result_reason"))
+    raw = str(action_row.get("result", "") or "")
+    result_status = _code(row.get("result_status") or action_row.get("result_status"), "UNKNOWN")
+    execution_status = _code(row.get("execution_status") or action_row.get("execution_status"), "UNKNOWN")
+    scope_error = _scope_code(reason, raw)
+    return {
+        "action_id": str(action_id)[:160],
+        "tool": tool,
+        "produced_round": row.get("produced_round"),
+        "executed": row.get("executed", action_row.get("executed")),
+        "result_status": result_status,
+        "execution_status": execution_status,
+        "verification_status": _code(row.get("effective_verification_status") or row.get("verification_status"), "UNKNOWN"),
+        "result_reason": reason or ("TOOL_SCOPE_REJECTED" if "[TOOL_SCOPE_REJECTED]" in raw else ""),
+        "scope_error_code": scope_error,
+        "evidence_status": _code(row.get("evidence_status"), "ACTIVE"),
+        "superseded_by_action_id": str(row.get("superseded_by_action_id", "") or "")[:160],
+        "condition_id": str(row.get("condition_id", "") or "")[:160],
+    }
+
+
+def _diagnostic(row: Mapping) -> dict:
+    issues = []
+    for issue in list(row.get("field_issues") or [])[:8]:
+        if isinstance(issue, Mapping):
+            issues.append({
+                "field": _code(issue.get("field")),
+                "expected": str(issue.get("expected", "") or "")[:120],
+            })
+    return {
+        "reason": _code(row.get("reason"), "UNKNOWN"),
+        "field_issues": issues,
+        "repair_scope": _code(row.get("repair_scope")),
+        "preserved_action_ids": [str(x)[:160] for x in list(row.get("preserved_action_ids") or [])[:16]],
+    }
+
+
+def build_planner_context_snapshot(runtime) -> dict:
+    """Project current authoritative state into one bounded Planner context.
+
+    Failure status is not proof that the requested fact is false. In particular,
+    REJECTED/NOT_EXECUTED and UNKNOWN retain their own distinct meanings.
+    """
+    evidence = dict(getattr(runtime, "action_result_ledger", {}) or {})
+    actions = dict(getattr(runtime, "action_ledger", {}) or {})
+    ids = list(evidence)
+    recent = ids[-MAX_RECENT_ACTIONS:]
+    older_blockers = [aid for aid in ids[:-MAX_RECENT_ACTIONS]
+                     if str((evidence.get(aid) or {}).get("evidence_status", "ACTIVE")) == "ACTIVE"
+                     and (str((evidence.get(aid) or {}).get("result_status", "UNKNOWN"))
+                          in {"FAILED", "REJECTED", "UNKNOWN", "PARTIAL"}
+                          or str((evidence.get(aid) or {}).get("execution_status", "UNKNOWN"))
+                          in {"FAILED", "UNKNOWN", "PARTIAL", "QUEUED", "RUNNING"})]
+    retained = list(dict.fromkeys(older_blockers[-MAX_OLDER_BLOCKERS:] + recent))
+    rows = [_record(aid, evidence[aid], actions.get(aid) or {}) for aid in retained]
+    omitted_ids = [aid for aid in older_blockers[:-MAX_OLDER_BLOCKERS] if aid not in retained]
+
+    resolution = getattr(getattr(runtime, "tools", None), "_runtime_semantic_capability_resolution", None)
+    matched = (isinstance(resolution, Mapping)
+               and resolution.get("request_id") == getattr(runtime, "run_id", None)
+               and resolution.get("task_epoch") == getattr(runtime, "task_epoch", None))
+    selected = sorted(set(resolution.get("capabilities", ()))) if matched else []
+    old_binding_mismatch = isinstance(resolution, Mapping) and not matched
+    als = dict(getattr(runtime, "action_loop_state", {}) or {})
+    candidate_tools = list(dict.fromkeys(str(t) for t in list(als.get("allowed_next_actions") or []) if t))
+    tool_readiness = []
+    for tool in candidate_tools:
+        capability = TOOL_TO_CAPABILITY.get(tool)
+        needs_selection = bool(matched and capability and capability not in selected)
+        tool_readiness.append({
+            "tool": tool,
+            "read_capability": capability or "",
+            "capability_state": ("BINDING_IDENTITY_MISMATCH" if old_binding_mismatch else
+                                 "SELECTION_REQUIRED" if needs_selection else
+                                 "SELECTED" if capability and matched else
+                                 "COMPATIBILITY_UNBOUND" if capability else "NOT_SCR_GATED"),
+            "action_admission": "REQUIRES_RUNTIME_ADMISSION",
+            "selection_can_expand_authorization": False,
+        })
+    strategy = dict(getattr(getattr(runtime, "progress_ledger", None), "strategy_state", {}) or {})
+    progress = getattr(runtime, "progress_ledger", None)
+    try:
+        caps = runtime._context_capabilities()
+    except (AttributeError, ValueError, TypeError, RuntimeError):
+        caps = {}
+    objective_blockers = []
+    for entry in list(caps.get("objective_blockers") or [])[-16:]:
+        if isinstance(entry, Mapping):
+            objective_blockers.append({
+                "action_id": str(entry.get("action_id", "") or "")[:160],
+                "reason": _code(entry.get("reason"), "UNKNOWN"),
+            })
+    recovery = dict(getattr(runtime, "pending_result_recovery", {}) or {})
+    diagnostics = [_diagnostic(row) for row in list(getattr(runtime, "_planner_context_diagnostics", []) or [])[-MAX_PROTOCOL_DIAGNOSTICS:]
+                   if isinstance(row, Mapping)]
+    payload = {
+        "schema": SCHEMA,
+        "goal": {
+            "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
+                      _code(getattr(progress, "decision", ""), "UNKNOWN"),
+            "strategy_revision": int(strategy.get("revision", 1) or 1),
+            "current_step": getattr(progress, "current_step", 0),
+            "total_steps": getattr(progress, "total_steps", 0),
+        },
+        "scope": {
+            "authorized_paths": [str(p)[:1024] for p in list(getattr(runtime, "authorized_paths", []) or [])[:16]],
+            "scope_expansion_authorized": False,
+            "scope_admission_still_required": True,
+        },
+        "recent_action_evidence": rows,
+        "evidence_total": len(ids),
+        "omitted_older_action_count": len(ids) - len(retained),
+        "omitted_active_blocker_count": len(omitted_ids),
+        "omitted_active_blocker_refs": [str(x)[:160] for x in omitted_ids[-24:]],
+        "critical_context_omitted": len(omitted_ids) > 24,
+        "latest_protocol_diagnostics": diagnostics,
+        "runtime_transition": _code(als.get("required_transition"), "UNKNOWN"),
+        "action_loop_blockers": [
+            {"blocking_action_id": str(b.get("blocking_action_id", "") or "")[:160],
+             "reason": _code(b.get("reason"), "UNKNOWN"),
+             "release_kind": _code((b.get("release_conditions") or [{}])[0].get("kind"), "")}
+            for b in list(als.get("blockers") or [])[-16:] if isinstance(b, Mapping)
+        ],
+        "context_acquisition": {
+            "candidate_read_tools": list(caps.get("read_tools") or [])[:16],
+            "candidate_tools_are_not_admission_grants": True,
+            "objective_blockers": objective_blockers,
+        },
+        "capability_resolution": {
+            "binding_present": bool(matched),
+            "binding_identity_mismatch": bool(old_binding_mismatch),
+            "selected_capabilities": selected,
+            "finite_registry": dict(CAPABILITY_TO_TOOL),
+            "tool_readiness": tool_readiness,
+            "cumulative_selection_required": bool(matched),
+        },
+        "recovery": {
+            "reason": _code(recovery.get("reason")),
+            "required_action": _code(recovery.get("required_action")),
+            "active": bool(recovery.get("active")),
+            "pending_progress_action_ids": [str(a.get("action_id", ""))[:160]
+                                            for a in list(getattr(runtime, "pending_progress_repair_actions", []) or [])[:16]
+                                            if isinstance(a, Mapping)],
+        },
+        "decision_authority": "PLANNER",
+        "evidence_and_admission_authority": "RUNTIME",
+        "raw_tool_results_included": False,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    payload["context_digest"] = digest
+    payload["context_snapshot_id"] = "CTX-" + digest[:20].upper()
+    return payload
+
+
+def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
+    payload = build_planner_context_snapshot(runtime)
+    return ("[SMARTAGENT_PLANNER_CONTEXT_V1]\n"
+            + json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+            + "\n[/SMARTAGENT_PLANNER_CONTEXT_V1]\n"
+            "This is a Runtime-owned, read-only decision snapshot. Candidate tools are NOT grants. "
+            "Honor executed/verification states and do not treat UNKNOWN as absence. "
+            "To add a selected SCR capability, propose a cumulative capability_resolution "
+            "on report_progress and pass all ordinary Tool Admission checks; do not re-run "
+            "rejected actions merely under new IDs.", payload)
