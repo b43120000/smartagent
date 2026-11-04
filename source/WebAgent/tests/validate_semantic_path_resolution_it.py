@@ -39,6 +39,18 @@ def run():
         check("請分析 " + str(deps) + " 的資料夾狀況。", deps)
         doc = check("請分析 " + str(deps) + "的資料夾狀況。", deps)
         assert doc["status"] == "VERIFIED_UNIQUE", doc
+        # Real L06 structure: negative write restrictions after the path
+        # are NOT positive install, delete, or command-execution intent.
+        check(
+            "請只針對 " + str(deps) +
+            " 進行資料盤點。\\n需要內容與數量統計。"
+            "不允許執行任何寫入、安裝、刪除或修改操作。",
+            deps,
+        )
+        from agent_core.semantic_path_resolution import readonly_narrowing_allowed
+        creation = "請建立 " + str(deps) + " 的資料夾。"
+        assert not readonly_narrowing_allowed(creation, extract_authorized_paths(creation))
+
         assert sum(item["existence"] == "ABSENT"
                    for row in doc["records"] for item in row["candidates"]) > 0
         assert doc["grants_authorization"] is False
