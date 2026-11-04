@@ -98,6 +98,10 @@ def render_initial_planner_toolkit(environment: dict | None = None) -> str:
         "只補指定 action，不重送成功操作。已執行失敗 action 的結果不可改寫：修正操作使用新 action_id，"
         "未執行的 schema 錯誤若需 ACTION_REPLAN，使用新 action_id 並以 replaces_action_id 指向 deferred action。"
         "待執行的依賴 action 更新 depends_on 指向新前置。省略依賴不會解除來源證據、交易、授權或驗證前置條件。\n"
+        "10. Runtime 的 REQUEST_CONTEXT_OBJECTS 是已確認 input，不是執行授權或成功 evidence。"
+        "需要沿用 path/paths/project_root/output_path/expected_filename 時，明確使用 field_refs:{field:{ref_id,version}}，"
+        "不要同時填該欄位的 literal。缺少引用或過期／不同欄位的引用需重答；Runtime 不會猜測省略欄位。"
+        "command、decision、outcome、evidence、snapshot、verify、plan 不可透過 field_refs 沿用。\n"
         "11. 目標導向建立：原始需求明確要求『在既有父目錄下新增子資料夾／輸出檔案』時，"
         "不存在的子資料夾與輸出檔案是預期狀態，並非缺少輸入、Tool 或授權的證據。"
         "先依使用者的原始 literal 父路徑與子名稱確定輸出位置，再用 Runtime 原有的"
@@ -110,10 +114,6 @@ def render_initial_planner_toolkit(environment: dict | None = None) -> str:
         "只針對這個歧義請求 USER_INPUT，不可自行更正文字。"
         "若使用者要求編譯／執行，仍須依 run_command operation、執行權限及"
         "獨立 Runtime Evidence 的既有規範逐步執行。\n"
-        "10. Runtime 的 REQUEST_CONTEXT_OBJECTS 是已確認 input，不是執行授權或成功 evidence。"
-        "需要沿用 path/paths/project_root/output_path/expected_filename 時，明確使用 field_refs:{field:{ref_id,version}}，"
-        "不要同時填該欄位的 literal。缺少引用或過期／不同欄位的引用需重答；Runtime 不會猜測省略欄位。"
-        "command、decision、outcome、evidence、snapshot、verify、plan 不可透過 field_refs 沿用。\n"
         + _render_runtime_environment(environment)
         + "task_plan_schema_contract=" + _TASK_PLAN_SCHEMA_CONTRACT + "\n"
         + _SHARED_TOOL_SECTION + "\n" + render_write_budget()
