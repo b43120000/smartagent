@@ -38,20 +38,17 @@ _EFFECT_IMPERATIVE = re.compile(
 
 
 def readonly_narrowing_allowed(request: str, lexical_paths: list[str]) -> bool:
-    """Classify the *instruction*, not incidental 'Test/Build' in path names.
+    """Use only the instruction prefix before the first literal path.
 
-    This is only an opt-out for read-only preflight recovery. It never grants
-    a filesystem write (which remains subject to the original Runtime guards).
+    A filename such as Camera Test Data is not an EXECUTE instruction.
+    Following negative clauses such as '禁止任何寫入或安裝' must not turn
+    an otherwise read-only directory observation into a mutation request.
+    This preflight never establishes write permission, even when allowed.
     """
     text = str(request or "")
-    # A positive imperative is sufficient to disable heuristic narrowing.
-    if _EFFECT_IMPERATIVE.search(text):
-        return False
-    masked = text
-    for literal in lexical_paths[:_MAX_SPANS]:
-        masked = masked.replace(literal, " <USER_PATH> ", 1)
-    from .task_requirement import assess_task_requirement
-    return not assess_task_requirement(masked)["side_effect_required"]
+    positions = [text.find(value) for value in lexical_paths if value and text.find(value) >= 0]
+    prefix = text[:min(positions)] if positions else text
+    return not bool(_EFFECT_IMPERATIVE.search(prefix))
 
 
 def _path_exists(path: str, probe: Callable[[str], bool]) -> bool:
