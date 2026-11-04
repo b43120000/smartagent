@@ -198,6 +198,9 @@ class PlannerDeliveryIT(unittest.TestCase):
         prepared = [event for event in events if event[0] == 'planner_context_prepared']
         self.assertEqual(len(prepared), 2)
         self.assertEqual(len({row[1]['context_digest'] for row in prepared}), 2)
+        correlated = [event for event in events if event[0] == 'planner_context_response_correlated']
+        self.assertEqual(len(correlated), 1)
+        self.assertEqual(correlated[0][1]['context_digest'], prepared[0][1]['context_digest'])
 
 
 if __name__ == '__main__':
