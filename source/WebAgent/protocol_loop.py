@@ -322,6 +322,7 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance: dict = {}
         self._answer_only_admitted = False
+        self._preexec_strategy_blocked: dict = {}
         self._tri_one_origin = "WEB_DIRECT"
         self._tri_one_has_attached_context = False
         self.tools.configure_project_sync_transport(
@@ -1369,6 +1370,16 @@ class WebAgentProtocolLoop:
             )
             return ""
         state = dict(self.progress_ledger.strategy_state or {})
+        rejected = next((
+            item for item in calls if isinstance(item, dict)
+            and item.get("tool") == "run_command"
+        ), {})
+        self._preexec_strategy_blocked = {
+            "tool": "run_command",
+            "command": str(rejected.get("command", "")),
+            "operation": str(rejected.get("operation", "")),
+            "working_directory": str(rejected.get("working_directory", "")),
+        }
         self._emit(
             "progress_strategy_revision_recorded",
             request_id=self.run_id, task_id=self.task_id,
@@ -3745,6 +3756,19 @@ class WebAgentProtocolLoop:
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
         operational = [action for action in actions if action.get("tool") != "report_progress"]
+        # A pre-execution strategy revision cannot be bypassed by changing
+        # only Action ID or restating the same denied command. A new strategy
+        # still passes every normal V9 admission check below.
+        from agent_core.preexecution_replan import repeats_rejected_strategy
+        if any(repeats_rejected_strategy(item, self._preexec_strategy_blocked)
+               for item in operational):
+            return [], [{
+                "marker": "[RUNTIME_PREEXECUTION_REPLAN_REQUIRED]",
+                "reason": "preexecution_identical_strategy_replay",
+                "detail": "Unexecuted identical command/CWD after verified missing-CWD strategy revision",
+                "suggestion": "Choose a materially new, authorized canonical Tool Action; "
+                              "do not retry the old command with a new action_id.",
+            }]
         # Accept only finite semantic capabilities, with request/epoch identity.
         from agent_core.semantic_capability_resolution import (
             SCHEMA as SCR_SCHEMA, SemanticCapabilityError, verify_resolution_for_actions,
@@ -5094,6 +5118,7 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
+        self._preexec_strategy_blocked = {}
         self._bp1_observation_admitted = False
         # An already queued attachment or skill is an external dependency,
         # even if the original prose itself contains no file path.
