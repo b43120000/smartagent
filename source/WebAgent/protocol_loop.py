@@ -1406,7 +1406,7 @@ class WebAgentProtocolLoop:
         """
         from agent_core.preexecution_replan import (
             analyze_verified_prerequisite_failure,
-            render_preexecution_replan,
+            render_verified_prerequisite_replan,
         )
         from agent_core.task_progress import (
             record_runtime_strategy_revision, TaskProgressError,
@@ -1431,7 +1431,7 @@ class WebAgentProtocolLoop:
         except (TaskProgressError, ValueError, OSError):
             return
         self._runtime_strategy_replan_note = (
-            render_preexecution_replan(receipt)
+            render_verified_prerequisite_replan(receipt)
             + "\nOriginal Goal is unchanged; inspect another verified toolchain "
               "or prerequisite. Install only if the actual source, target, "
               "network and execution rights are independently authorized. "
