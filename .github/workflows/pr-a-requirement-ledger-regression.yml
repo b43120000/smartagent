@@ -26,6 +26,7 @@ on:
       - feat/scr-v1-semantic-capability-resolution-20261104
       - feat/spr-v1-path-resolution-20261104
       - feat/goal-driven-plan-readiness-repair-20261104
+      - feat/planner-runtime-flexible-recovery-p1-p3-20261104
   pull_request:
     branches:
       - fix/live-b-p1-progress-terminal-r17-20261103
@@ -96,6 +97,8 @@ jobs:
           python -B source/WebAgent/tests/validate_goal_driven_plan_readiness_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_goal_driven_plan_protocol_it.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B source/WebAgent/tests/validate_replan_safety_it.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B source/WebAgent/tests/validate_task_plan_schema_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
