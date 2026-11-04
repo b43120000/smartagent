@@ -3827,6 +3827,36 @@ class WebAgentProtocolLoop:
                 "reason": "task_plan_fresh_proposal_required",
                 "detail": "Evidence is ready: submit a complete NEW propose_task_plan, not a stale repair.",
             }]
+        # A corrected *format* is allowed only within a single Runtime-
+        # identified field. This is a new proposal, never an authorization
+        # upgrade, and still passes ordinary V9/Task Plan admission.
+        if (pending_plan_recovery.get("active")
+                and pending_plan_recovery.get("reason")
+                == "task_plan_schema_revision_required"):
+            from agent_core.action_dependencies import is_observation
+            from agent_core.plan_readiness import is_bounded_schema_revision
+            if operational and not all(is_observation(item) for item in operational):
+                allowed_revision = (
+                    len(operational) == 1
+                    and operational[0].get("tool") == "propose_task_plan"
+                    and is_bounded_schema_revision(
+                        pending_plan_recovery.get("original_plan"),
+                        operational[0].get("plan"),
+                        pending_plan_recovery.get("schema_revision_field", ""),
+                    )
+                )
+                if not allowed_revision:
+                    return [], [{
+                        "marker": "[WEBAGENT_TASK_PLAN_READINESS_REQUIRED]",
+                        "reason": "task_plan_schema_revision_scope_mismatch",
+                        "detail": (
+                            "Change only the precise invalid schema field; "
+                            "existing goal, scope and edits must stay identical."
+                        ),
+                        "suggestion": render_result_evidence_to_action_guidance(
+                            pending_plan_recovery
+                        ),
+                    }]
         repair_actions = [
             action for action in operational
             if str(action.get("tool", "") or "") == "repair_task_plan"
