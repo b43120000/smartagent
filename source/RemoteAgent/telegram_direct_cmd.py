@@ -26,13 +26,21 @@ def _bounded_timeout(value: int, *, minimum: int, maximum: int) -> int:
 
 def _command_failure_hint(command: str, stderr: str, exit_code: object) -> str:
     """Explain a verified Git error without rewriting or retrying the command."""
-    if (exit_code == 128 and re.match(r"(?i)^git(?:\\.exe)?\\s+fetch\\b", command)
-            and re.search(r"(?i)fatal:\\s+couldn't find remote ref\\b", stderr)):
+    if (exit_code == 128 and re.match(r"(?i)^git(?:\.exe)?\s+fetch\b", command)
+            and re.search(r"(?i)fatal:\s+couldn't find remote ref\b", stderr)):
         return (
             "GIT_REMOTE_REF_NOT_FOUND：遠端沒有指定的 ref。"
             "這不是 Timeout。若要更新 origin 的 refs，使用 git fetch origin；"
             "若要查詢分支名稱，使用 git ls-remote --heads origin。"
             "不會自動改成其他分支或重試。"
+        )
+    if (exit_code == 128 and re.match(r"(?i)^git(?:\.exe)?\s+fetch\b", command)
+            and re.search(r"(?i)could not resolve host:", stderr)):
+        return (
+            "GIT_DNS_UNRESOLVED：Git 子程序無法解析遠端主機。"
+            "請在相同 Telegram CMD 執行環境比較 where git、where curl.exe、"
+            "nslookup github.com；若一般 CMD 可用，優先檢查 PATH 和子程序環境。"
+            "未自動修改 DNS、Git remote 或重試。"
         )
     return ""
 
@@ -91,8 +99,8 @@ def parse_cmd_request(text: str) -> tuple[Path, tuple[str, ...]]:
             continue
         # A pasted second template or a glued header must never be executed
         # as CMD. Reject the entire batch before any command starts.
-        if (re.search(r"(?i)run\\s+cmd\\s+by\\s+tg", cmd)
-                or re.match(r"(?i)^(?:cmd\\s+path|command)\\s*:", cmd)):
+        if (re.search(r"(?i)run\s+cmd\s+by\s+tg", cmd)
+                or re.match(r"(?i)^(?:cmd\s+path|command)\s*:", cmd)):
             raise CmdControlError("TG_CMD_DUPLICATE_TEMPLATE_OR_GLUED_HEADER")
         if len(cmd) >= 2 and cmd[0] == cmd[-1] == '"':
             cmd = cmd[1:-1]
@@ -191,7 +199,7 @@ def execute_cmd_request(
                 "skipped_pause": True,
             })
             lines.extend(["", f"[{index}/{len(commands)}] > {command}",
-                          "Exit Code: 0", "stdout:\\nSKIPPED_PAUSE (TG noninteractive)"])
+                          "Exit Code: 0", "stdout:\nSKIPPED_PAUSE (TG noninteractive)"])
             continue
         info = executor(
             [exe, "/d", "/s", "/c", command],
