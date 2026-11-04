@@ -667,12 +667,21 @@ def record_runtime_strategy_revision(
     ledger = read_progress(task_id, root)
     if ledger is None or ledger.request_id != request_id:
         raise TaskProgressError("strategy_revision_request_identity_mismatch")
+    schema = str(evidence.get("schema", "")) if isinstance(evidence, Mapping) else ""
     if (not isinstance(evidence, Mapping)
-            or evidence.get("schema") != "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+            or schema not in {
+                "SMARTAGENT_PREEXECUTION_REPLAN_V1",
+                "SMARTAGENT_VERIFIED_PREREQUISITE_REPLAN_V1",
+            }
             or evidence.get("request_id") != request_id
-            or evidence.get("executed") is not False
             or evidence.get("scope_verified") is not True
-            or evidence.get("authorization_granted") is not False):
+            or evidence.get("authorization_granted") is not False
+            or (schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+                and evidence.get("executed") is not False)
+            or (schema == "SMARTAGENT_VERIFIED_PREREQUISITE_REPLAN_V1"
+                and (evidence.get("executed") is not True
+                     or evidence.get("result_verification") != "FAIL"
+                     or evidence.get("completion_verified") is not False))):
         raise TaskProgressError("strategy_revision_evidence_not_attested")
     digest = str(evidence.get("evidence_digest", ""))
     if (len(digest) != 64
@@ -686,13 +695,17 @@ def record_runtime_strategy_revision(
     if current < 1 or current >= max_revisions:
         raise TaskProgressError("strategy_revision_budget_exhausted")
     revision = current + 1
+    trigger = ("PREEXECUTION_CWD_ABSENT"
+               if schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+               else "VERIFIED_FAILED_PREREQUISITE")
     row = {
-        "revision": revision, "trigger": "PREEXECUTION_CWD_ABSENT",
+        "revision": revision, "trigger": trigger,
         "round_id": int(round_id), "evidence_digest": digest,
         "rejected_action_id": str(evidence.get("rejected_action_id", ""))[:128],
         "target": str(evidence.get("target", ""))[:MAX_TEXT],
         "existing_writable_parent": str(evidence.get("existing_writable_parent", ""))[:MAX_TEXT],
-        "executed": False, "completion_verified": False,
+        "executed": evidence["executed"], "completion_verified": False,
+        "evidence_ref": str(evidence.get("evidence_ref", ""))[:128],
         "authorization_granted": False,
     }
     ledger.strategy_state = {
