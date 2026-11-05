@@ -119,6 +119,51 @@ class GoalTransitionIT(unittest.TestCase):
         })
         self.assertTrue(valid, diagnostic)
 
+    def test_blocked_project_scope_requires_discovery_not_absence_claim(self):
+        from agent_core.action_readiness import classify_scope_preflight
+        self.action_ledger["ACT-READ-DENIED"]["action"] = {
+            "tool": "inspect_project_scope", "action_id": "ACT-READ-DENIED",
+            "workspace": str(self.root / "not_deployed"),
+        }
+        row = self.evidence["ACT-READ-DENIED"]
+        row["tool"] = "inspect_project_scope"
+        row["scope_diagnostic"] = classify_scope_preflight(
+            "inspect_project_scope",
+            "workspace_not_found_or_not_directory:PRIVATE_PATH",
+            allowed=False,
+        )
+        fact = classify_runtime_evidence(row, self.action_ledger["ACT-READ-DENIED"])
+        self.assertEqual(fact["classification"],
+                         "PREEXECUTION_PROJECT_WORKSPACE_UNVERIFIED")
+        self.assertEqual(fact["eligible_transition"], "EVIDENCE_ACQUISITION")
+        self.assertFalse(fact["proves_missing_prerequisite"])
+        proposal = {**self.proposal, "kind": "EVIDENCE_ACQUISITION"}
+        accepted = self.check(proposal)
+        self.assertEqual(accepted["kind"], "EVIDENCE_ACQUISITION")
+        self.must_reject(
+            {**proposal, "kind": "PREREQUISITE_RESOLUTION"},
+            "goal_transition_prerequisite_not_verified",
+        )
+        self.must_reject(
+            {**proposal, "kind": "STRATEGY_REPLAN"},
+            "goal_transition_strategy_not_evidence_supported",
+        )
+
+    def test_authorization_denial_cannot_infer_permission(self):
+        from agent_core.action_readiness import classify_scope_preflight
+        self.evidence["ACT-READ-DENIED"]["scope_diagnostic"] = classify_scope_preflight(
+            "list_directory",
+            "resolved_scope_expands_beyond_explicit_path:PRIVATE_PATH",
+            allowed=False,
+        )
+        fact = classify_runtime_evidence(
+            self.evidence["ACT-READ-DENIED"],
+            self.action_ledger["ACT-READ-DENIED"],
+        )
+        self.assertEqual(fact["classification"], "PREEXECUTION_AUTHORIZATION_BLOCKED")
+        self.assertFalse(fact["authorizes_execution"])
+        self.assertEqual(fact["eligible_transition"], "EVIDENCE_ACQUISITION")
+
     def test_negative_tool_error_does_not_infer_absence(self):
         case = {
             **self.evidence["ACT-READ-DENIED"],
