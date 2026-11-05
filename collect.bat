@@ -209,6 +209,8 @@ $scalarKeys = @(
     'execution_status','last_reason','repair_status','diagnostic_reason','error_type',
     'scope_allowed','scope_error_code','scope_source','runtime_fact_ref_count',
     'scope_reason_code','scope_category','scope_path_role','scope_transition','scope_required_field',
+    'repair_mode','issue_count','previous_issue_count','current_issue_count',
+    'resolved_issue_count','introduced_issue_count','converging','full_admission_passed',
     'project_root_matches_workspace','explicit_path_count','request_paths_grant_write',
     'candidate_count','selected_count',
     'ceiling_active','ceiling_valid','ceiling_reason','grants_authorization',
@@ -284,7 +286,8 @@ try {
                     $row[$key] = Safe-Code $v
                 }
             }
-            foreach ($key in @('reason_codes','pending_kinds','action_ids')) {
+            foreach ($key in @('reason_codes','pending_kinds','action_ids',
+                               'issue_codes','issue_fields')) {
                 $prop = $rec.PSObject.Properties[$key]
                 if ($null -ne $prop -and $null -ne $prop.Value) {
                     $row[$key] = Safe-CodeList $prop.Value
@@ -315,6 +318,47 @@ try {
                     }
                 }
                 $row.field_issues_codes = @($issues | Select-Object -First 30)
+                # Preserve only known, safe field paths (never the diagnostic
+                # detail itself, which can include script source or private paths).
+                $knownCommandFields = @('command','operation','verify','success_criteria',
+                                        'working_directory','timeout','action_id')
+                $commandRepairs = @()
+                foreach ($d in @($rec.diagnostics)) {
+                    $detailText = [string]$d.detail
+                    if ([string]$d.tool -eq 'run_command' -and
+                        $detailText -match '^field=(command|operation|verify|success_criteria|working_directory|timeout|action_id)(?:\\[[0-9]{1,2}\\]\\.command)?(?:;|\\s|$)') {
+                        $fieldName = [string]$Matches[1]
+                        if ($knownCommandFields -ccontains $fieldName) {
+                            $row.command_reject_field = $fieldName
+                        }
+                    }
+                    $repair = $d.command_repair
+                    if ($null -eq $repair -or
+                        [string]$repair.schema -cne 'SMARTAGENT_COMMAND_REPAIR_READINESS_V1') {
+                        continue
+                    }
+                    $safeIssues = @()
+                    foreach ($issue in @($repair.field_issues)) {
+                        if ($null -eq $issue) { continue }
+                        $fieldName = Safe-Code $issue.field
+                        $codeName = Safe-Code $issue.code
+                        if ($fieldName -in @('command','operation','verify','success_criteria',
+                                           'working_directory','timeout','action_id','tool',
+                                           'depends_on','replaces_action_id')) {
+                            $safeIssues += [ordered]@{ field=$fieldName; code=$codeName }
+                        }
+                    }
+                    $commandRepairs += [ordered]@{
+                        action_id=(Safe-Code $repair.action_id)
+                        mode=(Safe-Code $repair.mode)
+                        issue_count=[int]$repair.issue_count
+                        field_issues=@($safeIssues | Select-Object -First 16)
+                        authorization_granted=$false
+                    }
+                }
+                if ($commandRepairs.Count -gt 0) {
+                    $row.command_repair_diagnostics = @($commandRepairs | Select-Object -First 8)
+                }
                 $scrDiagnostics = @()
                 foreach ($d in @($rec.diagnostics)) {
                     if ($null -eq $d.capability_repair) { continue }
@@ -341,6 +385,9 @@ try {
                 foreach ($d in @($rec.diagnostics)) {
                     if ($null -eq $d.context_request_repair) { continue }
                     $repair = $d.context_request_repair
+                    if ([string]$repair.schema -cne 'SMARTAGENT_CONTEXT_REQUEST_FIELD_REPAIR_V1') {
+                        continue
+                    }
                     $issues = @()
                     foreach ($issue in @($repair.field_issues)) {
                         if ($null -eq $issue) { continue }
@@ -606,6 +653,32 @@ try {
     })
     Write-Json (Join-Path $stage 'context_request_repair_summary.json') @($contextRepairEvents)
 
+    $commandRepairs = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('command_repair_readiness_evaluated',
+                       'command_repair_converged') -or
+        ($_.event -eq 'protocol_rejected' -and
+         ($_.command_repair_diagnostics -or $_.command_reject_field))
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source
+            event=$_.event; round=$_.round
+            action_id=$_.action_id
+            repair_mode=$_.repair_mode
+            issue_count=$_.issue_count
+            previous_issue_count=$_.previous_issue_count
+            current_issue_count=$_.current_issue_count
+            resolved_issue_count=$_.resolved_issue_count
+            introduced_issue_count=$_.introduced_issue_count
+            converging=$_.converging
+            full_admission_passed=$_.full_admission_passed
+            issue_codes=@($_.issue_codes)
+            issue_fields=@($_.issue_fields)
+            command_reject_field=$_.command_reject_field
+            command_repair_diagnostics=@($_.command_repair_diagnostics)
+        }
+    })
+    Write-Json (Join-Path $stage 'command_repair_summary.json') @($commandRepairs)
+
     # Goal-aligned Strategy Transition: codes/refs only; no full Goal or rationale.
     $goalTransitions = @($timeline.ToArray() | Where-Object {
         $_.event -eq 'goal_transition_accepted' -or
@@ -814,6 +887,7 @@ try {
         'sanitized SCR proposal shape/digest, decision differences and context delivery digests,',
         'preexecution replan evaluation events (status codes only),',
         'scope preflight reason codes and context_request subfield repair codes; no raw paths',
+        'command repair modes, field codes and convergence counters; no command text',
         'Goal transition acceptance/rejection codes with condition IDs; no Planner rationale',
         'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
