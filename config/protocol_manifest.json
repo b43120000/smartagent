@@ -238,7 +238,7 @@
     "source/agent_core/workspace_manager.py": "23f8d7086de969401eab0e6b594a34b0f13b9018960b204a5d69407ff94f5f59",
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443",
     "source/agent_core/auto_rca_upload.py": "09b519ab350a7c82bb1564e7b14c5dab7399e9118e30b58d337e883fd0a6d44a",
-    "source/agent_core/target_path_contract.py": "e6b87db032245dbdfeed55a3d1f92ab2fadb1742cf3c5537d0c248f2c2f8ed48"
+    "source/agent_core/target_path_contract.py": "f2300fffd71a6f1403d8423045a2c6ee2199be88d49ba79b4d44732393951d00"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

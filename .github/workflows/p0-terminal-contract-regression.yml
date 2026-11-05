@@ -1,0 +1,59 @@
+name: P0 Target Contract and RCA Regression
+
+on:
+  push:
+    branches:
+      - feat/p0-terminal-goal-target-contract-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: P0 regression - ${{ matrix.os }} - Python 3.13
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile P0 sources and regression tests
+        run: >
+          python -B -m compileall -q
+          source/agent_core/target_path_contract.py
+          source/agent_core/goal_environment_reconciliation.py
+          source/agent_core/goal_strategy_transition.py
+          source/agent_core/auto_rca_upload.py
+          source/WebAgent/tests/test_target_path_contract.py
+          source/WebAgent/tests/test_goal_repair_p0_env.py
+          source/WebAgent/tests/test_auto_rca_upload.py
+      - name: Target-path regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_target_path_contract.py
+      - name: Goal repair and environment regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_goal_repair_p0_env.py
+      - name: Auto RCA upload regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_auto_rca_upload.py
+      - name: Validate changed-source manifest SHA256
+        run: >
+          python -B -c "import hashlib,json,pathlib;
+          m=json.loads(pathlib.Path('config/protocol_manifest.json').read_text(encoding='utf-8'));
+          paths=['source/agent_core/target_path_contract.py',
+          'source/agent_core/goal_environment_reconciliation.py',
+          'source/agent_core/goal_strategy_transition.py',
+          'source/WebAgent/protocol_loop.py',
+          'source/agent_core/auto_rca_upload.py',
+          'source/agent_core/protocol_manifest.py'];
+          mismatches=[p for p in paths if m['core_files'].get(p)!=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()];
+          print('MANIFEST_MISMATCHES:',mismatches);
+          assert not mismatches, mismatches"

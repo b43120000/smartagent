@@ -187,7 +187,7 @@ class TargetPathContractRegression(unittest.TestCase):
         c = self.contract()
         bad = dict(c, binding_status="AMBIGUOUS", requested_target="")
         self.assertEqual(self.verify(bad, {})["reason"], "REQUEST_TARGET_AMBIGUOUS")
-        observed = observe_target("/tmp/another-user-directory", self.scope)
+        observed = observe_target(str(self.root.parent / (self.root.name + "_outside")), self.scope)
         self.assertEqual(observed["state"], "UNKNOWN")
         self.assertEqual(observed["reason"], "PermissionError")
 
