@@ -97,7 +97,23 @@ def _diagnostic(row: Mapping) -> dict:
             k: v for k in safe_shape_keys for v in [shape.get(k)]
             if type(v) is bool or (type(v) is int and 0 <= v <= 100000)
         }
+        candidate = repair.get("canonical_candidate")
+        if (isinstance(candidate, Mapping)
+                and candidate.get("schema") == "SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1"
+                and isinstance(candidate.get("capabilities"), list)
+                and 1 <= len(candidate["capabilities"]) <= 12
+                and all(type(x) is str and x in CAPABILITY_TO_TOOL
+                        for x in candidate["capabilities"])):
+            safe_candidate = {
+                "schema": "SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1",
+                "capabilities": sorted(set(candidate["capabilities"])),
+            }
+        else:
+            safe_candidate = None
         safe_repair = {
+            "canonical_candidate": safe_candidate,
+            "candidate_applied": False,
+            "authorization_granted": False,
             "repair_target": "report_progress.capability_resolution",
             "expected_keys": ["schema", "capabilities"],
             "canonical_schema": "SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1",
