@@ -10,7 +10,8 @@ READ_ONLY_TOOLS = frozenset({'list_directory', 'inspect_directory', 'find_file',
 DISPLAY_FIELDS = frozenset({'total_steps', 'current_step', 'steps', 'base_evaluation', 'current_focus', 'next_action'})
 
 
-def repair_diagnostic(payload, ledger, error, known_refs=None):
+def repair_diagnostic(payload, ledger, error, known_refs=None,
+                      objective_blocker_ids=()):
     from .task_progress import PROGRESS_DECISIONS, PROGRESS_OUTCOMES, MAX_EVIDENCE_REFS
     issues = []
     def add(field, expected, actual=None):
@@ -58,10 +59,23 @@ def repair_diagnostic(payload, ledger, error, known_refs=None):
                 add(f'steps[{index}].status', 'PENDING | IN_PROGRESS | COMPLETED', step.get('status'))
     detail = str(error)
     field = getattr(error, 'field', '') or next((key for key in sorted(DISPLAY_FIELDS) if key in detail), 'progress')
+    context_repair = {}
+    if field == 'context_request' or detail.startswith('context_request_'):
+        from .context_acquisition import context_request_repair_diagnostic
+        context_repair = context_request_repair_diagnostic(
+            payload.get('context_request'),
+            objective_blocker_ids=objective_blocker_ids,
+        )
+        for item in context_repair["field_issues"]:
+            if not any(row['field'] == item['field'] and row.get('code') == item['code']
+                       for row in issues):
+                issues.append(dict(item))
     if not issues:
         add(field, detail)
     return {'marker':'[WEBAGENT_PROGRESS_REJECTED]', 'reason':'invalid_progress_payload',
             'detail':detail, 'repair_mode':'BATCH_FIELDS', 'field_issues':issues,
+            'repair_scope': 'CONTEXT_REQUEST_SCHEMA' if context_repair else 'PROGRESS_SCHEMA',
+            'context_request_repair': context_repair,
             'available_evidence_refs': sorted(known_refs or []),
             'evidence_reference_policy': {
                 'initial_continue': 'Select REQUEST_ACCEPTED or RUNTIME_STATUS when no tool result exists; do not invent an action result.',
