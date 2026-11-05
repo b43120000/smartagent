@@ -95,6 +95,9 @@ def extract_target_contract(request: str) -> dict | None:
         "relocation_permitted_if_collision": bool(_RELOCATION.search(text)),
         "required_top_level_entries": items[:24],
         "source": "ORIGINAL_REQUEST_EXPLICIT_LABEL",
+        "revalidation_requested": bool(re.search(
+            r"重新驗證|再次驗證|重新確認|復核|revalidat|re-check|verify existing",
+            text, re.IGNORECASE)),
         "request_anchor_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "authorization_granted": False,
     }
@@ -193,7 +196,8 @@ def _candidate_alt(root: Path, pre: Mapping, post: Mapping, security_context,
 
 def verify_target_completion(contract: Mapping | None, baseline: Mapping | None,
                              security_context, *, final_text: str = "",
-                             evidence_pass: bool = False) -> dict:
+                             evidence_pass: bool = False,
+                             reuse_verification_ref: str = "") -> dict:
     """Admission-only path compliance, not proof of source/checksum correctness.
 
     Generic verification remains an independent, necessary prerequisite.
@@ -268,6 +272,18 @@ def verify_target_completion(contract: Mapping | None, baseline: Mapping | None,
                 or (not required and bool(new_entries))):
             result.update(status="PASS", reason="REQUESTED_ROOT_VERIFIED",
                           actual_target=requested)
+            return result
+        if (required and contract.get("revalidation_requested") is True
+                and isinstance(reuse_verification_ref, str)
+                and reuse_verification_ref):
+            # Existing destination has all required direct-root entries,
+            # prior bytes/identities still match, and the *current* request
+            # supplied a referenced VERIFY PASS bound to this exact cwd.
+            # This accepts reuse; it does not infer a new copy/mutation.
+            result.update(status="PASS", reason="EXISTING_ROOT_REVALIDATED",
+                          actual_target=requested,
+                          reuse_verification_ref=reuse_verification_ref,
+                          mutation_applied=False)
             return result
         result["reason"] = "UNCHANGED_EXISTING_CONTENT_REQUIRES_INDEPENDENT_REUSE_PROOF"
         return result

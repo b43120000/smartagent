@@ -4957,7 +4957,16 @@ class WebAgentProtocolLoop:
                 and getattr(self, "_target_path_contract", None)
                 and terminal_evidence_verdict == "PASS"):
             from agent_core.target_path_contract import verify_target_completion
+            from agent_core.terminal_evidence_reconciliation import (
+                qualifying_reuse_verifier,
+            )
             from agent_core.security_context import SecurityContext
+            reuse_verifier_ref = qualifying_reuse_verifier(
+                self.action_ledger, self.action_result_ledger,
+                evidence_refs,
+                self._target_path_contract["requested_target"],
+                self.run_id, self.task_epoch,
+            )
             final_action = next(
                 (item for item in operational
                  if item.get("tool") == "final_response"), {})
@@ -4967,6 +4976,7 @@ class WebAgentProtocolLoop:
                     self.tools, fallback_workspace=self.workspace),
                 final_text=str(final_action.get("content", "") or ""),
                 evidence_pass=True,
+                reuse_verification_ref=reuse_verifier_ref,
             )
             self._target_path_verdict = target_verdict
             self._emit(
@@ -4998,6 +5008,12 @@ class WebAgentProtocolLoop:
                         "For PREEXISTING_FILE_CONTENT_CHANGED or "
                         "PREEXISTING_ENTRY_REMOVED, report the protected data "
                         "conflict and request a safe, authorized recovery. "
+                        "If the exact root was already complete at request entry, "
+                        "only a current run_command VERIFY PASS using the exact "
+                        "requested_target as working_directory, referenced in "
+                        "terminal evidence_refs, may prove safe reuse when the "
+                        "original user requested revalidation. Do not mutate "
+                        "an already compliant root merely to create new files. "
                         "For layout-only blockers, use a small bounded "
                         "read-only directory probe, not a complex inline script. "
                         "Do not move, overwrite, infer permission, or change "

@@ -66,7 +66,7 @@
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
     "source/WebAgent/protocol.py": "8130749035ee3c2e5ab20f5cc663417db410e9c062f52ca4c4dffe915b030b22",
-    "source/WebAgent/protocol_loop.py": "296b3147e5c25bb4db863c52042961cecdf5bcb972e8a2b96741d425ab9b5229",
+    "source/WebAgent/protocol_loop.py": "c11af5fc390a655b95168026cdaeaebe95ed3de24e497c7139961dd18654cb9a",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "source/agent_core/action_dependencies.py": "84fa5cbb756f4145b6d4fb4b8e8c4bb68619d739c574d6200d7ca59d43fdd5e6",
@@ -238,8 +238,8 @@
     "source/agent_core/workspace_manager.py": "23f8d7086de969401eab0e6b594a34b0f13b9018960b204a5d69407ff94f5f59",
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443",
     "source/agent_core/auto_rca_upload.py": "09b519ab350a7c82bb1564e7b14c5dab7399e9118e30b58d337e883fd0a6d44a",
-    "source/agent_core/target_path_contract.py": "b0fd5a570d96842937384e19dcaa705ae08477c8e181cfcdcb7e27f7783c15df",
-    "source/agent_core/terminal_evidence_reconciliation.py": "b85b46e9ed2b502748663a73da94ec36e77b552825874a77d4b6bd2a63b7e96d"
+    "source/agent_core/target_path_contract.py": "9bff1667cf1b7bae25fe2aacddc4301d033960a8aa445ca00c402f8bd7bbb70c",
+    "source/agent_core/terminal_evidence_reconciliation.py": "bf0378ca6d6e2494f06aefc6d6b7fdb653479a3cd0806cd9042ed13fd9fc1825"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

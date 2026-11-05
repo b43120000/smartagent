@@ -65,3 +65,32 @@ Expect Terminal Target Path PASS only if root direct entries are correct,
 all original data is verified unchanged, and independent Action Evidence
 passes. Confirm collector and Terminal Receipt. Any new preservation violation
 must remain UNVERIFIED (safe, no false-green).
+
+## Already-complete destination: safe revalidation without redeployment
+
+On a fresh request the previous interrupted deployment may already have all
+required files directly at the requested root. The original strict gate would
+otherwise reject an unchanged destination, causing unnecessary copy/retry.
+
+Terminal reuse is available only when ALL of these are true:
+
+1. The original human request explicitly asks to revalidate / recheck.
+2. All declared required top-level entries are already at the exact target.
+3. The pre-mutation preservation snapshot is READY and rechecked VERIFIED.
+4. Ordinary Terminal Action Evidence passes independently.
+5. A distinct `run_command(operation=VERIFY)` executed and passed in the
+   current Request/Epoch, using the **exact original target** as
+   `working_directory`; its Action ID appears in terminal `evidence_refs`.
+6. The receipt is still ACTIVE and terminal-eligible.
+
+The resulting Terminal Reason is `EXISTING_ROOT_REVALIDATED`, with
+`reuse_verification_ref` and `mutation_applied=False`. This is not evidence
+that a *new* deployment ran in the current request, and no old terminal
+receipt or unrelated PASS can satisfy the reuse gate. The VERIFY action
+must independently validate the user's required content/integrity, not just
+report file existence. A generic deploy request without revalidation intent
+still cannot succeed based on unrelated preexisting content.
+
+The original 600-second stagnation deadline and all authorization/scope
+ceilings remain unchanged; this change prevents spurious terminal rejection
+in the already-satisfied state rather than increasing retry budgets.

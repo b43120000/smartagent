@@ -13,7 +13,7 @@ from agent_core.target_path_contract import (
     extract_target_contract, observe_target, verify_target_completion,
 )
 from agent_core.terminal_evidence_reconciliation import (
-    capture_existing_tree, reconcile_existing_tree,
+    capture_existing_tree, reconcile_existing_tree, qualifying_reuse_verifier,
 )
 
 
@@ -57,10 +57,10 @@ class TargetPathContractRegression(unittest.TestCase):
         for name in self.requirements:
             (target / name).mkdir(exist_ok=True)
 
-    def verify(self, contract, baseline, *, reported=""):
+    def verify(self, contract, baseline, *, reported="", reuse_ref=""):
         return verify_target_completion(
             contract, baseline, self.scope, final_text=reported,
-            evidence_pass=True)
+            evidence_pass=True, reuse_verification_ref=reuse_ref)
 
     def test_immutable_explicit_target_and_no_implicit_path_binding(self):
         c = self.contract()
@@ -273,6 +273,73 @@ class TargetPathContractRegression(unittest.TestCase):
         result = self.verify(c, pre)
         self.assertEqual(result["status"], "PASS", result)
         self.assertTrue((self.destination / "unrelated_old_folder").is_dir())
+
+
+    def test_fresh_exact_root_verifier_accepts_preexisting_revalidation(self):
+        # A resumed task must not redeploy or manufacture a mutation just
+        # because its previous invocation finished copying before PAUSED.
+        c = self.contract()
+        c["revalidation_requested"] = True
+        self.create_children()
+        pre = observe_target(str(self.destination), self.scope,
+                             capture_preexisting=True)
+        ref = "VER-ROOT-REF"
+        act = {"tool": "run_command", "action_id": ref,
+               "operation": "VERIFY", "working_directory": str(self.destination)}
+        result = {"request_id": "RR-A", "task_epoch": "E-A",
+                  "evidence_status": "ACTIVE", "executed": True,
+                  "execution_status": "SUCCEEDED", "verification_status": "PASS",
+                  "effective_terminal_eligible": True}
+        found = qualifying_reuse_verifier(
+            {ref: {"action": act}}, {ref: result}, [ref],
+            str(self.destination), "RR-A", "E-A")
+        self.assertEqual(found, ref)
+        outcome = self.verify(c, pre, reuse_ref=found)
+        self.assertEqual(outcome["status"], "PASS", outcome)
+        self.assertEqual(outcome["reason"], "EXISTING_ROOT_REVALIDATED")
+        self.assertFalse(outcome["mutation_applied"])
+        self.assertEqual(outcome["reuse_verification_ref"], ref)
+
+    def test_stale_wrong_request_or_wrong_root_cannot_prove_reuse(self):
+        c = self.contract()
+        c["revalidation_requested"] = True
+        self.create_children()
+        pre = observe_target(str(self.destination), self.scope,
+                             capture_preexisting=True)
+        aid = "VER-ROOT-REF"
+        act = {"tool": "run_command", "action_id": aid,
+               "operation": "VERIFY", "working_directory": str(self.destination)}
+        record = {"request_id": "RR-A", "task_epoch": "E-A",
+                  "evidence_status": "ACTIVE", "executed": True,
+                  "execution_status": "SUCCEEDED", "verification_status": "PASS"}
+        ledger = {aid: {"action": act}}
+        for changes, request, epoch in (
+            ({"evidence_status": "STALE"}, "RR-A", "E-A"),
+            ({}, "RR-B", "E-A"),
+            ({}, "RR-A", "E-B"),
+            ({"executed": False}, "RR-A", "E-A"),
+            ({"verification_status": "UNKNOWN"}, "RR-A", "E-A"),
+        ):
+            rec = dict(record, **changes)
+            self.assertEqual(qualifying_reuse_verifier(
+                ledger, {aid: rec}, [aid], str(self.destination),
+                request, epoch), "", changes)
+        wrong_action = dict(act, working_directory=str(self.root / "other"))
+        self.assertEqual(qualifying_reuse_verifier(
+            {aid: {"action": wrong_action}}, {aid: record}, [aid],
+            str(self.destination), "RR-A", "E-A"), "")
+        self.assertEqual(qualifying_reuse_verifier(
+            ledger, {aid: record}, [], str(self.destination), "RR-A", "E-A"), "")
+        self.assertEqual(self.verify(c, pre)["status"], "UNVERIFIED")
+
+    def test_generic_deploy_still_requires_new_payload_not_reuse(self):
+        c = self.contract()
+        self.create_children()
+        pre = observe_target(str(self.destination), self.scope,
+                             capture_preexisting=True)
+        result = self.verify(c, pre, reuse_ref="VER-UNRELATED")
+        self.assertEqual(result["reason"],
+                         "UNCHANGED_EXISTING_CONTENT_REQUIRES_INDEPENDENT_REUSE_PROOF")
 
     def test_existing_unchanged_content_is_not_a_new_deployment(self):
         c = self.contract()

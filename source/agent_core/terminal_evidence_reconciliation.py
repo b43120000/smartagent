@@ -212,4 +212,49 @@ def reconcile_existing_tree(root: Path, scope, baseline: Mapping | None) -> dict
     return result
 
 
-__all__ = ["SCHEMA", "capture_existing_tree", "reconcile_existing_tree"]
+def qualifying_reuse_verifier(action_ledger: Mapping, action_results: Mapping,
+                             evidence_refs, target: str,
+                             request_id: str, task_epoch: str) -> str:
+    """Return a current, terminal-referenced VERIFY receipt bound to exact cwd.
+
+    An unrelated successful action or a stale verification cannot revalidate
+    pre-existing content. This grants no permissions and does not verify the
+    output bytes by itself; the independent filesystem preservation and
+    exact-root content checks remain mandatory.
+    """
+    if not target or not os.path.isabs(target):
+        return ""
+    expected = os.path.normcase(os.path.normpath(target))
+    if not (isinstance(action_ledger, Mapping)
+            and isinstance(action_results, Mapping)
+            and isinstance(request_id, str) and request_id
+            and isinstance(task_epoch, str) and task_epoch):
+        return ""
+    for aid in list(evidence_refs or []):
+        if not isinstance(aid, str) or not aid:
+            continue
+        original = action_ledger.get(aid)
+        evidence = action_results.get(aid)
+        if not isinstance(original, Mapping) or not isinstance(evidence, Mapping):
+            continue
+        action = original.get("action")
+        if not isinstance(action, Mapping) or action.get("action_id") != aid:
+            continue
+        if action.get("tool") != "run_command" or action.get("operation") != "VERIFY":
+            continue
+        cwd = action.get("working_directory")
+        if (not isinstance(cwd, str) or not os.path.isabs(cwd)
+                or os.path.normcase(os.path.normpath(cwd)) != expected):
+            continue
+        if (evidence.get("request_id") != request_id
+                or evidence.get("task_epoch") != task_epoch
+                or evidence.get("evidence_status") != "ACTIVE"
+                or evidence.get("executed") is not True
+                or evidence.get("execution_status") != "SUCCEEDED"
+                or evidence.get("verification_status") != "PASS"
+                or evidence.get("effective_terminal_eligible", True) is False):
+            continue
+        return aid
+    return ""
+
+__all__ = ["SCHEMA", "capture_existing_tree", "reconcile_existing_tree", "qualifying_reuse_verifier"]
