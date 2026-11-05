@@ -101,7 +101,12 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
                 and isinstance(observations[0], Mapping)):
             fact = observations[0]
             verified_absence = (
-                fact.get("observation_status") == "CONFIRMED"
+                fact.get("schema") == "SMARTAGENT_OBSERVATION_V1"
+                and fact.get("field") == "file.exists"
+                and fact.get("source") == "filesystem.stat"
+                and fact.get("freshness") == "CURRENT"
+                and fact.get("raw_evidence_ref") == action.get("action_id")
+                and fact.get("observation_status") == "CONFIRMED"
                 and fact.get("value") is False
             )
     base = {
