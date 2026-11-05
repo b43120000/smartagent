@@ -59,7 +59,7 @@
     "source/RemoteAgent/telegram_direct_cmd.py": "d05e35d8aac9ac738e9606f3b6aa31b1b9dbb9d3af65b66507041b2a8f174380",
     "source/RemoteAgent/telegram_listener.py": "1e89c683cac64bd85c792e2ff19b3d3dd9f50b0b1a3c9add5764df88687f4864",
     "source/RemoteAgent/telegram_transport.py": "24c1dff6ee88b217987d203b62561e052b3e4fa85a5f3cdcc43005313a56ab0f",
-    "source/RemoteAgent/telegram_webagent_worker.py": "6c13dd4d3ccd8a8e1729e210ec8797543dbca17c8673adb7f0d4ada5f0aacec6",
+    "source/RemoteAgent/telegram_webagent_worker.py": "92e77a01cb385e9d587b51a30d3320a37ff39ca8f86bf6c00c9fa6030812618c",
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
