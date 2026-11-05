@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/p0-terminal-goal-target-contract-20261106
+      - feat/p0-terminal-evidence-reconciliation-20261106
   workflow_dispatch:
 
 permissions:
@@ -32,6 +33,7 @@ jobs:
         run: >
           python -B -m compileall -q
           source/agent_core/target_path_contract.py
+          source/agent_core/terminal_evidence_reconciliation.py
           source/agent_core/goal_environment_reconciliation.py
           source/agent_core/goal_strategy_transition.py
           source/agent_core/auto_rca_upload.py
@@ -49,6 +51,7 @@ jobs:
           python -B -c "import hashlib,json,pathlib;
           m=json.loads(pathlib.Path('config/protocol_manifest.json').read_text(encoding='utf-8'));
           paths=['source/agent_core/target_path_contract.py',
+          'source/agent_core/terminal_evidence_reconciliation.py',
           'source/agent_core/goal_environment_reconciliation.py',
           'source/agent_core/goal_strategy_transition.py',
           'source/WebAgent/protocol_loop.py',

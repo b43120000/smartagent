@@ -13,6 +13,10 @@ import stat
 from pathlib import Path
 from typing import Mapping
 
+from .terminal_evidence_reconciliation import (
+    capture_existing_tree, reconcile_existing_tree,
+)
+
 SCHEMA = "SMARTAGENT_TARGET_PATH_CONTRACT_V1"
 _LABEL = re.compile(
     r"(?:預期部署根目錄|指定部署根目錄|目標部署根目錄|部署根目錄|指定部署路徑|"
@@ -96,7 +100,8 @@ def extract_target_contract(request: str) -> dict | None:
     }
 
 
-def observe_target(path: str, security_context, *, max_entries: int = _MAX_ENTRIES) -> dict:
+def observe_target(path: str, security_context, *, max_entries: int = _MAX_ENTRIES,
+                   capture_preexisting: bool = False) -> dict:
     """Small, nonrecursive, authorized stat/list, including missing-vs-denied."""
     try:
         if not isinstance(path, str) or not path:
@@ -128,9 +133,15 @@ def observe_target(path: str, security_context, *, max_entries: int = _MAX_ENTRI
                     "kind": kind, "bytes": metadata.st_size,
                     "mtime_ns": metadata.st_mtime_ns,
                 }
-        return {"state": "OCCUPIED" if entries else "EMPTY",
-                "reason": "DIRECTORY_OBSERVED", "resolved_path": str(resolved),
-                "entries": entries}
+        observed = {"state": "OCCUPIED" if entries else "EMPTY",
+                    "reason": "DIRECTORY_OBSERVED", "resolved_path": str(resolved),
+                    "entries": entries}
+        if capture_preexisting and entries:
+            # This must run at request entry, BEFORE any Tool Action. The
+            # bounded baseline is owned by Runtime, never model-provided.
+            observed["preservation_baseline"] = capture_existing_tree(
+                resolved, security_context)
+        return observed
     except Exception as exc:
         # Missing is authoritative only for FileNotFoundError from a scoped
         # stat. Authorization and I/O failures can NEVER prove absence.
@@ -221,14 +232,35 @@ def verify_target_completion(contract: Mapping | None, baseline: Mapping | None,
         return result
     required = list(contract.get("required_top_level_entries") or [])
     old = pre.get("entries") or {}
-    changed_old = [name for name in old if
-                   name not in post["entries"]
-                   or old[name] != post["entries"][name]]
-    if changed_old:
-        # No deletion or mutation of preexisting direct-root entries may be
-        # laundered through a successful deployment or a relocation exception.
-        result["reason"] = "PREEXISTING_ENTRY_CHANGED_REQUIRES_RECONCILIATION"
-        return result
+    if old:
+        # Metadata (especially directory mtime/size) is NOT content evidence.
+        # Reconcile every preexisting path against a bounded, pre-mutation
+        # file-content hash + file identity snapshot. Missing or changed
+        # original content stays blocked; new siblings/children are permitted.
+        preserved = reconcile_existing_tree(
+            Path(requested), security_context, pre.get("preservation_baseline"))
+        result["preservation_status"] = preserved["status"]
+        result["preservation_reason"] = preserved["reason"]
+        result["preservation_verified_nodes"] = preserved["verified_nodes"]
+        result["preservation_verified_bytes"] = preserved["verified_bytes"]
+        result["metadata_only_directory_changes"] = sum(
+            original.get("kind") == "DIRECTORY"
+            and name in post["entries"]
+            and post["entries"][name].get("kind") == "DIRECTORY"
+            and original != post["entries"][name]
+            for name, original in old.items())
+        if preserved["status"] != "VERIFIED":
+            if preserved["reason"].startswith("PREEXISTING_"):
+                result["reason"] = preserved["reason"]
+            else:
+                result["reason"] = "PREEXISTING_CONTENT_EVIDENCE_UNVERIFIED"
+            return result
+    else:
+        result["preservation_status"] = "NOT_REQUIRED"
+        result["preservation_reason"] = "NO_PREEXISTING_ENTRIES"
+        result["preservation_verified_nodes"] = 0
+        result["preservation_verified_bytes"] = 0
+        result["metadata_only_directory_changes"] = 0
     if _at_root(post, required) and post["state"] == "OCCUPIED":
         new_entries = set(post["entries"]) - set(old)
         if (pre["state"] == "ABSENT"

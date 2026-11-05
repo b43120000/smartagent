@@ -4992,6 +4992,14 @@ class WebAgentProtocolLoop:
                         "the required entries. Relocation needs pre-mutation "
                         "entry collision evidence and the original request's "
                         "explicit exception; disclose the actual target. "
+                        "For PREEXISTING_CONTENT_EVIDENCE_UNVERIFIED, do not "
+                        "repeat a mutation or accept changed original files: "
+                        "the pre-mutation proof cannot be recreated afterward. "
+                        "For PREEXISTING_FILE_CONTENT_CHANGED or "
+                        "PREEXISTING_ENTRY_REMOVED, report the protected data "
+                        "conflict and request a safe, authorized recovery. "
+                        "For layout-only blockers, use a small bounded "
+                        "read-only directory probe, not a complex inline script. "
                         "Do not move, overwrite, infer permission, or change "
                         "the Goal merely to pass this gate."
                     ),
@@ -5785,7 +5793,8 @@ class WebAgentProtocolLoop:
             context = SecurityContext.from_agent(
                 self.tools, fallback_workspace=self.workspace)
             self._target_pre_mutation = observe_target(
-                self._target_path_contract["requested_target"], context)
+                self._target_path_contract["requested_target"], context,
+                capture_preexisting=True)
             self._emit(
                 "target_path_contract_bound", request_id=self.run_id,
                 task_id=self.task_id, task_epoch=self.task_epoch,
@@ -5793,6 +5802,15 @@ class WebAgentProtocolLoop:
                 binding_status=self._target_path_contract["binding_status"],
                 pre_mutation_state=self._target_pre_mutation["state"],
                 pre_mutation_reason=self._target_pre_mutation["reason"],
+                preexisting_preservation_snapshot_status=(
+                    (self._target_pre_mutation.get("preservation_baseline") or {})
+                    .get("status", "NOT_REQUIRED")),
+                preexisting_preservation_snapshot_reason=(
+                    (self._target_pre_mutation.get("preservation_baseline") or {})
+                    .get("reason", "NO_PREEXISTING_ENTRIES")),
+                preexisting_preservation_snapshot_node_count=(
+                    (self._target_pre_mutation.get("preservation_baseline") or {})
+                    .get("node_count", 0)),
                 required_entry_count=len(
                     self._target_path_contract["required_top_level_entries"]),
                 relocation_exception_declared=self._target_path_contract[

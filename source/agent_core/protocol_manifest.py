@@ -176,6 +176,7 @@ CORE_FILES = (
     'source/agent_core/cross_contract_repair.py',
     'source/agent_core/goal_strategy_transition.py',
     'source/agent_core/target_path_contract.py',
+    'source/agent_core/terminal_evidence_reconciliation.py',
     'source/agent_core/planner_context_snapshot.py',
     'source/agent_core/semantic_path_resolution.py',
     'source/agent_core/plan_readiness.py',
