@@ -194,16 +194,18 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
             if explicit_paths and not requested:
                 raise ValueError("explicit_path_scope_requires_workspace")
             info["requested_paths"] = [requested] if requested else []
-            resolved_paths = [Path(_project_workspace(tool_call, agent)).resolve()]
             info["scope_source"] = "workspace" if requested else "workspace_default"
+            resolved_paths = [Path(_project_workspace(tool_call, agent)).resolve()]
         elif tool == 'inspect_project_working_set':
             requested=str(tool_call.get('workspace','') or '').strip()
             if explicit_paths and not requested:raise ValueError('explicit_path_scope_requires_workspace')
             values=tool_call.get('paths')
             if not isinstance(values,list) or not values or not all(isinstance(v,str) and v.strip() and v==v.strip() for v in values):
                 raise ValueError('project_working_set_paths_invalid')
+            info['requested_paths']=[requested] if requested else []
+            info['scope_source']='workspace_and_paths'
             root=Path(_project_workspace(tool_call,agent)).resolve()
-            resolved_paths=[];info['requested_paths']=list(values);info['scope_source']='workspace_and_paths'
+            resolved_paths=[];info['requested_paths']=list(values)
             for value in values:
                 candidate=Path(value)
                 resolved=security_context.require_read(str(candidate if candidate.is_absolute() else root/candidate))
@@ -241,6 +243,10 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
     except (PathSecurityError, ValueError, OSError, RuntimeError) as exc:
         info["allowed"] = False
         info["error"] = str(exc)
+    from .action_readiness import classify_scope_preflight
+    info["scope_diagnostic"] = classify_scope_preflight(
+        tool, info.get("error", ""), allowed=bool(info["allowed"])
+    )
     return info
 
 
