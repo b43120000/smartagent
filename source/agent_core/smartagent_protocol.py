@@ -338,6 +338,7 @@ TOOL_ENVELOPE_SCHEMAS = {
             "completion_contract": dict,
             "capability_resolution": dict,
             "path_resolution": dict,
+            "goal_transition": dict,
             "context_request": dict,
             "decision": str,
             "outcome": str,
