@@ -1589,7 +1589,19 @@ class WebAgentProtocolLoop:
                     if record.get('evidence_status', 'ACTIVE') == 'ACTIVE'
                     and record.get('request_id', self.run_id) == self.run_id
                     and record.get('task_epoch', self.task_epoch) == self.task_epoch)
-        return repair_diagnostic(payload, self.progress_ledger, error, refs)
+        try:
+            context = self._context_capabilities()
+            objective_ids = [
+                str(row.get("action_id"))
+                for row in list(context.get("objective_blockers") or [])
+                if isinstance(row, dict) and row.get("action_id") in refs
+            ]
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            objective_ids = []
+        return repair_diagnostic(
+            payload, self.progress_ledger, error, refs,
+            objective_blocker_ids=objective_ids,
+        )
 
     def _runtime_evidence_context(self) -> str:
         evidence = []
@@ -6103,6 +6115,28 @@ class WebAgentProtocolLoop:
                 if any(item.get("reason") == "MISSING_OR_INVALID_FIELD" for item in ack_diagnostics):
                     repair_note = (
                         "\n這是 FIELD_REPAIR：保留原 tool、action_id 與所有已提供欄位，只補 diagnostic 指定欄位。"
+                    )
+                context_request_repairs = [
+                    item["context_request_repair"]
+                    for item in ack_diagnostics
+                    if item.get("reason") == "invalid_progress_payload"
+                    and isinstance(item.get("context_request_repair"), dict)
+                    and item["context_request_repair"]
+                ]
+                if context_request_repairs:
+                    repair_note += (
+                        "\n[CONTEXT_REQUEST_FIELD_REPAIR]\n"
+                        + json.dumps(context_request_repairs, ensure_ascii=False, separators=(",", ":"))
+                        + "\n[/CONTEXT_REQUEST_FIELD_REPAIR]\n"
+                        "Repair ONLY report_progress.context_request. Valid kinds are "
+                        "RUNTIME_READ, USER_INPUT, BLOCKED; only keys are kind, detail, "
+                        "blocking_action_id. BLOCKED must cite an exact Runtime "
+                        "objective_blocker_ids reference and a concrete detail. "
+                        "If no eligible objective blocker exists, do not invent one: "
+                        "use CONTINUE with an authorized read action, or USER_INPUT "
+                        "only when a genuine user choice is required. "
+                        "Do not convert a preexecution scope refusal into proof of "
+                        "a missing directory, SUCCESS, or broader authorization."
                     )
                 progress_details = "\n".join(
                     str(item.get("detail", "") or "")
