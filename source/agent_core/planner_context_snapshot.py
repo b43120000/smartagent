@@ -175,11 +175,28 @@ def _diagnostic(row: Mapping) -> dict:
                 "authorization_granted": False,
                 "execution_inferred": False,
             }
+    ccrc = row.get("cross_contract_repair")
+    safe_ccrc = {}
+    if (isinstance(ccrc, Mapping)
+            and ccrc.get("schema") == "SMARTAGENT_CROSS_CONTRACT_REPAIR_V1"):
+        mode = _code(ccrc.get("mode"))
+        if mode in {"FIELD_REPAIR", "ACTION_RECONSTRUCTION", "REPLAN_REQUIRED"}:
+            safe_ccrc = {
+                "schema": "SMARTAGENT_CROSS_CONTRACT_REPAIR_V1",
+                "mode": mode,
+                "field_rounds": min(2, max(0, int(ccrc.get("field_rounds", 0) or 0))),
+                "reconstruction_rounds": min(1, max(0, int(ccrc.get("reconstruction_rounds", 0) or 0))),
+                "replan_required": mode == "REPLAN_REQUIRED",
+                "full_admission_required": True,
+                "authorization_granted": False,
+                "budget_reset": False,
+            }
     return {
         "reason": _code(row.get("reason"), "UNKNOWN"),
         "field_issues": issues,
         "repair_scope": _code(row.get("repair_scope")),
         "command_repair": safe_command,
+        "cross_contract_repair": safe_ccrc,
         "context_request_repair": safe_context,
         "capability_repair": safe_repair,
         "preserved_action_ids": [str(x)[:160] for x in list(row.get("preserved_action_ids") or [])[:16]],
@@ -307,6 +324,17 @@ def build_planner_context_snapshot(runtime) -> dict:
         },
         "recovery": {
             "reason": _code(recovery.get("reason")),
+            "cross_contract_repair": {
+                "schema": "SMARTAGENT_CROSS_CONTRACT_REPAIR_V1",
+                "active": bool(getattr(getattr(runtime, "_ccrc", None), "active", False)),
+                "mode": _code(getattr(getattr(runtime, "_ccrc", None), "mode", "")),
+                "field_rounds": min(2, max(0, int(getattr(getattr(runtime, "_ccrc", None), "field_rounds", 0)))),
+                "reconstruction_rounds": min(1, max(0, int(getattr(getattr(runtime, "_ccrc", None), "reconstruction_rounds", 0)))),
+                "replan_required": bool(getattr(getattr(runtime, "_ccrc", None), "replan_required", False)),
+                "goal_anchor_sha256": str(getattr(getattr(runtime, "_ccrc", None), "goal_digest", ""))[:64],
+                "authorization_granted": False,
+                "budget_reset": False,
+            },
             "pending_command_repairs": [
                 {
                     "action_id": str(action_id)[:160],
