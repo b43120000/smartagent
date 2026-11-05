@@ -162,8 +162,13 @@ class CrossContractIT(unittest.TestCase):
         )
         host.pending_progress_repair_actions = [dict(pending_command)]
         host.turn_id += 1
-        fourth = WebAgentProtocolLoop._ccrc_rejected(host, self.calls, issues())
+        # A different rejected ID must not create a second orphaned
+        # deferred Action during Goal Replan handoff.
+        changed_id_calls = [progress(), command("D9-UNRELATED-NEW-ID"),
+                            {"tool": "turn_commit", "action_count": 2}]
+        fourth = WebAgentProtocolLoop._ccrc_rejected(host, changed_id_calls, issues())
         self.assertEqual(fourth["mode"], REPLAN_REQUIRED)
+        self.assertNotIn("D9-UNRELATED-NEW-ID", host.deferred_action_repairs)
         self.assertEqual(host.pending_progress_repair_actions, [])
         self.assertTrue(any(name == "ccrc_unadmitted_progress_hold_released"
                             for name, _ in host.events))
