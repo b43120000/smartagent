@@ -1358,6 +1358,13 @@ class WebAgentProtocolLoop:
                 task_epoch=self.task_epoch,
             )
             if evidence is None:
+                self._emit(
+                    "preexecution_strategy_replan_evaluated",
+                    request_id=self.run_id, round=self.turn_id,
+                    status="NOT_ELIGIBLE",
+                    reason_code="RUNTIME_ATTESTATION_NOT_AVAILABLE",
+                    authorization_granted=False,
+                )
                 return ""
             self.progress_ledger, new_revision = record_runtime_strategy_revision(
                 self.task_id, request_id=self.run_id,
@@ -1369,6 +1376,12 @@ class WebAgentProtocolLoop:
                 "preexecution_strategy_revision_unavailable",
                 request_id=self.run_id, round=self.turn_id,
                 reason=type(exc).__name__,
+            )
+            self._emit(
+                "preexecution_strategy_replan_evaluated",
+                request_id=self.run_id, round=self.turn_id,
+                status="ERROR", reason_code=type(exc).__name__,
+                authorization_granted=False,
             )
             return ""
         state = dict(self.progress_ledger.strategy_state or {})
@@ -1382,6 +1395,12 @@ class WebAgentProtocolLoop:
             "operation": str(rejected.get("operation", "")),
             "working_directory": str(rejected.get("working_directory", "")),
         }
+        self._emit(
+            "preexecution_strategy_replan_evaluated",
+            request_id=self.run_id, round=self.turn_id,
+            status="ATTESTED", reason_code="VERIFIED_PREEXECUTION_CWD",
+            authorization_granted=False,
+        )
         self._emit(
             "progress_strategy_revision_recorded",
             request_id=self.run_id, task_id=self.task_id,
@@ -2971,9 +2990,26 @@ class WebAgentProtocolLoop:
             if tool == "report_progress":
                 nested = call.get("progress")
                 progress = nested if isinstance(nested, dict) else call
+                from agent_core.semantic_capability_resolution import resolution_decision_shape
+                path_proposal = progress.get("path_resolution")
+                path_shape = (
+                    {"kind": "OMITTED"} if path_proposal is None else
+                    {"kind": "OBJECT", "keys": sorted(str(k) for k in path_proposal)[:12],
+                     "selected_paths_digest": hashlib.sha256(
+                         json.dumps(path_proposal.get("selected_paths"), sort_keys=True,
+                                    ensure_ascii=False, default=str).encode("utf-8")
+                     ).hexdigest() if "selected_paths" in path_proposal else ""}
+                    if isinstance(path_proposal, dict)
+                    else {"kind": "NON_OBJECT"}
+                )
+                next_action_first_token = str(progress.get("next_action", "") or "").split()
+                next_action_tool = next_action_first_token[0] if next_action_first_token else ""
                 semantic_calls.append({
                     "tool": tool,
                     "progress_shape": "nested" if isinstance(nested, dict) else "flat",
+                    "capability_resolution": resolution_decision_shape(progress.get("capability_resolution")),
+                    "path_resolution": path_shape,
+                    "next_action_tool": next_action_tool if next_action_tool in SUPPORTED_ACTION_TOOLS else "",
                     "current_step": progress.get("current_step"),
                     "total_steps": progress.get("total_steps"),
                     "decision": str(progress.get("decision", "") or "").upper(),
@@ -3865,9 +3901,20 @@ class WebAgentProtocolLoop:
                 old_resolution, operational,
             )
         except SemanticCapabilityError as exc:
+            from agent_core.semantic_capability_resolution import describe_resolution_repair
+            diagnostic = describe_resolution_repair(
+                normalized_progress_action.get("capability_resolution"),
+                old_resolution, operational,
+            )
             return [], [{"marker": "[WEBAGENT_SEMANTIC_CAPABILITY_REJECTED]",
-                "reason": str(exc), "suggestion":
-                "Use the finite read-only SCR registry. Do not change permission or scope."}]
+                "reason": str(exc),
+                "repair_scope": "SCR_SCHEMA",
+                "capability_repair": diagnostic,
+                "suggestion": (
+                    "Fix report_progress.capability_resolution using the "
+                    "canonical two-key shape in SCR_SCHEMA_REPAIR. "
+                    "Capability selection never grants permission or scope."
+                )}]
         # Model-proposed path selection cannot expand the trusted original
         # request: compare against the request/epoch preflight's exact result.
         proposal = normalized_progress_action.get("path_resolution")
@@ -5976,6 +6023,25 @@ class WebAgentProtocolLoop:
                             "不得保留 diagnostic 指出的欄位。query_project 的 operation/path/symbol "
                             "只能放在 queries[] 物件內。"
                         )
+                scr_repairs = [
+                    item.get("capability_repair")
+                    for item in ack_diagnostics
+                    if isinstance(item.get("capability_repair"), dict)
+                ]
+                if scr_repairs:
+                    repair_note += (
+                        "\n[SCR_SCHEMA_REPAIR]\n"
+                        + json.dumps(scr_repairs, ensure_ascii=False, separators=(",", ":"))
+                        + "\n[/SCR_SCHEMA_REPAIR]\n"
+                        "This is schema/selection repair, not Strategy Replan. "
+                        "Return report_progress.capability_resolution as EXACTLY "
+                        "{schema: SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1, "
+                        "capabilities: [selected canonical registry keys]}. "
+                        "Choose from allowed_capabilities, preserve previously_selected, "
+                        "and include read capabilities required by the actual actions. "
+                        "Never copy Runtime snapshot fields into the Planner proposal. "
+                        "Capability selection does not expand Scope/ACL."
+                    )
                 if any(item.get("reason") == "MISSING_OR_INVALID_FIELD" for item in ack_diagnostics):
                     repair_note = (
                         "\n這是 FIELD_REPAIR：保留原 tool、action_id 與所有已提供欄位，只補 diagnostic 指定欄位。"
