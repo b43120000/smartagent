@@ -144,6 +144,33 @@ class PlannerContextBridgeIT(unittest.TestCase):
         )
         self.assertNotIn("DO_NOT_EXPORT_SECRET", json.dumps(state))
 
+    def test_command_repair_diagnostic_survives_context_without_script_source(self):
+        self.runtime._planner_context_diagnostics = [{
+            "reason": "run_command_verification_contract_required",
+            "tool": "run_command",
+            "command_repair": {
+                "schema": "SMARTAGENT_COMMAND_REPAIR_READINESS_V1",
+                "mode": "FIELD_REPAIR", "action_id": "D9-REPAIR",
+                "required_fields": ["operation", "verify", "success_criteria"],
+                "issue_count": 3,
+                "field_issues": [
+                    {"field": "operation", "code": "operation_not_in_registry"},
+                    {"field": "verify", "code": "required_if_non_observation"},
+                    {"field": "success_criteria", "code": "required_if_non_observation"},
+                ],
+                "instruction": "PRIVATE_SCRIPT_NEVER_EXPORT",
+                "authorization_granted": False,
+            },
+        }]
+        snapshot = build_planner_context_snapshot(self.runtime)
+        item = snapshot["latest_protocol_diagnostics"][0]["command_repair"]
+        self.assertEqual(item["mode"], "FIELD_REPAIR")
+        self.assertEqual(set(item["required_fields"]),
+                         {"operation", "verify", "success_criteria"})
+        self.assertEqual(item["issue_count"], 3)
+        self.assertFalse(item["authorization_granted"])
+        self.assertNotIn("PRIVATE_SCRIPT_NEVER_EXPORT", json.dumps(snapshot))
+
     def test_scr_candidate_is_not_falsely_advertised_as_admitted(self):
         snapshot = build_planner_context_snapshot(self.runtime)
         readiness = {row['tool']: row for row in
