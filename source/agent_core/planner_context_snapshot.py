@@ -143,10 +143,43 @@ def _diagnostic(row: Mapping) -> dict:
             "blocked_requires_runtime_receipt": True,
             "runtime_read_requires_continue": True,
         }
+    command_repair = row.get("command_repair")
+    safe_command = {}
+    if (isinstance(command_repair, Mapping)
+            and command_repair.get("schema") == "SMARTAGENT_COMMAND_REPAIR_READINESS_V1"):
+        from .command_repair_readiness import ALLOWLISTED_FIELDS
+        mode = str(command_repair.get("mode", ""))
+        if mode in {"FIELD_REPAIR", "ACTION_RECONSTRUCTION"}:
+            command_issues = []
+            for item in list(command_repair.get("field_issues") or [])[:16]:
+                if not isinstance(item, Mapping):
+                    continue
+                field = _code(item.get("field"))
+                if field in ALLOWLISTED_FIELDS:
+                    command_issues.append({
+                        "field": field,
+                        "code": _code(item.get("code"), "UNKNOWN"),
+                    })
+            fields = [
+                _code(item) for item in list(command_repair.get("required_fields") or [])[:16]
+                if _code(item) in ALLOWLISTED_FIELDS
+            ]
+            safe_command = {
+                "schema": "SMARTAGENT_COMMAND_REPAIR_READINESS_V1",
+                "mode": mode,
+                "action_id": str(command_repair.get("action_id", "") or "")[:160],
+                "issue_count": len(command_issues),
+                "field_issues": command_issues,
+                "required_fields": fields,
+                "full_admission_required": True,
+                "authorization_granted": False,
+                "execution_inferred": False,
+            }
     return {
         "reason": _code(row.get("reason"), "UNKNOWN"),
         "field_issues": issues,
         "repair_scope": _code(row.get("repair_scope")),
+        "command_repair": safe_command,
         "context_request_repair": safe_context,
         "capability_repair": safe_repair,
         "preserved_action_ids": [str(x)[:160] for x in list(row.get("preserved_action_ids") or [])[:16]],
