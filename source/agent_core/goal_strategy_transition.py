@@ -84,6 +84,26 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
                          or record.get("verification_status")).upper() or "UNKNOWN"
     executed = record.get("executed") is True
     evidence_status = _code(record.get("evidence_status")).upper() or "ACTIVE"
+    # A confirmed observe_fact false is a trustworthy *filesystem fact*.
+    # Other NOT_FOUND tool errors remain unverified and do not prove absence.
+    # A confirmed absent path still does NOT establish Goal relevance or
+    # permission to create it; the Planner supplies that semantic link.
+    verified_absence = False
+    if (tool == "observe_fact" and executed and status == "SUCCEEDED"
+            and evidence_status == "ACTIVE"):
+        from .tool_result_contract import decode_result
+        typed = decode_result(result) or {}
+        data = typed.get("data") or {}
+        observations = data.get("observations")
+        if (typed.get("tool") == "observe_fact" and typed.get("executed") is True
+                and typed.get("action_id") == action.get("action_id")
+                and isinstance(observations, list) and len(observations) == 1
+                and isinstance(observations[0], Mapping)):
+            fact = observations[0]
+            verified_absence = (
+                fact.get("observation_status") == "CONFIRMED"
+                and fact.get("value") is False
+            )
     base = {
         "tool": tool, "result_status": status,
         "verification_status": verification,
@@ -91,7 +111,8 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
         "scope_error_code": scope_error,
         "required_field": SCOPED_REPAIR_FIELDS.get(scope_error, ""),
         "evidence_status": evidence_status,
-        "proves_missing_prerequisite": False,
+        "proves_missing_prerequisite": verified_absence,
+        "verified_absence_is_goal_relevance": False,
         "authorizes_execution": False,
         "goal_completion_verified": False,
     }
@@ -104,6 +125,9 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
     elif not executed or status in {"UNKNOWN", "PARTIAL", "QUEUED", "RUNNING"}:
         base.update(classification="INDETERMINATE",
                     eligible_transition="EVIDENCE_ACQUISITION")
+    elif verified_absence:
+        base.update(classification="VERIFIED_NEGATIVE_FACT",
+                    eligible_transition="PREREQUISITE_RESOLUTION")
     elif status == "SUCCEEDED" and verification == "PASS":
         base.update(classification="VERIFIED_ACTION_SUCCESS",
                     eligible_transition="CONTINUE")
