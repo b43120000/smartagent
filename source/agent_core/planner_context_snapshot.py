@@ -307,6 +307,33 @@ def build_planner_context_snapshot(runtime) -> dict:
         },
         "recovery": {
             "reason": _code(recovery.get("reason")),
+            "pending_command_repairs": [
+                {
+                    "action_id": str(action_id)[:160],
+                    "mode": (
+                        "ACTION_RECONSTRUCTION" if item.get("status") ==
+                        "ACTION_RECONSTRUCTION_REQUIRED" else "FIELD_REPAIR"
+                    ),
+                    "issue_count": min(16, len((item.get("readiness") or {}).get("field_issues") or [])),
+                    "required_fields": [
+                        _code(field)
+                        for field in list((getattr(runtime, "pending_command_field_repairs", {})
+                            or {}).get(action_id, {}).get("required_fields") or [])[:16]
+                        if _code(field) in {
+                            "operation", "verify", "success_criteria", "timeout",
+                            "working_directory", "expected_failure", "expected_verification",
+                        }
+                    ],
+                    "executed": False,
+                    "authorization_granted": False,
+                    "full_admission_required": True,
+                }
+                for action_id, item in list(
+                    dict(getattr(runtime, "deferred_action_repairs", {}) or {}).items()
+                )[-16:]
+                if isinstance(item, Mapping) and item.get("tool") == "run_command"
+                and action_id not in actions
+            ],
             "strategy_revision_applies_to_future_actions_only": True,
             "budget_not_reset_by_revision": True,
             "required_action": _code(recovery.get("required_action")),
