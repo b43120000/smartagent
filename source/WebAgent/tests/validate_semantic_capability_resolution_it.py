@@ -65,6 +65,13 @@ def run():
     assert shape["duplicate_count"] == 1
     assert hint["previously_selected"] == ["directory.list"]
     assert hint["required_for_submitted_actions"] == ["directory.inspect_metadata"]
+    assert hint["canonical_candidate"] == {
+        "schema": SCHEMA, "capabilities": [
+            "directory.inspect_metadata", "directory.list",
+        ],
+    }
+    assert hint["candidate_applied"] is False
+    assert hint["authorization_granted"] is False
     assert "DO_NOT_ECHO" not in str(hint)
     assert "unknown.secret" not in str(hint)
     assert resolution_decision_shape(LIST) != resolution_decision_shape(BOTH)
