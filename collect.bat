@@ -225,7 +225,7 @@ $scalarKeys = @(
     'context_snapshot_id','context_digest','evidence_total','omitted_active_blocker_count',
     'critical_context_omitted','diagnostic_count','planner_response_received',
     'goal_condition_id','evidence_classification','next_tool','completion_verified',
-    'authorization_granted',
+    'kind','evidence_ref','authorization_granted',
     'revision','node_count','graph_digest','checkpoint_name','same_blocker','fresh_repair_attempts','elapsed_sec','elapsed_seconds'
 )
 $numericTypes = @('System.Int32','System.Int64','System.Double','System.Decimal','System.Single')
