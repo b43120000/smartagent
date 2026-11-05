@@ -115,7 +115,7 @@ class AutoRcaUploadTest(unittest.TestCase):
                                     collector=self.collector, run=fake)
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(result["reason"], "GITHUB_UPLOAD_EXIT_NONZERO")
-        self.assertEqual(result["local_zip"], str(self.archive))
+        self.assertTrue(Path(result["local_zip"]).samefile(self.archive))
         self.assertTrue(self.archive.exists())
 
     def test_archive_task_identity_required(self):
