@@ -80,8 +80,19 @@ def describe_resolution_repair(proposal: object, previous: object = None,
         TOOL_TO_CAPABILITY.get(str(a.get("tool", "") or ""))
         for a in (actions or []) if isinstance(a, Mapping)
     } - {None})
+    # Candidate copies only valid capability names already proposed by the
+    # Planner, previously bound, or required by its own submitted read tools.
+    # Runtime does NOT apply the candidate or authorize any resulting action.
+    candidate_caps = sorted(set(valid) | set(prior) | set(required))
+    candidate = (
+        {"schema": SCHEMA, "capabilities": candidate_caps}
+        if 1 <= len(candidate_caps) <= 12 else None
+    )
     return {
         "repair_target": "report_progress.capability_resolution",
+        "canonical_candidate": candidate,
+        "candidate_applied": False,
+        "authorization_granted": False,
         "expected_keys": ["schema", "capabilities"],
         "canonical_schema": SCHEMA,
         "allowed_capabilities": sorted(CAPABILITY_TO_TOOL),
