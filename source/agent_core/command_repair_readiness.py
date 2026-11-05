@@ -131,6 +131,8 @@ def analyze_command_repair(action: Mapping[str, Any]) -> dict:
         steps = verify if isinstance(verify, list) else [verify]
         if not steps:
             add("verify", "verify_nonempty_required")
+        if len(steps) > 32:
+            add("verify", "verify_steps_exceed_diagnostic_bound")
         for step in steps[:32]:
             if not isinstance(step, dict) or not step:
                 add("verify", "verify_nonempty_object_required")
