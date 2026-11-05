@@ -72,6 +72,79 @@ function Hash-Text([string]$text) {
         return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
     } finally { $sha.Dispose() }
 }
+function Get-PlannerSCRSummary([string]$response) {
+    # Parse only a bounded compact-V9 report_progress JSON line. Never export
+    # raw Planner replies, commands, unknown keys, schema values or credentials.
+    $progress = $null
+    foreach ($line in ($response -split '\r?\n')) {
+        $candidate = $line.Trim()
+        if ($candidate.Length -lt 16 -or $candidate.Length -gt 131072) { continue }
+        if (-not ($candidate.StartsWith('{') -and $candidate.EndsWith('}'))) { continue }
+        try { $parsed = $candidate | ConvertFrom-Json -ErrorAction Stop }
+        catch { continue }
+        if ($parsed -is [pscustomobject] -and [string]$parsed.tool -ceq 'report_progress') {
+            $progress = $parsed
+            break
+        }
+    }
+    if ($null -eq $progress) {
+        return [ordered]@{ progress_found=$false; scr_present=$false; analysis='PROGRESS_NOT_PARSED' }
+    }
+    $scrField = $progress.PSObject.Properties['capability_resolution']
+    if ($null -eq $scrField) {
+        return [ordered]@{ progress_found=$true; scr_present=$false; analysis='ABSENT' }
+    }
+    $scr = $scrField.Value
+    $objectValid = ($scr -is [pscustomobject])
+    $keys = if ($objectValid) { @($scr.PSObject.Properties.Name) } else { @() }
+    $expected = @('schema','capabilities')
+    $missing = @($expected | Where-Object { $keys -cnotcontains $_ })
+    $extraCount = @($keys | Where-Object { $expected -cnotcontains $_ }).Count
+    $schemaPresent = ($keys -ccontains 'schema')
+    $schemaMatches = ($schemaPresent -and
+        [string]$scr.schema -ceq 'SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1')
+    $capPresent = ($keys -ccontains 'capabilities')
+    $caps = if ($capPresent) { $scr.capabilities } else { $null }
+    $isList = ($caps -is [array])
+    $values = if ($isList) { @($caps) } else { @() }
+    $registry = @('directory.list','directory.inspect_metadata','directory.find',
+                  'project.inspect_scope','project.inspect_working_set')
+    $known = @()
+    $invalid = 0
+    foreach ($value in $values) {
+        if ($value -is [string] -and $registry -ccontains $value) {
+            $known += $value
+        } else { $invalid++ }
+    }
+    $unique = @($known | Sort-Object -Unique)
+    $duplicate = $known.Count - $unique.Count
+    $shape = [ordered]@{
+        progress_found=$true
+        scr_present=$true
+        analysis='SHAPE_PARSED'
+        object_valid=$objectValid
+        expected_keys_exact=($objectValid -and $missing.Count -eq 0 -and $extraCount -eq 0)
+        missing_expected_keys=@($missing)
+        extra_key_count=$extraCount
+        schema_present=$schemaPresent
+        schema_matches=[bool]$schemaMatches
+        capabilities_is_list=$isList
+        capability_count=$values.Count
+        known_capabilities=@($unique)
+        invalid_capability_count=$invalid
+        duplicate_count=$duplicate
+        schema_valid=($objectValid -and $missing.Count -eq 0 -and $extraCount -eq 0 -and
+                      $schemaMatches -and $isList -and $values.Count -ge 1 -and
+                      $values.Count -le 12 -and $invalid -eq 0 -and $duplicate -eq 0)
+    }
+    $canonicalShape = ConvertTo-Json -InputObject $shape -Depth 6 -Compress
+    $shape.shape_digest = Hash-Text $canonicalShape
+    # Digest only: detects changes to rejected proposals without exporting any
+    # untrusted string or schema value. This is NOT evidence of valid semantics.
+    $shape.proposal_digest = Hash-Text (ConvertTo-Json -InputObject $scr -Depth 8 -Compress)
+    return $shape
+}
+
 function Hash-File([string]$path) {
     $sha = [Security.Cryptography.SHA256]::Create()
     $stream = [IO.File]::OpenRead($path)
@@ -149,6 +222,9 @@ $scalarKeys = @(
     'executed_action_count','recorded_result_count','evidence_ref_count',
     'action_history_present','condition_history_present',
     'current_step','total_steps','repair_scope','previous_ack_id',
+    'context_snapshot_id','context_digest','evidence_total','omitted_active_blocker_count',
+    'critical_context_omitted','diagnostic_count','planner_response_received',
+    'authorization_granted',
     'revision','node_count','graph_digest','checkpoint_name','same_blocker','fresh_repair_attempts','elapsed_sec','elapsed_seconds'
 )
 $numericTypes = @('System.Int32','System.Int64','System.Double','System.Decimal','System.Single')
@@ -234,6 +310,28 @@ try {
                     }
                 }
                 $row.field_issues_codes = @($issues | Select-Object -First 30)
+                $scrDiagnostics = @()
+                foreach ($d in @($rec.diagnostics)) {
+                    if ($null -eq $d.capability_repair) { continue }
+                    $repair = $d.capability_repair
+                    $shape = $repair.proposal_shape
+                    $scrDiagnostics += [ordered]@{
+                        reason=(Safe-Code $d.reason)
+                        repair_target='report_progress.capability_resolution'
+                        object_type_valid=[bool]$shape.object_type_valid
+                        key_set_exact=[bool]$shape.key_set_exact
+                        schema_matches=[bool]$shape.schema_matches
+                        capabilities_is_list=[bool]$shape.capabilities_is_list
+                        unknown_or_invalid_count=[int]$shape.unknown_or_invalid_count
+                        duplicate_count=[int]$shape.duplicate_count
+                        extra_key_count=[int]$shape.extra_key_count
+                        previously_selected=(Safe-CodeList @($repair.previously_selected))
+                        required_for_submitted_actions=(Safe-CodeList @($repair.required_for_submitted_actions))
+                    }
+                }
+                if ($scrDiagnostics.Count -gt 0) {
+                    $row.scr_repair_diagnostics = @($scrDiagnostics | Select-Object -First 8)
+                }
             }
             if ($name -eq 'planner_response_received' -and $null -ne $rec.response) {
                 $response = [string]$rec.response
@@ -246,6 +344,7 @@ try {
                 $row.progress_decisions = @([regex]::Matches($response, '"decision"\s*:\s*"([A-Za-z_]+)"') |
                     ForEach-Object { Safe-Code $_.Groups[1].Value } | Select-Object -First 10)
                 $row.transport_fence_count = ([regex]::Matches($response, ([string][char]96 + [char]96 + [char]96 + 'smartagent_tool'))).Count
+                $row.planner_scr = Get-PlannerSCRSummary $response
             }
             if ($name -eq 'gar_checkpoint_persisted' -and $rec.checkpoint_name) {
                 $checkpoint = [string]$rec.checkpoint_name
@@ -377,6 +476,71 @@ try {
     }
     Write-Json (Join-Path $stage 'pr_bcd_recovery_summary.json') $prBCDSummary
     Write-Json (Join-Path $stage 'timeline.json') @($timeline.ToArray())
+
+    # Correlate bounded, non-sensitive Planner decisions with explicit
+    # Context digests and fail-closed SCR shape checks. No raw reply survives.
+    $decisionDiffs = @()
+    $previousSCR = $null
+    $priorResponse = ''
+    $plannerEvents = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'planner_response_received' -and $null -ne $_.planner_scr
+    } | Sort-Object @{ Expression={ [int]$_.round } }, @{ Expression={ [double]$_.timestamp_unix } })
+    foreach ($entry in $plannerEvents) {
+        $scr = $entry.planner_scr
+        $proposalHash = [string]$scr.proposal_digest
+        $changed = $null
+        $shapeChanged = $null
+        if ($null -ne $previousSCR -and $scr.scr_present -and $previousSCR.scr_present) {
+            $changed = ($proposalHash -cne [string]$previousSCR.proposal_digest)
+            $shapeChanged = ([string]$scr.shape_digest -cne [string]$previousSCR.shape_digest)
+        }
+        $decisionDiffs += [ordered]@{
+            round=$entry.round
+            source=$entry.source
+            response_sha256=$entry.response_sha256
+            progress_found=[bool]$scr.progress_found
+            scr_present=[bool]$scr.scr_present
+            schema_valid=[bool]$scr.schema_valid
+            proposal_changed_from_previous=$changed
+            shape_changed_from_previous=$shapeChanged
+            schema_matches=[bool]$scr.schema_matches
+            expected_keys_exact=[bool]$scr.expected_keys_exact
+            known_capabilities=@($scr.known_capabilities)
+            invalid_capability_count=$scr.invalid_capability_count
+            extra_key_count=$scr.extra_key_count
+            duplicate_count=$scr.duplicate_count
+        }
+        $previousSCR = $scr
+    }
+    Write-Json (Join-Path $stage 'planner_contract_diff.json') @($decisionDiffs)
+
+    $delivery = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('planner_context_prepared','planner_context_response_correlated')
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source; event=$_.event; round=$_.round
+            context_snapshot_id=$_.context_snapshot_id
+            context_digest=$_.context_digest
+            evidence_total=$_.evidence_total
+            diagnostic_count=$_.diagnostic_count
+            critical_context_omitted=$_.critical_context_omitted
+            planner_response_received=$_.planner_response_received
+        }
+    })
+    Write-Json (Join-Path $stage 'planner_context_delivery.json') @($delivery)
+
+    $preflight = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('preexecution_strategy_replan_evaluated',
+                       'preexecution_strategy_revision_unavailable',
+                       'progress_strategy_revision_recorded')
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source; round=$_.round; event=$_.event
+            status=$_.status; reason=$_.reason; reason_code=$_.reason_code
+            revision=$_.revision; authorization_granted=$_.authorization_granted
+        }
+    })
+    Write-Json (Join-Path $stage 'replan_preflight_summary.json') @($preflight)
 
     # RemoteEventStore persists the Telegram OUTBOUND terminal summary after
     # worker completion. Select by BOTH IDs when available; never include any
@@ -517,6 +681,8 @@ try {
     foreach ($relative in @('source\WebAgent\protocol_loop.py',
                              'source\agent_core\bounded_repair.py',
                              'source\agent_core\goal_anchored_recovery.py',
+                             'source\agent_core\planner_context_snapshot.py',
+                             'source\agent_core\semantic_capability_resolution.py',
                              'source\agent_core\prerequisite_runtime_v3.py',
                              'source\agent_core\project_environment.py',
                              'source\agent_core\pr_bcd_request_scope.py',
@@ -530,7 +696,7 @@ try {
         }
     }
     $metadata = [ordered]@{
-        schema='SMARTAGENT_LIVE_RCA_V2'
+        schema='SMARTAGENT_LIVE_RCA_V3'
         created_utc=(Get-Date).ToUniversalTime().ToString('o')
         expected_base_commit=$baseSha
         installed_git_head=(Safe-Code $head)
@@ -556,7 +722,9 @@ try {
         'SmartAgent GAR Live RCA / sanitized diagnostic bundle',
         'Read-only collection. Runtime/Source/Task state was not modified.',
         'Data: request-scoped timeline (event codes, counters, model tool/operation names only),',
-'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
+        'sanitized SCR proposal shape/digest, decision differences and context delivery digests,',
+        'preexecution replan evaluation events (status codes only),',
+        'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
         'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
         'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
