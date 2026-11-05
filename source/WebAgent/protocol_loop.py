@@ -6205,9 +6205,44 @@ class WebAgentProtocolLoop:
                           "Runtime 會重新檢查同 Request/Epoch、無已執行操作及待決副作用。"
                           "不要用 read_file 等替代操作繞過原始限制。"
                     )
-                field_repairs = [repair for diagnostic in ack_diagnostics for repair in diagnostic.get('command_field_repairs',[])]
-                if field_repairs:
-                    repair_note += '\n[COMMAND_FIELD_REPAIR]\n' + json.dumps(field_repairs,ensure_ascii=False) + '\n[/COMMAND_FIELD_REPAIR]\n只回覆同一 tool/action_id 與 required_fields；不必重寫 command、operation、working_directory。仍需 report_progress 與 turn_commit。'
+                field_repairs = [
+                    repair for diagnostic in ack_diagnostics
+                    for repair in diagnostic.get('command_field_repairs', [])
+                    if isinstance(repair, dict)
+                ]
+                patch_repairs = [
+                    repair for repair in field_repairs
+                    if repair.get('mode') == 'FIELD_REPAIR'
+                ]
+                reconstruction_repairs = [
+                    repair for repair in field_repairs
+                    if repair.get('mode') == 'ACTION_RECONSTRUCTION'
+                ]
+                if patch_repairs:
+                    repair_note += (
+                        '\n[COMMAND_FIELD_REPAIR]\n'
+                        + json.dumps(patch_repairs, ensure_ascii=False, separators=(',', ':'))
+                        + '\n[/COMMAND_FIELD_REPAIR]\n'
+                        'These are ONLY field repairs. Keep the same tool/action_id; '
+                        'return the required_fields in a canonical JSON object, '
+                        'along with a valid report_progress and turn_commit. '
+                        'Do not echo or alter the command, cwd, dependencies, or scope. '
+                        'No command was executed; all normal Tool Admission still applies.'
+                    )
+                if reconstruction_repairs:
+                    repair_note += (
+                        '\n[COMMAND_ACTION_RECONSTRUCTION]\n'
+                        + json.dumps(reconstruction_repairs, ensure_ascii=False, separators=(',', ':'))
+                        + '\n[/COMMAND_ACTION_RECONSTRUCTION]\n'
+                        'The original command cannot be repaired by changing verify alone. '
+                        'Planner must choose an authorized, fully canonical NEW action with '
+                        'new action_id and replaces_action_id for the unexecuted original. '
+                        'Do not put full script source into run_command; invoke an existing '
+                        'verified script with a short command when appropriate. '
+                        'Include the complete operation, verify and success_criteria '
+                        'as needed. Never change original Goal or scope, claim success, '
+                        'or treat this instruction as execution authorization.'
+                    )
                 if any(item.get("reason") == "unexpected_field" for item in ack_diagnostics):
                     if any(item.get("tool") == "report_progress"
                            for item in ack_diagnostics if item.get("reason") == "unexpected_field"):
