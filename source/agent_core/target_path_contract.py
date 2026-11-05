@@ -44,7 +44,18 @@ def _digest(value: object) -> str:
 def extract_target_contract(request: str) -> dict | None:
     """Only explicit labeled target paths; never infer a target from incidental paths."""
     text = str(request or "")
-    if not re.search(r"部署|deploy|extract|解壓|安裝", text, re.IGNORECASE):
+    # The target label alone is NOT an imperative to deploy. In particular,
+    # observation-only requests must not be forced through a mutation gate.
+    intent = _LABEL.sub(" ", text)
+    if not re.search(r"部署|deploy|extract|解壓|安裝", intent, re.IGNORECASE):
+        return None
+    readonly = re.search(
+        r"不(?:要|需|進行)?部署|禁止部署|只(?:需|要)?(?:檢查|驗證|確認)|"
+        r"唯讀(?:檢查|驗證|觀測)", intent, re.IGNORECASE)
+    followed_by_mutation = re.search(
+        r"(?:然後|再|之後|接著|then).{0,80}(?:部署|安裝|解壓|deploy|install|extract)",
+        intent, re.IGNORECASE | re.DOTALL)
+    if readonly and not followed_by_mutation:
         return None
     matches = [m.group("path").rstrip("\\/") for m in _LABEL.finditer(text)]
     if not matches:
@@ -114,11 +125,14 @@ def _at_root(post: Mapping, required: list[str]) -> bool:
     entries = post.get("entries") or {}
     if required:
         return all(name in entries for name in required)
+    # Runtime/cache bookkeeping does not constitute a deployed payload.
+    payload = {name: value for name, value in entries.items()
+               if name not in {".agents", ".git", ".cache", "__pycache__", "tmp"}}
     # Without a declared manifest, one wrapper directory is ambiguous:
     # it might be the actual destination instead of the requested root.
-    return bool(entries) and (
-        len(entries) > 1
-        or next(iter(entries.values())).get("kind") == "FILE"
+    return bool(payload) and (
+        len(payload) > 1
+        or next(iter(payload.values())).get("kind") == "FILE"
     )
 
 
@@ -190,17 +204,16 @@ def verify_target_completion(contract: Mapping | None, baseline: Mapping | None,
         result["reason"] = "TARGET_IDENTITY_CHANGED"
         return result
     required = list(contract.get("required_top_level_entries") or [])
+    old = pre.get("entries") or {}
+    changed_old = [name for name in old if
+                   name not in post["entries"]
+                   or old[name] != post["entries"][name]]
+    if changed_old:
+        # No deletion or mutation of preexisting direct-root entries may be
+        # laundered through a successful deployment or a relocation exception.
+        result["reason"] = "PREEXISTING_ENTRY_CHANGED_REQUIRES_RECONCILIATION"
+        return result
     if _at_root(post, required) and post["state"] == "OCCUPIED":
-        old = pre.get("entries") or {}
-        changed_old = [name for name in old if
-                       name in post["entries"]
-                       and old[name] != post["entries"][name]]
-        if changed_old:
-            # An occupied root is not permission to overwrite its contents.
-            # Metadata change is conservative: it requires independent
-            # no-clobber reconciliation before an accepted terminal claim.
-            result["reason"] = "PREEXISTING_ENTRY_CHANGED_REQUIRES_RECONCILIATION"
-            return result
         new_entries = set(post["entries"]) - set(old)
         if (pre["state"] == "ABSENT"
                 or (required and any(name in new_entries for name in required))

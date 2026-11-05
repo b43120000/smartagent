@@ -67,6 +67,32 @@ class TargetPathContractRegression(unittest.TestCase):
         self.assertIsNone(extract_target_contract(
             f"研究 {self.destination} 的腳本，請解釋內容。"))
 
+    def test_readonly_deployment_inspection_does_not_bind_mutation_gate(self):
+        c = extract_target_contract(
+            f"請唯讀檢查部署結果。預期部署根目錄：{self.destination}")
+        self.assertIsNone(c)
+
+    def test_preexisting_contents_removed_does_not_pass_terminal(self):
+        c = self.contract()
+        self.destination.mkdir()
+        old = self.destination / "important.txt"
+        old.write_text("user data")
+        pre = observe_target(str(self.destination), self.scope)
+        old.unlink()
+        self.create_children()
+        result = self.verify(c, pre)
+        self.assertEqual(result["reason"],
+                         "PREEXISTING_ENTRY_CHANGED_REQUIRES_RECONCILIATION")
+
+    def test_runtime_bookkeeping_alone_does_not_count_as_deployment(self):
+        c = self.contract(include_entries=False)
+        pre = observe_target(str(self.destination), self.scope)
+        self.destination.mkdir()
+        (self.destination / ".agents").mkdir()
+        (self.destination / ".cache").mkdir()
+        result = self.verify(c, pre)
+        self.assertNotEqual(result["status"], "PASS")
+
     def test_absent_target_direct_deployment_passes(self):
         c = self.contract()
         pre = observe_target(str(self.destination), self.scope)
