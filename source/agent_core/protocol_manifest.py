@@ -172,6 +172,7 @@ CORE_FILES = (
     'source/agent_core/tool_capabilities.py',
     'source/agent_core/semantic_capability_resolution.py',
     'source/agent_core/action_readiness.py',
+    'source/agent_core/command_repair_readiness.py',
     'source/agent_core/goal_strategy_transition.py',
     'source/agent_core/planner_context_snapshot.py',
     'source/agent_core/semantic_path_resolution.py',
