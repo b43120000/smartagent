@@ -364,6 +364,7 @@ class WebAgentProtocolLoop:
         from agent_core.bounded_repair import BoundedRepairBudget
         self._bounded_repair = BoundedRepairBudget()
         self._repair_stagnation = None
+        self._ccrc = None  # Request-scoped Cross-Contract Repair Coordinator.
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
@@ -3317,6 +3318,94 @@ class WebAgentProtocolLoop:
         )
         return True
 
+    def _ccrc_rejected(self, calls: list[dict], diagnostics: list[dict]) -> dict | None:
+        """Coordinate unadmitted Progress/Command/Action defects, never execute.
+
+        The normal V9 admission result remains authoritative. This function
+        only adds a bounded, sanitized recovery transaction and can invalidate
+        unexecuted holds when the Planner must reconstruct or replan.
+        """
+        from agent_core.cross_contract_repair import (
+            CrossContractRepairCoordinator, ACTION_RECONSTRUCTION,
+            REPLAN_REQUIRED,
+        )
+        coordinator = getattr(self, "_ccrc", None)
+        if coordinator is None:
+            return None
+        progress = next((item for item in calls if isinstance(item, dict)
+                         and item.get("tool") == "report_progress"), {})
+        declared = self._declared_next_tools(progress.get("next_action", ""))
+        result = coordinator.observe(calls, diagnostics, declared_tools=declared)
+        if result is None:
+            return None
+        mode = result["mode"]
+        if mode in {ACTION_RECONSTRUCTION, REPLAN_REQUIRED}:
+            # Only unexecuted actions can be replaced. Preserve original
+            # command/source in private Runtime state, not in prompt/status.
+            from copy import deepcopy
+            command_pending = getattr(self, "pending_command_field_repairs", {})
+            deferred = getattr(self, "deferred_action_repairs", {})
+            for action in calls:
+                if not isinstance(action, dict) or action.get("tool") in {
+                    "report_progress", "turn_commit", "final_response",
+                }:
+                    continue
+                ref = action.get("action_id")
+                if not isinstance(ref, str) or not ref or (
+                    ref in self.action_ledger or ref in self.action_result_ledger
+                ):
+                    continue
+                saved = command_pending.pop(ref, None)
+                original = saved.get("action") if isinstance(saved, dict) else None
+                if original is None:
+                    original = action
+                deferred[ref] = {
+                    "action_id": ref, "tool": str(original.get("tool", "")),
+                    "status": ("ACTION_RECONSTRUCTION_REQUIRED" if mode == ACTION_RECONSTRUCTION
+                               else "GOAL_REPLAN_REQUIRED"),
+                    "executed": False, "action": deepcopy(original),
+                    "diagnostics": [], "cross_contract_repair": {
+                        "mode": mode, "transaction_seq": result["transaction_seq"],
+                    },
+                }
+            if mode == REPLAN_REQUIRED:
+                # An unadmitted hold must not force the old Action after the
+                # entire decision is explicitly handed back to Goal Replan.
+                held = list(getattr(self, "pending_progress_repair_actions", []))
+                if held:
+                    self.pending_progress_repair_actions = []
+                    self._emit("ccrc_unadmitted_progress_hold_released",
+                        request_id=self.run_id, round=self.turn_id,
+                        action_ids=[str(row.get("action_id", "")) for row in held],
+                        authorization_granted=False, executed=False)
+                self.pending_action_repair = {}
+                command_pending.clear()
+            self.pending_command_field_repairs = command_pending
+            self.deferred_action_repairs = deferred
+        # BoundedRepairBudget and GAR remain the only rejection-budget owners.
+        # No Action, Progress or Goal is automatically admitted or rewritten.
+        diagnostics[0]["cross_contract_repair"] = {
+            key: result[key] for key in (
+                "schema", "mode", "transaction_seq", "goal_anchor_sha256",
+                "issue_count", "field_issues", "declared_next_tools",
+                "actual_operational_tools", "field_rounds", "reconstruction_rounds",
+                "nonconverging_rounds", "replan_required",
+                "full_admission_required", "authorization_granted", "budget_reset",
+            )
+        }
+        self._emit("cross_contract_repair_decision",
+            request_id=self.run_id, round=self.turn_id,
+            mode=mode, transaction_seq=result["transaction_seq"],
+            issue_count=result["issue_count"],
+            issue_codes=[row["code"] for row in result["field_issues"]],
+            field_rounds=result["field_rounds"],
+            reconstruction_rounds=result["reconstruction_rounds"],
+            nonconverging_rounds=result["nonconverging_rounds"],
+            converging=result["converging"],
+            replan_required=result["replan_required"],
+            authorization_granted=False, executed=False, budget_reset=False)
+        return result
+
     def _accept_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
         """Preserve partial Command repairs while batching independent defects.
 
@@ -5530,6 +5619,10 @@ class WebAgentProtocolLoop:
         repair_base = self.progress_root if self.progress_root is not None else self.workspace
         self._repair_stagnation = RepairStagnation(
             root=repair_base, task_id=self.task_id, request_id=self.run_id)
+        from agent_core.cross_contract_repair import CrossContractRepairCoordinator
+        self._ccrc = CrossContractRepairCoordinator(
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            goal=str(gar_goal))
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         # SPR V1 runs before first Planner Progress and before any Tool action.
@@ -6120,6 +6213,7 @@ class WebAgentProtocolLoop:
                 actions, ack_diagnostics = self._accept_ack(calls, expected)
             if ack_diagnostics:
                 self._record_preexecution_predicate_rejection(calls, ack_diagnostics)
+                ccrc_decision = self._ccrc_rejected(calls, ack_diagnostics)
                 self.protocol_state = "REJECTED"
                 if self.pending_action_repair and not any(
                     item.get("repair_scope") == "ACTION_BATCH"
@@ -6433,6 +6527,23 @@ class WebAgentProtocolLoop:
                         "\n[PARTIAL_REPAIR] PARTIAL 不能作為未查證完成的捷徑；"
                         "請只使用 Runtime 已支持且有實際 Evidence 的狀態。"
                     )
+                if ccrc_decision:
+                    from agent_core.cross_contract_repair import (
+                        repair_instruction, REPLAN_REQUIRED,
+                    )
+                    # CCRC is the final priority instruction. Old per-validator
+                    # repair notes are context only when the window is exhausted.
+                    if ccrc_decision["mode"] == REPLAN_REQUIRED:
+                        repair_note += (
+                            "\n[CCRC_HANDOFF_TO_GOAL_DRIVEN] Old field repair "
+                            "directives above are superseded. Do not keep "
+                            "patching the prior Action or reset the counter by "
+                            "changing action_id. Use original trusted Goal, "
+                            "existing Evidence and ordinary Action Admission "
+                            "for a new authorized plan.\n"
+                            "[/CCRC_HANDOFF_TO_GOAL_DRIVEN]"
+                        )
+                    repair_note += "\n" + repair_instruction(ccrc_decision)
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
                     + format_tool_parse_diagnostics(ack_diagnostics)
@@ -6447,6 +6558,17 @@ class WebAgentProtocolLoop:
                 continue
             last_rejected_exchange_signature = None
             self._planner_context_diagnostics = []
+            # Close CCRC only when the complete decision is admitted with no
+            # unresolved held actions. Merely changing an Action ID or Progress
+            # prose cannot close a repair transaction.
+            if (self._ccrc is not None
+                    and not getattr(self, "current_action_repairs", [])
+                    and not self.pending_command_field_repairs
+                    and not self.pending_progress_repair_actions):
+                closed = self._ccrc.admitted()
+                if closed:
+                    self._emit("cross_contract_repair_admitted",
+                        request_id=self.run_id, round=self.turn_id, **closed)
 
             progress_action = next(action for action in actions if action.get("tool") == "report_progress")
             from agent_core.task_progress import record_progress_repair
