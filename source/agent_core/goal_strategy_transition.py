@@ -136,6 +136,12 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
         base.update(classification="PREEXECUTION_PROJECT_WORKSPACE_UNVERIFIED",
                     eligible_transition="EVIDENCE_ACQUISITION",
                     proves_missing_prerequisite=False)
+    elif (not executed and status in {"REJECTED", "FAILED"}
+          and scope_classification.get("category") ==
+              "AUTHORIZATION_OR_SCOPE_BLOCKED"):
+        base.update(classification="PREEXECUTION_AUTHORIZATION_BLOCKED",
+                    eligible_transition="EVIDENCE_ACQUISITION",
+                    proves_missing_prerequisite=False)
     elif not executed and status in {"REJECTED", "FAILED"}:
         base.update(classification="PREEXECUTION_ADMISSION_BLOCKER",
                     eligible_transition="ACTION_REPAIR")
