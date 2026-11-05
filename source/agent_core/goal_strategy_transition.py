@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import re
 from collections.abc import Mapping, Sequence
 
@@ -69,6 +70,58 @@ def _scope_error(*values: object) -> str:
     return ""
 
 
+def _confirmed_directory_observation(record: Mapping, original: Mapping) -> dict | None:
+    """Check one exact, authorized Runtime directory probe and its receipt.
+
+    An inspection error, partial enumeration, scope rejection, or a mismatched
+    action path is never an absence proof. This is observation only; it does
+    not verify a Goal condition or grant any write permission.
+    """
+    from .tool_result_contract import decode_result
+    action = original.get("action") or {}
+    if not isinstance(action, Mapping) or action.get("tool") != "inspect_directory":
+        return None
+    requested = action.get("paths")
+    if (not isinstance(requested, list) or len(requested) != 1
+            or not isinstance(requested[0], str) or not requested[0].strip()):
+        return None
+    result = str(original.get("result", "") or "")
+    receipt = decode_result(result)
+    if (not isinstance(receipt, Mapping)
+            or receipt.get("tool") != "inspect_directory"
+            or receipt.get("action_id") != action.get("action_id")
+            or receipt.get("status") != "SUCCEEDED"
+            or receipt.get("executed") is not True
+            or receipt.get("status") != record.get("result_status")
+            or record.get("executed") is not True):
+        return None
+    try:
+        payload = json.loads(result)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("tool") != "inspect_directory":
+        return None
+    paths = payload.get("paths")
+    if not isinstance(paths, list) or len(paths) != 1 or not isinstance(paths[0], Mapping):
+        return None
+    row = paths[0]
+    path = row.get("path")
+    if (not isinstance(path, str) or not path or row.get("authorized") is not True
+            or row.get("inaccessible_count") != 0
+            or not isinstance(row.get("errors"), list)
+            or ntpath.normcase(ntpath.normpath(path)) !=
+                ntpath.normcase(ntpath.normpath(requested[0]))):
+        return None
+    errors, exists = row["errors"], row.get("exists")
+    if (exists is False and errors == ["path_not_found"]
+            and receipt.get("reason") == "DIRECTORY_ABSENCE_OBSERVED"
+            and (receipt.get("data") or {}).get("observation_status") == "CONFIRMED"
+            and (receipt.get("data") or {}).get("observed_exists") is False):
+        return {"kind": "directory.exists", "path": path, "exists": False}
+    if exists is True and not errors and receipt.get("reason") == "DIRECTORY_INSPECTED":
+        return {"kind": "directory.exists", "path": path, "exists": True}
+    return None
+
 def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) -> dict:
     """Classify execution/observation without interpreting untrusted prose."""
     original = original or {}
@@ -88,7 +141,12 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
     # Other NOT_FOUND tool errors remain unverified and do not prove absence.
     # A confirmed absent path still does NOT establish Goal relevance or
     # permission to create it; the Planner supplies that semantic link.
-    verified_absence = False
+    directory_observation = (
+        _confirmed_directory_observation(record, original)
+        if tool == "inspect_directory" and executed and status == "SUCCEEDED"
+        and evidence_status == "ACTIVE" else None
+    )
+    verified_absence = bool(directory_observation and directory_observation["exists"] is False)
     if (tool == "observe_fact" and executed and status == "SUCCEEDED"
             and evidence_status == "ACTIVE"):
         from .tool_result_contract import decode_result
@@ -120,6 +178,13 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
         "verified_absence_is_goal_relevance": False,
         "authorizes_execution": False,
         "goal_completion_verified": False,
+        "environment_observation_kind": (
+            directory_observation["kind"] if directory_observation else ""),
+        "environment_observed_exists": (
+            directory_observation["exists"] if directory_observation else None),
+        "environment_observed_path": (
+            directory_observation["path"] if directory_observation else ""),
+        "goal_condition_link_verified": False,
     }
     scope_classification = (
         record.get("scope_diagnostic") or {}
@@ -151,6 +216,9 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
     elif verified_absence:
         base.update(classification="VERIFIED_NEGATIVE_FACT",
                     eligible_transition="PREREQUISITE_RESOLUTION")
+    elif directory_observation and directory_observation["exists"] is True:
+        base.update(classification="VERIFIED_POSITIVE_FACT",
+                    eligible_transition="CONTINUE")
     elif status == "SUCCEEDED" and verification == "PASS":
         base.update(classification="VERIFIED_ACTION_SUCCESS",
                     eligible_transition="CONTINUE")
@@ -189,12 +257,44 @@ def build_transition_readiness(runtime) -> dict:
             continue
         action = actions.get(aid) or {}
         item = classify_runtime_evidence(record, action)
-        if item["classification"] == "VERIFIED_ACTION_SUCCESS":
+        if item["classification"] in {"VERIFIED_ACTION_SUCCESS", "VERIFIED_POSITIVE_FACT"}:
             continue
         candidates.append({"evidence_ref": str(aid)[:160],
                            "blocking_action_id": str(aid)[:160],
                            **item})
     selected = candidates[-8:]
+    # Preserve the observation-to-Goal boundary: a confirmed filesystem fact
+    # can justify an authorized Planner replan, but not satisfy an unrelated
+    # Completion Condition. Only predeclared condition IDs are linked here.
+    environment_facts = []
+    request_id = str(getattr(runtime, "run_id", "") or "")
+    task_epoch = str(getattr(runtime, "task_epoch", "") or "")
+    for aid in list(evidence)[-16:]:
+        row = evidence.get(aid) or {}
+        if not isinstance(row, Mapping) or row.get("evidence_status", "ACTIVE") != "ACTIVE":
+            continue
+        if (request_id and row.get("request_id") != request_id
+                or task_epoch and row.get("task_epoch") != task_epoch):
+            continue
+        fact = classify_runtime_evidence(row, actions.get(aid) or {})
+        if fact.get("environment_observation_kind") != "directory.exists":
+            continue
+        cid = str(row.get("condition_id", "") or "")
+        linked = cid in choices
+        environment_facts.append({
+            "evidence_ref": str(aid)[:160],
+            "kind": "directory_exists",
+            "path": fact["environment_observed_path"],
+            "exists": fact["environment_observed_exists"],
+            "observation_status": "CONFIRMED",
+            "goal_condition_id": cid if linked else "",
+            "goal_condition_link": "PREDECLARED" if linked else "UNBOUND",
+            "goal_condition_status": str((conditions.get(cid) or {}).get("status", "UNKNOWN"))
+                if linked else "UNKNOWN",
+            "eligible_transition": fact["eligible_transition"],
+            "authorization_granted": False,
+            "goal_completion_inferred": False,
+        })
     # A historical denial must not keep attracting the Planner's attention
     # after a newer verified PASS. Only the *latest* committed Action Result
     # can be presented as a current blocker without stronger correlation.
@@ -212,6 +312,8 @@ def build_transition_readiness(runtime) -> dict:
         "unresolved_success_conditions": unresolved,
         "latest_blocker": latest,
         "recent_blockers": selected,
+        "recent_environment_facts": environment_facts[-8:],
+        "environment_fact_is_not_goal_completion": True,
         "historical_blockers_are_not_current_goal_state": True,
         "transition_options": sorted(KINDS),
         "proposal_required_for_normal_progress": False,
@@ -277,6 +379,11 @@ def validate_planner_transition(
     if kind == "PREREQUISITE_RESOLUTION":
         if not fact["proves_missing_prerequisite"]:
             raise GoalTransitionError("goal_transition_prerequisite_not_verified")
+        # Never let a fact predeclared for another Completion Condition
+        # justify remediation of an unrelated Goal condition.
+        bound_condition = str(row.get("condition_id", "") or "")
+        if bound_condition and bound_condition != cid:
+            raise GoalTransitionError("goal_transition_prerequisite_condition_mismatch")
     elif kind == "STRATEGY_REPLAN":
         if fact["eligible_transition"] != "STRATEGY_REPLAN":
             raise GoalTransitionError("goal_transition_strategy_not_evidence_supported")

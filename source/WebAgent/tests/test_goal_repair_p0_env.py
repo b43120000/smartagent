@@ -11,6 +11,11 @@ from agent_core.bounded_repair import BoundedRepairBudget
 from agent_core.cross_contract_repair import CrossContractRepairCoordinator
 from agent_core.progress_recovery import progress_repair_hold_safe
 from agent_core.goal_environment_reconciliation import reconcile_goal_conditions
+from agent_core.tool_result_policy import structured_outcome
+from agent_core.tool_result_contract import attach_runtime_result
+from agent_core.goal_strategy_transition import classify_runtime_evidence, build_transition_readiness
+from types import SimpleNamespace
+import json
 
 
 class RepairAndEnvironmentRegression(unittest.TestCase):
@@ -76,6 +81,109 @@ class RepairAndEnvironmentRegression(unittest.TestCase):
                 "git_head": "b" * 40, "files": [
                     {"path": "src/main.cpp", "sha256": "c" * 64},
                 ]}
+
+    def _directory_evidence(self, *, errors=None, authorized=True, exists=False, requested=None):
+        path = r"E:\\SmartAgent_PR_BCD_LIVE\\feature"
+        requested = path if requested is None else requested
+        payload = {"tool": "inspect_directory", "paths": [{
+            "path": path, "authorized": authorized, "exists": exists,
+            "errors": ["path_not_found"] if errors is None else errors,
+            "inaccessible_count": 0,
+        }]}
+        status, reason, executed, data = structured_outcome("inspect_directory", payload)
+        result = attach_runtime_result(json.dumps(payload), status, reason,
+                                       tool="inspect_directory", executed=executed,
+                                       action_id="act-dir", data=data)
+        return ({"tool": "inspect_directory", "action_id": "act-dir",
+                 "paths": [requested]}, result, {
+                     "tool": "inspect_directory", "result_status": status,
+                     "executed": executed, "result_reason": reason,
+                     "evidence_status": "ACTIVE", "verification_status": "UNVERIFIED",
+                 })
+
+    def test_confirmed_missing_directory_is_completed_observation(self):
+        action, result, record = self._directory_evidence()
+        self.assertEqual(record["result_status"], "SUCCEEDED")
+        self.assertTrue(record["executed"])
+        fact = classify_runtime_evidence(record, {"action": action, "result": result})
+        self.assertEqual(fact["classification"], "VERIFIED_NEGATIVE_FACT")
+        self.assertTrue(fact["proves_missing_prerequisite"])
+        self.assertEqual(fact["eligible_transition"], "PREREQUISITE_RESOLUTION")
+        self.assertFalse(fact["goal_completion_verified"])
+        self.assertFalse(fact["authorizes_execution"])
+
+    def test_denial_io_and_target_mismatch_are_not_absence_proof(self):
+        for kwargs in ({"authorized": False, "errors": ["path_not_authorized_by_user_turn"]},
+                       {"errors": ["PermissionError: denied"]},
+                       {"requested": r"E:\\SmartAgent_PR_BCD_LIVE\\other"}):
+            action, result, record = self._directory_evidence(**kwargs)
+            fact = classify_runtime_evidence(record, {"action": action, "result": result})
+            self.assertFalse(fact["proves_missing_prerequisite"], kwargs)
+        action, result, record = self._directory_evidence(requested=r"E:\\SmartAgent_PR_BCD_LIVE\\other")
+        self.assertEqual(record["result_status"], "SUCCEEDED")
+        self.assertEqual(classify_runtime_evidence(record, {"action": action, "result": result})["classification"],
+                         "OUTCOME_UNVERIFIED")
+
+    def test_existing_directory_remains_positive_observation(self):
+        action, result, record = self._directory_evidence(exists=True, errors=[])
+        fact = classify_runtime_evidence(record, {"action": action, "result": result})
+        self.assertEqual(fact["environment_observed_exists"], True)
+        self.assertFalse(fact["proves_missing_prerequisite"])
+
+    def test_readiness_carries_directory_fact_without_goal_completion(self):
+        action, result, record = self._directory_evidence()
+        record.update(request_id="RR-CASE", task_epoch="epoch")
+        runtime = SimpleNamespace(
+            progress_ledger=SimpleNamespace(
+                goal="Create feature folder",
+                completion_contract={"success": ["feature folder exists"]}),
+            action_result_ledger={"act-dir": record},
+            action_ledger={"act-dir": {"action": action, "result": result}},
+            condition_result_ledger={},
+            run_id="RR-CASE", task_epoch="epoch", task_request="Create feature folder",
+        )
+        readiness = build_transition_readiness(runtime)
+        self.assertEqual(readiness["latest_blocker"]["classification"], "VERIFIED_NEGATIVE_FACT")
+        self.assertEqual(readiness["recent_environment_facts"][0]["goal_condition_link"], "UNBOUND")
+        self.assertFalse(readiness["recent_environment_facts"][0]["goal_completion_inferred"])
+        self.assertFalse(readiness["recent_environment_facts"][0]["authorization_granted"])
+
+    def test_directory_predicate_requires_verified_evidence(self):
+        snapshot = {**self.snapshot(), "workspace_root": r"E:\\SmartAgent_PR_BCD_LIVE"}
+        paths = [
+            {"id": "existing", "kind": "directory_exists", "path": "src"},
+            {"id": "missing", "kind": "directory_exists", "path": "feature"},
+        ]
+        no_fact = reconcile_goal_conditions(snapshot, paths)
+        self.assertEqual([row["status"] for row in no_fact["conditions"]],
+                         ["VERIFIED", "UNKNOWN"])
+        action, result, record = self._directory_evidence()
+        record.update(request_id="RR-CASE", task_epoch="epoch")
+        observed = reconcile_goal_conditions(
+            snapshot, paths,
+            action_ledger={"act-dir": {"action": action, "result": result}},
+            action_results={"act-dir": record},
+            request_id="RR-CASE", task_epoch="epoch",
+        )
+        self.assertEqual([row["status"] for row in observed["conditions"]],
+                         ["VERIFIED", "MISSING"])
+        self.assertEqual(observed["conditions"][1]["evidence_ref"], "act-dir")
+        self.assertFalse(observed["authorization_granted"])
+        self.assertFalse(observed["task_completion_inferred"])
+        self.assertFalse(observed["new_scan_performed"])
+
+    def test_stale_or_cross_request_fact_cannot_verify_goal(self):
+        snapshot = {**self.snapshot(), "workspace_root": r"E:\\SmartAgent_PR_BCD_LIVE"}
+        action, result, record = self._directory_evidence()
+        record.update(request_id="RR-OTHER", task_epoch="epoch")
+        kwargs = dict(
+            action_ledger={"act-dir": {"action": action, "result": result}},
+            action_results={"act-dir": record},
+            request_id="RR-CASE", task_epoch="epoch")
+        row = {"id": "missing", "kind": "directory_exists", "path": "feature"}
+        self.assertEqual(reconcile_goal_conditions(snapshot, [row], **kwargs)["conditions"][0]["status"], "UNKNOWN")
+        record.update(request_id="RR-CASE", evidence_status="STALE")
+        self.assertEqual(reconcile_goal_conditions(snapshot, [row], **kwargs)["conditions"][0]["status"], "UNKNOWN")
 
     def test_index_only_reconciliation_no_rescan(self):
         result = reconcile_goal_conditions(self.snapshot(), [

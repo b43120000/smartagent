@@ -43,3 +43,34 @@ Re-probe real dependency usability with authorized Runtime tools.
 
 Run alongside the Manifest validator and Project Sync/Progress/Command suites
 on the Windows deployment machine before merging into main.
+
+## P0-4: completed negative directory observations
+
+`inspect_directory` now treats **one** authorized and complete filesystem-stat
+`path_not_found` as a successful observation (`DIRECTORY_ABSENCE_OBSERVED`),
+while preserving `FAILED/REJECTED/UNKNOWN` for permission errors, incomplete
+enumeration, mismatched identities, and unsafe scope.
+
+GAST rechecks the exact committed receipt and original Action path before
+classifying a missing directory as `VERIFIED_NEGATIVE_FACT`; this unlocks a
+Planner-selected `PREREQUISITE_RESOLUTION` proposal through existing admission.
+`build_transition_readiness` exposes bounded environment facts with explicit
+`PREDECLARED` / `UNBOUND` Goal condition linkage. Neither observation nor
+readiness grants authorization, creates a directory, or verifies overall Goal
+completion.
+
+Regression: `python -m unittest source/WebAgent/tests/test_goal_repair_p0_env.py -v`.
+
+## P0-5: Goal predicate reconciliation with trusted Runtime directory receipts
+
+`project_sync(strategy=INDEX_ONLY)` supports explicit `directory_exists`
+conditions. A directory containing inventoried files is VERIFIED from the
+existing snapshot. An empty or absent directory is UNKNOWN unless the same
+Request/Epoch already has an ACTIVE, canonical `inspect_directory` receipt
+bound to the exact target path. A verified negative read produces MISSING,
+not a Scope denial or a premature Task failure.
+
+The Project Sync snapshot is reused without extra scanning, and the latest
+24 Runtime receipts form a bounded source. Conflicting snapshot and live
+observations stay UNKNOWN. No Planner-generated fact or old Request can supply
+authorization or mark Task completion.

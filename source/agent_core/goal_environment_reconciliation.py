@@ -7,6 +7,8 @@ Environment Index entries are historical hints, never live verification.
 from __future__ import annotations
 
 import re
+import ntpath
+import posixpath
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 
@@ -16,7 +18,7 @@ SCHEMA = "SMARTAGENT_GOAL_ENVIRONMENT_RECONCILIATION_V1"
 _HEX = re.compile(r"^[a-fA-F0-9]{64}$")
 _ID = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
 _DISTRIBUTION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
-_ALLOWED = {"file_exists", "file_sha256", "git_head", "dependency_candidate"}
+_ALLOWED = {"file_exists", "file_sha256", "directory_exists", "git_head", "dependency_candidate"}
 
 
 def _relative_path(raw: object) -> str:
@@ -29,9 +31,64 @@ def _relative_path(raw: object) -> str:
     return PurePosixPath(path).as_posix()
 
 
+def _windows_root(root: str) -> bool:
+    return bool(re.match(r"^[A-Za-z]:[/\\]", root) or root.startswith("\\\\"))
+
+
+def _canonical_target(workspace_root: object, path: str) -> str:
+    """Lexical project-relative identity only; no filesystem calls."""
+    if not isinstance(workspace_root, str) or not workspace_root:
+        return ""
+    if _windows_root(workspace_root):
+        return ntpath.normcase(ntpath.normpath(
+            ntpath.join(workspace_root, path.replace("/", "\\"))))
+    if workspace_root.startswith("/") and not workspace_root.startswith("//"):
+        return posixpath.normpath(posixpath.join(workspace_root, path))
+    return ""
+
+
+def _canonical_observed(workspace_root: object, path: object) -> str:
+    if not isinstance(workspace_root, str) or not isinstance(path, str) or not path:
+        return ""
+    if _windows_root(workspace_root):
+        return ntpath.normcase(ntpath.normpath(path)) if ntpath.isabs(path) else ""
+    if workspace_root.startswith("/") and not workspace_root.startswith("//"):
+        return posixpath.normpath(path) if posixpath.isabs(path) else ""
+    return ""
+
+def _runtime_directory_facts(action_ledger: Mapping | None,
+                             action_results: Mapping | None,
+                             request_id: str, task_epoch: str) -> list[dict]:
+    """Recheck bounded, committed Runtime receipts; ignore model statements."""
+    if not isinstance(action_ledger, Mapping) or not isinstance(action_results, Mapping):
+        return []
+    from .goal_strategy_transition import classify_runtime_evidence
+    facts = []
+    for aid in list(action_results)[-24:]:
+        row = action_results.get(aid)
+        original = action_ledger.get(aid)
+        if not isinstance(row, Mapping) or not isinstance(original, Mapping):
+            continue
+        if (row.get("evidence_status", "ACTIVE") != "ACTIVE"
+                or not request_id or row.get("request_id") != request_id
+                or not task_epoch or row.get("task_epoch") != task_epoch):
+            continue
+        fact = classify_runtime_evidence(row, original)
+        if fact.get("environment_observation_kind") != "directory.exists":
+            continue
+        facts.append({
+            "evidence_ref": str(aid)[:160],
+            "path": fact["environment_observed_path"],
+            "exists": fact["environment_observed_exists"],
+        })
+    return facts
+
 def reconcile_goal_conditions(
     snapshot: Mapping, conditions: list,
     *, environment_index: Mapping | None = None,
+    action_ledger: Mapping | None = None,
+    action_results: Mapping | None = None,
+    request_id: str = "", task_epoch: str = "",
 ) -> dict:
     """Compare explicit predicates with an existing Project Sync snapshot.
 
@@ -53,6 +110,8 @@ def reconcile_goal_conditions(
     recorded = (environment_index or {}).get("dependencies", {})
     if not isinstance(recorded, Mapping):
         recorded = {}
+    live_directories = _runtime_directory_facts(
+        action_ledger, action_results, request_id, task_epoch)
     seen = set()
     evaluations = []
     for condition in conditions:
@@ -66,7 +125,36 @@ def reconcile_goal_conditions(
         seen.add(cid)
         answer = {"id": cid, "kind": kind, "status": "UNKNOWN",
                   "reason": "NOT_YET_OBSERVED", "snapshot_id": snapshot_id}
-        if kind in {"file_exists", "file_sha256"}:
+        if kind == "directory_exists":
+            path = _relative_path(condition.get("path"))
+            answer["path"] = path
+            if is_ignored_project_path(path):
+                answer.update(reason="OUTSIDE_PROJECT_SYNC_INVENTORY")
+            else:
+                target = _canonical_target(snapshot.get("workspace_root"), path)
+                live = next((
+                    fact for fact in reversed(live_directories)
+                    if target and _canonical_observed(
+                        snapshot.get("workspace_root"), fact["path"]) == target
+                ), None)
+                has_children = any(item.startswith(path + "/") for item in inventory)
+                if path in inventory:
+                    answer.update(status="UNSATISFIED", reason="PATH_IS_FILE_IN_SNAPSHOT")
+                elif live and has_children and live["exists"] is False:
+                    answer.update(status="UNKNOWN", reason="SNAPSHOT_AND_LIVE_FACT_CONFLICT")
+                elif has_children:
+                    answer.update(status="VERIFIED", reason="DIRECTORY_CONTAINS_SNAPSHOT_FILES")
+                elif live:
+                    answer.update(
+                        status="VERIFIED" if live["exists"] else "MISSING",
+                        reason="DIRECTORY_PRESENT_BY_RUNTIME" if live["exists"]
+                               else "DIRECTORY_ABSENT_BY_RUNTIME",
+                        evidence_ref=live["evidence_ref"],
+                        observation_source="COMMITTED_ACTION_RECEIPT",
+                    )
+                else:
+                    answer.update(reason="DIRECTORY_REQUIRES_LIVE_OBSERVATION")
+        elif kind in {"file_exists", "file_sha256"}:
             path = _relative_path(condition.get("path"))
             answer["path"] = path
             expected = None
@@ -121,5 +209,6 @@ def reconcile_goal_conditions(
         "status": "ASSESSED", "conditions": evaluations, "counts": counts,
         "task_completion_inferred": False, "authorization_granted": False,
         "dependency_live_verified": False, "replan_executed": False,
+        "runtime_directory_fact_count": len(live_directories),
         "new_scan_performed": False,
     }

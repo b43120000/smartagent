@@ -1895,6 +1895,10 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
                 capsule["goal_reconciliation"] = reconcile_goal_conditions(
                     snapshot, tool_call["goal_conditions"],
                     environment_index=read_project_environment(workspace),
+                    action_ledger=getattr(agent, "action_ledger", None),
+                    action_results=getattr(agent, "action_result_ledger", None),
+                    request_id=str(getattr(agent, "current_request_id", "") or ""),
+                    task_epoch=str(getattr(agent, "task_epoch", "") or ""),
                 )
             return json.dumps(capsule,ensure_ascii=False,separators=(",",":"))
         if "goal_conditions" in tool_call:
