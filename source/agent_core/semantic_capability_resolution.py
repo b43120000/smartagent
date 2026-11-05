@@ -55,6 +55,94 @@ def verify_resolution_for_actions(proposal, previous, actions):
     return new
 
 
+
+def describe_resolution_repair(proposal: object, previous: object = None,
+                               actions: object = None) -> dict:
+    """Only trusted enum/shape diagnostics; never echo untrusted field values.
+
+    Semantic selection is Planner-owned. A repair hint is NOT a selection,
+    authorization, or permission to perform the proposed Tool Action.
+    """
+    expected_keys = {"schema", "capabilities"}
+    mapping = isinstance(proposal, Mapping)
+    keys = set(proposal) if mapping else set()
+    caps = proposal.get("capabilities") if mapping else None
+    cap_list = isinstance(caps, list)
+    values = [x for x in caps if type(x) is str] if cap_list else []
+    valid = [x for x in values if x in CAPABILITY_TO_TOOL]
+    prior = []
+    if isinstance(previous, Mapping):
+        try:
+            prior = normalize_resolution(previous)["capabilities"]
+        except SemanticCapabilityError:
+            prior = []
+    required = sorted({
+        TOOL_TO_CAPABILITY.get(str(a.get("tool", "") or ""))
+        for a in (actions or []) if isinstance(a, Mapping)
+    } - {None})
+    return {
+        "repair_target": "report_progress.capability_resolution",
+        "expected_keys": ["schema", "capabilities"],
+        "canonical_schema": SCHEMA,
+        "allowed_capabilities": sorted(CAPABILITY_TO_TOOL),
+        "previously_selected": sorted(prior),
+        "required_for_submitted_actions": required,
+        "proposal_shape": {
+            "present": proposal is not None,
+            "object_type_valid": mapping,
+            "key_set_exact": mapping and keys == expected_keys,
+            "missing_expected_keys": sorted(expected_keys - keys),
+            "extra_key_count": len(keys - expected_keys),
+            "schema_present": mapping and "schema" in keys,
+            "schema_matches": mapping and proposal.get("schema") == SCHEMA,
+            "capabilities_is_list": cap_list,
+            "capability_count": len(caps) if cap_list else 0,
+            "known_capabilities": sorted(set(valid)),
+            "unknown_or_invalid_count": (
+                len(caps) - len(valid) if cap_list else 0
+            ),
+            "duplicate_count": (
+                len(values) - len(set(values)) if cap_list else 0
+            ),
+        },
+        "repair_rule": (
+            "Replace only the proposal with exactly the two canonical keys. "
+            "Use the literal canonical_schema as schema and select a non-empty "
+            "unique subset of allowed_capabilities; keep previously_selected "
+            "and include capabilities required by the chosen read actions. "
+            "This proposal never grants scope, ACL or write permission."
+        ),
+    }
+
+
+def resolution_decision_shape(proposal: object) -> dict:
+    """Stable semantic shape for rejection deduplication.
+
+    Ignores arbitrary invalid strings and wording, but distinguishes a real
+    change in finite selected capabilities or canonical schema structure.
+    """
+    mapping = isinstance(proposal, Mapping)
+    if not mapping:
+        return {"kind": "OMITTED" if proposal is None else "NON_OBJECT"}
+    keys = set(proposal)
+    caps = proposal.get("capabilities")
+    valid_list = isinstance(caps, list)
+    values = [x for x in caps if type(x) is str] if valid_list else []
+    known = sorted({x for x in values if x in CAPABILITY_TO_TOOL})
+    return {
+        "kind": "OBJECT",
+        "keys_exact": keys == {"schema", "capabilities"},
+        "schema_matches": proposal.get("schema") == SCHEMA,
+        "schema_type": type(proposal.get("schema")).__name__,
+        "capabilities_type": type(caps).__name__,
+        "selected_known": known,
+        "invalid_count": (len(caps) - len([x for x in values if x in CAPABILITY_TO_TOOL])
+                          if valid_list else 0),
+        "duplicate_count": (len(values) - len(set(values)) if valid_list else 0),
+        "missing_count": len({"schema", "capabilities"} - keys),
+        "extra_count": len(keys - {"schema", "capabilities"}),
+    }
+
 def render_planner_contract():
     registry = "; ".join(k + " => " + v for k, v in CAPABILITY_TO_TOOL.items())
     return (
