@@ -3473,8 +3473,9 @@ class WebAgentProtocolLoop:
                     'full_admission_required': True,
                     'authorization_granted': False,
                     'instruction': (
-                        'Use a NEW action_id, replaces_action_id=' + ref
-                        + ', and a fully reconstructed canonical run_command. '
+                        'Use a NEW action_id and set replaces_action_id to '
+                        'the exact action_id identified in this diagnostic. '
+                        'Submit a fully reconstructed canonical run_command. '
                         'If a script was previously created, use a short invocation '
                         'rather than embedding script source in command. '
                         'No previous operation was executed.'
