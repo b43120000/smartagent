@@ -167,6 +167,111 @@ class PlannerContextBridgeIT(unittest.TestCase):
         self.assertEqual(snapshot['goal']['status'], 'INCOMPLETE')
 
 
+
+class PlannerSCRRecoveryIT(unittest.TestCase):
+    def test_rejected_signature_tracks_real_capability_changes_not_noise(self):
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from agent_core.semantic_capability_resolution import SCHEMA
+        def decision(action_id, caps, schema=SCHEMA):
+            return [{"tool": "report_progress", "action_id": action_id,
+                     "current_step": 1, "total_steps": 2,
+                     "decision": "CONTINUE", "outcome": "PENDING",
+                     "capability_resolution": {
+                         "schema": schema, "capabilities": caps,
+                     }}, {"tool": "turn_commit", "action_count": 1}]
+        diag = [{"reason": "semantic_capability_list_invalid"}]
+        old = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-1", ["directory.list"]), diag, "",
+        )
+        updated = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-2", ["directory.list", "directory.inspect_metadata"]), diag, "",
+        )
+        same = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-CHANGED-ID", ["directory.list"]), diag, "",
+        )
+        self.assertNotEqual(old, updated)
+        self.assertEqual(old, same)
+        noise1 = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-3", [], "NOT_A_REAL_SCHEMA_1"), diag, "",
+        )
+        noise2 = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-4", [], "NOT_A_REAL_SCHEMA_2"), diag, "",
+        )
+        self.assertEqual(noise1, noise2)
+
+    def test_scr_invalid_then_fixed_admits_real_read_once(self):
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from WebAgent.tests.validate_progress_terminal_lifecycle import response
+        from agent_core.semantic_capability_resolution import SCHEMA
+        with tempfile.TemporaryDirectory(prefix="scr-context-repair-") as folder:
+            root = Path(folder).resolve()
+            turns, events = [], []
+            clause = "Directory contents have been inspected"
+            def progress(action_id, broken):
+                proposal = {"schema": SCHEMA,
+                            "capabilities": ["directory.inspect_metadata"]}
+                if broken:
+                    proposal["runtime_capability_state"] = {"binding_present": False}
+                return {
+                    "tool": "report_progress", "action_id": action_id,
+                    "base_evaluation": "Only read the explicit authorized directory",
+                    "total_steps": 2, "current_step": 1,
+                    "steps": [
+                        {"step": 1, "desc": "Inspect the directory",
+                         "status": "IN_PROGRESS"},
+                        {"step": 2, "desc": "Evaluate the inspection evidence",
+                         "status": "PENDING"},
+                    ],
+                    "current_focus": "Read directory metadata",
+                    "next_action": "inspect_directory",
+                    "completion_contract": {
+                        "success": [clause],
+                        "failure": ["Inspection verified failed"],
+                        "in_progress": ["Directory inspection pending"],
+                        "interrupted": ["No allowed observation route"],
+                    },
+                    "decision": "CONTINUE", "outcome": "PENDING",
+                    "matched_condition": "Directory inspection pending",
+                    "evidence_refs": ["REQUEST_ACCEPTED"],
+                    "decision_reason": "Collect scoped read evidence.",
+                    "capability_resolution": proposal,
+                }
+            action = {"tool": "inspect_directory", "action_id": "SCR-READ",
+                      "paths": [str(root)], "recursive": False}
+            def planner(prompt, expected, attachments):
+                turns.append(prompt)
+                if len(turns) == 1:
+                    return response(progress("P-SCR-INVALID", True), action)
+                if len(turns) == 2:
+                    self.assertIn("[SCR_SCHEMA_REPAIR]", prompt)
+                    self.assertIn('"runtime_capability_state"', prompt)
+                    self.assertIn('"capability_repair"', prompt)
+                    return response(progress("P-SCR-FIXED", False), action)
+                raise RuntimeError("STOP_AFTER_SCR_RECOVERED")
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=5,
+                event_sink=lambda name, **kw: events.append((name, kw)),
+            )
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "0",
+                "SMARTAGENT_PREREQ_V3_BCD": "0",
+                "SMARTAGENT_PREREQ_V3_PR_A": "0",
+            }):
+                with self.assertRaisesRegex(RuntimeError, "STOP_AFTER_SCR_RECOVERED"):
+                    loop.run("唯讀檢查明確授權的目錄", request_id="RR-SCR-REPAIR-E2E",
+                             task_id="TASK-SCR-REPAIR-E2E", task_epoch="EPOCH-SCR",
+                             trusted_authorized_paths=[str(root)])
+            self.assertEqual(len(turns), 3)
+            rejected = [r[1] for r in events if r[0] == "protocol_rejected"]
+            self.assertTrue(any(
+                any(d.get("reason") == "semantic_capability_schema_invalid"
+                    for d in item.get("diagnostics", [])) for item in rejected))
+            started = [row[1] for row in events
+                       if row[0] == "tool_started" and row[1].get("action_id") == "SCR-READ"]
+            self.assertEqual(len(started), 1)
+            self.assertTrue(any(r[0] == "planner_context_response_correlated" for r in events))
+
+
 class PlannerDeliveryIT(unittest.TestCase):
     def test_runtime_rejection_next_round_receives_a_fresh_compiled_context(self):
         from WebAgent.protocol_loop import WebAgentProtocolLoop
