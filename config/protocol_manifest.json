@@ -234,7 +234,7 @@
     "source/WebAgent/protocol.py": "8130749035ee3c2e5ab20f5cc663417db410e9c062f52ca4c4dffe915b030b22",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
-    "source/agent_core/cross_contract_repair.py": "4e2293516c7724f7f861e227292c72ab38a973567b48b571708a0c64d8ede96d"
+    "source/agent_core/cross_contract_repair.py": "1b7fc63d18f538a2040ed06416d8ffe2055fb905ee55e0e2144a37323fb72c24"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
