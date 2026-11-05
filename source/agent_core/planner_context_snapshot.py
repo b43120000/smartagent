@@ -166,8 +166,10 @@ def build_planner_context_snapshot(runtime) -> dict:
     for tool in candidate_tools:
         capability = TOOL_TO_CAPABILITY.get(tool)
         needs_selection = bool(matched and capability and capability not in selected)
+        from .action_readiness import tool_readiness_contract
         tool_readiness.append({
             "tool": tool,
+            "action_fields": tool_readiness_contract(tool),
             "read_capability": capability or "",
             "capability_state": ("BINDING_IDENTITY_MISMATCH" if old_binding_mismatch else
                                  "SELECTION_REQUIRED" if needs_selection else
@@ -210,6 +212,10 @@ def build_planner_context_snapshot(runtime) -> dict:
             "scope_admission_still_required": True,
         },
         "recent_action_evidence": rows,
+        "scope_preflight_readiness": (
+            __import__("agent_core.action_readiness", fromlist=["current_action_readiness"])
+            .current_action_readiness(evidence, actions)
+        ),
         "evidence_total": len(ids),
         "omitted_older_action_count": len(ids) - len(retained),
         "omitted_active_blocker_count": len(omitted_ids),
@@ -280,8 +286,12 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "Goal Transition Readiness only classifies evidence: Planner decides any changed strategy. "
             "An optional report_progress.goal_transition must bind a declared Goal condition "
             "to a current Runtime evidence_ref; no such proposal authorizes tools. "
-            "A denied read is not proof of a missing directory; use ACTION_REPAIR or "
-            "EVIDENCE_ACQUISITION, and do not repeat an identically denied read "
+            "A denied read is not proof of a missing directory. For a project workspace "
+            "preflight workspace_not_found_or_not_directory, do not reissue "
+            "inspect_project_scope against an unavailable directory; select a new "
+            "authorized observation or prerequisite strategy. "
+            "Use ACTION_REPAIR for missing tool fields, EVIDENCE_ACQUISITION for "
+            "unverified workspace state, and do not repeat an identically denied read "
             "without new evidence or changed parameters. "
             "runtime_capability_state describes observed state, NOT a report_progress field. "
             "Only report_progress.capability_resolution is the Planner proposal, with exactly "
