@@ -224,6 +224,7 @@ $scalarKeys = @(
     'current_step','total_steps','repair_scope','previous_ack_id',
     'context_snapshot_id','context_digest','evidence_total','omitted_active_blocker_count',
     'critical_context_omitted','diagnostic_count','planner_response_received',
+    'goal_condition_id','evidence_classification','next_tool','completion_verified',
     'authorization_granted',
     'revision','node_count','graph_digest','checkpoint_name','same_blocker','fresh_repair_attempts','elapsed_sec','elapsed_seconds'
 )
@@ -547,6 +548,27 @@ try {
     })
     Write-Json (Join-Path $stage 'replan_preflight_summary.json') @($preflight)
 
+    # Goal-aligned Strategy Transition: codes/refs only; no full Goal or rationale.
+    $goalTransitions = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'goal_transition_accepted' -or
+        ($_.event -eq 'protocol_rejected' -and
+         @($_.diagnostic_reasons | Where-Object { $_ -like 'goal_transition_*' -or
+                     $_ -eq 'goal_alignment_identical_denied_read_without_new_evidence' }).Count -gt 0)
+    } | ForEach-Object {
+        [ordered]@{
+            event=$_.event; round=$_.round; source=$_.source
+            kind=$_.kind
+            evidence_ref=$_.evidence_ref
+            goal_condition_id=$_.goal_condition_id
+            evidence_classification=$_.evidence_classification
+            next_tool=$_.next_tool
+            authorization_granted=$_.authorization_granted
+            completion_verified=$_.completion_verified
+            diagnostic_reasons=@($_.diagnostic_reasons)
+        }
+    })
+    Write-Json (Join-Path $stage 'goal_transition_summary.json') @($goalTransitions)
+
     # RemoteEventStore persists the Telegram OUTBOUND terminal summary after
     # worker completion. Select by BOTH IDs when available; never include any
     # reply_route/chat_id, raw Telegram update, or original event payload.
@@ -729,6 +751,7 @@ try {
         'Data: request-scoped timeline (event codes, counters, model tool/operation names only),',
         'sanitized SCR proposal shape/digest, decision differences and context delivery digests,',
         'preexecution replan evaluation events (status codes only),',
+        'Goal transition acceptance/rejection codes with condition IDs; no Planner rationale',
         'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
         'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
