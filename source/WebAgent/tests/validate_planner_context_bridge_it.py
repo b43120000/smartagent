@@ -78,6 +78,44 @@ class PlannerContextBridgeIT(unittest.TestCase):
     def setUp(self):
         self.runtime = FakeRuntime()
 
+    def test_ccrc_transaction_is_visible_without_raw_commands(self):
+        from agent_core.cross_contract_repair import CrossContractRepairCoordinator
+        coordinator = CrossContractRepairCoordinator(
+            request_id=self.runtime.run_id, task_epoch=self.runtime.task_epoch,
+            goal="Deploy the authorized fixture",
+        )
+        rejected = [{
+            "reason": "invalid_progress_payload",
+            "field_issues": [{"field": "outcome", "code": "missing"}],
+        }]
+        coordinator.observe([{
+            "tool": "report_progress", "action_id": "PROGRESS",
+            "decision": "CONTINUE", "next_action": "run_command",
+        }, {
+            "tool": "run_command", "action_id": "REPLACE-ME",
+            "command": "PRIVATE_SCRIPT_CONTENT_MUST_NOT_BE_EXPORTED",
+        }], rejected, declared_tools=["run_command"])
+        self.runtime._ccrc = coordinator
+        self.runtime._planner_context_diagnostics = [{
+            **rejected[0],
+            "cross_contract_repair": {
+                "schema": "SMARTAGENT_CROSS_CONTRACT_REPAIR_V1",
+                "mode": "FIELD_REPAIR", "field_rounds": 1,
+                "reconstruction_rounds": 0,
+            },
+        }]
+        snapshot = build_planner_context_snapshot(self.runtime)
+        state = snapshot["recovery"]["cross_contract_repair"]
+        self.assertTrue(state["active"])
+        self.assertEqual(state["mode"], "FIELD_REPAIR")
+        self.assertEqual(state["field_rounds"], 1)
+        self.assertFalse(state["budget_reset"])
+        self.assertEqual(len(state["goal_anchor_sha256"]), 64)
+        self.assertEqual(snapshot["latest_protocol_diagnostics"][-1]
+                         ["cross_contract_repair"]["mode"], "FIELD_REPAIR")
+        self.assertNotIn("PRIVATE_SCRIPT_CONTENT_MUST_NOT_BE_EXPORTED",
+                         json.dumps(snapshot))
+
     def test_case_d_scope_failure_preserved_with_correct_execution_facts(self):
         snapshot = build_planner_context_snapshot(self.runtime)
         self.assertEqual(snapshot['schema'], 'SMARTAGENT_PLANNER_CONTEXT_V1')
