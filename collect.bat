@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($env:SA_COLLECT_ROOT)
 $task = [string]$env:SA_COLLECT_TASK
 $request = [string]$env:SA_COLLECT_REQUEST
-$baseSha = 'f7ec5429fc1a2b761e1592d068b488d851c6e184'
+$baseSha = 'e25bea7aa2d540cb77aead61babeaacaf3f19154'
 
 function Assert-Id([string]$id, [string]$kind) {
     if ($id -and $id -notmatch '^[A-Za-z0-9_-]{1,160}$') {
