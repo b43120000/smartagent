@@ -90,18 +90,20 @@ class PlannerContextBridgeIT(unittest.TestCase):
                          'resolved_scope_expands_beyond_explicit_path')
         self.assertEqual(rows['inspect-case-d-target-replan-02']['verification_status'], 'UNKNOWN')
         self.assertFalse(snapshot['scope']['scope_expansion_authorized'])
+        self.assertIn('runtime_capability_state', snapshot)
+        self.assertNotIn('capability_resolution', snapshot)
 
     def test_scr_candidate_is_not_falsely_advertised_as_admitted(self):
         snapshot = build_planner_context_snapshot(self.runtime)
         readiness = {row['tool']: row for row in
-                     snapshot['capability_resolution']['tool_readiness']}
+                     snapshot['runtime_capability_state']['tool_readiness']}
         self.assertEqual(readiness['list_directory']['read_capability'], 'directory.list')
         self.assertEqual(readiness['list_directory']['capability_state'], 'SELECTION_REQUIRED')
         self.assertEqual(readiness['inspect_directory']['capability_state'], 'SELECTED')
         self.assertEqual(readiness['run_command']['action_admission'],
                          'REQUIRES_RUNTIME_ADMISSION')
         self.assertFalse(readiness['list_directory']['selection_can_expand_authorization'])
-        self.assertEqual(snapshot['capability_resolution']['selected_capabilities'],
+        self.assertEqual(snapshot['runtime_capability_state']['selected_capabilities'],
                          ['directory.inspect_metadata', 'project.inspect_scope'])
 
     def test_protocol_reject_does_not_erase_prior_tool_failures(self):
@@ -133,9 +135,9 @@ class PlannerContextBridgeIT(unittest.TestCase):
     def test_request_epoch_binding_mismatch_is_explicit(self):
         self.runtime.tools._runtime_semantic_capability_resolution['task_epoch'] = 'OLD'
         snapshot = build_planner_context_snapshot(self.runtime)
-        self.assertTrue(snapshot['capability_resolution']['binding_identity_mismatch'])
-        self.assertFalse(snapshot['capability_resolution']['binding_present'])
-        self.assertEqual(snapshot['capability_resolution']['tool_readiness'][0]['capability_state'],
+        self.assertTrue(snapshot['runtime_capability_state']['binding_identity_mismatch'])
+        self.assertFalse(snapshot['runtime_capability_state']['binding_present'])
+        self.assertEqual(snapshot['runtime_capability_state']['tool_readiness'][0]['capability_state'],
                          'BINDING_IDENTITY_MISMATCH')
 
     def test_old_active_blockers_are_reported_when_truncated(self):
