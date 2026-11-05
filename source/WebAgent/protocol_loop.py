@@ -6260,7 +6260,7 @@ class WebAgentProtocolLoop:
                 if any(item.get("reason") == "unexpected_field" for item in ack_diagnostics):
                     if any(item.get("tool") == "report_progress"
                            for item in ack_diagnostics if item.get("reason") == "unexpected_field"):
-                        repair_note = (
+                        repair_note += (
                             "\n這是 PROGRESS_SCHEMA_REPAIR：只保留 report_progress 的 "
                             "canonical 欄位（tool/action_id/decision/outcome/"
                             "current_step/total_steps/current_focus/steps/"
@@ -6270,7 +6270,7 @@ class WebAgentProtocolLoop:
                             "已接受的 Progress 計畫欄位可在 PATCH 省略並由 Runtime 沿用。"
                         )
                     else:
-                        repair_note = (
+                        repair_note += (
                             "\n這不是 FIELD_REPAIR，而是 ACTION_REPLAN：原 action 含有未定義或放錯層級的欄位。"
                             "請使用新的 action_id，依 tool 的 canonical schema 重建完整 action；"
                             "不得保留 diagnostic 指出的欄位。query_project 的 operation/path/symbol "
@@ -6296,7 +6296,7 @@ class WebAgentProtocolLoop:
                         "Capability selection does not expand Scope/ACL."
                     )
                 if any(item.get("reason") == "MISSING_OR_INVALID_FIELD" for item in ack_diagnostics):
-                    repair_note = (
+                    repair_note += (
                         "\n這是 FIELD_REPAIR：保留原 tool、action_id 與所有已提供欄位，只補 diagnostic 指定欄位。"
                     )
                 context_request_repairs = [
