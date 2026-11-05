@@ -121,9 +121,21 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
         "authorizes_execution": False,
         "goal_completion_verified": False,
     }
+    scope_classification = (
+        record.get("scope_diagnostic") or {}
+        if isinstance(record.get("scope_diagnostic"), Mapping) else {}
+    )
     if evidence_status != "ACTIVE":
         base.update(classification="STALE_EVIDENCE",
                     eligible_transition="EVIDENCE_ACQUISITION")
+    elif (not executed and status in {"REJECTED", "FAILED"}
+          and scope_classification.get("category") ==
+              "PROJECT_WORKSPACE_UNAVAILABLE_OR_NOT_DIRECTORY"):
+        # A project inventory requires an existing workspace, but a blocked
+        # inventory call is NOT a verified negative filesystem observation.
+        base.update(classification="PREEXECUTION_PROJECT_WORKSPACE_UNVERIFIED",
+                    eligible_transition="EVIDENCE_ACQUISITION",
+                    proves_missing_prerequisite=False)
     elif not executed and status in {"REJECTED", "FAILED"}:
         base.update(classification="PREEXECUTION_ADMISSION_BLOCKER",
                     eligible_transition="ACTION_REPAIR")
