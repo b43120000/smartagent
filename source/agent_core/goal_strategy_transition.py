@@ -172,7 +172,14 @@ def build_transition_readiness(runtime) -> dict:
                            "blocking_action_id": str(aid)[:160],
                            **item})
     selected = candidates[-8:]
-    latest = selected[-1] if selected else {}
+    # A historical denial must not keep attracting the Planner's attention
+    # after a newer verified PASS. Only the *latest* committed Action Result
+    # can be presented as a current blocker without stronger correlation.
+    latest_id = list(evidence)[-1] if evidence else ""
+    latest = (
+        selected[-1] if selected and selected[-1]["evidence_ref"] == latest_id
+        else {}
+    )
     return {
         "schema": READINESS_SCHEMA,
         "goal_anchor_sha256": goal_digest(goal),
@@ -182,6 +189,7 @@ def build_transition_readiness(runtime) -> dict:
         "unresolved_success_conditions": unresolved,
         "latest_blocker": latest,
         "recent_blockers": selected,
+        "historical_blockers_are_not_current_goal_state": True,
         "transition_options": sorted(KINDS),
         "proposal_required_for_normal_progress": False,
         "transition_proposal_schema": {
