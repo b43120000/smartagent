@@ -38,11 +38,13 @@ class CollectRCAV3IT(unittest.TestCase):
             base = {"task_id": task, "request_id": request}
             def progress_response(scr, aid):
                 fence = chr(96) * 3
+                payload = {"tool": "report_progress", "action_id": aid,
+                           "decision": "CONTINUE"}
+                if scr is not None:
+                    payload["capability_resolution"] = scr
                 return "\n".join([
                     fence + "smartagent_tool",
-                    json.dumps({"tool": "report_progress", "action_id": aid,
-                                "capability_resolution": scr,
-                                "decision": "CONTINUE"}, separators=(",", ":")),
+                    json.dumps(payload, separators=(",", ":")),
                     json.dumps({"tool": "turn_commit", "action_count": 1}),
                     fence,
                 ])
@@ -86,6 +88,31 @@ class CollectRCAV3IT(unittest.TestCase):
                  "timestamp": 105.0, "status": "NOT_ELIGIBLE",
                  "reason_code": "RUNTIME_ATTESTATION_NOT_AVAILABLE",
                  "authorization_granted": False},
+                {**base, "event": "planner_response_received", "round": 3,
+                 "timestamp": 106.0, "response": progress_response(None, "P-3")},
+                {**base, "event": "tool_started", "round": 3, "timestamp": 107.0,
+                 "action_id": "A-SCOPE-UNAVAILABLE", "tool": "inspect_project_scope",
+                 "scope_allowed": False,
+                 "scope_reason_code": "workspace_not_found_or_not_directory",
+                 "scope_category": "PROJECT_WORKSPACE_UNAVAILABLE_OR_NOT_DIRECTORY",
+                 "scope_path_role": "PROJECT_WORKSPACE",
+                 "scope_transition": "EVIDENCE_ACQUISITION",
+                 "scope_required_field": ""},
+                {**base, "event": "protocol_rejected", "round": 4, "timestamp": 108.0,
+                 "diagnostics": [{
+                     "reason": "invalid_progress_payload",
+                     "field_issues": [{
+                         "field": "context_request.detail",
+                         "code": "detail_required",
+                     }],
+                     "context_request_repair": {
+                         "field_issues": [{
+                             "field": "context_request.detail",
+                             "code": "detail_required",
+                         }],
+                         "objective_blocker_ids": ["A-SCOPE-UNAVAILABLE"],
+                     },
+                 }]},
             ]
             (logs / "webagent_runtime.jsonl").write_text(
                 "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
@@ -103,14 +130,25 @@ class CollectRCAV3IT(unittest.TestCase):
                 manifest = load("manifest.json")
                 self.assertEqual(manifest["schema"], "SMARTAGENT_LIVE_RCA_V3")
                 diff = load("planner_contract_diff.json")
-                self.assertEqual(len(diff), 2)
+                self.assertEqual(len(diff), 3)
                 self.assertFalse(diff[0]["schema_valid"])
                 self.assertTrue(diff[1]["schema_valid"])
                 self.assertTrue(diff[1]["proposal_changed_from_previous"])
+                self.assertEqual(diff[1]["known_capabilities"],
+                                 ["directory.inspect_metadata"])
+                self.assertFalse(diff[2]["scr_present"])
+                self.assertEqual(diff[2]["known_capabilities"], [])
                 delivery = load("planner_context_delivery.json")
                 self.assertTrue(any(row.get("context_digest") == "a" * 64 for row in delivery))
                 preflight = load("replan_preflight_summary.json")
                 self.assertTrue(any(row["status"] == "NOT_ELIGIBLE" for row in preflight))
+                scope = load("scope_preflight_summary.json")
+                self.assertEqual(scope[0]["scope_reason_code"],
+                                 "workspace_not_found_or_not_directory")
+                self.assertFalse(scope[0]["filesystem_absence_verified"])
+                context = load("context_request_repair_summary.json")
+                self.assertEqual(context[0]["field_repairs"][0]["issues"][0]["code"],
+                                 "detail_required")
                 for filename in archive.namelist():
                     data = archive.read(filename).decode("utf-8")
                     self.assertNotIn(secret, data)
