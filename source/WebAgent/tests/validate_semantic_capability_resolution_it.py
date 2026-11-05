@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from agent_core.semantic_capability_resolution import (
     SCHEMA, SemanticCapabilityError, normalize_resolution,
-    verify_resolution_for_actions,
+    verify_resolution_for_actions, describe_resolution_repair, resolution_decision_shape,
 )
 from agent_core.smartagent_protocol import validate_tool_envelope
 from WebAgent.tool_context import WebAgentToolContext
@@ -46,6 +46,34 @@ def run():
                 "semantic_capability_removal_forbidden")
     assert verify_resolution_for_actions(BOTH, LIST, [
         {"tool": "inspect_directory"}]) == BOTH
+
+    # A malformed Planner proposal must receive exact, non-secret repair
+    # metadata without a broader authorization or Runtime-selected intent.
+    broken = {
+        "schema": "WRONG_SCHEMA",
+        "capabilities": ["directory.list", "unknown.secret", "directory.list"],
+        "runtime_capability_state": {"scope": "DO_NOT_ECHO"},
+    }
+    hint = describe_resolution_repair(
+        broken, LIST, [{"tool": "inspect_directory"}],
+    )
+    shape = hint["proposal_shape"]
+    assert hint["repair_target"] == "report_progress.capability_resolution"
+    assert shape["extra_key_count"] == 1
+    assert shape["schema_matches"] is False
+    assert shape["unknown_or_invalid_count"] == 1
+    assert shape["duplicate_count"] == 1
+    assert hint["previously_selected"] == ["directory.list"]
+    assert hint["required_for_submitted_actions"] == ["directory.inspect_metadata"]
+    assert "DO_NOT_ECHO" not in str(hint)
+    assert "unknown.secret" not in str(hint)
+    assert resolution_decision_shape(LIST) != resolution_decision_shape(BOTH)
+    assert resolution_decision_shape({"schema": "RANDOM_1", "capabilities": []}) == (
+        resolution_decision_shape({"schema": "RANDOM_2", "capabilities": []})
+    )
+    assert resolution_decision_shape({"schema": SCHEMA, "capabilities": ["directory.list"]}) == (
+        resolution_decision_shape(LIST)
+    )
 
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp).resolve()
