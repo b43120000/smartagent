@@ -82,10 +82,38 @@ def _diagnostic(row: Mapping) -> dict:
                 "field": _code(issue.get("field")),
                 "expected": str(issue.get("expected", "") or "")[:120],
             })
+    repair = row.get("capability_repair")
+    safe_repair = {}
+    if isinstance(repair, Mapping):
+        shape = repair.get("proposal_shape")
+        shape = shape if isinstance(shape, Mapping) else {}
+        safe_shape_keys = (
+            "present", "object_type_valid", "key_set_exact",
+            "extra_key_count", "schema_present", "schema_matches",
+            "capabilities_is_list", "capability_count",
+            "unknown_or_invalid_count", "duplicate_count",
+        )
+        safe_shape = {
+            k: v for k in safe_shape_keys for v in [shape.get(k)]
+            if type(v) is bool or (type(v) is int and 0 <= v <= 100000)
+        }
+        safe_repair = {
+            "repair_target": "report_progress.capability_resolution",
+            "expected_keys": ["schema", "capabilities"],
+            "canonical_schema": "SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1",
+            "proposal_shape": safe_shape,
+            "previously_selected": [
+                _code(x) for x in list(repair.get("previously_selected") or [])[:12]
+            ],
+            "required_for_submitted_actions": [
+                _code(x) for x in list(repair.get("required_for_submitted_actions") or [])[:12]
+            ],
+        }
     return {
         "reason": _code(row.get("reason"), "UNKNOWN"),
         "field_issues": issues,
         "repair_scope": _code(row.get("repair_scope")),
+        "capability_repair": safe_repair,
         "preserved_action_ids": [str(x)[:160] for x in list(row.get("preserved_action_ids") or [])[:16]],
     }
 
@@ -194,7 +222,7 @@ def build_planner_context_snapshot(runtime) -> dict:
             "candidate_tools_are_not_admission_grants": True,
             "objective_blockers": objective_blockers,
         },
-        "capability_resolution": {
+        "runtime_capability_state": {
             "binding_present": bool(matched),
             "binding_identity_mismatch": bool(old_binding_mismatch),
             "selected_capabilities": selected,
@@ -230,6 +258,9 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             + "\n[/SMARTAGENT_PLANNER_CONTEXT_V1]\n"
             "This is a Runtime-owned, read-only decision snapshot. Candidate tools are NOT grants. "
             "Honor executed/verification states and do not treat UNKNOWN as absence. "
+            "runtime_capability_state describes observed state, NOT a report_progress field. "
+            "Only report_progress.capability_resolution is the Planner proposal, with exactly "
+            "{schema: SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1, capabilities: [canonical keys]}. "
             "To add a selected SCR capability, propose a cumulative capability_resolution "
-            "on report_progress and pass all ordinary Tool Admission checks; do not re-run "
+            "and pass all ordinary Tool Admission checks; do not re-run "
             "rejected actions merely under new IDs.", payload)
