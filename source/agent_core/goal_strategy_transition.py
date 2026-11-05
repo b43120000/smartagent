@@ -225,7 +225,9 @@ def validate_planner_transition(
     }
     if not isinstance(proposal, Mapping) or set(proposal) != fields:
         raise GoalTransitionError("goal_transition_schema_invalid")
-    if proposal.get("schema") != SCHEMA or proposal.get("kind") not in KINDS:
+    if (proposal.get("schema") != SCHEMA
+            or type(proposal.get("kind")) is not str
+            or proposal["kind"] not in KINDS):
         raise GoalTransitionError("goal_transition_kind_invalid")
     if proposal.get("goal_anchor_sha256") != goal_digest(goal):
         raise GoalTransitionError("goal_transition_goal_anchor_mismatch")
@@ -239,7 +241,7 @@ def validate_planner_transition(
     row = evidence.get(ref)
     if not isinstance(row, Mapping) or row.get("evidence_status", "ACTIVE") != "ACTIVE":
         raise GoalTransitionError("goal_transition_evidence_not_active")
-    if row.get("request_id", request_id) != request_id or row.get("task_epoch", task_epoch) != task_epoch:
+    if row.get("request_id") != request_id or row.get("task_epoch") != task_epoch:
         raise GoalTransitionError("goal_transition_evidence_identity_mismatch")
     if ref not in action_ledger:
         raise GoalTransitionError("goal_transition_action_not_found")
