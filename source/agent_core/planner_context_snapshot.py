@@ -80,6 +80,7 @@ def _diagnostic(row: Mapping) -> dict:
         if isinstance(issue, Mapping):
             issues.append({
                 "field": _code(issue.get("field")),
+                "code": _code(issue.get("code")),
                 "expected": str(issue.get("expected", "") or "")[:120],
             })
     repair = row.get("capability_repair")
@@ -125,10 +126,28 @@ def _diagnostic(row: Mapping) -> dict:
                 _code(x) for x in list(repair.get("required_for_submitted_actions") or [])[:12]
             ],
         }
+    context_repair = row.get("context_request_repair")
+    safe_context = {}
+    if isinstance(context_repair, Mapping) and context_repair.get("schema") == (
+            "SMARTAGENT_CONTEXT_REQUEST_FIELD_REPAIR_V1"):
+        safe_context = {
+            "schema": "SMARTAGENT_CONTEXT_REQUEST_FIELD_REPAIR_V1",
+            "repair_scope": "CONTEXT_REQUEST_SCHEMA",
+            "allowed_fields": ["kind", "detail", "blocking_action_id"],
+            "allowed_kinds": ["BLOCKED", "RUNTIME_READ", "USER_INPUT"],
+            "field_issues": issues,
+            "objective_blocker_ids": [
+                str(x)[:160] for x in list(context_repair.get("objective_blocker_ids") or [])[:8]
+                if isinstance(x, str)
+            ],
+            "blocked_requires_runtime_receipt": True,
+            "runtime_read_requires_continue": True,
+        }
     return {
         "reason": _code(row.get("reason"), "UNKNOWN"),
         "field_issues": issues,
         "repair_scope": _code(row.get("repair_scope")),
+        "context_request_repair": safe_context,
         "capability_repair": safe_repair,
         "preserved_action_ids": [str(x)[:160] for x in list(row.get("preserved_action_ids") or [])[:16]],
     }
@@ -195,6 +214,7 @@ def build_planner_context_snapshot(runtime) -> dict:
     diagnostics = [_diagnostic(row) for row in list(getattr(runtime, "_planner_context_diagnostics", []) or [])[-MAX_PROTOCOL_DIAGNOSTICS:]
                    if isinstance(row, Mapping)]
     from .goal_strategy_transition import build_transition_readiness
+    from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
     payload = {
         "schema": SCHEMA,
@@ -212,10 +232,7 @@ def build_planner_context_snapshot(runtime) -> dict:
             "scope_admission_still_required": True,
         },
         "recent_action_evidence": rows,
-        "scope_preflight_readiness": (
-            __import__("agent_core.action_readiness", fromlist=["current_action_readiness"])
-            .current_action_readiness(evidence, actions)
-        ),
+        "scope_preflight_readiness": current_action_readiness(evidence, actions),
         "evidence_total": len(ids),
         "omitted_older_action_count": len(ids) - len(retained),
         "omitted_active_blocker_count": len(omitted_ids),
