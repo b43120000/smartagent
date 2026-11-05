@@ -192,8 +192,11 @@ def build_planner_context_snapshot(runtime) -> dict:
     recovery = dict(getattr(runtime, "pending_result_recovery", {}) or {})
     diagnostics = [_diagnostic(row) for row in list(getattr(runtime, "_planner_context_diagnostics", []) or [])[-MAX_PROTOCOL_DIAGNOSTICS:]
                    if isinstance(row, Mapping)]
+    from .goal_strategy_transition import build_transition_readiness
+    goal_transition_readiness = build_transition_readiness(runtime)
     payload = {
         "schema": SCHEMA,
+        "goal_transition_readiness": goal_transition_readiness,
         "goal": {
             "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
                       _code(getattr(progress, "decision", ""), "UNKNOWN"),
@@ -274,6 +277,12 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             + "\n[/SMARTAGENT_PLANNER_CONTEXT_V1]\n"
             "This is a Runtime-owned, read-only decision snapshot. Candidate tools are NOT grants. "
             "Honor executed/verification states and do not treat UNKNOWN as absence. "
+            "Goal Transition Readiness only classifies evidence: Planner decides any changed strategy. "
+            "An optional report_progress.goal_transition must bind a declared Goal condition "
+            "to a current Runtime evidence_ref; no such proposal authorizes tools. "
+            "A denied read is not proof of a missing directory; use ACTION_REPAIR or "
+            "EVIDENCE_ACQUISITION, and do not repeat an identically denied read "
+            "without new evidence or changed parameters. "
             "runtime_capability_state describes observed state, NOT a report_progress field. "
             "Only report_progress.capability_resolution is the Planner proposal, with exactly "
             "{schema: SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1, capabilities: [canonical keys]}. "
