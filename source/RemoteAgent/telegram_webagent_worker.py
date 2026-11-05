@@ -155,6 +155,34 @@ def bind_resolved_execution_page(scraper, requested_url: str, execution_url: str
     return resolved
 
 
+def _auto_rca_debug_hook(runtime_log: RemoteRuntimeLog, task, state: str) -> None:
+    """Temporary fixed software hook; never mutates the task's terminal status."""
+    try:
+        from agent_core.auto_rca_upload import collect_and_upload
+        result = collect_and_upload(task.task_id, task.request_id)
+        success = result.get("status") == "SUCCESS"
+        runtime_log.write(
+            "STATUS" if success else "ERROR",
+            component="telegram_webagent_worker",
+            stage="AUTO_RCA_GITHUB_UPLOADED" if success else "AUTO_RCA_GITHUB_UPLOAD_FAILED",
+            task_id=task.task_id,
+            request_id=task.request_id,
+            interruption_state=state,
+            **result,
+        )
+    except Exception as exc:
+        # Diagnostics must never mask an actual failure or block queue cleanup.
+        try:
+            runtime_log.write(
+                "ERROR", component="telegram_webagent_worker",
+                stage="AUTO_RCA_HOOK_ERROR", task_id=task.task_id,
+                request_id=task.request_id, interruption_state=state,
+                error_type=type(exc).__name__,
+            )
+        except Exception:
+            pass
+
+
 def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     from agent_core.protocol_manifest import require_protocol_manifest
     # ``root`` may be redirected to a temporary state directory by tests, but
@@ -756,6 +784,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 stage="TASK_CANCELLED", task_id=task.task_id,
                 request_id=task.request_id,
             )
+            _auto_rca_debug_hook(runtime_log, task, "CANCELLED")
             return 0
         progress = read_progress(task.task_id, root=root)
         # A protocol loop may deliberately pause after detecting semantic
@@ -829,6 +858,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 request_id=task.request_id,
                 error=f"{type(exc).__name__}: {exc}",
             )
+            _auto_rca_debug_hook(runtime_log, task, "PAUSED")
             return 0  # Worker exited cleanly; task remains nonterminal PAUSED.
         if protocol_only_interruption:
             interrupted = queue.interrupt_running(
@@ -859,6 +889,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             request_id=task.request_id,
             error=f"{type(exc).__name__}: {exc}",
         )
+        _auto_rca_debug_hook(runtime_log, task, "INTERRUPTED" if protocol_only_interruption else "FAILED")
         raise
     finally:
         stop_heartbeat.set()
