@@ -106,6 +106,7 @@ class CollectRCAV3IT(unittest.TestCase):
                          "code": "detail_required",
                      }],
                      "context_request_repair": {
+                         "schema": "SMARTAGENT_CONTEXT_REQUEST_FIELD_REPAIR_V1",
                          "field_issues": [{
                              "field": "context_request.detail",
                              "code": "detail_required",
@@ -113,6 +114,33 @@ class CollectRCAV3IT(unittest.TestCase):
                          "objective_blocker_ids": ["A-SCOPE-UNAVAILABLE"],
                      },
                  }]},
+                {**base, "event": "command_repair_readiness_evaluated", "round": 5,
+                 "timestamp": 109.0, "action_id": "D9", "repair_mode": "FIELD_REPAIR",
+                 "issue_count": 3, "previous_issue_count": None,
+                 "resolved_issue_count": 0, "introduced_issue_count": 0,
+                 "converging": False, "issue_fields": [
+                     "operation", "verify", "success_criteria",
+                 ], "issue_codes": [
+                     "operation_not_in_registry",
+                     "required_if_non_observation",
+                 ], "authorization_granted": False, "executed": False},
+                {**base, "event": "protocol_rejected", "round": 5,
+                 "timestamp": 109.5, "diagnostics": [{
+                     "tool": "run_command", "reason": "inline_script_too_complex",
+                     "detail": "field=verify[0].command; hidden=" + secret,
+                     "command_repair": {
+                         "schema": "SMARTAGENT_COMMAND_REPAIR_READINESS_V1",
+                         "action_id": "D9", "mode": "ACTION_RECONSTRUCTION",
+                         "issue_count": 1, "field_issues": [
+                             {"field": "command", "code": "inline_script_too_complex"},
+                         ], "authorization_granted": False,
+                     },
+                 }]},
+                {**base, "event": "command_repair_converged", "round": 6,
+                 "timestamp": 110.0, "action_id": "D9",
+                 "previous_issue_count": 3, "current_issue_count": 0,
+                 "resolved_issue_count": 3, "introduced_issue_count": 0,
+                 "full_admission_passed": True, "executed": False},
             ]
             (logs / "webagent_runtime.jsonl").write_text(
                 "\n".join(json.dumps(event, ensure_ascii=False) for event in events),
@@ -149,6 +177,17 @@ class CollectRCAV3IT(unittest.TestCase):
                 context = load("context_request_repair_summary.json")
                 self.assertEqual(context[0]["field_repairs"][0]["issues"][0]["code"],
                                  "detail_required")
+                command_events = load("command_repair_summary.json")
+                self.assertEqual(len(command_events), 3)
+                rejections = [row for row in command_events
+                              if row["event"] == "protocol_rejected"]
+                self.assertEqual(rejections[0]["command_reject_field"], "verify")
+                self.assertEqual(rejections[0]["command_repair_diagnostics"][0]["mode"],
+                                 "ACTION_RECONSTRUCTION")
+                successes = [row for row in command_events
+                             if row["event"] == "command_repair_converged"]
+                self.assertEqual(successes[0]["resolved_issue_count"], 3)
+                self.assertTrue(successes[0]["full_admission_passed"])
                 for filename in archive.namelist():
                     data = archive.read(filename).decode("utf-8")
                     self.assertNotIn(secret, data)
