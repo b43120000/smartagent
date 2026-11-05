@@ -3340,34 +3340,40 @@ class WebAgentProtocolLoop:
             return None
         mode = result["mode"]
         if mode in {ACTION_RECONSTRUCTION, REPLAN_REQUIRED}:
-            # Only unexecuted actions can be replaced. Preserve original
-            # command/source in private Runtime state, not in prompt/status.
+            # CCRC owns ONE logical repair target; a new rejected Action ID
+            # must not manufacture another deferred obligation or reset budget.
+            # An already executed or committed action is never replaceable.
             from copy import deepcopy
             command_pending = getattr(self, "pending_command_field_repairs", {})
             deferred = getattr(self, "deferred_action_repairs", {})
-            for action in calls:
-                if not isinstance(action, dict) or action.get("tool") in {
-                    "report_progress", "turn_commit", "final_response",
-                }:
-                    continue
-                ref = action.get("action_id")
-                if not isinstance(ref, str) or not ref or (
-                    ref in self.action_ledger or ref in self.action_result_ledger
-                ):
-                    continue
-                saved = command_pending.pop(ref, None)
-                original = saved.get("action") if isinstance(saved, dict) else None
-                if original is None:
-                    original = action
-                deferred[ref] = {
-                    "action_id": ref, "tool": str(original.get("tool", "")),
-                    "status": ("ACTION_RECONSTRUCTION_REQUIRED" if mode == ACTION_RECONSTRUCTION
-                               else "GOAL_REPLAN_REQUIRED"),
-                    "executed": False, "action": deepcopy(original),
-                    "diagnostics": [], "cross_contract_repair": {
-                        "mode": mode, "transaction_seq": result["transaction_seq"],
-                    },
-                }
+            if mode == ACTION_RECONSTRUCTION:
+                candidate = None
+                for action in calls:
+                    if not isinstance(action, dict) or action.get("tool") in {
+                        "report_progress", "turn_commit", "final_response",
+                    }:
+                        continue
+                    ref = action.get("action_id")
+                    if (isinstance(ref, str) and ref
+                            and ref not in self.action_ledger
+                            and ref not in self.action_result_ledger):
+                        candidate = action
+                        if ref in command_pending or ref in deferred:
+                            break
+                if candidate is not None:
+                    ref = candidate["action_id"]
+                    saved = command_pending.pop(ref, None)
+                    previous = deferred.get(ref) or {}
+                    original = (saved.get("action") if isinstance(saved, dict)
+                                else previous.get("action")) or candidate
+                    deferred[ref] = {
+                        "action_id": ref, "tool": str(original.get("tool", "")),
+                        "status": "ACTION_RECONSTRUCTION_REQUIRED",
+                        "executed": False, "action": deepcopy(original),
+                        "diagnostics": [], "cross_contract_repair": {
+                            "mode": mode, "transaction_seq": result["transaction_seq"],
+                        },
+                    }
             if mode == REPLAN_REQUIRED:
                 # An unadmitted hold must not force the old Action after the
                 # entire decision is explicitly handed back to Goal Replan.
