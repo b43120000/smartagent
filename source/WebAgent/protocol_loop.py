@@ -6531,16 +6531,19 @@ class WebAgentProtocolLoop:
                     from agent_core.cross_contract_repair import (
                         repair_instruction, REPLAN_REQUIRED,
                     )
-                    # CCRC is the final priority instruction. Old per-validator
-                    # repair notes are context only when the window is exhausted.
                     if ccrc_decision["mode"] == REPLAN_REQUIRED:
+                        # The repair transaction has been handed to Goal
+                        # Replan. Do not concatenate earlier single-field
+                        # commands that would restart the exhausted cycle.
+                        repair_note = ("\n" + strategy_replan_note
+                                       if strategy_replan_note else "")
                         repair_note += (
-                            "\n[CCRC_HANDOFF_TO_GOAL_DRIVEN] Old field repair "
-                            "directives above are superseded. Do not keep "
-                            "patching the prior Action or reset the counter by "
-                            "changing action_id. Use original trusted Goal, "
-                            "existing Evidence and ordinary Action Admission "
-                            "for a new authorized plan.\n"
+                            "\n[CCRC_HANDOFF_TO_GOAL_DRIVEN] Previous "
+                            "field-repair instructions are superseded. "
+                            "Do not keep patching the prior Action or reset "
+                            "the counter by changing action_id. Replan from "
+                            "the original trusted Goal and existing Runtime "
+                            "Evidence, then pass all normal admission gates.\n"
                             "[/CCRC_HANDOFF_TO_GOAL_DRIVEN]"
                         )
                     repair_note += "\n" + repair_instruction(ccrc_decision)
@@ -6568,7 +6571,7 @@ class WebAgentProtocolLoop:
                 closed = self._ccrc.admitted()
                 if closed:
                     self._emit("cross_contract_repair_admitted",
-                        request_id=self.run_id, round=self.turn_id, **closed)
+                        round=self.turn_id, **closed)
 
             progress_action = next(action for action in actions if action.get("tool") == "report_progress")
             from agent_core.task_progress import record_progress_repair
