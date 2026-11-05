@@ -144,6 +144,12 @@ class ScopeContextTransitionIT(unittest.TestCase):
             "blocking_action_id": "SCOPE-01",
         }
         self.assertEqual(normalize_context_request(repaired), repaired)
+        with self.assertRaisesRegex(
+            ValueError, "context_request_blocking_action_id_required"
+        ):
+            normalize_context_request({
+                "kind": "BLOCKED", "detail": "Scoped read was refused",
+            })
 
     def test_progress_repair_includes_bounded_context_subfield(self):
         payload = {
