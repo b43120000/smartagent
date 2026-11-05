@@ -6657,6 +6657,13 @@ class WebAgentProtocolLoop:
                     resolved_paths=scope.get("resolved_paths", []),
                     scope_source=scope.get("scope_source", "none"),
                     scope_allowed=scope.get("allowed", True),
+                    scope_reason_code=(scope.get("scope_diagnostic") or {}).get(
+                        "reason_code", "SCOPE_ALLOWED" if scope.get("allowed") else "OTHER_SCOPE_REJECTION"
+                    ),
+                    scope_category=(scope.get("scope_diagnostic") or {}).get("category", "OTHER"),
+                    scope_path_role=(scope.get("scope_diagnostic") or {}).get("path_role", "OTHER"),
+                    scope_transition=(scope.get("scope_diagnostic") or {}).get("eligible_transition", ""),
+                    scope_required_field=(scope.get("scope_diagnostic") or {}).get("required_field", ""),
                     scope_error_code=(
                         next((code for code in (
                             "explicit_path_scope_requires_workspace",
@@ -6732,6 +6739,10 @@ class WebAgentProtocolLoop:
                     )
                     ledger_entry.update(action_evidence)
                     ledger_entry = self._record_action_result_evidence(action, ledger_entry)
+                    # Scope diagnostics are Runtime-owned admission observations,
+                    # not verified filesystem absence or permission to mutate.
+                    if isinstance(scope.get("scope_diagnostic"), dict):
+                        ledger_entry["scope_diagnostic"] = dict(scope["scope_diagnostic"])
                     if (ledger_entry.get("result_status") == "SUCCEEDED"
                             and ledger_entry.get("effective_verification_status") == "PASS"):
                         self._runtime_strategy_replan_note = ""
