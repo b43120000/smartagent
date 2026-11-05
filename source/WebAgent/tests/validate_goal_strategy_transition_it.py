@@ -142,6 +142,9 @@ class GoalTransitionIT(unittest.TestCase):
             "SUCCEEDED", "FACT_OBSERVED", tool="observe_fact", executed=True,
             action_id="FACT-ABSENT", data={
                 "observations": [{
+                    "schema": "SMARTAGENT_EVIDENCE_V1", "field": "file.exists",
+                    "source": "filesystem.stat", "freshness": "CURRENT",
+                    "raw_evidence_ref": "FACT-ABSENT",
                     "observation_status": "CONFIRMED", "value": False,
                 }],
             },
