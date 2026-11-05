@@ -25,6 +25,8 @@ def normalize_context_request(raw):
         raise ValueError('context_request_invalid')
     if kind != 'RUNTIME_READ' and not detail:
         raise ValueError('context_request_detail_required')
+    if kind == 'BLOCKED' and not ref:
+        raise ValueError('context_request_blocking_action_id_required')
     return {'kind': kind, 'detail': detail, 'blocking_action_id': ref}
 
 
