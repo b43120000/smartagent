@@ -3462,7 +3462,7 @@ class WebAgentProtocolLoop:
                     'action_id': ref, 'tool': 'run_command',
                     'status': 'ACTION_RECONSTRUCTION_REQUIRED',
                     'executed': False, 'action': deepcopy(action),
-                    'diagnostics': [],
+                    'readiness': readiness, 'diagnostics': [],
                 }
                 repair = {
                     'schema': readiness['schema'],
@@ -3496,7 +3496,8 @@ class WebAgentProtocolLoop:
                 self.deferred_action_repairs[ref] = {
                     'action_id': ref, 'tool': 'run_command',
                     'status': 'REPAIR_REQUIRED', 'executed': False,
-                    'action': deepcopy(action), 'diagnostics': [],
+                    'action': deepcopy(action), 'readiness': readiness,
+                    'diagnostics': [],
                 }
                 repair = {
                     'schema': readiness['schema'],
