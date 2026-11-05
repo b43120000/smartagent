@@ -171,7 +171,13 @@ def analyze_command_repair(action: Mapping[str, Any]) -> dict:
             add("success_criteria", "success_criteria_required")
         if not negative_assertion and (verify is None or verify == []):
             add("verify", "verify_required")
-    # Unknown operation: do not guess verification requirements.
+    elif normalized_op is None:
+        # Warn about conditional prerequisites in the SAME round as an
+        # unknown operation; never assume which legal operation Planner chose.
+        if not str(action.get("success_criteria", "") or "").strip():
+            add("success_criteria", "required_if_non_observation")
+        if verify is None or verify == []:
+            add("verify", "required_if_non_observation")
 
     fields = sorted({issue["field"] for issue in issues})
     if reconstruct:
