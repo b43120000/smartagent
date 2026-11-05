@@ -186,6 +186,15 @@ class CrossContractIT(unittest.TestCase):
         )
         self.assertIsNone(observed)
         self.assertFalse(coordinator.active)
+        # A run_command does not turn an authorization denial into a CCRC
+        # field repair. The existing Scope/ACL gate retains ownership.
+        scope_denial = coordinator.observe(
+            [progress(), command()],
+            [{"reason": "request_write_ceiling_tool_not_authorized"}],
+            declared_tools=["run_command"],
+        )
+        self.assertIsNone(scope_denial)
+        self.assertFalse(coordinator.active)
 
 
 if __name__ == "__main__":
