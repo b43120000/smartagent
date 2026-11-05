@@ -104,7 +104,10 @@ function Get-PlannerSCRSummary([string]$response) {
     $schemaMatches = ($schemaPresent -and
         [string]$scr.schema -ceq 'SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1')
     $capPresent = ($keys -ccontains 'capabilities')
-    $caps = if ($capPresent) { $scr.capabilities } else { $null }
+    # Do NOT evaluate an array via an if-expression. PowerShell emits an
+    # array's elements from a script block, unwrapping a singleton to string.
+    $caps = $null
+    if ($capPresent) { $caps = $scr.capabilities }
     $isList = ($caps -is [array])
     $values = if ($isList) { @($caps) } else { @() }
     $registry = @('directory.list','directory.inspect_metadata','directory.find',
@@ -205,6 +208,7 @@ $scalarKeys = @(
     'action_id','tool','operation','verification_status','result_status','result_reason','executed','effective_verification_status',
     'execution_status','last_reason','repair_status','diagnostic_reason','error_type',
     'scope_allowed','scope_error_code','scope_source','runtime_fact_ref_count',
+    'scope_reason_code','scope_category','scope_path_role','scope_transition','scope_required_field',
     'project_root_matches_workspace','explicit_path_count','request_paths_grant_write',
     'candidate_count','selected_count',
     'ceiling_active','ceiling_valid','ceiling_reason','grants_authorization',
@@ -332,6 +336,29 @@ try {
                 }
                 if ($scrDiagnostics.Count -gt 0) {
                     $row.scr_repair_diagnostics = @($scrDiagnostics | Select-Object -First 8)
+                }
+                $contextRepairs = @()
+                foreach ($d in @($rec.diagnostics)) {
+                    if ($null -eq $d.context_request_repair) { continue }
+                    $repair = $d.context_request_repair
+                    $issues = @()
+                    foreach ($issue in @($repair.field_issues)) {
+                        if ($null -eq $issue) { continue }
+                        $issues += [ordered]@{
+                            field=(Safe-Code $issue.field)
+                            code=(Safe-Code $issue.code)
+                        }
+                    }
+                    $contextRepairs += [ordered]@{
+                        schema='SMARTAGENT_CONTEXT_REQUEST_FIELD_REPAIR_V1'
+                        repair_scope='CONTEXT_REQUEST_SCHEMA'
+                        issues=@($issues | Select-Object -First 8)
+                        eligible_blocker_count=@($repair.objective_blocker_ids | Where-Object { $_ }).Count
+                        blocked_requires_runtime_receipt=$true
+                    }
+                }
+                if ($contextRepairs.Count -gt 0) {
+                    $row.context_request_repair = @($contextRepairs | Select-Object -First 8)
                 }
             }
             if ($name -eq 'planner_response_received' -and $null -ne $rec.response) {
@@ -500,6 +527,10 @@ try {
             $changed = ($proposalHash -cne [string]$previousSCR.proposal_digest)
             $shapeChanged = ([string]$scr.shape_digest -cne [string]$previousSCR.shape_digest)
         }
+        $knownCapabilities = @()
+        if ($scr.scr_present) {
+            $knownCapabilities = @($scr.known_capabilities | Where-Object { $_ -is [string] })
+        }
         $decisionDiffs += [ordered]@{
             round=$entry.round
             source=$entry.source
@@ -511,7 +542,7 @@ try {
             shape_changed_from_previous=$shapeChanged
             schema_matches=[bool]$scr.schema_matches
             expected_keys_exact=[bool]$scr.expected_keys_exact
-            known_capabilities=@($scr.known_capabilities)
+            known_capabilities=$knownCapabilities
             invalid_capability_count=$scr.invalid_capability_count
             extra_key_count=$scr.extra_key_count
             duplicate_count=$scr.duplicate_count
@@ -547,6 +578,33 @@ try {
         }
     })
     Write-Json (Join-Path $stage 'replan_preflight_summary.json') @($preflight)
+
+    $scopePreflights = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'tool_started' -and $_.scope_allowed -eq $false
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round; action_id=$_.action_id; tool=$_.tool
+            scope_reason_code=$_.scope_reason_code
+            scope_category=$_.scope_category
+            scope_path_role=$_.scope_path_role
+            scope_transition=$_.scope_transition
+            scope_required_field=$_.scope_required_field
+            scope_allowed=$false
+            filesystem_absence_verified=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'scope_preflight_summary.json') @($scopePreflights)
+
+    $contextRepairEvents = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'protocol_rejected' -and $_.context_request_repair
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            reason_codes=@($_.diagnostic_reasons)
+            field_repairs=@($_.context_request_repair)
+        }
+    })
+    Write-Json (Join-Path $stage 'context_request_repair_summary.json') @($contextRepairEvents)
 
     # Goal-aligned Strategy Transition: codes/refs only; no full Goal or rationale.
     $goalTransitions = @($timeline.ToArray() | Where-Object {
@@ -751,6 +809,7 @@ try {
         'Data: request-scoped timeline (event codes, counters, model tool/operation names only),',
         'sanitized SCR proposal shape/digest, decision differences and context delivery digests,',
         'preexecution replan evaluation events (status codes only),',
+        'scope preflight reason codes and context_request subfield repair codes; no raw paths',
         'Goal transition acceptance/rejection codes with condition IDs; no Planner rationale',
         'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
