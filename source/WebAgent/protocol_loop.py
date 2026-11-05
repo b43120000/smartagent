@@ -4319,7 +4319,13 @@ class WebAgentProtocolLoop:
                 validated_goal_transition = validate_planner_transition(
                     goal_transition_proposal,
                     goal=getattr(self.progress_ledger, "goal", "") or self.task_request,
-                    contract=normalized_progress["completion_contract"],
+                    # Transition anchors to PREVIOUSLY accepted conditions;
+                    # new Planner-authored clauses in the current proposal
+                    # cannot manufacture an eligible Goal link.
+                    contract=(
+                        getattr(self.progress_ledger, "completion_contract", {})
+                        or normalized_progress["completion_contract"]
+                    ),
                     evidence=self.action_result_ledger,
                     action_ledger=self.action_ledger,
                     operational=operational,
