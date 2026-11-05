@@ -769,6 +769,11 @@ def record_runtime_strategy_revision(
         "schema": "SMARTAGENT_PROGRESS_STRATEGY_REVISION_V1",
         "revision": revision,
         "history": [*existing, row][-MAX_HISTORY:],
+        # Preserve previously admitted Planner links when Runtime records a
+        # separate evidence-attested strategy revision. Neither authorizes
+        # scope expansion nor rewrites the immutable task goal.
+        "planner_transition_history": list(state.get("planner_transition_history") or [])[-MAX_HISTORY:],
+        "planner_transition_count": int(state.get("planner_transition_count", 0)),
         "active_evidence_digest": digest,
         "goal_changed": False,
         "original_goal_sha256": hashlib.sha256(ledger.goal.encode("utf-8")).hexdigest(),
