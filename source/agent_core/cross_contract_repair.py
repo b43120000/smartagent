@@ -96,10 +96,12 @@ def inspect_cross_contract(
         {"origin": origin, "field": field, "code": code}
         for origin, field, code in sorted(issues)[:48]
     ]
-    relevant = (
-        command_involved
-        or any(row["origin"] in {"PROGRESS", "CONSISTENCY", "COMMAND"}
-               or row["code"] in _RELEVANT for row in rows)
+    # A run_command in a rejected turn is not by itself a contract defect.
+    # In particular, Scope/Authorization/Preflight denials belong to their
+    # original safety gates and must never consume CCRC's format window.
+    relevant = any(
+        row["origin"] in {"PROGRESS", "CONSISTENCY", "COMMAND"}
+        or row["code"] in _RELEVANT for row in rows
     )
     return {
         "schema": SCHEMA,
