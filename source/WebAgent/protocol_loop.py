@@ -3389,6 +3389,21 @@ class WebAgentProtocolLoop:
         admitted, diagnostics = self._accept_action_batch(merged, expected)
         for action in admitted:
             ref = action.get('action_id')
+            saved = before_by_id.get(ref)
+            if saved and action.get('tool') == 'run_command':
+                accepted_readiness = analyze_command_repair(action)
+                convergence = repair_progress(saved.get('readiness'), accepted_readiness)
+                self._emit(
+                    'command_repair_converged',
+                    request_id=self.run_id, round=self.turn_id,
+                    action_id=ref,
+                    previous_issue_count=convergence['previous_issue_count'],
+                    current_issue_count=convergence['current_issue_count'],
+                    resolved_issue_count=convergence['resolved_issue_count'],
+                    introduced_issue_count=convergence['introduced_issue_count'],
+                    full_admission_passed=True,
+                    executed=False, authorization_granted=False,
+                )
             pending.pop(ref, None)
             pending.pop(action.get('replaces_action_id'), None)
         deferred_diagnostics = [
@@ -3443,13 +3458,12 @@ class WebAgentProtocolLoop:
                 continue
             if mode == ACTION_RECONSTRUCTION:
                 pending.pop(ref, None)
-                if ref not in self.deferred_action_repairs:
-                    self.deferred_action_repairs[ref] = {
-                        'action_id': ref, 'tool': 'run_command',
-                        'status': 'ACTION_RECONSTRUCTION_REQUIRED',
-                        'executed': False, 'action': deepcopy(action),
-                        'diagnostics': [],
-                    }
+                self.deferred_action_repairs[ref] = {
+                    'action_id': ref, 'tool': 'run_command',
+                    'status': 'ACTION_RECONSTRUCTION_REQUIRED',
+                    'executed': False, 'action': deepcopy(action),
+                    'diagnostics': [],
+                }
                 repair = {
                     'schema': readiness['schema'],
                     'action_id': ref, 'mode': ACTION_RECONSTRUCTION,
