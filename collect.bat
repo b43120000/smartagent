@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($env:SA_COLLECT_ROOT)
 $task = [string]$env:SA_COLLECT_TASK
 $request = [string]$env:SA_COLLECT_REQUEST
-$baseSha = '4982c6df335c26cbf027b05c385682f130fe963b'
+$baseSha = 'f7ec5429fc1a2b761e1592d068b488d851c6e184'
 
 function Assert-Id([string]$id, [string]$kind) {
     if ($id -and $id -notmatch '^[A-Za-z0-9_-]{1,160}$') {
@@ -138,10 +138,10 @@ function Get-PlannerSCRSummary([string]$response) {
                       $values.Count -le 12 -and $invalid -eq 0 -and $duplicate -eq 0)
     }
     $canonicalShape = ConvertTo-Json -InputObject $shape -Depth 6 -Compress
-    $shape.shape_digest = Hash-Text $canonicalShape
+    $shape['shape_digest'] = Hash-Text $canonicalShape
     # Digest only: detects changes to rejected proposals without exporting any
     # untrusted string or schema value. This is NOT evidence of valid semantics.
-    $shape.proposal_digest = Hash-Text (ConvertTo-Json -InputObject $scr -Depth 8 -Compress)
+    $shape['proposal_digest'] = Hash-Text (ConvertTo-Json -InputObject $scr -Depth 8 -Compress)
     return $shape
 }
 
