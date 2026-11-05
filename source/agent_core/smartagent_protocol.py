@@ -215,7 +215,7 @@ TOOL_ENVELOPE_SCHEMAS = {
     },
     "project_sync": {
         "required": {"strategy": str},
-        "optional": {"project_root": str, "workspace": str, "path": str, "base_snapshot_id": str, "max_bytes": int, "max_files": int},
+        "optional": {"project_root": str, "workspace": str, "path": str, "base_snapshot_id": str, "max_bytes": int, "max_files": int, "goal_conditions": list},
     },
     "query_project": {
         "required": {"project_root": str, "queries": list},

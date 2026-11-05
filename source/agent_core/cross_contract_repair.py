@@ -60,13 +60,20 @@ def inspect_cross_contract(
                 add("PROGRESS", field, _code(row.get("code"), reason))
             elif isinstance(row, str):
                 add("PROGRESS", _code(row, "field"), reason)
-        ready = diagnostic.get("command_repair")
-        if isinstance(ready, Mapping):
+        ready_values = [diagnostic.get("command_repair")]
+        ready_values.extend(list(diagnostic.get("command_repair_diagnostics") or [])[:16])
+        for ready in ready_values:
+            if not isinstance(ready, Mapping):
+                continue
             command_involved = True
             structural_reconstruction |= ready.get("mode") == ACTION_RECONSTRUCTION
             for row in list(ready.get("field_issues") or [])[:32]:
                 if isinstance(row, Mapping):
                     add("COMMAND", row.get("field", "field"), row.get("code", "invalid"))
+        if reason == "run_command_operation_mismatch":
+            add("COMMAND", "operation", "operation_command_mismatch")
+        if reason == "run_command_verification_contract_required":
+            add("COMMAND", "verify", "verification_contract_required")
         if reason in {"inline_script_too_complex", "command_action_reconstruction_required"}:
             structural_reconstruction = True
 
@@ -139,6 +146,7 @@ class CrossContractRepairCoordinator:
         self.reject_rounds = 0
         self.nonconverging_rounds = 0
         self.previous_issues: set[tuple[str, str, str]] = set()
+        self.convergence_generation = 0
         self.active = False
         self.replan_required = False
         self.mode = ""
@@ -160,16 +168,22 @@ class CrossContractRepairCoordinator:
             self.reject_rounds = 0
             self.nonconverging_rounds = 0
             self.previous_issues = set()
+            self.convergence_generation = 0
             self.replan_required = False
         issues = {
             (row["origin"], row["field"], row["code"])
             for row in inspected["field_issues"]
         }
-        resolved = self.previous_issues - issues
-        introduced = issues - self.previous_issues
-        converging = bool(
-            self.reject_rounds and resolved and len(issues) < len(self.previous_issues)
-        )
+        # Ignore the generic ADMISSION row when measuring semantic field
+        # convergence; new defect categories cannot masquerade as progress.
+        field_issues = {row for row in issues if row[0] != "ADMISSION"}
+        previous_fields = {row for row in self.previous_issues if row[0] != "ADMISSION"}
+        resolved = previous_fields - field_issues
+        introduced = field_issues - previous_fields
+        converging = bool(self.reject_rounds and resolved and not introduced
+                          and field_issues < previous_fields)
+        if converging:
+            self.convergence_generation += 1
         if self.reject_rounds:
             self.nonconverging_rounds = 0 if converging else self.nonconverging_rounds + 1
         self.previous_issues = issues
@@ -188,12 +202,14 @@ class CrossContractRepairCoordinator:
                 mode = REPLAN_REQUIRED
             else:
                 mode = ACTION_RECONSTRUCTION
-        elif self.reconstruction_rounds:
-            mode = REPLAN_REQUIRED
         elif (self.field_rounds < self.max_field_rounds
-              and self.nonconverging_rounds < 2):
+              and self.nonconverging_rounds < 3):
+            # An ACTION_RECONSTRUCTION can expose previously unvalidated
+            # required fields. Allow field-only repair without immediately
+            # escalating to another reconstruction/replan.
             mode = FIELD_REPAIR
-        elif inspected["actual_operational_tools"]:
+        elif (not self.reconstruction_rounds
+              and inspected["actual_operational_tools"]):
             mode = ACTION_RECONSTRUCTION
         else:
             mode = REPLAN_REQUIRED
@@ -222,6 +238,7 @@ class CrossContractRepairCoordinator:
             "resolved_issue_count": len(resolved) if self.reject_rounds > 1 else 0,
             "introduced_issue_count": len(introduced) if self.reject_rounds > 1 else 0,
             "converging": converging,
+            "convergence_generation": self.convergence_generation,
             "tracked_action_count": len(self.action_ids),
             "replan_required": self.replan_required,
             "runtime_strategy_selected": False,

@@ -1886,7 +1886,19 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             raise ValueError(f"project_sync_strategy_invalid:{strategy}")
         workspace=_project_sync_workspace(tool_call,agent)
         if strategy == "INDEX_ONLY":
-            return json.dumps(build_project_capsule(workspace),ensure_ascii=False,separators=(",",":"))
+            capsule = build_project_capsule(workspace)
+            if "goal_conditions" in tool_call:
+                from .goal_environment_reconciliation import reconcile_goal_conditions
+                from .project_environment import read_project_environment
+                # Reuse exactly the snapshot built by Project Sync.
+                snapshot = load_project_snapshot(workspace, capsule["snapshot_id"])
+                capsule["goal_reconciliation"] = reconcile_goal_conditions(
+                    snapshot, tool_call["goal_conditions"],
+                    environment_index=read_project_environment(workspace),
+                )
+            return json.dumps(capsule,ensure_ascii=False,separators=(",",":"))
+        if "goal_conditions" in tool_call:
+            raise ValueError("goal_conditions_require_index_only")
         result=build_atomic_project_sync(workspace,strategy,base_snapshot_id=tool_call.get("base_snapshot_id",""),max_bytes=int(tool_call.get("max_bytes",500000)),max_files=int(tool_call.get("max_files",50)))
         if result.get("status")=="READY" and agent:
             runner=getattr(agent,"run_project_sync_transaction",None)

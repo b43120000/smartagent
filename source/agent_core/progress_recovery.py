@@ -165,3 +165,23 @@ def read_fact_digest(action, result):
             payload = {key:payload.get(key) for key in ('status','error','project_root','project_handle','snapshot_id','results')}
             text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+def progress_repair_hold_safe(actions, committed_ids=()):
+    """Fail closed on replay, invalid identity or a terminal-shaped hold.
+
+    This is an unadmitted proposal check; it never grants authorization.
+    """
+    if not isinstance(actions, (list, tuple)) or not actions:
+        return False
+    committed = set(committed_ids)
+    seen = set()
+    for action in actions:
+        if not isinstance(action, dict):
+            return False
+        if action.get('tool') in {'report_progress', 'turn_commit', 'final_response'}:
+            return False
+        aid = action.get('action_id')
+        if not isinstance(aid, str) or not aid.strip() or aid in seen or aid in committed:
+            return False
+        seen.add(aid)
+    return True

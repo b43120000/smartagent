@@ -948,8 +948,15 @@ class WebAgentProtocolLoop:
             1 for entry in self.action_result_ledger.values()
             if entry.get("executed") is True
         )
+        contract = next(
+            (row.get("cross_contract_repair") for row in diagnostics
+             if isinstance(row, dict)
+             and isinstance(row.get("cross_contract_repair"), dict)),
+            None,
+        )
         budget = self._bounded_repair.observe(
-            diagnostics, evidence_generation=evidence_generation
+            diagnostics, evidence_generation=evidence_generation,
+            contract_repair=contract,
         )
         if getattr(self, "_repair_stagnation", None) is not None:
             self._repair_stagnation.rejected(
@@ -3396,6 +3403,8 @@ class WebAgentProtocolLoop:
                 "issue_count", "field_issues", "declared_next_tools",
                 "actual_operational_tools", "field_rounds", "reconstruction_rounds",
                 "nonconverging_rounds", "replan_required",
+                "resolved_issue_count", "introduced_issue_count", "converging",
+                "convergence_generation",
                 "full_admission_required", "authorization_granted", "budget_reset",
             )
         }
@@ -3808,6 +3817,11 @@ class WebAgentProtocolLoop:
         if not candidates or len(candidates) != len(operational):
             self.pending_progress_repair_actions = []
             return []
+        from agent_core.progress_recovery import progress_repair_hold_safe
+        used_ids = set(self.action_ledger) | set(self.action_result_ledger)
+        if not progress_repair_hold_safe(candidates, used_ids):
+            self.pending_progress_repair_actions = []
+            return []
         try:
             context = V8RequestContext(
                 self.run_id,
@@ -3867,6 +3881,15 @@ class WebAgentProtocolLoop:
             self._emit('action_numeric_fields_normalized', request_id=self.run_id, round=self.turn_id, block_indexes=numeric_changes)
         calls = normalized
         pending = [dict(action) for action in self.pending_progress_repair_actions]
+        if pending:
+            from agent_core.progress_recovery import progress_repair_hold_safe
+            used_ids = set(self.action_ledger) | set(self.action_result_ledger)
+            if not progress_repair_hold_safe(pending, used_ids):
+                self.pending_progress_repair_actions = []
+                self._emit("progress_repair_actions_replay_blocked",
+                           request_id=self.run_id, round=self.turn_id,
+                           authorization_granted=False, executed=False)
+                return calls
         if not pending or not calls or calls[-1].get("tool") != "turn_commit":
             return calls
         submitted = [
