@@ -93,6 +93,57 @@ class PlannerContextBridgeIT(unittest.TestCase):
         self.assertIn('runtime_capability_state', snapshot)
         self.assertNotIn('capability_resolution', snapshot)
 
+    def test_scope_preflight_action_readiness_and_goal_anchoring(self):
+        from agent_core.action_readiness import classify_scope_preflight
+        info = classify_scope_preflight(
+            "inspect_project_scope",
+            "workspace_not_found_or_not_directory:E:/nonexistent",
+            allowed=False,
+        )
+        self.runtime.action_result_ledger["scope-case-d-replan-02"]["scope_diagnostic"] = info
+        state = build_planner_context_snapshot(self.runtime)
+        active = state["scope_preflight_readiness"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["category"],
+                         "PROJECT_WORKSPACE_UNAVAILABLE_OR_NOT_DIRECTORY")
+        self.assertEqual(active[0]["eligible_transition"], "EVIDENCE_ACQUISITION")
+        self.assertFalse(active[0]["filesystem_absence_verified"])
+        self.assertNotIn("E:/nonexistent", json.dumps(active))
+        readiness = {row["tool"]: row for row in
+                     state["runtime_capability_state"]["tool_readiness"]}
+        self.assertEqual(
+            readiness["list_directory"]["action_fields"]["required_action_fields_when_explicit_scope"],
+            ["path"],
+        )
+        self.assertTrue(
+            state["scope_preflight_readiness"][0]["tool_admission_still_required"]
+        )
+
+    def test_context_request_repair_subfields_remain_visible_without_raw_text(self):
+        from agent_core.context_acquisition import context_request_repair_diagnostic
+        advice = context_request_repair_diagnostic(
+            {"kind": "BLOCKED", "detail": "", "invented_key": "DO_NOT_EXPORT_SECRET"},
+            objective_blocker_ids=["scope-case-d-replan-02"],
+        )
+        self.runtime._planner_context_diagnostics = [{
+            "reason": "invalid_progress_payload",
+            "field_issues": advice["field_issues"],
+            "repair_scope": "CONTEXT_REQUEST_SCHEMA",
+            "context_request_repair": advice,
+        }]
+        state = build_planner_context_snapshot(self.runtime)
+        item = state["latest_protocol_diagnostics"][0]
+        fields = {row["field"]: row["code"] for row in item["field_issues"]}
+        self.assertEqual(fields["context_request"], "unsupported_keys")
+        self.assertEqual(fields["context_request.detail"], "detail_required")
+        self.assertEqual(fields["context_request.blocking_action_id"],
+                         "objective_blocker_ref_required")
+        self.assertEqual(
+            item["context_request_repair"]["objective_blocker_ids"],
+            ["scope-case-d-replan-02"],
+        )
+        self.assertNotIn("DO_NOT_EXPORT_SECRET", json.dumps(state))
+
     def test_scr_candidate_is_not_falsely_advertised_as_admitted(self):
         snapshot = build_planner_context_snapshot(self.runtime)
         readiness = {row['tool']: row for row in
