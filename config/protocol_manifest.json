@@ -106,7 +106,7 @@
     "source/agent_core/project_sync_runner.py": "7a7c17e9b376b2f26b869a8acfdb9e4dd325cd2924579cfd58cb8109bd3f8d46",
     "source/agent_core/project_sync_transaction.py": "2e8514576da80223d521ab716226ebd0a2a14a4077cc68b00807148c7be5543f",
     "source/agent_core/project_sync.py": "614aad90249e003b5cb6a5d96ffdc95069819777c6f9c6d967286a4dd8d38c82",
-    "source/agent_core/protocol_manifest.py": "a5af7eb6e82e2562add97b56b69f0221866808a4bd5213394cf26f815e107abc",
+    "source/agent_core/protocol_manifest.py": "8c271a4013f4f1b6b539ed3a3b48011e24ce262cc7407859a935f4ee12b52c63",
     "source/agent_core/protocol_v8.py": "31f08b070bbfd2cb67c1323af9f18c6d6c5527036b8131abd7b9cc70fbcb9608",
     "source/agent_core/protocol_v9.py": "26932c3fa2bc41edfc16bc80613953e4c16f0e3a4ecfa42c6d7af5fdb3d8e51a",
     "source/agent_core/query_expected_outcome.py": "fa74ed8331ba794f0c14f3c06ef8d9bd8447788fbf51e02ec72bed99204821bd",
@@ -230,10 +230,11 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "ea0feef8d9d809f7a6d0d24d09fb92d50d146600c1800a4b7c44b82a89d983d9",
+    "source/WebAgent/protocol_loop.py": "a64ffe33d78276b5e1a643420dce35a4c19f90d2ef5674c4421913f3ffaa5958",
     "source/WebAgent/protocol.py": "8130749035ee3c2e5ab20f5cc663417db410e9c062f52ca4c4dffe915b030b22",
     "source/WebAgent/session.py": "542971388bbf974d9c286e760634cd0b816bc2a7ff47a2428e6e8bee4343b114",
-    "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0"
+    "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
+    "source/agent_core/cross_contract_repair.py": "4e2293516c7724f7f861e227292c72ab38a973567b48b571708a0c64d8ede96d"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
