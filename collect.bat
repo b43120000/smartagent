@@ -485,7 +485,12 @@ try {
     $plannerEvents = @($timeline.ToArray() | Where-Object {
         $_.event -eq 'planner_response_received' -and $null -ne $_.planner_scr
     } | Sort-Object @{ Expression={ [int]$_.round } }, @{ Expression={ [double]$_.timestamp_unix } })
+    # Mirrored Remote/WebAgent log sources may contain the same response.
+    # Dedupe only identical (round, SHA256), not genuinely different replies.
+    $seenPlannerReplies = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($entry in $plannerEvents) {
+        $replyKey = ([string]$entry.round + '|' + [string]$entry.response_sha256)
+        if (-not $seenPlannerReplies.Add($replyKey)) { continue }
         $scr = $entry.planner_scr
         $proposalHash = [string]$scr.proposal_digest
         $changed = $null
