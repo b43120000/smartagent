@@ -171,6 +171,25 @@ class PlannerContextBridgeIT(unittest.TestCase):
         self.assertFalse(item["authorization_granted"])
         self.assertNotIn("PRIVATE_SCRIPT_NEVER_EXPORT", json.dumps(snapshot))
 
+    def test_deferred_command_reconstruction_remains_visible_without_source(self):
+        self.runtime.deferred_action_repairs = {
+            "D9-UNEXECUTED": {
+                "tool": "run_command", "status": "ACTION_RECONSTRUCTION_REQUIRED",
+                "action": {"command": "PRIVATE_SCRIPT_NEVER_EXPORT"},
+                "readiness": {"field_issues": [{
+                    "field": "command", "code": "inline_script_too_complex",
+                }]},
+            },
+        }
+        self.runtime.pending_command_field_repairs = {}
+        state = build_planner_context_snapshot(self.runtime)
+        pending = state["recovery"]["pending_command_repairs"]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["action_id"], "D9-UNEXECUTED")
+        self.assertEqual(pending[0]["mode"], "ACTION_RECONSTRUCTION")
+        self.assertFalse(pending[0]["authorization_granted"])
+        self.assertNotIn("PRIVATE_SCRIPT_NEVER_EXPORT", json.dumps(state))
+
     def test_scr_candidate_is_not_falsely_advertised_as_admitted(self):
         snapshot = build_planner_context_snapshot(self.runtime)
         readiness = {row['tool']: row for row in
