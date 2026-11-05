@@ -567,6 +567,57 @@ def record_model_progress(
     return updated
 
 
+
+def record_planner_goal_transition(
+    task_id: str, *, request_id: str, decision: Mapping[str, Any],
+    round_id: int, root: str | Path | None = None,
+) -> TaskProgressLedger:
+    """Persist only an already-admitted, Runtime-validated Planner transition.
+
+    The Goal, accepted Completion Contract, verified action evidence and
+    Runtime-owned strategy revision are NOT modified by this record.
+    """
+    ledger = read_progress(task_id, root)
+    if ledger is None or ledger.request_id != request_id:
+        raise TaskProgressError("goal_transition_record_identity_mismatch")
+    from .goal_strategy_transition import SCHEMA, goal_digest, condition_choices
+    required = {
+        "schema", "kind", "goal_anchor_sha256", "goal_condition_id",
+        "evidence_ref", "blocked_action_id", "next_tool", "rationale_sha256",
+        "evidence_classification", "authorization_granted", "completion_verified",
+    }
+    if (not isinstance(decision, Mapping) or set(decision) != required
+            or decision.get("schema") != SCHEMA
+            or decision.get("goal_anchor_sha256") != goal_digest(ledger.goal)
+            or decision.get("goal_condition_id") not in condition_choices(ledger.completion_contract)
+            or decision.get("authorization_granted") is not False
+            or decision.get("completion_verified") is not False):
+        raise TaskProgressError("goal_transition_record_invalid")
+    record = {
+        "round_id": int(round_id),
+        "kind": str(decision["kind"]),
+        "goal_condition_id": str(decision["goal_condition_id"]),
+        "evidence_ref": str(decision["evidence_ref"]),
+        "blocked_action_id": str(decision["blocked_action_id"]),
+        "next_tool": str(decision["next_tool"]),
+        "rationale_sha256": str(decision["rationale_sha256"]),
+        "evidence_classification": str(decision["evidence_classification"]),
+        "authorization_granted": False,
+        "completion_verified": False,
+    }
+    state = dict(ledger.strategy_state or {})
+    history = list(state.get("planner_transition_history") or [])
+    if not any(row == record for row in history):
+        history.append(record)
+    state["planner_transition_history"] = history[-MAX_HISTORY:]
+    state["planner_transition_count"] = int(state.get("planner_transition_count", 0)) + 1
+    state["goal_anchor_sha256"] = goal_digest(ledger.goal)
+    ledger.strategy_state = state
+    ledger.updated_at = time.time()
+    _atomic_write(get_ledger_path(task_id, root), ledger.to_dict())
+    return ledger
+
+
 def set_runtime_state(task_id: str, state: str, *, reason: str = "", root: str | Path | None = None) -> TaskProgressLedger | None:
     ledger = read_progress(task_id, root)
     if ledger is None:
