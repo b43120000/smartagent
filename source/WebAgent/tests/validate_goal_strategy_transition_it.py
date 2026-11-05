@@ -15,7 +15,7 @@ from agent_core.goal_strategy_transition import (
 )
 from agent_core.task_progress import (
     _atomic_write, condition_id_for, get_ledger_path, initialize_progress,
-    read_progress, record_planner_goal_transition,
+    read_progress, record_planner_goal_transition, record_runtime_strategy_revision,
 )
 from agent_core.tool_result_contract import attach_runtime_result
 
@@ -109,6 +109,16 @@ class GoalTransitionIT(unittest.TestCase):
         self.evidence["ACT-READ-DENIED"]["task_epoch"] = "WRONG"
         self.must_reject(self.proposal, "goal_transition_evidence_identity_mismatch")
 
+    def test_wire_contract_accepts_optional_goal_transition(self):
+        from agent_core.smartagent_protocol import validate_tool_envelope
+        valid, diagnostic = validate_tool_envelope({
+            "tool": "report_progress", "action_id": "P-WIRE",
+            "current_step": 1, "total_steps": 2,
+            "current_focus": "Repair the path field",
+            "goal_transition": self.proposal,
+        })
+        self.assertTrue(valid, diagnostic)
+
     def test_negative_tool_error_does_not_infer_absence(self):
         case = {
             **self.evidence["ACT-READ-DENIED"],
@@ -194,6 +204,24 @@ class GoalTransitionIT(unittest.TestCase):
             persisted.strategy_state["planner_transition_history"][0]["kind"],
             "ACTION_REPAIR",
         )
+        # A separate Runtime-attested Replan must not erase Planner's
+        # previously accepted Goal/evidence dependency.
+        evidence_receipt = {
+            "schema": "SMARTAGENT_PREEXECUTION_REPLAN_V1",
+            "request_id": self.request, "scope_verified": True,
+            "authorization_granted": False, "executed": False,
+            "evidence_digest": "a" * 64,
+            "rejected_action_id": "ACT-BLOCKED",
+            "target": str(self.root / "missing"),
+            "existing_writable_parent": str(self.root),
+        }
+        revised, changed = record_runtime_strategy_revision(
+            self.task, request_id=self.request, evidence=evidence_receipt,
+            round_id=5, root=self.root)
+        self.assertTrue(changed)
+        self.assertEqual(revised.strategy_state["revision"], 4)
+        self.assertEqual(len(revised.strategy_state["planner_transition_history"]), 1)
+        self.assertEqual(revised.goal, self.goal)
 
     def test_readiness_preserves_goal_anchor_and_no_tool_grants(self):
         class Runtime:
@@ -213,6 +241,17 @@ class GoalTransitionIT(unittest.TestCase):
         self.assertEqual(state["latest_blocker"]["eligible_transition"], "ACTION_REPAIR")
         self.assertEqual(len(state["unresolved_success_conditions"]), 1)
         self.assertTrue(state["runtime_owns_evidence_and_admission"])
+        r.action_result_ledger = {
+            **self.evidence,
+            "ACT-VERIFIED-LATER": {
+                "tool": "list_directory", "result_status": "SUCCEEDED",
+                "effective_verification_status": "PASS", "executed": True,
+                "evidence_status": "ACTIVE",
+            },
+        }
+        later = build_transition_readiness(r)
+        self.assertEqual(later["latest_blocker"], {})
+        self.assertEqual(len(later["recent_blockers"]), 1)
 
 
 class GoalTransitionLiveIT(unittest.TestCase):
