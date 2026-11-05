@@ -21,6 +21,19 @@ _LABEL = re.compile(
     r"(?P<path>[A-Za-z]:[\\/][^\s\`\"'<>|?*，,。;；)\]]+|/[^\s\`\"'<>|?*，,。;；)\]]+)",
     re.IGNORECASE,
 )
+_EXPLICIT_VERB_TARGET = re.compile(
+    r"(?:部署|解壓|安裝|deploy|extract|install).{0,16}?"
+    r"(?:到|至|於|into|to)\s*[:：]?\s*[`\"']?"
+    r"(?P<path>[A-Za-z]:[\\/][^\s`\"'<>|?*，,。;；)\]]+|/[^\s`\"'<>|?*，,。;；)\]]+)",
+    re.IGNORECASE,
+)
+_EXPLICIT_IN_TARGET = re.compile(
+    r"(?:在|於|under|within)\s*[`\"']?"
+    r"(?P<path>[A-Za-z]:[\\/][^\s`\"'<>|?*，,。;；)\]]+|/[^\s`\"'<>|?*，,。;；)\]]+)"
+    r"\s*(?:下|中|內|底下|之下)?\s*(?:進行|執行|完成)?\s*"
+    r"(?:部署|解壓|安裝|deploy|extract|install)",
+    re.IGNORECASE,
+)
 _RELOCATION = re.compile(
     r"(?:如果|若|if)\s*.{0,100}(?:覆蓋|overwrit|衝突|conflict)"
     r".{0,110}(?:新.*(?:目錄|資料夾)|獨立.*(?:目錄|資料夾)|alternative|separate directory)",
@@ -58,6 +71,9 @@ def extract_target_contract(request: str) -> dict | None:
     if readonly and not followed_by_mutation:
         return None
     matches = [m.group("path").rstrip("\\/") for m in _LABEL.finditer(text)]
+    matches.extend(m.group("path").rstrip("\\/") for expression in
+                   (_EXPLICIT_VERB_TARGET, _EXPLICIT_IN_TARGET)
+                   for m in expression.finditer(text))
     if not matches:
         return None
     normalized = {os.path.normcase(os.path.normpath(p)) for p in matches}

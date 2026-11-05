@@ -67,6 +67,17 @@ class TargetPathContractRegression(unittest.TestCase):
         self.assertIsNone(extract_target_contract(
             f"研究 {self.destination} 的腳本，請解釋內容。"))
 
+    def test_explicit_natural_language_destination_is_bound(self):
+        for request in (
+            f"請把測試包部署到 {self.destination}",
+            f"請在 {self.destination} 下部署測試包",
+            f"Deploy to {self.destination}",
+        ):
+            contract = extract_target_contract(request)
+            self.assertIsNotNone(contract, request)
+            self.assertEqual(contract["requested_target"],
+                             str(self.destination), contract)
+
     def test_readonly_deployment_inspection_does_not_bind_mutation_gate(self):
         c = extract_target_contract(
             f"請唯讀檢查部署結果。預期部署根目錄：{self.destination}")
