@@ -326,7 +326,7 @@ try {
                 foreach ($d in @($rec.diagnostics)) {
                     $detailText = [string]$d.detail
                     if ([string]$d.tool -eq 'run_command' -and
-                        $detailText -match '^field=(command|operation|verify|success_criteria|working_directory|timeout|action_id)(?:\\[[0-9]{1,2}\\]\\.command)?(?:;|\\s|$)') {
+                        $detailText -match '^field=(command|operation|verify|success_criteria|working_directory|timeout|action_id)(?:\[[0-9]{1,2}\]\.command)?(?:;|\s|$)') {
                         $fieldName = [string]$Matches[1]
                         if ($knownCommandFields -ccontains $fieldName) {
                             $row.command_reject_field = $fieldName
