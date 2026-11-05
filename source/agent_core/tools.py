@@ -145,6 +145,9 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
     if not request_allowed:
         info.update(allowed=False, scope_source="request_write_ceiling",
                     error=request_reason)
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info["error"], allowed=False)
         return info
     if tool == 'run_command':
         try:
@@ -157,6 +160,9 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
                 resolved_paths=[str(cwd)],scope_source='working_directory' if 'working_directory' in tool_call else 'workspace_default')
         except (PathSecurityError, ValueError, OSError) as exc:
             info.update(allowed=False,error=str(exc))
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info.get("error", ""), allowed=bool(info["allowed"]))
         return info
     if tool == 'delete_path':
         requested = str(tool_call.get('path', '') or '')
@@ -170,6 +176,9 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
             info['resolved_paths'] = [str(target)]
         except (PathSecurityError, ValueError, OSError) as exc:
             info.update(allowed=False, error=str(exc))
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info.get("error", ""), allowed=bool(info["allowed"]))
         return info
     if tool not in _SCOPED_INSPECTION_TOOLS:
         return info
