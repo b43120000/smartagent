@@ -1,0 +1,159 @@
+"""Offline regressions for immutable deployment target and terminal path admission."""
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from agent_core.target_path_contract import (
+    extract_target_contract, observe_target, verify_target_completion,
+)
+
+
+class ReadScope:
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+
+    def require_read(self, path, *, require_absolute=False):
+        candidate = Path(path)
+        if require_absolute and not candidate.is_absolute():
+            raise ValueError("absolute_path_required")
+        result = candidate.resolve(strict=False)
+        if not result.is_relative_to(self.root):
+            raise PermissionError("outside_authorized_scope")
+        return result
+
+
+class TargetPathContractRegression(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.destination = self.root / "deployment"
+        self.scope = ReadScope(self.root)
+        self.requirements = ("case_a", "case_b", "case_c")
+
+    def contract(self, *, exception=True, include_entries=True):
+        base = f"預期部署根目錄：{self.destination}\n"
+        if include_entries:
+            base += "預期包含：case_a、case_b、case_c\n"
+        if exception:
+            base += "如果目標已經存在且會覆蓋資料，請選擇新的獨立目錄並明確回報。\n"
+        parsed = extract_target_contract("請將測試包部署完成。\n" + base)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["requested_target"], str(self.destination))
+        return parsed
+
+    def create_children(self, path=None):
+        target = path or self.destination
+        target.mkdir(parents=True, exist_ok=True)
+        for name in self.requirements:
+            (target / name).mkdir(exist_ok=True)
+
+    def verify(self, contract, baseline, *, reported=""):
+        return verify_target_completion(
+            contract, baseline, self.scope, final_text=reported,
+            evidence_pass=True)
+
+    def test_immutable_explicit_target_and_no_implicit_path_binding(self):
+        c = self.contract()
+        self.assertEqual(c["binding_status"], "BOUND")
+        self.assertTrue(c["relocation_permitted_if_collision"])
+        self.assertEqual(c["required_top_level_entries"], list(self.requirements))
+        self.assertFalse(c["authorization_granted"])
+        self.assertIsNone(extract_target_contract(
+            f"研究 {self.destination} 的腳本，請解釋內容。"))
+
+    def test_absent_target_direct_deployment_passes(self):
+        c = self.contract()
+        pre = observe_target(str(self.destination), self.scope)
+        self.assertEqual(pre["state"], "ABSENT")
+        self.create_children()
+        result = self.verify(c, pre)
+        self.assertEqual(result["status"], "PASS", result)
+        self.assertEqual(result["actual_target"], str(self.destination))
+        self.assertEqual(result["relocation_justification"], "NONE")
+
+    def test_absent_root_nested_wrapper_cannot_claim_success(self):
+        c = self.contract()
+        pre = observe_target(str(self.destination), self.scope)
+        self.create_children(self.destination / "case_d_deploy_01" / "SmartAgent_GoalDriven_IT")
+        result = self.verify(c, pre)
+        self.assertNotEqual(result["status"], "PASS")
+        self.assertEqual(result["reason"], "OVERWRITE_RISK_NOT_ESTABLISHED")
+
+    def test_existing_parent_with_unrelated_content_is_not_collision(self):
+        c = self.contract()
+        self.destination.mkdir()
+        (self.destination / "old").mkdir()
+        pre = observe_target(str(self.destination), self.scope)
+        self.create_children(self.destination / "new_isolated" / "package")
+        result = self.verify(c, pre, reported=str(self.destination / "new_isolated" / "package"))
+        self.assertEqual(result["reason"], "OVERWRITE_RISK_NOT_ESTABLISHED")
+
+    def test_preexisting_collision_relocation_requires_disclosure(self):
+        c = self.contract()
+        self.destination.mkdir()
+        (self.destination / "case_a").mkdir()
+        pre = observe_target(str(self.destination), self.scope)
+        actual = self.destination / "new_isolated" / "package"
+        self.create_children(actual)
+        concealed = self.verify(c, pre)
+        self.assertEqual(concealed["reason"], "RELOCATION_NOT_DISCLOSED_TO_USER")
+        reported = self.verify(c, pre, reported=f"部署位置：{actual}")
+        self.assertEqual(reported["status"], "PASS", reported)
+        self.assertEqual(reported["actual_target"], str(actual))
+        self.assertEqual(reported["relocation_justification"], "PREEXISTING_ENTRY_COLLISION")
+
+    def test_relocation_without_original_exception_is_denied(self):
+        c = self.contract(exception=False)
+        self.destination.mkdir()
+        (self.destination / "case_a").mkdir()
+        pre = observe_target(str(self.destination), self.scope)
+        actual = self.destination / "new_isolated"
+        self.create_children(actual)
+        result = self.verify(c, pre, reported=str(actual))
+        self.assertEqual(result["reason"], "DEPLOYMENT_LAYOUT_NOT_AT_REQUESTED_ROOT")
+
+    def test_direct_deployment_into_occupied_parent_can_pass_without_deletion(self):
+        c = self.contract()
+        self.destination.mkdir()
+        (self.destination / "unrelated_old_folder").mkdir()
+        pre = observe_target(str(self.destination), self.scope)
+        self.create_children()
+        result = self.verify(c, pre)
+        self.assertEqual(result["status"], "PASS", result)
+        self.assertTrue((self.destination / "unrelated_old_folder").is_dir())
+
+    def test_existing_unchanged_content_is_not_a_new_deployment(self):
+        c = self.contract()
+        self.create_children()
+        pre = observe_target(str(self.destination), self.scope)
+        result = self.verify(c, pre)
+        self.assertEqual(result["reason"],
+                         "UNCHANGED_EXISTING_CONTENT_REQUIRES_INDEPENDENT_REUSE_PROOF")
+
+    def test_invalid_preflight_and_no_verified_actions_fail_closed(self):
+        c = self.contract()
+        pre = observe_target(str(self.destination), self.scope)
+        self.create_children()
+        unverified = verify_target_completion(c, pre, self.scope,
+                                               evidence_pass=False)
+        self.assertEqual(unverified["reason"], "INDEPENDENT_ACTION_VERIFICATION_REQUIRED")
+        denied = self.verify(c, {"state": "UNKNOWN", "reason": "PermissionError"})
+        self.assertEqual(denied["reason"], "PRE_MUTATION_EVIDENCE_UNVERIFIED")
+
+    def test_unknown_scope_and_ambiguous_contract_fail_closed(self):
+        c = self.contract()
+        bad = dict(c, binding_status="AMBIGUOUS", requested_target="")
+        self.assertEqual(self.verify(bad, {})["reason"], "REQUEST_TARGET_AMBIGUOUS")
+        observed = observe_target("/tmp/another-user-directory", self.scope)
+        self.assertEqual(observed["state"], "UNKNOWN")
+        self.assertEqual(observed["reason"], "PermissionError")
+
+
+if __name__ == "__main__":
+    unittest.main()

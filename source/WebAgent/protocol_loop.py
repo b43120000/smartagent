@@ -3136,6 +3136,16 @@ class WebAgentProtocolLoop:
                 refs, matched_condition=progress.matched_condition,
                 fact_assertion=getattr(progress, "fact_assertion", {})),
         }
+        # Record the independent, request-anchored path verdict. Never
+        # substitute it for ordinary Action/Condition verification.
+        if getattr(self, "_target_path_contract", None) is not None:
+            payload["target_path_compliance"] = dict(
+                getattr(self, "_target_path_verdict", {}) or {
+                    "status": "UNVERIFIED",
+                    "reason": "NO_ACCEPTED_TARGET_VERDICT",
+                    "requested_target": self._target_path_contract.get(
+                        "requested_target", ""),
+                })
         # Include the distinct answer-only admission type in the receipt ID.
         # An evidence-free text reply cannot collide with an ordinary receipt.
         if self._answer_only_admitted:
@@ -4938,6 +4948,54 @@ class WebAgentProtocolLoop:
             matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
             fact_assertion=normalized_progress.get("fact_assertion"),
         )
+        # Terminal Goal Contract: an Action PASS is necessary but does not
+        # prove that the user's original deployment destination was honored.
+        # This gate is read-only and checks the immutable target bound before
+        # the first action. Unknown scope, mismatch, and unproven relocation
+        # never become terminal SUCCESS.
+        if (decision == "COMPLETE" and outcome == "SUCCESS"
+                and getattr(self, "_target_path_contract", None)
+                and terminal_evidence_verdict == "PASS"):
+            from agent_core.target_path_contract import verify_target_completion
+            from agent_core.security_context import SecurityContext
+            final_action = next(
+                (item for item in operational
+                 if item.get("tool") == "final_response"), {})
+            target_verdict = verify_target_completion(
+                self._target_path_contract, self._target_pre_mutation,
+                SecurityContext.from_agent(
+                    self.tools, fallback_workspace=self.workspace),
+                final_text=str(final_action.get("content", "") or ""),
+                evidence_pass=True,
+            )
+            self._target_path_verdict = target_verdict
+            self._emit(
+                "terminal_target_path_evaluated",
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, round=self.turn_id,
+                **target_verdict,
+            )
+            if target_verdict["status"] != "PASS":
+                return [], [{
+                    "marker": "[WEBAGENT_TARGET_PATH_CONTRACT_REJECTED]",
+                    "reason": "terminal_goal_target_unverified",
+                    "detail": json.dumps(target_verdict, ensure_ascii=False,
+                                         separators=(",", ":")),
+                    "suggestion": (
+                        "Action PASS is not Goal Path PASS. Preserve the original "
+                        "requested_target and original completion contract. "
+                        "Inspect the requested root and its direct contents. "
+                        "If existing artifacts are found, compare and reuse "
+                        "them only when independently verified. If the exact "
+                        "target is still required, perform a new authorized "
+                        "non-destructive deployment into that root and verify "
+                        "the required entries. Relocation needs pre-mutation "
+                        "entry collision evidence and the original request's "
+                        "explicit exception; disclose the actual target. "
+                        "Do not move, overwrite, infer permission, or change "
+                        "the Goal merely to pass this gate."
+                    ),
+                }]
         # Explicit four-Action B-P1 observations have their own scope-limited
         # success contract. PR-A Action SATISFIED does NOT verify PR-C/D.
         bp1_observation_admission = False
@@ -5579,6 +5637,9 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
+        self._target_path_contract = None
+        self._target_pre_mutation = None
+        self._target_path_verdict = {}
         self._preexec_strategy_blocked = {}
         self._runtime_strategy_replan_note = ""
         self._planner_context_diagnostics = []
@@ -5710,6 +5771,34 @@ class WebAgentProtocolLoop:
             request_paths_grant_write=False,
         )
         self.tools.begin_run(self.run_id, request, authorized)
+        # Bind the immutable original deployment destination before the first
+        # Tool Action. A read-only observation is never a write authorization
+        # and does not assert that the deployment has succeeded.
+        from agent_core.target_path_contract import (
+            extract_target_contract, observe_target,
+        )
+        from agent_core.security_context import SecurityContext
+        self._target_path_contract = extract_target_contract(gar_goal)
+        self._target_pre_mutation = None
+        self._target_path_verdict = {}
+        if self._target_path_contract is not None:
+            context = SecurityContext.from_agent(
+                self.tools, fallback_workspace=self.workspace)
+            self._target_pre_mutation = observe_target(
+                self._target_path_contract["requested_target"], context)
+            self._emit(
+                "target_path_contract_bound", request_id=self.run_id,
+                task_id=self.task_id, task_epoch=self.task_epoch,
+                requested_target=self._target_path_contract["requested_target"],
+                binding_status=self._target_path_contract["binding_status"],
+                pre_mutation_state=self._target_pre_mutation["state"],
+                pre_mutation_reason=self._target_pre_mutation["reason"],
+                required_entry_count=len(
+                    self._target_path_contract["required_top_level_entries"]),
+                relocation_exception_declared=self._target_path_contract[
+                    "relocation_permitted_if_collision"],
+                read_only=True, authorization_granted=False,
+                mutation_applied=False)
         # Negative user write constraints must narrow tool execution even
         # when the configured workspace policy is broader. This request-owned
         # ceiling never creates new write permission or performs remediation.
