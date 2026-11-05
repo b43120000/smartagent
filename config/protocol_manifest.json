@@ -89,7 +89,7 @@
     "source/agent_core/paths.py": "7894eb39c8b9da086018062f2f5f273cd4adafa1ee26eb211804f054f471b052",
     "source/agent_core/plan_ledger.py": "c2c5a29d625e9907fb4e7eea46b86031482440a2814b4a4ea35d4877fd834f47",
     "source/agent_core/plan_readiness.py": "3617ae47f3354f22e6dfccef8feb2fc7295b1211f50ee116e2d58c05540c671b",
-    "source/agent_core/planner_context_snapshot.py": "ba42cb8c145c18f0ffd51679ad121c13b01cad129ba8f25dae3e392fe3eae503",
+    "source/agent_core/planner_context_snapshot.py": "8e78bf116436e8221dfdf24c28339baa2e2f5cab968913dbceeaa2dd29703ead",
     "source/agent_core/pr_bcd_observation_evidence.py": "3bb806780709bf7e758b00941c6356f5ebc9ca7dad062d13f283c379b65531a0",
     "source/agent_core/pr_bcd_request_scope.py": "5566da70e22babb8f7dfebfb5dc80347aa3d507ebe47db30591a6acad6902c65",
     "source/agent_core/preexecution_replan.py": "e3845d78f04f0aa41f9bedeec683126b773b519863e0d21e3f5e4620f3860da2",
