@@ -843,4 +843,5 @@ __all__ = [
     "format_telegram_status_view", "get_ledger_path",
     "initialize_progress", "read_progress", "record_model_progress", "set_runtime_state",
     "validate_model_progress", "record_runtime_strategy_revision",
+    "record_planner_goal_transition",
 ]
