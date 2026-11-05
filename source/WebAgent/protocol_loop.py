@@ -3318,67 +3318,201 @@ class WebAgentProtocolLoop:
         return True
 
     def _accept_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
+        """Preserve partial Command repairs while batching independent defects.
+
+        A merged action is NOT admitted until _accept_action_batch has rechecked
+        every normal V9, Progress, Scope, Dependency and Tool gate.
+        """
         from copy import deepcopy
+        from agent_core.command_repair_readiness import (
+            analyze_command_repair, repair_progress,
+            FIELD_REPAIR, ACTION_RECONSTRUCTION, READY_FOR_ADMISSION,
+        )
         pending = getattr(self, 'pending_command_field_repairs', {})
         merged = []
+        before_by_id = {}
         for call in calls:
             ref = call.get('action_id')
-            saved = pending.get(ref) if isinstance(ref,str) else None
+            saved = pending.get(ref) if isinstance(ref, str) else None
             if saved:
-                if (saved['request_id'] != self.run_id or saved['task_epoch'] != getattr(self,'task_epoch','')
-                    or ref in self.action_ledger or ref in self.action_result_ledger):
-                    return [], [{'reason':'command_repair_target_not_pending','detail':ref}]
+                if (saved['request_id'] != self.run_id
+                        or saved['task_epoch'] != getattr(self, 'task_epoch', '')
+                        or ref in self.action_ledger or ref in self.action_result_ledger):
+                    return [], [{'reason': 'command_repair_target_not_pending',
+                                 'detail': ref}]
+                if saved.get('mode') == ACTION_RECONSTRUCTION:
+                    return [], [{
+                        'marker': '[WEBAGENT_COMMAND_REPAIR_REQUIRED]',
+                        'reason': 'command_action_reconstruction_required',
+                        'repair_scope': 'COMMAND_ACTION_RECONSTRUCTION',
+                        'action_id': ref,
+                        'suggestion': (
+                            'The original command cannot be field-patched. '
+                            'Planner must submit a new action_id and '
+                            'replaces_action_id; ordinary Tool Admission remains required.'
+                        ),
+                    }]
                 original = saved['action']
-                for name,value in call.items():
-                    if name not in ({'verify','success_criteria'} | set(saved.get('required_fields', []))) and value != original.get(name):
-                        return [], [{'reason':'command_repair_identity_changed','detail':name,
-                            'suggestion':'命令、operation、目錄或依賴改變時，使用新 action_id 與 replaces_action_id；不得沿用舊驗證。'}]
+                fields = set(saved.get('required_fields', [])) | {
+                    'verify', 'success_criteria',
+                }
+                for name, value in call.items():
+                    if name not in fields and value != original.get(name):
+                        return [], [{
+                            'reason': 'command_repair_identity_changed',
+                            'detail': name if name in {
+                                'tool', 'action_id', 'command', 'operation',
+                                'working_directory', 'depends_on',
+                                'replaces_action_id',
+                            } else 'other_action_field',
+                            'suggestion': (
+                                'Use a NEW action_id with replaces_action_id '
+                                'when command, operation, directory or dependencies change '
+                                'outside the Runtime-issued repair fields.'
+                            ),
+                        }]
+                before_by_id[ref] = saved
                 materialized = {**deepcopy(original), **deepcopy(call)}
                 merged.append(materialized)
-                self._emit('command_field_repair_merged',request_id=self.run_id,round=self.turn_id,
-                    action_id=ref,patched_fields=sorted(set(call)-{'tool','action_id'}))
+                self._emit(
+                    'command_field_repair_merged',
+                    request_id=self.run_id, round=self.turn_id,
+                    action_id=ref, patched_fields=sorted(
+                        field for field in set(call) - {'tool', 'action_id'}
+                        if field in fields
+                    ),
+                    authorization_granted=False,
+                )
             else:
                 merged.append(call)
+
         admitted, diagnostics = self._accept_action_batch(merged, expected)
         for action in admitted:
             ref = action.get('action_id')
-            pending.pop(ref,None)
-            pending.pop(action.get('replaces_action_id'),None)
-        deferred_diagnostics = [item for repair in getattr(self,'current_action_repairs',[])
-            for item in repair.get('diagnostics',[])]
+            pending.pop(ref, None)
+            pending.pop(action.get('replaces_action_id'), None)
+        deferred_diagnostics = [
+            item for repair in getattr(self, 'current_action_repairs', [])
+            for item in repair.get('diagnostics', [])
+        ]
         repair_sources = diagnostics + deferred_diagnostics
-        repair_diagnostic = any(item.get('reason') in {'run_command_verification_contract_required','wrong_field_type','run_command_operation_invalid'}
-            for item in repair_sources)
-        if repair_diagnostic:
-            for action in merged:
-                ref = action.get('action_id')
-                if action.get('tool') != 'run_command' or not isinstance(ref,str) or ref in self.action_ledger:
+        for action in merged:
+            ref = action.get('action_id')
+            if (action.get('tool') != 'run_command'
+                    or not isinstance(ref, str) or not ref.strip()
+                    or ref in self.action_ledger or ref in self.action_result_ledger
+                    or any(item.get('action_id') == ref for item in admitted)):
+                continue
+            # The original response is rejected (or this independent action
+            # was deferred). Classify ALL independently detectable defects,
+            # rather than exposing only the first Tool/Progress error.
+            if not repair_sources and ref not in before_by_id:
+                continue
+            readiness = analyze_command_repair(action)
+            old = before_by_id.get(ref)
+            previous = old.get('readiness') if old else None
+            convergence = repair_progress(previous, readiness)
+            if old and readiness['mode'] == FIELD_REPAIR:
+                no_improvement = int(old.get('no_improvement', 0))
+                no_improvement = 0 if convergence['converging'] else no_improvement + 1
+            else:
+                no_improvement = 0
+            mode = readiness['mode']
+            if mode == FIELD_REPAIR and no_improvement >= 2:
+                mode = ACTION_RECONSTRUCTION
+                readiness = {**readiness, 'mode': mode,
+                             'escalation_reason': 'repair_not_converging'}
+            self._emit(
+                'command_repair_readiness_evaluated',
+                request_id=self.run_id, round=self.turn_id,
+                action_id=ref, repair_mode=mode,
+                issue_count=readiness['issue_count'],
+                issue_codes=[item['code'] for item in readiness['field_issues']],
+                issue_fields=sorted({item['field'] for item in readiness['field_issues']}),
+                previous_issue_count=convergence['previous_issue_count'],
+                resolved_issue_count=convergence['resolved_issue_count'],
+                introduced_issue_count=convergence['introduced_issue_count'],
+                converging=convergence['converging'],
+                authorization_granted=False, executed=False,
+            )
+            if mode == READY_FOR_ADMISSION:
+                # A valid command may be blocked by Progress, Scope or a
+                # different action. Do not manufacture a Command repair.
+                if old:
+                    pending.pop(ref, None)
+                continue
+            if mode == ACTION_RECONSTRUCTION:
+                pending.pop(ref, None)
+                if ref not in self.deferred_action_repairs:
+                    self.deferred_action_repairs[ref] = {
+                        'action_id': ref, 'tool': 'run_command',
+                        'status': 'ACTION_RECONSTRUCTION_REQUIRED',
+                        'executed': False, 'action': deepcopy(action),
+                        'diagnostics': [],
+                    }
+                repair = {
+                    'schema': readiness['schema'],
+                    'action_id': ref, 'mode': ACTION_RECONSTRUCTION,
+                    'issue_count': readiness['issue_count'],
+                    'field_issues': readiness['field_issues'],
+                    'replaces_action_id_required': True,
+                    'full_admission_required': True,
+                    'authorization_granted': False,
+                    'instruction': (
+                        'Use a NEW action_id, replaces_action_id=' + ref
+                        + ', and a fully reconstructed canonical run_command. '
+                        'If a script was previously created, use a short invocation '
+                        'rather than embedding script source in command. '
+                        'No previous operation was executed.'
+                    ),
+                }
+            elif mode == FIELD_REPAIR:
+                fields = readiness['repairable_fields']
+                if not fields or (len(pending) >= 32 and ref not in pending):
                     continue
-                if not isinstance(action.get('command'),str) or not action['command'].strip():
-                    continue
-                fields = []
-                try:
-                    detail = self._run_command_verification_detail(action)
-                except (ValueError,TypeError):
-                    continue
-                for field in ('operation','verify','success_criteria'):
-                    if field in detail or (field in action and not isinstance(action[field], (list,dict) if field=='verify' else str)):
-                        fields.append(field)
-                if not fields: continue
-                if len(pending) >= 32 and ref not in pending: continue
-                saved = {'request_id':self.run_id,'task_epoch':getattr(self,'task_epoch',''),
-                    'action':deepcopy(action),'required_fields':fields}
-                pending[ref] = saved
-                self.deferred_action_repairs[ref] = {'action_id':ref,'tool':'run_command',
-                    'status':'REPAIR_REQUIRED','executed':False,'action':deepcopy(action),'diagnostics':repair_sources}
-                for diagnostic in repair_sources:
-                    if diagnostic.get('reason') in {'run_command_verification_contract_required','wrong_field_type','run_command_operation_invalid'}:
-                        diagnostic.setdefault('command_field_repairs',[]).append({
-                            'action_id':ref,'tool':'run_command','required_fields':fields,
-                            'reply_example':{'tool':'run_command','action_id':ref,**{field:
-                                ([{'action':'run_command','command':'<read-only verification command>','expect_exit_code':0}]
-                                 if field=='verify' else ('INSPECT|MUTATE|BUILD|TEST|VERIFY|GIT_INSPECT|GIT_MUTATE|PROCESS|TRANSFER|GENERAL' if field=='operation' else '<describe the expected observable result>')) for field in fields}},
-                            'rule':'Only patch these fields. Runtime restores the pending action and revalidates it; it has NOT executed.'})
+                pending[ref] = {
+                    'request_id': self.run_id,
+                    'task_epoch': getattr(self, 'task_epoch', ''),
+                    'mode': FIELD_REPAIR,
+                    'action': deepcopy(action),
+                    'required_fields': fields,
+                    'readiness': readiness,
+                    'no_improvement': no_improvement,
+                }
+                self.deferred_action_repairs[ref] = {
+                    'action_id': ref, 'tool': 'run_command',
+                    'status': 'REPAIR_REQUIRED', 'executed': False,
+                    'action': deepcopy(action), 'diagnostics': [],
+                }
+                repair = {
+                    'schema': readiness['schema'],
+                    'action_id': ref, 'mode': FIELD_REPAIR,
+                    'required_fields': fields,
+                    'issue_count': readiness['issue_count'],
+                    'field_issues': readiness['field_issues'],
+                    'convergence': convergence,
+                    'full_admission_required': True,
+                    'authorization_granted': False,
+                    'instruction': (
+                        'Patch ONLY listed required_fields with the SAME tool/action_id. '
+                        'Runtime restores original command and revalidates everything. '
+                        'Never invent verify evidence or assume execution.'
+                    ),
+                }
+            else:
+                continue
+            # Keep the original actual rejection reason. Attach a bounded
+            # diagnostic to one correlated rejection rather than generating
+            # an independent synthetic rejected turn.
+            target = next(
+                (item for item in repair_sources
+                 if item.get('tool') == 'run_command'), None
+            )
+            if target is None:
+                target = repair_sources[0] if repair_sources else None
+            if target is not None:
+                target.setdefault('command_repair', repair)
+                target.setdefault('command_field_repairs', []).append(repair)
         self.pending_command_field_repairs = pending
         return admitted, diagnostics
 
