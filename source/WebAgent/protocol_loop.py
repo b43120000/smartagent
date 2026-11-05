@@ -3009,6 +3009,15 @@ class WebAgentProtocolLoop:
                     "progress_shape": "nested" if isinstance(nested, dict) else "flat",
                     "capability_resolution": resolution_decision_shape(progress.get("capability_resolution")),
                     "path_resolution": path_shape,
+                    "goal_transition": (
+                        {
+                            "kind": str(progress["goal_transition"].get("kind", "")),
+                            "goal_condition_id": str(progress["goal_transition"].get("goal_condition_id", "")),
+                            "evidence_ref": str(progress["goal_transition"].get("evidence_ref", "")),
+                            "next_tool": str(progress["goal_transition"].get("next_tool", "")),
+                        } if isinstance(progress.get("goal_transition"), dict)
+                        else {"kind": "OMITTED" if progress.get("goal_transition") is None else "INVALID"}
+                    ),
                     "next_action_tool": next_action_tool if next_action_tool in SUPPORTED_ACTION_TOOLS else "",
                     "current_step": progress.get("current_step"),
                     "total_steps": progress.get("total_steps"),
@@ -4297,6 +4306,49 @@ class WebAgentProtocolLoop:
             if preserved_action_ids:
                 diagnostic["preserved_action_ids"] = preserved_action_ids
             return [], [diagnostic]
+        # Evidence-Guided Goal Transition: Planner owns semantics, Runtime
+        # checks immutable goal/condition and exact committed evidence refs.
+        # This is optional for ordinary Progress and never bypasses Admission.
+        from agent_core.goal_strategy_transition import (
+            GoalTransitionError, validate_planner_transition,
+            repeat_denied_read_diagnostic, build_transition_readiness,
+        )
+        goal_transition_proposal = progress_actions[0].get("goal_transition")
+        if goal_transition_proposal is not None:
+            try:
+                validated_goal_transition = validate_planner_transition(
+                    goal_transition_proposal,
+                    goal=getattr(self.progress_ledger, "goal", "") or self.task_request,
+                    contract=normalized_progress["completion_contract"],
+                    evidence=self.action_result_ledger,
+                    action_ledger=self.action_ledger,
+                    operational=operational,
+                    request_id=self.run_id,
+                    task_epoch=self.task_epoch,
+                )
+                if validated_goal_transition["evidence_ref"] not in normalized_progress["evidence_refs"]:
+                    raise GoalTransitionError("goal_transition_progress_evidence_ref_missing")
+            except GoalTransitionError as exc:
+                return [], [{
+                    "marker": "[GOAL_ALIGNMENT_REJECTED]",
+                    "reason": exc.code,
+                    "repair_scope": "GOAL_TRANSITION",
+                    "suggestion": (
+                        "Repair report_progress.goal_transition only: preserve "
+                        "the immutable goal_anchor_sha256, choose one existing "
+                        "completion condition_id, cite the exact current Action "
+                        "evidence_ref in both goal_transition and Progress, "
+                        "and match next_tool to a submitted Action. "
+                        "Do not claim missing prerequisites from a rejected read; "
+                        "this is not an authorization grant."
+                    ),
+                }]
+        replay = repeat_denied_read_diagnostic(
+            operational, evidence=self.action_result_ledger,
+            action_ledger=self.action_ledger,
+        )
+        if replay:
+            return [], [replay]
         decision = normalized_progress["decision"]
         outcome = normalized_progress["outcome"]
         if (decision == 'COMPLETE' and getattr(self,'deferred_action_repairs',{})
@@ -6189,6 +6241,39 @@ class WebAgentProtocolLoop:
                         round_id=self.turn_id, root=self.progress_root) or self.progress_ledger
                 self.deferred_progress_repair = {}
                 self.last_deferred_read_signature = None
+            # Preserve the accepted Planner strategy link in the existing
+            # TaskProgressLedger. The runtime-owned strategy revision counter
+            # and immutable Goal are not changed by this Planner proposal.
+            proposal = progress_action.get("goal_transition")
+            if proposal is not None and not self.read_only_progress_deferred:
+                from agent_core.goal_strategy_transition import validate_planner_transition
+                from agent_core.task_progress import record_planner_goal_transition
+                grounded = validate_planner_transition(
+                    proposal,
+                    goal=self.progress_ledger.goal,
+                    contract=self.progress_ledger.completion_contract,
+                    evidence=self.action_result_ledger,
+                    action_ledger=self.action_ledger,
+                    operational=[item for item in actions if item.get("tool") != "report_progress"],
+                    request_id=self.run_id,
+                    task_epoch=self.task_epoch,
+                )
+                self.progress_ledger = record_planner_goal_transition(
+                    self.task_id, request_id=self.run_id,
+                    decision=grounded, round_id=self.turn_id,
+                    root=self.progress_root,
+                )
+                self._emit(
+                    "goal_transition_accepted",
+                    request_id=self.run_id, task_id=self.task_id,
+                    round=self.turn_id,
+                    kind=grounded["kind"],
+                    goal_condition_id=grounded["goal_condition_id"],
+                    evidence_ref=grounded["evidence_ref"],
+                    evidence_classification=grounded["evidence_classification"],
+                    next_tool=grounded["next_tool"],
+                    authorization_granted=False, completion_verified=False,
+                )
             # Admission is request-scoped. Install only the accepted,
             # Runtime-recorded progress clauses (never raw Planner action
             # fields), after progress persistence but before any Tool Action.
