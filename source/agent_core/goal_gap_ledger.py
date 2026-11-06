@@ -124,22 +124,17 @@ def decision_grounding_diagnostics(operational, gap_view: Mapping) -> list[dict]
     Discovery and mutations are not blocked by their mere lack of direct Goal
     progress. All permitted candidates still pass existing Tool Admission.
     """
+    from .action_readiness import DIRECTORY_PRECONDITION_FIELDS
     blockers = list(gap_view.get("active_gaps") or [])
     if not blockers:
         return []
     out = []
     for action in operational:
         tool = str(action.get("tool", "") or "")
-        # These readers require an already existing workspace. Project sync,
-        # scoped inspection of an absent path and parent discovery are allowed.
-        if tool not in {"query_project", "inspect_project_scope",
-                        "inspect_project_working_set", "run_command"}:
+        field = DIRECTORY_PRECONDITION_FIELDS.get(tool)
+        if not field:
             continue
-        root = (
-            action.get("working_directory") if tool == "run_command"
-            else action.get("project_root") if tool == "query_project"
-            else action.get("workspace")
-        )
+        root = action.get(field)
         requested = _path_key(root)
         if not requested:
             continue
