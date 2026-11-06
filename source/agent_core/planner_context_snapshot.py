@@ -276,6 +276,7 @@ def build_planner_context_snapshot(runtime) -> dict:
     diagnostics = [_diagnostic(row) for row in list(getattr(runtime, "_planner_context_diagnostics", []) or [])[-MAX_PROTOCOL_DIAGNOSTICS:]
                    if isinstance(row, Mapping)]
     from .goal_strategy_transition import build_transition_readiness
+    from .goal_gap_ledger import reconstruct_goal_gaps
     from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
     from .progress_reply_contract import dynamic_progress_contract
@@ -287,6 +288,7 @@ def build_planner_context_snapshot(runtime) -> dict:
             action_history_count=len(actions),
         ),
         "goal_transition_readiness": goal_transition_readiness,
+        "persistent_goal_gaps": reconstruct_goal_gaps(runtime),
         "goal": {
             "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
                       _code(getattr(progress, "decision", ""), "UNKNOWN"),
@@ -411,6 +413,10 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "This is a Runtime-owned, read-only decision snapshot. Candidate tools are NOT grants. "
             "Honor executed/verification states and do not treat UNKNOWN as absence. "
             "Goal Transition Readiness only classifies evidence: Planner decides any changed strategy. "
+            "persistent_goal_gaps retains verified missing prerequisites across later failures; "
+            "a new rejected read does not erase an earlier confirmed absence. "
+            "Do not choose query_project or another existing-workspace reader for a known absent root. "
+            "Discovery may be a valid prerequisite step even when it does not directly complete the Goal. "
             "An optional report_progress.goal_transition must bind a declared Goal condition "
             "to a current Runtime evidence_ref; no such proposal authorizes tools. "
             "A denied read is not proof of a missing directory. For a project workspace "
