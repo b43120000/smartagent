@@ -4218,7 +4218,8 @@ class WebAgentProtocolLoop:
             normalized_progress_action, filled_draft_fields = (
                 materialize_unadmitted_first_full(
                     normalized_progress_action, initial_draft,
-                    request_id=self.run_id, task_epoch=self.task_epoch,
+                    request_id=getattr(self, 'run_id', ''),
+                    task_epoch=getattr(self, 'task_epoch', ''),
                     field_repair_active=bool(
                         ccrc is not None and ccrc.active
                         and ccrc.mode == "FIELD_REPAIR"
