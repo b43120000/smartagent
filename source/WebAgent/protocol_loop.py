@@ -5780,25 +5780,50 @@ class WebAgentProtocolLoop:
             "recovery_context": recovery_context,
             **evidence,
         }
-        # Persist only a successfully listed, structurally complete source
-        # as a future lead in Runtime metadata, never a user-project write.
+        # Index a successfully observed source structure only in Agent-owned
+        # metadata, isolated by owner, instance, workspace and Goal Identity.
+        # No current read permission or content-integrity assertion follows.
         contract = getattr(self, "_target_path_contract", None) or {}
         if (action.get("tool") == "list_directory"
                 and contract.get("required_top_level_entries")):
-            from agent_core.source_history_registry import record_source_history
-            recorded = record_source_history(
-                self.workspace,
-                target=contract.get("requested_target", ""),
-                source=str(action.get("path", "")),
-                expected_entries=list(contract["required_top_level_entries"]),
-                actual_tool=str(action.get("tool", "")),
-                result=str(result),
-                action_id=action_id,
-                task_id=str(self.task_id),
+            from agent_core.source_goal_identity import (
+                goal_identity, normalized_path,
             )
+            from agent_core.source_reference_index import publish_reference
+            from agent_core.historical_source_resolver import _listed_required
+            from agent_core.tool_result_contract import decode_result
+            receipt = decode_result(str(result))
+            ident = goal_identity(contract)
+            source_path = str(action.get("path", ""))
+            valid = (
+                isinstance(receipt, dict)
+                and receipt.get("tool") == "list_directory"
+                and receipt.get("status") == "SUCCEEDED"
+                and receipt.get("executed") is True
+                and receipt.get("reason") == "DIRECTORY_LISTED"
+                and normalized_path(receipt.get("requested_path")) ==
+                    normalized_path(source_path)
+                and normalized_path(source_path) != ident.get("target")
+                and ident.get("status") == "READY"
+                and _listed_required(receipt, ident)
+            )
+            saved = False
+            if valid and self.continuation_store and self.continuation_owner:
+                saved = publish_reference(
+                    self.continuation_store.root,
+                    owner=self.continuation_owner,
+                    instance=self.continuation_store.instance,
+                    workspace=str(self.workspace),
+                    goal_digest=ident["digest"],
+                    path=source_path,
+                    provenance_ref=str(self.task_id) + "/" + str(action_id),
+                    origin="PREVIOUS_TASK_RECEIPT",
+                    evidence_level="E2",
+                )
             self._emit("source_history_record_attempted",
                        request_id=self.run_id, action_id=action_id,
-                       recorded=recorded, scope_or_write_granted=False)
+                       recorded=saved, current_structure_receipt_valid=bool(valid),
+                       scope_or_write_granted=False)
         self.execution_state = evidence["execution_status"]
         fact = provenance.get("fact") or {}
         self._emit("runtime_action_provenance_recorded",
@@ -6146,10 +6171,39 @@ class WebAgentProtocolLoop:
         )
         from agent_core.security_context import SecurityContext
         self._target_path_contract = extract_target_contract(gar_goal)
-        from agent_core.source_history_registry import load_source_history
-        self._source_candidate_history = load_source_history(
-            self.workspace,
-            (self._target_path_contract or {}).get("requested_target", ""),
+        from agent_core.historical_source_resolver import bootstrap_historical_sources
+        from agent_core.project_ledger import query_project_history
+        project_source_events = []
+        try:
+            project_source_events = query_project_history(
+                self.workspace, event_types=["source_reference_verified"],
+                limit=32,
+            ).get("events", [])
+        except (OSError, ValueError, RuntimeError):
+            # Incomplete/corrupt Project Ledger is not proof that sources
+            # do not exist. Other source metadata remains usable.
+            pass
+        history_root = (
+            self.continuation_store.root if self.continuation_store else self.workspace
+        )
+        self._source_candidate_history = bootstrap_historical_sources(
+            agent_root=history_root,
+            workspace=self.workspace,
+            owner=str(self.continuation_owner or ""),
+            instance=str(self.continuation_store.instance if self.continuation_store else ""),
+            target_contract=self._target_path_contract,
+            task_store=self.continuation_store,
+            exclude_task_id=str(self.task_id),
+            project_events=project_source_events,
+        )
+        self._emit(
+            "source_candidate_bootstrap_completed",
+            request_id=self.run_id, task_id=self.task_id,
+            state=self._source_candidate_history["bootstrap_state"],
+            index_status=self._source_candidate_history["index_status"],
+            candidate_count=len(self._source_candidate_history["candidates"]),
+            task_records_examined=self._source_candidate_history["task_records_examined"],
+            authorization_granted=False,
         )
         self._target_pre_mutation = None
         self._target_path_verdict = {}
