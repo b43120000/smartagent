@@ -113,7 +113,7 @@ class RemoteAuthorizationTests(unittest.TestCase):
         cmd = "git ls-remote https://github.com/b43120000/test.git HEAD"
         sha = "a" * 40
         response = attach_runtime_result(
-            "[COMMAND_RESULT]\\nstdout:\\n" + sha + "\\tHEAD\\n",
+            "[COMMAND_RESULT]\nstdout:\n" + sha + "\tHEAD\n",
             "SUCCEEDED", "COMMAND_EXITED", tool="run_command", executed=True,
             data={"exit_code": 0, "process_state": "EXITED"},
         )
