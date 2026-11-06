@@ -278,10 +278,12 @@ def build_planner_context_snapshot(runtime) -> dict:
     from .goal_strategy_transition import build_transition_readiness
     from .goal_gap_ledger import reconstruct_goal_gaps
     from .interrupt_readiness import interrupt_readiness, _read_attempts
+    from .goal_prerequisite_resolution import resolve_goal_prerequisites
     from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
     gap_view = reconstruct_goal_gaps(runtime)
     interruption_view = interrupt_readiness(gap_view, caps, attempted_reads=_read_attempts(runtime))
+    prerequisite_view = resolve_goal_prerequisites(gap_view, interruption_view)
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
         "schema": SCHEMA,
@@ -293,6 +295,7 @@ def build_planner_context_snapshot(runtime) -> dict:
         "goal_transition_readiness": goal_transition_readiness,
         "persistent_goal_gaps": gap_view,
         "interrupt_readiness": interruption_view,
+        "goal_prerequisite_resolution": prerequisite_view,
         "goal": {
             "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
                       _code(getattr(progress, "decision", ""), "UNKNOWN"),
@@ -419,6 +422,12 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "Goal Transition Readiness only classifies evidence: Planner decides any changed strategy. "
             "persistent_goal_gaps retains verified missing prerequisites across later failures; "
             "a new rejected read does not erase an earlier confirmed absence. "
+            "goal_prerequisite_resolution is an advisory, evidence-grounded ordering: "
+            "for explicit standalone creation with confirmed target absence, propose "
+            "the Goal Action for ordinary Tool/Scope/Write Admission without gratuitous "
+            "source discovery. For Goals requiring an existing source, discover only "
+            "within authorized read scope before proposing a deployment. "
+            "No candidate grants access or verifies source integrity. "
             "Do not choose query_project or another existing-workspace reader for a known absent root. "
             "Discovery may be a valid prerequisite step even when it does not directly complete the Goal. "
             "A staged read-only inspection does not forbid conditionally authorized later repair. "
