@@ -12,7 +12,7 @@ import unittest
 from agent_core.conditional_goal_policy import conditional_goal_policy
 from agent_core.goal_gap_ledger import reconstruct_goal_gaps
 from agent_core.interrupt_readiness import (
-    interrupt_readiness, proposed_interrupt_constraint,
+    interrupt_readiness, proposed_interrupt_constraint, _read_attempts,
 )
 from WebAgent.tests.test_goal_grounded_gap_p0_p3 import (
     ROOT, add_probe, runtime,
@@ -145,6 +145,36 @@ class ConditionalGoalCaseD(unittest.TestCase):
         self.assertIsNone(proposed_interrupt_constraint({
             "kind": "RUNTIME_READ",
         }, readiness))
+
+    def test_scoped_discovery_never_repeats_same_completed_inspection(self):
+        r = runtime(goal=CASE_D)
+        add_probe(r, "ACT-EXISTS", exists=True)
+        view = reconstruct_goal_gaps(r)
+        caps = {
+            "authorized_paths": [ROOT],
+            "read_tools": ["inspect_directory", "list_directory"],
+        }
+        first = interrupt_readiness(
+            view, caps, attempted_reads=_read_attempts(r),
+        )
+        self.assertEqual(first["candidate_count"], 1)
+        self.assertEqual(first["candidate_reads"][0]["tool"], "list_directory")
+        self.assertEqual(first["candidate_reads"][0]["path"], ROOT)
+        r.action_ledger["ACT-LIST"] = {
+            "action": {"tool": "list_directory", "action_id": "ACT-LIST",
+                       "path": ROOT},
+        }
+        r.action_result_ledger["ACT-LIST"] = {
+            "tool": "list_directory", "result_status": "SUCCEEDED",
+            "executed": True, "evidence_status": "ACTIVE",
+            "request_id": r.run_id, "task_epoch": r.task_epoch,
+        }
+        after = interrupt_readiness(
+            view, caps, attempted_reads=_read_attempts(r),
+        )
+        self.assertEqual(after["candidate_count"], 0)
+        self.assertEqual(after["next_safe_category"],
+                         "USER_INPUT_OR_OBJECTIVE_BLOCKER_IF_NEEDED")
 
     def test_no_invented_gap_from_failed_unexecuted_list(self):
         r = runtime(goal=CASE_D)
