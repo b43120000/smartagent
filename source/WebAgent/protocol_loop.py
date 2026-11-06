@@ -3417,6 +3417,9 @@ class WebAgentProtocolLoop:
                         },
                     }
             if mode == REPLAN_REQUIRED:
+                # A Goal Replan must discard the never-admitted initial draft;
+                # only accepted Progress and executed Evidence can be inherited.
+                self._first_full_progress_draft = {}
                 # An unadmitted hold must not force the old Action after the
                 # entire decision is explicitly handed back to Goal Replan.
                 held = list(getattr(self, "pending_progress_repair_actions", []))
@@ -4186,8 +4189,36 @@ class WebAgentProtocolLoop:
         )
         if wrapper_diagnostic:
             return [], [wrapper_diagnostic]
-        from agent_core.initial_progress_normalization import normalize_initial_progress
+        from agent_core.initial_progress_normalization import (
+            normalize_initial_progress, materialize_unadmitted_first_full,
+        )
         from agent_core.progress_reply_contract import has_accepted_plan
+        # The first rejected FULL is not an accepted plan, but in a bounded
+        # format-only repair the Planner may reuse its own earlier *plan*
+        # fields. Never inherit evidence, decision, Action, scope or authority.
+        # Explicit PATCH with no accepted ledger remains invalid.
+        initial_draft = getattr(self, "_first_full_progress_draft", {})
+        ccrc = getattr(self, "_ccrc", None)
+        if not has_accepted_plan(self.progress_ledger) and not self.action_result_ledger:
+            normalized_progress_action, filled_draft_fields = (
+                materialize_unadmitted_first_full(
+                    normalized_progress_action, initial_draft,
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                    field_repair_active=bool(
+                        ccrc is not None and ccrc.active
+                        and ccrc.mode == "FIELD_REPAIR"
+                        and not ccrc.replan_required
+                    ),
+                )
+            )
+            if filled_draft_fields:
+                self._emit(
+                    "unadmitted_first_full_draft_materialized",
+                    request_id=self.run_id, round=self.turn_id,
+                    inherited_planner_fields=filled_draft_fields,
+                    accepted=False, executed=False,
+                    authorization_granted=False, evidence_created=False,
+                )
         normalized_progress_action, bootstrap_normalization = normalize_initial_progress(
             normalized_progress_action,
             has_plan=has_accepted_plan(self.progress_ledger),
@@ -4743,6 +4774,27 @@ class WebAgentProtocolLoop:
             )
         except TaskProgressError as exc:
             from agent_core.progress_recovery import repair_diagnostic, read_only_progress_fallback
+            from agent_core.progress_reply_contract import has_accepted_plan
+            if (not has_accepted_plan(self.progress_ledger)
+                    and not self.action_result_ledger
+                    and normalized_progress_action.get("tool") == "report_progress"
+                    and str(normalized_progress_action.get("decision", "")).upper() == "CONTINUE"
+                    and normalized_progress_action.get("progress_update", "FULL") == "FULL"):
+                from agent_core.initial_progress_normalization import remember_unadmitted_first_full
+                self._first_full_progress_draft = remember_unadmitted_first_full(
+                    getattr(self, "_first_full_progress_draft", {}),
+                    normalized_progress_action, request_id=self.run_id,
+                    task_epoch=self.task_epoch, round_id=self.turn_id,
+                )
+                self._emit(
+                    "unadmitted_first_full_draft_preserved",
+                    request_id=self.run_id, round=self.turn_id,
+                    preserved_fields=sorted(
+                        (self._first_full_progress_draft.get("fields") or {})
+                    ),
+                    accepted=False, executed=False,
+                    authorization_granted=False, evidence_created=False,
+                )
             diagnostic = self._progress_repair_diagnostic(progress_actions[0], exc)
             fallback = read_only_progress_fallback(progress_actions[0], self.progress_ledger,
                                                   operational, exc, self._runtime_evidence_refs())
