@@ -59,7 +59,7 @@ class SourceDiscoveryBootstrapTests(unittest.TestCase):
         return bootstrap_source_discovery(
             self.root, contract,
             owner="telegram:one:one", instance="agent-instance",
-            workspace=self.work, **extra,
+            workspace=self.work, installation_root=self.root, **extra,
         )
 
     def _package_catalog(self):
@@ -71,6 +71,78 @@ class SourceDiscoveryBootstrapTests(unittest.TestCase):
 
     def test_required_entries_keep_last_filename_before_chinese_period(self):
         self.assertEqual(EXPECTED["required_top_level_entries"], ENTRIES)
+
+    def test_telegram_worker_state_root_reads_real_installed_catalog(self):
+        # Production Telegram worker uses source/ as its Task state root, not
+        # the application installation directory. No fake catalog is created.
+        worker_source = (ROOT / "source" / "RemoteAgent"
+                         / "telegram_webagent_worker.py").read_text(encoding="utf-8")
+        self.assertIn("ROOT = Path(__file__).resolve().parents[1]", worker_source)
+        worker_state_root = ROOT / "source"
+        found = bootstrap_source_discovery(
+            worker_state_root, EXPECTED,
+            owner="telegram:one:one", instance="agent-instance",
+            workspace=self.work,
+        )
+        self.assertEqual(found["catalog_path_authority"], "INSTALLATION_ROOT")
+        self.assertEqual(found["registration_path_authority"], "TASK_STATE_ROOT")
+        self.assertEqual(found["catalog_status"], "READY")
+        self.assertEqual(found["catalog_records_examined"], 1)
+        self.assertEqual(found["catalog_matched_count"], 1)
+        self.assertEqual(found["catalog_goal_mismatch_count"], 0)
+        self.assertEqual(found["state"], "ARTIFACT_REFERENCE_FOUND")
+        self.assertEqual(found["artifact_count"], 1)
+        self.assertFalse(found["network_access_attempted"])
+        self.assertFalse(found["new_authorization_granted"])
+
+    def test_catalog_path_is_never_derived_from_task_state_or_workspace(self):
+        # Explicit fake package root and separate Task metadata root.
+        # A decoy catalog in state_root/config must never win.
+        from agent_core.paths import runtime_root
+        state = self.root / "state-root"
+        installed = self.root / "installed-root"
+        state.mkdir()
+        installed.mkdir()
+        packaged = installed / "config"
+        packaged.mkdir()
+        (packaged / "source_discovery_catalog.json").write_text(
+            CATALOG.read_text(encoding="utf-8"), encoding="utf-8",
+        )
+        decoy = state / "config"
+        decoy.mkdir()
+        (decoy / "source_discovery_catalog.json").write_text(
+            '{"schema":"SMARTAGENT_SOURCE_DISCOVERY_CATALOG_V1","records":[]}',
+            encoding="utf-8",
+        )
+        found = bootstrap_source_discovery(
+            state, EXPECTED, owner="telegram:one:one",
+            instance="agent-instance", workspace=self.work,
+            installation_root=installed,
+        )
+        self.assertEqual(found["artifact_count"], 1)
+        self.assertEqual(found["catalog_matched_count"], 1)
+        self.assertEqual(found["registration_status"], "NOT_FOUND")
+        self.assertFalse((runtime_root(state) / "source_artifact_registrations_v1.json").exists())
+        # Wrong installed catalog must not fall back to valid Task-state decoy.
+        missing = bootstrap_source_discovery(
+            state, EXPECTED, owner="telegram:one:one",
+            instance="agent-instance", workspace=self.work,
+            installation_root=self.root / "nonexistent-install",
+        )
+        self.assertEqual(missing["catalog_status"], "NOT_FOUND")
+        self.assertEqual(missing["artifact_count"], 0)
+
+    def test_matching_diagnostics_distinguish_invalid_from_unmatched_goal(self):
+        self._package_catalog()
+        wrong_target = extract_target_contract(
+            GOAL.replace(TARGET, r"E:\NotTheExpectedTarget")
+        )
+        mismatched = self._bootstrap(wrong_target)
+        self.assertEqual(mismatched["catalog_status"], "READY")
+        self.assertEqual(mismatched["catalog_records_examined"], 1)
+        self.assertEqual(mismatched["catalog_goal_mismatch_count"], 1)
+        self.assertEqual(mismatched["catalog_matched_count"], 0)
+        self.assertEqual(mismatched["artifact_count"], 0)
 
     def test_cold_start_case_d_finds_pinned_fixture_reference_without_history(self):
         self._package_catalog()
@@ -202,13 +274,13 @@ class SourceDiscoveryBootstrapTests(unittest.TestCase):
         other = bootstrap_source_discovery(
             self.root, EXPECTED,
             owner="telegram:another:chat", instance="agent-instance",
-            workspace=self.work,
+            workspace=self.work, installation_root=self.root,
         )
         self.assertEqual(other["artifact_count"], 0)
         otherwork = bootstrap_source_discovery(
             self.root, EXPECTED,
             owner="telegram:one:one", instance="agent-instance",
-            workspace=str(self.root / "different-workspace"),
+            workspace=str(self.root / "different-workspace"), installation_root=self.root,
         )
         self.assertEqual(otherwork["artifact_count"], 0)
 
