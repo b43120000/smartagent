@@ -195,6 +195,36 @@ def premature_source_interrupt_diagnostic(
     if request.get("kind") != "USER_INPUT":
         return None
     category = resolution.get("next_category")
+    detail = str(request.get("detail") or "")
+    remote_reference = (
+        category == "RESOLVE_REGISTERED_SOURCE_ARTIFACT"
+        and int(resolution.get("registered_artifact_count", 0) or 0) > 0
+    )
+    if (remote_reference and _SOURCE_REQUEST.search(detail)
+            and not re.search(
+                r"\\b(?:github|repository|repo access|authentication|auth token)\\b"
+                r"|GitHub|私人儲存庫|遠端存取|網路授權|取得壓縮檔",
+                detail, re.I,
+            )):
+        return {
+            "marker": "[REGISTERED_SOURCE_ARTIFACT_REFERENCE_AVAILABLE]",
+            "reason": "remote_artifact_reference_grounded_no_source_path_request",
+            "repair_scope": "SOURCE_DISCOVERY_BOOTSTRAP",
+            "missing_gap_refs": [
+                row["gap_id"] for row in list(
+                    resolution.get("confirmed_missing_goal_targets") or []
+                )[:8]
+            ],
+            "suggestion": (
+                "A pinned source artifact is already registered for this Goal. "
+                "Do not ask for an unspecified existing local source folder. "
+                "Instead evaluate whether the authenticated GitHub repository "
+                "and archive acquisition capabilities are available and authorized. "
+                "If missing, request the precise access/capability approval. "
+                "Do not claim a local source or D4 PASS until a new source "
+                "observation and content integrity check succeed."
+            ),
+        }
     direct_creation = category == "PROPOSE_GOAL_ACTION_FOR_ADMISSION"
     scoped_source = (category == "DISCOVER_SOURCE_WITHIN_SCOPE" and
                      any(row.get("reason") == "GROUNDED_SOURCE_CANDIDATE"
