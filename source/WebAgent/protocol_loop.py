@@ -316,6 +316,7 @@ class WebAgentProtocolLoop:
         self.progress_root = Path(progress_root).resolve() if progress_root is not None else None
         self.progress_ledger = None
         self._spr_path_resolution = None
+        self._source_candidate_history = {"schema": "SMARTAGENT_SOURCE_HISTORY_V1", "candidates": []}
         self.continuation_store = continuation_store
         self.continuation_owner = continuation_owner
         self.continuation_source = None
@@ -5779,6 +5780,25 @@ class WebAgentProtocolLoop:
             "recovery_context": recovery_context,
             **evidence,
         }
+        # Persist only a successfully listed, structurally complete source
+        # as a future lead in Runtime metadata, never a user-project write.
+        contract = getattr(self, "_target_path_contract", None) or {}
+        if (action.get("tool") == "list_directory"
+                and contract.get("required_top_level_entries")):
+            from agent_core.source_history_registry import record_source_history
+            recorded = record_source_history(
+                self.workspace,
+                target=contract.get("requested_target", ""),
+                source=str(action.get("path", "")),
+                expected_entries=list(contract["required_top_level_entries"]),
+                actual_tool=str(action.get("tool", "")),
+                result=str(result),
+                action_id=action_id,
+                task_id=str(self.task_id),
+            )
+            self._emit("source_history_record_attempted",
+                       request_id=self.run_id, action_id=action_id,
+                       recorded=recorded, scope_or_write_granted=False)
         self.execution_state = evidence["execution_status"]
         fact = provenance.get("fact") or {}
         self._emit("runtime_action_provenance_recorded",
@@ -6126,6 +6146,11 @@ class WebAgentProtocolLoop:
         )
         from agent_core.security_context import SecurityContext
         self._target_path_contract = extract_target_contract(gar_goal)
+        from agent_core.source_history_registry import load_source_history
+        self._source_candidate_history = load_source_history(
+            self.workspace,
+            (self._target_path_contract or {}).get("requested_target", ""),
+        )
         self._target_pre_mutation = None
         self._target_path_verdict = {}
         if self._target_path_contract is not None:
