@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 from agent_core.tool_result_contract import encode_result
@@ -14,6 +16,7 @@ from agent_core.goal_prerequisite_resolution import (
     resolve_goal_prerequisites, premature_source_interrupt_diagnostic,
 )
 from agent_core.target_path_contract import extract_target_contract
+from agent_core.source_history_registry import load_source_history, record_source_history
 from WebAgent.tests.test_goal_grounded_gap_p0_p3 import runtime, add_probe, ROOT
 from WebAgent.tests.test_conditional_goal_interrupt_case_d import CASE_D
 
@@ -184,6 +187,55 @@ class SourceCandidateGroundingTests(unittest.TestCase):
             c.get("path") == SOURCE and c.get("tool") == "list_directory"
             for c in interrupt["candidate_reads"]
         ))
+
+
+    def test_verified_structure_persisted_only_as_cross_task_history_hint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            receipt = encode_result(
+                "SUCCEEDED", "DIRECTORY_LISTED", executed=True,
+                requested_path=SOURCE, tool="list_directory",
+                data={"entries": [
+                    {"name": name, "kind": "FILE" if "." in name else "DIRECTORY"}
+                    for name in REQUIRED
+                ]},
+            )
+            ok = record_source_history(
+                Path(temp), target=ROOT, source=SOURCE,
+                expected_entries=list(REQUIRED),
+                actual_tool="list_directory", result=receipt,
+                action_id="ACT-LIVE", task_id="TASK-OLD",
+            )
+            self.assertTrue(ok)
+            history = load_source_history(Path(temp), ROOT)
+            self.assertEqual(len(history["candidates"]), 1)
+            self.assertEqual(history["candidates"][0]["path"], SOURCE)
+            self.assertEqual(history["candidates"][0]["origin"], "PREVIOUS_TASK_RECEIPT")
+            self.assertEqual(load_source_history(Path(temp), r"E:\OtherGoal")["candidates"], [])
+            new_task = task(paths=[ROOT])
+            new_task._source_candidate_history = history
+            source_view = build_source_candidate_ledger(new_task, reconstruct_goal_gaps(new_task))
+            self.assertEqual(source_view["candidates"][0]["existence"], "UNKNOWN")
+            self.assertEqual(source_view["candidates"][0]["scope_status"],
+                             "OUTSIDE_DECLARED_PATHS")
+            self.assertFalse(source_view["candidates"][0]["read_authorized"])
+
+    def test_failed_listing_never_persists_source_history(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fake = encode_result(
+                "FAILED", "DIRECTORY_IO_ERROR", executed=False,
+                requested_path=SOURCE, tool="list_directory",
+                data={"entries": [
+                    {"name": name, "kind": "FILE" if "." in name else "DIRECTORY"}
+                    for name in REQUIRED
+                ]},
+            )
+            self.assertFalse(record_source_history(
+                Path(temp), target=ROOT, source=SOURCE,
+                expected_entries=list(REQUIRED),
+                actual_tool="list_directory", result=fake,
+                action_id="ACT-FAIL", task_id="TASK-OLD",
+            ))
+            self.assertEqual(load_source_history(Path(temp), ROOT)["candidates"], [])
 
 
 if __name__ == "__main__":
