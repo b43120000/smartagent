@@ -185,6 +185,8 @@ CORE_FILES = (
     'source/agent_core/source_reference_index.py',
     'source/agent_core/historical_source_resolver.py',
     'source/agent_core/source_discovery_bootstrap.py',
+    'source/agent_core/remote_artifact_access_readiness.py',
+    'source/agent_core/runtime_software_inventory.py',
     'config/source_discovery_catalog.json',
     'collect.bat',
     'source/agent_core/conditional_goal_policy.py',
