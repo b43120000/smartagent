@@ -269,9 +269,15 @@ class CrossContractRepairCoordinator:
         return snapshot
 
 
-def repair_instruction(decision: Mapping) -> str:
-    """Bounded Planner guidance, not permission to run a proposed action."""
+def repair_instruction(decision: Mapping, *,
+                       accepted_plan: bool = True) -> str:
+    """Bounded Planner guidance, not permission to run a proposed action.
+
+    First-FULL must never be described as PATCH.  A rejected Progress is not
+    an accepted plan, even if it carried valid operational proposals.
+    """
     mode = decision.get("mode")
+    progress_mode = "PATCH" if accepted_plan else "FULL"
     summary = {
         key: decision[key] for key in (
             "schema", "mode", "transaction_seq", "goal_anchor_sha256",
@@ -284,30 +290,54 @@ def repair_instruction(decision: Mapping) -> str:
     prefix = "[CROSS_CONTRACT_REPAIR]\n" + json.dumps(
         summary, ensure_ascii=False, separators=(",", ":")
     ) + "\n"
+    prefix += (
+        "[PROGRESS_ADMISSION_MODE] " + progress_mode +
+        (" (accepted Progress exists; only truly inherited fields may be omitted)"
+         if accepted_plan else
+         " (no accepted Progress: submit a complete report_progress with "
+         "base_evaluation, total_steps, current_step, steps, completion_contract, "
+         "decision, current_focus, decision_reason, evidence_refs, and next_action "
+         "when CONTINUE; do not use PATCH or invent completion/evidence)")
+        + "\\n"
+    )
     if mode == FIELD_REPAIR:
         query_only = bool(decision.get("field_issues")) and all(
             row.get("origin") in {"QUERY", "ADMISSION"}
             for row in decision["field_issues"])
-        instruction = (
-            "Repair ONLY query_project.queries[] with explicit canonical "
-            "operation objects. Preserve the already accepted Progress "
-            "and use a minimal PATCH; omit inherited plan fields unless "
-            "they truly change. No operation/path guessing, no new Scope, "
-            "no fake Action Evidence. Full admission remains mandatory."
-            if query_only else
-            "Repair Progress, Query and next_action as ONE pending decision; "
-            "use PATCH to inherit accepted plan fields rather than regenerating "
-            "steps, base_evaluation or completion_contract. Correct only the "
-            "listed canonical issues; preserve Action semantics, evidence "
-            "and original Goal. Never replay executed actions or broaden scope."
-        )
+        if query_only:
+            instruction = (
+                "Repair ONLY query_project.queries[] with explicit canonical "
+                "operation objects; use " + progress_mode +
+                " report_progress. Keep the already accepted plan fields "
+                "inherited ONLY when PATCH is authorized. No operation/path "
+                "guessing, new scope, or fake evidence."
+            )
+        elif accepted_plan:
+            instruction = (
+                "Repair Progress, Query and next_action as ONE pending decision; "
+                "use PATCH only for already accepted plan fields. Correct the "
+                "listed canonical issues; preserve exact Tool intent and "
+                "original Goal. Never replay executed actions or broaden scope."
+            )
+        else:
+            instruction = (
+                "FIRST FULL IS UNADMITTED. Repair one complete FULL report_progress: "
+                "preserve Planner-authored plan and completion_contract, use "
+                "numerical step indices satisfying 0 <= current_step <= total_steps, "
+                "and select exact completion_contract.in_progress matched_condition "
+                "or valid matched_condition_id. If there are held read-only Actions, "
+                "do not replace their Action IDs or semantics. Do NOT use PATCH "
+                "and do NOT claim their execution. Every Action still requires "
+                "ordinary admission."
+            )
     elif mode == ACTION_RECONSTRUCTION:
         instruction = (
-            "STOP field-only patches. Planner must reconstruct an authorized "
-            "canonical Action/Progress pair; use NEW action_id and "
-            "replaces_action_id when replacing an unexecuted deferred action. "
-            "Keep the original Goal and permissions; short script invocation "
-            "is preferable to a complex inline command. Full admission required."
+            "STOP field-only patches. Planner must reconstruct a canonical "
+            "Action/Progress pair under " + progress_mode +
+            " Progress semantics. New Actions require fresh action_id; "
+            "unexecuted holds may only be released by Runtime's explicit "
+            "reconstruction handoff, never by Planner assertion. Keep the "
+            "original Goal and permissions. Full admission required."
         )
     else:
         instruction = (
