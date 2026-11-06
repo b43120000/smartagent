@@ -10,6 +10,7 @@ import os
 import re
 import time
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -339,6 +340,8 @@ class WebAgentProtocolLoop:
         self.sent_attachment_paths: list[str] = []
         self.action_ledger: dict[str, dict] = {}
         self.action_result_ledger: dict[str, dict] = {}
+        self._planner_original_actions: dict[str, dict] = {}
+        self._canonical_action_proposals: dict[str, dict] = {}
         # A pre-execution envelope rejection is protocol evidence, never a Tool result.
         self._protocol_spec_rejection: dict[str, object] = {}
         # Native pre-execution bound-cwd rejection: not a ToolResult or terminal fact.
@@ -2664,6 +2667,9 @@ class WebAgentProtocolLoop:
                     # Historical execution remains UNKNOWN/PARTIAL. A linked
                     # current verifier resolves the pending postcondition only.
                     target['pending_resolution'] = 'SCOPED_VERIFICATION_OBTAINED'
+        provenance = (self.action_ledger.get(action_id) or {}).get("provenance")
+        if isinstance(provenance, dict) and isinstance(provenance.get("fact"), dict):
+            ledger_entry["runtime_fact"] = deepcopy(provenance["fact"])
         self.action_result_ledger[action_id] = ledger_entry
         if (action.get('tool') == 'repair_task_plan'
                 and ledger_entry.get('result_status') == 'SUCCEEDED'
@@ -5615,7 +5621,16 @@ class WebAgentProtocolLoop:
         evidence = self._classify_action_evidence(action, str(raw_result))
         result = prepare_tool_result(action, raw_result, self.tools)
         from agent_core.progress_recovery import read_fact_digest
+        from agent_core.runtime_fact_ledger import build_action_provenance
+        provenance = build_action_provenance(
+            self._planner_original_actions.get(action_id, action),
+            self._canonical_action_proposals.get(action_id, action),
+            action, raw_result,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            round_id=self.turn_id,
+        )
         self.action_ledger[action_id] = {
+            "provenance": provenance,
             "signature": signature,
             "result": result,
             'raw_result_digest': hashlib.sha256(str(raw_result).encode('utf-8')).hexdigest(),
@@ -5625,6 +5640,16 @@ class WebAgentProtocolLoop:
             **evidence,
         }
         self.execution_state = evidence["execution_status"]
+        fact = provenance.get("fact") or {}
+        self._emit("runtime_action_provenance_recorded",
+                   request_id=self.run_id, round=self.turn_id,
+                   action_id=action_id, tool=action.get("tool", ""),
+                   canonical_changed=(provenance["original_action"] !=
+                                      provenance["canonical_action"]),
+                   actual_status=provenance["actual_result"]["status"],
+                   fact_predicate=fact.get("predicate", ""),
+                   fact_value=fact.get("value") if fact else None,
+                   goal_verified=False)
         stagnation_guard = getattr(self, "_semantic_stagnation", None)
         if stagnation_guard is not None:
             stagnation = stagnation_guard.observe(action, evidence)
@@ -5892,6 +5917,9 @@ class WebAgentProtocolLoop:
         from agent_core.protocol_repair_transaction import ProtocolRepairTransaction
         self._protocol_repair_tx = ProtocolRepairTransaction(
             self.run_id, self.task_epoch)
+        # New request: never inherit an earlier request's unexecuted proposal.
+        self._planner_original_actions = {}
+        self._canonical_action_proposals = {}
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         # SPR V1 runs before first Planner Progress and before any Tool action.
@@ -6449,6 +6477,15 @@ class WebAgentProtocolLoop:
                 response,
                 action_id_seed=action_id_seed,
             )
+            if not v8_parse_diagnostics:
+                for submitted in calls:
+                    if not isinstance(submitted, dict) or submitted.get("tool") in {
+                            "report_progress", "turn_commit", "final_response"}:
+                        continue
+                    aid = submitted.get("action_id")
+                    if isinstance(aid, str) and aid:
+                        # First proposal retained across field-only repairs.
+                        self._planner_original_actions.setdefault(aid, deepcopy(submitted))
             diagnostics = [
                 {
                     "marker": "[WEBAGENT_V8_PARSE_ERROR]",
@@ -6868,6 +6905,12 @@ class WebAgentProtocolLoop:
                 continue
             last_rejected_exchange_signature = None
             self._planner_context_diagnostics = []
+            for admitted_action in actions:
+                if admitted_action.get("tool") in {"report_progress", "turn_commit", "final_response"}:
+                    continue
+                aid = str(admitted_action.get("action_id", "") or "")
+                if aid:
+                    self._canonical_action_proposals[aid] = deepcopy(admitted_action)
             # Close CCRC only when the complete decision is admitted with no
             # unresolved held actions. Merely changing an Action ID or Progress
             # prose cannot close a repair transaction.
@@ -7158,7 +7201,12 @@ class WebAgentProtocolLoop:
                     sort_keys=True,
                     separators=(",", ":"),
                 )
-                if decision_signature == last_no_action_decision_signature:
+                from agent_core.runtime_fact_ledger import decision_action_consistency
+                action_policy = decision_action_consistency(
+                    self.progress_ledger.decision, actions,
+                    runtime_transition=str((self.action_loop_state or {}).get("required_transition", "")),
+                )
+                if last_no_action_decision_signature is not None and action_policy == "ACTION_REQUIRED":
                     reason = "semantic_stagnation:repeated_model_decision_without_new_runtime_evidence"
                     recovery = self._gar_semantic_supervision(reason)
                     if recovery:
@@ -7178,6 +7226,26 @@ class WebAgentProtocolLoop:
                         "WebAgent 持續回傳相同 Progress 決策且沒有新的 Runtime evidence 或 action；Runtime 已暫停"
                     )
                 last_no_action_decision_signature = decision_signature
+                if action_policy == "ACTION_REQUIRED":
+                    # One bounded guidance turn, then pause if Planner still
+                    # has no action. Text changes cannot reset the no-action
+                    # budget without fresh Runtime evidence.
+                    self._emit("decision_action_repair_required",
+                               request_id=self.run_id, round=self.turn_id,
+                               evidence_total=len(self.action_result_ledger),
+                               decision="CONTINUE", executed=False)
+                    from agent_core.planner_context_snapshot import render_planner_context_snapshot
+                    planner_context, _ = render_planner_context_snapshot(self)
+                    prompt = (
+                        "[RUNTIME_DECISION_ACTION_REQUIRED]\n"
+                        "CONTINUE contains no operational Action and Runtime is "
+                        "not waiting for an in-flight Action. Use the current "
+                        "Runtime facts and original Goal to propose one authorized "
+                        "new observation, prerequisite strategy, or a supported "
+                        "truthful interruption. Do not replay an unchanged Action.\n"
+                        + planner_context + "\n[/RUNTIME_DECISION_ACTION_REQUIRED]"
+                    )
+                    continue
             else:
                 last_no_action_decision_signature = None
                 last_dead_end_recovery_signature = None
