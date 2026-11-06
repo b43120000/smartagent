@@ -3381,6 +3381,16 @@ class WebAgentProtocolLoop:
         if result is None:
             return None
         mode = result["mode"]
+        from agent_core.progress_reply_contract import has_accepted_plan
+        accepted_plan = has_accepted_plan(getattr(self, "progress_ledger", None))
+        # Runtime-owned Progress bootstrap state is authoritative. CCRC must
+        # never instruct PATCH before the first FULL was admitted.
+        result["progress_mode"] = "PATCH" if accepted_plan else "FULL"
+        result["accepted_plan"] = bool(accepted_plan)
+        result["held_unadmitted_action_ids"] = [
+            str(action.get("action_id", "") or "")
+            for action in list(getattr(self, "pending_progress_repair_actions", []) or [])
+        ]
         if mode in {ACTION_RECONSTRUCTION, REPLAN_REQUIRED}:
             # CCRC owns ONE logical repair target; a new rejected Action ID
             # must not manufacture another deferred obligation or reset budget.
@@ -3388,7 +3398,25 @@ class WebAgentProtocolLoop:
             from copy import deepcopy
             command_pending = getattr(self, "pending_command_field_repairs", {})
             deferred = getattr(self, "deferred_action_repairs", {})
-            if mode == ACTION_RECONSTRUCTION:
+            if mode == ACTION_RECONSTRUCTION and not result.get("command_involved"):
+                # A schema-valid *read-only* hold is not an executed action.
+                # When field repair escalates to Action Reconstruction, keeping
+                # that old hold contradicts the required fresh proposal.
+                held = list(getattr(self, "pending_progress_repair_actions", []) or [])
+                if held and all(
+                    str(a.get("action_id", "") or "") not in self.action_ledger
+                    and str(a.get("action_id", "") or "") not in self.action_result_ledger
+                    for a in held
+                ):
+                    self.pending_progress_repair_actions = []
+                    self._emit(
+                        "ccrc_unadmitted_progress_hold_released",
+                        request_id=self.run_id, round=self.turn_id,
+                        reason="read_only_action_reconstruction",
+                        action_ids=[str(a.get("action_id", "") or "") for a in held],
+                        authorization_granted=False, executed=False,
+                    )
+            if mode == ACTION_RECONSTRUCTION and result.get("command_involved"):
                 candidate = None
                 for action in calls:
                     if not isinstance(action, dict) or action.get("tool") in {
@@ -3439,13 +3467,16 @@ class WebAgentProtocolLoop:
                 "actual_operational_tools", "field_rounds", "reconstruction_rounds",
                 "nonconverging_rounds", "replan_required",
                 "resolved_issue_count", "introduced_issue_count", "converging",
-                "convergence_generation",
+                "convergence_generation", "progress_mode", "accepted_plan",
+                "held_unadmitted_action_ids",
                 "full_admission_required", "authorization_granted", "budget_reset",
             )
         }
         self._emit("cross_contract_repair_decision",
             request_id=self.run_id, round=self.turn_id,
             mode=mode, transaction_seq=result["transaction_seq"],
+            progress_mode=result["progress_mode"],
+            accepted_plan=result["accepted_plan"],
             issue_count=result["issue_count"],
             issue_codes=[row["code"] for row in result["field_issues"]],
             field_rounds=result["field_rounds"],
