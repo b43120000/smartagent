@@ -4767,6 +4767,59 @@ class WebAgentProtocolLoop:
                         ),
                     }]
                 cwd_scope = self.tools.preview_tool_scope(action)
+                if not cwd_scope.get('allowed', True):
+                    # Rewrite ONLY a recognized, registered, literal remote
+                    # Git HEAD read. Never change the command, target or
+                    # repository; the original absent destination is NOT a CWD.
+                    from agent_core.action_resolution_trace import (
+                        propose_equivalent_bound_cwd_rewrite,
+                    )
+                    from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+                    rewrite = propose_equivalent_bound_cwd_rewrite(
+                        action,
+                        original_cwd_error=str(cwd_scope.get("error") or ""),
+                        bound_workspace=str(self.workspace),
+                        target_contract=getattr(self, "_target_path_contract", None),
+                        goal_gaps=reconstruct_goal_gaps(self),
+                        artifact_view=getattr(self, "_source_discovery_bootstrap", None),
+                    )
+                    if rewrite:
+                        candidate = rewrite["candidate_action"]
+                        next_scope = self.tools.preview_tool_scope(candidate)
+                        if next_scope.get("allowed") is True:
+                            aid = str(action.get("action_id") or "")
+                            if aid:
+                                self._runtime_action_rewrite_notes[aid] = {
+                                    k: v for k, v in rewrite.items()
+                                    if k != "candidate_action"
+                                }
+                            action.clear()
+                            action.update(candidate)
+                            cwd_scope = next_scope
+                            self._emit(
+                                "action_runtime_rewrite_applied",
+                                request_id=self.run_id, round=self.turn_id,
+                                action_id=aid, tool="run_command",
+                                changed_fields=["working_directory"],
+                                rewrite_reason_code=rewrite["rewrite_reason_code"],
+                                target_absence_evidence_ref=rewrite[
+                                    "target_absence_evidence_ref"
+                                ],
+                                command_unchanged=True,
+                                semantics_preserved=True,
+                                grant_created=False,
+                                original_scope_denied=True,
+                                rewritten_scope_admitted=True,
+                                executed=False,
+                            )
+                        else:
+                            self._emit(
+                                "action_runtime_rewrite_candidate_rejected",
+                                request_id=self.run_id, round=self.turn_id,
+                                action_id=str(action.get("action_id") or ""),
+                                reason_code="REWRITTEN_CWD_SCOPE_NOT_ADMITTED",
+                                grant_created=False, executed=False,
+                            )
                 if not cwd_scope.get('allowed',True):
                     from agent_core.tools import _path_independent_command_must_use_bound_workspace
                     command = str(action.get('command', '') or '')
