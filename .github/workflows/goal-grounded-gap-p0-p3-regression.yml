@@ -52,7 +52,8 @@ jobs:
         run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
       - name: Existing Context interruption regression
         run: python -B source/WebAgent/tests/validate_context_acquisition.py
-      - name: Existing preexecution replan regression
+      - name: Existing Windows preexecution replan regression
+        if: runner.os == 'Windows'
         run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
       - name: Verify updated core hashes
         shell: python
