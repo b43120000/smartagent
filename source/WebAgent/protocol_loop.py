@@ -5932,6 +5932,8 @@ class WebAgentProtocolLoop:
                 disposition=resolution["disposition"],
                 changed_fields=resolution.get("changed_fields", []),
                 rewrite_reason_code=resolution.get("rewrite_reason_code", ""),
+                rewrite_rule_ids=resolution.get("rewrite_rule_ids", []),
+                rewrite_rule_schema=resolution.get("rewrite_rule_schema", ""),
                 original_command_sha256=(
                     (trace.get("planner_requested") or {}).get("command_sha256", "")
                 ),
