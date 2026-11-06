@@ -78,11 +78,16 @@ def interrupt_readiness(gaps: Mapping, capabilities: Mapping) -> dict:
 
 
 _EXPLICIT_USER_CHOICE = re.compile(
-    r"授權|批准|同意|允許|寫入權限|存取權限|權限範圍|"
-    r"准許|審核|決定|確認是否同意|"
-    r"\b(?:approve|approval|permission|consent|authorize|authorization)\b",
+    # Do not confuse "已授權目錄" (already-scoped location) with an
+    # actual request to obtain additional user approval.
+    r"(?:請|需要|要求|是否|確認|同意|取得|授予).{0,18}"
+    r"(?:授權|批准|准許|允許|寫入權限|存取權限|權限範圍)"
+    r"|(?:授權|批准|同意|允許)(?:本次|新增|建立|寫入|修改|部署)"
+    r"|\\b(?:approve|approval|consent|please authorize|grant permission|"
+    r"permission required|need permission)\\b",
     re.I,
 )
+
 _RUNTIME_READ_REQUEST = re.compile(
     r"提供.{0,15}(?:檔案|內容|原始碼|source|目錄清單)|"
     r"上傳|貼上|自行檢查|請你檢查|"
