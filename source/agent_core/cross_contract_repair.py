@@ -298,7 +298,7 @@ def repair_instruction(decision: Mapping, *,
          "base_evaluation, total_steps, current_step, steps, completion_contract, "
          "decision, current_focus, decision_reason, evidence_refs, and next_action "
          "when CONTINUE; do not use PATCH or invent completion/evidence)")
-        + "\\n"
+        + "\n"
     )
     if mode == FIELD_REPAIR:
         query_only = bool(decision.get("field_issues")) and all(
