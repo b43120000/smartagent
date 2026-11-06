@@ -296,6 +296,7 @@ def build_action_loop_state(
     action_records: Sequence[Mapping[str, Any]] | None = None,
     admission_records: Sequence[Mapping[str, Any]] | None = None,
     available_tools: Sequence[str] | None = None,
+    goal_gap_view: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one complete, model-readable, Runtime-owned state snapshot."""
     progress = dict(progress or {})
@@ -559,6 +560,14 @@ def build_action_loop_state(
         "blocked_actions": list(dict.fromkeys(blocked)),
         "blocked_action_signatures": blocked_signatures,
         "missing_evidence": [item for item in missing if item],
+        "goal_gap_state": {
+            "schema": "SMARTAGENT_ACTIVE_GOAL_GAPS_V1",
+            "active_count": int((goal_gap_view or {}).get("active_count", 0)),
+            "unresolved_gap_ids": [str(g.get("gap_id", "")) for g in
+                                   list((goal_gap_view or {}).get("active_gaps") or [])[:32]],
+            "fact_based_prerequisites_remain_active": True,
+            "does_not_grant_mutation": True,
+        },
         "last_action": {
             "tool": tool,
             "semantic_signature": semantic_action_signature(action) if action else "",
