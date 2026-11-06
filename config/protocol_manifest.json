@@ -241,7 +241,7 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "875db3e3da561bf91182119f11f074f9065e033931d2c7722b038687936e7e66",
+    "source/WebAgent/protocol_loop.py": "d08d68c1ed681ed09584dfea269f921e9ba15d81d0092b4aba5cff978b8587dc",
     "source/WebAgent/protocol.py": "8130749035ee3c2e5ab20f5cc663417db410e9c062f52ca4c4dffe915b030b22",
     "source/WebAgent/session.py": "a3e3cedda8e42611705c09b71228ec59e13f63f49e1f7e10297b64198699bd6e",
     "source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py": "7be7da2abad8d3bfb8a299d36ab390b3507f7fee430a17b3f84350145ae1a3ea",
