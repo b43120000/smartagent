@@ -190,7 +190,7 @@ class ActionResolutionTraceTests(unittest.TestCase):
         fake._target_path_contract = extract_target_contract(goal)
         fake.run_id = "RR-CASE-D"
         fake.task_epoch = "EPOCH-D"
-        action_row, result_row = directory_record("ACT-CONFIRMED-ABSENT")
+        action_row, result_row = directory_record("ACT-CONFIRMED-ABSENT", exists=False)
         result_row["request_id"] = fake.run_id
         result_row["task_epoch"] = fake.task_epoch
         fake.action_ledger["ACT-CONFIRMED-ABSENT"] = action_row
