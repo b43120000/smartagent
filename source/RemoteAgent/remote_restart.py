@@ -21,11 +21,35 @@ def _log(root,message):
     except OSError:
         pass
 
+def _is_windows_runtime():
+    return os.name == "nt"
+
+
 def spawn_restart_helper(*,root,old_pid,old_generation,chat_id,reply_to_message_id,popen=subprocess.Popen):
-    cmd=[sys.executable,"-m","RemoteAgent.remote_restart","--root",str(Path(root).resolve()),"--old-pid",str(int(old_pid)),"--old-generation",str(old_generation or ""),"--chat-id",str(int(chat_id)),"--reply-to-message-id",str(int(reply_to_message_id))]
-    flags=0
-    if os.name=="nt": flags=(getattr(subprocess,"CREATE_NEW_PROCESS_GROUP",0)|getattr(subprocess,"DETACHED_PROCESS",0)|getattr(subprocess,"CREATE_BREAKAWAY_FROM_JOB",0x01000000))
-    proc=popen(cmd,cwd=str(Path(root).resolve()),creationflags=flags,close_fds=(os.name!="nt"))
+    """Create the restart helper without requiring Windows Job breakaway rights.
+
+    A managed terminal may reject CREATE_BREAKAWAY_FROM_JOB with WinError 5.
+    In that narrow case retry the same *current-installation* helper without
+    breakaway. A different error must still propagate, never be disguised as
+    a successful restart. The detached helper performs the ordinary
+    shutdown/archive/scope checks unchanged.
+    """
+    root=Path(root).resolve()
+    cmd=[sys.executable,"-m","RemoteAgent.remote_restart","--root",str(root),"--old-pid",str(int(old_pid)),"--old-generation",str(old_generation or ""),"--chat-id",str(int(chat_id)),"--reply-to-message-id",str(int(reply_to_message_id))]
+    windows=_is_windows_runtime()
+    base_flags=(getattr(subprocess,"CREATE_NEW_PROCESS_GROUP",0)|getattr(subprocess,"DETACHED_PROCESS",0)) if windows else 0
+    breakaway_flag=getattr(subprocess,"CREATE_BREAKAWAY_FROM_JOB",0x01000000) if windows else 0
+    kwargs={"cwd":str(root),"close_fds":not windows}
+    try:
+        proc=popen(cmd,creationflags=base_flags|breakaway_flag,**kwargs)
+    except PermissionError as exc:
+        # WinError 5 from Windows Job Object restrictions is specific to the
+        # BREAKAWAY flag. Do not elevate privileges or retry unrelated errors.
+        if not windows or not breakaway_flag or getattr(exc,"winerror",None)!=5:
+            raise
+        _log(root,"RESTART_HELPER_BREAKAWAY_DENIED winerror=5 retry_without_breakaway")
+        proc=popen(cmd,creationflags=base_flags,**kwargs)
+        _log(root,f"RESTART_HELPER_BREAKAWAY_FALLBACK_STARTED pid={int(proc.pid)}")
     return int(proc.pid)
 
 def _load(path):
