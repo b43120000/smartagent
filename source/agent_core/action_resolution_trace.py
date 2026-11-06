@@ -180,7 +180,10 @@ def _rewrite_details(original: Mapping, canonical: Mapping, info: Mapping | None
     notes = info if isinstance(info, Mapping) else {}
     fields = sorted(
         key for key in set(before).union(after)
-        if key != "action_id" and before.get(key) != after.get(key)
+        if key != "action_id" and (
+            (key in before) != (key in after)
+            or before.get(key) != after.get(key)
+        )
     )
     if not fields:
         return {
