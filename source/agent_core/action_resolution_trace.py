@@ -167,6 +167,31 @@ def propose_equivalent_bound_cwd_rewrite(
 
 REWRITE_RULE_SCHEMA = "SMARTAGENT_ACTION_REWRITE_RULES_V1"
 
+_TRANSPORT_RULES = {
+    "V9_EXCLUSIVE_JSON_CANONICALIZED": (
+        "Use canonical smartagent_tool fenced JSON blocks and a final turn_commit; "
+        "plain JSON fallback requires Runtime transport conversion."
+    ),
+    "RUNTIME_ACTION_ID_ASSIGNED": (
+        "The submitted Action omitted its correlation ID. Supply an explicit "
+        "unique action_id in the canonical Action envelope."
+    ),
+    "DOM_JSON_SEQUENCE_ACCEPTED": (
+        "Multiple JSON Action objects were extracted from a rendered DOM block. "
+        "Emit a canonical single-fence v9 transport instead."
+    ),
+    "TRAILING_BARE_TURN_COMMIT_ADOPTED": (
+        "Runtime adopted a bare trailing turn_commit. Keep it within the "
+        "canonical smartagent_tool transport."
+    ),
+    "TERMINAL_FENCE_RESIDUE_REMOVED": (
+        "Runtime removed a redundant closing fence fragment. Return exactly "
+        "one opening and one closing smartagent_tool fence."
+    ),
+}
+
+
+
 
 def _rewrite_details(original: Mapping, canonical: Mapping, info: Mapping | None) -> dict:
     """Explain every actual payload difference without inventing a semantic rule.
@@ -178,6 +203,10 @@ def _rewrite_details(original: Mapping, canonical: Mapping, info: Mapping | None
     before = dict(original) if isinstance(original, Mapping) else {}
     after = dict(canonical) if isinstance(canonical, Mapping) else {}
     notes = info if isinstance(info, Mapping) else {}
+    transport_ids = [
+        str(rule) for rule in (notes.get("transport_rule_ids") or [])[:12]
+        if isinstance(rule, str) and rule in _TRANSPORT_RULES
+    ]
     fields = sorted(
         key for key in set(before).union(after)
         if key != "action_id" and (
@@ -185,7 +214,7 @@ def _rewrite_details(original: Mapping, canonical: Mapping, info: Mapping | None
             or before.get(key) != after.get(key)
         )
     )
-    if not fields:
+    if not fields and not transport_ids:
         return {
             "changed_fields": [], "rewrite_reason_code": "",
             "rewrite_rule_ids": [], "rewrite_rules": [],
@@ -244,11 +273,19 @@ def _rewrite_details(original: Mapping, canonical: Mapping, info: Mapping | None
             "to_type": type(new).__name__ if field in after else "absent",
             "rule": description,
         })
+    for rule_id in dict.fromkeys(transport_ids):
+        rules.append({
+            "rule_id": rule_id,
+            "input_fields": [], "output_fields": [],
+            "from_type": "transport", "to_type": "canonical_transport",
+            "rule": _TRANSPORT_RULES[rule_id],
+        })
     ids = list(dict.fromkeys(item["rule_id"] for item in rules))
     reason = str(notes.get("rewrite_reason_code") or "")[:120]
     if not reason:
         reason = (
-            "CANONICAL_FORM_UNCLASSIFIED"
+            "TRANSPORT_CANONICALIZATION" if not fields
+            else "CANONICAL_FORM_UNCLASSIFIED"
             if "CANONICAL_FORM_UNCLASSIFIED" in ids
             else "CANONICAL_FORM_NORMALIZATION"
         )
@@ -297,7 +334,7 @@ def rejection_traces(
         rewrite = (rewrite_notes or {}).get(aid) if isinstance(rewrite_notes, Mapping) else None
         rewrite = rewrite if isinstance(rewrite, Mapping) else {}
         rewrite_details = _rewrite_details(original, candidate, rewrite)
-        rewritten = bool(rewrite_details["changed_fields"])
+        rewritten = bool(rewrite_details["rewrite_rule_ids"])
         records.append({
             "schema": SCHEMA,
             "request_id": request_id,
@@ -354,7 +391,7 @@ def executed_trace(
     actual = provenance.get("actual_result") or {}
     info = rewrite_info if isinstance(rewrite_info, Mapping) else {}
     rewrite_details = _rewrite_details(original, canonical, info)
-    modified = bool(rewrite_details["changed_fields"])
+    modified = bool(rewrite_details["rewrite_rule_ids"])
     return {
         "schema": SCHEMA,
         "request_id": request_id,
