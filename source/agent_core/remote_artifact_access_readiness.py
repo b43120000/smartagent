@@ -150,6 +150,10 @@ def derive_admitted_git_read_receipt(
         if match is None:
             continue
         repo = match.group(1)
+        # The optional URL transport suffix is not part of GitHub's
+        # canonical owner/repository identity.
+        if repo.casefold().endswith(".git"):
+            repo = repo[:-4]
         linked = next((r for r in refs if str(r.get("repository", "")).casefold() == repo.casefold()), None)
         if linked is None:
             continue
