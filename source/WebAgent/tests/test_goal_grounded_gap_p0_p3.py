@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agent_core.action_loop_state import build_action_loop_state
+from agent_core.action_readiness import tool_readiness_contract
 from agent_core.goal_gap_ledger import (
     decision_grounding_diagnostics,
     reconstruct_goal_gaps,
@@ -71,6 +72,15 @@ def add_probe(r, action_id="inspect-1", *, exists=False, result_path=ROOT):
 
 
 class PersistentGoalGapTests(unittest.TestCase):
+    def test_query_project_preconditions_are_declared_to_planner(self):
+        readiness = tool_readiness_contract("query_project")
+        self.assertTrue(readiness["existing_project_workspace_required"])
+        self.assertIn("project_root", readiness["required_action_fields_when_explicit_scope"])
+        self.assertEqual(readiness["directory_precondition"]["field"], "project_root")
+        self.assertEqual(readiness["directory_precondition"]["expected"], True)
+        self.assertFalse(readiness["directory_precondition"]["not_an_authorization_grant"] is False)
+
+
     def test_case_d_negative_fact_persists_after_rejected_query(self):
         r = runtime()
         add_probe(r)
