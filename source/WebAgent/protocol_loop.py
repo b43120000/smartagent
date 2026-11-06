@@ -344,6 +344,9 @@ class WebAgentProtocolLoop:
         self.action_result_ledger: dict[str, dict] = {}
         self._planner_original_actions: dict[str, dict] = {}
         self._canonical_action_proposals: dict[str, dict] = {}
+        # Parse/admission-rejected Actions must have a disposition receipt too.
+        self._rejected_action_resolution_traces: list[dict] = []
+        self._runtime_action_rewrite_notes: dict[str, dict] = {}
         # A pre-execution envelope rejection is protocol evidence, never a Tool result.
         self._protocol_spec_rejection: dict[str, object] = {}
         # Native pre-execution bound-cwd rejection: not a ToolResult or terminal fact.
@@ -6147,6 +6150,8 @@ class WebAgentProtocolLoop:
         # New request: never inherit an earlier request's unexecuted proposal.
         self._planner_original_actions = {}
         self._canonical_action_proposals = {}
+        self._rejected_action_resolution_traces = []
+        self._runtime_action_rewrite_notes = {}
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         # SPR V1 runs before first Planner Progress and before any Tool action.
@@ -6228,6 +6233,9 @@ class WebAgentProtocolLoop:
             instance=str(self.continuation_store.instance if self.continuation_store else ""),
             workspace=str(self.workspace),
         )
+        # This is a Runtime-owned scoped reference, NOT a permission grant.
+        # Used only for exact Git remote-read classification/admission.
+        self.tools._registered_remote_artifact_view = self._source_discovery_bootstrap
         self._emit(
             "source_discovery_bootstrap_completed",
             request_id=self.run_id, task_id=self.task_id,
