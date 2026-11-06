@@ -146,10 +146,10 @@ class ComposerIntegrityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             journal = Path(folder) / "state.json"
             record = {"state": "IN_FLIGHT", "baseline": fake_snapshot(scraper, "")}
-            with patch.object(co.time, "monotonic", clock.monotonic), \\
-                 patch.object(co.time, "sleep", clock.sleep), \\
-                 patch.object(co, "_page_snapshot", fake_snapshot), \\
-                 patch.object(co, "_atomic_clear_owned", fake_atomic_clear), \\
+            with patch.object(co.time, "monotonic", clock.monotonic), \
+                 patch.object(co.time, "sleep", clock.sleep), \
+                 patch.object(co, "_page_snapshot", fake_snapshot), \
+                 patch.object(co, "_atomic_clear_owned", fake_atomic_clear), \
                  patch.object(co.PIT, "record", return_value=None):
                 co._write_staged_prompt(scraper, prompt, record, journal)
             self.assertEqual(scraper.text, prompt)
@@ -170,10 +170,10 @@ class ComposerIntegrityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             journal = Path(folder) / "state.json"
             record = {"state": "IN_FLIGHT", "baseline": fake_snapshot(scraper, "")}
-            with patch.object(co.time, "monotonic", clock.monotonic), \\
-                 patch.object(co.time, "sleep", clock.sleep), \\
-                 patch.object(co, "_page_snapshot", fake_snapshot), \\
-                 patch.object(co, "_atomic_clear_owned", fake_atomic_clear), \\
+            with patch.object(co.time, "monotonic", clock.monotonic), \
+                 patch.object(co.time, "sleep", clock.sleep), \
+                 patch.object(co, "_page_snapshot", fake_snapshot), \
+                 patch.object(co, "_atomic_clear_owned", fake_atomic_clear), \
                  patch.object(co.PIT, "record", return_value=None):
                 with self.assertRaises(co.ComposerOperationError):
                     co._write_staged_prompt(scraper, prompt, record, journal)
