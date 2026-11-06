@@ -126,7 +126,7 @@
     "source/agent_core/protocol_v9.py": "26932c3fa2bc41edfc16bc80613953e4c16f0e3a4ecfa42c6d7af5fdb3d8e51a",
     "source/agent_core/query_expected_outcome.py": "fa74ed8331ba794f0c14f3c06ef8d9bd8447788fbf51e02ec72bed99204821bd",
     "source/agent_core/recovery_protocol.py": "c18990845ea383a385fadc639d23eb9ebe0090da59e7cac43f8f787069fd1c5b",
-    "source/agent_core/remote_artifact_access_readiness.py": "c65bce88ffcc017569b4fc454843525de7ab3dd5f63bbbed46f00693ff539265",
+    "source/agent_core/remote_artifact_access_readiness.py": "99dd6554259a4143d18ec201f73ade9172ca2e9c6f80ce88d7d0fa4b5be309d8",
     "source/agent_core/remote_binding_manager.py": "fffffe0b54d08bfb5e9a2a492d826d0c02da0ec48e2f100eabad70d65a28ec45",
     "source/agent_core/remote_binding.py": "52a5acc9e82e6f3946b906c256814d4f8e93e0ad43c8cd74fdbfd9efcc17814f",
     "source/agent_core/remote_clean_start.py": "8e57ec0796b1770d5e73ff44eba348542528d2b8f7f58f22234bad3d3ca8e307",
