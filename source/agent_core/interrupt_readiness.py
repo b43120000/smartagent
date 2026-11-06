@@ -61,6 +61,7 @@ def _read_attempts(runtime) -> list[dict]:
 def interrupt_readiness(
     gaps: Mapping, capabilities: Mapping, *,
     attempted_reads: list[dict] | None = None,
+    source_candidates: Mapping | None = None,
 ) -> dict:
     """Project unexhausted *scoped* discovery candidates, never widen scope.
 
@@ -83,9 +84,54 @@ def interrupt_readiness(
         for row in list(attempted_reads or [])
         if _path_key(row.get("path"))
     }
+    # Prioritize provenance-grounded sources that are exact or descendants of
+    # an explicitly declared read path. Descendant checks are lexical hints
+    # only: real Tool/Scope Admission still decides actual access.
+    blocked_candidates = 0
+    for source in list((source_candidates or {}).get("candidates") or [])[:16]:
+        if not isinstance(source, Mapping):
+            continue
+        raw = str(source.get("path", ""))
+        key = _path_key(raw)
+        scope = source.get("scope_status")
+        if scope not in {"EXACT_DECLARED_PATH", "WITHIN_DECLARED_PATH"}:
+            blocked_candidates += 1
+            continue
+        if not key or key in seen or _is_missing(key, absent):
+            continue
+        seen.add(key)
+        known_state = known.get(key)
+        if known_state is False:
+            continue
+        listed_parent = (
+            source.get("origin") == "COMMITTED_PARENT_DIRECTORY_LISTING"
+            and bool(source.get("parent_listing_ref"))
+        )
+        if known_state is True or listed_parent:
+            tool = "list_directory"
+            field = {"path": raw}
+        else:
+            tool = "inspect_directory"
+            field = {"paths": [raw]}
+        if tool not in tools or (tool, key) in attempted:
+            continue
+        candidates.append({
+            "tool": tool, **field,
+            "reason": "GROUNDED_SOURCE_CANDIDATE",
+            "candidate_id": str(source.get("candidate_id", ""))[:80],
+            "provenance_ref": str(source.get("provenance_ref", ""))[:160],
+            "scope_status": str(scope),
+            "normal_admission_required": True,
+            "authorization_granted": False,
+        })
+        if len(candidates) >= 8:
+            break
+    # Existing exact path discovery remains as a fallback after known sources.
     # Use only exact explicitly authorized paths. Never infer parent access.
     # A completed observation cannot be repeated to manufacture progress.
     for raw in paths:
+        if len(candidates) >= 8:
+            break
         key = _path_key(raw)
         if not key or key in seen or _is_missing(key, absent):
             continue
@@ -120,6 +166,7 @@ def interrupt_readiness(
         ][:16],
         "candidate_reads": candidates,
         "candidate_count": len(candidates),
+        "out_of_scope_source_candidate_count": blocked_candidates,
         "scope_expansion_granted": False,
         "write_authorization_granted": False,
         "candidate_is_admission": False,
