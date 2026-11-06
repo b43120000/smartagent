@@ -26,7 +26,7 @@ from agent_core.protocol_v9 import (
     action_digest as v8_action_digest,
     admit_action as v8_admit_action,
     build_result as v8_build_result,
-    parse_v9_tool_transport,
+    parse_v9_tool_transport_detailed,
     validate_model_commit as v8_validate_model_commit,
 )
 from agent_core.result_exchange import prepare_tool_result
@@ -4797,9 +4797,15 @@ class WebAgentProtocolLoop:
                         if next_scope.get("allowed") is True:
                             aid = str(action.get("action_id") or "")
                             if aid:
+                                previous_notes = self._runtime_action_rewrite_notes.get(
+                                    aid, {}
+                                )
                                 self._runtime_action_rewrite_notes[aid] = {
-                                    k: v for k, v in rewrite.items()
-                                    if k != "candidate_action"
+                                    **previous_notes,
+                                    **{
+                                        k: v for k, v in rewrite.items()
+                                        if k != "candidate_action"
+                                    },
                                 }
                             action.clear()
                             action.update(candidate)
@@ -6911,12 +6917,26 @@ class WebAgentProtocolLoop:
                 planner_response_received=True,
             )
             action_id_seed = f"{expected.get('run_id', '')}:{expected.get('turn_id', '')}"
-            calls, v8_parse_diagnostics = parse_v9_tool_transport(
+            parsed_transport = parse_v9_tool_transport_detailed(
                 response,
                 action_id_seed=action_id_seed,
             )
+            calls, v8_parse_diagnostics = (
+                parsed_transport.calls, parsed_transport.diagnostics
+            )
+            # Even transport-only canonicalization counts as a Rewrite.
+            # Record documented rule IDs without elevating parser normalization
+            # into permission, execution, or semantic equivalence evidence.
+            transport_rules = [
+                str(value).split(":", 1)[0]
+                for value in parsed_transport.normalizations
+            ]
+            global_transport_rules = [
+                value for value in transport_rules
+                if value != "RUNTIME_ACTION_ID_ASSIGNED"
+            ]
             if not v8_parse_diagnostics:
-                for submitted in calls:
+                for index, submitted in enumerate(calls, 1):
                     if not isinstance(submitted, dict) or submitted.get("tool") in {
                             "report_progress", "turn_commit", "final_response"}:
                         continue
@@ -6924,6 +6944,22 @@ class WebAgentProtocolLoop:
                     if isinstance(aid, str) and aid:
                         # First proposal retained across field-only repairs.
                         self._planner_original_actions.setdefault(aid, deepcopy(submitted))
+                        per_action_rules = list(global_transport_rules)
+                        if any(
+                            str(value).startswith(
+                                f"RUNTIME_ACTION_ID_ASSIGNED:index={index};"
+                            )
+                            for value in parsed_transport.normalizations
+                        ):
+                            per_action_rules.append("RUNTIME_ACTION_ID_ASSIGNED")
+                        if per_action_rules:
+                            notes = self._runtime_action_rewrite_notes.setdefault(
+                                aid, {}
+                            )
+                            notes["transport_rule_ids"] = list(dict.fromkeys(
+                                list(notes.get("transport_rule_ids") or [])
+                                + per_action_rules
+                            ))[:12]
             diagnostics = [
                 {
                     "marker": "[WEBAGENT_V8_PARSE_ERROR]",
