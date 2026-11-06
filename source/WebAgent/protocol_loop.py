@@ -4946,10 +4946,20 @@ class WebAgentProtocolLoop:
             interrupt_diagnostic = proposed_interrupt_constraint(request, interruption_view)
             if interrupt_diagnostic:
                 return [], [interrupt_diagnostic]
+            from agent_core.remote_artifact_access_readiness import (
+                resolve_remote_artifact_access,
+            )
+            artifact_view = getattr(self, "_source_discovery_bootstrap", None) or {}
+            remote_view = resolve_remote_artifact_access(
+                artifact_view,
+                environment=getattr(self, "_planner_environment_snapshot", None),
+                runtime_receipt=getattr(self, "_remote_artifact_access_runtime_receipt", None),
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
             prerequisite_diagnostic = premature_source_interrupt_diagnostic(
                 request, resolve_goal_prerequisites(
                     gap_view, interruption_view, source_view, source_integrity_view,
-                    getattr(self, "_source_discovery_bootstrap", None) or {},
+                    artifact_view, remote_view,
                 ),
             )
             if prerequisite_diagnostic:
@@ -6418,6 +6428,9 @@ class WebAgentProtocolLoop:
                 "tools": {},
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
+        # Request-local probe evidence; later Planner rounds reuse the actual
+        # installed-tool probe rather than mistaking missing receipts for denial.
+        self._planner_environment_snapshot = environment_snapshot
         # PR-B/C/D complements PR-A; never authorizes operations by probing.
         self._pr_v3_ledger = None
         self._environment_fact_refs = {}
@@ -6532,6 +6545,7 @@ class WebAgentProtocolLoop:
                 if getattr(self, "_pr_v3_project_root_explicit", False)
                 else self.workspace
             )
+            self._project_environment_hint = known_environment
             if known_environment.get("index_status") in {"ABSENT", "INVALID", "UNKNOWN", "PRESENT"}:
                 prompt += ("\n[PROJECT_ENVIRONMENT_DISCOVERY_FACT]\n"
                            + json.dumps({"index_status": known_environment["index_status"],
