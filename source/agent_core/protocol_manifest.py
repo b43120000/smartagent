@@ -94,6 +94,7 @@ CORE_FILES = (
     'source/agent_core/capability_recovery.py',
     'source/agent_core/context_acquisition.py',
     'source/agent_core/progress_reply_contract.py',
+    'source/agent_core/protocol_repair_transaction.py',
     'source/agent_core/tool_result_contract.py',
     'source/agent_core/tool_result_policy.py',
     'source/agent_core/query_expected_outcome.py',

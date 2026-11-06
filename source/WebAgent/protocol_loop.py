@@ -365,6 +365,7 @@ class WebAgentProtocolLoop:
         self._bounded_repair = BoundedRepairBudget()
         self._repair_stagnation = None
         self._ccrc = None  # Request-scoped Cross-Contract Repair Coordinator.
+        self._protocol_repair_tx = None  # Request-scoped unadmitted candidate.
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
@@ -4177,6 +4178,44 @@ class WebAgentProtocolLoop:
                 action_executed=False, terminal_evidence_created=False,
                 authorization_granted=False,
             )
+        # P1: A PATCH repeats plan fields only when they really change.
+        # Identical already-accepted fields are inherited from Ledger, not
+        # copied into the next schema repair. Changed explicit fields remain
+        # subject to ordinary Progress validation (fail closed).
+        from agent_core.progress_reply_contract import reconcile_redundant_patch_fields
+        try:
+            normalized_progress_action, redundant_fields = (
+                reconcile_redundant_patch_fields(
+                    normalized_progress_action, self.progress_ledger))
+        except ValueError:
+            redundant_fields = []  # ordinary materialization reports conflict
+        if redundant_fields:
+            self._emit(
+                "protocol_repair_redundant_patch_fields_inherited",
+                request_id=self.run_id, round=self.turn_id,
+                fields=redundant_fields,
+                authorization_granted=False, executed=False,
+            )
+        # P0: A previously validated Progress proposal can survive a rejected
+        # query_project Action schema. Never restore changed Goal, Evidence,
+        # decision, or accepted Plan fields; FULL admission still follows.
+        tx = getattr(self, "_protocol_repair_tx", None)
+        if tx is not None:
+            restored, repair_mode = tx.restore_progress(
+                normalized_progress_action, submitted,
+                ledger=self.progress_ledger,
+                action_results=self.action_result_ledger,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
+            if repair_mode:
+                normalized_progress_action = restored
+                self._emit(
+                    "protocol_repair_valid_progress_candidate_restored",
+                    request_id=self.run_id, round=self.turn_id,
+                    mode=repair_mode, transaction_revision=tx.revision,
+                    persisted=False, admitted=False,
+                    executed=False, authorization_granted=False,
+                )
 
         # Shared Tri-One Completion Contract: only the trusted, no-action,
         # exclusive final_response terminal may omit evidence_refs. This is
@@ -4231,6 +4270,27 @@ class WebAgentProtocolLoop:
         progress_index = actions.index(progress_actions[0])
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
+        # P2: deterministic query_project reshaping only when the Planner has
+        # explicitly selected the operation and its query arguments. No
+        # operation/path/symbol is guessed, no admission can be skipped.
+        from agent_core.protocol_repair_transaction import normalize_query_project
+        query_modes = []
+        for index, action in enumerate(actions):
+            if action.get("tool") != "query_project":
+                continue
+            normalized_query, mode = normalize_query_project(action)
+            if mode:
+                actions[index] = normalized_query
+                query_modes.append((str(action.get("action_id", "")), mode))
+        if query_modes:
+            self._emit(
+                "query_project_deterministic_schema_repair",
+                request_id=self.run_id, round=self.turn_id,
+                action_ids=[item[0] for item in query_modes],
+                modes=[item[1] for item in query_modes],
+                inferred_operation=False, authorization_granted=False,
+                executed=False, admission_required=True,
+            )
         operational = [action for action in actions if action.get("tool") != "report_progress"]
         # A pre-execution strategy revision cannot be bypassed by changing
         # only Action ID or restating the same denied command. A new strategy
@@ -4314,6 +4374,23 @@ class WebAgentProtocolLoop:
                 or not str(query.get("operation", "") or "").strip()
             ]
             if invalid_indexes:
+                # Save only a fully valid, unadmitted Progress *proposal*.
+                # Invalid query payloads cannot be executed; the candidate is
+                # never stored in TaskProgressLedger until full admission.
+                tx = getattr(self, "_protocol_repair_tx", None)
+                if tx is not None and tx.capture_query_rejection(
+                    progress_actions[0], operational,
+                    ledger=self.progress_ledger,
+                    action_results=self.action_result_ledger,
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                ):
+                    self._emit(
+                        "protocol_repair_valid_progress_candidate_preserved",
+                        request_id=self.run_id, round=self.turn_id,
+                        transaction_revision=tx.revision,
+                        persisted=False, admitted=False, executed=False,
+                        authorization_granted=False,
+                    )
                 return [], [{
                     "marker": "[WEBAGENT_QUERY_PROJECT_REJECTED]",
                     "reason": "query_project_structured_queries_required",
@@ -4321,7 +4398,14 @@ class WebAgentProtocolLoop:
                         "queries[] must contain explicit operation objects; invalid_indexes="
                         + json.dumps(invalid_indexes, separators=(",", ":"))
                     ),
-                    "suggestion": PROJECT_EVIDENCE_ACTION_CONTRACT,
+                    "suggestion": (
+                        "Repair only query_project.queries[] into explicit "
+                        "{operation: canonical_name, ...arguments} objects; "
+                        "never infer a missing operation or broaden a path. "
+                        "For report_progress use a minimal PATCH, preserve "
+                        "the accepted Goal, status/evidence and condition. "
+                        + PROJECT_EVIDENCE_ACTION_CONTRACT
+                    ),
                 }]
         pending_edit_recovery = dict(self.pending_result_recovery or {})
         if (
@@ -5416,6 +5500,9 @@ class WebAgentProtocolLoop:
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
         self.protocol_state = "ACCEPTED"
+        tx = getattr(self, "_protocol_repair_tx", None)
+        if tx is not None:
+            tx.clear()  # Close only on FULL admission; no early commit.
         self.pending_progress_repair_actions = []
         self.pending_action_repair = {}
         self.pending_result_ack_id = ""
@@ -5802,6 +5889,9 @@ class WebAgentProtocolLoop:
         self._ccrc = CrossContractRepairCoordinator(
             request_id=self.run_id, task_epoch=self.task_epoch,
             goal=str(gar_goal))
+        from agent_core.protocol_repair_transaction import ProtocolRepairTransaction
+        self._protocol_repair_tx = ProtocolRepairTransaction(
+            self.run_id, self.task_epoch)
         self.tools.current_task_epoch = self.task_epoch
         self.tools.current_intent_digest = self.intent_digest
         # SPR V1 runs before first Planner Progress and before any Tool action.

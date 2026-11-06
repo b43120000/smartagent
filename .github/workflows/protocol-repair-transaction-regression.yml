@@ -1,0 +1,70 @@
+name: Protocol Repair Transaction P0-P3 Regression
+
+on:
+  push:
+    branches:
+      - feat/protocol-repair-transaction-p0-p3-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protocol-repair:
+    name: Protocol Repair Transaction - ${{ matrix.os }} - Python 3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile Protocol Repair sources
+        run: >
+          python -B -m compileall -q
+          source/agent_core/protocol_repair_transaction.py
+          source/agent_core/cross_contract_repair.py
+          source/agent_core/progress_reply_contract.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_protocol_repair_transaction_p0_p3.py
+      - name: New P0-P3 transaction and synthetic replay regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_protocol_repair_transaction_p0_p3.py
+      - name: Existing Cross-Contract Repair regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Existing Flexible Progress admission regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_flexible_progress_admission.py
+      - name: Existing Query Project matrix
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_query_project_matrix.py
+      - name: Existing Progress reply contract
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_progress_reply_contract.py
+      - name: Existing GAR Progress hold
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_gar_progress_hold_it.py
+      - name: Existing protocol same-round repair
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_protocol_same_round_repair.py
+      - name: Existing Terminal Goal target guard
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_target_path_contract.py
+      - name: Existing P0 environment repair
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_goal_repair_p0_env.py
+      - name: Existing Auto RCA
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_auto_rca_upload.py
+      - name: Core protocol source SHA256 manifest
+        run: >
+          python -B -c "import hashlib,json,pathlib;
+          m=json.loads(pathlib.Path('config/protocol_manifest.json').read_text(encoding='utf-8'));
+          p=['source/agent_core/protocol_repair_transaction.py',
+          'source/agent_core/progress_reply_contract.py',
+          'source/agent_core/cross_contract_repair.py',
+          'source/WebAgent/protocol_loop.py',
+          'source/agent_core/protocol_manifest.py'];
+          bad=[f for f in p if m['core_files'].get(f)!=hashlib.sha256(pathlib.Path(f).read_bytes()).hexdigest()];
+          print('MANIFEST_MISMATCHES:',bad);
+          assert not bad,bad"

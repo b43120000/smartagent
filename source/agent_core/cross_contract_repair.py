@@ -23,6 +23,7 @@ _RELEVANT = {
     "declared_next_action_mismatch", "command_repair_identity_changed",
     "command_action_reconstruction_required", "pending_actions_not_preserved",
     "MISSING_OR_INVALID_FIELD", "unexpected_field",
+    "query_project_structured_queries_required",
 }
 
 
@@ -70,6 +71,8 @@ def inspect_cross_contract(
             for row in list(ready.get("field_issues") or [])[:32]:
                 if isinstance(row, Mapping):
                     add("COMMAND", row.get("field", "field"), row.get("code", "invalid"))
+        if reason == "query_project_structured_queries_required":
+            add("QUERY", "queries", "explicit_query_operation_required")
         if reason == "run_command_operation_mismatch":
             add("COMMAND", "operation", "operation_command_mismatch")
         if reason == "run_command_verification_contract_required":
@@ -107,7 +110,7 @@ def inspect_cross_contract(
     # In particular, Scope/Authorization/Preflight denials belong to their
     # original safety gates and must never consume CCRC's format window.
     relevant = any(
-        row["origin"] in {"PROGRESS", "CONSISTENCY", "COMMAND"}
+        row["origin"] in {"PROGRESS", "CONSISTENCY", "COMMAND", "QUERY"}
         or row["code"] in _RELEVANT for row in rows
     )
     return {
@@ -282,11 +285,21 @@ def repair_instruction(decision: Mapping) -> str:
         summary, ensure_ascii=False, separators=(",", ":")
     ) + "\n"
     if mode == FIELD_REPAIR:
+        query_only = bool(decision.get("field_issues")) and all(
+            row.get("origin") in {"QUERY", "ADMISSION"}
+            for row in decision["field_issues"])
         instruction = (
-            "Repair Progress, Command and next_action/actual Action as ONE pending "
-            "decision; fix all listed canonical issues together. Preserve "
-            "unexecuted action identity and any Runtime-held actions. Never "
-            "replay executed actions, invent evidence, or broaden scope."
+            "Repair ONLY query_project.queries[] with explicit canonical "
+            "operation objects. Preserve the already accepted Progress "
+            "and use a minimal PATCH; omit inherited plan fields unless "
+            "they truly change. No operation/path guessing, no new Scope, "
+            "no fake Action Evidence. Full admission remains mandatory."
+            if query_only else
+            "Repair Progress, Query and next_action as ONE pending decision; "
+            "use PATCH to inherit accepted plan fields rather than regenerating "
+            "steps, base_evaluation or completion_contract. Correct only the "
+            "listed canonical issues; preserve Action semantics, evidence "
+            "and original Goal. Never replay executed actions or broaden scope."
         )
     elif mode == ACTION_RECONSTRUCTION:
         instruction = (

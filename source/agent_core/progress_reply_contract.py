@@ -47,6 +47,28 @@ def reply_contract(ledger):
     }
 
 
+def reconcile_redundant_patch_fields(payload, ledger):
+    """Omit only redundant, exactly equivalent inherited Progress fields.
+
+    The accepted Ledger remains authoritative; never reinterpret an explicit
+    new Step, Goal clause, decision, outcome, condition, or Evidence ref.
+    Any conflicting field is kept for the ordinary Progress validator to
+    reject or accept as a legitimate planned change.
+    """
+    if (not has_accepted_plan(ledger)
+            or not isinstance(payload, dict)
+            or payload.get('progress_update', 'PATCH') != 'PATCH'
+            or str(payload.get('decision', '')).upper() != 'CONTINUE'):
+        return dict(payload), []
+    proposed = normalize_progress_fields(payload)
+    redundant = []
+    for key in INHERITED_FIELDS:
+        if key in proposed and proposed[key] == getattr(ledger, key):
+            proposed.pop(key)
+            redundant.append(key)
+    return proposed, redundant
+
+
 def materialize_progress(
     payload, ledger, *, allow_omitted_answer_only_evidence=False,
 ):
