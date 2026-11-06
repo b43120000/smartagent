@@ -30,7 +30,38 @@ def _is_missing(key: str, absences: list[dict]) -> bool:
     return False
 
 
-def interrupt_readiness(gaps: Mapping, capabilities: Mapping) -> dict:
+def _read_attempts(runtime) -> list[dict]:
+    """Bind prior reader attempts to the current Request/Epoch and exact paths."""
+    actions = dict(getattr(runtime, "action_ledger", {}) or {})
+    results = dict(getattr(runtime, "action_result_ledger", {}) or {})
+    request_id = str(getattr(runtime, "run_id", "") or "")
+    epoch = str(getattr(runtime, "task_epoch", "") or "")
+    out = []
+    for action_id, record in actions.items():
+        result = results.get(action_id) or {}
+        if (result.get("request_id") != request_id
+                or result.get("task_epoch") != epoch
+                or result.get("evidence_status", "ACTIVE") != "ACTIVE"):
+            continue
+        action = record.get("action") or {}
+        tool = str(action.get("tool", ""))
+        if tool == "inspect_directory":
+            paths = list(action.get("paths") or [])
+        elif tool == "list_directory":
+            paths = [action.get("path")]
+        else:
+            continue
+        for path in paths:
+            if _path_key(path):
+                out.append({"tool": tool, "path": str(path),
+                            "action_id": str(action_id)})
+    return out
+
+
+def interrupt_readiness(
+    gaps: Mapping, capabilities: Mapping, *,
+    attempted_reads: list[dict] | None = None,
+) -> dict:
     """Project unexhausted *scoped* discovery candidates, never widen scope.
 
     The candidate is only an advisory exact-path inspect. Normal scope and
@@ -42,23 +73,45 @@ def interrupt_readiness(gaps: Mapping, capabilities: Mapping) -> dict:
     paths = list(capabilities.get("authorized_paths") or [])
     candidates = []
     seen = set()
-    # Only explicit, already-scoped paths; never infer parent or sibling from
-    # an absent target. A path known absent cannot be probed indefinitely.
-    if "inspect_directory" in tools:
-        for raw in paths:
-            key = _path_key(raw)
-            if not key or key in seen or _is_missing(key, absent):
-                continue
-            seen.add(key)
-            candidates.append({
-                "tool": "inspect_directory",
-                "paths": [str(raw)],
-                "reason": "SCOPED_PATH_NOT_YET_OBSERVED_ABSENT",
-                "normal_admission_required": True,
-                "authorization_granted": False,
-            })
-            if len(candidates) >= 8:
-                break
+    known = {
+        _path_key(row.get("path")): row.get("observed_value")
+        for row in list(gaps.get("gaps") or [])
+        if type(row.get("observed_value")) is bool and _path_key(row.get("path"))
+    }
+    attempted = {
+        (str(row.get("tool", "")), _path_key(row.get("path")))
+        for row in list(attempted_reads or [])
+        if _path_key(row.get("path"))
+    }
+    # Use only exact explicitly authorized paths. Never infer parent access.
+    # A completed observation cannot be repeated to manufacture progress.
+    for raw in paths:
+        key = _path_key(raw)
+        if not key or key in seen or _is_missing(key, absent):
+            continue
+        seen.add(key)
+        known_state = known.get(key)
+        if known_state is True:
+            tool = "list_directory"
+            field = {"path": str(raw)}
+            reason = "SCOPED_PRESENT_DIRECTORY_NOT_YET_LISTED"
+        elif known_state is False:
+            continue
+        else:
+            tool = "inspect_directory"
+            field = {"paths": [str(raw)]}
+            reason = "SCOPED_DIRECTORY_NOT_YET_OBSERVED"
+        if tool not in tools or (tool, key) in attempted:
+            continue
+        candidates.append({
+            "tool": tool,
+            **field,
+            "reason": reason,
+            "normal_admission_required": True,
+            "authorization_granted": False,
+        })
+        if len(candidates) >= 8:
+            break
     return {
         "schema": SCHEMA,
         "active_goal_gap_ids": [str(g.get("gap_id", "")) for g in active][:16],
@@ -127,4 +180,4 @@ def proposed_interrupt_constraint(request: Mapping, readiness: Mapping) -> dict 
     }
 
 
-__all__ = ["SCHEMA", "interrupt_readiness", "proposed_interrupt_constraint"]
+__all__ = ["SCHEMA", "interrupt_readiness", "proposed_interrupt_constraint", "_read_attempts"]
