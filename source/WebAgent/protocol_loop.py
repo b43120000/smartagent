@@ -4949,6 +4949,7 @@ class WebAgentProtocolLoop:
             prerequisite_diagnostic = premature_source_interrupt_diagnostic(
                 request, resolve_goal_prerequisites(
                     gap_view, interruption_view, source_view, source_integrity_view,
+                    getattr(self, "_source_discovery_bootstrap", None) or {},
                 ),
             )
             if prerequisite_diagnostic:
