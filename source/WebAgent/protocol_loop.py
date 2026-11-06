@@ -4956,13 +4956,22 @@ class WebAgentProtocolLoop:
                 runtime_receipt=getattr(self, "_remote_artifact_access_runtime_receipt", None),
                 request_id=self.run_id, task_epoch=self.task_epoch,
             )
+            prerequisite_view = resolve_goal_prerequisites(
+                gap_view, interruption_view, source_view, source_integrity_view,
+                artifact_view, remote_view,
+            )
+            prerequisite_view["remote_access_probe_guidance_already_issued"] = bool(
+                getattr(self, "_remote_access_probe_guidance_issued", False)
+            )
             prerequisite_diagnostic = premature_source_interrupt_diagnostic(
-                request, resolve_goal_prerequisites(
-                    gap_view, interruption_view, source_view, source_integrity_view,
-                    artifact_view, remote_view,
-                ),
+                request, prerequisite_view,
             )
             if prerequisite_diagnostic:
+                if (prerequisite_diagnostic.get("reason") ==
+                        "remote_access_unknown_git_capability_probe_required"):
+                    # One bounded hint, not infinite rejection when the
+                    # requested Git probe is itself prohibited by policy.
+                    self._remote_access_probe_guidance_issued = True
                 return [], [prerequisite_diagnostic]
             spec = self._safe_protocol_spec_rejection()
             if (spec and request.get('kind') == 'BLOCKED'
