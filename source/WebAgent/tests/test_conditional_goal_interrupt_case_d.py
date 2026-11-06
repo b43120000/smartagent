@@ -84,7 +84,7 @@ class ConditionalGoalCaseD(unittest.TestCase):
     def test_unknown_or_unbound_goal_does_not_create_unverified_gap(self):
         p = conditional_goal_policy("請唯讀確認有無資料，無需補救")
         self.assertEqual(p["intent"], "DISCOVERY_OR_OBSERVATION")
-        r = runtime(goal="請查看其他目錄，不要推定 " + ROOT + " 是部署目標")
+        r = runtime(goal="請在 E:\\OtherFolder 建立專案資料")
         add_probe(r)
         self.assertEqual(reconstruct_goal_gaps(r)["active_count"], 0)
 
