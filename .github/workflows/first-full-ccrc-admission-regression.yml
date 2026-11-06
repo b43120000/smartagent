@@ -1,0 +1,58 @@
+name: First FULL CCRC Admission Recovery
+
+on:
+  push:
+    branches:
+      - fix/first-full-ccrc-admission-live-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  first-full-admission:
+    name: First FULL Admission - ${{ matrix.os }} - Python 3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile modified runtime and regression
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/cross_contract_repair.py
+          source/agent_core/progress_recovery.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/validate_first_full_ccrc_live_regression.py
+      - name: RCA replay first FULL and held observation
+        run: python -B source/WebAgent/tests/validate_first_full_ccrc_live_regression.py
+      - name: Existing CCRC transaction regression
+        run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Existing Progress reply schema regression
+        run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
+      - name: Existing Progress lifecycle regression
+        run: python -B source/WebAgent/tests/validate_progress_terminal_lifecycle.py
+      - name: Original Goal Gap decision grounding
+        run: python -B source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
+      - name: Original Goal Strategy regression
+        run: python -B source/WebAgent/tests/validate_goal_strategy_transition_it.py
+      - name: Existing Context Acquisition regression
+        run: python -B source/WebAgent/tests/validate_context_acquisition.py
+      - name: Existing Planner Context bridge regression
+        run: python -B source/WebAgent/tests/validate_planner_context_bridge_it.py
+      - name: Existing Windows preexecution recovery regression
+        if: runner.os == 'Windows'
+        run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
+      - name: Verify full core source manifest
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.'))"
