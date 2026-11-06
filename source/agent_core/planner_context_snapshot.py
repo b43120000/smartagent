@@ -286,13 +286,20 @@ def build_planner_context_snapshot(runtime) -> dict:
     gap_view = reconstruct_goal_gaps(runtime)
     source_view = build_source_candidate_ledger(runtime, gap_view)
     artifact_view = getattr(runtime, "_source_discovery_bootstrap", None) or {}
-    from .remote_artifact_access_readiness import resolve_remote_artifact_access
+    from .remote_artifact_access_readiness import (
+        resolve_remote_artifact_access, derive_admitted_git_read_receipt,
+    )
     from .runtime_software_inventory import build_runtime_software_inventory
     environment = getattr(runtime, "_planner_environment_snapshot", None) or {}
+    access_receipt = derive_admitted_git_read_receipt(
+        artifact_view, action_ledger=actions, result_ledger=evidence,
+        request_id=str(getattr(runtime, "run_id", "") or ""),
+        task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
+    ) or getattr(runtime, "_remote_artifact_access_runtime_receipt", None)
     remote_access_view = resolve_remote_artifact_access(
         artifact_view,
         environment=environment,
-        runtime_receipt=getattr(runtime, "_remote_artifact_access_runtime_receipt", None),
+        runtime_receipt=access_receipt,
         request_id=str(getattr(runtime, "run_id", "") or ""),
         task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
     )
