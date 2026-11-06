@@ -342,6 +342,48 @@ def run() -> dict:
         assert result["state"]["readiness_identity_verified"] is False
         assert captured == ["協議初始化"], captured
 
+    with tempfile.TemporaryDirectory(prefix="webagent-repaired-scoped-ready-") as temp:
+        root = Path(temp)
+        phases = []
+        def repaired_marker_only(prompt: str, *, stage: str, **_kwargs) -> str:
+            phases.append(stage)
+            if stage == "協議初始化":
+                return "[AGENT_PROTOCOL_READY] incomplete"
+            assert stage == "協議初始化格式修復"
+            return "AGENT_PROTOCOL_READY"
+        armed = ensure_webagent_session(
+            workspace=str(root),
+            gpt_url="https://chatgpt.com/c/bootstrap-repair-scoped-ready",
+            state_dir=root / "state", send_prompt=repaired_marker_only,
+        )
+        assert armed["state"]["readiness_mode"] == "SCOPED_MARKER_ONLY"
+        assert armed["state"]["readiness_identity_verified"] is False
+        assert phases == ["協議初始化", "協議初始化格式修復"]
+
+    with tempfile.TemporaryDirectory(prefix="webagent-session-attach-not-marker-") as temp:
+        root = Path(temp)
+        url = "https://chatgpt.com/c/bootstrap-attach-bare-reject"
+        phases = []
+        def attached_marker_only(prompt: str, *, stage: str, **_kwargs) -> str:
+            phases.append(stage)
+            if stage == "協議附著確認":
+                # A marker must NOT claim matching identity for an attach.
+                return "[AGENT_PROTOCOL_READY]"
+            assert stage == "協議初始化"
+            return "[AGENT_PROTOCOL_READY]"
+        first = ensure_webagent_session(
+            workspace=str(root), gpt_url=url, state_dir=root / "state",
+            send_prompt=attached_marker_only,
+        )
+        assert first["mode"] == "BOOTSTRAP"
+        second = ensure_webagent_session(
+            workspace=str(root), gpt_url=url, state_dir=root / "state",
+            send_prompt=attached_marker_only,
+        )
+        assert second["mode"] == "BOOTSTRAP"
+        assert second["reason"] == "session_attach_failed"
+        assert phases == ["協議初始化", "協議附著確認", "協議初始化"]
+
     validate_bootstrap_format_repair()
 
     return {
@@ -350,9 +392,9 @@ def run() -> dict:
         "rate_delay_is_observable": True,
         "bootstrap_sent": True,
         "session_attach_sent": True,
-        "marker_only_rejected_even_with_legacy_flag": marker_only_results,
+        "marker_only_scoped_bootstrap_accepted": marker_only_results,
         "marker_only_with_extra_text_rejected": True,
-        "marker_only_default_is_fail_closed": True,
+        "marker_only_explicit_off_is_fail_closed": True,
         "local_agent_started": False,
     }
 
