@@ -53,3 +53,24 @@ jobs:
         run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
       - name: Verify fail-closed protocol manifest
         run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.'))"
+
+  terminal-baseline:
+    name: Baseline terminal lifecycle - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e3ca9f90876e67ca01df290a75d8e26374cd4a94
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Baseline Progress Terminal Lifecycle
+        run: python -B source/WebAgent/tests/validate_progress_terminal_lifecycle.py
