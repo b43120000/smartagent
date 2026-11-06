@@ -121,7 +121,13 @@ def run():
                                  'evidence_refs':['FORGED-ACTION']})
             if len(repair_turns)==3:
                 assert 'evidence_refs' in prompt and 'RUNTIME_STATUS' in prompt
-                return response({**initial(),'evidence_refs':['REQUEST_ACCEPTED']})
+                # If CCRC released the never-executed hold on REPLAN,
+                # reconstruct the same read as a fresh authorized proposal.
+                # If still held, Runtime correlates it; either way, execute
+                # the read exactly once and require genuine result evidence.
+                return response({**initial(),'evidence_refs':['REQUEST_ACCEPTED']},
+                                {'tool':'list_directory','action_id':'HELD-READ',
+                                 'path':str(sub)})
             assert len(repair_turns)==4 and 'proof.txt' in prompt
             return response({**initial(),'decision':'COMPLETE','outcome':'SUCCESS',
                 'current_step':1,'steps':[{'step':1,'desc':'讀取目錄','status':'COMPLETED'}],
