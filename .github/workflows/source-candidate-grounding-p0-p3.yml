@@ -33,6 +33,7 @@ jobs:
           python -B -m compileall -q
           source/agent_core/source_candidate_ledger.py
           source/agent_core/source_integrity_resolution.py
+          source/agent_core/source_history_registry.py
           source/agent_core/interrupt_readiness.py
           source/agent_core/goal_prerequisite_resolution.py
           source/agent_core/planner_context_snapshot.py
