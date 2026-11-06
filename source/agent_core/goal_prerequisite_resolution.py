@@ -66,6 +66,8 @@ def source_requirement(goal: object, policy: Mapping | None = None) -> str:
 
 def resolve_goal_prerequisites(
     gap_view: Mapping, interrupt_view: Mapping | None = None,
+    source_view: Mapping | None = None,
+    source_integrity_view: Mapping | None = None,
 ) -> dict:
     """Prefer the shortest Goal-relevant transition after confirmed absence.
 
@@ -88,6 +90,18 @@ def resolve_goal_prerequisites(
         and bool(row.get("observed_fact_ref"))
     ]
     candidates = list((interrupt_view or {}).get("candidate_reads") or [])[:4]
+    source_records = list((source_view or {}).get("candidates") or [])[:16]
+    verified_structures = list((source_integrity_view or {}).get("sources") or [])[:16]
+    source_ready = any(row.get("source_ready") is True for row in verified_structures
+                       if isinstance(row, Mapping))
+    structure_observed = any(row.get("structure_state") == "STRUCTURE_VERIFIED"
+                             for row in verified_structures if isinstance(row, Mapping))
+    source_reads = [row for row in candidates
+                    if isinstance(row, Mapping) and row.get("reason") == "GROUNDED_SOURCE_CANDIDATE"]
+    non_source_reads = [row for row in candidates
+                        if isinstance(row, Mapping) and row.get("reason") != "GROUNDED_SOURCE_CANDIDATE"]
+    outside = [row for row in source_records
+               if isinstance(row, Mapping) and row.get("scope_status") == "OUTSIDE_DECLARED_PATHS"]
     # This view does not promote an authorization ceiling or a list of readable
     # paths into permission to create/overwrite a target.
     if not gaps:
@@ -98,7 +112,23 @@ def resolve_goal_prerequisites(
         next_category, reason = (
             "PROPOSE_GOAL_ACTION_FOR_ADMISSION", "TARGET_ABSENT_SOURCE_NOT_REQUIRED"
         )
-    elif need == "REQUIRED" and candidates:
+    elif need == "REQUIRED" and source_ready:
+        next_category, reason = (
+            "CHECK_DEPLOYMENT_ADMISSION", "SOURCE_INTEGRITY_EVIDENCE_AVAILABLE"
+        )
+    elif need == "REQUIRED" and structure_observed:
+        next_category, reason = (
+            "VERIFY_SOURCE_CONTENTS", "SOURCE_STRUCTURE_ONLY_NOT_CONTENT_INTEGRITY"
+        )
+    elif need == "REQUIRED" and source_reads:
+        next_category, reason = (
+            "DISCOVER_SOURCE_WITHIN_SCOPE", "GROUNDED_SOURCE_CANDIDATE_UNVERIFIED"
+        )
+    elif need == "REQUIRED" and outside:
+        next_category, reason = (
+            "SOURCE_SCOPE_AUTHORIZATION_REQUIRED", "GROUNDED_SOURCE_OUTSIDE_READ_SCOPE"
+        )
+    elif need == "REQUIRED" and non_source_reads:
         next_category, reason = (
             "DISCOVER_SOURCE_WITHIN_SCOPE", "EXPLICIT_SOURCE_DEPENDENCY_UNVERIFIED"
         )
@@ -122,6 +152,14 @@ def resolve_goal_prerequisites(
             for row in gaps
         ],
         "source_candidate_reads": candidates if next_category == "DISCOVER_SOURCE_WITHIN_SCOPE" else [],
+        "source_candidates": source_records,
+        "out_of_scope_source_candidates": [
+            {"candidate_id": str(row.get("candidate_id", ""))[:80],
+             "path": str(row.get("path", ""))[:1024],
+             "provenance_ref": str(row.get("provenance_ref", ""))[:160]}
+            for row in outside[:4]
+        ],
+        "source_structure_observed": structure_observed,
         "source_integrity_verified": False,
         "write_authorization_granted": False,
         "parent_scope_expansion_granted": False,
@@ -142,25 +180,36 @@ def premature_source_interrupt_diagnostic(
     Never suppress genuine permission, approval, or ambiguous-payload questions.
     This does not approve a write: Planner must propose a normal admitted Action.
     """
-    if (request.get("kind") != "USER_INPUT"
-            or resolution.get("next_category") != "PROPOSE_GOAL_ACTION_FOR_ADMISSION"):
+    if request.get("kind") != "USER_INPUT":
+        return None
+    category = resolution.get("next_category")
+    direct_creation = category == "PROPOSE_GOAL_ACTION_FOR_ADMISSION"
+    scoped_source = (category == "DISCOVER_SOURCE_WITHIN_SCOPE" and
+                     any(row.get("reason") == "GROUNDED_SOURCE_CANDIDATE"
+                         for row in list(resolution.get("source_candidate_reads") or [])
+                         if isinstance(row, Mapping)))
+    if not (direct_creation or scoped_source):
         return None
     detail = str(request.get("detail") or "")
     if not _SOURCE_REQUEST.search(detail) or _PERMISSION_REQUEST.search(detail):
         return None
     return {
         "marker": "[GOAL_PREREQUISITE_ACTION_PREFERRED]",
-        "reason": "source_not_required_for_explicit_creation_goal",
+        "reason": ("source_not_required_for_explicit_creation_goal" if direct_creation else
+                   "scoped_grounded_source_candidate_unexhausted"),
         "repair_scope": "GOAL_DIRECTED_PREREQUISITE_RESOLUTION",
         "missing_gap_refs": [
             row["gap_id"] for row in list(resolution.get("confirmed_missing_goal_targets") or [])[:8]
         ],
         "suggestion": (
-            "The requested target absence is already confirmed and the Goal "
-            "requires local creation, not an existing source. Do not re-inspect "
-            "the absent target or request an irrelevant source. Propose the Goal "
-            "Action with normal Tool/Scope/Write Admission, or ask for actual "
-            "missing write permission. Never assume permission or success."
+            ("The target is confirmed absent, but a source candidate with "
+             "current provenance is available for a scoped read. Propose the "
+             "precise source Action for normal Tool/Scope Admission rather "
+             "than requesting its path again. An actual permission request "
+             "is still allowed." if scoped_source else
+             "The target is confirmed absent and the Goal requires creation, "
+             "not a source search. Propose a create Action for normal "
+             "Tool/Scope/Write Admission. Never assume permission or success.")
         ),
     }
 
