@@ -286,6 +286,19 @@ def build_planner_context_snapshot(runtime) -> dict:
     gap_view = reconstruct_goal_gaps(runtime)
     source_view = build_source_candidate_ledger(runtime, gap_view)
     artifact_view = getattr(runtime, "_source_discovery_bootstrap", None) or {}
+    from .remote_artifact_access_readiness import resolve_remote_artifact_access
+    from .runtime_software_inventory import build_runtime_software_inventory
+    environment = getattr(runtime, "_planner_environment_snapshot", None) or {}
+    remote_access_view = resolve_remote_artifact_access(
+        artifact_view,
+        environment=environment,
+        runtime_receipt=getattr(runtime, "_remote_artifact_access_runtime_receipt", None),
+        request_id=str(getattr(runtime, "run_id", "") or ""),
+        task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
+    )
+    software_inventory = build_runtime_software_inventory(
+        environment, getattr(runtime, "_project_environment_hint", None),
+    )
     source_integrity_view = reconcile_source_integrity(runtime, source_view)
     interruption_view = interrupt_readiness(
         gap_view, caps, attempted_reads=_read_attempts(runtime),
@@ -293,7 +306,7 @@ def build_planner_context_snapshot(runtime) -> dict:
     )
     prerequisite_view = resolve_goal_prerequisites(
         gap_view, interruption_view, source_view, source_integrity_view,
-        artifact_view,
+        artifact_view, remote_access_view,
     )
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
@@ -309,6 +322,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         "goal_prerequisite_resolution": prerequisite_view,
         "source_candidate_ledger": source_view,
         "source_discovery_bootstrap": artifact_view,
+        "remote_artifact_access_readiness": remote_access_view,
+        "runtime_software_inventory": software_inventory,
         "historical_source_bootstrap": {
             "index_status": source_view.get("historical_index_status", "UNKNOWN"),
             "bootstrap_state": source_view.get("historical_bootstrap_state", "UNKNOWN"),
@@ -454,7 +469,19 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "source_discovery_bootstrap may contain pinned repository artifacts; these "
             "are only E1 references and require separate remote access authorization, "
             "archive acquisition, SHA256/Git blob verification, and normal target "
-            "write admission. A registered remote artifact is NOT a local path, "
+            "write admission. UNKNOWN remote authorization means NOT_CHECKED, not DENIED. "
+            "Use runtime_software_inventory to reuse current-probed bundled Git/Python "
+            "and re-probe recorded ProjectSync tools/dependencies before use. "
+            "For a known GitHub artifact and AVAILABLE Git, evaluate the existing "
+            "run_command/GIT_INSPECT path and applicable Tool/Network/Scope Admission; "
+            "a failed authorized probe or a runtime security receipt can identify a "
+            "specific approval or denial, but Git availability alone never grants "
+            "network or repository access. Do not interrupt solely because an E1 "
+            "reference has no authorization receipt; first seek a safe, admitted "
+            "readiness check, or cite the concrete policy blocker. "
+            "Use an explicitly requested target in preference to the default .venv; "
+            "shared .venv changes still require independent authorization. "
+            "A registered remote artifact is NOT a local path, "
             "does NOT authorize network access and does NOT satisfy D4 observation. "
             "historical_source_bootstrap reports INDEX_NOT_FOUND versus INDEX_EMPTY, "
             "INDEX_INVALID, INDEX_HIT or recovered leads. Prior E1 user-labeled "
