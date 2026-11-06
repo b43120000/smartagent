@@ -1354,6 +1354,40 @@ class WebAgentProtocolLoop:
             "rule": "Continue only remaining content; OPEN is not a completed file. Do not replay accepted chunks.",
         }, ensure_ascii=False, sort_keys=True) + "\n[/RUNTIME_WRITE_CONTINUATION]"
 
+    def _record_rejected_action_resolutions(self, calls, diagnostics) -> None:
+        """Attest each parsed operational proposal whose turn was not admitted.
+
+        Admission denial is evidence about *why no process ran*, never a
+        ToolResult. Preserve the model's source action separately from any
+        submitted numeric/field normalization, and bind to request/epoch.
+        """
+        from agent_core.action_resolution_trace import rejection_traces
+        traces = rejection_traces(
+            list(calls or []), list(diagnostics or []),
+            original_actions=self._planner_original_actions,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            round_id=self.turn_id,
+        )
+        self._rejected_action_resolution_traces.extend(traces)
+        self._rejected_action_resolution_traces = (
+            self._rejected_action_resolution_traces[-64:]
+        )
+        for row in traces:
+            reasons = (row.get("runtime_resolved") or {}).get("reason_codes") or []
+            self._emit(
+                "action_resolution_recorded",
+                request_id=self.run_id, round=self.turn_id,
+                action_id=row["action_id"],
+                disposition="REJECTED_PREEXECUTION",
+                tool=(row.get("planner_requested") or {}).get("tool", ""),
+                original_command_sha256=(
+                    (row.get("planner_requested") or {}).get("command_sha256", "")
+                ),
+                reason_codes=reasons,
+                dispatched=False, executed=False,
+                evidence_kind="PREEXECUTION_ADMISSION_DIAGNOSTIC",
+            )
+
     def _runtime_preexecution_strategy_replan(self, diagnostics, calls) -> str:
         """Escalate a verified missing CWD from field repair to new strategy.
 
