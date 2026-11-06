@@ -44,8 +44,12 @@ def run() -> dict:
     # Ordinary exact content remains accepted.
     assert_match("ordinary prompt", "ordinary prompt")
 
-    # Existing normalization behavior remains intact for ordinary whitespace.
-    assert_match("ordinary prompt", " ordinary\u00a0   prompt ")
+    # Whitespace and newline losses must never silently pass integrity.
+    assert_mismatch("ordinary prompt", " ordinary\u00a0   prompt ")
+    assert_mismatch("a  b", "a b")
+    assert_mismatch("a\n\nb", "a\nb")
+    assert_mismatch("a\tb", "a b")
+    assert_match("a\r\nb", "a\nb")
 
     # Ordinary substantive mutations remain rejected.
     assert_mismatch("ordinary prompt", "ordinary prompt changed")
@@ -161,7 +165,8 @@ def run() -> dict:
     assert "return {primary, semantic}" in extractor_source
 
     matcher_source = inspect.getsource(validate_composer_prompt)
-    assert "== normalize_composer_text(expected)" in matcher_source
+    assert "primary == expected" in matcher_source
+    assert "== normalize_composer_text(expected)" not in matcher_source
     assert "matches_auto_url_boundary_spacing" in matcher_source
 
     result = {
