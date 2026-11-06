@@ -841,7 +841,16 @@ def _composer_write_batches(prompt, max_chars=1024):
     """
     pending = []
     size = 0
-    for unit in _composer_write_units(prompt):
+    def finer_units():
+        for start, end, value, soft_break in _composer_write_units(prompt):
+            if max_chars < 1024 and not soft_break and len(value) > max_chars:
+                for offset in range(0, len(value), max_chars):
+                    part = value[offset:offset + max_chars]
+                    yield start + offset, start + offset + len(part), part, False
+            else:
+                yield start, end, value, soft_break
+
+    for unit in finer_units():
         span = unit[1] - unit[0]
         if pending and size + span > max_chars:
             yield pending[0][0], pending[-1][1], tuple(pending)
@@ -991,11 +1000,134 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=512
         pass
 
 
-def _write_staged_prompt(scraper,prompt,record,journal):
+def _attempt_bounded_composer_repair(scraper, prompt, record, journal, *,
+                                     start, end, units, failure):
+    """One owned-draft repair only; never replay an uncertain send.
+
+    Stable mismatches can repair a native input's latest batch, or reset a
+    provably owned ProseMirror draft once. No DOM-selection guesses for blocks.
+    """
+    evidence = failure.evidence or {}
+    if (record.get("composer_repair_attempted")
+            or evidence.get("stable_readback") is not True
+            or evidence.get("confirmed_prefix_intact") is not True
+            or not isinstance(record.get("baseline"), dict)):
+        return None
+    try:
+        baseline = record["baseline"]
+        before = _page_snapshot(scraper, "")
+        time.sleep(.2)
+        stable = _page_snapshot(scraper, "")
+        loc = scraper._composer_locator()
+        if (not _same_turns(baseline, before)
+                or not _same_turns(before, stable)
+                or before.get("generation_active") or stable.get("generation_active")
+                or loc is None or not loc.is_visible()
+                or not loc.is_enabled() or not loc.is_editable()):
+            return None
+        one = _composer_readback_sample(scraper, prompt[:end])
+        time.sleep(.2)
+        two = _composer_readback_sample(scraper, prompt[:end])
+        if not one or not two or one["sample_hash"] != two["sample_hash"]:
+            return None
+        from .web_ui.providers.chatgpt.composer import canonical_composer_text
+        observed = two["chosen"]
+        prefix = canonical_composer_text(prompt[:start])
+        # A confirmed earlier prefix must be exact. For batch zero, establish
+        # draft ownership with a nontrivial identical leading fragment.
+        identity_len = min(len(prompt), 16)
+        if (start > 0 and not observed.startswith(prefix)) or (
+                start == 0 and (len(observed) < identity_len or
+                not observed.startswith(canonical_composer_text(prompt[:identity_len])))):
+            return None
+        primary_candidates = scraper._read_composer_text_candidates()
+        if not primary_candidates:
+            return None
+        primary = str(primary_candidates[0])
+        if scraper._composer_matches_prompt(prompt[:end]):
+            return "STABILIZED"
+    except Exception:
+        return None
+
+    record["composer_repair_attempted"] = True
+    record["composer_repair"] = {
+        "state": "STARTED", "batch_start": start, "batch_end": end,
+        "max_tail_attempts": 1, "max_full_restarts": 1,
+        "first_diff_index": evidence.get("first_diff_index"),
+    }
+    write_json_atomic(journal, record)
+
+    # Native textarea/input only. The page callback compare-and-select is
+    # atomic; ProseMirror's block boundaries do NOT satisfy this contract.
+    if (start > 0 and len(units) == 1 and not units[0][3]
+            and "\n" not in prompt[start:end] and "\r" not in prompt[start:end]
+            and primary.startswith(prompt[:start]) and primary == observed):
+        try:
+            selected = bool(loc.evaluate(
+                """(el,args) => {
+                    if(typeof el.value!=='string' ||
+                       typeof el.setSelectionRange!=='function') return false;
+                    if(el.value!==args[0] || !el.value.startsWith(args[1])) return false;
+                    el.focus();
+                    el.setSelectionRange(args[1].length,el.value.length);
+                    return true;
+                }""", [primary, prompt[:start]]
+            ))
+            if selected:
+                scraper._page.keyboard.insert_text(prompt[start:end])
+                _await_chunk_readback(
+                    scraper, prompt[:end], timeout_sec=3, confirmed_chars=start
+                )
+                record["composer_repair"].update(
+                    state="VERIFIED", mode="NATIVE_INPUT_LATEST_BATCH")
+                write_json_atomic(journal, record)
+                return "TAIL_VERIFIED"
+        except Exception as exc:
+            record["composer_repair"]["tail_error_type"] = type(exc).__name__
+            write_json_atomic(journal, record)
+
+    # Full restart is a single, separately verified, compare-and-clear action;
+    # neither a stale baseline nor a changed primary draft may authorize it.
+    try:
+        current = _page_snapshot(scraper, "")
+        if not _same_turns(baseline, current) or current.get("generation_active"):
+            return None
+        latest = scraper._read_composer_text_candidates()
+        if not latest:
+            return None
+        current_primary = str(latest[0])
+        current_sample = _composer_readback_sample(scraper, prompt[:end])
+        if (not current_sample
+                or not current_sample["chosen"].startswith(prefix)
+                or (start == 0 and not current_sample["chosen"].startswith(
+                    canonical_composer_text(prompt[:identity_len])))):
+            return None
+        if not _atomic_clear_owned(scraper, current_primary):
+            return None
+        cleared = _page_snapshot(scraper, "")
+        time.sleep(.2)
+        cleared_again = _page_snapshot(scraper, "")
+        if (not cleared.get("composer_empty")
+                or not cleared_again.get("composer_empty")
+                or not _same_turns(current, cleared)
+                or not _same_turns(cleared, cleared_again)
+                or cleared.get("generation_active")
+                or cleared_again.get("generation_active")):
+            return None
+    except Exception:
+        return None
+    record["composer_repair"].update(
+        state="RESET_CONFIRMED", mode="OWNED_SINGLE_RESTART_SMALLER_BATCH")
+    write_json_atomic(journal, record)
+    return "RESET_CONFIRMED"
+
+
+def _write_staged_prompt(scraper,prompt,record,journal, *,
+                         _restart_used=False, max_chars=1024):
     PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
     scraper._focus_composer_dom()
-    for start, end, units in _composer_write_batches(prompt):
+    for start, end, units in _composer_write_batches(prompt, max_chars=max_chars):
         if start and not scraper._composer_matches_prompt(prompt[:start]):
             raise ComposerOperationError('composer_prefix_changed')
         loc=scraper._focus_composer_dom()
@@ -1025,7 +1157,7 @@ def _write_staged_prompt(scraper,prompt,record,journal):
                            extra={'chunk_start': part_start, 'chunk_end': part_end})
                 scraper._page.keyboard.insert_text(value)
         try:
-            readback = _await_chunk_readback(scraper, prefix)
+            readback = _await_chunk_readback(scraper, prefix, confirmed_chars=start)
         except ComposerOperationError as exc:
             # Durable, content-free evidence survives writer quarantine.
             record['readback_failure'] = dict(
@@ -1041,10 +1173,25 @@ def _write_staged_prompt(scraper,prompt,record,journal):
             scraper._log_stage('composer_chunk_readback_failed',
                                json.dumps(record['readback_failure'],
                                           ensure_ascii=True, separators=(',', ':')))
-            raise
+            repair = None if _restart_used else _attempt_bounded_composer_repair(
+                scraper, prompt, record, journal, start=start, end=end,
+                units=units, failure=exc,
+            )
+            if repair == "RESET_CONFIRMED":
+                return _write_staged_prompt(
+                    scraper, prompt, record, journal,
+                    _restart_used=True, max_chars=256,
+                )
+            if repair in {"TAIL_VERIFIED", "STABILIZED"}:
+                readback = {"attempts": 0}
+            else:
+                raise
         record['confirmed_prefix']=checkpoint;write_json_atomic(journal,record)
         scraper._log_stage('composer_chunk_verified',
                            f"chars={end}/{len(prompt)} units={len(units)} readback_attempts={readback['attempts']}")
+    if _restart_used:
+        record["composer_repair"]["state"] = "REWRITTEN_AND_VERIFIED"
+        write_json_atomic(journal, record)
 
 
 def helper_main():
