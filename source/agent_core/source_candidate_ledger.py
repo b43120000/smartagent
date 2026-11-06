@@ -80,7 +80,8 @@ def build_source_candidate_ledger(runtime, gap_view: Mapping) -> dict:
     records: dict[str, dict] = {}
 
     def add(path: object, origin: str, ref: str, *, rank: int,
-            existence: str = "UNKNOWN", parent_ref: str = ""):
+            existence: str = "UNKNOWN", parent_ref: str = "",
+            evidence_level: str = "E0"):
         raw = str(path or "").strip().rstrip("\\/")
         if not _absolute(raw):
             return
@@ -91,6 +92,7 @@ def build_source_candidate_ledger(runtime, gap_view: Mapping) -> dict:
             "candidate_id": "SRC-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16].upper(),
             "path": raw,
             "origin": origin,
+            "evidence_level": evidence_level,
             "provenance_ref": str(ref)[:160],
             "parent_listing_ref": str(parent_ref)[:160],
             "existence": existence,
@@ -130,7 +132,8 @@ def build_source_candidate_ledger(runtime, gap_view: Mapping) -> dict:
                 continue
             add(ntpath.join(parent, item["name"]),
                 "COMMITTED_PARENT_DIRECTORY_LISTING", str(aid),
-                rank=2, existence="OBSERVED_PRESENT", parent_ref=str(aid))
+                rank=2, existence="OBSERVED_PRESENT", parent_ref=str(aid),
+                evidence_level="E3")
 
     # This optional field is only populated by trusted Runtime code.
     # Historical pointers cannot verify current existence or authorize reads.
@@ -138,11 +141,14 @@ def build_source_candidate_ledger(runtime, gap_view: Mapping) -> dict:
     if isinstance(history, Mapping) and history.get("schema") == "SMARTAGENT_SOURCE_HISTORY_V1":
         for hint in list(history.get("candidates") or [])[:16]:
             if (isinstance(hint, Mapping) and hint.get("origin") in
-                    {"PROJECT_LEDGER", "PREVIOUS_TASK_RECEIPT"}
+                    {"PROJECT_LEDGER", "PREVIOUS_TASK_RECEIPT",
+                     "HISTORICAL_USER_SOURCE_LABEL", "HISTORICAL_RUNTIME_LIST_RECEIPT"}
+                    and hint.get("evidence_level", "E2") in {"E1", "E2"}
                     and isinstance(hint.get("provenance_ref"), str)
                     and bool(hint["provenance_ref"])):
                 add(hint.get("path"), str(hint["origin"]),
-                    hint["provenance_ref"], rank=1)
+                    hint["provenance_ref"], rank=1,
+                    evidence_level=str(hint.get("evidence_level", "E2")))
 
     output = sorted(records.values(),
                     key=lambda r: (r["priority"], r["path"].casefold()))[:16]
@@ -157,6 +163,14 @@ def build_source_candidate_ledger(runtime, gap_view: Mapping) -> dict:
         "historical_index_available": (
             isinstance(history, Mapping) and history.get("schema") == "SMARTAGENT_SOURCE_HISTORY_V1"
         ),
+        "historical_index_status": str((history or {}).get("index_status", "UNKNOWN"))[:80]
+            if isinstance(history, Mapping) else "UNKNOWN",
+        "historical_bootstrap_state": str((history or {}).get("bootstrap_state", "UNKNOWN"))[:80]
+            if isinstance(history, Mapping) else "UNKNOWN",
+        "historical_recovered_count": int((history or {}).get("recovered_count", 0) or 0)
+            if isinstance(history, Mapping) else 0,
+        "historical_task_records_examined": int((history or {}).get("task_records_examined", 0) or 0)
+            if isinstance(history, Mapping) else 0,
         "historical_leads_are_live_evidence": False,
         "candidate_is_authorization": False,
         "new_disk_scan_performed": False,
