@@ -174,6 +174,7 @@ class RepairStagnation:
         revision resets the cumulative rejection budget.
         """
         import hashlib
+        import ntpath
         aid = str(action_id or "")
         if not aid or not isinstance(fact_key, (tuple, list)) or len(fact_key) != 3:
             return False
@@ -183,7 +184,7 @@ class RepairStagnation:
         # Case-fold Windows paths but preserve the boolean value: a genuine
         # state transition false -> true is a distinct observation.
         canonical = json.dumps(
-            [predicate, str(path).replace("/", "\\\\").casefold(), value],
+            [predicate, ntpath.normcase(ntpath.normpath(str(path))), value],
             ensure_ascii=True, separators=(",", ":"),
         )
         signature = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
