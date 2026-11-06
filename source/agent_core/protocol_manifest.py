@@ -184,6 +184,8 @@ CORE_FILES = (
     'source/agent_core/source_goal_identity.py',
     'source/agent_core/source_reference_index.py',
     'source/agent_core/historical_source_resolver.py',
+    'source/agent_core/source_discovery_bootstrap.py',
+    'config/source_discovery_catalog.json',
     'source/agent_core/conditional_goal_policy.py',
     'source/agent_core/interrupt_readiness.py',
     'source/agent_core/target_path_contract.py',
