@@ -202,7 +202,7 @@ def premature_source_interrupt_diagnostic(
     )
     if (remote_reference and _SOURCE_REQUEST.search(detail)
             and not re.search(
-                r"\\b(?:github|repository|repo access|authentication|auth token)\\b"
+                r"(?:github|repository|repo access|authentication|auth token)"
                 r"|GitHub|私人儲存庫|遠端存取|網路授權|取得壓縮檔",
                 detail, re.I,
             )):
