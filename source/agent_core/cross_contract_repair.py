@@ -269,7 +269,7 @@ class CrossContractRepairCoordinator:
         return snapshot
 
 
-def repair_instruction(decision: Mapping) -> str:
+def repair_instruction(decision: Mapping, *, accepted_plan: bool = True) -> str:
     """Bounded Planner guidance, not permission to run a proposed action."""
     mode = decision.get("mode")
     summary = {
@@ -284,20 +284,29 @@ def repair_instruction(decision: Mapping) -> str:
     prefix = "[CROSS_CONTRACT_REPAIR]\n" + json.dumps(
         summary, ensure_ascii=False, separators=(",", ":")
     ) + "\n"
+    bootstrap = (
+        "The first Progress has NOT been admitted. Use progress_update=FULL "
+        "(never PATCH); include a canonical base_evaluation, total_steps, "
+        "current_step, steps, completion_contract and an exact matched "
+        "condition from that contract. Only Planner-authored fields may be "
+        "used; no Runtime Evidence or authority is invented. "
+        "An unexecuted Action held for format repair remains unexecuted. "
+        if not accepted_plan else ""
+    )
     if mode == FIELD_REPAIR:
         query_only = bool(decision.get("field_issues")) and all(
             row.get("origin") in {"QUERY", "ADMISSION"}
             for row in decision["field_issues"])
         instruction = (
             "Repair ONLY query_project.queries[] with explicit canonical "
-            "operation objects. Preserve the already accepted Progress "
-            "and use a minimal PATCH; omit inherited plan fields unless "
-            "they truly change. No operation/path guessing, no new Scope, "
+            "operation objects. Preserve accepted Progress when it exists; "
+            "use PATCH only after admission, FULL for the first plan. "
+            "No operation/path guessing, no new Scope, "
             "no fake Action Evidence. Full admission remains mandatory."
             if query_only else
             "Repair Progress, Query and next_action as ONE pending decision; "
-            "use PATCH to inherit accepted plan fields rather than regenerating "
-            "steps, base_evaluation or completion_contract. Correct only the "
+            "use PATCH only after a plan was admitted; otherwise send FULL. "
+            "Do not invent steps or completion_contract. Correct only the "
             "listed canonical issues; preserve Action semantics, evidence "
             "and original Goal. Never replay executed actions or broaden scope."
         )
@@ -318,4 +327,4 @@ def repair_instruction(decision: Mapping) -> str:
             "permission, no fabricated ToolResult. The same cumulative "
             "BoundedRepair/GAR budgets remain active."
         )
-    return prefix + instruction + "\n[/CROSS_CONTRACT_REPAIR]"
+    return prefix + bootstrap + instruction + "\n[/CROSS_CONTRACT_REPAIR]"
