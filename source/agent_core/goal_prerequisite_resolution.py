@@ -69,6 +69,7 @@ def resolve_goal_prerequisites(
     source_view: Mapping | None = None,
     source_integrity_view: Mapping | None = None,
     artifact_view: Mapping | None = None,
+    remote_access_view: Mapping | None = None,
 ) -> dict:
     """Prefer the shortest Goal-relevant transition after confirmed absence.
 
@@ -93,6 +94,10 @@ def resolve_goal_prerequisites(
     candidates = list((interrupt_view or {}).get("candidate_reads") or [])[:4]
     source_records = list((source_view or {}).get("candidates") or [])[:16]
     remote_artifacts = list((artifact_view or {}).get("artifact_references") or [])[:8]
+    remote_view = remote_access_view if isinstance(remote_access_view, Mapping) else {}
+    remote_state = str(remote_view.get("authorization_state") or "UNKNOWN")
+    if remote_state not in {"UNKNOWN", "AUTHORIZED", "DENIED", "NEEDS_USER_APPROVAL"}:
+        remote_state = "UNKNOWN"
     verified_structures = list((source_integrity_view or {}).get("sources") or [])[:16]
     source_ready = any(row.get("source_ready") is True for row in verified_structures
                        if isinstance(row, Mapping))
@@ -163,7 +168,22 @@ def resolve_goal_prerequisites(
         "registered_artifact_references": remote_artifacts,
         "registered_artifact_count": len(remote_artifacts),
         "artifact_retrieval_is_source_observation": False,
-        "remote_access_authorized": False,
+        "remote_access_authorization_state": remote_state,
+        "remote_access_authorized": (
+            True if remote_state == "AUTHORIZED"
+            else False if remote_state == "DENIED"
+            else None
+        ),
+        "remote_access_authorization_evidence_ref": str(
+            remote_view.get("authorization_evidence_ref") or ""
+        )[:160],
+        "remote_access_next_verification": str(
+            remote_view.get("next_verification") or
+            "CHECK_EXISTING_GIT_AND_SCOPE_ADMISSION"
+        )[:160],
+        "git_executable_status": str(remote_view.get("git_executable_status") or "UNKNOWN"),
+        "git_action_route": {"tool": "run_command", "operation": "GIT_INSPECT"},
+        "remote_access_missing_evidence_is_denial": False,
         "artifact_integrity_verified": False,
         "out_of_scope_source_candidates": [
             {"candidate_id": str(row.get("candidate_id", ""))[:80],
