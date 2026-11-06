@@ -306,6 +306,14 @@ def build_planner_context_snapshot(runtime) -> dict:
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,
         "source_candidate_ledger": source_view,
+        "historical_source_bootstrap": {
+            "index_status": source_view.get("historical_index_status", "UNKNOWN"),
+            "bootstrap_state": source_view.get("historical_bootstrap_state", "UNKNOWN"),
+            "recovered_count": source_view.get("historical_recovered_count", 0),
+            "task_records_examined": source_view.get("historical_task_records_examined", 0),
+            "historical_paths_are_live_evidence": False,
+            "historical_paths_are_read_authorization": False,
+        },
         "source_integrity_resolution": source_integrity_view,
         "goal": {
             "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
@@ -440,6 +448,11 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "within authorized read scope before proposing a deployment. "
             "No candidate grants access or verifies source integrity. "
             "source_candidate_ledger holds provenance-bound leads only; "
+            "historical_source_bootstrap reports INDEX_NOT_FOUND versus INDEX_EMPTY, "
+            "INDEX_INVALID, INDEX_HIT or recovered leads. Prior E1 user-labeled "
+            "paths and E2 historic Runtime receipts are NOT current observations; "
+            "they require this Task's independent scoped re-probe. "
+
             "prior task paths and parent listing names are NOT live source integrity. "
             "Prefer exact scoped candidate reads and validate their normal Tool Admission; "
             "if outside scope, request precise source authorization, never infer parent scope. "
