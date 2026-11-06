@@ -11,7 +11,9 @@ from agent_core.source_discovery_bootstrap import (
     bootstrap_source_discovery,
     register_source_artifact,
 )
-from agent_core.goal_prerequisite_resolution import resolve_goal_prerequisites
+from agent_core.goal_prerequisite_resolution import (
+    resolve_goal_prerequisites, premature_source_interrupt_diagnostic,
+)
 from agent_core.target_path_contract import extract_target_contract
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -116,6 +118,35 @@ class SourceDiscoveryBootstrapTests(unittest.TestCase):
         self.assertFalse(outcome["artifact_integrity_verified"])
         self.assertFalse(outcome["source_integrity_verified"])
         self.assertFalse(outcome["write_authorization_granted"])
+
+    def test_known_remote_artifact_requires_precise_access_not_generic_source_path(self):
+        self._package_catalog()
+        view = self._bootstrap()
+        gap = {
+            "goal_policy": {"intent": "MUTATION_ALLOWED"},
+            "source_requirement": "REQUIRED",
+            "active_gaps": [{
+                "gap_id": "TARGET-ABSENT", "path": TARGET,
+                "status": "UNRESOLVED", "observation_status": "CONFIRMED",
+                "observed_value": False, "desired_value": True,
+                "observed_fact_ref": "ACT-OBSERVE",
+            }],
+        }
+        resolution = resolve_goal_prerequisites(
+            gap, {"candidate_reads": []}, {"candidates": []}, {"sources": []}, view,
+        )
+        diag = premature_source_interrupt_diagnostic({
+            "kind": "USER_INPUT",
+            "detail": "請提供先前部署來源的完整路徑與唯讀授權。",
+        }, resolution)
+        self.assertEqual(
+            diag["reason"],
+            "remote_artifact_reference_grounded_no_source_path_request",
+        )
+        self.assertIsNone(premature_source_interrupt_diagnostic({
+            "kind": "USER_INPUT",
+            "detail": "請授權 GitHub 私人儲存庫存取，以取得來源 ZIP。",
+        }, resolution))
 
     def test_unrelated_goal_and_required_entries_not_matched(self):
         self._package_catalog()
