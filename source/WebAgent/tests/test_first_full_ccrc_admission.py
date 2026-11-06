@@ -152,6 +152,34 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertFalse(any(name == "tool_started"
                              for name, _ in host.events))
 
+    def test_unexecuted_mutation_hold_is_not_released_by_read_repair(self):
+        from WebAgent.tests.validate_cross_contract_repair_it import FakeLoop
+        host = FakeLoop()
+        host.progress_ledger = None
+        held = {"tool": "write_file", "action_id": "RCA-WRITE",
+                "path": r"E:\\Unknown\\result.json",
+                "content": "not-an-authorized-write"}
+        host.pending_progress_repair_actions = [held]
+        calls = [full("P-MUTATION", correct=False), held,
+                 {"tool": "turn_commit", "action_count": 2}]
+        diagnostics = [{
+            "reason": "invalid_progress_payload",
+            "field_issues": [{"field": "matched_condition"}],
+        }]
+        for _ in range(3):
+            observed = WebAgentProtocolLoop._ccrc_rejected(
+                host, calls, [dict(row) for row in diagnostics])
+        self.assertEqual(observed["mode"], ACTION_RECONSTRUCTION)
+        self.assertEqual(host.pending_progress_repair_actions, [held])
+        self.assertFalse(host.action_result_ledger)
+        self.assertFalse(any(name == "tool_started" for name, _ in host.events))
+
+        final = WebAgentProtocolLoop._ccrc_rejected(
+            host, calls, [dict(row) for row in diagnostics])
+        self.assertTrue(final["replan_required"])
+        self.assertEqual(host.pending_progress_repair_actions, [])
+        self.assertFalse(any(name == "tool_started" for name, _ in host.events))
+
 
 class RealAdmissionLifecycleTests(unittest.TestCase):
     def test_repaired_full_progress_reaches_real_read_only_actions(self):
