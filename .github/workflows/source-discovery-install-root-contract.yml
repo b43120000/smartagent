@@ -40,7 +40,6 @@ jobs:
           source/agent_core/source_discovery_bootstrap.py
           source/agent_core/metadata.py
           source/agent_core/paths.py
-          collect.bat
           source/agent_core/task_continuation.py
           source/agent_core/interrupt_readiness.py
           source/agent_core/goal_prerequisite_resolution.py
