@@ -125,10 +125,10 @@ class PersistentGoalGapTests(unittest.TestCase):
         add_probe(r)
         view = reconstruct_goal_gaps(r)
         self.assertEqual(decision_grounding_diagnostics([
-            {"tool": "inspect_directory", "paths": [r"E:\"]},
-            {"tool": "list_directory", "path": r"E:\"},
+            {"tool": "inspect_directory", "paths": ["E:\\"]},
+            {"tool": "list_directory", "path": "E:\\"},
             {"tool": "run_command", "operation": "MUTATE",
-             "working_directory": r"E:\",
+             "working_directory": "E:\\",
              "command": "New-Item -ItemType Directory -Path 'E:\\target'"},
             {"tool": "query_project", "project_root": r"E:\Elsewhere"},
         ], view), [])
