@@ -105,6 +105,35 @@ class ActionResolutionTraceTests(unittest.TestCase):
         self.assertTrue(resolved_cwd.samefile(self.workspace))
         self.assertFalse(self.target.exists(), "rewrite must never create destination")
 
+    def test_live_shape_parent_drive_request_scope_blocker(self):
+        target = r"E:\\SmartAgent_GoalDriven_IT_GH_v1"
+        contract = {"binding_status":"BOUND", "requested_target":target}
+        gaps = {"active_gaps":[{
+            "path":target,"status":"UNRESOLVED",
+            "observation_status":"CONFIRMED","observed_value":False,
+            "observed_fact_ref":"ACT-OBSERVED-TARGET-ABSENT",
+        }]}
+        attempted = {
+            **self.action,
+            "working_directory": r"E:\\",
+        }
+        candidate = propose_equivalent_bound_cwd_rewrite(
+            attempted,
+            original_cwd_error=(
+                "command_working_directory_outside_request_scope:E:\\\\"
+            ),
+            bound_workspace=str(self.workspace),
+            target_contract=contract, goal_gaps=gaps,
+            artifact_view=self.catalog,
+        )
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["rewrite_reason_code"],
+                         "DEPLOYMENT_PARENT_OUTSIDE_COMMAND_REQUEST_SCOPE")
+        self.assertEqual(candidate["candidate_action"]["command"], PROBE)
+        self.assertEqual(candidate["candidate_action"]["working_directory"],
+                         str(self.workspace))
+        self.assertFalse(candidate["authorization_granted"])
+
     def test_unknown_git_url_or_unverified_absence_never_rewrites_scope(self):
         self.assertTrue(registered_remote_git_read(self.action, self.catalog))
         self.assertEqual(exact_remote_git_read_repository(PROBE), REPO)
