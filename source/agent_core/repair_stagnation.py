@@ -164,6 +164,41 @@ class RepairStagnation:
         self._persist()
         return True
 
+    def accepted_observation(self, *, action_id: object, fact_key: object,
+                             now: float | None = None) -> bool:
+        """Credit a new trusted filesystem fact, never the associated Goal PASS.
+
+        Callers must independently verify the native observation receipt and
+        request identity. A new Action ID re-observing the *same* fact does not
+        extend the repair deadline. Neither this path nor a Goal strategy
+        revision resets the cumulative rejection budget.
+        """
+        import hashlib
+        aid = str(action_id or "")
+        if not aid or not isinstance(fact_key, (tuple, list)) or len(fact_key) != 3:
+            return False
+        predicate, path, value = fact_key
+        if predicate != "directory.exists" or type(value) is not bool or not path:
+            return False
+        # Case-fold Windows paths but preserve the boolean value: a genuine
+        # state transition false -> true is a distinct observation.
+        canonical = json.dumps(
+            [predicate, str(path).replace("/", "\\\\").casefold(), value],
+            ensure_ascii=True, separators=(",", ":"),
+        )
+        signature = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if not hasattr(self, "_seen_fact_signatures"):
+            self._seen_fact_signatures = set()
+        if aid in self._seen_action_ids or signature in self._seen_fact_signatures:
+            return False
+        self._seen_fact_signatures.add(signature)
+        self._seen_action_ids.add(aid)
+        stamp = time.time() if now is None else float(now)
+        self.last_evidence_at = stamp
+        self._effective(stamp)
+        self._persist()
+        return True
+
     def rejected(self, reasons: object, *, total: int,
                  now: float | None = None) -> None:
         stamp = time.time() if now is None else float(now)
