@@ -104,6 +104,44 @@ class FactLedgerP0Test(unittest.TestCase):
         self.assertTrue(public["dispatched_action"]["command_redacted"])
         self.assertEqual(public["dispatched_action"]["query_count"], 1)
 
+    def test_result_identity_mismatch_never_produces_native_fact(self):
+        forged = attach_runtime_result(
+            '{"paths":[{"exists":false}]}',
+            "SUCCEEDED", "DIRECTORY_ABSENCE_OBSERVED",
+            tool="inspect_directory", executed=True,
+            action_id="other-action",
+        )
+        trace = make_trace(result=forged)
+        self.assertEqual(trace["actual_result"]["status"], "UNKNOWN")
+        self.assertEqual(trace["actual_result"]["reason"], "RESULT_IDENTITY_MISMATCH")
+        self.assertIsNone(trace["fact"])
+
+    def test_native_observation_payload_visible_with_result_reason(self):
+        result = attach_runtime_result(
+            json.dumps({"paths": [{"path": ROOT, "exists": False, "authorized": True}]}),
+            "SUCCEEDED", "DIRECTORY_ABSENCE_OBSERVED",
+            tool="inspect_directory", executed=True,
+        )
+        visible = planner_projection(
+            make_trace(result=result), request_id=REQUEST, task_epoch=EPOCH,
+        )
+        observed = visible["actual_result"]["observed_data"]
+        self.assertEqual(observed["paths"][0]["path"], ROOT)
+        self.assertIs(observed["paths"][0]["exists"], False)
+        self.assertIs(visible["fact"]["value"], False)
+
+    def test_bounded_safe_exact_command_visible(self):
+        action = {"tool": "run_command", "action_id": "cmd-1",
+                  "operation": "INSPECT", "command": "git status --short",
+                  "working_directory": ROOT}
+        trace = make_trace(action, action, action, encode_result(
+            "SUCCEEDED", "COMMAND_EXITED", tool="run_command", executed=True,
+            data={"exit_code": 0, "process_state": "EXITED"},
+        ))
+        visible = planner_projection(trace, request_id=REQUEST, task_epoch=EPOCH)
+        self.assertEqual(visible["dispatched_action"]["command"], "git status --short")
+        self.assertEqual(visible["actual_result"]["observed_data"]["exit_code"], 0)
+
     def test_native_present_directory_is_a_fact_only_when_bool_observed(self):
         result = attach_runtime_result(
             json.dumps({"paths": [{"path": ROOT, "exists": True}]}),
