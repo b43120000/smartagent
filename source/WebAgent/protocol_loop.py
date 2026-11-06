@@ -6174,11 +6174,16 @@ class WebAgentProtocolLoop:
         from agent_core.security_context import SecurityContext
         self._target_path_contract = extract_target_contract(gar_goal)
         from agent_core.source_discovery_bootstrap import bootstrap_source_discovery
-        artifact_root = (
+        from agent_core.paths import install_root as smartagent_install_root
+        # Three distinct authorities: packaged catalog from installation,
+        # owner metadata from Task state, and user files from Workspace.
+        # Never infer the installation root from continuation_store.root.
+        artifact_state_root = (
             self.continuation_store.root if self.continuation_store else self.workspace
         )
         self._source_discovery_bootstrap = bootstrap_source_discovery(
-            artifact_root, self._target_path_contract,
+            artifact_state_root, self._target_path_contract,
+            installation_root=smartagent_install_root(),
             owner=str(self.continuation_owner or ""),
             instance=str(self.continuation_store.instance if self.continuation_store else ""),
             workspace=str(self.workspace),
@@ -6188,6 +6193,16 @@ class WebAgentProtocolLoop:
             request_id=self.run_id, task_id=self.task_id,
             state=self._source_discovery_bootstrap["state"],
             catalog_status=self._source_discovery_bootstrap["catalog_status"],
+            registration_status=self._source_discovery_bootstrap["registration_status"],
+            catalog_path_authority=self._source_discovery_bootstrap["catalog_path_authority"],
+            registration_path_authority=self._source_discovery_bootstrap["registration_path_authority"],
+            goal_identity_status=self._source_discovery_bootstrap["goal_identity_status"],
+            catalog_records_examined=self._source_discovery_bootstrap["catalog_records_examined"],
+            catalog_matched_count=self._source_discovery_bootstrap["catalog_matched_count"],
+            catalog_goal_mismatch_count=self._source_discovery_bootstrap["catalog_goal_mismatch_count"],
+            catalog_invalid_record_count=self._source_discovery_bootstrap["catalog_invalid_record_count"],
+            registration_records_examined=self._source_discovery_bootstrap["registration_records_examined"],
+            registration_matched_count=self._source_discovery_bootstrap["registration_matched_count"],
             artifact_candidate_count=self._source_discovery_bootstrap["artifact_count"],
             repository_access_verified=False,
             authorization_granted=False, filesystem_scan_performed=False,
