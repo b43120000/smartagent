@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agent_core.remote_artifact_access_readiness import (
     RECEIPT_SCHEMA, resolve_remote_artifact_access,
+    derive_admitted_git_read_receipt,
 )
 from agent_core.runtime_software_inventory import build_runtime_software_inventory
 from agent_core.goal_prerequisite_resolution import (
@@ -106,6 +107,58 @@ class RemoteAuthorizationTests(unittest.TestCase):
         got = self.resolve(env=e)
         self.assertEqual(got["authorization_state"], "UNKNOWN")
         self.assertEqual(got["next_verification"], "VERIFY_LOCAL_GIT_CAPABILITY")
+
+    def test_real_git_remote_read_receipt_converges_only_with_runtime_proof(self):
+        from agent_core.tool_result_contract import attach_runtime_result, encode_result
+        cmd = "git ls-remote https://github.com/b43120000/test.git HEAD"
+        sha = "a" * 40
+        response = attach_runtime_result(
+            "[COMMAND_RESULT]\\nstdout:\\n" + sha + "\\tHEAD\\n",
+            "SUCCEEDED", "COMMAND_EXITED", tool="run_command", executed=True,
+            data={"exit_code": 0, "process_state": "EXITED"},
+        )
+        actions = {"GIT-ACTION": {
+            "action": {"tool": "run_command", "operation": "GIT_INSPECT",
+                       "command": cmd}, "result": response,
+        }}
+        results = {"GIT-ACTION": {
+            "request_id": REQUEST, "task_epoch": EPOCH,
+            "evidence_status": "ACTIVE", "execution_status": "SUCCEEDED",
+        }}
+        def derive(act=actions, res=results):
+            return derive_admitted_git_read_receipt(
+                self.artifact, action_ledger=act, result_ledger=res,
+                request_id=REQUEST, task_epoch=EPOCH,
+            )
+        verified = derive()
+        self.assertIsNotNone(verified)
+        self.assertEqual(verified["decision"], "AUTHORIZED")
+        self.assertEqual(self.resolve(verified)["authorization_state"], "AUTHORIZED")
+        bad_result = {"GIT-ACTION": {**results["GIT-ACTION"], "task_epoch": "older"}}
+        self.assertIsNone(derive(res=bad_result))
+        malformed = {"GIT-ACTION": {**actions["GIT-ACTION"],
+                     "action": {**actions["GIT-ACTION"]["action"],
+                                "command": cmd + "; whoami"}}}
+        self.assertIsNone(derive(act=malformed))
+        rejected = encode_result(
+            "REJECTED", "COMMAND_SCOPE_REJECTED", executed=False,
+            tool="run_command",
+        )
+        declined = {"GIT-ACTION": {**actions["GIT-ACTION"], "result": rejected}}
+        self.assertEqual(derive(act=declined)["decision"], "DENIED")
+        expected_approval = encode_result(
+            "REJECTED", "SECURITY_CONFIRMATION_REQUIRED",
+            executed=False, tool="run_command",
+        )
+        needs = {"GIT-ACTION": {**actions["GIT-ACTION"], "result": expected_approval}}
+        self.assertEqual(derive(act=needs)["decision"], "NEEDS_USER_APPROVAL")
+        failed = encode_result(
+            "FAILED", "COMMAND_EXITED", executed=True, tool="run_command",
+            data={"exit_code": 128, "process_state": "EXITED"},
+        )
+        self.assertIsNone(derive(act={"GIT-ACTION": {
+            **actions["GIT-ACTION"], "result": failed,
+        }}))
 
     def test_prerequisite_preserves_unknown_and_probe_route(self):
         a = self.resolve()
