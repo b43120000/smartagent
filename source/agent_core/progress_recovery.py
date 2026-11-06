@@ -12,7 +12,11 @@ DISPLAY_FIELDS = frozenset({'total_steps', 'current_step', 'steps', 'base_evalua
 
 def repair_diagnostic(payload, ledger, error, known_refs=None,
                       objective_blocker_ids=()):
-    from .task_progress import PROGRESS_DECISIONS, PROGRESS_OUTCOMES, MAX_EVIDENCE_REFS
+    from .task_progress import (PROGRESS_DECISIONS, PROGRESS_OUTCOMES,
+                                MAX_EVIDENCE_REFS, completion_condition_choices)
+    from .progress_reply_contract import reply_contract
+    contract = reply_contract(ledger)
+    first_full = not has_accepted_plan(ledger)
     issues = []
     def add(field, expected, actual=None):
         if not any(issue['field'] == field and issue['expected'] == expected for issue in issues):
@@ -72,9 +76,35 @@ def repair_diagnostic(payload, ledger, error, known_refs=None,
                 issues.append(dict(item))
     if not issues:
         add(field, detail)
+    condition_class = ('in_progress' if decision == 'CONTINUE' else
+                       'interrupted' if decision == 'INTERRUPT' else
+                       'success' if outcome == 'SUCCESS' else 'failure')
+    possible_contract = payload.get('completion_contract')
+    if not isinstance(possible_contract, dict):
+        possible_contract = (getattr(ledger, 'completion_contract', None) or {})
+    choices = completion_condition_choices(possible_contract, condition_class)[:16]
+    # A condition reference is not evidence and must never be guessed when
+    # multiple Planner-authored completion conditions are possible.
+    admission_hint = {
+        'mode': 'FULL' if first_full else 'PATCH',
+        'accepted_plan_exists': not first_full,
+        'required_fields': (contract['initial_required']
+                            if first_full else contract['always_required']),
+        'step_bounds': '0 <= current_step <= total_steps; total_steps > 0',
+        'numeric_field_types': ['int', 'float'],
+        'current_step_example_for_zero_completed_steps': 0,
+        'allowed_step_statuses': ['PENDING', 'IN_PROGRESS', 'COMPLETED'],
+        'condition_class': condition_class,
+        'condition_choices': choices,
+        'matched_condition_must_equal_one_of_choices': True,
+        'status_refs_are_not_action_evidence': True,
+        'may_inherit_plan_fields': not first_full,
+        'no_action_or_evidence_fabrication': True,
+    }
     return {'marker':'[WEBAGENT_PROGRESS_REJECTED]', 'reason':'invalid_progress_payload',
             'detail':detail, 'repair_mode':'BATCH_FIELDS', 'field_issues':issues,
             'repair_scope': 'CONTEXT_REQUEST_SCHEMA' if context_repair else 'PROGRESS_SCHEMA',
+            'progress_admission_hint': admission_hint,
             'context_request_repair': context_repair,
             'available_evidence_refs': sorted(known_refs or []),
             'evidence_reference_policy': {
@@ -82,7 +112,14 @@ def repair_diagnostic(payload, ledger, error, known_refs=None,
                 'terminal': 'Request/status references alone do not prove SUCCESS; cite actual current evidence required by the completion contract.',
             },
             'runtime_known_values':{key:deepcopy(getattr(ledger, key, None)) for key in DISPLAY_FIELDS} if has_accepted_plan(ledger) else {},
-            'suggestion':'一次補齊 field_issues 中必要欄位。已接受的計畫欄位省略即可沿用，不必標記 PATCH；不得沿用舊 decision/evidence 或重做已執行 action。'}
+            'suggestion':(
+                '首次 Progress 尚未接受：必須提交完整 FULL，保留原 Goal 與 Planner-authored completion_contract；'
+                'matched_condition 必須精確引用指定 condition class 的條款或其 condition_id。'
+                '不合法的 step 值請修正為數值；不得把 REQUEST_ACCEPTED 當成執行成功。'
+                if first_full else
+                '修正 field_issues 中必要欄位。已接受的計畫欄位可用 PATCH 繼承；'
+                '不得繼承舊 decision/evidence 或重做已執行 action。'
+            )}
 
 
 def read_only_progress_fallback(payload, ledger, actions, error, known_refs):
