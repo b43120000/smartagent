@@ -79,8 +79,11 @@ def reconstruct_goal_gaps(runtime) -> dict:
             continue
         gap_id = "GAP-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16].upper()
         previous = ordered.get(key)
-        status = "RESOLVED" if exists else "UNRESOLVED"
         goal_link = _goal_link(goal, path)
+        linked = goal_link == "REMEDIATION_INTENT_CANDIDATE"
+        status = ("RESOLVED" if linked and exists else
+                  "UNRESOLVED" if linked else
+                  "OBSERVED_PRESENT" if exists else "OBSERVED_ABSENCE")
         ordered[key] = {
             "schema": GAP_SCHEMA,
             "gap_id": gap_id,
@@ -88,14 +91,14 @@ def reconstruct_goal_gaps(runtime) -> dict:
             "path": path,
             "predicate": "directory.exists",
             "observed_value": exists,
-            "desired_value": True,
+            "desired_value": True if linked else None,
             "status": status,
             "observed_fact_ref": str(action_id),
             "observation_status": "CONFIRMED",
             "goal_link": goal_link,
             "goal_condition_id": str(row.get("condition_id", "") or ""),
             "revision": (previous or {}).get("revision", 0) + 1,
-            "resolved_by_evidence_ref": str(action_id) if exists else "",
+            "resolved_by_evidence_ref": str(action_id) if exists and linked else "",
             "repair_candidates": (
                 ["INSPECT_PARENT_AND_SCOPE", "CREATE_DIRECTORY_IF_AUTHORIZED"]
                 if not exists and goal_link == "REMEDIATION_INTENT_CANDIDATE"
@@ -111,6 +114,7 @@ def reconstruct_goal_gaps(runtime) -> dict:
         "task_epoch": epoch,
         "gaps": gaps[-32:],
         "active_gaps": [gap for gap in gaps if gap["status"] == "UNRESOLVED"][-32:],
+        "known_absences": [gap for gap in gaps if gap["observed_value"] is False][-32:],
         "active_count": sum(gap["status"] == "UNRESOLVED" for gap in gaps),
         "storage": "RECONSTRUCTED_FROM_DURABLE_ACTION_LEDGER",
         "planner_strategy_authority": True,
@@ -125,7 +129,9 @@ def decision_grounding_diagnostics(operational, gap_view: Mapping) -> list[dict]
     progress. All permitted candidates still pass existing Tool Admission.
     """
     from .action_readiness import DIRECTORY_PRECONDITION_FIELDS
-    blockers = list(gap_view.get("active_gaps") or [])
+    # Tool preconditions apply to all confirmed absences, including read-only
+    # tasks where a missing path is not itself an unmet Goal requirement.
+    blockers = list(gap_view.get("known_absences") or gap_view.get("active_gaps") or [])
     if not blockers:
         return []
     out = []
