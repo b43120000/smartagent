@@ -272,13 +272,28 @@ class CrossContractRepairCoordinator:
 def repair_instruction(decision: Mapping) -> str:
     """Bounded Planner guidance, not permission to run a proposed action."""
     mode = decision.get("mode")
+    progress_mode = str(decision.get("progress_mode") or "FULL").upper()
+    full = progress_mode != "PATCH"
+    progress_guidance = (
+        "No Progress plan has passed Admission. Use a COMPLETE FULL "
+        "report_progress with progress_update=FULL, total_steps, "
+        "current_step, steps, base_evaluation, completion_contract, "
+        "decision=CONTINUE, outcome=PENDING, current_focus, next_action, "
+        "matched_condition or a valid matched_condition_id, evidence_refs, "
+        "and decision_reason. No existing plan fields can be inherited. "
+        "Select the matched condition from completion_contract.in_progress. "
+        if full else
+        "An already accepted Progress plan exists. Use PATCH to inherit "
+        "unchanged plan fields; supply fresh decision and evidence fields. "
+    )
     summary = {
         key: decision[key] for key in (
             "schema", "mode", "transaction_seq", "goal_anchor_sha256",
             "field_issues", "declared_next_tools", "actual_operational_tools",
             "rejected_rounds", "field_rounds", "field_rounds_limit",
             "reconstruction_rounds", "reconstruction_rounds_limit",
-            "converging",
+            "converging", "progress_mode", "accepted_plan",
+            "held_unadmitted_action_ids",
         ) if key in decision
     }
     prefix = "[CROSS_CONTRACT_REPAIR]\n" + json.dumps(
@@ -290,16 +305,15 @@ def repair_instruction(decision: Mapping) -> str:
             for row in decision["field_issues"])
         instruction = (
             "Repair ONLY query_project.queries[] with explicit canonical "
-            "operation objects. Preserve the already accepted Progress "
-            "and use a minimal PATCH; omit inherited plan fields unless "
-            "they truly change. No operation/path guessing, no new Scope, "
-            "no fake Action Evidence. Full admission remains mandatory."
+            "operation objects. " + progress_guidance +
+            "No operation/path guessing, no new Scope, no fake Action Evidence. "
+            "Full admission remains mandatory."
             if query_only else
-            "Repair Progress, Query and next_action as ONE pending decision; "
-            "use PATCH to inherit accepted plan fields rather than regenerating "
-            "steps, base_evaluation or completion_contract. Correct only the "
-            "listed canonical issues; preserve Action semantics, evidence "
-            "and original Goal. Never replay executed actions or broaden scope."
+            "Repair Progress, Query and next_action as ONE pending decision. "
+            + progress_guidance +
+            "Correct only the listed canonical issues; preserve Action semantics, "
+            "evidence and original Goal. Never replay executed actions or "
+            "broaden scope."
         )
     elif mode == ACTION_RECONSTRUCTION:
         instruction = (
@@ -307,15 +321,27 @@ def repair_instruction(decision: Mapping) -> str:
             "canonical Action/Progress pair; use NEW action_id and "
             "replaces_action_id when replacing an unexecuted deferred action. "
             "Keep the original Goal and permissions; short script invocation "
-            "is preferable to a complex inline command. Full admission required."
+            "is preferable to a complex inline command. " + progress_guidance +
+            "Full admission required."
         )
     else:
         instruction = (
             "CCRC field and reconstruction windows are exhausted. STOP schema "
             "patch cycles; hand back to Goal-Anchored strategy replan using "
             "existing Runtime evidence and original authorized scope. Planner "
-            "chooses the next strategy, not CCRC. No new goal, no inferred "
-            "permission, no fabricated ToolResult. The same cumulative "
-            "BoundedRepair/GAR budgets remain active."
+            "chooses the next strategy, not CCRC. " + progress_guidance +
+            "No new goal, no inferred permission, no fabricated ToolResult. "
+            "The same cumulative BoundedRepair/GAR budgets remain active."
+        )
+    held = list(decision.get("held_unadmitted_action_ids") or [])
+    if mode == FIELD_REPAIR and held:
+        instruction += (
+            " Runtime has already held an UNEXECUTED, schema-valid Action "
+            "batch with exact action_ids=" + json.dumps(held) + ". "
+            "For a Progress-only repair, declare every retained Tool in "
+            "next_action and submit only report_progress + turn_commit; "
+            "Runtime will deterministically restore the *identical* held "
+            "Actions for complete normal admission, not treat them as executed "
+            "evidence. Do not invent or rename Action IDs. "
         )
     return prefix + instruction + "\n[/CROSS_CONTRACT_REPAIR]"
