@@ -283,6 +283,31 @@ class CanonicalRewriteTests(unittest.TestCase):
         self.assertEqual(resolved["changed_fields"], ["operation"])
         self.assertEqual(resolved["rewrite_rules"][0]["to_type"], "str")
 
+    def test_transport_only_conversion_is_still_a_rewrite(self):
+        action = {"action_id": "A1", "tool": "inspect_directory", "paths": ["X"]}
+        trace = self._trace(action, action, {
+            "transport_rule_ids": ["TERMINAL_FENCE_RESIDUE_REMOVED"]
+        })
+        resolved = trace["runtime_resolved"]
+        self.assertEqual(resolved["disposition"], "REWRITTEN_AND_DISPATCHED")
+        self.assertEqual(resolved["changed_fields"], [])
+        self.assertEqual(resolved["rewrite_reason_code"], "TRANSPORT_CANONICALIZATION")
+        self.assertIn(
+            "TERMINAL_FENCE_RESIDUE_REMOVED", resolved["rewrite_rule_ids"]
+        )
+        self.assertEqual(resolved["planner_canonical_form"]["paths"], ["X"])
+
+    def test_real_parser_reports_json_transport_rewrite(self):
+        from agent_core.protocol_v9 import parse_v9_tool_transport_detailed
+        parsed = parse_v9_tool_transport_detailed(
+            '{"tool":"inspect_directory","paths":["X"]}',
+            action_id_seed="git23",
+        )
+        self.assertFalse(parsed.diagnostics)
+        self.assertIn(
+            "V9_EXCLUSIVE_JSON_CANONICALIZED", parsed.normalizations
+        )
+
     def test_rejected_candidate_never_claims_execution(self):
         original = {"action_id": "A1", "tool": "inspect_directory", "path": "X"}
         candidate = {"action_id": "A1", "tool": "inspect_directory", "paths": ["X"]}
