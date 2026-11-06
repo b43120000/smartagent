@@ -1362,8 +1362,16 @@ class WebAgentProtocolLoop:
         submitted numeric/field normalization, and bind to request/epoch.
         """
         from agent_core.action_resolution_trace import rejection_traces
+        # An action already recorded as dispatched in an earlier accepted
+        # round must not acquire a contradictory NOT_EXECUTED receipt merely
+        # because a later batch containing its ID is rejected.
+        new_proposals = [
+            item for item in list(calls or [])
+            if not isinstance(item, dict)
+            or str(item.get("action_id") or "") not in self.action_ledger
+        ]
         traces = rejection_traces(
-            list(calls or []), list(diagnostics or []),
+            new_proposals, list(diagnostics or []),
             original_actions=self._planner_original_actions,
             rewrite_notes=self._runtime_action_rewrite_notes,
             request_id=self.run_id, task_epoch=self.task_epoch,
