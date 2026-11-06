@@ -369,6 +369,61 @@ class TaskContinuationStore:
                         parent['continuations'].append(task_id)
             self._save(data)
 
+    def source_history_records(self, *, owner, workspace, exclude_task_id="", limit=48):
+        """Bounded read of same-owner/instance/workspace historical source facts.
+
+        Only completed/paused/interrupted records and list_directory action
+        receipts are included. This method neither replays nor authorizes actions.
+        """
+        if not owner:
+            return []
+        cap = max(1, min(int(limit), 64))
+        with self.lock.process_lock():
+            document = self._load()
+            records = list(document["records"].values())[-256:]
+            selected = []
+            for rec in reversed(records):
+                if (not isinstance(rec, dict)
+                        or rec.get("task_id") == exclude_task_id
+                        or rec.get("owner") != owner
+                        or rec.get("instance") != self.instance
+                        or rec.get("state") not in {"COMPLETED", "PAUSED", "INTERRUPTED", "FAILED"}
+                        or not _same_path(rec.get("workspace", ""), workspace)):
+                    continue
+                actions = rec.get("actions") or {}
+                results = rec.get("results") or {}
+                filtered_actions, filtered_results = {}, {}
+                if isinstance(actions, dict) and isinstance(results, dict):
+                    for aid, action_row in list(actions.items())[-48:]:
+                        if not isinstance(action_row, dict):
+                            continue
+                        action = action_row.get("action") or {}
+                        if not isinstance(action, dict) or action.get("tool") != "list_directory":
+                            continue
+                        filtered_actions[str(aid)] = {
+                            "action": {"tool": "list_directory", "path": action.get("path")},
+                            "result": str(action_row.get("result") or "")[:200000],
+                        }
+                        row = results.get(aid)
+                        if isinstance(row, dict):
+                            filtered_results[str(aid)] = {
+                                key: row.get(key) for key in (
+                                    "tool", "result_status", "executed", "request_id",
+                                    "task_epoch", "evidence_status"
+                                )
+                            }
+                selected.append({
+                    "task_id": str(rec.get("task_id", ""))[:120],
+                    "request_id": str(rec.get("request_id", ""))[:120],
+                    "task_epoch": str(rec.get("epoch", ""))[:120],
+                    "goal": str(rec.get("effective_goal") or rec.get("goal") or "")[:16000],
+                    "actions": filtered_actions,
+                    "results": filtered_results,
+                })
+                if len(selected) >= cap:
+                    break
+            return selected
+
     def get(self, task_id):
         with self.lock.process_lock():
             return copy.deepcopy(self._load()['records'].get(task_id))
