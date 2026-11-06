@@ -222,12 +222,17 @@ def build_planner_context_snapshot(runtime) -> dict:
     retained = list(dict.fromkeys(older_blockers[-MAX_OLDER_BLOCKERS:] + recent))
     rows = [_record(aid, evidence[aid], actions.get(aid) or {}) for aid in retained]
     from .runtime_fact_ledger import planner_projection
-    traces = [planner_projection(
-        (actions.get(aid) or {}).get("provenance"),
-        request_id=str(getattr(runtime, "run_id", "")),
-        task_epoch=str(getattr(runtime, "task_epoch", "")),
-    ) for aid in retained]
-    traces = [item for item in traces if item is not None]
+    traces = []
+    for aid in retained:
+        trace = planner_projection(
+            (actions.get(aid) or {}).get("provenance"),
+            request_id=str(getattr(runtime, "run_id", "")),
+            task_epoch=str(getattr(runtime, "task_epoch", "")),
+        )
+        if trace is not None:
+            trace["evidence_status"] = str((evidence.get(aid) or {}).get(
+                "evidence_status", "ACTIVE"))[:40]
+            traces.append(trace)
     omitted_ids = [aid for aid in older_blockers[:-MAX_OLDER_BLOCKERS] if aid not in retained]
 
     resolution = getattr(getattr(runtime, "tools", None), "_runtime_semantic_capability_resolution", None)
@@ -296,7 +301,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         },
         "recent_action_evidence": rows,
         "recent_action_provenance": traces,
-        "observed_runtime_facts": [row["fact"] for row in traces if row.get("fact")],
+        "observed_runtime_facts": [row["fact"] for row in traces
+                                   if row.get("fact") and row.get("evidence_status") == "ACTIVE"],
         "scope_preflight_readiness": current_action_readiness(evidence, actions),
         "evidence_total": len(ids),
         "omitted_older_action_count": len(ids) - len(retained),
