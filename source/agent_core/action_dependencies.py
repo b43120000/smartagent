@@ -75,6 +75,11 @@ def command_is_proven_observation(action):
         rf'git\s+-C\s+{literal}\s+(?:status\s+--short|rev-parse\s+HEAD|branch\s+--show-current|log\s+-1\s+--oneline)',
         r'git\s+(?:status(?:\s+--short)?|rev-parse\s+HEAD|branch\s+--show-current|log\s+-1\s+--oneline)',
     )
+    from .action_resolution_trace import exact_remote_git_read_repository
+    # A single fixed HEAD remote read is a safe *command classification*;
+    # classification never bypasses separate network/credential/scope admission.
+    if action.get('operation') == 'GIT_INSPECT' and exact_remote_git_read_repository(command):
+        return True
     return any(re.fullmatch(pattern, command, re.IGNORECASE) for pattern in patterns)
 
 
