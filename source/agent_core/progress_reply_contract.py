@@ -135,3 +135,38 @@ def normalize_progress_fields(payload):
                 status = step['status'].strip().upper().replace(' ', '_')
                 step['status'] = 'COMPLETED' if status == 'COMPLETE' else status
     return result
+
+
+def dynamic_progress_contract(ledger, *, runtime_transition: str = "",
+                              action_history_count: int = 0) -> dict:
+    """Advertise conditional fields without relaxing admission.
+
+    Accepted plan fields are inherited on PATCH; decision and evidence are
+    always verified afresh. The trusted text-only terminal exception continues
+    to belong exclusively to the existing Runtime terminal gate.
+    """
+    is_patch = has_accepted_plan(ledger)
+    return {
+        "schema": "SMARTAGENT_DYNAMIC_PROGRESS_CONTRACT_V1",
+        "mode": "PATCH" if is_patch else "FULL",
+        "required": (
+            ["decision", "current_focus", "decision_reason", "evidence_refs"]
+            if is_patch else
+            ["decision", "current_focus", "decision_reason", "steps",
+             "total_steps", "current_step", "completion_contract",
+             "base_evaluation", "evidence_refs"]
+        ),
+        "inherited_if_omitted": list(INHERITED_FIELDS) if is_patch else [],
+        "conditional": {
+            "CONTINUE": ["next_action", "operational_action_unless_runtime_wait"],
+            "COMPLETE": ["outcome", "matched_condition", "terminal_evidence_gate"],
+            "INTERRUPT": ["outcome", "context_request"],
+        },
+        "can_omit_outcome_if_continue": True,
+        "null_only_when_inapplicable": ["next_action"],
+        "runtime_wait_allowed": runtime_transition == "WAIT_RUNTIME",
+        "action_history_present": bool(action_history_count),
+        "text_only_terminal_requires_existing_runtime_gate": True,
+        "unknown_is_not_null": True,
+        "full_runtime_admission_required": True,
+    }

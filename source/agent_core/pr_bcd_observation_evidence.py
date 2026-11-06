@@ -67,6 +67,10 @@ def observation_receipt(action: Mapping, result: str, ledger_entry: Mapping) -> 
         return {"admitted": True, "reason": "NATIVE_DIRECTORY_LIST_CURRENT"}
 
     if tool == "inspect_directory":
+        if envelope.get("reason") == "DIRECTORY_ABSENCE_OBSERVED":
+            # A negative observation is not a positive B-P1 proof. The typed
+            # Runtime Fact Ledger may nevertheless expose this known absence.
+            return {"admitted": False, "reason": "OBSERVED_DIRECTORY_ABSENT"}
         if envelope.get("reason") != _NATIVE_REASONS[tool]:
             return {"admitted": False, "reason": "OBSERVATION_PRODUCER_UNRECOGNIZED"}
         try:

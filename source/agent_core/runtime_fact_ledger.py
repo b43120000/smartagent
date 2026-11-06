@@ -179,3 +179,15 @@ def planner_projection(record: Mapping, *, request_id: str,
         "fact": safe_fact,
         "complete_result_in_runtime_ledger": True,
     }
+
+
+def decision_action_consistency(decision: str, operational: list,
+                                *, runtime_transition: str) -> str:
+    """No-action CONTINUE is not an executable strategy."""
+    if str(decision).upper() != "CONTINUE":
+        return "NOT_CONTINUE"
+    if operational:
+        return "ACTION_PRESENT"
+    if runtime_transition == "WAIT_RUNTIME":
+        return "RUNTIME_WAIT"
+    return "ACTION_REQUIRED"

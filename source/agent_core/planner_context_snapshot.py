@@ -221,6 +221,13 @@ def build_planner_context_snapshot(runtime) -> dict:
                           in {"FAILED", "UNKNOWN", "PARTIAL", "QUEUED", "RUNNING"})]
     retained = list(dict.fromkeys(older_blockers[-MAX_OLDER_BLOCKERS:] + recent))
     rows = [_record(aid, evidence[aid], actions.get(aid) or {}) for aid in retained]
+    from .runtime_fact_ledger import planner_projection
+    traces = [planner_projection(
+        (actions.get(aid) or {}).get("provenance"),
+        request_id=str(getattr(runtime, "run_id", "")),
+        task_epoch=str(getattr(runtime, "task_epoch", "")),
+    ) for aid in retained]
+    traces = [item for item in traces if item is not None]
     omitted_ids = [aid for aid in older_blockers[:-MAX_OLDER_BLOCKERS] if aid not in retained]
 
     resolution = getattr(getattr(runtime, "tools", None), "_runtime_semantic_capability_resolution", None)
@@ -266,8 +273,14 @@ def build_planner_context_snapshot(runtime) -> dict:
     from .goal_strategy_transition import build_transition_readiness
     from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
+    from .progress_reply_contract import dynamic_progress_contract
     payload = {
         "schema": SCHEMA,
+        "dynamic_progress_contract": dynamic_progress_contract(
+            progress,
+            runtime_transition=str(als.get("required_transition", "")),
+            action_history_count=len(actions),
+        ),
         "goal_transition_readiness": goal_transition_readiness,
         "goal": {
             "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
@@ -282,6 +295,8 @@ def build_planner_context_snapshot(runtime) -> dict:
             "scope_admission_still_required": True,
         },
         "recent_action_evidence": rows,
+        "recent_action_provenance": traces,
+        "observed_runtime_facts": [row["fact"] for row in traces if row.get("fact")],
         "scope_preflight_readiness": current_action_readiness(evidence, actions),
         "evidence_total": len(ids),
         "omitted_older_action_count": len(ids) - len(retained),
@@ -373,6 +388,7 @@ def build_planner_context_snapshot(runtime) -> dict:
         "decision_authority": "PLANNER",
         "evidence_and_admission_authority": "RUNTIME",
         "raw_tool_results_included": False,
+        "actual_commands_and_raw_results_retained_in_runtime_ledger": True,
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

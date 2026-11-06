@@ -244,6 +244,14 @@ def classify_evidence_state(
         if _query_result_has_evidence(payload):
             return "AVAILABLE", []
         return "MISSING", ["query_project returned no usable source evidence"]
+    if tool == "inspect_directory":
+        from .tool_result_contract import decode_result
+        observed = decode_result(result) or {}
+        if (execution == "SUCCEEDED" and observed.get("status") == "SUCCEEDED"
+                and observed.get("executed") is True
+                and observed.get("reason") == "DIRECTORY_ABSENCE_OBSERVED"):
+            # A native negative observation is a known fact, not goal success.
+            return "OBSERVED_NEGATIVE", ["directory absence observed; evaluate original Goal prerequisites"]
     if tool in DISCOVERY_TOOLS:
         text = str(result or "").strip()
         if not text or any(marker in text for marker in (
@@ -365,6 +373,11 @@ def build_action_loop_state(
         transition = 'WAIT_RUNTIME'
         allowed = sorted(DISCOVERY_TOOLS | VERIFY_TOOLS | {'run_command','final_response'})
         blocked_signatures = [semantic_action_signature(action)]
+    elif action and evidence_state == 'OBSERVED_NEGATIVE':
+        transition = 'REPLAN_REQUIRED'
+        allowed = ['propose_task_plan', 'query_project', 'read_file',
+                   'list_directory', 'find_file', 'inspect_directory', 'run_command']
+        blocked_signatures = [semantic_action_signature(action)]
     elif action and evidence_state == 'OBSERVATION_UNKNOWN':
         # A completed read with an indeterminate fact is not a pending action.
         # Replanning is optional; an objectively BLOCKED interruption may be
@@ -406,6 +419,8 @@ def build_action_loop_state(
             release_kind = 'SCOPED_VERIFICATION_PASS_OR_FAIL'
         elif evidence_state == 'OBSERVATION_UNKNOWN':
             release_kind = 'NEW_VALID_FACT_OR_OBJECTIVE_INTERRUPTION'
+        elif evidence_state == 'OBSERVED_NEGATIVE':
+            release_kind = 'AUTHORIZED_PREREQUISITE_OR_GOAL_REEVALUATION'
         elif recovery.get('active'):
             release_kind = 'RUNTIME_PREREQUISITE_SATISFIED'
         else:
