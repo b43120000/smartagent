@@ -317,6 +317,7 @@ class WebAgentProtocolLoop:
         self.progress_ledger = None
         self._spr_path_resolution = None
         self._source_candidate_history = {"schema": "SMARTAGENT_SOURCE_HISTORY_V1", "candidates": []}
+        self._source_discovery_bootstrap = {}
         self.continuation_store = continuation_store
         self.continuation_owner = continuation_owner
         self.continuation_source = None
@@ -6171,6 +6172,25 @@ class WebAgentProtocolLoop:
         )
         from agent_core.security_context import SecurityContext
         self._target_path_contract = extract_target_contract(gar_goal)
+        from agent_core.source_discovery_bootstrap import bootstrap_source_discovery
+        artifact_root = (
+            self.continuation_store.root if self.continuation_store else self.workspace
+        )
+        self._source_discovery_bootstrap = bootstrap_source_discovery(
+            artifact_root, self._target_path_contract,
+            owner=str(self.continuation_owner or ""),
+            instance=str(self.continuation_store.instance if self.continuation_store else ""),
+            workspace=str(self.workspace),
+        )
+        self._emit(
+            "source_discovery_bootstrap_completed",
+            request_id=self.run_id, task_id=self.task_id,
+            state=self._source_discovery_bootstrap["state"],
+            catalog_status=self._source_discovery_bootstrap["catalog_status"],
+            artifact_candidate_count=self._source_discovery_bootstrap["artifact_count"],
+            repository_access_verified=False,
+            authorization_granted=False, filesystem_scan_performed=False,
+        )
         from agent_core.historical_source_resolver import bootstrap_historical_sources
         from agent_core.project_ledger import query_project_history
         project_source_events = []
