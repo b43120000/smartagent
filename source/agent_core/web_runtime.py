@@ -1378,13 +1378,16 @@ class WebLLMScraper:
         return bool(validation.matched)
 
     def _composer_verification_passes(self, prompt: str) -> bool:
-        """Apply the explicit unsafe override only at post-write send gates."""
+        """Require actual readback equality before every send-ready gate.
+
+        Legacy debug unsafe-force-pass is intentionally ignored: an
+        unverified draft can never be submitted by a production agent.
+        """
         if _unsafe_force_composer_verify_pass():
             self._log_stage(
-                "UNSAFE_composer_verification_forced_pass",
+                "composer_unsafe_override_ignored",
                 f"prompt_len={len(prompt)}",
             )
-            return True
         self._last_composer_validation = None
         matched = self._composer_matches_prompt(prompt)
         verification = getattr(self, "_last_composer_validation", None)
