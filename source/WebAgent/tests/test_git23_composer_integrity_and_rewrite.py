@@ -182,6 +182,78 @@ class ComposerIntegrityTests(unittest.TestCase):
             self.assertNotIn("composer_repair_attempted", record)
 
 
+class TailAndRetryLimitTests(unittest.TestCase):
+    def test_native_input_can_replace_latest_batch_without_reset(self):
+        prompt = "A" * 4096 + "B" * 501
+        scraper = FakeComposer()
+        clock = Clock()
+        selection = {"start": None}
+        raw_inserts = []
+
+        def input_text(value):
+            raw_inserts.append(value)
+            if len(raw_inserts) == 2:
+                value = value[:-1]
+            if selection["start"] is not None:
+                scraper.text = scraper.text[:selection["start"]] + value
+                selection["start"] = None
+            else:
+                scraper.text += value
+
+        def evaluate(script, args=None):
+            if isinstance(args, list) and len(args) == 2:
+                primary, prefix = args
+                if scraper.text != primary or not scraper.text.startswith(prefix):
+                    return False
+                selection["start"] = len(prefix)
+                return True
+            return None
+
+        scraper._page.keyboard.insert_text = input_text
+        scraper.loc.evaluate = evaluate
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / "tail.json"
+            record = {"state": "IN_FLIGHT", "baseline": fake_snapshot(scraper, "")}
+            with patch.object(co.time, "monotonic", clock.monotonic), \
+                 patch.object(co.time, "sleep", clock.sleep), \
+                 patch.object(co, "_page_snapshot", fake_snapshot), \
+                 patch.object(co, "_atomic_clear_owned", fake_atomic_clear), \
+                 patch.object(co.PIT, "record", return_value=None):
+                co._write_staged_prompt(scraper, prompt, record, journal)
+            self.assertEqual(scraper.text, prompt)
+            self.assertEqual(scraper.clear_calls, 0)
+            self.assertEqual(len(raw_inserts), 3)
+            self.assertEqual(record["composer_repair"]["state"], "VERIFIED")
+            self.assertEqual(
+                record["composer_repair"]["mode"], "NATIVE_INPUT_LATEST_BATCH"
+            )
+
+    def test_one_full_reset_is_maximum_even_if_retry_truncates(self):
+        prompt = "OWNED-BEGIN-" + "R" * 4000
+        scraper = FakeComposer()
+        clock = Clock()
+
+        def always_truncate(value):
+            scraper.input_calls += 1
+            scraper.text += value[:-1]
+
+        scraper._page.keyboard.insert_text = always_truncate
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / "once.json"
+            record = {"state": "IN_FLIGHT", "baseline": fake_snapshot(scraper, "")}
+            with patch.object(co.time, "monotonic", clock.monotonic), \
+                 patch.object(co.time, "sleep", clock.sleep), \
+                 patch.object(co, "_page_snapshot", fake_snapshot), \
+                 patch.object(co, "_atomic_clear_owned", fake_atomic_clear), \
+                 patch.object(co.PIT, "record", return_value=None):
+                with self.assertRaises(co.ComposerOperationError):
+                    co._write_staged_prompt(scraper, prompt, record, journal)
+            self.assertEqual(scraper.clear_calls, 1)
+            self.assertTrue(record["composer_repair_attempted"])
+            self.assertEqual(record["composer_repair"]["state"], "RESET_CONFIRMED")
+            self.assertIn("readback_failure", record)
+
+
 class CanonicalRewriteTests(unittest.TestCase):
     def _trace(self, original, canonical, info=None):
         return executed_trace({
