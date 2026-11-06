@@ -279,11 +279,20 @@ def build_planner_context_snapshot(runtime) -> dict:
     from .goal_gap_ledger import reconstruct_goal_gaps
     from .interrupt_readiness import interrupt_readiness, _read_attempts
     from .goal_prerequisite_resolution import resolve_goal_prerequisites
+    from .source_candidate_ledger import build_source_candidate_ledger
+    from .source_integrity_resolution import reconcile_source_integrity
     from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
     gap_view = reconstruct_goal_gaps(runtime)
-    interruption_view = interrupt_readiness(gap_view, caps, attempted_reads=_read_attempts(runtime))
-    prerequisite_view = resolve_goal_prerequisites(gap_view, interruption_view)
+    source_view = build_source_candidate_ledger(runtime, gap_view)
+    source_integrity_view = reconcile_source_integrity(runtime, source_view)
+    interruption_view = interrupt_readiness(
+        gap_view, caps, attempted_reads=_read_attempts(runtime),
+        source_candidates=source_view,
+    )
+    prerequisite_view = resolve_goal_prerequisites(
+        gap_view, interruption_view, source_view, source_integrity_view,
+    )
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
         "schema": SCHEMA,
@@ -296,6 +305,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         "persistent_goal_gaps": gap_view,
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,
+        "source_candidate_ledger": source_view,
+        "source_integrity_resolution": source_integrity_view,
         "goal": {
             "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
                       _code(getattr(progress, "decision", ""), "UNKNOWN"),
@@ -428,6 +439,12 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "source discovery. For Goals requiring an existing source, discover only "
             "within authorized read scope before proposing a deployment. "
             "No candidate grants access or verifies source integrity. "
+            "source_candidate_ledger holds provenance-bound leads only; "
+            "prior task paths and parent listing names are NOT live source integrity. "
+            "Prefer exact scoped candidate reads and validate their normal Tool Admission; "
+            "if outside scope, request precise source authorization, never infer parent scope. "
+            "source_integrity_resolution requires committed same-epoch source listing "
+            "for STRUCTURE_VERIFIED and never infers content hashes or deployment readiness. "
             "Do not choose query_project or another existing-workspace reader for a known absent root. "
             "Discovery may be a valid prerequisite step even when it does not directly complete the Goal. "
             "A staged read-only inspection does not forbid conditionally authorized later repair. "
