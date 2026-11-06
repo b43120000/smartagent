@@ -7320,8 +7320,10 @@ class WebAgentProtocolLoop:
                                decision="CONTINUE", executed=False)
                     from agent_core.planner_context_snapshot import render_planner_context_snapshot
                     planner_context, _ = render_planner_context_snapshot(self)
+                    advisory = self._progress_capability_guidance(progress_action)
                     prompt = (
                         "[RUNTIME_DECISION_ACTION_REQUIRED]\n"
+                        (advisory + "\n" if advisory else "")
                         "CONTINUE contains no operational Action and Runtime is "
                         "not waiting for an in-flight Action. Use the current "
                         "Runtime facts and original Goal to propose one authorized "
