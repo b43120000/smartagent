@@ -54,6 +54,15 @@ authorization. An explicitly user-selected path takes precedence; the
 canonical .venv is a bundled/default *location*, not permission to modify a
 shared environment. Shared .venv mutations remain separately authorized.
 
+## Live RCA telemetry
+
+Each Planner round now emits
+`remote_artifact_access_readiness_prepared` with bounded enum/counters:
+authorization_state, authorization_reason_code, next_verification,
+git_executable_status, registered_artifact_count, authorization_evidence_present,
+project_environment_index_status. Updated collect.bat preserves these sanitized
+codes in timeline.json without exposing credentials, paths or raw commands.
+
 ## Expected Case D Live observations
 
 - Source Discovery: catalog_status READY, catalog_matched_count 1,
