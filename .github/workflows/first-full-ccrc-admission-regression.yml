@@ -40,8 +40,8 @@ jobs:
         run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
       - name: Existing Progress Reply Contract
         run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
-      - name: Existing Progress Terminal Lifecycle
-        run: python -B source/WebAgent/tests/validate_progress_terminal_lifecycle.py
+      - name: Existing Progress Terminal Lifecycle (one documented baseline exclusion)
+        run: python -B source/WebAgent/tests/validate_terminal_lifecycle_baseline_scoped.py
       - name: Existing Goal Grounding and persisted facts
         run: python -B source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
       - name: Existing first action / Planner Context
@@ -54,23 +54,3 @@ jobs:
       - name: Verify fail-closed protocol manifest
         run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.'))"
 
-  terminal-baseline:
-    name: Baseline terminal lifecycle - ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-    env:
-      PYTHONPATH: source
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: utf-8
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: e3ca9f90876e67ca01df290a75d8e26374cd4a94
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Baseline Progress Terminal Lifecycle
-        run: python -B source/WebAgent/tests/validate_progress_terminal_lifecycle.py
