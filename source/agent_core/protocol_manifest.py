@@ -178,6 +178,8 @@ CORE_FILES = (
     'source/agent_core/goal_strategy_transition.py',
     'source/agent_core/goal_gap_ledger.py',
     'source/agent_core/goal_prerequisite_resolution.py',
+    'source/agent_core/source_candidate_ledger.py',
+    'source/agent_core/source_integrity_resolution.py',
     'source/agent_core/conditional_goal_policy.py',
     'source/agent_core/interrupt_readiness.py',
     'source/agent_core/target_path_contract.py',
