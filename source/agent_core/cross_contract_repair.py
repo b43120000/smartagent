@@ -282,6 +282,10 @@ def repair_instruction(decision: Mapping) -> str:
         "matched_condition or a valid matched_condition_id, evidence_refs, "
         "and decision_reason. No existing plan fields can be inherited. "
         "Select the matched condition from completion_contract.in_progress. "
+        "If CONTINUE declares Tool Actions, include them in the same committed "
+        "turn unless Runtime explicitly holds and restores the exact original "
+        "unexecuted batch. Never emit a Progress-only CONTINUE with an "
+        "unmatched next_action. "
         if full else
         "An already accepted Progress plan exists. Use PATCH to inherit "
         "unchanged plan fields; supply fresh decision and evidence fields. "
