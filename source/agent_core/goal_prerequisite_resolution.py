@@ -68,6 +68,7 @@ def resolve_goal_prerequisites(
     gap_view: Mapping, interrupt_view: Mapping | None = None,
     source_view: Mapping | None = None,
     source_integrity_view: Mapping | None = None,
+    artifact_view: Mapping | None = None,
 ) -> dict:
     """Prefer the shortest Goal-relevant transition after confirmed absence.
 
@@ -91,6 +92,7 @@ def resolve_goal_prerequisites(
     ]
     candidates = list((interrupt_view or {}).get("candidate_reads") or [])[:4]
     source_records = list((source_view or {}).get("candidates") or [])[:16]
+    remote_artifacts = list((artifact_view or {}).get("artifact_references") or [])[:8]
     verified_structures = list((source_integrity_view or {}).get("sources") or [])[:16]
     source_ready = any(row.get("source_ready") is True for row in verified_structures
                        if isinstance(row, Mapping))
@@ -128,6 +130,11 @@ def resolve_goal_prerequisites(
         next_category, reason = (
             "SOURCE_SCOPE_AUTHORIZATION_REQUIRED", "GROUNDED_SOURCE_OUTSIDE_READ_SCOPE"
         )
+    elif need == "REQUIRED" and remote_artifacts:
+        next_category, reason = (
+            "RESOLVE_REGISTERED_SOURCE_ARTIFACT",
+            "PINNED_REMOTE_ARTIFACT_REFERENCE_REQUIRES_ACQUISITION",
+        )
     elif need == "REQUIRED" and non_source_reads:
         next_category, reason = (
             "DISCOVER_SOURCE_WITHIN_SCOPE", "EXPLICIT_SOURCE_DEPENDENCY_UNVERIFIED"
@@ -153,6 +160,11 @@ def resolve_goal_prerequisites(
         ],
         "source_candidate_reads": candidates if next_category == "DISCOVER_SOURCE_WITHIN_SCOPE" else [],
         "source_candidates": source_records,
+        "registered_artifact_references": remote_artifacts,
+        "registered_artifact_count": len(remote_artifacts),
+        "artifact_retrieval_is_source_observation": False,
+        "remote_access_authorized": False,
+        "artifact_integrity_verified": False,
         "out_of_scope_source_candidates": [
             {"candidate_id": str(row.get("candidate_id", ""))[:80],
              "path": str(row.get("path", ""))[:1024],
