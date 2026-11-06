@@ -277,11 +277,11 @@ def build_planner_context_snapshot(runtime) -> dict:
                    if isinstance(row, Mapping)]
     from .goal_strategy_transition import build_transition_readiness
     from .goal_gap_ledger import reconstruct_goal_gaps
-    from .interrupt_readiness import interrupt_readiness
+    from .interrupt_readiness import interrupt_readiness, _read_attempts
     from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
     gap_view = reconstruct_goal_gaps(runtime)
-    interruption_view = interrupt_readiness(gap_view, caps)
+    interruption_view = interrupt_readiness(gap_view, caps, attempted_reads=_read_attempts(runtime))
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
         "schema": SCHEMA,
