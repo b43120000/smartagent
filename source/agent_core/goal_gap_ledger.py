@@ -38,6 +38,8 @@ def _goal_link(goal: str, path: str) -> str:
     """An intent hint, NOT an authorization or verified Completion Condition."""
     if _path_key(path) not in _path_key(goal) and path.casefold() not in goal.casefold():
         return "UNBOUND"
+    if re.search(r"唯讀|只讀|read[ -]?only|禁止任何寫入|不得寫入|禁止執行修改", goal, re.I):
+        return "READ_ONLY_OR_RESTRICTED"
     if _UNSAFE_REMEDIATION.search(goal):
         return "READ_ONLY_OR_RESTRICTED"
     if _REMEDIATION.search(goal):
