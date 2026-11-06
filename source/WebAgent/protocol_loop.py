@@ -4918,6 +4918,10 @@ class WebAgentProtocolLoop:
             interruption_view = interrupt_readiness(
                 gap_view, capabilities, attempted_reads=_read_attempts(self),
             )
+            capabilities = dict(capabilities)
+            capabilities["grounded_scoped_read_candidate_count"] = (
+                interruption_view["candidate_count"]
+            )
             self._emit(
                 "goal_interrupt_readiness_evaluated",
                 request_id=self.run_id,
