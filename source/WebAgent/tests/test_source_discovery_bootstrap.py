@@ -67,6 +67,9 @@ class SourceDiscoveryBootstrapTests(unittest.TestCase):
             CATALOG.read_text(encoding="utf-8"), encoding="utf-8",
         )
 
+    def test_required_entries_keep_last_filename_before_chinese_period(self):
+        self.assertEqual(EXPECTED["required_top_level_entries"], ENTRIES)
+
     def test_cold_start_case_d_finds_pinned_fixture_reference_without_history(self):
         self._package_catalog()
         got = self._bootstrap()
