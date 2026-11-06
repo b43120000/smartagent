@@ -424,9 +424,10 @@ def _page_snapshot(scraper,prompt):
         observed_length=int(validation.observed_length),
         expected_sha256=str(validation.expected_sha256),
         observed_sha256=str(validation.observed_sha256))
+    from .web_ui.providers.chatgpt.composer import canonical_composer_text
     return dict(composer_matches=bool(validation.matched),
         composer_validation=verification,
-        composer_empty=not scraper._normalize_composer_text(scraper._read_composer_text()),
+        composer_empty=(canonical_composer_text(scraper._read_composer_text()) == ""),
         last_turn_status=last_turn_status,
         url=scraper._page.url,
         user_anchors=[[t.structural_id,t.content_digest] for t in users[-2:]],
@@ -1251,7 +1252,14 @@ def helper_main():
             print('COMPOSER_RESULT '+json.dumps(result),flush=True)
             return
         if payload['mode']=='write':
-            prewrite=_wait_for_prewrite_stability(scraper,payload['prompt'])
+            # The parent has pinned the immutable original text and digest.
+            # A stale or modified payload may not write or repair a draft.
+            prompt = payload.get('prompt')
+            if (not isinstance(prompt, str)
+                    or hashlib.sha256(prompt.encode()).hexdigest()
+                       != record.get('prompt_sha256')):
+                raise ComposerOperationError('composer_frozen_prompt_mismatch')
+            prewrite=_wait_for_prewrite_stability(scraper,prompt)
             if prewrite['status']!='READY':
                 print('COMPOSER_RESULT '+json.dumps({
                     'status':prewrite['status'],
@@ -1267,10 +1275,10 @@ def helper_main():
                 return
             if not before['composer_empty'] and not before['composer_matches']:
                 raise ComposerOperationError('composer_unrelated_draft_present')
-            if payload.get('hybrid') and len(payload['prompt']) > 1024:
-                _write_hybrid_prompt(scraper,payload['prompt'],record,journal)
-            else:
-                _write_staged_prompt(scraper,payload['prompt'],record,journal)
+            # The experimental bulk-tail writer cannot prove every prefix.
+            # Git23 deliberately routes even hybrid requests through staged
+            # checkpoints until that experiment offers equivalent guarantees.
+            _write_staged_prompt(scraper,prompt,record,journal)
             after=_page_snapshot(scraper,payload['prompt'])
         else:
             before=record.get('baseline')
