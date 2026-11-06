@@ -58,6 +58,8 @@ jobs:
       - name: Existing Windows preexecution replan regression
         if: runner.os == 'Windows'
         run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
+      - name: Full core protocol manifest verification
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.'))"
       - name: Verify updated core hashes
         shell: python
         run: |
