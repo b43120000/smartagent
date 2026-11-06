@@ -24,8 +24,10 @@ REPO = "b43120000/test"
 REQUEST = "RR-TEST-001"
 EPOCH = "epoch-test-01"
 TARGET = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
-GOAL = ("驗證並完成 Case D 的部署目標。 預期部署根目錄：" + TARGET
-        + " 預期包含：case_a、case_b、case_c、fixture_manifest.json、check_results.py。")
+GOAL = ("驗證並完成 Case D 的部署目標。"
+        + "\n預期部署根目錄：\n" + TARGET
+        + "\n預期包含：case_a、case_b、case_c、fixture_manifest.json、check_results.py。"
+        + "\n先確認來源；若不存在，從可信來源取得內容，經授權後部署。")
 
 
 class RemoteAuthorizationTests(unittest.TestCase):
