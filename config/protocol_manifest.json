@@ -106,7 +106,7 @@
     "source/agent_core/goal_anchored_recovery.py": "b96337f5279a07c6b4d1d16e8029e472ecbad0c654bf5fc34e29e227fc734546",
     "source/agent_core/goal_environment_reconciliation.py": "a4ca2c0056a3e90bc4136c36a7cad67e89c66d93a423949ed0403637ac627778",
     "source/agent_core/goal_gap_ledger.py": "8b2008cb1e25404974bee937206fea2c686776d0ed4d569b9c79e50c550d0615",
-    "source/agent_core/goal_prerequisite_resolution.py": "749a099b8d503964e281ae57cc50df8aabe4a1385fc2111224f11840fb938647",
+    "source/agent_core/goal_prerequisite_resolution.py": "75861649f9a01df8781ea164eefddaee7c12721668f6c1507e7d5834423efc40",
     "source/agent_core/goal_strategy_transition.py": "9972f4040f234f86f529c02e3de37a4c3d19dfca053facd0ae1dedd4fef512a2",
     "source/agent_core/google_drive.py": "fde41e312177796392a53ce46d35ab2e35821ba21c60f40fef0643bb0ac2fbba",
     "source/agent_core/historical_source_resolver.py": "e19481de135ed3c68b74ccdea4636a9b1ada8de3f53e5336824e6b0b8962db39",
