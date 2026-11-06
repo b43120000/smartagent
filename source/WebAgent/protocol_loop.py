@@ -6849,6 +6849,7 @@ class WebAgentProtocolLoop:
                         "WebAgent 連續回傳相同的無效協議內容，Runtime 已暫停重複問答"
                     )
                 last_rejected_exchange_signature = rejection_signature
+                self._record_rejected_action_resolutions(calls, diagnostics)
                 self._planner_context_diagnostics = list(diagnostics)
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
                 repair_budget = self._admit_bounded_repair(diagnostics)
@@ -6931,6 +6932,7 @@ class WebAgentProtocolLoop:
                         action_ids=invalidated_ids,
                         reason="non_progress_admission_rejection",
                     )
+                self._record_rejected_action_resolutions(calls, ack_diagnostics)
                 self._planner_context_diagnostics = list(ack_diagnostics)
                 self._emit(
                     "protocol_rejected",
