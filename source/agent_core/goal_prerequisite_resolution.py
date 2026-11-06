@@ -220,6 +220,35 @@ def premature_source_interrupt_diagnostic(
         category == "RESOLVE_REGISTERED_SOURCE_ARTIFACT"
         and int(resolution.get("registered_artifact_count", 0) or 0) > 0
     )
+    # A missing receipt is UNKNOWN, not an evidence-backed denial. When the
+    # bundled Git executable was actually probed and no readiness probe has
+    # yet been attempted, request a normal admitted capability check before
+    # accepting a premature generic GitHub approval interruption. This nudge
+    # never authorizes network access or mutates the project.
+    if (remote_reference
+            and resolution.get("remote_access_authorization_state") == "UNKNOWN"
+            and resolution.get("git_executable_status") == "AVAILABLE"
+            and not resolution.get("remote_access_probe_guidance_already_issued")
+            and re.search(r"(?i)github|repository|私人儲存庫|遠端存取|網路授權|取得壓縮檔", detail)
+            and _PERMISSION_REQUEST.search(detail)):
+        return {
+            "marker": "[REMOTE_ARTIFACT_ACCESS_READINESS_REQUIRED]",
+            "reason": "remote_access_unknown_git_capability_probe_required",
+            "repair_scope": "REMOTE_ARTIFACT_ACCESS_READINESS",
+            "suggestion": (
+                "The bundled Git binary has been verified and the exact "
+                "remote Artifact is already known. UNKNOWN means untested; "
+                "it is not a network denial. Prefer a narrowly scoped "
+                "run_command/GIT_INSPECT GitHub access/readiness check under "
+                "ordinary Tool/Scope/Network Admission. Do not run a network "
+                "operation if security policy requires prior approval: "
+                "instead cite that concrete Runtime preflight result. "
+                "If denied or approval-required, preserve the exact evidence "
+                "and request only the missing authorization. Do not assume "
+                "download, write permission, repository authentication, or "
+                "verified source integrity."
+            ),
+        }
     if (remote_reference and _SOURCE_REQUEST.search(detail)
             and not re.search(
                 r"(?:github|repository|repo access|authentication|auth token)"
