@@ -1543,6 +1543,22 @@ class WebAgentProtocolLoop:
     def _with_commit(self, prompt: str, expected: dict) -> str:
         from agent_core.planner_context_snapshot import render_planner_context_snapshot
         planner_context, context_info = render_planner_context_snapshot(self)
+        remote_access = context_info.get("remote_artifact_access_readiness") or {}
+        inventory = context_info.get("runtime_software_inventory") or {}
+        self._emit(
+            "remote_artifact_access_readiness_prepared",
+            request_id=self.run_id, round=self.turn_id,
+            authorization_state=remote_access.get("authorization_state", "UNKNOWN"),
+            authorization_reason_code=remote_access.get("reason_code", ""),
+            next_verification=remote_access.get("next_verification", ""),
+            git_executable_status=remote_access.get("git_executable_status", "UNKNOWN"),
+            registered_artifact_count=remote_access.get("registered_artifact_count", 0),
+            authorization_evidence_present=bool(remote_access.get("authorization_evidence_ref")),
+            project_environment_index_status=inventory.get(
+                "project_environment_index_status", "NOT_OBSERVED"
+            ),
+            grants_authorization=False,
+        )
         self._last_planner_context_digest = context_info["context_digest"]
         self._last_planner_context_snapshot_id = context_info["context_snapshot_id"]
         self._emit(
