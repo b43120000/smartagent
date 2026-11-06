@@ -15,16 +15,7 @@ from collections.abc import Mapping
 
 SCHEMA = "SMARTAGENT_GOAL_GAP_LEDGER_V1"
 GAP_SCHEMA = "SMARTAGENT_GOAL_GAP_V1"
-_UNSAFE_REMEDIATION = re.compile(
-    r"(?:禁止|不得|不要|請勿|不允許)\\s*(?:任何|所有|實際|自行|一切|執行|進行|直接|對目標|對此路徑|寫入|修改|建立|部署|補救|安裝|create|write|modify|mutate){0,5}"
-    r"(?:寫入|修改|建立|部署|補救|安裝|MUTATE|create|write|modify|install)|"
-    r"\\b(?:do not|don't|must not|never)\\s+(?:create|write|mutate|install|modify)\\b",
-    re.I,
-)
-_REMEDIATION = re.compile(
-    r"部署|建立|新增|補齊|修復|安裝|建置|\\b(?:deploy|create|setup|repair|install|provision)\\b",
-    re.I,
-)
+from .conditional_goal_policy import conditional_goal_policy
 
 
 def _path_key(value: object) -> str:
@@ -35,14 +26,15 @@ def _path_key(value: object) -> str:
 
 
 def _goal_link(goal: str, path: str) -> str:
-    """An intent hint, NOT an authorization or verified Completion Condition."""
+    """An intent hint only; it never grants write permission."""
     if _path_key(path) not in _path_key(goal) and path.casefold() not in goal.casefold():
         return "UNBOUND"
-    if re.search(r"唯讀|只讀|read[ -]?only|禁止任何寫入|不得寫入|禁止執行修改", goal, re.I):
+    policy = conditional_goal_policy(goal)
+    if policy["intent"] == "READ_ONLY_ONLY":
         return "READ_ONLY_OR_RESTRICTED"
-    if _UNSAFE_REMEDIATION.search(goal):
-        return "READ_ONLY_OR_RESTRICTED"
-    if _REMEDIATION.search(goal):
+    if policy["intent"] == "CONDITIONAL_REMEDIATION":
+        return "CONDITIONAL_REMEDIATION_CANDIDATE"
+    if policy["intent"] == "REMEDIATION_CANDIDATE":
         return "REMEDIATION_INTENT_CANDIDATE"
     return "UNBOUND"
 
@@ -60,6 +52,7 @@ def reconstruct_goal_gaps(runtime) -> dict:
     epoch = str(getattr(runtime, "task_epoch", "") or "")
     progress = getattr(runtime, "progress_ledger", None)
     goal = str(getattr(progress, "goal", "") or getattr(runtime, "task_request", "") or "")
+    policy = conditional_goal_policy(goal)
     ordered = {}
     for action_id, row in ledger.items():
         if not isinstance(row, Mapping):
@@ -80,7 +73,8 @@ def reconstruct_goal_gaps(runtime) -> dict:
         gap_id = "GAP-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16].upper()
         previous = ordered.get(key)
         goal_link = _goal_link(goal, path)
-        linked = goal_link == "REMEDIATION_INTENT_CANDIDATE"
+        linked = goal_link in {"REMEDIATION_INTENT_CANDIDATE",
+                               "CONDITIONAL_REMEDIATION_CANDIDATE"}
         status = ("RESOLVED" if linked and exists else
                   "UNRESOLVED" if linked else
                   "OBSERVED_PRESENT" if exists else "OBSERVED_ABSENCE")
@@ -100,16 +94,28 @@ def reconstruct_goal_gaps(runtime) -> dict:
             "revision": (previous or {}).get("revision", 0) + 1,
             "resolved_by_evidence_ref": str(action_id) if exists and linked else "",
             "repair_candidates": (
-                ["INSPECT_PARENT_AND_SCOPE", "CREATE_DIRECTORY_IF_AUTHORIZED"]
-                if not exists and goal_link == "REMEDIATION_INTENT_CANDIDATE"
-                else ["INSPECT_PARENT_AND_SCOPE"] if not exists else []
+                ["DISCOVER_SOURCE_IF_SCOPED", "INSPECT_PARENT_IF_SCOPED",
+                 "VERIFY_WRITE_AUTHORIZATION", "CHECK_TARGET_CONFLICTS",
+                 "CREATE_DIRECTORY_IF_AUTHORIZED", "VERIFY_RESULT"]
+                if not exists and linked else
+                ["INSPECT_PARENT_IF_SCOPED"] if not exists else []
             ),
+            "prerequisites": ({
+                "source_integrity": "UNKNOWN",
+                "write_authorization": "UNKNOWN",
+                "target_conflicts": "UNKNOWN",
+                "parent_scope": "UNKNOWN",
+                "independent_verification": "NOT_STARTED",
+            } if not exists and linked else {}),
+            "conditional_mutation": policy["conditional_remediation"],
+            "restrictions": policy["restrictions"],
             "authorization_granted": False,
             "goal_completion_verified": False,
         }
     gaps = list(ordered.values())
     return {
         "schema": SCHEMA,
+        "goal_policy": policy,
         "request_id": request_id,
         "task_epoch": epoch,
         "gaps": gaps[-32:],
