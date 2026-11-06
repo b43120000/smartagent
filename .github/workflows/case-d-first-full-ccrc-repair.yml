@@ -43,8 +43,18 @@ jobs:
         run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
       - name: Existing Goal-Grounded Gap regression
         run: python -B source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
-      - name: Existing Progress terminal lifecycle
-        run: python -B source/WebAgent/tests/validate_progress_terminal_lifecycle.py
+      # The full legacy script fails on e3ca9f9 before this patch (missing
+      # Capability Guidance). Run its relevant later tests explicitly, without
+      # hiding or redefining that unrelated baseline failure as a PASS.
+      - name: Condition, next-action and Action-hold lifecycle regressions
+        run: >-
+          python -B -c "from WebAgent.tests import validate_progress_terminal_lifecycle as t;
+          [getattr(t,n)() for n in
+          ('validate_progress_repair_is_condition_specific',
+          'validate_ambiguous_condition_repair_lists_candidates',
+          'validate_declared_next_action_must_be_emitted',
+          'validate_condition_id_repairs_progress_without_losing_action',
+          'validate_action_batch_repair_preserves_valid_siblings')]"
       - name: Existing Planner context bridge
         run: python -B source/WebAgent/tests/validate_planner_context_bridge_it.py
       - name: Existing Action Loop regression
