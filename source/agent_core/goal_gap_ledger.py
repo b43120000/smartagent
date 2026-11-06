@@ -16,6 +16,7 @@ from collections.abc import Mapping
 SCHEMA = "SMARTAGENT_GOAL_GAP_LEDGER_V1"
 GAP_SCHEMA = "SMARTAGENT_GOAL_GAP_V1"
 from .conditional_goal_policy import conditional_goal_policy
+from .goal_prerequisite_resolution import source_requirement
 
 
 def _path_key(value: object) -> str:
@@ -53,6 +54,7 @@ def reconstruct_goal_gaps(runtime) -> dict:
     progress = getattr(runtime, "progress_ledger", None)
     goal = str(getattr(progress, "goal", "") or getattr(runtime, "task_request", "") or "")
     policy = conditional_goal_policy(goal)
+    source_need = source_requirement(goal, policy)
     ordered = {}
     for action_id, row in ledger.items():
         if not isinstance(row, Mapping):
@@ -94,14 +96,15 @@ def reconstruct_goal_gaps(runtime) -> dict:
             "revision": (previous or {}).get("revision", 0) + 1,
             "resolved_by_evidence_ref": str(action_id) if exists and linked else "",
             "repair_candidates": (
-                ["DISCOVER_SOURCE_IF_SCOPED", "INSPECT_PARENT_IF_SCOPED",
-                 "VERIFY_WRITE_AUTHORIZATION", "CHECK_TARGET_CONFLICTS",
-                 "CREATE_DIRECTORY_IF_AUTHORIZED", "VERIFY_RESULT"]
+                (([] if source_need == "NOT_REQUIRED"
+                  else ["DISCOVER_SOURCE_IF_SCOPED", "INSPECT_PARENT_IF_SCOPED"])
+                 + ["VERIFY_WRITE_AUTHORIZATION", "CHECK_TARGET_CONFLICTS",
+                    "CREATE_DIRECTORY_IF_AUTHORIZED", "VERIFY_RESULT"])
                 if not exists and linked else
                 ["INSPECT_PARENT_IF_SCOPED"] if not exists else []
             ),
             "prerequisites": ({
-                "source_integrity": "UNKNOWN",
+                "source_integrity": "NOT_REQUIRED" if source_need == "NOT_REQUIRED" else "UNKNOWN",
                 "write_authorization": "UNKNOWN",
                 "target_conflicts": "UNKNOWN",
                 "parent_scope": "UNKNOWN",
@@ -116,6 +119,7 @@ def reconstruct_goal_gaps(runtime) -> dict:
     return {
         "schema": SCHEMA,
         "goal_policy": policy,
+        "source_requirement": source_need,
         "request_id": request_id,
         "task_epoch": epoch,
         "gaps": gaps[-32:],
@@ -166,10 +170,13 @@ def decision_grounding_diagnostics(operational, gap_view: Mapping) -> list[dict]
                 "required_precondition": "workspace.exists=true",
                 "suggestion": (
                     "The requested workspace was confirmed absent by Runtime. "
-                    "Choose an authorized parent/scope discovery or a separately "
-                    "admitted create-directory prerequisite when the original "
-                    "Goal permits mutation. Do not retry a project-root reader "
-                    "until a new independent observation confirms existence."
+                    "The target is already confirmed absent. Do not repeat a "
+                    "reader against that missing directory. If the Goal "
+                    "requires local creation, propose a separately admitted "
+                    "Goal Action without searching for a nonexistent source. "
+                    "If the Goal requires existing content, resolve that "
+                    "source only inside authorized scope; never infer parent "
+                    "access or write permission from this observation."
                 ),
             })
             break
