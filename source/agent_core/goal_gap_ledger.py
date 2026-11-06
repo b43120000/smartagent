@@ -1,0 +1,167 @@
+"""Reconstruct persistent Goal prerequisites from current, trusted Runtime evidence.
+
+This ledger is a deterministic materialized view over the durable Action Result
+Ledger. It is not the latest Action Loop status, does not create permissions,
+and cannot infer absence from rejected or UNKNOWN operations. Rebuilding the
+view after each turn preserves unresolved gaps while allowing a newer, verified
+observation to resolve them. It intentionally never reads the local filesystem.
+"""
+from __future__ import annotations
+
+import hashlib
+import ntpath
+import re
+from collections.abc import Mapping
+
+SCHEMA = "SMARTAGENT_GOAL_GAP_LEDGER_V1"
+GAP_SCHEMA = "SMARTAGENT_GOAL_GAP_V1"
+_UNSAFE_REMEDIATION = re.compile(
+    r"(?:禁止|不得|不要|請勿|不允許)\\s*(?:任何|所有|實際|自行|一切|執行|進行|直接|對目標|對此路徑|寫入|修改|建立|部署|補救|安裝|create|write|modify|mutate){0,5}"
+    r"(?:寫入|修改|建立|部署|補救|安裝|MUTATE|create|write|modify|install)|"
+    r"\\b(?:do not|don't|must not|never)\\s+(?:create|write|mutate|install|modify)\\b",
+    re.I,
+)
+_REMEDIATION = re.compile(
+    r"部署|建立|新增|補齊|修復|安裝|建置|\\b(?:deploy|create|setup|repair|install|provision)\\b",
+    re.I,
+)
+
+
+def _path_key(value: object) -> str:
+    path = str(value or "").strip()
+    if not path or len(path) > 2048:
+        return ""
+    return ntpath.normcase(ntpath.normpath(path))
+
+
+def _goal_link(goal: str, path: str) -> str:
+    """An intent hint, NOT an authorization or verified Completion Condition."""
+    if _path_key(path) not in _path_key(goal) and path.casefold() not in goal.casefold():
+        return "UNBOUND"
+    if _UNSAFE_REMEDIATION.search(goal):
+        return "READ_ONLY_OR_RESTRICTED"
+    if _REMEDIATION.search(goal):
+        return "REMEDIATION_INTENT_CANDIDATE"
+    return "UNBOUND"
+
+
+def reconstruct_goal_gaps(runtime) -> dict:
+    """Replay current-epoch directory observations; latest verified fact wins.
+
+    Uses exact Runtime-produced receipts, not model statements or error strings.
+    A rejected project inventory cannot resolve or create an absence fact.
+    """
+    from .goal_strategy_transition import classify_runtime_evidence
+    ledger = dict(getattr(runtime, "action_result_ledger", {}) or {})
+    actions = dict(getattr(runtime, "action_ledger", {}) or {})
+    request_id = str(getattr(runtime, "run_id", "") or "")
+    epoch = str(getattr(runtime, "task_epoch", "") or "")
+    progress = getattr(runtime, "progress_ledger", None)
+    goal = str(getattr(progress, "goal", "") or getattr(runtime, "task_request", "") or "")
+    ordered = {}
+    for action_id, row in ledger.items():
+        if not isinstance(row, Mapping):
+            continue
+        if row.get("evidence_status", "ACTIVE") != "ACTIVE":
+            continue
+        if row.get("request_id") != request_id or row.get("task_epoch") != epoch:
+            continue
+        historical = actions.get(action_id) or {}
+        observation = classify_runtime_evidence(row, historical)
+        if observation.get("environment_observation_kind") != "directory.exists":
+            continue
+        exists = observation.get("environment_observed_exists")
+        path = observation.get("environment_observed_path", "")
+        key = _path_key(path)
+        if not key or type(exists) is not bool:
+            continue
+        gap_id = "GAP-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16].upper()
+        previous = ordered.get(key)
+        status = "RESOLVED" if exists else "UNRESOLVED"
+        goal_link = _goal_link(goal, path)
+        ordered[key] = {
+            "schema": GAP_SCHEMA,
+            "gap_id": gap_id,
+            "kind": "DIRECTORY_EXISTENCE",
+            "path": path,
+            "predicate": "directory.exists",
+            "observed_value": exists,
+            "desired_value": True,
+            "status": status,
+            "observed_fact_ref": str(action_id),
+            "observation_status": "CONFIRMED",
+            "goal_link": goal_link,
+            "goal_condition_id": str(row.get("condition_id", "") or ""),
+            "revision": (previous or {}).get("revision", 0) + 1,
+            "resolved_by_evidence_ref": str(action_id) if exists else "",
+            "repair_candidates": (
+                ["INSPECT_PARENT_AND_SCOPE", "CREATE_DIRECTORY_IF_AUTHORIZED"]
+                if not exists and goal_link == "REMEDIATION_INTENT_CANDIDATE"
+                else ["INSPECT_PARENT_AND_SCOPE"] if not exists else []
+            ),
+            "authorization_granted": False,
+            "goal_completion_verified": False,
+        }
+    gaps = list(ordered.values())
+    return {
+        "schema": SCHEMA,
+        "request_id": request_id,
+        "task_epoch": epoch,
+        "gaps": gaps[-32:],
+        "active_gaps": [gap for gap in gaps if gap["status"] == "UNRESOLVED"][-32:],
+        "active_count": sum(gap["status"] == "UNRESOLVED" for gap in gaps),
+        "storage": "RECONSTRUCTED_FROM_DURABLE_ACTION_LEDGER",
+        "planner_strategy_authority": True,
+        "scope_or_write_authorization_granted": False,
+    }
+
+
+def decision_grounding_diagnostics(operational, gap_view: Mapping) -> list[dict]:
+    """Reject a *known impossible* project-root read before Tool dispatch.
+
+    Discovery and mutations are not blocked by their mere lack of direct Goal
+    progress. All permitted candidates still pass existing Tool Admission.
+    """
+    blockers = list(gap_view.get("active_gaps") or [])
+    if not blockers:
+        return []
+    out = []
+    for action in operational:
+        tool = str(action.get("tool", "") or "")
+        # These readers require an already existing workspace. Project sync,
+        # scoped inspection of an absent path and parent discovery are allowed.
+        if tool not in {"query_project", "inspect_project_scope",
+                        "inspect_project_working_set", "run_command"}:
+            continue
+        root = (
+            action.get("working_directory") if tool == "run_command"
+            else action.get("project_root") if tool == "query_project"
+            else action.get("workspace")
+        )
+        requested = _path_key(root)
+        if not requested:
+            continue
+        for gap in blockers:
+            missing = _path_key(gap.get("path"))
+            if requested != missing and not requested.startswith(missing + "\\"):
+                continue
+            out.append({
+                "marker": "[GOAL_ALIGNMENT_REJECTED]",
+                "reason": "goal_gap_known_missing_workspace",
+                "repair_scope": "GOAL_GAP_DECISION_GROUNDING",
+                "action_id": str(action.get("action_id", "")),
+                "tool": tool,
+                "gap_id": gap["gap_id"],
+                "evidence_ref": gap["observed_fact_ref"],
+                "known_fact": "directory.exists=false",
+                "required_precondition": "workspace.exists=true",
+                "suggestion": (
+                    "The requested workspace was confirmed absent by Runtime. "
+                    "Choose an authorized parent/scope discovery or a separately "
+                    "admitted create-directory prerequisite when the original "
+                    "Goal permits mutation. Do not retry a project-root reader "
+                    "until a new independent observation confirms existence."
+                ),
+            })
+            break
+    return out
