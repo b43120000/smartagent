@@ -10,6 +10,7 @@ import json
 import ntpath
 import re
 from collections.abc import Mapping
+from pathlib import Path
 
 SCHEMA = "SMARTAGENT_SOURCE_GOAL_IDENTITY_V1"
 
@@ -56,7 +57,8 @@ def goal_identity(contract: Mapping | None) -> dict:
 def context_identity(owner: str, instance: str, workspace: str) -> str:
     if not owner or not instance or not workspace:
         return ""
-    payload = json.dumps([owner, instance, workspace.casefold()],
+    canonical_workspace = str(Path(workspace).expanduser().resolve()).casefold()
+    payload = json.dumps([owner, instance, canonical_workspace],
                          separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
