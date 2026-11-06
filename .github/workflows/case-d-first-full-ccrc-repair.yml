@@ -1,0 +1,56 @@
+name: Case D First FULL and CCRC Regression
+
+on:
+  push:
+    branches:
+      - fix/first-full-progress-ccrc-case-d-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  case-d:
+    name: P0 first FULL - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile modified files
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/initial_progress_normalization.py
+          source/agent_core/cross_contract_repair.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_case_d_first_full_admission.py
+      - name: First FULL Case D closed-loop replay
+        run: python -B source/WebAgent/tests/test_case_d_first_full_admission.py
+      - name: Existing CCRC regression
+        run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Existing Progress reply contract
+        run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
+      - name: Existing Goal-Grounded Gap regression
+        run: python -B source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
+      - name: Existing Progress terminal lifecycle
+        run: python -B source/WebAgent/tests/validate_progress_terminal_lifecycle.py
+      - name: Existing Planner context bridge
+        run: python -B source/WebAgent/tests/validate_planner_context_bridge_it.py
+      - name: Existing Action Loop regression
+        run: python -B source/WebAgent/tests/validate_action_loop_runtime_state.py
+      - name: Existing Windows preexecution replan
+        if: runner.os == 'Windows'
+        run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
+      - name: Full fail-closed core manifest validation
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.'))"
