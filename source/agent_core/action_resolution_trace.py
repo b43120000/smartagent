@@ -168,6 +168,7 @@ def propose_equivalent_bound_cwd_rewrite(
 def rejection_traces(
     proposed_actions: list, diagnostics: list,
     *, original_actions: Mapping | None,
+    rewrite_notes: Mapping | None = None,
     request_id: str, task_epoch: str, round_id: int,
 ) -> list[dict]:
     """Record *all* parsed operational proposals including rejected batches.
@@ -196,6 +197,9 @@ def rejection_traces(
             original_actions.get(aid, candidate)
             if isinstance(original_actions, Mapping) else candidate
         )
+        rewrite = (rewrite_notes or {}).get(aid) if isinstance(rewrite_notes, Mapping) else None
+        rewrite = rewrite if isinstance(rewrite, Mapping) else {}
+        rewritten = bool(rewrite) and original != candidate
         records.append({
             "schema": SCHEMA,
             "request_id": request_id,
@@ -204,13 +208,18 @@ def rejection_traces(
             "action_id": aid or f"UNBOUND-{round_id}-{position}",
             "planner_requested": _public_action(original),
             "runtime_resolved": {
-                "disposition": "REJECTED_PREEXECUTION",
+                "disposition": (
+                    "REWRITE_CANDIDATE_NOT_ADMITTED" if rewritten
+                    else "REJECTED_PREEXECUTION"
+                ),
                 "submitted_normalized": _public_action(candidate),
                 "effective_action": None,
+                "rewrite_candidate_action": _public_action(candidate) if rewritten else None,
+                "rewrite_reason_code": str(rewrite.get("rewrite_reason_code") or "")[:120],
                 "reason_codes": reasons,
                 "reason_details": issues,
-                "changed_fields": [],
-                "rewrite_applied": False,
+                "changed_fields": list(rewrite.get("rewrite_changed_fields") or [])[:12],
+                "rewrite_applied": rewritten,
                 "authorization_granted": False,
                 "admission_status": "NOT_ADMITTED",
             },
