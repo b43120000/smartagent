@@ -1241,6 +1241,21 @@ def resolve_command_working_directory(
         raise PathSecurityError('command_working_directory_invalid')
     from .action_dependencies import command_is_proven_observation
     operation_name = str(operation or "GENERAL").upper()
+    from .action_resolution_trace import registered_remote_git_read
+    remote_read_action = {
+        "tool": "run_command", "operation": operation_name,
+        "command": str(command or ""),
+    }
+    # Exact registered GitHub HEAD-only reads may run from the already bound
+    # Runtime workspace, without widening the original deployment request.
+    # This is CWD-scope classification, not network or repo authorization.
+    remote_probe_bound = (
+        agent is not None and operation_name == "GIT_INSPECT"
+        and registered_remote_git_read(
+            remote_read_action,
+            getattr(agent, "_registered_remote_artifact_view", None),
+        )
+    )
     # Only INSPECT has a read-only-CWD exception. A VERIFY action may include
     # additional tool checks; it retains its original write-CWD admission.
     proven_read = operation_name in {"INSPECT", "GIT_INSPECT"} and command_is_proven_observation({
@@ -1264,6 +1279,7 @@ def resolve_command_working_directory(
             _bounded_path_independent_wait(command)
             or str(command or '').strip().casefold()
             in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}
+            or (remote_probe_bound and cwd == context.workspace_root)
         ):
             raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
 
