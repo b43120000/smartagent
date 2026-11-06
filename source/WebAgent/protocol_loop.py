@@ -4914,6 +4914,9 @@ class WebAgentProtocolLoop:
             from agent_core.interrupt_readiness import (
                 interrupt_readiness, proposed_interrupt_constraint, _read_attempts,
             )
+            from agent_core.goal_prerequisite_resolution import (
+                resolve_goal_prerequisites, premature_source_interrupt_diagnostic,
+            )
             gap_view = reconstruct_goal_gaps(self)
             interruption_view = interrupt_readiness(
                 gap_view, capabilities, attempted_reads=_read_attempts(self),
@@ -4936,6 +4939,11 @@ class WebAgentProtocolLoop:
             interrupt_diagnostic = proposed_interrupt_constraint(request, interruption_view)
             if interrupt_diagnostic:
                 return [], [interrupt_diagnostic]
+            prerequisite_diagnostic = premature_source_interrupt_diagnostic(
+                request, resolve_goal_prerequisites(gap_view, interruption_view),
+            )
+            if prerequisite_diagnostic:
+                return [], [prerequisite_diagnostic]
             spec = self._safe_protocol_spec_rejection()
             if (spec and request.get('kind') == 'BLOCKED'
                     and request.get('blocking_action_id') == spec['action_id']):
