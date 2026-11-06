@@ -1,0 +1,66 @@
+name: Goal-Grounded Persistent Gap P0-P3
+
+on:
+  push:
+    branches:
+      - feat/goal-grounded-persistent-gap-p0-p3-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grounding:
+    name: Goal grounding - ${{ matrix.os }} - Python 3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile updated runtime
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/goal_gap_ledger.py
+          source/agent_core/action_loop_state.py
+          source/agent_core/planner_context_snapshot.py
+          source/agent_core/progress_reply_contract.py
+          source/agent_core/repair_stagnation.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
+      - name: Case D persistent gap and decision grounding
+        run: python -B source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
+      - name: Existing provenance and dynamic contract
+        run: python -B source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py
+      - name: Existing GAST Goal Strategy regression
+        run: python -B source/WebAgent/tests/validate_goal_strategy_transition_it.py
+      - name: Existing Action Loop regression
+        run: python -B source/WebAgent/tests/validate_action_loop_runtime_state.py
+      - name: Existing repair stagnation regression
+        run: python -B source/WebAgent/tests/validate_repair_stagnation.py
+      - name: Existing Progress contract regression
+        run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
+      - name: Existing Context interruption regression
+        run: python -B source/WebAgent/tests/validate_context_acquisition.py
+      - name: Existing preexecution replan regression
+        run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
+      - name: Verify updated core hashes
+        shell: python
+        run: |
+          import hashlib
+          import json
+          from pathlib import Path
+          m = json.loads(Path('config/protocol_manifest.json').read_text(encoding='utf-8'))
+          for path in ('source/WebAgent/protocol_loop.py', 'source/agent_core/progress_reply_contract.py'):
+              actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert m['core_files'][path] == actual, (path, actual)
