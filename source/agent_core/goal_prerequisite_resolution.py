@@ -34,7 +34,7 @@ _STANDALONE_CREATE = re.compile(
 )
 _REQUIRES_PAYLOAD = re.compile(
     r"(?:複製|拷貝|還原|解壓|下載|同步|匯入|部署既有|"
-    r"既有專案|既有檔案|安裝套件)|"
+    r"安裝套件)|"
     r"\b(?:copy|clone|checkout|extract|download|restore|import|sync)\b",
     re.I,
 )
