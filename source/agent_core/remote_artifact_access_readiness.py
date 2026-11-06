@@ -142,9 +142,9 @@ def derive_admitted_git_read_receipt(
         # Only direct HTTPS GitHub references. Never accept URLs with embedded
         # credentials, aliases, options, command chains, or shell expansions.
         match = re.fullmatch(
-            r"git(?:\\.exe)?\\s+ls-remote\\s+['\"]?"
-            r"https://github\\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100})(?:\\.git)?"
-            r"['\"]?\\s+HEAD",
+            r"git(?:\.exe)?\s+ls-remote\s+['\"]?"
+            r"https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100})(?:\.git)?"
+            r"['\"]?\s+HEAD",
             text, re.IGNORECASE,
         )
         if match is None:
@@ -179,7 +179,7 @@ def derive_admitted_git_read_receipt(
                 and type(data.get("exit_code")) is int and data["exit_code"] == 0
                 and evidence.get("execution_status") == "SUCCEEDED"):
             transcript = str(recorded.get("result") or "")
-            if re.search(r"(?m)^stdout:\\r?\\n[0-9a-fA-F]{40}\\s+HEAD(?:\\r?\\n|$)", transcript):
+            if re.search(r"(?m)^stdout:\r?\n[0-9a-fA-F]{40}\s+HEAD(?:\r?\n|$)", transcript):
                 return {
                     **receipt, "decision": "AUTHORIZED",
                     "network_authorized": True,
