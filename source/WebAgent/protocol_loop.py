@@ -4917,9 +4917,14 @@ class WebAgentProtocolLoop:
             from agent_core.goal_prerequisite_resolution import (
                 resolve_goal_prerequisites, premature_source_interrupt_diagnostic,
             )
+            from agent_core.source_candidate_ledger import build_source_candidate_ledger
+            from agent_core.source_integrity_resolution import reconcile_source_integrity
             gap_view = reconstruct_goal_gaps(self)
+            source_view = build_source_candidate_ledger(self, gap_view)
+            source_integrity_view = reconcile_source_integrity(self, source_view)
             interruption_view = interrupt_readiness(
                 gap_view, capabilities, attempted_reads=_read_attempts(self),
+                source_candidates=source_view,
             )
             capabilities = dict(capabilities)
             capabilities["grounded_scoped_read_candidate_count"] = (
@@ -4940,7 +4945,9 @@ class WebAgentProtocolLoop:
             if interrupt_diagnostic:
                 return [], [interrupt_diagnostic]
             prerequisite_diagnostic = premature_source_interrupt_diagnostic(
-                request, resolve_goal_prerequisites(gap_view, interruption_view),
+                request, resolve_goal_prerequisites(
+                    gap_view, interruption_view, source_view, source_integrity_view,
+                ),
             )
             if prerequisite_diagnostic:
                 return [], [prerequisite_diagnostic]
