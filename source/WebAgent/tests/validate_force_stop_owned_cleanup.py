@@ -242,16 +242,135 @@ class OwnedCleanup(unittest.TestCase):
         self.assertEqual(json.loads(path.read_text())['transactions'],{})
         self.assertEqual(settings.read_bytes(),b'{"settings":"KEEP"}')
 
-    def test_live_or_reused_metadata_pid_blocks_without_kill(self):
-        task=self.task();task.metadata['worker_pid']=123;self.store.put(task);before=data_tree(self.root)
-        result=self.clean([{'ProcessId':123,'ParentProcessId':0,'CommandLine':'unrelated editor'}])
-        self.assertFalse(result['success']);self.assertEqual(data_tree(self.root),before)
+    def test_reused_foreign_pid_is_not_ownership_evidence(self):
+        task=self.task();task.metadata['worker_pid']=123;self.store.put(task)
+        foreign_process=[{'ProcessId':123,'ParentProcessId':0,'Name':'editor.exe',
+                          'ExecutablePath':r'C:\OtherApps\editor.exe',
+                          'CommandLine':'unrelated editor'}]
+        result=self.clean(foreign_process)
+        self.assertTrue(result['success'],result)
+        self.assertIn(task.task_id,result['tasks_cancelled'])
+        self.assertEqual(TaskStateStore(remote_tasks_path(self.root)).load()[task.task_id].state,
+                         'CANCELLED')
 
     def test_live_excluded_agent_blocks_owned_cleanup(self):
         self.task();before=tree(self.root)
         inventory=[{'ProcessId':123,'ParentProcessId':0,'CommandLine':f'python -m agent_core.host_supervisor --root "{self.root}"'}]
         result=self.clean(inventory)
         self.assertFalse(result['success']);self.assertEqual(tree(self.root),before)
+
+
+    def test_missing_old_external_workspace_paused_cancels_local_record_only(self):
+        # Live incident TASK-519592C38B0CB1DDCE21 had a deleted E: project.
+        task=TaskRecord(
+            task_id='TASK-519592C38B0CB1DDCE21',
+            request_id='RR-TELEGRAM-LOCAL-OLD',task_epoch='epoch-old',
+            workspace=r'E:\SmartAgent_GoalDriven_IT_GH_v1',
+            state='PAUSED',metadata={'transport':'TELEGRAM'})
+        self.store.put(task)
+        path=remote_tasks_path(self.root)
+        before=path.read_bytes()
+        result=self.clean()
+        self.assertTrue(result['success'],result)
+        self.assertIn(task.task_id,result['tasks_cancelled'])
+        self.assertIn(task.task_id,result['external_or_missing_workspace_tasks'])
+        index=json.loads((Path(result['archive'])/'index.json').read_text())
+        entry=next(e for e in index['files'] if e['source']==str(path))
+        self.assertEqual((Path(result['archive'])/entry['file']).read_bytes(),before)
+        self.assertEqual(TaskStateStore(path).load()[task.task_id].state,'CANCELLED')
+
+    def test_existing_external_workspace_not_inspected_or_modified(self):
+        with tempfile.TemporaryDirectory(prefix='external-checkout-') as ext:
+            foreign=Path(ext).resolve()
+            marker=foreign/'KEEP_ME.txt'
+            marker.write_bytes(b'OTHER SMARTAGENT INSTANCE DATA')
+            task=self.task()
+            task.workspace=str(foreign)
+            self.store.put(task)
+            real_plain=cleanup._plain
+            def deny_foreign_access(path):
+                candidate=Path(path).absolute()
+                if candidate==foreign or foreign in candidate.parents:
+                    raise RuntimeError('EXTERNAL_WORKSPACE_SHOULD_NOT_BE_TOUCHED')
+                return real_plain(path)
+            with patch.object(cleanup,'_plain',side_effect=deny_foreign_access):
+                result=self.clean()
+            self.assertTrue(result['success'],result)
+            self.assertEqual(marker.read_bytes(),b'OTHER SMARTAGENT INSTANCE DATA')
+            self.assertIn(task.task_id,result['external_or_missing_workspace_tasks'])
+
+    def test_other_checkout_task_queue_is_not_changed(self):
+        with tempfile.TemporaryDirectory(prefix='second-smartagent-') as foreign:
+            other=Path(foreign).resolve()
+            keep=TaskRecord(task_id='TASK-FOREIGN',request_id='RR-FOREIGN',
+                            task_epoch='E-OTHER',workspace=str(other),
+                            state='PAUSED',metadata={'transport':'LOCAL_TEST'})
+            TaskStateStore(remote_tasks_path(other)).put(keep)
+            other_state=remote_tasks_path(other).read_bytes()
+            own=self.task()
+            result=self.clean()
+            self.assertTrue(result['success'],result)
+            self.assertIn(own.task_id,result['tasks_cancelled'])
+            self.assertEqual(remote_tasks_path(other).read_bytes(),other_state)
+
+    def test_mixed_store_explicit_foreign_install_root_is_not_cancelled(self):
+        own=self.task(1)
+        foreign=self.task(2)
+        foreign.metadata['install_root']=str(self.root.parent/'different-smartagent')
+        foreign.workspace=str(self.root.parent/'different-smartagent'/'workspace')
+        self.store.put(foreign)
+        result=self.clean()
+        self.assertTrue(result['success'],result)
+        self.assertEqual(result['tasks_cancelled'],[own.task_id])
+        after=TaskStateStore(remote_tasks_path(self.root)).load()
+        self.assertEqual(after[foreign.task_id].state,'PAUSED')
+        self.assertNotIn(foreign.task_id,result['tasks_cancelled'])
+
+    def test_process_discovery_never_owns_foreign_agent_via_workspace(self):
+        own_root=str(self.root)
+        foreign_root=str(self.root.parent/'other-smartagent')
+        rows=[
+            {'ProcessId':101,'ParentProcessId':0,'Name':'python.exe',
+             'ExecutablePath':foreign_root+r'\.venv\Scripts\python.exe',
+             'CommandLine':f'python -m agent_core.host_supervisor --root "{foreign_root}" --workspace "{own_root}"'},
+            {'ProcessId':102,'ParentProcessId':101,'Name':'python.exe',
+             'ExecutablePath':foreign_root+r'\.venv\Scripts\python.exe',
+             'CommandLine':f'python -m RemoteAgent.telegram_webagent_worker --root "{foreign_root}"'},
+            {'ProcessId':201,'ParentProcessId':0,'Name':'python.exe',
+             'CommandLine':f'python -m agent_core.host_supervisor --root "{own_root}"'},
+            {'ProcessId':202,'ParentProcessId':201,'Name':'python.exe',
+             'CommandLine':f'python -m RemoteAgent.telegram_webagent_worker --root "{foreign_root}"'},
+            {'ProcessId':301,'ParentProcessId':0,'Name':'cmd.exe',
+             'CommandLine':f'cmd /c "{foreign_root}\\launch_remote_agent.bat"'},
+        ]
+        result=stop.discover_agent_pids(rows,self.root)
+        self.assertEqual(result['selected_pids'],[201],result)
+        self.assertNotIn(101,result['selected_pids'])
+        self.assertNotIn(102,result['selected_pids'])
+        self.assertNotIn(202,result['selected_pids'])
+
+    def test_force_stop_kill_does_not_use_recursive_tree_flag(self):
+        from types import SimpleNamespace
+        commands=[]
+        def fake_run(command,**kwargs):
+            commands.append(command)
+            return SimpleNamespace(returncode=0)
+        with patch.object(stop.subprocess,'run',side_effect=fake_run):
+            self.assertTrue(stop._taskkill_owned_pid(123))
+        self.assertEqual(commands,[['taskkill','/PID','123','/F']])
+
+    def test_remote_clean_start_force_stop_scope_does_not_abandon_tasks(self):
+        foreign=self.task()
+        from agent_core import remote_clean_start as remote_clean
+        with patch.object(remote_clean,'_terminate_task_processes',
+                          side_effect=AssertionError('PID kill forbidden')):
+            result=remote_clean.remote_clean_start(
+                self.root,reason='FORCE_STOP_ALL_AGENTS',
+                local_checkout_only=True)
+        self.assertEqual(result['tasks_discarded'],0)
+        self.assertEqual(result['processes_terminated'],0)
+        self.assertEqual(TaskStateStore(remote_tasks_path(self.root)).load()[foreign.task_id].state,
+                         'PAUSED')
 
     def test_foreign_process_root_prefix_not_discovered(self):
         row={'ProcessId':123,'ParentProcessId':0,'CommandLine':f'python -m agent_core.host_supervisor --root "{self.root}2"'}

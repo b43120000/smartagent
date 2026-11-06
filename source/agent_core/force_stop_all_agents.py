@@ -94,24 +94,47 @@ def discover_agent_pids(
         rows[pid] = row
         children.setdefault(ppid, set()).add(pid)
 
+    # Only Agent executables/scripts or explicit --root can establish
+    # installation ownership. A foreign Agent whose --workspace refers to
+    # this checkout must NOT become a kill candidate.
+    rooted_arg = re.compile(
+        r"(?:^|\s)--root(?:=|\s+)[\"']?"
+        + re.escape(root_text)
+        + r"(?=$|[\s\"'])"
+    )
+    rooted_scripts = (
+        root_text + "\\smart_agent.py",
+        root_text + "\\web_copilot.py",
+        root_text + "\\source\\",
+        root_text + "\\remoteagent\\",
+    )
+    explicit_root_arg = re.compile(
+        r"(?:^|\s)--root(?:=|\s+)(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
+    )
     seeds: set[int] = set()
     for pid, row in rows.items():
         command = str(row.get("CommandLine") or "").replace("/", "\\").lower()
         executable = str(row.get("ExecutablePath") or "").replace("/", "\\").lower()
-        belongs_to_checkout = bool(re.search(
-            r"(?:^|[\s\"'=])" + re.escape(root_text) + r"(?=[\\\s\"']|$)", command
-        )) or executable.startswith(root_text + "\\")
+        explicit = explicit_root_arg.search(command)
+        if explicit:
+            declared = next((part for part in explicit.groups() if part), "")
+            # A local Python executable may be reused to run an Agent with
+            # a foreign explicit --root. Respect the runtime owner, not the
+            # interpreter's location.
+            if declared.rstrip("\\") != root_text:
+                continue
+        belongs_to_checkout = (
+            executable.startswith(root_text + "\\")
+            or bool(rooted_arg.search(command))
+            or any(script in command for script in rooted_scripts)
+        )
         if belongs_to_checkout and any(marker in command for marker in AGENT_COMMAND_MARKERS):
             seeds.add(pid)
 
+    # Never recursively select all child PIDs: a legitimate Agent may spawn
+    # a program located in another checkout. Stopping it would violate the
+    # local-install boundary. Only independently attested Agent PIDs qualify.
     selected = set(seeds)
-    frontier = list(seeds)
-    while frontier:
-        parent = frontier.pop()
-        for child in children.get(parent, set()):
-            if child not in selected:
-                selected.add(child)
-                frontier.append(child)
 
     launchers: set[int] = set()
     for seed in list(seeds):
@@ -122,7 +145,11 @@ def discover_agent_pids(
             row = rows[parent]
             name = str(row.get("Name") or "").lower()
             command = str(row.get("CommandLine") or "").replace("/", "\\").lower()
-            if name in {"cmd.exe", "cmd"} and any(value in command for value in LAUNCHER_NAMES):
+            if (name in {"cmd.exe", "cmd"}
+                    and any(root_text + "\\" + value in command
+                            for value in LAUNCHER_NAMES)):
+                # Kill only a CMD that names a launcher *inside this checkout*.
+                # A generic shared CMD ancestor is not owned by SmartAgent.
                 launchers.add(parent)
                 selected.add(parent)
                 break
@@ -162,9 +189,9 @@ def _request_orderly_shutdown(root: Path) -> dict[str, bool]:
     return requested
 
 
-def _taskkill_tree(pid: int) -> bool:
+def _taskkill_owned_pid(pid: int) -> bool:
     result = subprocess.run(
-        ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+        ["taskkill", "/PID", str(int(pid)), "/F"],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -248,7 +275,7 @@ def _force_stop_all_locked(
     stopped: list[int] = []
     failed: list[int] = []
     for pid in discovered["root_pids"]:
-        (stopped if _taskkill_tree(pid) else failed).append(pid)
+        (stopped if _taskkill_owned_pid(pid) else failed).append(pid)
     time.sleep(0.5)
     # One bounded second sweep closes a launcher/worker that crossed the first
     # inventory boundary.  This is intentionally not an endless kill loop.
@@ -258,7 +285,7 @@ def _force_stop_all_locked(
     second_stopped: list[int] = []
     second_failed: list[int] = []
     for pid in second["root_pids"]:
-        (second_stopped if _taskkill_tree(pid) else second_failed).append(pid)
+        (second_stopped if _taskkill_owned_pid(pid) else second_failed).append(pid)
     if second["root_pids"]:
         time.sleep(0.5)
     final_inventory = _powershell_process_inventory()
@@ -288,7 +315,8 @@ def _force_stop_all_locked(
             # All incomplete tasks are now terminal; this only clears remaining
             # control/approval/ownership reservations, never raw metadata PIDs.
             result["remote_clean_start"] = remote_clean_start(
-                project, reason="FORCE_STOP_ALL_AGENTS"
+                project, reason="FORCE_STOP_ALL_AGENTS",
+                local_checkout_only=True,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             result["remote_clean_start"] = {"error": f"{type(exc).__name__}: {exc}"}
