@@ -151,7 +151,8 @@ def run():
         stalled_repairs=[]; stalled_actions=[]
         def repeat_invalid(prompt, expected, attachments):
             stalled_repairs.append(prompt)
-            progress={**initial(),'evidence_refs':[],'decision_reason':'different prose '+str(len(stalled_repairs))}
+            # An explicitly malformed value is not an omitted/empty status ref.
+            progress={**initial(),'evidence_refs':None,'decision_reason':'different prose '+str(len(stalled_repairs))}
             if len(stalled_repairs)==1:
                 return response(progress,{'tool':'list_directory','action_id':'NEVER-EXECUTE','path':str(sub)})
             return response(progress)
