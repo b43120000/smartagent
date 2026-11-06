@@ -1156,10 +1156,26 @@ class WebAgentProtocolLoop:
                     action_id=fields.get("action_id"),
                     executed=fields.get("executed"),
                     verification_status=fields.get("effective_verification_status"))
+                evidence_kind = "VERIFIED_ACTION_RESULT"
+                if not advanced:
+                    # A new exact, confirmed filesystem fact is observation
+                    # progress even if it does not verify a Goal condition.
+                    # An identical re-probe does not reset the repair clock.
+                    from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+                    observed_id = str(fields.get("action_id", "") or "")
+                    current_gaps = reconstruct_goal_gaps(self)
+                    for gap in current_gaps["gaps"]:
+                        if gap["observed_fact_ref"] == observed_id:
+                            advanced = tracker.accepted_observation(
+                                action_id=observed_id,
+                                fact_key=(gap["predicate"], gap["path"], gap["observed_value"]))
+                            if advanced:
+                                evidence_kind = "NEW_VERIFIED_FILESYSTEM_FACT"
+                            break
                 if advanced and self.event_sink is not None:
                     self.event_sink("repair_effective_progress",
                         request_id=self.run_id, round=self.turn_id,
-                        evidence_kind="VERIFIED_ACTION_RESULT")
+                        evidence_kind=evidence_kind)
             elif event == "gar_recovery_decision":
                 tracker.level(fields.get("level"))
         if event == "tool_completed":
@@ -1759,8 +1775,10 @@ class WebAgentProtocolLoop:
                         ) or ""
                     ),
                 })
+        from agent_core.goal_gap_ledger import reconstruct_goal_gaps
         self.action_loop_state = build_action_loop_state(
             transport_state=self.protocol_state,
+            goal_gap_view=reconstruct_goal_gaps(self),
             progress=self._progress_state_payload(),
             action=action,
             result=result,
@@ -4800,6 +4818,17 @@ class WebAgentProtocolLoop:
         )
         if replay:
             return [], [replay]
+        # A confirmed missing workspace is a standing prerequisite, not the
+        # transient latest Action failure. Reject incompatible root readers
+        # before dispatch; the existing security/admission gates still own writes.
+        from agent_core.goal_gap_ledger import (
+            reconstruct_goal_gaps, decision_grounding_diagnostics,
+        )
+        gap_errors = decision_grounding_diagnostics(
+            operational, reconstruct_goal_gaps(self),
+        )
+        if gap_errors:
+            return [], gap_errors
         decision = normalized_progress["decision"]
         outcome = normalized_progress["outcome"]
         if (decision == 'COMPLETE' and getattr(self,'deferred_action_repairs',{})
