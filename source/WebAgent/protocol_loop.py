@@ -4800,7 +4800,8 @@ class WebAgentProtocolLoop:
                 self._first_full_progress_draft = remember_unadmitted_first_full(
                     getattr(self, "_first_full_progress_draft", {}),
                     normalized_progress_action, request_id=self.run_id,
-                    task_epoch=self.task_epoch, round_id=self.turn_id,
+                    task_epoch=getattr(self, 'task_epoch', ''),
+                    round_id=getattr(self, 'turn_id', 0),
                 )
                 self._emit(
                     "unadmitted_first_full_draft_preserved",
