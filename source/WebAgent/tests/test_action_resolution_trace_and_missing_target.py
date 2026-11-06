@@ -93,15 +93,16 @@ class ActionResolutionTraceTests(unittest.TestCase):
         self.assertFalse(proposal["authorization_granted"])
         admitted = preview_tool_scope(effective, self.agent)
         self.assertTrue(admitted["allowed"], admitted)
-        self.assertEqual(
-            resolve_command_working_directory(
-                str(self.workspace),
-                SecurityContext.for_workspace(
-                    self.workspace, read_roots=(self.target,)
-                ),
-                self.agent, operation="GIT_INSPECT", command=PROBE,
-            ), self.workspace,
+        resolved_cwd = resolve_command_working_directory(
+            str(self.workspace),
+            SecurityContext.for_workspace(
+                self.workspace, read_roots=(self.target,)
+            ),
+            self.agent, operation="GIT_INSPECT", command=PROBE,
         )
+        # Windows GitHub runners can spell the same folder via 8.3
+        # (RUNNER~1) and long (runneradmin) forms.
+        self.assertTrue(resolved_cwd.samefile(self.workspace))
         self.assertFalse(self.target.exists(), "rewrite must never create destination")
 
     def test_unknown_git_url_or_unverified_absence_never_rewrites_scope(self):
