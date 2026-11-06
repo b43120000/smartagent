@@ -99,7 +99,7 @@ class BootstrapContractTests(unittest.TestCase):
 
         broken = full("RCA-INVALID-STEPS", correct=True)
         broken["total_steps"] = None
-        broken["current_step"] = -1
+        broken["current_step"] = "first"
         with self.assertRaises(TaskProgressError) as rejected:
             validate_model_progress(broken)
         self.assertTrue(str(rejected.exception))
