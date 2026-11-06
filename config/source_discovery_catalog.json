@@ -1,0 +1,31 @@
+{
+  "schema": "SMARTAGENT_SOURCE_DISCOVERY_CATALOG_V1",
+  "records": [
+    {
+      "id": "smartagent-goal-it-fixture-v1",
+      "requested_target": "E:\\SmartAgent_GoalDriven_IT_GH_v1",
+      "required_top_level_entries": [
+        "case_a",
+        "case_b",
+        "case_c",
+        "fixture_manifest.json",
+        "check_results.py"
+      ],
+      "artifact": {
+        "provider": "github",
+        "repository": "b43120000/test",
+        "commit": "6b0d680185e40ae654acef03d0eeb9074536fb8e",
+        "path": "goal-driven-replan/v1/SmartAgent_GoalDriven_IT_fixture.zip",
+        "archive_root": "SmartAgent_GoalDriven_IT",
+        "sha256": "c38d634188e23868bd384ad8b0cd12bbe20d778eea8b67338f4ec2bbf747ef62",
+        "git_blob_sha": "a0a2a3e2aa3c0a34a5011f2553c0b232ea657bdb",
+        "manifest_path": "goal-driven-replan/v1/SmartAgent_GoalDriven_IT/fixture_manifest.json"
+      },
+      "provenance": "b43120000/test:goal-driven-replan/v1/README.md@6b0d680185e40ae654acef03d0eeb9074536fb8e",
+      "evidence_level": "E1",
+      "read_authorization_granted": false,
+      "network_or_download_authorized": false,
+      "mutation_authorized": false
+    }
+  ]
+}
