@@ -83,8 +83,8 @@ _EXPLICIT_USER_CHOICE = re.compile(
     r"(?:請|需要|要求|是否|確認|同意|取得|授予).{0,18}"
     r"(?:授權|批准|准許|允許|寫入權限|存取權限|權限範圍)"
     r"|(?:授權|批准|同意|允許)(?:本次|新增|建立|寫入|修改|部署)"
-    r"|\\b(?:approve|approval|consent|please authorize|grant permission|"
-    r"permission required|need permission)\\b",
+    r"|\b(?:approve|approval|consent|please authorize|grant permission|"
+    r"permission required|need permission)\b",
     re.I,
 )
 
