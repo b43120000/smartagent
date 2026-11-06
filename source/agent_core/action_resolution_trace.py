@@ -165,6 +165,100 @@ def propose_equivalent_bound_cwd_rewrite(
     }
 
 
+REWRITE_RULE_SCHEMA = "SMARTAGENT_ACTION_REWRITE_RULES_V1"
+
+
+def _rewrite_details(original: Mapping, canonical: Mapping, info: Mapping | None) -> dict:
+    """Explain every actual payload difference without inventing a semantic rule.
+
+    Known transformations have stable rule IDs. Unknown normalizations are
+    explicitly unclassified, and the admitted canonical form is the only
+    recommended example. Never surface arbitrary command/script contents.
+    """
+    before = dict(original) if isinstance(original, Mapping) else {}
+    after = dict(canonical) if isinstance(canonical, Mapping) else {}
+    notes = info if isinstance(info, Mapping) else {}
+    fields = sorted(
+        key for key in set(before).union(after)
+        if key != "action_id" and before.get(key) != after.get(key)
+    )
+    if not fields:
+        return {
+            "changed_fields": [], "rewrite_reason_code": "",
+            "rewrite_rule_ids": [], "rewrite_rules": [],
+            "rewrite_rule_schema": REWRITE_RULE_SCHEMA,
+            "planner_canonical_form": None,
+        }
+    rules = []
+    explicit_fields = set(notes.get("rewrite_changed_fields") or [])
+    paired_path = (
+        "path" in fields and "paths" in fields
+        and isinstance(before.get("path"), str)
+        and after.get("paths") == [before["path"]]
+    )
+    if paired_path:
+        rules.append({
+            "rule_id": "SINGULAR_PATH_TO_PATHS_LIST",
+            "input_fields": ["path"], "output_fields": ["paths"],
+            "rule": "Use paths as a one-element list containing the exact original path.",
+            "from_type": "str", "to_type": "list",
+        })
+    for field in fields:
+        if paired_path and field in {"path", "paths"}:
+            continue
+        old, new = before.get(field), after.get(field)
+        reason = ""
+        description = ""
+        if field in explicit_fields and notes.get("rewrite_reason_code"):
+            reason = str(notes["rewrite_reason_code"])[:120]
+            description = (
+                "Runtime's explicitly evidenced, independently admitted "
+                "field rewrite; preserve all other command and target semantics."
+            )
+        elif isinstance(new, list) and old is not None and new == [old]:
+            reason = "SCALAR_TO_SINGLETON_LIST"
+            description = "Supply this field as a single-element JSON array."
+        elif isinstance(old, str) and isinstance(new, str) and old.strip() == new:
+            reason = "TRIM_SURROUNDING_WHITESPACE"
+            description = "Remove only surrounding whitespace from the field."
+        elif (
+            field == "operation" and isinstance(old, str)
+            and isinstance(new, str) and old.casefold() == new.casefold()
+        ):
+            reason = "OPERATION_ENUM_CASE"
+            description = "Use the exact canonical operation enum spelling."
+        else:
+            reason = "CANONICAL_FORM_UNCLASSIFIED"
+            description = (
+                "A payload change is observed, but Runtime has not attested "
+                "the transformation rule. Use the admitted canonical field "
+                "value where visible; do not assume an equivalent permission."
+            )
+        rules.append({
+            "rule_id": reason,
+            "input_fields": [field], "output_fields": [field],
+            "from_type": type(old).__name__ if field in before else "absent",
+            "to_type": type(new).__name__ if field in after else "absent",
+            "rule": description,
+        })
+    ids = list(dict.fromkeys(item["rule_id"] for item in rules))
+    reason = str(notes.get("rewrite_reason_code") or "")[:120]
+    if not reason:
+        reason = (
+            "CANONICAL_FORM_UNCLASSIFIED"
+            if "CANONICAL_FORM_UNCLASSIFIED" in ids
+            else "CANONICAL_FORM_NORMALIZATION"
+        )
+    return {
+        "changed_fields": fields[:24],
+        "rewrite_reason_code": reason,
+        "rewrite_rule_ids": ids[:24],
+        "rewrite_rules": rules[:24],
+        "rewrite_rule_schema": REWRITE_RULE_SCHEMA,
+        "planner_canonical_form": _public_action(after),
+    }
+
+
 def rejection_traces(
     proposed_actions: list, diagnostics: list,
     *, original_actions: Mapping | None,
@@ -199,7 +293,8 @@ def rejection_traces(
         )
         rewrite = (rewrite_notes or {}).get(aid) if isinstance(rewrite_notes, Mapping) else None
         rewrite = rewrite if isinstance(rewrite, Mapping) else {}
-        rewritten = bool(rewrite) and original != candidate
+        rewrite_details = _rewrite_details(original, candidate, rewrite)
+        rewritten = bool(rewrite_details["changed_fields"])
         records.append({
             "schema": SCHEMA,
             "request_id": request_id,
@@ -215,11 +310,16 @@ def rejection_traces(
                 "submitted_normalized": _public_action(candidate),
                 "effective_action": None,
                 "rewrite_candidate_action": _public_action(candidate) if rewritten else None,
-                "rewrite_reason_code": str(rewrite.get("rewrite_reason_code") or "")[:120],
+                "rewrite_reason_code": rewrite_details["rewrite_reason_code"],
+                "rewrite_rule_schema": rewrite_details["rewrite_rule_schema"],
+                "rewrite_rule_ids": rewrite_details["rewrite_rule_ids"],
+                "rewrite_rules": rewrite_details["rewrite_rules"],
+                "planner_canonical_form": rewrite_details["planner_canonical_form"],
                 "reason_codes": reasons,
                 "reason_details": issues,
-                "changed_fields": list(rewrite.get("rewrite_changed_fields") or [])[:12],
-                "rewrite_applied": rewritten,
+                "changed_fields": rewrite_details["changed_fields"],
+                "rewrite_applied": False,
+                "rewrite_attempted": rewritten,
                 "authorization_granted": False,
                 "admission_status": "NOT_ADMITTED",
             },
@@ -249,12 +349,9 @@ def executed_trace(
     canonical = provenance.get("canonical_action")
     dispatched = provenance.get("dispatched_action")
     actual = provenance.get("actual_result") or {}
-    modified = (
-        isinstance(original, Mapping) and isinstance(canonical, Mapping)
-        and any(original.get(k) != canonical.get(k) for k in
-                set(original).union(canonical) if k != "action_id")
-    )
     info = rewrite_info if isinstance(rewrite_info, Mapping) else {}
+    rewrite_details = _rewrite_details(original, canonical, info)
+    modified = bool(rewrite_details["changed_fields"])
     return {
         "schema": SCHEMA,
         "request_id": request_id,
@@ -265,8 +362,12 @@ def executed_trace(
         "runtime_resolved": {
             "disposition": "REWRITTEN_AND_DISPATCHED" if modified else "ADMITTED_UNCHANGED",
             "effective_action": _public_action(canonical),
-            "changed_fields": list(info.get("rewrite_changed_fields") or [])[:12],
-            "rewrite_reason_code": str(info.get("rewrite_reason_code") or "")[:120],
+            "changed_fields": rewrite_details["changed_fields"],
+            "rewrite_reason_code": rewrite_details["rewrite_reason_code"],
+            "rewrite_rule_schema": rewrite_details["rewrite_rule_schema"],
+            "rewrite_rule_ids": rewrite_details["rewrite_rule_ids"],
+            "rewrite_rules": rewrite_details["rewrite_rules"],
+            "planner_canonical_form": rewrite_details["planner_canonical_form"],
             "rewrite_applied": bool(modified),
             "authorization_granted": False,
             "admission_status": "ADMITTED",
