@@ -171,6 +171,60 @@ class ActionResolutionTraceTests(unittest.TestCase):
         self.assertIsNone(rows[0]["runtime_resolved"]["effective_action"])
         self.assertEqual(rows[0]["execution"]["status"], "NOT_EXECUTED")
 
+    def test_real_planner_context_includes_undispatched_action_and_known_absence(self):
+        from agent_core.planner_context_snapshot import build_planner_context_snapshot
+        from WebAgent.tests.validate_planner_context_bridge_it import FakeRuntime
+        from WebAgent.tests.test_goal_grounded_gap_p0_p3 import (
+            directory_record,
+        )
+        from agent_core.target_path_contract import extract_target_contract
+        root = r"E:\\SmartAgent_GoalDriven_IT_GH_v1"
+        goal = (
+            "請完成 Case D 部署。\\n預期部署根目錄：\\n" + root
+            + "\\n預期包含：case_a、case_b、case_c、fixture_manifest.json、check_results.py。"
+            + "\\n若缺少則補齊，不得覆蓋。"
+        )
+        fake = FakeRuntime()
+        fake.task_request = goal
+        fake.progress_ledger.goal = goal
+        fake._target_path_contract = extract_target_contract(goal)
+        fake.run_id = "RR-CASE-D"
+        fake.task_epoch = "EPOCH-D"
+        action_row, result_row = directory_record("ACT-CONFIRMED-ABSENT")
+        result_row["request_id"] = fake.run_id
+        result_row["task_epoch"] = fake.task_epoch
+        fake.action_ledger["ACT-CONFIRMED-ABSENT"] = action_row
+        fake.action_result_ledger["ACT-CONFIRMED-ABSENT"] = result_row
+        fake._rejected_action_resolution_traces = rejection_traces(
+            [self.action],
+            [{"reason": "run_command_working_directory_rejected",
+              "detail": "command_working_directory_not_directory:" + str(self.target)}],
+            original_actions={"ACT-GIT-1": self.action},
+            request_id=fake.run_id, task_epoch=fake.task_epoch,
+            round_id=3,
+        )
+        snapshot = build_planner_context_snapshot(fake)
+        self.assertEqual(
+            snapshot["deployment_path_prerequisites"]["target_observation_status"],
+            "CONFIRMED_ABSENT",
+        )
+        self.assertEqual(
+            snapshot["deployment_path_prerequisites"]["target_absence_evidence_ref"],
+            "ACT-CONFIRMED-ABSENT",
+        )
+        self.assertEqual(
+            snapshot["action_resolution_trace"][-1]["execution"]["status"],
+            "NOT_EXECUTED",
+        )
+        self.assertEqual(
+            snapshot["action_resolution_trace"][-1]["planner_requested"]["command"],
+            PROBE,
+        )
+        self.assertEqual(
+            snapshot["action_resolution_trace"][-1]["runtime_resolved"]["reason_codes"],
+            ["run_command_working_directory_rejected"],
+        )
+
     def test_executed_provenance_preserves_exact_source_and_effective_action(self):
         effective = {**self.action, "working_directory": str(self.workspace)}
         actual = attach_runtime_result(
