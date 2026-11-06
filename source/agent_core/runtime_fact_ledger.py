@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 
 from .tool_result_contract import decode_result
@@ -41,15 +42,73 @@ def _public_action(action: Mapping | None) -> dict:
         elif key == "paths" and isinstance(value, list):
             out[key] = [str(x)[:MAX_PUBLIC_STRING] for x in value[:8]]
     if isinstance(action.get("command"), str):
-        out["command_sha256"] = hashlib.sha256(
-            action["command"].encode("utf-8")).hexdigest()
-        out["command_redacted"] = True
+        command = action["command"]
+        out["command_sha256"] = hashlib.sha256(command.encode("utf-8")).hexdigest()
+        # Show an exact short command only if it has no evident credential or
+        # multiline script. Otherwise the full exact value remains in Ledger.
+        sensitive = re.search(
+            r"(?i)\b(?:password|passwd|secret|token|bearer|api[_-]?key|authorization)\b",
+            command,
+        )
+        if len(command) <= 240 and "\n" not in command and not sensitive:
+            out["command"] = command
+        else:
+            out["command_redacted"] = True
     if "queries" in action:
         out["queries_sha256"] = _digest(action["queries"])
         queries = action.get("queries")
         out["query_count"] = len(queries) if isinstance(queries, list) else 1
     return out
 
+
+
+def _bounded_observed_data(envelope: Mapping, raw_result: object) -> dict:
+    """Project actual scalar/finite native return fields, not arbitrary stdout."""
+    data = envelope.get("data")
+    data = data if isinstance(data, Mapping) else {}
+    result = {}
+    for key in ("exists", "exit_code", "process_state", "result_count",
+                "total", "observation_status", "execution_status",
+                "verification_status", "resolved_path"):
+        value = data.get(key)
+        if type(value) in (bool, int, float) or (
+                isinstance(value, str) and len(value) <= 128):
+            result[key] = value
+    entries = data.get("entries")
+    if isinstance(entries, list):
+        names = []
+        for item in entries[:24]:
+            name = item if isinstance(item, str) else (
+                item.get("name") if isinstance(item, Mapping) else None)
+            if isinstance(name, str):
+                names.append(name[:256])
+        result["entry_count"] = len(entries)
+        result["entry_names"] = names
+        result["entry_names_truncated"] = len(entries) > 24
+    # inspect_directory's business JSON commonly carries its observed paths
+    # outside the envelope. Keep booleans and paths, not arbitrary error prose.
+    if envelope.get("tool") == "inspect_directory":
+        try:
+            body = json.loads(str(raw_result))
+        except (TypeError, ValueError):
+            body = {}
+        rows = body.get("paths") if isinstance(body, Mapping) else None
+        if isinstance(rows, list):
+            safe_paths = []
+            for item in rows[:8]:
+                if not isinstance(item, Mapping):
+                    continue
+                row = {}
+                if isinstance(item.get("path"), str):
+                    row["path"] = item["path"][:MAX_PUBLIC_STRING]
+                for key in ("exists", "authorized", "is_directory", "inaccessible_count"):
+                    value = item.get(key)
+                    if type(value) in (bool, int):
+                        row[key] = value
+                safe_paths.append(row)
+            result["paths"] = safe_paths
+            result["paths_truncated"] = len(rows) > 8
+    return result
 
 def _fact_from_native_return(action: Mapping, result: object,
                              envelope: Mapping) -> dict | None:
@@ -119,6 +178,14 @@ def build_action_provenance(original_action: Mapping,
             "admission_status": "NOT_DISPATCHED",
         }
     envelope = decode_result(raw_result) or {}
+    # Never bind a return from a different tool/action to this dispatch.
+    identity_mismatch = (
+        (envelope.get("tool") and envelope["tool"] != dispatched.get("tool"))
+        or (envelope.get("action_id") and envelope["action_id"] != action_id)
+    )
+    if identity_mismatch:
+        envelope = {"status": "UNKNOWN", "executed": None,
+                    "reason": "RESULT_IDENTITY_MISMATCH"}
     status = str(envelope.get("status", "UNKNOWN") or "UNKNOWN")
     executed = envelope.get("executed")
     if type(executed) is not bool:
@@ -131,6 +198,7 @@ def build_action_provenance(original_action: Mapping,
         "executed": executed,
         "raw_result_sha256": hashlib.sha256(
             str(raw_result).encode("utf-8")).hexdigest(),
+        "observed_data": _bounded_observed_data(envelope, raw_result),
     }
     fact = _fact_from_native_return(dispatched, raw_result, envelope)
     return {
@@ -160,6 +228,7 @@ def planner_projection(record: Mapping, *, request_id: str,
             "reason": str(result.get("reason", ""))[:120],
             "executed": result.get("executed"),
             "raw_result_sha256": str(result.get("raw_result_sha256", ""))[:64],
+            "observed_data": deepcopy(result.get("observed_data") or {}),
         }
     fact = record.get("fact")
     safe_fact = None
