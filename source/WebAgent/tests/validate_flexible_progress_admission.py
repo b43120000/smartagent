@@ -115,7 +115,10 @@ def run():
                 return response(bad_initial,{'tool':'list_directory','action_id':'HELD-READ','path':str(sub)})
             if len(repair_turns)==2:
                 assert 'available_evidence_refs' in prompt and 'REQUEST_ACCEPTED' in prompt
-                return response({**bad_initial,'outcome':'PENDING'})
+                # Explicitly forged non-status evidence is NOT normalized.
+                # This keeps the legacy multi-turn hold repair scenario valid.
+                return response({**bad_initial,'outcome':'PENDING',
+                                 'evidence_refs':['FORGED-ACTION']})
             if len(repair_turns)==3:
                 assert 'evidence_refs' in prompt and 'RUNTIME_STATUS' in prompt
                 return response({**initial(),'evidence_refs':['REQUEST_ACCEPTED']})
