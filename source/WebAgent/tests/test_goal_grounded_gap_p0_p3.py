@@ -78,7 +78,7 @@ class PersistentGoalGapTests(unittest.TestCase):
         self.assertIn("project_root", readiness["required_action_fields_when_explicit_scope"])
         self.assertEqual(readiness["directory_precondition"]["field"], "project_root")
         self.assertEqual(readiness["directory_precondition"]["expected"], True)
-        self.assertFalse(readiness["directory_precondition"]["not_an_authorization_grant"] is False)
+        self.assertTrue(readiness["directory_precondition"]["not_an_authorization_grant"])
 
 
     def test_case_d_negative_fact_persists_after_rejected_query(self):
@@ -171,7 +171,11 @@ class PersistentGoalGapTests(unittest.TestCase):
     def test_read_only_goal_never_suggests_mutation(self):
         r = runtime(goal="請唯讀檢查 " + ROOT + " 是否存在，不得寫入或建立")
         add_probe(r)
-        g = reconstruct_goal_gaps(r)["active_gaps"][0]
+        view = reconstruct_goal_gaps(r)
+        self.assertEqual(view["active_count"], 0)
+        g = view["known_absences"][0]
+        self.assertEqual(g["status"], "OBSERVED_ABSENCE")
+        self.assertIsNone(g["desired_value"])
         self.assertNotIn("CREATE_DIRECTORY_IF_AUTHORIZED", g["repair_candidates"])
 
     def test_active_gap_does_not_override_latest_action_lifecycle(self):
