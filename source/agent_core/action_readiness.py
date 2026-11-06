@@ -15,12 +15,21 @@ ACTION_FIELDS = {
     "find_file": ("root",),
     "inspect_directory": ("paths",),
     "observe_fact": ("path",),
-    "query_project": ("queries",),
+    "query_project": ("project_root", "queries"),
     "run_command": ("command", "operation", "working_directory"),
 }
 PROJECT_WORKSPACE_TOOLS = frozenset({
-    "inspect_project_scope", "inspect_project_working_set",
+    "query_project", "inspect_project_scope", "inspect_project_working_set",
 })
+
+# Declarative, read-only tool preconditions; an existing directory is a
+# necessary prerequisite for these operations, never a permission grant.
+DIRECTORY_PRECONDITION_FIELDS = {
+    "query_project": "project_root",
+    "inspect_project_scope": "workspace",
+    "inspect_project_working_set": "workspace",
+    "run_command": "working_directory",
+}
 
 
 def tool_readiness_contract(tool: object) -> dict:
@@ -30,6 +39,12 @@ def tool_readiness_contract(tool: object) -> dict:
         "tool": name,
         "required_action_fields_when_explicit_scope": list(ACTION_FIELDS.get(name, ())),
         "existing_project_workspace_required": name in PROJECT_WORKSPACE_TOOLS,
+        "directory_precondition": (
+            {"field": DIRECTORY_PRECONDITION_FIELDS[name],
+             "predicate": "directory.exists", "expected": True,
+             "not_an_authorization_grant": True}
+            if name in DIRECTORY_PRECONDITION_FIELDS else None
+        ),
         "tool_admission_still_required": True,
         "can_expand_authorized_scope": False,
         "missing_path_may_be_a_prerequisite_not_a_project": name in PROJECT_WORKSPACE_TOOLS,
