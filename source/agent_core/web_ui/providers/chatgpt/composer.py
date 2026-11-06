@@ -20,29 +20,30 @@ def canonical_composer_text(value: object) -> str:
 
 
 def normalize_composer_text(value: object) -> str:
-    """Legacy visible-text comparison used as the first validation layer."""
+    """Legacy UI-only normalization; never use it as an integrity pass."""
     return re.sub(r"\s+", " ", canonical_composer_text(value)).strip()
 
 
 def normalize_renderer_boundaries(value: object) -> str:
     """Normalize only the proven visual boundary inside ``blob:`` URLs."""
     return re.sub(
-        r"(?<=blob:)\s+(?=https?://)",
+        r"(?<=blob:)[ \t]+(?=https?://)",
         "",
-        normalize_composer_text(value),
+        canonical_composer_text(value),
     )
 
 
 def matches_auto_url_boundary_spacing(expected: object, observed: object) -> bool:
     """Accept only renderer-inserted ASCII space immediately before a URL.
 
-    ChatGPT's ProseMirror may turn ``例如https://...`` into
+    Whitespace normalization is prohibited here: a missing space, newline or
+    indentation change is a failed integrity check. ChatGPT's ProseMirror may turn ``例如https://...`` into
     ``例如 https://...`` without exposing an ``a[href]`` node.  Walk both
     normalized strings in lockstep and permit that one proven insertion only;
     every URL character and all surrounding content must otherwise be exact.
     """
-    target = normalize_composer_text(expected)
-    actual = normalize_composer_text(observed)
+    target = canonical_composer_text(expected)
+    actual = canonical_composer_text(observed)
     if not target:
         return False
 
@@ -161,9 +162,9 @@ def validate_composer_prompt(prompt: str, snapshot: ComposerSnapshot) -> Compose
     matched_view = ""
     observed = semantic or primary
 
-    if expected and normalize_composer_text(primary) == normalize_composer_text(expected):
+    if expected and primary == expected:
         matched = True
-        matched_view = "primary"
+        matched_view = "primary_exact"
         observed = primary
     elif expected and matches_auto_url_boundary_spacing(expected, primary):
         matched = True
