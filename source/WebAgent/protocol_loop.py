@@ -3416,19 +3416,26 @@ class WebAgentProtocolLoop:
                             "mode": mode, "transaction_seq": result["transaction_seq"],
                         },
                     }
+            if mode in {ACTION_RECONSTRUCTION, REPLAN_REQUIRED}:
+                # A format repair may hold unadmitted Actions, but reconstructing
+                # a new Action cannot be forced to preserve the old action IDs.
+                # Neither handoff admits or executes an Action.
+                held = list(getattr(self, "pending_progress_repair_actions", []))
+                if held:
+                    self.pending_progress_repair_actions = []
+                    self._emit(
+                        "ccrc_unadmitted_progress_hold_released",
+                        request_id=self.run_id, round=self.turn_id,
+                        action_ids=[str(row.get("action_id", "")) for row in held],
+                        release_mode=mode,
+                        authorization_granted=False, executed=False,
+                    )
             if mode == REPLAN_REQUIRED:
                 # A Goal Replan must discard the never-admitted initial draft;
                 # only accepted Progress and executed Evidence can be inherited.
                 self._first_full_progress_draft = {}
-                # An unadmitted hold must not force the old Action after the
-                # entire decision is explicitly handed back to Goal Replan.
-                held = list(getattr(self, "pending_progress_repair_actions", []))
-                if held:
-                    self.pending_progress_repair_actions = []
-                    self._emit("ccrc_unadmitted_progress_hold_released",
-                        request_id=self.run_id, round=self.turn_id,
-                        action_ids=[str(row.get("action_id", "")) for row in held],
-                        authorization_granted=False, executed=False)
+                # The prior unadmitted Action hold was released above; the
+                # original Goal and actually accepted evidence remain intact.
                 self.pending_action_repair = {}
                 command_pending.clear()
             self.pending_command_field_repairs = command_pending
@@ -3950,6 +3957,14 @@ class WebAgentProtocolLoop:
             action for action in calls[:-1]
             if action.get("tool") != "report_progress"
         ]
+        # Do not restore an unexecuted operational hold into an INTERRUPT or
+        # terminal-shaped response; normal blocker/terminal guards decide.
+        current_progress = next(
+            (item for item in calls[:-1] if item.get("tool") == "report_progress"),
+            {},
+        )
+        if str(current_progress.get("decision", "")).upper() != "CONTINUE":
+            return calls
         pending_by_id = {str(item.get('action_id', '')): item for item in pending}
         # A format-only repair may echo the same unexecuted Action under a
         # fresh ID. Correlate only a unique, byte-for-byte semantic match with
@@ -5591,6 +5606,7 @@ class WebAgentProtocolLoop:
         if tx is not None:
             tx.clear()  # Close only on FULL admission; no early commit.
         self.pending_progress_repair_actions = []
+        self._first_full_progress_draft = {}
         self.pending_action_repair = {}
         self.pending_result_ack_id = ""
         self.pending_web_ack_id = "WEBACK-V8-" + uuid.uuid4().hex[:16].upper()
@@ -6971,7 +6987,11 @@ class WebAgentProtocolLoop:
                             "Evidence, then pass all normal admission gates.\n"
                             "[/CCRC_HANDOFF_TO_GOAL_DRIVEN]"
                         )
-                    repair_note += "\n" + repair_instruction(ccrc_decision)
+                    from agent_core.progress_reply_contract import has_accepted_plan
+                    repair_note += "\n" + repair_instruction(
+                        ccrc_decision,
+                        accepted_plan=has_accepted_plan(self.progress_ledger),
+                    )
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
                     + format_tool_parse_diagnostics(ack_diagnostics)
