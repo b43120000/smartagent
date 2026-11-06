@@ -1365,6 +1365,7 @@ class WebAgentProtocolLoop:
         traces = rejection_traces(
             list(calls or []), list(diagnostics or []),
             original_actions=self._planner_original_actions,
+            rewrite_notes=self._runtime_action_rewrite_notes,
             request_id=self.run_id, task_epoch=self.task_epoch,
             round_id=self.turn_id,
         )
@@ -1378,7 +1379,9 @@ class WebAgentProtocolLoop:
                 "action_resolution_recorded",
                 request_id=self.run_id, round=self.turn_id,
                 action_id=row["action_id"],
-                disposition="REJECTED_PREEXECUTION",
+                disposition=(row.get("runtime_resolved") or {}).get(
+                    "disposition", "REJECTED_PREEXECUTION"
+                ),
                 tool=(row.get("planner_requested") or {}).get("tool", ""),
                 original_command_sha256=(
                     (row.get("planner_requested") or {}).get("command_sha256", "")
