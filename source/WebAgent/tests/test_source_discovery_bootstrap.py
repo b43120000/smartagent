@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Source Discovery Bootstrap: pinned artifacts without implicit access."""
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from agent_core.source_discovery_bootstrap import (
+    bootstrap_source_discovery,
+    register_source_artifact,
+)
+from agent_core.goal_prerequisite_resolution import resolve_goal_prerequisites
+from agent_core.target_path_contract import extract_target_contract
+
+ROOT = Path(__file__).resolve().parents[3]
+CATALOG = ROOT / "config" / "source_discovery_catalog.json"
+TARGET = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
+ENTRIES = ["case_a", "case_b", "case_c", "fixture_manifest.json", "check_results.py"]
+GOAL = (
+    "驗證並完成 Case D 的部署目標。"
+    + "\n預期部署根目錄：\n" + TARGET
+    + "\n預期包含：" + "、".join(ENTRIES) + "。"
+    + "\n先確認來源；若不存在，從可信來源取得內容，經授權後部署。"
+)
+EXPECTED = extract_target_contract(GOAL)
+
+
+def candidate_record(target=TARGET):
+    return {
+        "requested_target": target,
+        "required_top_level_entries": ENTRIES,
+        "provenance": "user-provided-project-artifact-manifest",
+        "artifact": {
+            "provider": "github",
+            "repository": "example-user/private-fixtures",
+            "commit": "a" * 40,
+            "path": "fixtures/release-v1.zip",
+            "archive_root": "release-v1",
+            "sha256": "b" * 64,
+            "git_blob_sha": "c" * 40,
+            "manifest_path": "fixtures/manifest.json",
+        },
+    }
+
+
+class SourceDiscoveryBootstrapTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.work = str(self.root / "workspace")
+        Path(self.work).mkdir()
+
+    def _bootstrap(self, contract=EXPECTED, **extra):
+        return bootstrap_source_discovery(
+            self.root, contract,
+            owner="telegram:one:one", instance="agent-instance",
+            workspace=self.work, **extra,
+        )
+
+    def _package_catalog(self):
+        target = self.root / "config"
+        target.mkdir()
+        (target / "source_discovery_catalog.json").write_text(
+            CATALOG.read_text(encoding="utf-8"), encoding="utf-8",
+        )
+
+    def test_cold_start_case_d_finds_pinned_fixture_reference_without_history(self):
+        self._package_catalog()
+        got = self._bootstrap()
+        self.assertEqual(got["state"], "ARTIFACT_REFERENCE_FOUND")
+        self.assertEqual(got["catalog_status"], "READY")
+        self.assertEqual(got["artifact_count"], 1)
+        artifact = got["artifact_references"][0]
+        self.assertEqual(artifact["repository"], "b43120000/test")
+        self.assertEqual(
+            artifact["artifact_path"],
+            "goal-driven-replan/v1/SmartAgent_GoalDriven_IT_fixture.zip",
+        )
+        self.assertEqual(
+            artifact["expected_sha256"],
+            "c38d634188e23868bd384ad8b0cd12bbe20d778eea8b67338f4ec2bbf747ef62",
+        )
+        self.assertEqual(artifact["evidence_level"], "E1")
+        self.assertEqual(artifact["repository_access"], "NOT_CHECKED")
+        self.assertFalse(artifact["artifact_retrieved"])
+        self.assertFalse(artifact["archive_hash_verified"])
+        self.assertFalse(artifact["source_is_deployment_ready"])
+        self.assertFalse(got["network_access_attempted"])
+        self.assertFalse(got["disk_source_scan_performed"])
+        self.assertFalse(got["new_authorization_granted"])
+
+    def test_goal_prerequisite_moves_to_artifact_acquisition_not_missing_path(self):
+        self._package_catalog()
+        artifact = self._bootstrap()
+        gap = {
+            "goal_policy": {"intent": "MUTATION_ALLOWED"},
+            "source_requirement": "REQUIRED",
+            "active_gaps": [{
+                "gap_id": "G1", "path": TARGET,
+                "status": "UNRESOLVED", "observation_status": "CONFIRMED",
+                "observed_value": False, "desired_value": True,
+                "observed_fact_ref": "ACT-TARGET-ABSENT",
+            }],
+        }
+        outcome = resolve_goal_prerequisites(gap, {"candidate_reads":[]},
+                                             {"candidates":[]}, {"sources":[]}, artifact)
+        self.assertEqual(outcome["next_category"], "RESOLVE_REGISTERED_SOURCE_ARTIFACT")
+        self.assertEqual(outcome["registered_artifact_count"], 1)
+        self.assertFalse(outcome["remote_access_authorized"])
+        self.assertFalse(outcome["artifact_integrity_verified"])
+        self.assertFalse(outcome["source_integrity_verified"])
+        self.assertFalse(outcome["write_authorization_granted"])
+
+    def test_unrelated_goal_and_required_entries_not_matched(self):
+        self._package_catalog()
+        self.assertEqual(self._bootstrap(
+            extract_target_contract(GOAL.replace(TARGET, r"E:\OtherDeployment"))
+        )["artifact_count"], 0)
+        self.assertEqual(self._bootstrap(
+            extract_target_contract(GOAL.replace("check_results.py", "different.py"))
+        )["artifact_count"], 0)
+
+    def test_no_catalog_is_a_distinct_state_not_source_absence(self):
+        got = self._bootstrap()
+        self.assertEqual(got["state"], "NO_REGISTERED_ARTIFACT")
+        self.assertEqual(got["catalog_status"], "NOT_FOUND")
+        self.assertFalse(got["source_location_known_as_reference"])
+
+    def test_corrupt_catalog_fails_closed(self):
+        dest = self.root / "config"
+        dest.mkdir()
+        (dest / "source_discovery_catalog.json").write_text(
+            '{"schema": "NOT_THE_EXPECTED_SCHEMA", "records": []}', encoding="utf-8",
+        )
+        got = self._bootstrap()
+        self.assertEqual(got["state"], "CATALOG_INVALID_OR_UNREADABLE")
+        self.assertEqual(got["catalog_status"], "INVALID")
+        self.assertEqual(got["artifact_count"], 0)
+
+    def test_register_requires_explicit_user_approval(self):
+        record = candidate_record()
+        blocked = register_source_artifact(
+            self.root, owner="telegram:one:one", instance="agent-instance",
+            workspace=self.work, record=record,
+        )
+        self.assertEqual(blocked["status"], "REJECTED")
+        self.assertEqual(self._bootstrap()["artifact_count"], 0)
+        recorded = register_source_artifact(
+            self.root, owner="telegram:one:one", instance="agent-instance",
+            workspace=self.work, record=record, explicitly_authorized=True,
+        )
+        self.assertEqual(recorded["status"], "RECORDED")
+        self.assertFalse(recorded["grants_access"])
+        self.assertFalse(recorded["grants_write"])
+        got = self._bootstrap()
+        self.assertEqual(got["artifact_count"], 1)
+        self.assertEqual(got["artifact_references"][0]["registration_origin"], "OWNER_REGISTRY")
+
+    def test_registered_records_do_not_cross_owner_workspace(self):
+        self.assertEqual(register_source_artifact(
+            self.root, owner="telegram:one:one", instance="agent-instance",
+            workspace=self.work, record=candidate_record(),
+            explicitly_authorized=True,
+        )["status"], "RECORDED")
+        other = bootstrap_source_discovery(
+            self.root, EXPECTED,
+            owner="telegram:another:chat", instance="agent-instance",
+            workspace=self.work,
+        )
+        self.assertEqual(other["artifact_count"], 0)
+        otherwork = bootstrap_source_discovery(
+            self.root, EXPECTED,
+            owner="telegram:one:one", instance="agent-instance",
+            workspace=str(self.root / "different-workspace"),
+        )
+        self.assertEqual(otherwork["artifact_count"], 0)
+
+    def test_invalid_relative_paths_or_moving_ref_rejected(self):
+        variants = [
+            {"commit": "main"},
+            {"path": "../unsafe.zip"},
+            {"path": "/root/unsafe.zip"},
+            {"path": "fixtures\\archive.zip"},
+            {"path": "fixtures/file.exe"},
+            {"git_blob_sha": "not-sha"},
+        ]
+        for updates in variants:
+            with self.subTest(updates=updates):
+                r = candidate_record()
+                r["artifact"].update(updates)
+                got = register_source_artifact(
+                    self.root, owner="telegram:one:one", instance="agent-instance",
+                    workspace=self.work, record=r, explicitly_authorized=True,
+                )
+                self.assertEqual(got["status"], "REJECTED")
+
+    def test_untrusted_catalog_values_are_not_tool_actions(self):
+        self._package_catalog()
+        candidate = self._bootstrap()["artifact_references"][0]
+        self.assertNotIn("command", candidate)
+        self.assertNotIn("local_path", candidate)
+        self.assertNotIn("tool", candidate)
+        self.assertEqual(candidate["next_prerequisite"],
+                         "CHECK_REMOTE_REPOSITORY_ACCESS_AND_AUTHORIZATION")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
