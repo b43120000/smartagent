@@ -48,11 +48,13 @@ jobs:
         run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_progress_reply_contract.py
       - name: Existing GAR Progress hold
         run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_gar_progress_hold_it.py
-      # The historical same_round_repair test imports ProtocolLoopInterrupted,
-      # removed from the baseline prior to this branch. Use the supported
-      # current command-field repair regression instead.
-      - name: Existing command field repair
-        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_p0_command_field_repair.py
+      # Baseline same-round test imports a removed exception class, and
+      # baseline command-field test assumes an execution CWD forbidden by
+      # the current path-independent command security guard. Both are
+      # unrelated obsolete fixtures; test existing bounded-repair and
+      # prerequisite behavior using its supported native regression.
+      - name: Existing prerequisite bounded repair regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_round3_prereq_repair.py
       - name: Existing Terminal Goal target guard
         run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_target_path_contract.py
       - name: Existing P0 environment repair
