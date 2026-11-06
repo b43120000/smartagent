@@ -84,4 +84,95 @@ def normalize_initial_progress(payload: Mapping, *, has_plan: bool,
     return out, report
 
 
-__all__ = ["SCHEMA", "normalize_initial_progress"]
+
+# The first FULL plan is not an accepted TaskProgressLedger until the entire
+# Progress + Action batch passes admission.  However, its Planner-authored
+# fields may be reused during a strictly format-only repair.  Never reuse a
+# decision, evidence_ref, scope, completion verdict, or actual action here.
+FIRST_FULL_PLAN_FIELDS = (
+    "base_evaluation", "total_steps", "current_step", "steps",
+    "completion_contract",
+)
+
+
+def _reusable_plan_field(name: str, value: object) -> bool:
+    import math
+    if name in {"total_steps", "current_step"}:
+        return (type(value) in {int, float} and math.isfinite(value)
+                and (value > 0 if name == "total_steps" else value >= 0))
+    if name == "base_evaluation":
+        return isinstance(value, str) and bool(value.strip())
+    if name == "steps":
+        return (isinstance(value, list) and 1 <= len(value) <= 32
+                and all(isinstance(row, dict) for row in value))
+    if name == "completion_contract":
+        return isinstance(value, dict) and bool(value)
+    return False
+
+
+def remember_unadmitted_first_full(
+    previous: Mapping | None, payload: Mapping, *,
+    request_id: str, task_epoch: str, round_id: int,
+) -> dict:
+    """Preserve only Planner-authored valid-shaped plan fields, without acceptance.
+
+    This cache is request/epoch bound and explicitly carries no executable
+    authority. Even after field merging, the entire proposal must pass the
+    normal Progress, commit, scope, Tool and evidence gates.
+    """
+    from copy import deepcopy
+    old = dict(previous or {})
+    if (old.get("request_id") != request_id
+            or old.get("task_epoch") != task_epoch):
+        old = {}
+    fields = deepcopy(dict(old.get("fields") or {}))
+    for name in FIRST_FULL_PLAN_FIELDS:
+        if name in payload and _reusable_plan_field(name, payload[name]):
+            fields[name] = deepcopy(payload[name])
+    if not fields:
+        return {}
+    return {
+        "schema": "SMARTAGENT_UNADMITTED_FIRST_FULL_DRAFT_V1",
+        "request_id": request_id,
+        "task_epoch": task_epoch,
+        "source_round": int(round_id),
+        "fields": fields,
+        "admitted": False, "executed": False,
+        "authorization_granted": False, "evidence_created": False,
+    }
+
+
+def materialize_unadmitted_first_full(
+    payload: Mapping, draft: Mapping | None, *,
+    request_id: str, task_epoch: str, field_repair_active: bool,
+) -> tuple[dict, list[str]]:
+    """Fill omitted bootstrap plan fields only in a genuine field-repair turn.
+
+    An explicit PATCH is never secretly promoted into FULL.  The Planner must
+    choose FULL while no accepted ledger exists.  A conflicting explicit value
+    is preserved for normal validation; never silently overwrite it.
+    """
+    from copy import deepcopy
+    result = deepcopy(dict(payload))
+    old = dict(draft or {})
+    if (not field_repair_active
+            or old.get("request_id") != request_id
+            or old.get("task_epoch") != task_epoch
+            or result.get("tool") != "report_progress"
+            or str(result.get("decision", "")).upper() != "CONTINUE"
+            or str(result.get("outcome", "PENDING")).upper() != "PENDING"
+            or result.get("progress_update", "FULL") != "FULL"):
+        return result, []
+    filled = []
+    for name in FIRST_FULL_PLAN_FIELDS:
+        if name not in result and name in (old.get("fields") or {}):
+            result[name] = deepcopy(old["fields"][name])
+            filled.append(name)
+    return result, filled
+
+
+__all__ = [
+    "SCHEMA", "normalize_initial_progress", "FIRST_FULL_PLAN_FIELDS",
+    "remember_unadmitted_first_full", "materialize_unadmitted_first_full",
+]
+
