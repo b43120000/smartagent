@@ -666,56 +666,137 @@ def _recover_page(scraper,record):
         sent_count=len(delivered),draft_cleanup='OWNED_DRAFT_CLEARED',observation=final)
 
 
-def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
-                          clock=None, sleep=None):
-    """Bounded, strictly read-only DOM verification after ONE keyboard write.
+def _composer_readback_sample(scraper, expected):
+    """Read all DOM views, retaining content in memory only (never in journals)."""
+    try:
+        candidates = scraper._read_composer_text_candidates()
+    except Exception:
+        return None
+    if not candidates:
+        return None
+    from .web_ui.providers.chatgpt.composer import canonical_composer_text
+    target = canonical_composer_text(expected)
+    values = [canonical_composer_text(value) for value in candidates]
+    def overlap(value):
+        return next(
+            (index for index, (left, right) in enumerate(zip(target, value))
+             if left != right), min(len(target), len(value))
+        )
+    chosen = max(values, key=overlap)
+    return {
+        "values": values,
+        "chosen": chosen,
+        "sample_hash": hashlib.sha256(
+            json.dumps(values, ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+    }
 
-    Never type again or treat a timeout as success. The returned/raised
-    diagnostics contain only counts, SHA-256 digests, and error class names.
+
+def _composer_readback_diff(expected, sample, *, confirmed_chars=0):
+    """Bounded, content-free first-difference and owned-prefix diagnostics."""
+    from .web_ui.providers.chatgpt.composer import canonical_composer_text
+    expected = canonical_composer_text(expected)
+    observed = sample["chosen"]
+    first = next(
+        (index for index, (left, right) in enumerate(zip(expected, observed))
+         if left != right), min(len(expected), len(observed))
+    )
+    suffix = 0
+    while (suffix < min(len(expected), len(observed)) - first
+           and expected[len(expected)-suffix-1] == observed[len(observed)-suffix-1]):
+        suffix += 1
+    return {
+        "first_diff_index": first,
+        "common_prefix_chars": first,
+        "common_suffix_chars": suffix,
+        "observed_length": len(observed),
+        "observed_sha256": hashlib.sha256(observed.encode()).hexdigest(),
+        "confirmed_prefix_intact": observed.startswith(expected[:confirmed_chars]),
+        "diff_class": (
+            "INSERTION" if first == len(expected) and len(observed) > len(expected)
+            else "TRUNCATION" if first == len(observed) and len(expected) > len(observed)
+            else "REPLACEMENT" if first < min(len(expected), len(observed))
+            else "NONE"
+        ),
+    }
+
+
+def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
+                          clock=None, sleep=None, confirmed_chars=0):
+    """Read-only verification: two consecutive matches, or bounded failure.
+
+    DOM observations may lag behind insert_text; no unconfirmed batch is
+    considered committed and the verifier never retypes or submits content.
     """
     clock = clock or time.monotonic
     sleep = sleep or time.sleep
     started = clock()
     deadline = started + max(0.01, float(timeout_sec))
     attempts = 0
+    matching_streak = 0
+    stable_mismatch_streak = 0
+    last_observation_hash = None
+    last_sample = None
     read_error = None
     while True:
         attempts += 1
+        matched = False
         try:
-            if scraper._composer_matches_prompt(prefix):
-                return dict(attempts=attempts,
-                            elapsed_sec=round(clock()-started, 3))
+            matched = bool(scraper._composer_matches_prompt(prefix))
             read_error = None
         except Exception as exc:
-            # No retry of the writer: transient read-only DOM observations
-            # may be sampled again within the same finite deadline.
             read_error = type(exc).__name__
+        sample = _composer_readback_sample(scraper, prefix)
+        if sample is not None:
+            if sample["sample_hash"] == last_observation_hash:
+                stable_mismatch_streak += 1
+            else:
+                stable_mismatch_streak = 1
+            last_observation_hash = sample["sample_hash"]
+            last_sample = sample
+        else:
+            stable_mismatch_streak = 0
+            last_observation_hash = None
+        if matched:
+            matching_streak += 1
+            if matching_streak >= 2:
+                return {
+                    "attempts": attempts,
+                    "elapsed_sec": round(clock()-started, 3),
+                    "consecutive_matches": matching_streak,
+                }
+        else:
+            matching_streak = 0
         remaining = deadline-clock()
         if remaining <= 0:
             break
         sleep(min(.20, remaining))
-
-    # _composer_matches_prompt() records the most recent strict adapter
-    # validation. Whitelist only scalar lengths and validated digest strings;
-    # never persist any composer text or prompt fragment in the journal.
-    info = dict(attempts=attempts,
-                timeout_sec=round(max(0.01, float(timeout_sec)), 3),
-                elapsed_sec=round(clock()-started, 3),
-                expected_prefix_chars=len(prefix),
-                expected_prefix_sha256=hashlib.sha256(prefix.encode()).hexdigest())
-    validation = getattr(scraper, '_last_composer_validation', None)
+    info = {
+        "attempts": attempts,
+        "timeout_sec": round(max(0.01, float(timeout_sec)), 3),
+        "elapsed_sec": round(clock()-started, 3),
+        "expected_prefix_chars": len(prefix),
+        "expected_prefix_sha256": hashlib.sha256(prefix.encode()).hexdigest(),
+        "stable_readback": stable_mismatch_streak >= 2,
+        "stable_observations": stable_mismatch_streak,
+    }
+    if last_sample is not None:
+        info.update(_composer_readback_diff(
+            prefix, last_sample, confirmed_chars=confirmed_chars
+        ))
+    validation = getattr(scraper, "_last_composer_validation", None)
     if validation is not None:
-        for key in ('expected_length', 'observed_length'):
+        for key in ("expected_length", "observed_length"):
             value = getattr(validation, key, None)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                info[key] = value
-        for key in ('expected_sha256', 'observed_sha256'):
+                info.setdefault(key, value)
+        for key in ("expected_sha256", "observed_sha256"):
             value = getattr(validation, key, None)
-            if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value):
-                info[key] = value
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value):
+                info.setdefault(key, value)
     if read_error:
-        info['last_read_error_type'] = read_error
-    raise ComposerOperationError('composer_chunk_readback_failed', info)
+        info["last_read_error_type"] = read_error
+    raise ComposerOperationError("composer_chunk_readback_failed", info)
 
 
 def _composer_write_units(prompt):
