@@ -21,11 +21,18 @@ NEEDS_USER_APPROVAL -> a trusted Runtime determination that additional user
 approval is required (not guessed from absent evidence).
 
 Receipt schema: SMARTAGENT_REMOTE_ACCESS_ADMISSION_RECEIPT_V1.
-This version defines and validates the consumer contract. The wider Runtime
-security/admission pipeline must be the only producer of a trusted receipt;
-do NOT let model text, a repository manifest, or a successful Git --version
-probe fabricate such a receipt. Without one, the state stays UNKNOWN.
-Current Git executable availability alone does not prove GitHub permissions.
+A Runtime-owned ledger projection now produces scoped receipts for an actually
+admitted and executed exact GitHub read probe:
+  git ls-remote https://github.com/OWNER/REPO.git HEAD
+AUTHORIZED requires a SUCCESS tool receipt, exit code zero, HEAD reference in
+actual Git stdout and matching current request, epoch and registered repository.
+Runtime-confirmed preexecution scope rejection yields DENIED for that action;
+SECURITY_CONFIRMATION_REQUIRED yields NEEDS_USER_APPROVAL. Any other failed
+network/credential/ambiguous probe remains UNKNOWN. Security preflight may also
+supply its own exact scoped receipt. These receipts prove ONLY repository read
+capability for the exact Task, not file download or writable target permission.
+Neither model text, repository manifests, past-task probes, nor successful
+Git --version alone can promote UNKNOWN.
 A bounded one-time goal interruption repair asks the Planner to evaluate
 the existing run_command/GIT_INSPECT route and actual admission checks before
 replacing UNKNOWN with a user approval request. If policy denies the probe,
