@@ -10,6 +10,7 @@ from __future__ import annotations
 import unittest
 
 from agent_core.conditional_goal_policy import conditional_goal_policy
+from agent_core.context_acquisition import context_interrupt_allowed
 from agent_core.goal_gap_ledger import reconstruct_goal_gaps
 from agent_core.interrupt_readiness import (
     interrupt_readiness, proposed_interrupt_constraint, _read_attempts,
@@ -175,6 +176,28 @@ class ConditionalGoalCaseD(unittest.TestCase):
         self.assertEqual(after["candidate_count"], 0)
         self.assertEqual(after["next_safe_category"],
                          "USER_INPUT_OR_OBJECTIVE_BLOCKER_IF_NEEDED")
+
+    def test_context_upload_gate_respects_exhausted_scope(self):
+        request = {
+            "kind": "USER_INPUT",
+            "detail": "請提供目前授權路徑以外的檔案內容",
+        }
+        caps = {
+            "authorized_paths": [ROOT],
+            "discovery_paths": [ROOT],
+            "read_tools": ["inspect_directory", "read_file"],
+            "objective_blockers": [],
+        }
+        # Legacy context has not received a grounded readiness view.
+        self.assertFalse(context_interrupt_allowed(request, caps))
+        # The exact authorized root was confirmed missing, with no other
+        # scoped reads. A true user question must remain possible.
+        caps["grounded_scoped_read_candidate_count"] = 0
+        self.assertTrue(context_interrupt_allowed(request, caps))
+        # Conversely, a truly available scoped read cannot be disguised as
+        # asking the user to upload the same readable material.
+        caps["grounded_scoped_read_candidate_count"] = 1
+        self.assertFalse(context_interrupt_allowed(request, caps))
 
     def test_no_invented_gap_from_failed_unexecuted_list(self):
         r = runtime(goal=CASE_D)
