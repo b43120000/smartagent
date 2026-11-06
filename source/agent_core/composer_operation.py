@@ -747,6 +747,7 @@ def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
             read_error = None
         except Exception as exc:
             read_error = type(exc).__name__
+        previous_sample_hash = last_observation_hash
         sample = _composer_readback_sample(scraper, prefix)
         if sample is not None:
             if sample["sample_hash"] == last_observation_hash:
@@ -759,7 +760,13 @@ def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
             stable_mismatch_streak = 0
             last_observation_hash = None
         if matched:
-            matching_streak += 1
+            # An equality result cannot advance the checkpoint while the
+            # complete DOM representation is still changing.
+            if (sample is not None and previous_sample_hash is not None
+                    and sample["sample_hash"] != previous_sample_hash):
+                matching_streak = 1
+            else:
+                matching_streak += 1
             if matching_streak >= 2:
                 return {
                     "attempts": attempts,
@@ -1117,6 +1124,13 @@ def _attempt_bounded_composer_repair(scraper, prompt, record, journal, *,
             return None
     except Exception:
         return None
+    # A previous confirmed prefix belongs to the old editor transaction.
+    # Never present it as a checkpoint for the new empty draft.
+    record["composer_repair"]["previous_confirmed_prefix"] = (
+        record.get("confirmed_prefix") or {}
+    )
+    record.pop("confirmed_prefix", None)
+    record.pop("pending_prefix", None)
     record["composer_repair"].update(
         state="RESET_CONFIRMED", mode="OWNED_SINGLE_RESTART_SMALLER_BATCH")
     write_json_atomic(journal, record)
