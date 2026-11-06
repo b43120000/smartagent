@@ -183,7 +183,7 @@
     "source/agent_core/source_reference_index.py": "f0a21842e6164fec684e0a83d4457effaf4f52ca1e22160f95102bf75f6e11d9",
     "source/agent_core/stage_result.py": "6e37aee642656c69bd9b86eda896c2c8d465c75228788ffea95c9410cd696906",
     "source/agent_core/strict_observation_guard.py": "9388d38dcd8546ffb8d98c90110fb92bd9e0530dc8f4605e1edbcba936fc81ad",
-    "source/agent_core/target_path_contract.py": "47f3d13451aa4a0154064fac133fc2f7e72d8c1360c9fef7445d81013f11d5b7",
+    "source/agent_core/target_path_contract.py": "27a30beb46db8ca953a3d0d180a12baa935cd968b68076cd52bca344bf347a6d",
     "source/agent_core/task_continuation.py": "6359297d4576b36cc69bc0b8227a52a133c5844864eb2b677eecef74e1c1128b",
     "source/agent_core/task_plan.py": "390f01fa76c88b6afd66b76385216aaa4157e43875786628d265610ceec736fb",
     "source/agent_core/task_progress.py": "1de28ce240f6b18dad9a176a709569ef1883f2d8bc563772b277326aa202caf5",
