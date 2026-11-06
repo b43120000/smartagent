@@ -4910,6 +4910,26 @@ class WebAgentProtocolLoop:
             from agent_core.context_acquisition import context_interrupt_allowed
             capabilities = self._context_capabilities()
             request = normalized_progress.get('context_request') or {}
+            from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+            from agent_core.interrupt_readiness import (
+                interrupt_readiness, proposed_interrupt_constraint,
+            )
+            gap_view = reconstruct_goal_gaps(self)
+            interruption_view = interrupt_readiness(gap_view, capabilities)
+            self._emit(
+                "goal_interrupt_readiness_evaluated",
+                request_id=self.run_id,
+                round=self.turn_id,
+                context_kind=str(request.get("kind", "") or ""),
+                active_goal_gap_count=int(gap_view.get("active_count", 0)),
+                scoped_read_candidate_count=interruption_view["candidate_count"],
+                next_safe_category=interruption_view["next_safe_category"],
+                write_authorization_granted=False,
+                tool_executed=False,
+            )
+            interrupt_diagnostic = proposed_interrupt_constraint(request, interruption_view)
+            if interrupt_diagnostic:
+                return [], [interrupt_diagnostic]
             spec = self._safe_protocol_spec_rejection()
             if (spec and request.get('kind') == 'BLOCKED'
                     and request.get('blocking_action_id') == spec['action_id']):
