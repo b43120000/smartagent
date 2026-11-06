@@ -1,0 +1,54 @@
+name: Git23 Composer Integrity and Canonical Rewrite Rules
+
+on:
+  push:
+    branches:
+      - git23/composer-readback-repair-rewrite-rules-20261107
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  git23-offline:
+    name: Git23 offline regression ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install minimal offline-test import dependency
+        run: python -m pip install --disable-pip-version-check playwright
+      - name: Compile affected Python source
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/composer_operation.py
+          source/agent_core/web_runtime.py
+          source/agent_core/action_resolution_trace.py
+          source/agent_core/planner_context_snapshot.py
+          source/agent_core/web_ui/providers/chatgpt/composer.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_git23_composer_integrity_and_rewrite.py
+      - name: Git23 strict whitespace, bounded repair and canonical rewrite rules
+        run: python -B source/WebAgent/tests/test_git23_composer_integrity_and_rewrite.py
+      - name: Existing composer writer regression
+        run: python -B source/WebAgent/tests/validate_composer_operation.py
+      - name: Existing composer rich-link roundtrip
+        run: python -B source/WebAgent/tests/validate_composer_rich_link_matching.py
+      - name: Unsafe verification gate cannot bypass
+        run: python -B source/WebAgent/tests/validate_unsafe_composer_verification_bypass.py
+      - name: Existing action resolution and missing-target regression
+        run: python -B source/WebAgent/tests/test_action_resolution_trace_and_missing_target.py
+      - name: Existing composer mismatch diagnostics
+        run: python -B source/WebAgent/tests/validate_composer_mismatch_diagnostics.py
