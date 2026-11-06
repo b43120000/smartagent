@@ -3891,6 +3891,22 @@ class WebAgentProtocolLoop:
             self._emit('action_numeric_fields_normalized', request_id=self.run_id, round=self.turn_id, block_indexes=numeric_changes)
         calls = normalized
         pending = [dict(action) for action in self.pending_progress_repair_actions]
+        # A CCRC Goal-Replan handoff must not impose obsolete, never-admitted
+        # field-repair holds on the newly reconstructed plan. No tool result
+        # or authorization is produced by releasing the hold.
+        if (pending and getattr(getattr(self, "_ccrc", None),
+                                "replan_required", False)
+                and not any(item.get("action_id") in self.action_ledger
+                            or item.get("action_id") in self.action_result_ledger
+                            for item in pending)):
+            self.pending_progress_repair_actions = []
+            self._emit(
+                "ccrc_replan_unadmitted_hold_released",
+                request_id=self.run_id, round=self.turn_id,
+                action_ids=[item["action_id"] for item in pending],
+                executed=False, authorization_granted=False,
+            )
+            return calls
         if pending:
             from agent_core.progress_recovery import progress_repair_hold_safe
             used_ids = set(self.action_ledger) | set(self.action_result_ledger)
@@ -3907,9 +3923,41 @@ class WebAgentProtocolLoop:
             if action.get("tool") != "report_progress"
         ]
         pending_by_id = {str(item.get('action_id', '')): item for item in pending}
-        if any(str(item.get('action_id', '')) not in pending_by_id
-               or semantic_action_signature(item) != semantic_action_signature(pending_by_id[str(item.get('action_id', ''))])
-               for item in submitted):
+        # A format-only repair may echo the same unexecuted Action under a
+        # fresh ID. Correlate only a unique, byte-for-byte semantic match with
+        # identical dependency/replacement fields. Restore the Runtime-held
+        # original identity; never execute a new command or replay a result.
+        unknown = []
+        used = set()
+        for submitted_action in submitted:
+            aid = str(submitted_action.get("action_id", "") or "")
+            matched = pending_by_id.get(aid)
+            if matched is None:
+                matches = [candidate for candidate in pending
+                           if candidate["action_id"] not in used
+                           and semantic_action_signature(candidate)
+                           == semantic_action_signature(submitted_action)
+                           and candidate.get("depends_on") == submitted_action.get("depends_on")
+                           and candidate.get("replaces_action_id")
+                           == submitted_action.get("replaces_action_id")]
+                if len(matches) != 1:
+                    unknown.append(aid)
+                    continue
+                matched = matches[0]
+                self._emit("progress_repair_unadmitted_action_identity_restored",
+                           request_id=self.run_id, round=self.turn_id,
+                           restored_action_id=matched["action_id"],
+                           executed=False, authorization_granted=False)
+            if (matched["action_id"] in used
+                    or semantic_action_signature(submitted_action)
+                    != semantic_action_signature(matched)
+                    or submitted_action.get("depends_on") != matched.get("depends_on")
+                    or submitted_action.get("replaces_action_id")
+                    != matched.get("replaces_action_id")):
+                unknown.append(aid)
+            else:
+                used.add(matched["action_id"])
+        if unknown:
             return calls
         # A partial repair reply may echo only one of several held actions.
         # Restore the entire original order without executing any action here.
@@ -4113,6 +4161,23 @@ class WebAgentProtocolLoop:
         )
         if wrapper_diagnostic:
             return [], [wrapper_diagnostic]
+        from agent_core.initial_progress_normalization import normalize_initial_progress
+        from agent_core.progress_reply_contract import has_accepted_plan
+        normalized_progress_action, bootstrap_normalization = normalize_initial_progress(
+            normalized_progress_action,
+            has_plan=has_accepted_plan(self.progress_ledger),
+            action_result_count=len(self.action_result_ledger),
+        )
+        if bootstrap_normalization["applied"]:
+            self._emit(
+                "initial_progress_deterministic_normalization",
+                request_id=self.run_id, task_id=self.task_id, round=self.turn_id,
+                fields=bootstrap_normalization["normalized_fields"],
+                status_marker_only=bootstrap_normalization["status_marker_only"],
+                action_executed=False, terminal_evidence_created=False,
+                authorization_granted=False,
+            )
+
         # Shared Tri-One Completion Contract: only the trusted, no-action,
         # exclusive final_response terminal may omit evidence_refs. This is
         # transport-neutral (Telegram/WebCopilot/Local Test) and does not

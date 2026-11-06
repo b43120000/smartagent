@@ -25,7 +25,7 @@ def ensure_webagent_session(
     state_dir: str | Path,
     send_prompt: Callable[..., str],
     display_name: str = "WebAgent",
-    allow_scoped_marker_only_bootstrap: bool = False,
+    allow_scoped_marker_only_bootstrap: bool = True,
 ) -> dict:
     state_root = Path(state_dir)
     state_root.mkdir(parents=True, exist_ok=True)
@@ -52,13 +52,17 @@ def ensure_webagent_session(
         full_identity_ready = session.parse_protocol_ready(
             response, session_id=decision.session_id, allow_smart_quotes=claude_quotes
         )
+        scoped_marker_ready = bool(
+            allow_scoped_marker_only_bootstrap
+            and session.parse_protocol_ready_marker_only(response)
+        )
         first_marker_only = str(response or "").strip() == f"[{PROTOCOL_READY_MARKER}]"
         compact_identity_ready = False
         # The browser must finish its UI/response stability gate before this
         # parser runs. Correct an incomplete FORMAT at most once, without
         # replaying the full bootstrap or executing any task action.
         # An otherwise complete identity mismatch is never retried.
-        if not full_identity_ready:
+        if not (full_identity_ready or scoped_marker_ready):
             reason_code = session.protocol_ready_failure_reason(
                 response, session_id=decision.session_id,
                 allow_smart_quotes=claude_quotes,
@@ -80,7 +84,11 @@ def ensure_webagent_session(
                     repaired, session_id=decision.session_id,
                     allow_smart_quotes=claude_quotes,
                 )
-                if not full_identity_ready:
+                scoped_marker_ready = bool(
+                    allow_scoped_marker_only_bootstrap
+                    and session.parse_protocol_ready_marker_only(repaired)
+                )
+                if not (full_identity_ready or scoped_marker_ready):
                     reason_code = session.protocol_ready_failure_reason(
                         repaired, session_id=decision.session_id,
                         allow_smart_quotes=claude_quotes,
@@ -112,9 +120,10 @@ def ensure_webagent_session(
                         )
                         if not compact_identity_ready:
                             reason_code = "READY_COMPACT_IDENTITY_MISMATCH"
-        # The legacy marker-only flag is retained for call compatibility only.
-        # A complete matching identity is mandatory, including for Claude.
-        if not (full_identity_ready or compact_identity_ready):
+        # Scoped marker acceptance only applies to the awaited BOOTSTRAP
+        # handshake on the already-bound conversation. Never accept a
+        # marker as an Action ACK, task response, or SESSION_ATTACH identity.
+        if not (full_identity_ready or compact_identity_ready or scoped_marker_ready):
             registry.set_protocol_state(
                 workspace,
                 gpt_url,
@@ -127,13 +136,21 @@ def ensure_webagent_session(
             )
         state = session.armed_state(session_id=decision.session_id)
         state["readiness_mode"] = (
-            "COMPACT_FULL_IDENTITY" if compact_identity_ready else "FULL_IDENTITY"
+            "FULL_IDENTITY" if full_identity_ready
+            else "COMPACT_FULL_IDENTITY" if compact_identity_ready
+            else "SCOPED_MARKER_ONLY"
         )
-        state["readiness_identity_verified"] = True
+        state["readiness_identity_verified"] = bool(
+            full_identity_ready or compact_identity_ready
+        )
+        state["readiness_transport_scoped"] = bool(scoped_marker_ready)
+        # Marker-only does not cryptographically echo protocol/session identity.
+        # Registry identity is the Runtime's locally bound context, NOT a
+        # model-verified identity; keep the distinction explicit.
         registry.set_protocol_state(workspace, gpt_url, WEBAGENT_PROTOCOL_NAME, state)
         print(
             f"[{display_name}] 協議初始化成功，mode={state['readiness_mode']} "
-            "matching protocol and session identity.",
+            "readiness accepted in trusted bootstrap exchange.",
             flush=True,
         )
         return {"mode": BOOTSTRAP, "reason": reason, "state": state}

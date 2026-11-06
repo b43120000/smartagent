@@ -6,6 +6,7 @@ It never moves, overwrites, creates, or grants access to files.
 from __future__ import annotations
 
 import hashlib
+import ntpath
 import json
 import os
 import re
@@ -21,7 +22,7 @@ SCHEMA = "SMARTAGENT_TARGET_PATH_CONTRACT_V1"
 _LABEL = re.compile(
     r"(?:預期部署根目錄|指定部署根目錄|目標部署根目錄|部署根目錄|指定部署路徑|"
     r"目標部署路徑|預期部署路徑|expected deployment root|deployment target root|"
-    r"deployment root|target deployment path)\s*[:：]\s*"
+    r"deployment root|target deployment path)\s*[:：]\s*(?:\*\*)?\s*[\x60\x22\x27\u201c]?"
     r"(?P<path>[A-Za-z]:[\\/][^\s\`\"'<>|?*，,。;；)\]]+|/[^\s\`\"'<>|?*，,。;；)\]]+)",
     re.IGNORECASE,
 )
@@ -74,14 +75,31 @@ def extract_target_contract(request: str) -> dict | None:
         intent, re.IGNORECASE | re.DOTALL)
     if readonly and not followed_by_mutation:
         return None
-    matches = [m.group("path").rstrip("\\/") for m in _LABEL.finditer(text)]
-    matches.extend(m.group("path").rstrip("\\/") for expression in
+    def clean_match(value: str) -> str:
+        # Preserve Windows drive roots, e.g. E:\\, rather than turning
+        # them into ambiguous drive-relative E:.
+        return value if re.fullmatch(r"[A-Za-z]:[\\/]", value) else value.rstrip("\\/")
+    matches = [clean_match(m.group("path")) for m in _LABEL.finditer(text)]
+    matches.extend(clean_match(m.group("path")) for expression in
                    (_EXPLICIT_VERB_TARGET, _EXPLICIT_IN_TARGET)
                    for m in expression.finditer(text))
-    if not matches:
+    # A deployment label is a declared destination contract even when the
+    # path is malformed or wrapped unexpectedly. Never silently disable the
+    # terminal gate after failing to extract the requested target.
+    if not matches and not re.search(
+        r"(?:預期部署根目錄|指定部署根目錄|目標部署根目錄|部署根目錄|"
+        r"指定部署路徑|目標部署路徑|預期部署路徑|"
+        r"expected deployment root|deployment target root|deployment root|"
+        r"target deployment path)\s*[:：]",
+        text, re.IGNORECASE,
+    ):
         return None
-    normalized = {os.path.normcase(os.path.normpath(p)) for p in matches}
-    path = matches[0] if len(normalized) == 1 else ""
+    def normalize_target(value: str) -> str:
+        return (ntpath.normcase(ntpath.normpath(value))
+                if re.match(r"^[A-Za-z]:[\\/]", value)
+                else os.path.normcase(os.path.normpath(value)))
+    normalized = {normalize_target(p) for p in matches}
+    path = matches[0] if matches and len(normalized) == 1 else ""
     items = []
     for section in _ENTRIES.findall(text):
         for token in re.split(r"[,，、;；\s]+", section):
