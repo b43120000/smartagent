@@ -285,6 +285,7 @@ def build_planner_context_snapshot(runtime) -> dict:
     goal_transition_readiness = build_transition_readiness(runtime)
     gap_view = reconstruct_goal_gaps(runtime)
     source_view = build_source_candidate_ledger(runtime, gap_view)
+    artifact_view = getattr(runtime, "_source_discovery_bootstrap", None) or {}
     source_integrity_view = reconcile_source_integrity(runtime, source_view)
     interruption_view = interrupt_readiness(
         gap_view, caps, attempted_reads=_read_attempts(runtime),
@@ -292,6 +293,7 @@ def build_planner_context_snapshot(runtime) -> dict:
     )
     prerequisite_view = resolve_goal_prerequisites(
         gap_view, interruption_view, source_view, source_integrity_view,
+        artifact_view,
     )
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
@@ -306,6 +308,7 @@ def build_planner_context_snapshot(runtime) -> dict:
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,
         "source_candidate_ledger": source_view,
+        "source_discovery_bootstrap": artifact_view,
         "historical_source_bootstrap": {
             "index_status": source_view.get("historical_index_status", "UNKNOWN"),
             "bootstrap_state": source_view.get("historical_bootstrap_state", "UNKNOWN"),
@@ -448,6 +451,11 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "within authorized read scope before proposing a deployment. "
             "No candidate grants access or verifies source integrity. "
             "source_candidate_ledger holds provenance-bound leads only; "
+            "source_discovery_bootstrap may contain pinned repository artifacts; these "
+            "are only E1 references and require separate remote access authorization, "
+            "archive acquisition, SHA256/Git blob verification, and normal target "
+            "write admission. A registered remote artifact is NOT a local path, "
+            "does NOT authorize network access and does NOT satisfy D4 observation. "
             "historical_source_bootstrap reports INDEX_NOT_FOUND versus INDEX_EMPTY, "
             "INDEX_INVALID, INDEX_HIT or recovered leads. Prior E1 user-labeled "
             "paths and E2 historic Runtime receipts are NOT current observations; "
