@@ -178,11 +178,11 @@ class ActionResolutionTraceTests(unittest.TestCase):
             directory_record,
         )
         from agent_core.target_path_contract import extract_target_contract
-        root = r"E:\\SmartAgent_GoalDriven_IT_GH_v1"
+        root = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
         goal = (
-            "請完成 Case D 部署。\\n預期部署根目錄：\\n" + root
-            + "\\n預期包含：case_a、case_b、case_c、fixture_manifest.json、check_results.py。"
-            + "\\n若缺少則補齊，不得覆蓋。"
+            "請完成 Case D 部署。\n預期部署根目錄：\n" + root
+            + "\n預期包含：case_a、case_b、case_c、fixture_manifest.json、check_results.py。"
+            + "\n若缺少則補齊，不得覆蓋。"
         )
         fake = FakeRuntime()
         fake.task_request = goal
