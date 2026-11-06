@@ -277,8 +277,11 @@ def build_planner_context_snapshot(runtime) -> dict:
                    if isinstance(row, Mapping)]
     from .goal_strategy_transition import build_transition_readiness
     from .goal_gap_ledger import reconstruct_goal_gaps
+    from .interrupt_readiness import interrupt_readiness
     from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
+    gap_view = reconstruct_goal_gaps(runtime)
+    interruption_view = interrupt_readiness(gap_view, caps)
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
         "schema": SCHEMA,
@@ -288,7 +291,8 @@ def build_planner_context_snapshot(runtime) -> dict:
             action_history_count=len(actions),
         ),
         "goal_transition_readiness": goal_transition_readiness,
-        "persistent_goal_gaps": reconstruct_goal_gaps(runtime),
+        "persistent_goal_gaps": gap_view,
+        "interrupt_readiness": interruption_view,
         "goal": {
             "status": "INCOMPLETE" if getattr(progress, "decision", "CONTINUE") == "CONTINUE" else
                       _code(getattr(progress, "decision", ""), "UNKNOWN"),
@@ -417,6 +421,10 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "a new rejected read does not erase an earlier confirmed absence. "
             "Do not choose query_project or another existing-workspace reader for a known absent root. "
             "Discovery may be a valid prerequisite step even when it does not directly complete the Goal. "
+            "A staged read-only inspection does not forbid conditionally authorized later repair. "
+            "An absent goal target does not authorize a parent/sibling read or a write. "
+            "interrupt_readiness offers scoped read candidates only, not admission. "
+            "Use USER_INPUT for genuinely missing approval/source location when no scoped read remains. "
             "An optional report_progress.goal_transition must bind a declared Goal condition "
             "to a current Runtime evidence_ref; no such proposal authorizes tools. "
             "A denied read is not proof of a missing directory. For a project workspace "
