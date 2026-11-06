@@ -6959,6 +6959,22 @@ class WebAgentProtocolLoop:
                         ccrc_decision,
                         accepted_plan=has_accepted_plan(self.progress_ledger),
                     )
+                # A rejected Progress-only turn can still need tool-capability
+                # guidance.  Keep this advisory separate from Admission: it
+                # never invents an Action or asserts that any Tool ran.
+                rejected_progress = next(
+                    (item for item in calls
+                     if isinstance(item, dict)
+                     and item.get("tool") == "report_progress"), {},
+                )
+                advisory_progress, _ = self._normalize_report_progress_envelope(
+                    rejected_progress, self.progress_ledger,
+                )
+                capability_note = self._progress_capability_guidance(
+                    advisory_progress or rejected_progress,
+                )
+                if capability_note:
+                    repair_note += "\n" + capability_note
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
                     + format_tool_parse_diagnostics(ack_diagnostics)
