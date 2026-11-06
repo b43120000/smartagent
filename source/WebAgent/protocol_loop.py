@@ -5905,6 +5905,37 @@ class WebAgentProtocolLoop:
             request_id=self.run_id, task_epoch=self.task_epoch,
             round_id=self.turn_id,
         )
+        # Emit a bounded, credential-safe lifecycle receipt on real dispatch.
+        # The full original/canonical/dispatched commands stay in the Runtime
+        # provenance ledger and only safe projections reach Planner context.
+        from agent_core.action_resolution_trace import executed_trace
+        trace = executed_trace(
+            provenance,
+            rewrite_info=self._runtime_action_rewrite_notes.get(action_id),
+            request_id=self.run_id, task_epoch=self.task_epoch,
+        )
+        if trace is not None:
+            execution = trace["execution"]
+            resolution = trace["runtime_resolved"]
+            self._emit(
+                "action_resolution_recorded",
+                request_id=self.run_id, round=self.turn_id,
+                action_id=action_id, tool=str(action.get("tool") or ""),
+                disposition=resolution["disposition"],
+                changed_fields=resolution.get("changed_fields", []),
+                rewrite_reason_code=resolution.get("rewrite_reason_code", ""),
+                original_command_sha256=(
+                    (trace.get("planner_requested") or {}).get("command_sha256", "")
+                ),
+                dispatched_command_sha256=(
+                    (execution.get("dispatched_action") or {}).get("command_sha256", "")
+                ),
+                execution_status=execution["status"],
+                executed=execution["executed"],
+                evidence_kind="ACTUAL_TOOL_RESULT",
+                execution_evidence_ref=execution.get("execution_evidence_ref", ""),
+                grant_created=False,
+            )
         self.action_ledger[action_id] = {
             "provenance": provenance,
             "signature": signature,
