@@ -315,6 +315,18 @@ def build_planner_context_snapshot(runtime) -> dict:
         gap_view, interruption_view, source_view, source_integrity_view,
         artifact_view, remote_access_view,
     )
+    from .action_resolution_trace import (
+        deployment_path_prerequisites, bounded_action_trace_projection,
+    )
+    path_prerequisites = deployment_path_prerequisites(
+        getattr(runtime, "_target_path_contract", None), gap_view,
+    )
+    action_resolution_traces = bounded_action_trace_projection(
+        getattr(runtime, "_rejected_action_resolution_traces", None), actions,
+        rewrite_ledger=getattr(runtime, "_runtime_action_rewrite_notes", None),
+        request_id=str(getattr(runtime, "run_id", "") or ""),
+        task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
+    )
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
         "schema": SCHEMA,
@@ -327,6 +339,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         "persistent_goal_gaps": gap_view,
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,
+        "deployment_path_prerequisites": path_prerequisites,
+        "action_resolution_trace": action_resolution_traces,
         "source_candidate_ledger": source_view,
         "source_discovery_bootstrap": artifact_view,
         "remote_artifact_access_readiness": remote_access_view,
@@ -466,6 +480,19 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "Goal Transition Readiness only classifies evidence: Planner decides any changed strategy. "
             "persistent_goal_gaps retains verified missing prerequisites across later failures; "
             "a new rejected read does not erase an earlier confirmed absence. "
+            "deployment_path_prerequisites distinguishes an absent deployment "
+            "destination from an executable command CWD. A Git clone destination "
+            "may be absent, while its parent and write permission must be verified; "
+            "remote Git inspection needs an existing admitted CWD, not the absent "
+            "deployment destination. Absence never grants creation permission. "
+            "action_resolution_trace preserves Planner-requested, Runtime-rewritten "
+            "or rejected, and actually-dispatched operations separately. "
+            "A REJECTED_PREEXECUTION trace has only admission evidence: it was "
+            "NOT executed. A CWD-only rewrite for an exact registered remote "
+            "Git HEAD probe never authorizes network or repository access and "
+            "is not an equivalent clone/download/deployment operation. "
+            "Do not replay a blocked Action unchanged; use its precise "
+            "disposition, rewrite details, verified blockers and next strategy. "
             "goal_prerequisite_resolution is an advisory, evidence-grounded ordering: "
             "for explicit standalone creation with confirmed target absence, propose "
             "the Goal Action for ordinary Tool/Scope/Write Admission without gratuitous "
