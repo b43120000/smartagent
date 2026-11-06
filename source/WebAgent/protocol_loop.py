@@ -3399,12 +3399,14 @@ class WebAgentProtocolLoop:
             command_pending = getattr(self, "pending_command_field_repairs", {})
             deferred = getattr(self, "deferred_action_repairs", {})
             if mode == ACTION_RECONSTRUCTION and not result.get("command_involved"):
-                # A schema-valid *read-only* hold is not an executed action.
-                # When field repair escalates to Action Reconstruction, keeping
-                # that old hold contradicts the required fresh proposal.
+                # Release only never-executed, schema-valid READ holds. A
+                # mutation hold must keep its stronger replan/reconcile guards;
+                # this transition is not authority to replay or replace it.
+                from agent_core.progress_recovery import READ_ONLY_TOOLS
                 held = list(getattr(self, "pending_progress_repair_actions", []) or [])
                 if held and all(
-                    str(a.get("action_id", "") or "") not in self.action_ledger
+                    str(a.get("tool", "") or "") in READ_ONLY_TOOLS
+                    and str(a.get("action_id", "") or "") not in self.action_ledger
                     and str(a.get("action_id", "") or "") not in self.action_result_ledger
                     for a in held
                 ):
