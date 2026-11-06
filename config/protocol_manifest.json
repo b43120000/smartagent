@@ -175,7 +175,7 @@
     "source/agent_core/smartagent_protocol.py": "c390ee30ce79213b90668ddbaf4ea0a918f5b2ee947eea20ba8a71bd17477fb1",
     "source/agent_core/source_attestation.py": "63e59db2eb6ff433536da3aa9ee050dfbed3ff1111af48cf1884fcc47f0f9ac7",
     "source/agent_core/source_candidate_ledger.py": "2725cd3ce84d41ff63abe2afc19d9d1775f23eede95bb110a59e54a945aff0b6",
-    "source/agent_core/source_goal_identity.py": "72620689d0b3ec2c7528eae314b59f04ef29de1c01f31e7ff5d3f9e9f405bae6",
+    "source/agent_core/source_goal_identity.py": "8afbbddd39b9a643825b4c5c894c8bbba44654a1a29549cba8f329d28c6f7c92",
     "source/agent_core/source_history_registry.py": "0eca6cc88d553461f8f29e171d42d3fc6d5de229dd3e105125377073e212a5b2",
     "source/agent_core/source_integrity_resolution.py": "8a605640e456bd91480d1dd9e5d5dd094b5528536d04ebc3c9826c49489c8549",
     "source/agent_core/source_reference_index.py": "f0a21842e6164fec684e0a83d4457effaf4f52ca1e22160f95102bf75f6e11d9",
