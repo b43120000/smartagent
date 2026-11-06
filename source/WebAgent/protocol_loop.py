@@ -4912,10 +4912,12 @@ class WebAgentProtocolLoop:
             request = normalized_progress.get('context_request') or {}
             from agent_core.goal_gap_ledger import reconstruct_goal_gaps
             from agent_core.interrupt_readiness import (
-                interrupt_readiness, proposed_interrupt_constraint,
+                interrupt_readiness, proposed_interrupt_constraint, _read_attempts,
             )
             gap_view = reconstruct_goal_gaps(self)
-            interruption_view = interrupt_readiness(gap_view, capabilities)
+            interruption_view = interrupt_readiness(
+                gap_view, capabilities, attempted_reads=_read_attempts(self),
+            )
             self._emit(
                 "goal_interrupt_readiness_evaluated",
                 request_id=self.run_id,
