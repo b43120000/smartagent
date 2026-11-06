@@ -126,7 +126,7 @@
     "source/agent_core/remote_events.py": "961d3a1b092243a6892b6c53d6687d962173bf9dd3aee664fb09e5a31b566716",
     "source/agent_core/remote_execution_coordinator.py": "8270829b4419200c90784720d77b50420471c5cb5c77ef0047ba3f11dd50a724",
     "source/agent_core/remote_skill_manager.py": "4985f448a8d55dae9d1c2de14db2ab8cd4a0d9b6606e624380c75846ff395f63",
-    "source/agent_core/repair_stagnation.py": "05ef6db409de7872deb6185edb00d96e291ea10795a940405f3a99f0dc6daf45",
+    "source/agent_core/repair_stagnation.py": "36737eef5c3f01109aff70a637085349b5e9b857466b5c7750f886a381f88b7f",
     "source/agent_core/request_context.py": "a6d87fa1aa5803df012f360a8b981551147d208364c02a7743bf2a859eaab4c0",
     "source/agent_core/request_ownership.py": "6bc49cc2da8cac6d712685079e976aa32036d14745b656aca3f41ce8e95030cc",
     "source/agent_core/restricted_executor_client.py": "7f7fbcf4696422bfa3e862637069f56521675169ea1d2dfa994c2de69e89eff8",
