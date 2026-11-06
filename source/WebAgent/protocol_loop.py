@@ -4947,13 +4947,18 @@ class WebAgentProtocolLoop:
             if interrupt_diagnostic:
                 return [], [interrupt_diagnostic]
             from agent_core.remote_artifact_access_readiness import (
-                resolve_remote_artifact_access,
+                resolve_remote_artifact_access, derive_admitted_git_read_receipt,
             )
             artifact_view = getattr(self, "_source_discovery_bootstrap", None) or {}
+            access_receipt = derive_admitted_git_read_receipt(
+                artifact_view, action_ledger=self.action_ledger,
+                result_ledger=self.action_result_ledger,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            ) or getattr(self, "_remote_artifact_access_runtime_receipt", None)
             remote_view = resolve_remote_artifact_access(
                 artifact_view,
                 environment=getattr(self, "_planner_environment_snapshot", None),
-                runtime_receipt=getattr(self, "_remote_artifact_access_runtime_receipt", None),
+                runtime_receipt=access_receipt,
                 request_id=self.run_id, task_epoch=self.task_epoch,
             )
             prerequisite_view = resolve_goal_prerequisites(
