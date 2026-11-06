@@ -3916,6 +3916,41 @@ class WebAgentProtocolLoop:
             self._emit('action_numeric_fields_normalized', request_id=self.run_id, round=self.turn_id, block_indexes=numeric_changes)
         calls = normalized
         pending = [dict(action) for action in self.pending_progress_repair_actions]
+        # After CCRC explicitly escalates to ACTION_RECONSTRUCTION, a fresh
+        # canonical Action proposal can supersede the old UNADMITTED hold.
+        # Identity-only rewrites of semantically identical Actions continue
+        # through the existing restoration path below.  The replacement
+        # proposal still passes ALL ordinary Progress / Scope / Tool Admission.
+        ccrc = getattr(self, "_ccrc", None)
+        submitted_operations = [
+            item for item in calls[:-1] if item.get("tool") not in {
+                "report_progress", "final_response"
+            }
+        ] if calls and calls[-1].get("tool") == "turn_commit" else []
+        if (pending and ccrc is not None
+                and getattr(ccrc, "mode", "") == "ACTION_RECONSTRUCTION"
+                and submitted_operations
+                and not any(item.get("action_id") in self.action_ledger
+                            or item.get("action_id") in self.action_result_ledger
+                            for item in pending)):
+            # Don't release for a faithful retransmission, including a
+            # new ID that matches an original action's semantic signature.
+            original_signatures = sorted(
+                semantic_action_signature(item) for item in pending)
+            submitted_signatures = sorted(
+                semantic_action_signature(item) for item in submitted_operations)
+            if submitted_signatures != original_signatures:
+                self.pending_progress_repair_actions = []
+                self._emit(
+                    "ccrc_reconstruction_unadmitted_hold_released",
+                    request_id=self.run_id, round=self.turn_id,
+                    held_action_ids=[str(item.get("action_id", "")) for item in pending],
+                    proposed_action_ids=[str(item.get("action_id", ""))
+                                         for item in submitted_operations],
+                    executed=False, authorization_granted=False,
+                    full_admission_required=True,
+                )
+                return calls
         # A CCRC Goal-Replan handoff must not impose obsolete, never-admitted
         # field-repair holds on the newly reconstructed plan. No tool result
         # or authorization is produced by releasing the hold.
@@ -6919,7 +6954,11 @@ class WebAgentProtocolLoop:
                             "Evidence, then pass all normal admission gates.\n"
                             "[/CCRC_HANDOFF_TO_GOAL_DRIVEN]"
                         )
-                    repair_note += "\n" + repair_instruction(ccrc_decision)
+                    from agent_core.progress_reply_contract import has_accepted_plan
+                    repair_note += "\n" + repair_instruction(
+                        ccrc_decision,
+                        accepted_plan=has_accepted_plan(self.progress_ledger),
+                    )
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
                     + format_tool_parse_diagnostics(ack_diagnostics)
