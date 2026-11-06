@@ -105,6 +105,15 @@ def publish_reference(agent_root: str | Path, *, owner: str, instance: str,
             doc = _read(target)
             if doc["status"] == "INDEX_INVALID":
                 return False
+            for old in doc["records"]:
+                if (old.get("context_digest") == ctx
+                        and old.get("goal_digest") == goal_digest
+                        and normalized_path(old.get("path")) == path_key
+                        and old.get("evidence_level") == "E2"
+                        and evidence_level == "E1"):
+                    # An older structural Runtime receipt stays stronger
+                    # than a newly rediscovered original-request source label.
+                    return True
             records = [
                 row for row in doc["records"]
                 if not (row.get("context_digest") == ctx
