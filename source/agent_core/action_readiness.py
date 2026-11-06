@@ -25,6 +25,8 @@ PROJECT_WORKSPACE_TOOLS = frozenset({
 # Declarative, read-only tool preconditions; an existing directory is a
 # necessary prerequisite for these operations, never a permission grant.
 DIRECTORY_PRECONDITION_FIELDS = {
+    "list_directory": "path",
+    "find_file": "root",
     "query_project": "project_root",
     "inspect_project_scope": "workspace",
     "inspect_project_working_set": "workspace",
