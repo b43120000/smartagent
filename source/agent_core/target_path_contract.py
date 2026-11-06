@@ -103,7 +103,7 @@ def extract_target_contract(request: str) -> dict | None:
     items = []
     for section in _ENTRIES.findall(text):
         for token in re.split(r"[,，、;；\s]+", section):
-            token = token.strip("`\"'()[]{}")
+            token = token.strip("`\"'()[]{}。．，；！？」")
             if _NAME.fullmatch(token) and token not in items:
                 items.append(token)
     return {
