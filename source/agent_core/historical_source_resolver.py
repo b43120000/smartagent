@@ -154,7 +154,7 @@ def bootstrap_historical_sources(
                     or not str(event.get("event_id", ""))):
                 continue
             add(details.get("source_path"), "PROJECT_LEDGER",
-                str(event["event_id"]), "E2")
+                str(event["event_id"]), "E1")
 
     for candidate in recovered.values():
         publish_reference(
