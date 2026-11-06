@@ -71,7 +71,18 @@ def context_interrupt_allowed(request, capabilities):
         read_request = re.search(r'上傳|貼上|提供.{0,12}(?:檔案|程式碼|目錄|專案)|'
                                  r'upload|paste|file content|source code|Gradle|CMake', detail, re.I)
         path_question = bool(re.search(r'絕對路徑|完整路徑|absolute path|full path', detail, re.I))
-        return bool(detail) and not (read_request and not path_question and (capabilities.get('authorized_paths') or capabilities.get('discovery_paths')) and capabilities.get('read_tools'))
+        # When a trusted current-epoch Grounding view is supplied, distinguish
+        # a *possible* read tool from an unexhausted scoped read candidate.
+        # In particular, an authorized root proven absent is not readable
+        # source content and must not force endless reinspection.
+        scoped_count = capabilities.get('grounded_scoped_read_candidate_count')
+        readable = (bool(scoped_count) if type(scoped_count) is int else
+                    bool(capabilities.get('authorized_paths')
+                         or capabilities.get('discovery_paths')))
+        return bool(detail) and not (
+            read_request and not path_question
+            and readable and capabilities.get('read_tools')
+        )
     if kind == 'RUNTIME_READ':
         return False
     # Compatibility for non-context aborts. Scoped missing-context requests
