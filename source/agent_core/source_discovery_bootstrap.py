@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from .paths import runtime_root
+from .paths import install_root, runtime_root
 from .process_file_lock import exclusive_process_lock
 from .source_goal_identity import context_identity, goal_identity
 
@@ -119,14 +119,29 @@ def _registry_path(agent_root: str | Path) -> Path:
 def bootstrap_source_discovery(
     agent_root: str | Path, target_contract: Mapping | None, *,
     owner: str = "", instance: str = "", workspace: str = "",
+    installation_root: str | Path | None = None,
 ) -> dict:
-    """Match exact target/required entries using scoped, pinned artifact refs."""
+    """Match exact Goal to packaged catalog and state-scoped registrations.
+
+    The packaged catalog belongs to the Installation Root, never the Telegram
+    Task state directory or active Workspace. installation_root is only an
+    explicit deployment/test override of the canonical installed app root.
+    """
     goal = goal_identity(target_contract)
     empty = {
         "schema": BOOTSTRAP_SCHEMA,
         "state": "NOT_INDEXABLE",
         "catalog_status": "NOT_QUERIED",
         "registration_status": "NOT_QUERIED",
+        "catalog_path_authority": "INSTALLATION_ROOT",
+        "registration_path_authority": "TASK_STATE_ROOT",
+        "goal_identity_status": goal.get("status", "UNKNOWN"),
+        "catalog_records_examined": 0,
+        "catalog_matched_count": 0,
+        "catalog_goal_mismatch_count": 0,
+        "catalog_invalid_record_count": 0,
+        "registration_records_examined": 0,
+        "registration_matched_count": 0,
         "artifact_references": [],
         "artifact_count": 0,
         "source_location_known_as_reference": False,
@@ -138,21 +153,37 @@ def bootstrap_source_discovery(
     }
     if goal.get("status") != "READY":
         return empty
-    root = Path(agent_root).expanduser().resolve()
-    catalog = _catalog_file(root / "config" / "source_discovery_catalog.json")
-    registry = _catalog_file(_registry_path(root))
+    state_root = Path(agent_root).expanduser().resolve()
+    package_root = install_root(installation_root)
+    catalog = _catalog_file(package_root / "config" / "source_discovery_catalog.json")
+    registry = _catalog_file(_registry_path(state_root))
     context = context_identity(owner, instance, workspace)
     output: dict[str, dict] = {}
+    catalog_matches = 0
+    catalog_mismatches = 0
+    catalog_invalid = 0
+    registry_matches = 0
     for origin, documents in (("PACKAGED_CATALOG", catalog), ("OWNER_REGISTRY", registry)):
         for row in documents["records"]:
             if not isinstance(row, Mapping):
+                if origin == "PACKAGED_CATALOG":
+                    catalog_invalid += 1
                 continue
             if origin == "OWNER_REGISTRY":
                 if not context or row.get("context_digest") != context:
                     continue
+            elif goal_identity(row).get("digest") != goal.get("digest"):
+                catalog_mismatches += 1
+                continue
             item = _valid_artifact(row, goal)
             if item is None:
+                if origin == "PACKAGED_CATALOG":
+                    catalog_invalid += 1
                 continue
+            if origin == "PACKAGED_CATALOG":
+                catalog_matches += 1
+            else:
+                registry_matches += 1
             item["registration_origin"] = origin
             output[item["candidate_id"]] = item
     refs = sorted(output.values(), key=lambda row: row["candidate_id"])[:16]
@@ -165,6 +196,12 @@ def bootstrap_source_discovery(
     return {
         **empty, "state": state, "catalog_status": catalog["status"],
         "registration_status": registry["status"],
+        "catalog_records_examined": len(catalog["records"]),
+        "catalog_matched_count": catalog_matches,
+        "catalog_goal_mismatch_count": catalog_mismatches,
+        "catalog_invalid_record_count": catalog_invalid,
+        "registration_records_examined": len(registry["records"]),
+        "registration_matched_count": registry_matches,
         "artifact_references": refs,
         "artifact_count": len(refs),
         "source_location_known_as_reference": bool(refs),
