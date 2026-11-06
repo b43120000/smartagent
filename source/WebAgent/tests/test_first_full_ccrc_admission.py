@@ -92,6 +92,39 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertIn("OBS-1", guidance)
         self.assertNotIn("use PATCH to inherit", guidance)
 
+    def test_initial_numeric_field_repair_remains_full_until_admission(self):
+        from agent_core.task_progress import TaskProgressError, validate_model_progress
+        from agent_core.progress_recovery import repair_diagnostic
+        from agent_core.cross_contract_repair import repair_instruction
+
+        broken = full("RCA-INVALID-STEPS", correct=True)
+        broken["total_steps"] = None
+        broken["current_step"] = -1
+        with self.assertRaises(TaskProgressError) as rejected:
+            validate_model_progress(broken)
+        self.assertTrue(str(rejected.exception))
+        diag = repair_diagnostic(broken, None, rejected.exception,
+                                 {"REQUEST_ACCEPTED"})
+        fields = {item["field"] for item in diag["field_issues"]}
+        self.assertTrue({"total_steps", "current_step"} <= fields)
+        coordinator = CrossContractRepairCoordinator(
+            request_id="RR-NUMERIC", task_epoch="EPOCH-NUMERIC",
+            goal="First FULL must supply exact step fields",
+        )
+        calls = [broken, {"tool": "turn_commit", "action_count": 1}]
+        for _ in range(2):
+            decision = coordinator.observe(calls, [diag])
+            decision.update(progress_mode="FULL", accepted_plan=False)
+            instruction = repair_instruction(decision)
+            self.assertEqual(decision["mode"], FIELD_REPAIR)
+            self.assertIn("total_steps", instruction)
+            self.assertIn("current_step", instruction)
+            self.assertIn("progress_update=FULL", instruction)
+            self.assertNotIn("use PATCH to inherit", instruction)
+
+        corrected = full("RCA-FIXED-STEPS", correct=True)
+        self.assertEqual(validate_model_progress(corrected)["current_step"], 0)
+
     def test_read_only_hold_released_at_action_reconstruction(self):
         from WebAgent.tests.validate_cross_contract_repair_it import FakeLoop
         host = FakeLoop()
