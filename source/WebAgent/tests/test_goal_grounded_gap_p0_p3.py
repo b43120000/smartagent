@@ -207,6 +207,10 @@ class ProgressAndRepairP3Tests(unittest.TestCase):
                 action_id="inspect-2",
                 fact_key=("directory.exists", ROOT, False), now=1030))
             self.assertEqual(tracker.effective_generation, 1)
+            self.assertFalse(tracker.accepted_observation(
+                action_id="inspect-slash-alias",
+                fact_key=("directory.exists", ROOT.replace(chr(92), "/"), False),
+                now=1035))
             self.assertEqual(tracker.rejected_turns_since_progress, 1)
             self.assertTrue(tracker.accepted_observation(
                 action_id="inspect-3",
