@@ -376,6 +376,7 @@ class WebAgentProtocolLoop:
         self._ccrc = None  # Request-scoped Cross-Contract Repair Coordinator.
         self._last_unified_contract_receipt: dict = {}
         self._unified_action_recovery_events: list[dict] = []
+        self._pending_progress_repair_binding: dict = {}
         self._protocol_repair_tx = None  # Request-scoped unadmitted candidate.
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
@@ -3492,6 +3493,7 @@ class WebAgentProtocolLoop:
                 held = list(getattr(self, "pending_progress_repair_actions", []))
                 if held:
                     self.pending_progress_repair_actions = []
+                    self._pending_progress_repair_binding = {}
                     WebAgentProtocolLoop._record_unified_action_recovery(
                         self, "CCRC_RELEASED_UNADMITTED", held
                     )
@@ -3808,7 +3810,9 @@ class WebAgentProtocolLoop:
     def _probe_action_admission(self, calls, expected, *, single=False):
         from copy import deepcopy
         names = ('pending_result_recovery', 'pending_verification_requirement',
-                 'pending_progress_repair_actions', 'pending_action_repair',
+                 'pending_progress_repair_actions', '_pending_progress_repair_binding',
+                 '_unified_action_recovery_events', '_last_unified_contract_receipt',
+                 '_last_canonical_contract_receipts', 'pending_action_repair',
                  'read_only_progress_deferred', 'deferred_progress_repair', 'active_stage_manifest')
         saved = {name: deepcopy(getattr(self, name, None)) for name in names}
         self._action_admission_probe = True
@@ -4022,6 +4026,9 @@ class WebAgentProtocolLoop:
                 return []
             seen.add(action_id)
         self.pending_progress_repair_actions = candidates
+        self._pending_progress_repair_binding = {
+            "request_id": self.run_id, "task_epoch": self.task_epoch,
+        }
         self._record_unified_action_recovery("HELD_UNADMITTED", candidates)
         action_ids = [str(action.get("action_id", "") or "") for action in candidates]
         self._emit(
@@ -4051,6 +4058,19 @@ class WebAgentProtocolLoop:
             self._emit('action_numeric_fields_normalized', request_id=self.run_id, round=self.turn_id, block_indexes=numeric_changes)
         calls = normalized
         pending = [dict(action) for action in self.pending_progress_repair_actions]
+        binding = dict(getattr(self, "_pending_progress_repair_binding", {}) or {})
+        if pending and binding and (
+            binding.get("request_id") != self.run_id
+            or binding.get("task_epoch") != self.task_epoch
+        ):
+            self.pending_progress_repair_actions = []
+            self._pending_progress_repair_binding = {}
+            self._record_unified_action_recovery("REQUEST_EPOCH_MISMATCH_REJECTED", pending)
+            self._emit("progress_repair_action_binding_rejected",
+                       request_id=self.run_id, round=self.turn_id,
+                       action_ids=[str(a.get("action_id", "")) for a in pending],
+                       executed=False, authorization_granted=False)
+            return calls
         # A CCRC Goal-Replan handoff must not impose obsolete, never-admitted
         # field-repair holds on the newly reconstructed plan. No tool result
         # or authorization is produced by releasing the hold.
@@ -4060,6 +4080,7 @@ class WebAgentProtocolLoop:
                             or item.get("action_id") in self.action_result_ledger
                             for item in pending)):
             self.pending_progress_repair_actions = []
+            self._pending_progress_repair_binding = {}
             self._record_unified_action_recovery("REPLAN_RELEASED_UNADMITTED", pending)
             self._emit(
                 "ccrc_replan_unadmitted_hold_released",
@@ -5894,6 +5915,7 @@ class WebAgentProtocolLoop:
         if tx is not None:
             tx.clear()  # Close only on FULL admission; no early commit.
         self.pending_progress_repair_actions = []
+        self._pending_progress_repair_binding = {}
         self._first_full_progress_draft = {}
         self.pending_action_repair = {}
         self.pending_result_ack_id = ""
@@ -6393,6 +6415,7 @@ class WebAgentProtocolLoop:
         self._last_canonical_contract_receipts = []
         self._last_unified_contract_receipt = {}
         self._unified_action_recovery_events = []
+        self._pending_progress_repair_binding = {}
         spr_candidate_request = (
             trusted_authorized_paths is None
             and _SAVED_PLAN_OPEN not in request
