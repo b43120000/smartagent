@@ -237,6 +237,59 @@ def _feedback(receipt: dict) -> dict:
     }
 
 
+# The core Progress schema uses the same safe-equivalence policy as SCR/SPR.
+# These are spelling aliases only. Never infer a condition, Evidence reference,
+# Goal, Outcome, Decision, prerequisite or permission from absent fields.
+_CORE_ALIASES = {
+    "current step": "current_step",
+    "total steps": "total_steps",
+    "current focus": "current_focus",
+    "next action": "next_action",
+    "base evaluation": "base_evaluation",
+    "currentStep": "current_step",
+    "totalSteps": "total_steps",
+    "currentFocus": "current_focus",
+    "nextAction": "next_action",
+    "baseEvaluation": "base_evaluation",
+    "progressUpdate": "progress_update",
+    "completionContract": "completion_contract",
+    "matchedCondition": "matched_condition",
+    "matchedConditionId": "matched_condition_id",
+    "evidenceRefs": "evidence_refs",
+    "decisionReason": "decision_reason",
+    "contextRequest": "context_request",
+}
+
+
+def resolve_core_progress_fields(payload: Mapping) -> tuple[dict, dict]:
+    """Normalize unambiguous Core Progress aliases without semantic invention.
+
+    Called from the established Progress materialization entrypoint, so
+    existing evidence and completion validation remain the authority.
+    """
+    result = dict(payload)
+    source = dict(payload)
+    rules: list[str] = []
+    changes: list[str] = []
+    for alias, canonical in _CORE_ALIASES.items():
+        if alias not in result:
+            continue
+        if canonical in result and result[canonical] != result[alias]:
+            raise ValueError("conflicting_progress_alias:" + canonical)
+        value = result.pop(alias)
+        if canonical not in result:
+            result[canonical] = value
+        rules.append("CORE_PROGRESS_EXACT_ALIAS")
+        changes.append(canonical)
+    return result, _record(
+        "report_progress", "REWRITE_SAFE_EQUIVALENT" if changes else "PASS_UNCHANGED",
+        "CANONICAL_CORE_PROGRESS_FIELDS" if changes else "CORE_PROGRESS_VALID",
+        expected_schema="SMARTAGENT_PROGRESS_REPLY_CONTRACT_V1",
+        expected_keys=set(source) | set(_CORE_ALIASES.values()),
+        original=source, rules=sorted(set(rules)), changes=sorted(set(changes)),
+    )
+
+
 def resolve_planner_contracts(progress: Mapping, *,
                               path_document: Mapping | None) -> tuple[dict, list[dict], list[dict]]:
     """Resolve optional Planner contracts without changing semantic decisions.
@@ -265,4 +318,4 @@ def resolve_planner_contracts(progress: Mapping, *,
     return candidate, receipts, errors
 
 
-__all__ = ["SCHEMA", "resolve_planner_contracts"]
+__all__ = ["SCHEMA", "resolve_planner_contracts", "resolve_core_progress_fields"]
