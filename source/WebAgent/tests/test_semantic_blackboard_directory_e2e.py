@@ -246,7 +246,12 @@ class OriginalGoalDirectoryIntegration(unittest.TestCase):
             diagnostic = loop._normalize_action_loop_decision(
                 {"decision": "CONTINUE", "outcome": "PENDING"}, [create],
             )
-            self.assertIsNone(diagnostic)
+            # Reconciliation is allowed, but repeating a successful
+            # creation must still be governed by the *current* Action Loop.
+            self.assertNotEqual(
+                (diagnostic or {}).get("reason"),
+                "action_loop_blackboard_state_drift_unreconciled",
+            )
             refreshed = read_action_loop_blackboard(
                 loop._last_shared_blackboard_snapshot,
                 request_id=REQUEST, task_epoch=EPOCH,

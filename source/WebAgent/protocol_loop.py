@@ -2004,11 +2004,16 @@ class WebAgentProtocolLoop:
                 request_id=str(getattr(self, "run_id", "") or ""),
                 task_epoch=str(getattr(self, "task_epoch", "") or ""),
             )
+            # Snapshot reconstruction itself may advance the authoritative
+            # Action Loop (e.g. a newly materialized Progress/verification).
+            # Compare against that latest owner state, never a pre-refresh
+            # local copy. Any changed allowed-set still uses normal admission.
+            current_state = dict(self.action_loop_state or {})
             if (refreshed.get("status") != "BOUND" or
-                    refreshed.get("state_id") != state_id or
-                    refreshed.get("required_transition") != state.get("required_transition") or
+                    refreshed.get("state_id") != current_state.get("state_id") or
+                    refreshed.get("required_transition") != current_state.get("required_transition") or
                     refreshed.get("allowed_next_actions") !=
-                        list(state.get("allowed_next_actions") or [])):
+                        list(current_state.get("allowed_next_actions") or [])):
                 return {
                     "marker": "[SHARED_BLACKBOARD_STATE_REJECTED]",
                     "reason": "action_loop_blackboard_state_drift_unreconciled",
@@ -2016,6 +2021,8 @@ class WebAgentProtocolLoop:
                     "suggestion": "Rebuild the Runtime-owned Planner context; no stale state authorizes execution.",
                 }
             previous_id = str(board_state.get("state_id") or "")
+            state = current_state
+            state_id = str(state.get("state_id") or "")
             self._last_shared_blackboard_snapshot = fresh_board
             self._last_strategy_candidate_registry = dict(
                 fresh_context.get("strategy_candidates") or {}
