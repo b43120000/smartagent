@@ -84,6 +84,10 @@ class CollectorCausalCoverageTests(unittest.TestCase):
                  "reason": "run_command_working_directory_rejected",
                  "tool": "run_command", "action_id": "G27-DNS",
                  "scope_reason_code": "path_independent_command_cwd_outside_bound_workspace",
+                 "scope_category": "COMMAND",
+                 "scope_path_role": "WORKING_DIRECTORY",
+                 "scope_required_field": "working_directory",
+                 "scope_reason_code": "path_independent_command_cwd_outside_bound_workspace",
                  "unified_contract": {
                      "schema": "SMARTAGENT_UNIFIED_CONTRACT_TRANSACTION_V1",
                      "issues": [{
@@ -160,6 +164,10 @@ class CollectorCausalCoverageTests(unittest.TestCase):
                          "run_command")
         scope = json.loads(files["scope_preflight_summary.json"])
         self.assertTrue(any(item.get("admission_only") for item in scope))
+        admission_scope = next(item for item in scope if item.get("admission_only"))
+        self.assertEqual(admission_scope["scope_reason_code"],
+                         "path_independent_command_cwd_outside_bound_workspace")
+        self.assertEqual(admission_scope["action_id"], "G27-DNS")
         delivery = json.loads(files["planner_context_delivery.json"])
         self.assertEqual(delivery[0]["failure_causal_receipt_count"], 1)
         self.assertEqual(delivery[0]["planner_failure_action_ids"], [ACTION])
