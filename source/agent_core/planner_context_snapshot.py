@@ -193,6 +193,18 @@ def _diagnostic(row: Mapping) -> dict:
             }
     return {
         "reason": _code(row.get("reason"), "UNKNOWN"),
+        # Safe codes are preserved for *every* admission boundary, not just
+        # CommandRepair. Paths, commands and untrusted details are excluded.
+        "scope_reason_code": _code(row.get("scope_reason_code")),
+        "scope_category": _code(row.get("scope_category")),
+        "scope_path_role": _code(row.get("scope_path_role")),
+        "scope_transition": _code(row.get("scope_transition")),
+        "scope_required_field": _code(row.get("scope_required_field")),
+        "action_id": _code(row.get("action_id")),
+        "tool": _code(row.get("tool")),
+        "blocking_evidence_ref": _code(row.get("blocking_evidence_ref")),
+        "failure_category": _code(row.get("failure_category")),
+        "next_evaluation": _code(row.get("next_evaluation")),
         "field_issues": issues,
         "repair_scope": _code(row.get("repair_scope")),
         "command_repair": safe_command,
