@@ -3492,7 +3492,9 @@ class WebAgentProtocolLoop:
                 held = list(getattr(self, "pending_progress_repair_actions", []))
                 if held:
                     self.pending_progress_repair_actions = []
-                    self._record_unified_action_recovery("CCRC_RELEASED_UNADMITTED", held)
+                    WebAgentProtocolLoop._record_unified_action_recovery(
+                        self, "CCRC_RELEASED_UNADMITTED", held
+                    )
                     self._emit(
                         "ccrc_unadmitted_progress_hold_released",
                         request_id=self.run_id, round=self.turn_id,
