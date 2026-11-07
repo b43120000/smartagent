@@ -374,6 +374,8 @@ class WebAgentProtocolLoop:
         self._bounded_repair = BoundedRepairBudget()
         self._repair_stagnation = None
         self._ccrc = None  # Request-scoped Cross-Contract Repair Coordinator.
+        self._last_unified_contract_receipt: dict = {}
+        self._unified_action_recovery_events: list[dict] = []
         self._protocol_repair_tx = None  # Request-scoped unadmitted candidate.
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
@@ -3490,6 +3492,7 @@ class WebAgentProtocolLoop:
                 held = list(getattr(self, "pending_progress_repair_actions", []))
                 if held:
                     self.pending_progress_repair_actions = []
+                    self._record_unified_action_recovery("CCRC_RELEASED_UNADMITTED", held)
                     self._emit(
                         "ccrc_unadmitted_progress_hold_released",
                         request_id=self.run_id, round=self.turn_id,
@@ -3532,6 +3535,58 @@ class WebAgentProtocolLoop:
             replan_required=result["replan_required"],
             authorization_granted=False, executed=False, budget_reset=False)
         return result
+
+    def _publish_unified_contract(
+        self, *, calls: list[dict], diagnostics: list[dict] | None = None,
+        ccrc: dict | None = None, phase: str = "REJECTED",
+        admitted: list[dict] | None = None,
+    ) -> dict:
+        """Project all owning modules into ONE request/epoch-bound vocabulary.
+
+        This adapter cannot grant Scope, mutate Tool Actions, run tools or
+        restore previously executed operations. Every validator stays owner.
+        """
+        from agent_core.unified_contract_transaction import build_transaction
+        record = build_transaction(
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            original_goal=getattr(self, "task_request", ""),
+            round_id=self.turn_id, phase=phase,
+            diagnostics=diagnostics or [], submitted=calls,
+            accepted=admitted or [],
+            pending=getattr(self, "pending_progress_repair_actions", []),
+            recovery_events=getattr(self, "_unified_action_recovery_events", []),
+            ccrc=ccrc,
+            canonical=getattr(self, "_last_canonical_contract_receipts", []),
+            evidence_count=len(self.action_result_ledger),
+        )
+        if not getattr(self, "_action_admission_probe", False):
+            self._last_unified_contract_receipt = record
+            self._emit(
+                "unified_contract_transaction_resolved",
+                request_id=self.run_id, round=self.turn_id,
+                phase=phase,
+                contract_names=sorted({item["contract"] for item in record["issues"]}),
+                decision_codes=[item["decision"] for item in record["issues"]],
+                reason_codes=[item["reason_code"] for item in record["issues"]],
+                pending_action_ids=record["pending_action_ids"],
+                admitted_action_ids=record["admitted_action_ids"],
+                ccrc_mode=record["ccrc_mode"],
+                authorization_granted=False, executed=False,
+            )
+        return record
+
+    def _record_unified_action_recovery(
+        self, status: str, actions: list[dict],
+    ) -> None:
+        if getattr(self, "_action_admission_probe", False):
+            return
+        from agent_core.unified_contract_transaction import _safe
+        ids = [_safe(item.get("action_id")) for item in actions[:32]
+               if isinstance(item, dict) and _safe(item.get("action_id"))]
+        self._unified_action_recovery_events = (
+            list(getattr(self, "_unified_action_recovery_events", []))
+            + [{"status": status, "action_ids": ids}]
+        )[-8:]
 
     def _accept_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
         """Preserve partial Command repairs while batching independent defects.
@@ -3965,6 +4020,7 @@ class WebAgentProtocolLoop:
                 return []
             seen.add(action_id)
         self.pending_progress_repair_actions = candidates
+        self._record_unified_action_recovery("HELD_UNADMITTED", candidates)
         action_ids = [str(action.get("action_id", "") or "") for action in candidates]
         self._emit(
             "progress_repair_actions_preserved",
@@ -4002,6 +4058,7 @@ class WebAgentProtocolLoop:
                             or item.get("action_id") in self.action_result_ledger
                             for item in pending)):
             self.pending_progress_repair_actions = []
+            self._record_unified_action_recovery("REPLAN_RELEASED_UNADMITTED", pending)
             self._emit(
                 "ccrc_replan_unadmitted_hold_released",
                 request_id=self.run_id, round=self.turn_id,
@@ -4075,6 +4132,7 @@ class WebAgentProtocolLoop:
         commit = dict(calls[-1])
         commit["action_count"] = len(restored)
         restored.append(commit)
+        self._record_unified_action_recovery("RESTORED_FOR_FULL_ADMISSION", pending)
         self._emit(
             "progress_repair_actions_restored",
             request_id=self.run_id,
@@ -7053,6 +7111,14 @@ class WebAgentProtocolLoop:
             if ack_diagnostics:
                 self._record_preexecution_predicate_rejection(calls, ack_diagnostics)
                 ccrc_decision = self._ccrc_rejected(calls, ack_diagnostics)
+                # Use the same contract vocabulary across Progress, Action,
+                # Replan and Request/Prerequisite; retain original diagnostics.
+                unified_receipt = self._publish_unified_contract(
+                    calls=calls, diagnostics=ack_diagnostics,
+                    ccrc=ccrc_decision, phase="REJECTED",
+                )
+                if ack_diagnostics:
+                    ack_diagnostics[0]["unified_contract"] = unified_receipt
                 self.protocol_state = "REJECTED"
                 if self.pending_action_repair and not any(
                     item.get("repair_scope") == "ACTION_BATCH"
@@ -7391,8 +7457,10 @@ class WebAgentProtocolLoop:
                         ccrc_decision,
                         accepted_plan=has_accepted_plan(self.progress_ledger),
                     )
+                from agent_core.unified_contract_transaction import render_transaction
+                repair_note += "\\n" + render_transaction(unified_receipt)
                 prompt = (
-                    "[WEBAGENT_ACK_REJECTED]\n"
+                    "[WEBAGENT_ACK_REJECTED]\\n"
                     + format_tool_parse_diagnostics(ack_diagnostics)
                     + "\n修正 compact v9 response 後重送同一決策；不得重做尚未執行的 action。"
                     + repair_note
@@ -7405,6 +7473,9 @@ class WebAgentProtocolLoop:
                 continue
             last_rejected_exchange_signature = None
             self._planner_context_diagnostics = []
+            self._publish_unified_contract(
+                calls=calls, phase="ADMITTED", admitted=actions,
+            )
             for admitted_action in actions:
                 if admitted_action.get("tool") in {"report_progress", "turn_commit", "final_response"}:
                     continue
