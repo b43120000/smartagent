@@ -40,7 +40,7 @@ class CollectorCausalCoverageTests(unittest.TestCase):
                       {"status": "IN_PROGRESS"}],
         }), encoding="utf-8")
 
-    def _collect(self, include_failure=True):
+    def _collect(self, include_failure=True, older_log_noise=False):
         base = {
             "timestamp": 1794040191.0,
             "event": "STATUS", "component": "telegram_webagent_worker",
@@ -128,9 +128,19 @@ class CollectorCausalCoverageTests(unittest.TestCase):
             })
         logs = self.root / "localdata" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
-        (logs / "remote_runtime.jsonl").write_text(
-            "\n".join(json.dumps(item) for item in rows) + "\n", encoding="utf-8"
-        )
+        with (logs / "remote_runtime.jsonl").open("w", encoding="utf-8") as output:
+            for item in rows:
+                output.write(json.dumps(item) + "\n")
+            if older_log_noise:
+                # The previous 25,000-line tail silently lost these early
+                # Task events; full-file streaming must retain them.
+                noise = json.dumps({
+                    "event": "STATUS", "stage": "OTHER_TASK_HEARTBEAT",
+                    "task_id": "TASK-UNRELATED",
+                    "request_id": "RR-UNRELATED",
+                }) + "\n"
+                for _ in range(25010):
+                    output.write(noise)
         result = subprocess.run(
             ["cmd.exe", "/d", "/c", str(self.root / "collect.bat"), TASK, REQUEST],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -184,11 +194,25 @@ class CollectorCausalCoverageTests(unittest.TestCase):
         self.assertEqual(diff["schema_status"], "NOT_SUBMITTED")
         self.assertIsNone(diff["schema_valid"])
         coverage = json.loads(files["rca_causal_coverage.json"])
-        self.assertEqual(coverage["status"], "COVERED_WITH_BOUNDED_WINDOW", coverage)
+        self.assertEqual(coverage["status"], "FULL_AVAILABLE_LOG_SCAN", coverage)
+        self.assertFalse(coverage["log_window_bounded"])
         manifest = json.loads(files["manifest.json"])
         self.assertEqual(manifest["causal_coverage_status"], coverage["status"])
         self.assertNotIn("SECRET_TOOL_OUTPUT_MUST_NOT_EXPORT",
                          "\n".join(files.values()))
+
+    def test_full_scan_retains_early_failure_beyond_previous_25000_line_window(self):
+        files = self._collect(older_log_noise=True)
+        transition = json.loads(files["prerequisite_transition_summary.json"])
+        self.assertEqual(transition[0]["transition_stage"],
+                         "PROBE_EVIDENCE_AVAILABLE_UNRESOLVED")
+        coverage = json.loads(files["rca_causal_coverage.json"])
+        self.assertEqual(coverage["status"], "FULL_AVAILABLE_LOG_SCAN", coverage)
+        manifest = json.loads(files["manifest.json"])
+        source = next(row for row in manifest["log_sources"]
+                      if row["source"] == "remote_runtime")
+        self.assertEqual(source["scan_mode"], "FULL_FILE_STREAM")
+        self.assertTrue(source["scan_guarantees_unlimited_history"])
 
     def test_missing_failure_receipt_is_reported_partial_not_hidden(self):
         files = self._collect(include_failure=False)
