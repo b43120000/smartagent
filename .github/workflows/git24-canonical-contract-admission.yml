@@ -1,0 +1,51 @@
+name: Git24 Canonical Contract Admission Regression
+
+on:
+  push:
+    branches:
+      - git24/canonical-contract-admission-case-d-20261107
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  git24-offline:
+    name: Canonical Contract ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install baseline test dependency
+        run: python -m pip install --disable-pip-version-check playwright
+      - name: Compile changed source
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/canonical_contract_resolver.py
+          source/agent_core/planner_context_snapshot.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_git24_canonical_contract_resolution.py
+      - name: Canonical resolver and real read admission
+        run: python -B source/WebAgent/tests/test_git24_canonical_contract_resolution.py
+      - name: Existing action rewrite causality and Case D prerequisite regression
+        run: python -B source/WebAgent/tests/test_action_resolution_trace_and_missing_target.py
+      - name: Existing progress admission and repair regression
+        run: python -B source/WebAgent/tests/validate_flexible_progress_admission.py
+      - name: Existing protocol same-round repair
+        run: python -B source/WebAgent/tests/validate_protocol_same_round_repair.py
+      - name: Existing command security gate
+        run: python -B source/WebAgent/tests/validate_command_security_classification.py
+      - name: Existing tool scope gate
+        run: python -B source/WebAgent/tests/validate_tool_scope_hardening.py
