@@ -5504,33 +5504,32 @@ class WebAgentProtocolLoop:
                 result_ledger=self.action_result_ledger,
                 request_id=self.run_id, task_epoch=self.task_epoch,
             )
-            active_failed_read = next((
+            active_failure = next((
                 item for item in reversed(failures)
-                if item.get("tool") == "run_command"
-                and item.get("operation") == "GIT_INSPECT"
-                and item.get("execution", {}).get("status") == "FAILED"
+                if item.get("execution", {}).get("status")
+                in {"FAILED", "REJECTED", "PARTIAL"}
             ), None)
-            if active_failed_read:
+            if active_failure:
                 return [], [{
                     "marker": "[WEBAGENT_FAILURE_CAUSAL_ACTION_REQUIRED]",
                     "reason": "failed_prerequisite_continue_requires_action",
                     "tool": "report_progress",
                     "action_id": str(progress_actions[0].get("action_id") or ""),
-                    "blocking_evidence_ref": active_failed_read["action_id"],
-                    "failure_category": active_failed_read["failure"]["category"],
-                    "next_evaluation": active_failed_read["replan"]["next_evaluation"],
+                    "blocking_evidence_ref": active_failure["action_id"],
+                    "failure_category": active_failure["failure"]["category"],
+                    "next_evaluation": active_failure["replan"]["next_evaluation"],
                     "field_issues": [{
                         "field": "operational_action",
                         "code": "CONTINUE_REQUIRES_CAUSALLY_GROUNDED_ACTION",
                     }],
                     "suggestion": (
-                        "Git Probe has an actual FAILED Runtime Tool Result. "
-                        "Do not commit CONTINUE with no operational Action. "
-                        "Use the failure_causal_receipts current-epoch evidence "
-                        "and choose one safe, materially different diagnostic "
-                        "under full Runtime Tool/Scope Admission. Or propose "
-                        "a supported evidence-bound interruption if genuinely "
-                        "blocked. No grant, evidence or result is inferred."
+                        "The previous Runtime Tool Result is FAILED, REJECTED "
+                        "or PARTIAL. Do not commit CONTINUE without an actionable "
+                        "next step. Use this current-epoch causal evidence and "
+                        "the verified environment, then choose one safe, materially "
+                        "different diagnostic with full Tool/Scope Admission, "
+                        "or an evidence-bound interruption if genuinely blocked. "
+                        "A failure diagnostic is neither permission nor execution."
                     ),
                 }]
         action_consistency = None if (
