@@ -180,6 +180,44 @@ class CanonicalContractResolutionTests(unittest.TestCase):
 
 
 class IntegratedRuntimeAdmissionTests(unittest.TestCase):
+    def test_conflicting_path_rejects_complete_batch_before_any_tool(self):
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from WebAgent.tests.validate_flexible_progress_admission import initial
+        from agent_core.task_progress import initialize_progress
+        with tempfile.TemporaryDirectory(prefix="git24-conflict-") as temp:
+            root = Path(temp).resolve()
+            loop = WebAgentProtocolLoop(root, lambda *args: "",
+                                        progress_root=root)
+            loop.run_id = loop.task_id = loop.task_epoch = "G24-CONFLICT"
+            loop.intent_digest = "f" * 64
+            loop.progress_ledger = initialize_progress(
+                loop.task_id, request_id=loop.run_id,
+                goal="只讀取授權目錄", root=root,
+            )
+            loop.authorized_paths = [str(root)]
+            loop.tools._authorized_local_paths = [str(root)]
+            loop._spr_path_resolution = {
+                "status": "LEXICAL_EXACT", "paths": [str(root)],
+            }
+            bad_progress = dict(initial())
+            bad_progress["path_resolution"] = {
+                "schema": PATH_SCHEMA, "selected_paths": [str(root / "other")],
+            }
+            actions = [
+                bad_progress,
+                {"tool": "list_directory", "action_id": "G24-BLOCKED",
+                 "path": str(root)},
+                {"tool": "turn_commit", "action_count": 2},
+            ]
+            admitted, diagnostics = loop._accept_v8_ack(actions, {})
+            self.assertFalse(admitted)
+            self.assertTrue(diagnostics)
+            self.assertEqual(diagnostics[0]["reason"],
+                             "semantic_path_planner_selection_mismatch")
+            self.assertEqual(diagnostics[0]["repair_scope"], "SEMANTIC_CONFLICT")
+            self.assertEqual(loop.action_ledger, {})
+            self.assertEqual(loop.action_result_ledger, {})
+
     def test_repaired_progress_passes_ordinary_read_admission(self):
         from WebAgent.protocol_loop import WebAgentProtocolLoop
         from WebAgent.tests.validate_flexible_progress_admission import initial
