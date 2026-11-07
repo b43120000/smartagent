@@ -164,6 +164,24 @@ def diagnostic_receipts(diagnostics: Sequence[Mapping], *,
     return rows
 
 
+def retain_hold_for_progress_repair(diagnostics: Sequence[Mapping], *,
+                                    submitted: Sequence[Mapping]) -> bool:
+    """Keep a never-admitted Action ONLY for an unambiguous Progress defect.
+
+    The old reason-only filter discarded held reads on `unexpected_field`
+    even when the actual bad envelope was report_progress. Use the owning
+    contract instead. Ambiguous diagnostics, Action/Scope/ACL errors and
+    semantic Replan never authorize retention.
+    """
+    rows = diagnostic_receipts(diagnostics, submitted=submitted)
+    return bool(rows) and all(
+        row["contract"] in {"PROGRESS", "EVIDENCE"}
+        and row["tool"] in {"", "report_progress"}
+        and row["decision"] == "NEEDS_INFORMATION"
+        for row in rows
+    )
+
+
 def build_transaction(*, request_id: str, task_epoch: str, original_goal: str,
                       round_id: int, phase: str,
                       diagnostics: Sequence[Mapping] = (),
@@ -248,5 +266,6 @@ def render_transaction(record: Mapping) -> str:
 
 
 __all__ = [
-    "SCHEMA", "diagnostic_receipts", "build_transaction", "render_transaction",
+    "SCHEMA", "diagnostic_receipts", "retain_hold_for_progress_repair",
+    "build_transaction", "render_transaction",
 ]
