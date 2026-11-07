@@ -23,7 +23,7 @@ from agent_core.decision_rules.directory_workspace_rule import evaluate_director
 from agent_core.goal_gap_ledger import reconstruct_goal_gaps
 from agent_core.action_loop_state import build_action_loop_state
 from agent_core.shared_blackboard import (
-    build_shared_blackboard, build_strategy_candidate_registry,
+    build_shared_blackboard, read_action_loop_blackboard, build_strategy_candidate_registry,
     evaluate_terminal_readiness, validate_strategy_candidate_bindings,
 )
 from agent_core.smartagent_protocol import validate_tool_envelope
@@ -52,6 +52,10 @@ class OriginalGoalDirectoryIntegration(unittest.TestCase):
                     verb + "這個資料夾\n" + r"E:\SmartAgent_GoalDriven_IT_GH_v1"
                 )["intent"], "REMEDIATION_CANDIDATE",
             )
+        self.assertEqual(
+            conditional_goal_policy("不要創立這個資料夾")["intent"],
+            "READ_ONLY_ONLY",
+        )
         self.assertEqual(
             translate_request_action("只查詢資料夾")["selected_capability"],
             "",
@@ -226,6 +230,23 @@ class OriginalGoalDirectoryIntegration(unittest.TestCase):
             self.assertEqual(decision_event["reason_code"],
                              "GOAL_DIRECTORY_ABSENCE_CONFIRMED")
             self.assertFalse(decision_event["authorization_granted"])
+            shared_loop = read_action_loop_blackboard(
+                board, request_id=REQUEST, task_epoch=EPOCH,
+            )
+            self.assertEqual(shared_loop["status"], "BOUND")
+            self.assertEqual(shared_loop["state_id"], als["state_id"])
+            self.assertEqual(shared_loop["allowed_next_actions"], ["create_directory"])
+            self.assertEqual(read_action_loop_blackboard(
+                board, request_id="RR-WRONG", task_epoch=EPOCH,
+            )["status"], "UNAVAILABLE")
+            # Conflict between a newer live ActionLoop and a prior Blackboard
+            # must not silently admit a different operation.
+            loop._last_shared_blackboard_snapshot = board
+            loop.action_loop_state = build_action_loop_state()
+            conflict = loop._normalize_action_loop_decision(
+                {"decision": "CONTINUE", "outcome": "PENDING"}, [create],
+            )
+            self.assertEqual(conflict["reason"], "action_loop_blackboard_state_drift")
 
 
 if __name__ == "__main__":

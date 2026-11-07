@@ -752,6 +752,27 @@ try {
     })
     Write-Json (Join-Path $stage 'planner_context_delivery.json') @($delivery)
 
+    # Preserve the Runtime-owned Action Loop causal decision in the RCA.
+    # Only bounded enum codes and trusted action/evidence identifiers survive;
+    # no raw paths, user prose, commands, or Tool output are exported.
+    $loopDecisions = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'action_loop_decision_evaluated'
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source
+            event=$_.event
+            round=$_.round
+            state_id=(Safe-Code $_.state_id)
+            rule_id=(Safe-Code $_.rule_id)
+            observed_evidence_ref=(Safe-Code $_.observed_evidence_ref)
+            required_transition=(Safe-Code $_.required_transition)
+            allowed_next_actions=@(Safe-CodeList $_.allowed_next_actions)
+            reason_code=(Safe-Code $_.reason_code)
+            authorization_granted=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'action_loop_decision_summary.json') @($loopDecisions)
+
     $preflight = @($timeline.ToArray() | Where-Object {
         $_.event -in @('preexecution_strategy_replan_evaluated',
                        'preexecution_strategy_revision_unavailable',

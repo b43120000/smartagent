@@ -1977,6 +1977,27 @@ class WebAgentProtocolLoop:
         """Bind unambiguous state fields and reject only semantic conflicts."""
         state = dict(self.action_loop_state or {})
         state_id = str(state.get("state_id", "") or "")
+        # Planner and Runtime read one correlated Action Loop projection.
+        # Never accept a decision against a stale Blackboard snapshot; also
+        # never elevate Blackboard fields into execution authorization.
+        from agent_core.shared_blackboard import read_action_loop_blackboard
+        board_state = read_action_loop_blackboard(
+            getattr(self, "_last_shared_blackboard_snapshot", None),
+            request_id=str(getattr(self, "run_id", "") or ""),
+            task_epoch=str(getattr(self, "task_epoch", "") or ""),
+        )
+        if (board_state.get("status") == "STALE" or
+                board_state.get("status") == "BOUND" and
+                (board_state.get("state_id") != state_id or
+                 board_state.get("required_transition") != state.get("required_transition") or
+                 board_state.get("allowed_next_actions") !=
+                    list(state.get("allowed_next_actions") or []))):
+            return {
+                "marker": "[SHARED_BLACKBOARD_STATE_REJECTED]",
+                "reason": "action_loop_blackboard_state_drift",
+                "detail": "Current Runtime Action Loop differs from same-request Blackboard snapshot",
+                "suggestion": "Refresh the current Request/Epoch Planner context before any new Action.",
+            }
         # These fields describe Runtime facts already present in the same turn.
         # Never ask the model to echo them and never reject a valid action because
         # the model copied an old or semantically different value.

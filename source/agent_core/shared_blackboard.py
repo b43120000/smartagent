@@ -77,6 +77,9 @@ def build_runtime_capability_manifest(runtime) -> dict:
     """Publish the real canonical interface/schema surface, never permissions."""
     from .smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
     from .tool_capabilities import get_allowed_tools, TOOL_CATEGORIES, describe_tools
+    from .semantic_capability_resolution import (
+        CAPABILITY_TO_TOOL, ACTION_VOCABULARY,
+    )
     from .action_loop_state import (
         DISCOVERY_TOOLS, PLAN_TOOLS, VERIFY_TOOLS, MUTATION_TOOLS, DELIVERY_TOOLS,
     )
@@ -123,6 +126,14 @@ def build_runtime_capability_manifest(runtime) -> dict:
                 for key, value in (schema.get("optional") or {}).items()
             },
             "side_effect_class": side_effect,
+            "semantic_capabilities": sorted(
+                capability for capability, registered_tool in CAPABILITY_TO_TOOL.items()
+                if registered_tool == name
+            ),
+            "fixed_vocabulary_translation": any(
+                registered_tool == name and capability in ACTION_VOCABULARY
+                for capability, registered_tool in CAPABILITY_TO_TOOL.items()
+            ),
             "normal_tool_admission_required": True,
             "scope_admission_owner": "RUNTIME",
             "authorization_inferred": False,
@@ -144,6 +155,12 @@ def build_runtime_capability_manifest(runtime) -> dict:
         "allowed_tool_count": len(tools),
         "allowed_tools": [row["tool"] for row in tools],
         "tools": tools,
+        "semantic_translation_registry": {
+            "owner": "SEMANTIC_CAPABILITY_RESOLUTION_V1",
+            "fixed_vocabulary_capabilities": sorted(ACTION_VOCABULARY),
+            "capability_to_tool": dict(CAPABILITY_TO_TOOL),
+            "selection_is_not_authorization": True,
+        },
         "run_command_operations": [
             "INSPECT", "MUTATE", "BUILD", "TEST", "VERIFY",
             "GIT_INSPECT", "GIT_MUTATE", "PROCESS", "TRANSFER", "GENERAL",
@@ -1292,6 +1309,44 @@ def _event_projection(runtime, payload: Mapping) -> tuple[list[dict], bool]:
     return events[-64:], truncated
 
 
+def read_action_loop_blackboard(
+    board: Mapping | None, *, request_id: str, task_epoch: str,
+) -> dict:
+    """Common read-only Action Loop evidence projection for Runtime modules.
+
+    A Blackboard read never updates a Ledger or grants tool/scope authority.
+    The current Action Loop and its causal decision must share the same state
+    ID and current Request/Epoch. Stale or inconsistent projections fail closed.
+    """
+    snapshot = board if isinstance(board, Mapping) else {}
+    identity = snapshot.get("identity") or {}
+    if not snapshot or identity.get("request_id") != request_id or identity.get("task_epoch") != task_epoch:
+        return {"status": "UNAVAILABLE", "reason_code": "BLACKBOARD_REQUEST_EPOCH_UNBOUND"}
+    sections = snapshot.get("sections") or {}
+    progress = ((sections.get("progress") or {}).get("value") or {})
+    actions = ((sections.get("actions") or {}).get("value") or {})
+    loop_state = progress.get("action_loop_state") or {}
+    decision = actions.get("action_loop_decision") or {}
+    state_id = str(loop_state.get("state_id") or "")
+    if (not state_id or state_id != str(decision.get("state_id") or "")):
+        return {
+            "status": "STALE",
+            "reason_code": "BLACKBOARD_ACTION_LOOP_STATE_ID_CONFLICT",
+            "authorization_granted": False,
+        }
+    return {
+        "status": "BOUND",
+        "state_id": state_id,
+        "required_transition": str(decision.get("required_transition") or ""),
+        "allowed_next_actions": list(decision.get("allowed_next_actions") or [])[:32],
+        "decision_basis": dict(decision.get("decision_basis") or {}),
+        "authorization_granted": False,
+        "source_owner": "ACTION_LOOP_STATE",
+        "request_id": request_id,
+        "task_epoch": task_epoch,
+    }
+
+
 def build_shared_blackboard(runtime, payload: Mapping) -> dict:
     """Build the one bounded canonical read model consumed by Planner/Runtime."""
     progress = getattr(runtime, "progress_ledger", None)
@@ -1496,7 +1551,7 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
 
 __all__ = [
     "CAPABILITY_SCHEMA", "CANDIDATE_SCHEMA", "SCHEMA", "TERMINAL_SCHEMA",
-    "build_runtime_capability_manifest", "build_strategy_candidate_registry",
+    "read_action_loop_blackboard", "build_runtime_capability_manifest", "build_strategy_candidate_registry",
     "build_shared_blackboard", "evaluate_terminal_readiness",
     "interrupt_terminal_diagnostic", "validate_strategy_candidate_bindings",
 ]

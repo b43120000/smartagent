@@ -42,6 +42,8 @@ jobs:
           source/agent_core/directory_goal_contract.py
           source/agent_core/conditional_goal_policy.py
           source/agent_core/semantic_capability_resolution.py
+          source/WebAgent/tool_context.py
+          source/WebAgent/tests/test_git27_collector_causal_coverage.py
           source/agent_core/tools.py
           source/agent_core/goal_strategy_transition.py
           source/agent_core/action_readiness.py
@@ -63,6 +65,14 @@ jobs:
         run: python -B source/WebAgent/tests/test_directory_decision_rule.py
       - name: SCR + Action Loop + Blackboard original-Chinese Goal E2E
         run: python -B source/WebAgent/tests/test_semantic_blackboard_directory_e2e.py
+      - name: Existing SCR semantic capability contracts
+        run: python -B source/WebAgent/tests/validate_semantic_capability_resolution_it.py
+      - name: Existing SCR protocol selection
+        run: python -B source/WebAgent/tests/validate_semantic_capability_protocol_it.py
+      - name: Existing Action Loop runtime state
+        run: python -B source/WebAgent/tests/validate_action_loop_runtime_state.py
+      - name: Existing Git24 canonical contract resolution
+        run: python -B source/WebAgent/tests/test_git24_canonical_contract_resolution.py
       - name: Existing Git27 causal receipts
         run: python -B source/WebAgent/tests/test_git27_failure_causal_pipeline.py
       - name: Existing Git26 prerequisite transition

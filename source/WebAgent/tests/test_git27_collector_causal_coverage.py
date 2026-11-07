@@ -69,6 +69,13 @@ class CollectorCausalCoverageTests(unittest.TestCase):
              "untried_candidate_count": 1,
              "strategy_candidate_route_ids": ["PINNED_REMOTE_ARTIFACT_ACQUISITION"],
              "strategy_candidate_statuses": ["UNTRIED"]},
+            {**base, "stage": "action_loop_decision_evaluated", "round": 3,
+             "state_id": "ALS-G27-ACTION-LOOP", "rule_id": "DIR-001",
+             "observed_evidence_ref": ACTION,
+             "required_transition": "REPLAN_REQUIRED",
+             "allowed_next_actions": ["create_directory"],
+             "reason_code": "GOAL_DIRECTORY_ABSENCE_CONFIRMED",
+             "authorization_granted": False},
             {**base, "stage": "action_resolution_recorded", "round": 2,
              "action_id": ACTION, "tool": "run_command",
              "original_command_sha256": "b" * 64,
@@ -212,6 +219,16 @@ class CollectorCausalCoverageTests(unittest.TestCase):
         self.assertEqual(terminal["strategy_candidate_route_ids"],
                          ["PINNED_REMOTE_ARTIFACT_ACQUISITION"])
         self.assertEqual(terminal["strategy_candidate_statuses"], ["UNTRIED"])
+        loop_decisions = json.loads(files["action_loop_decision_summary.json"])
+        self.assertEqual(len(loop_decisions), 1)
+        loop_row = loop_decisions[0]
+        self.assertEqual(loop_row["rule_id"], "DIR-001")
+        self.assertEqual(loop_row["observed_evidence_ref"], ACTION)
+        self.assertEqual(loop_row["required_transition"], "REPLAN_REQUIRED")
+        self.assertEqual(loop_row["allowed_next_actions"], ["create_directory"])
+        self.assertEqual(loop_row["reason_code"],
+                         "GOAL_DIRECTORY_ABSENCE_CONFIRMED")
+        self.assertFalse(loop_row["authorization_granted"])
         action_trace = json.loads(files["action_causal_trace_summary.json"])
         self.assertTrue(any(row["event"] == "action_resolution_recorded"
                             and row["original_command_sha256"] == "b" * 64
