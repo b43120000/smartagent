@@ -1,5 +1,6 @@
 {
   "core_files": {
+    ".github/workflows/git24-canonical-contract-admission.yml": "9821c2253a6ae966224a47d2dc398b9fa7914bf0d4cd37023a60b6c0be94dfab",
     ".github/workflows/runtime-fact-ledger-p0-p3-regression.yml": "8f79b9acf3d283486c18e65a951b23298a407f6a6d4818b6b825514626f1aec6",
     "ACLstatus.bat": "0d358900e318fd5d3cad027ac708de045c7d7741d86d66bc68cebd6030db4fa8",
     "adapterUI/1.writeSendBox.bat": "d9f16aa27c6610aa6b311188db45ce16cca6bd475b4253aa6e653a929cb05498",
@@ -67,6 +68,7 @@
     "source/agent_core/bounded_repair.py": "004e316f316b2a3925ee8f89cf5e8ea6f3badc949790e4d17cf8e33155e01480",
     "source/agent_core/bp1_observation_terminal.py": "c059bc55262f96d1ca7ca952a100376adf3faaac19ec27e0a98dcd16672a5abe",
     "source/agent_core/browser_preferences.py": "4aadf625407015633a89c0b82e198988c4f8f9c758233add82e01662ec499011",
+    "source/agent_core/canonical_contract_resolver.py": "6e88627061a3cf3218585fa0bd9cdeb875e5ce6f0a0926383ca50ac5b489a0fa",
     "source/agent_core/capability_recovery.py": "4f8d69c43683e874da7421b25af403c23d0be3187fff98069bfa22a317264ed3",
     "source/agent_core/chunked_write.py": "cf5acd5ae5229dfdc62164957b34c21dbd29b6af5006c78265072f6b00bd74e0",
     "source/agent_core/command_operation.py": "cdf7f95493be12618197df6a0b2be7e208ac5d69dd46b3642c8f4e7d4d119faa",
@@ -104,7 +106,7 @@
     "source/agent_core/paths.py": "7894eb39c8b9da086018062f2f5f273cd4adafa1ee26eb211804f054f471b052",
     "source/agent_core/plan_ledger.py": "c2c5a29d625e9907fb4e7eea46b86031482440a2814b4a4ea35d4877fd834f47",
     "source/agent_core/plan_readiness.py": "3617ae47f3354f22e6dfccef8feb2fc7295b1211f50ee116e2d58c05540c671b",
-    "source/agent_core/planner_context_snapshot.py": "ded8acd68a487049d7aac5461ad16d78544c1325927095b4b276f472ee0b2451",
+    "source/agent_core/planner_context_snapshot.py": "5e21b883b1fca7a6fdacda3cbbe87870d8a9393ad655b870b1b184063d2d5749",
     "source/agent_core/pr_bcd_observation_evidence.py": "6532776f715ddd08913d4272342644d14146dad1d081e6aab855a318d0835502",
     "source/agent_core/pr_bcd_request_scope.py": "5566da70e22babb8f7dfebfb5dc80347aa3d507ebe47db30591a6acad6902c65",
     "source/agent_core/preexecution_replan.py": "e3845d78f04f0aa41f9bedeec683126b773b519863e0d21e3f5e4620f3860da2",
@@ -257,9 +259,10 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "5059eab73bb7773433d7663431a1370c315025cbf6ab6f0b6a64e3576991ec7f",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "f96d0d9d51a6e28d2ca65f15fb9435005a8d3dcb8da813efbbffd70db34a3bd8",
+    "source/WebAgent/protocol_loop.py": "eec72fd16310cfaeadb77be4425709c5b38c7be9cd428b94c5b4992ce7622e64",
     "source/WebAgent/protocol.py": "8130749035ee3c2e5ab20f5cc663417db410e9c062f52ca4c4dffe915b030b22",
     "source/WebAgent/session.py": "a3e3cedda8e42611705c09b71228ec59e13f63f49e1f7e10297b64198699bd6e",
+    "source/WebAgent/tests/test_git24_canonical_contract_resolution.py": "3a0af39f1dbf83724b672aa3c628e7a89b4874f5094700aa264c2f8222cd4b47",
     "source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py": "7be7da2abad8d3bfb8a299d36ab390b3507f7fee430a17b3f84350145ae1a3ea",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0"
   },
