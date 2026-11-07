@@ -932,6 +932,9 @@ try {
     })
     Write-Json (Join-Path $stage 'action_causal_trace_summary.json') @($actionTrace)
     $coverageIssues = New-Object 'System.Collections.Generic.List[string]'
+    if ($timeline.Count -eq 0) {
+        $coverageIssues.Add('NO_MATCHING_RUNTIME_EVENTS')
+    }
     $missingStages = @($transitions | Where-Object {
         $_.transition_stage -in @('MISSING','[REDACTED_NONCODE]')
     }).Count
@@ -960,6 +963,10 @@ try {
         transition_missing_stage=$missingStages
         failed_action_count=$failedIDs.Count
         failure_receipt_count=$failures.Count
+        unique_failure_action_count=$knownIDs.Count
+        planner_failure_context_events=@($delivery | Where-Object {
+            $_.failure_causal_receipt_count -gt 0
+        }).Count
         missing_failure_action_ids=@($missingIDs | Select-Object -First 24)
         admission_rejection_count=$admissionRejections.Count
         contract_receipt_count=$contracts.Count
