@@ -192,6 +192,7 @@ def build_transaction(*, request_id: str, task_epoch: str, original_goal: str,
                       ccrc: Mapping | None = None,
                       canonical: Sequence[Mapping] = (),
                       prerequisite_transition: Mapping | None = None,
+                      failure_receipts: Sequence[Mapping] = (),
                       evidence_count: int = 0) -> dict:
     """One stable bounded vocabulary projected across all existing validators."""
     phase = phase if phase in {"REJECTED", "ADMITTED", "PROPOSED"} else "PROPOSED"
@@ -225,6 +226,21 @@ def build_transaction(*, request_id: str, task_epoch: str, original_goal: str,
         "phase": phase,
         "progress_contract": "PROGRESS",
         "replan_contract": "REPLAN",
+        "failure_causal_receipts": [
+            {
+                "action_id": _safe(item.get("action_id")),
+                "tool": _safe(item.get("tool")),
+                "status": _safe((item.get("execution") or {}).get("status")),
+                "reason_code": _safe((item.get("execution") or {}).get("reason_code")),
+                "failure_category": _safe((item.get("failure") or {}).get("category")),
+                "classification_verified": bool(
+                    (item.get("failure") or {}).get("classification_verified")
+                ),
+                "next_evaluation": _safe((item.get("replan") or {}).get("next_evaluation")),
+                "authorization_granted": False,
+            }
+            for item in list(failure_receipts or [])[-8:] if isinstance(item, Mapping)
+        ],
         "request_contract": "REQUEST",
         "prerequisite_contract": "PREREQUISITE",
         "prerequisite_transition": {
