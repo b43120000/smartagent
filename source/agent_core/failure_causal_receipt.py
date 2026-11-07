@@ -120,7 +120,18 @@ def build_failure_receipt(action_id: str, *,
         category, conclusive = "UNCLASSIFIED_FAILURE", False
     if status == "REJECTED" and decoded.get("executed") is False:
         category, conclusive = "ADMISSION_REJECTED", True
-    next_evaluation = _CLASS_TO_NEXT.get(category, "INSPECT_RUNTIME_BLOCKER")
+    # Do not route an unrelated filesystem/build failure to Git diagnosis.
+    if category == "UNCLASSIFIED_FAILURE":
+        if tool != "run_command":
+            next_evaluation = "INSPECT_TYPED_TOOL_RESULT_AND_SCOPE"
+        elif str(action.get("operation") or "") == "GIT_INSPECT":
+            next_evaluation = "INSPECT_ACTUAL_GIT_FAILURE_EVIDENCE"
+        else:
+            next_evaluation = "INSPECT_ACTUAL_COMMAND_FAILURE_EVIDENCE"
+    elif category == "ADMISSION_REJECTED":
+        next_evaluation = "REVIEW_RUNTIME_ADMISSION_REASON"
+    else:
+        next_evaluation = _CLASS_TO_NEXT.get(category, "INSPECT_RUNTIME_BLOCKER")
     return {
         "schema": SCHEMA,
         "request_id": request_id,
