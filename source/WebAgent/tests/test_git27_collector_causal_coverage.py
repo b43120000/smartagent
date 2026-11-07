@@ -112,6 +112,15 @@ class CollectorCausalCoverageTests(unittest.TestCase):
                  "decision": "CONTINUE",
              })},
         ]
+        # This event mentions the selected Request but belongs to a DIFFERENT
+        # Task. String-match-only collection would silently join its evidence.
+        rows.append({
+            **base, "stage": "tool_failure_causal_receipt_recorded",
+            "task_id": "TASK-OTHER-G27", "action_id": "FOREIGN-RESULT",
+            "round": 8, "tool": "run_command",
+            "result_status": "FAILED", "result_reason": "COMMAND_EXITED",
+            "failure_category": "AUTHENTICATION_REJECTED",
+        })
         if include_failure:
             rows.append({
                 **base, "stage": "tool_failure_causal_receipt_recorded",
@@ -169,6 +178,7 @@ class CollectorCausalCoverageTests(unittest.TestCase):
         self.assertEqual(failure["next_evaluation"],
                          "CHECK_DNS_WITH_SCOPED_OBSERVATION")
         self.assertTrue(failure["classification_verified"])
+        self.assertNotIn("FOREIGN-RESULT", "\\n".join(files.values()))
         admission = json.loads(files["action_admission_rejections.json"])[0]
         self.assertEqual(admission["unified_contract_issue_diffs"][0]["tool"],
                          "run_command")
