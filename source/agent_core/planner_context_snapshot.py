@@ -315,6 +315,20 @@ def build_planner_context_snapshot(runtime) -> dict:
         gap_view, interruption_view, source_view, source_integrity_view,
         artifact_view, remote_access_view,
     )
+    # Precondition candidates are explicitly carried into Progress and Replan:
+    # a one-time suggestion cannot become satisfied without Runtime evidence.
+    from .prerequisite_transition_gate import build_prerequisite_transition
+    transition_view = build_prerequisite_transition(
+        artifact_view=artifact_view,
+        prerequisite_view=prerequisite_view,
+        remote_view=remote_access_view,
+        request_id=str(getattr(runtime, "run_id", "") or ""),
+        task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
+        bound_workspace=str(getattr(runtime, "workspace", "") or ""),
+        tool_scope_preview=getattr(getattr(runtime, "tools", None), "preview_tool_scope", None),
+        action_ledger=actions, result_ledger=evidence,
+        guidance_issued=bool(getattr(runtime, "_remote_access_probe_guidance_issued", False)),
+    )
     from .action_resolution_trace import (
         deployment_path_prerequisites, bounded_action_trace_projection,
     )
@@ -339,6 +353,7 @@ def build_planner_context_snapshot(runtime) -> dict:
         "persistent_goal_gaps": gap_view,
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,
+        "prerequisite_transition_gate": transition_view,
         "deployment_path_prerequisites": path_prerequisites,
         "action_resolution_trace": action_resolution_traces,
         "unified_contract_transaction": dict(getattr(runtime, "_last_unified_contract_receipt", {}) or {}),
@@ -483,6 +498,17 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "This is a Runtime-owned, read-only decision snapshot. Candidate tools are NOT grants. "
             "Honor executed/verification states and do not treat UNKNOWN as absence. "
             "Goal Transition Readiness only classifies evidence: Planner decides any changed strategy. "
+            "prerequisite_transition_gate is a causal constraint on Progress, Replan "
+            "and INTERRUPTION. If READY_FOR_TOOL_ADMISSION, use its exact "
+            "probe_action in a CONTINUE proposal and pass full Tool/Scope/Network "
+            "Admission before claiming any probe result. Its existing bound "
+            "working_directory is a scoped CWD candidate, not a new file read "
+            "permission or network authorization. guidance_previously_issued "
+            "is never Evidence. If WORKSPACE_SCOPE_REJECTED, use the exact "
+            "Runtime preflight reason to request the minimal missing scope; "
+            "if PROBE_EVIDENCE_AVAILABLE_UNRESOLVED, inspect real Tool Result "
+            "Evidence and choose a strategy, not a repeated speculative probe. "
+            "Progress must not describe an unexecuted prerequisite as completed. "
             "persistent_goal_gaps retains verified missing prerequisites across later failures; "
             "a new rejected read does not erase an earlier confirmed absence. "
             "deployment_path_prerequisites distinguishes an absent deployment "
