@@ -76,12 +76,13 @@ def collect_and_upload(task_id: str, request_id: str, *, collector: Path = COLLE
                 if (coverage.get("schema") != declared
                         or coverage.get("status") != manifest.get("causal_coverage_status")
                         or coverage.get("status") not in {
-                            "COVERED_WITH_BOUNDED_WINDOW", "PARTIAL"
+                            "COVERED_WITH_BOUNDED_WINDOW", "FULL_AVAILABLE_LOG_SCAN",
+                            "PARTIAL"
                         }):
                     raise ValueError("RCA_CAUSAL_COVERAGE_INVALID")
                 result["causal_coverage_status"] = coverage["status"]
                 result["causal_coverage_complete"] = (
-                    coverage["status"] == "COVERED_WITH_BOUNDED_WINDOW"
+                    coverage["status"] == "FULL_AVAILABLE_LOG_SCAN"
                 )
                 result["causal_coverage_issue_codes"] = [
                     str(x)[:80] for x in list(coverage.get("issues") or [])[:16]
