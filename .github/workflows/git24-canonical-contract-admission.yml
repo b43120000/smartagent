@@ -43,8 +43,8 @@ jobs:
         run: python -B source/WebAgent/tests/test_action_resolution_trace_and_missing_target.py
       - name: Existing progress admission and repair regression
         run: python -B source/WebAgent/tests/validate_flexible_progress_admission.py
-      - name: Existing protocol same-round repair
-        run: python -B source/WebAgent/tests/validate_protocol_same_round_repair.py
+      - name: Existing prerequisite and bounded repair regression
+        run: python -B source/WebAgent/tests/validate_round3_prereq_repair.py
       - name: Existing command security gate
         run: python -B source/WebAgent/tests/validate_command_security_classification.py
       - name: Existing tool scope gate
