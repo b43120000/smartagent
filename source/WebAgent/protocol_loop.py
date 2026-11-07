@@ -7498,6 +7498,26 @@ class WebAgentProtocolLoop:
                             "不得保留 diagnostic 指出的欄位。query_project 的 operation/path/symbol "
                             "只能放在 queries[] 物件內。"
                         )
+                # CanonicalResolver may reject the SCR shape before the
+                # older SCR-specific validator runs. Keep ONE equivalent
+                # Planner-facing repair instruction for both entry points.
+                if any(
+                    item.get("reason") == "semantic_capability_schema_invalid"
+                    for item in ack_diagnostics
+                ):
+                    repair_note += (
+                        "\n[SCR_SCHEMA_REPAIR]\n"
+                        "capability_resolution is a strict two-key object: "
+                        "{schema: SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1, "
+                        "capabilities: [finite canonical capability names]}. "
+                        "Remove Runtime-owned fields, including "
+                        "runtime_capability_state. Preserve previously selected "
+                        "read capabilities, add only capabilities required by "
+                        "the submitted Action, and do not infer Scope, "
+                        "execution or authorization. This is FIELD_REPAIR, "
+                        "not a request for a new Goal strategy.\n"
+                        "[/SCR_SCHEMA_REPAIR]"
+                    )
                 scr_repairs = [
                     item.get("capability_repair")
                     for item in ack_diagnostics
