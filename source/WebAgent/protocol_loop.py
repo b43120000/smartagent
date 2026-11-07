@@ -5248,6 +5248,14 @@ class WebAgentProtocolLoop:
             prerequisite_diagnostic = premature_source_interrupt_diagnostic(
                 request, prerequisite_view,
             )
+            # A verified CWD Scope denial is NOT an untried runnable Probe.
+            # Do not tell Planner to try a command that the Runtime's own
+            # preflight already rejected. Existing exact user consent remains.
+            if (prerequisite_diagnostic
+                    and prerequisite_diagnostic.get("reason") ==
+                    "remote_access_unknown_git_capability_probe_required"
+                    and transition["stage"] != "READY_FOR_TOOL_ADMISSION"):
+                prerequisite_diagnostic = None
             # Initial soft guidance remains for compatible Planner messages,
             # but it cannot release the hard Evidence/Scope transition gate.
             if prerequisite_diagnostic and prerequisite_diagnostic.get("reason") == (
@@ -6467,6 +6475,7 @@ class WebAgentProtocolLoop:
         self._unified_action_recovery_events = []
         self._pending_progress_repair_binding = {}
         self._last_prerequisite_transition_receipt = {}
+        self._remote_access_probe_guidance_issued = False
         spr_candidate_request = (
             trusted_authorized_paths is None
             and _SAVED_PLAN_OPEN not in request
