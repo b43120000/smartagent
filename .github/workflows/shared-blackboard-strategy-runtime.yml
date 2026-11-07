@@ -64,3 +64,6 @@ jobs:
       - name: Existing Windows-native preexecution Replan
         if: matrix.os == 'windows-latest'
         run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
+      - name: Git27 RCA Collector candidate trace completeness
+        if: matrix.os == 'windows-latest'
+        run: python -B source/WebAgent/tests/test_git27_collector_causal_coverage.py

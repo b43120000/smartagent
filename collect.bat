@@ -212,7 +212,7 @@ $scalarKeys = @(
     'repair_mode','issue_count','previous_issue_count','current_issue_count',
     'resolved_issue_count','introduced_issue_count','converging','full_admission_passed',
     'project_root_matches_workspace','explicit_path_count','request_paths_grant_write',
-    'candidate_count','selected_count',
+    'candidate_count','selected_count','strategy_candidate_count','untried_candidate_count',
     'artifact_candidate_count','artifact_count',
     'catalog_status','registration_status','catalog_path_authority',
     'registration_path_authority','goal_identity_status',
@@ -367,7 +367,8 @@ try {
                                'issue_codes','issue_fields','contract_names',
                                'decision_codes','pending_action_ids',
                                'admitted_action_ids','changed_fields',
-                               'rewrite_rule_ids','planner_failure_action_ids')) {
+                               'rewrite_rule_ids','planner_failure_action_ids',
+                               'strategy_candidate_route_ids','strategy_candidate_statuses')) {
                 $prop = $rec.PSObject.Properties[$key]
                 if ($null -ne $prop -and $null -ne $prop.Value) {
                     $row[$key] = Safe-CodeList $prop.Value
@@ -744,6 +745,9 @@ try {
             last_failure_category=$_.last_failure_category
             planner_failure_action_ids=@($_.planner_failure_action_ids)
             prerequisite_transition_stage=$_.prerequisite_transition_stage
+            strategy_candidate_count=$_.strategy_candidate_count
+            strategy_candidate_route_ids=@($_.strategy_candidate_route_ids)
+            strategy_candidate_statuses=@($_.strategy_candidate_statuses)
         }
     })
     Write-Json (Join-Path $stage 'planner_context_delivery.json') @($delivery)

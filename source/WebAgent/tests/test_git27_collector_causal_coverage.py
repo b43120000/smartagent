@@ -53,7 +53,10 @@ class CollectorCausalCoverageTests(unittest.TestCase):
              "failure_causal_receipt_count": 1,
              "last_failure_category": "DNS_RESOLUTION_FAILED",
              "planner_failure_action_ids": [ACTION],
-             "prerequisite_transition_stage": "PROBE_EVIDENCE_AVAILABLE_UNRESOLVED"},
+             "prerequisite_transition_stage": "PROBE_EVIDENCE_AVAILABLE_UNRESOLVED",
+             "strategy_candidate_count": 1,
+             "strategy_candidate_route_ids": ["PINNED_REMOTE_ARTIFACT_ACQUISITION"],
+             "strategy_candidate_statuses": ["UNTRIED"]},
             {**base, "stage": "planner_context_response_correlated", "round": 3,
              "context_snapshot_id": "CTX-G27-EXACT",
              "context_digest": "a" * 64,
@@ -61,6 +64,11 @@ class CollectorCausalCoverageTests(unittest.TestCase):
              "failure_causal_receipt_count": 1,
              "last_failure_category": "DNS_RESOLUTION_FAILED",
              "planner_failure_action_ids": [ACTION]},
+            {**base, "stage": "strategy_terminal_readiness_evaluated",
+             "round": 3, "decision": "REPLAN_REQUIRED", "candidate_count": 1,
+             "untried_candidate_count": 1,
+             "strategy_candidate_route_ids": ["PINNED_REMOTE_ARTIFACT_ACQUISITION"],
+             "strategy_candidate_statuses": ["UNTRIED"]},
             {**base, "stage": "action_resolution_recorded", "round": 2,
              "action_id": ACTION, "tool": "run_command",
              "original_command_sha256": "b" * 64,
@@ -193,6 +201,17 @@ class CollectorCausalCoverageTests(unittest.TestCase):
         self.assertEqual(delivery[0]["planner_failure_action_ids"], [ACTION])
         self.assertEqual(delivery[0]["prerequisite_transition_stage"],
                          "PROBE_EVIDENCE_AVAILABLE_UNRESOLVED")
+        self.assertEqual(delivery[0]["strategy_candidate_count"], 1)
+        self.assertEqual(delivery[0]["strategy_candidate_route_ids"],
+                         ["PINNED_REMOTE_ARTIFACT_ACQUISITION"])
+        self.assertEqual(delivery[0]["strategy_candidate_statuses"], ["UNTRIED"])
+        timeline = json.loads(files["timeline.json"])
+        terminal = next(row for row in timeline if row.get("event") ==
+                        "strategy_terminal_readiness_evaluated")
+        self.assertEqual(terminal["untried_candidate_count"], 1)
+        self.assertEqual(terminal["strategy_candidate_route_ids"],
+                         ["PINNED_REMOTE_ARTIFACT_ACQUISITION"])
+        self.assertEqual(terminal["strategy_candidate_statuses"], ["UNTRIED"])
         action_trace = json.loads(files["action_causal_trace_summary.json"])
         self.assertTrue(any(row["event"] == "action_resolution_recorded"
                             and row["original_command_sha256"] == "b" * 64

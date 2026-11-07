@@ -39,8 +39,11 @@ ARTIFACTS = {
         "kind": "REMOTE_ARTIFACT_REFERENCE",
         "candidate_id": "E1-CASE-D",
         "repository": "b43120000/test",
-        "commit_sha": "6b0d680185e40ae654acef03d0eeb9074536fb8e",
+        "commit": "6b0d680185e40ae654acef03d0eeb9074536fb8e",
         "artifact_path": "goal-driven-replan/v1/SmartAgent_GoalDriven_IT_fixture.zip",
+        "archive_root": "SmartAgent_GoalDriven_IT",
+        "expected_sha256": "c38d634188e23868bd384ad8b0cd12bbe20d778eea8b67338f4ec2bbf747ef62",
+        "expected_git_blob_sha": "a0a2a3e2aa3c0a34a5011f2553c0b232ea657bdb",
     }]
 }
 GAPS = {
@@ -238,6 +241,11 @@ class SharedBlackboardTests(unittest.TestCase):
         self.assertEqual(candidate["source_git_read_evidence_ref"], "D-LIVE-GIT-READ")
         self.assertEqual(candidate["target_absence_evidence_ref"], "FACT-TARGET-ABSENT-001")
         self.assertEqual(candidate["operation"], "GIT_MUTATE")
+        self.assertEqual(candidate["source_artifact"]["commit"],
+                         "6b0d680185e40ae654acef03d0eeb9074536fb8e")
+        self.assertEqual(candidate["source_artifact"]["expected_sha256"],
+                         "c38d634188e23868bd384ad8b0cd12bbe20d778eea8b67338f4ec2bbf747ef62")
+        self.assertTrue(candidate["source_artifact"]["expected_hashes_are_catalog_claims"])
         self.assertTrue(candidate["mutation_scope_not_yet_verified"])
         self.assertFalse(candidate["execution_authorized"])
         self.assertFalse(candidate["source_integrity_verified"])

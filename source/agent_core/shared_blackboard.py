@@ -594,8 +594,10 @@ def build_strategy_candidate_registry(
         from .action_resolution_trace import registered_remote_git_read
         source = artifact_refs[0]
         repository = str(source.get("repository") or "")
-        commit_sha = str(source.get("commit_sha") or "")
+        commit_sha = str(source.get("commit") or "")
         archive_path = str(source.get("artifact_path") or "")
+        expected_sha256 = str(source.get("expected_sha256") or "")
+        expected_blob_sha = str(source.get("expected_git_blob_sha") or "")
         known_targets = [
             gap for gap in list(gaps.get("active_gaps") or [])[:32]
             if isinstance(gap, Mapping)
@@ -612,6 +614,8 @@ def build_strategy_candidate_registry(
             len(known_targets) == 1
             and repository
             and re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha)
+            and re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256)
+            and re.fullmatch(r"[0-9a-fA-F]{40}", expected_blob_sha)
             and archive_path
             and not ntpath.isabs(archive_path)
             and ":" not in archive_path.split("/")[0]
@@ -662,7 +666,10 @@ def build_strategy_candidate_registry(
                 seed = _digest({
                     "source_candidate_id": str(source.get("candidate_id") or ""),
                     "repository": repository, "commit_sha": commit_sha,
-                    "archive_path": archive_path, "target": _path_key(target),
+                    "archive_path": archive_path,
+                    "expected_sha256": expected_sha256,
+                    "expected_blob_sha": expected_blob_sha,
+                    "target": _path_key(target),
                     "git_read_action_id": str(action_id),
                     "target_absence_ref": evidence_ref,
                 })
@@ -683,8 +690,12 @@ def build_strategy_candidate_registry(
                     "source_artifact": {
                         "candidate_id": str(source.get("candidate_id") or "")[:80],
                         "repository": repository,
-                        "commit_sha": commit_sha,
+                        "commit": commit_sha,
                         "artifact_path": archive_path,
+                        "expected_sha256": expected_sha256,
+                        "expected_git_blob_sha": expected_blob_sha,
+                        "archive_root": str(source.get("archive_root") or ""),
+                        "expected_hashes_are_catalog_claims": True,
                     },
                     "source_git_read_evidence_ref": str(action_id)[:160],
                     "purpose": (

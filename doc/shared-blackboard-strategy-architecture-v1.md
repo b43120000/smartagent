@@ -117,3 +117,20 @@ correlated and reported as evidence rather than guessed.
 
 Regression `test_live_case_d_access_verified_without_replan_generates_next_strategy`
 replays the exact relevant stage transition without a Replan history.
+
+## Catalog schema and collector fidelity
+
+The canonical `SMARTAGENT_SOURCE_DISCOVERY_BOOTSTRAP_V1` reference
+uses `commit` (not `commit_sha`), `artifact_path`,
+`expected_sha256`, and `expected_git_blob_sha`. The next-stage
+candidate retains these as pinned **expected values**, not as local
+verification results. A candidate is not materialized if the source's
+commit or expected hashes are malformed or the current Task/Epoch
+Git read is not independently confirmed successful.
+
+The Collector's sanitized `timeline.json` and
+`planner_context_delivery.json` now retain candidate counts,
+`strategy_candidate_route_ids`, and `strategy_candidate_statuses`
+alongside the transition stage. This makes the exact
+`ACCESS_VERIFIED -> candidate_count=0` failure independently
+auditable without exporting commands, credentials or raw source paths.
