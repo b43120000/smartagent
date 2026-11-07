@@ -39,6 +39,7 @@ def _current_probe_attempts(artifact_view: Mapping | None, *,
                             request_id: str, task_epoch: str) -> list[dict]:
     """Only actual current-epoch Tool Result Evidence counts as attempted."""
     from .action_resolution_trace import registered_remote_git_read
+    from .tool_result_contract import decode_result
     actions = action_ledger if isinstance(action_ledger, Mapping) else {}
     results = result_ledger if isinstance(result_ledger, Mapping) else {}
     attempts: list[dict] = []
@@ -48,8 +49,17 @@ def _current_probe_attempts(artifact_view: Mapping | None, *,
                 or evidence.get("task_epoch") != task_epoch
                 or evidence.get("evidence_status", "ACTIVE") != "ACTIVE"):
             continue
-        action = (actions.get(action_id) or {}).get("action") or {}
+        recorded = actions.get(action_id) or {}
+        action = recorded.get("action") or {}
         if not isinstance(action, Mapping) or not registered_remote_git_read(action, artifact_view):
+            continue
+        # A ledger key or Planner narrative is not a Git attempt. Require
+        # a real typed Runtime ToolResult, correlated to current Request/Epoch.
+        tool_result = decode_result(str(recorded.get("result") or "")) or {}
+        if (tool_result.get("tool") != "run_command"
+                or tool_result.get("executed") not in (True, False)
+                or (tool_result.get("executed") is False
+                    and tool_result.get("status") != "REJECTED")):
             continue
         attempts.append({
             "action_id": str(action_id)[:160],
