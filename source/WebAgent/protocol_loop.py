@@ -376,6 +376,7 @@ class WebAgentProtocolLoop:
         self._ccrc = None  # Request-scoped Cross-Contract Repair Coordinator.
         self._last_unified_contract_receipt: dict = {}
         self._unified_action_recovery_events: list[dict] = []
+        self._last_prerequisite_transition_receipt: dict = {}
         self._pending_progress_repair_binding: dict = {}
         self._protocol_repair_tx = None  # Request-scoped unadmitted candidate.
         from agent_core.bounded_repair import SemanticStagnationGuard
@@ -1595,6 +1596,9 @@ class WebAgentProtocolLoop:
     def _with_commit(self, prompt: str, expected: dict) -> str:
         from agent_core.planner_context_snapshot import render_planner_context_snapshot
         planner_context, context_info = render_planner_context_snapshot(self)
+        self._last_prerequisite_transition_receipt = dict(
+            context_info.get("prerequisite_transition_gate") or {}
+        )
         remote_access = context_info.get("remote_artifact_access_readiness") or {}
         inventory = context_info.get("runtime_software_inventory") or {}
         self._emit(
@@ -3561,6 +3565,9 @@ class WebAgentProtocolLoop:
             recovery_events=getattr(self, "_unified_action_recovery_events", []),
             ccrc=ccrc,
             canonical=getattr(self, "_last_canonical_contract_receipts", []),
+            prerequisite_transition=getattr(
+                self, "_last_prerequisite_transition_receipt", {}
+            ),
             evidence_count=len(self.action_result_ledger),
         )
         if not getattr(self, "_action_admission_probe", False):
@@ -6459,6 +6466,7 @@ class WebAgentProtocolLoop:
         self._last_unified_contract_receipt = {}
         self._unified_action_recovery_events = []
         self._pending_progress_repair_binding = {}
+        self._last_prerequisite_transition_receipt = {}
         spr_candidate_request = (
             trusted_authorized_paths is None
             and _SAVED_PLAN_OPEN not in request
