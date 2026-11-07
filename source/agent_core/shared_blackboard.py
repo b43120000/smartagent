@@ -208,6 +208,11 @@ def _command_mentions_target(action: Mapping, candidate: Mapping) -> bool:
 def _candidate_action_matches(candidate: Mapping, action: Mapping) -> bool:
     if action.get("strategy_id") == candidate.get("strategy_id"):
         return True
+    if candidate.get("route_id") == "GOAL_DIRECTORY_CREATE":
+        return (
+            action.get("tool") == "create_directory"
+            and _path_key(action.get("path")) == _path_key(candidate.get("target"))
+        )
     if str(action.get("tool") or "") != str(candidate.get("tool") or ""):
         return False
     operation = str(candidate.get("operation") or "")
@@ -354,6 +359,7 @@ def build_strategy_candidate_registry(
     remote_access_view: Mapping | None = None,
     artifact_view: Mapping | None = None,
     goal_gap_view: Mapping | None = None,
+    directory_decision: Mapping | None = None,
 ) -> dict:
     """Project goal-relevant alternatives from Runtime-attested strategy receipts."""
     from .goal_prerequisite_resolution import source_requirement
@@ -393,6 +399,23 @@ def build_strategy_candidate_registry(
                 return str(gap.get("observed_fact_ref"))[:160]
         return ""
     candidates = []
+    decision = directory_decision if isinstance(directory_decision, Mapping) else {}
+    directory_candidate = decision.get("candidate")
+    if isinstance(directory_candidate, Mapping) and directory_candidate.get("route_id") == "GOAL_DIRECTORY_CREATE":
+        candidate = dict(directory_candidate)
+        if candidate.get("tool") in allowed_tools:
+            attempts = _find_attempts(runtime, candidate)
+            if attempts:
+                latest = attempts[-1]
+                candidate.update({
+                    "status": latest["status"],
+                    "attempt_count": len(attempts),
+                    "attempted_action_id": latest["action_id"],
+                    "attempted_reason_code": latest["reason_code"],
+                })
+                candidate["blocks_interrupt"] = candidate["status"] in _BLOCKING_STATES
+                candidate["requires_user_input"] = candidate["status"] in _USER_INPUT_STATES
+            candidates.append(candidate)
 
     for revision_row in history:
         if not isinstance(revision_row, Mapping):
@@ -1101,6 +1124,15 @@ def validate_strategy_candidate_bindings(
                 "suggestion": "保留 Runtime 提供的精確 probe command；若要改用其他操作，請提出新的策略並通過正常 Admission。",
                 "authorization_granted": False, "executed": False,
             }
+        if (candidate.get("route_id") == "GOAL_DIRECTORY_CREATE"
+                and _path_key(action.get("path")) != _path_key(candidate.get("target"))):
+            return {
+                "marker": "[SMARTAGENT_STRATEGY_REFERENCE_REJECTED]",
+                "reason": "strategy_candidate_directory_target_mismatch",
+                "detail": "DIR-001 requires creation of the exact Runtime-confirmed missing directory",
+                "suggestion": "使用 directory_decision_rule.candidate.target 指定的完整原始路徑，不得建立上層或其他子路徑。",
+                "authorization_granted": False, "executed": False,
+            }
         root = str(candidate.get("target_path_root") or "")
         if root and not _within(action.get("path"), root):
             return {
@@ -1293,6 +1325,7 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         "raw_tool_results_included": False,
     }
     strategy_data = {
+        "directory_decision_rule": dict(payload.get("directory_decision_rule") or {}),
         "candidate_registry": dict(payload.get("strategy_candidates") or {}),
         "prerequisite_transition_gate": dict(
             payload.get("prerequisite_transition_gate") or {}

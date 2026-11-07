@@ -134,6 +134,10 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"path": str, "content": str},
         "optional": {},
     },
+    "create_directory": {
+        "required": {"path": str},
+        "optional": {},
+    },
     "delete_path": {
         "required": {"path": str, "recursive": bool, "reason": str},
         "optional": {},

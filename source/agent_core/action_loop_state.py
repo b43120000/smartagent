@@ -39,7 +39,7 @@ PLAN_TOOLS = {
 }
 VERIFY_TOOLS = {"aggregate_verification"}
 MUTATION_TOOLS = {
-    "apply_edit_plan", "execute_frozen_plan", "write_file", "delete_path",
+    "apply_edit_plan", "execute_frozen_plan", "write_file", "create_directory", "delete_path",
     "begin_file_write", "write_file_chunk", "commit_file_write",
     "abort_file_write", "run_command", "update_semantic_map",
     "update_semantic_map_file", "web_edit_file",

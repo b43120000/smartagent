@@ -379,6 +379,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         evaluate_terminal_readiness, build_shared_blackboard,
     )
     capability_manifest = build_runtime_capability_manifest(runtime)
+    from .decision_rules.directory_workspace_rule import evaluate_directory_decision
+    directory_decision = evaluate_directory_decision(runtime, gap_view)
     strategy_candidates = build_strategy_candidate_registry(
         runtime, capability_manifest=capability_manifest,
         prerequisite_view=prerequisite_view,
@@ -386,6 +388,7 @@ def build_planner_context_snapshot(runtime) -> dict:
         remote_access_view=remote_access_view,
         artifact_view=artifact_view,
         goal_gap_view=gap_view,
+        directory_decision=directory_decision,
     )
     terminal_readiness = evaluate_terminal_readiness(
         strategy_candidates,
@@ -402,6 +405,7 @@ def build_planner_context_snapshot(runtime) -> dict:
         ),
         "goal_transition_readiness": goal_transition_readiness,
         "persistent_goal_gaps": gap_view,
+        "directory_decision_rule": directory_decision,
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,
         "prerequisite_transition_gate": transition_view,
@@ -678,6 +682,19 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "and pass all ordinary Tool Admission checks; do not re-run "
             "rejected actions merely under new IDs. "
             "shared_blackboard is the canonical current-request/current-epoch read model; "
+            "Directory rule DIR-001: when directory_decision_rule.decision is "
+            "INSPECT_DIRECTORY_REQUIRED, inspect the exact Goal target; when it is "
+            "CREATE_DIRECTORY_REQUIRED and candidate_status=UNTRIED, immediately "
+            "propose exactly the create_directory Tool Action for candidate.target "
+            "with candidate.strategy_id, using normal Runtime Write/Scope Admission. "
+            "Do not ask for source/download before this directory-only creation "
+            "unless explicitly required by the original Goal; no parent-path "
+            "creation or placeholder files. If decision=ENTER_EXISTING_DIRECTORY, "
+            "continue the actual task inside that existing path without repeating "
+            "the missing-target probe. Never infer permission from existence or "
+            "absence; on denial report the exact Runtime blocker. "
+            "Creation success proves the directory exists, NOT that the whole Goal "
+            "or any source integrity or file deployment has completed. "
             "each section identifies its authoritative owner and source ledger. Read the "
             "same snapshot rather than reconstructing facts from separate prose fragments. "
             "runtime_capability_manifest describes the canonical tools, schemas, operation "

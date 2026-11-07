@@ -122,6 +122,38 @@ def _confirmed_directory_observation(record: Mapping, original: Mapping) -> dict
         return {"kind": "directory.exists", "path": path, "exists": True}
     return None
 
+def _confirmed_created_directory(record: Mapping, original: Mapping) -> dict | None:
+    """Accept only a native, directly stat-verified current Tool Result.
+
+    Tool success is not inferred from Planner prose or a successful shell exit.
+    """
+    from .tool_result_contract import decode_result
+    action = original.get("action") or {}
+    if not isinstance(action, Mapping) or action.get("tool") != "create_directory":
+        return None
+    path = str(action.get("path") or "")
+    typed = decode_result(str(original.get("result") or "")) or {}
+    data = typed.get("data") or {}
+    if (
+        not path
+        or typed.get("tool") != "create_directory"
+        or typed.get("action_id") != action.get("action_id")
+        or typed.get("status") != "SUCCEEDED"
+        or typed.get("reason") != "DIRECTORY_CREATED"
+        or typed.get("executed") is not True
+        or typed.get("status") != record.get("result_status")
+        or record.get("executed") is not True
+        or data.get("observed_exists") is not True
+        or data.get("observed_is_directory") is not True
+        or data.get("observation_status") != "CONFIRMED"
+        or ntpath.normcase(ntpath.normpath(path)) != ntpath.normcase(
+            ntpath.normpath(str(typed.get("resolved_path") or ""))
+        )
+    ):
+        return None
+    return {"kind": "directory.exists", "path": path, "exists": True}
+
+
 def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) -> dict:
     """Classify execution/observation without interpreting untrusted prose."""
     original = original or {}
@@ -144,6 +176,9 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
     directory_observation = (
         _confirmed_directory_observation(record, original)
         if tool == "inspect_directory" and executed and status == "SUCCEEDED"
+        and evidence_status == "ACTIVE" else
+        _confirmed_created_directory(record, original)
+        if tool == "create_directory" and executed and status == "SUCCEEDED"
         and evidence_status == "ACTIVE" else None
     )
     verified_absence = bool(directory_observation and directory_observation["exists"] is False)

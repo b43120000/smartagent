@@ -27,7 +27,7 @@ PROTOCOL_CONTROL = "PROTOCOL_CONTROL"
 
 _CATEGORY_MEMBERS = {
     DETERMINISTIC_LOCAL: {
-        "run_command", "read_file", "write_file", "delete_path", "begin_file_write",
+        "run_command", "read_file", "write_file", "create_directory", "delete_path", "begin_file_write",
         "write_file_chunk", "commit_file_write", "abort_file_write",
         "list_directory", "inspect_directory", "find_file", "observe_fact",
         "inspect_project_scope", "inspect_project_working_set", "compare_project_snapshot",
@@ -78,6 +78,7 @@ _TOOL_PURPOSES = MappingProxyType({
     "query_project_history": "Query bounded Project Ledger events by type, snapshot, path, or time.",
     "project_sync": "Create or refresh Runtime project context using the smallest selected strategy.",
     "run_command": "Run an explicitly selected command inside the authorized workspace.",
+    "create_directory": "Create exactly one new, authorized directory without shell execution, recursive parent creation or overwrites.",
 })
 
 _WEB_DIRECT_DENY = frozenset({

@@ -17,6 +17,7 @@ ACTION_FIELDS = {
     "observe_fact": ("path",),
     "query_project": ("project_root", "queries"),
     "run_command": ("command", "operation", "working_directory"),
+    "create_directory": ("path",),
 }
 PROJECT_WORKSPACE_TOOLS = frozenset({
     "query_project", "inspect_project_scope", "inspect_project_working_set",

@@ -164,6 +164,31 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
         info["scope_diagnostic"] = classify_scope_preflight(
             tool, info.get("error", ""), allowed=bool(info["allowed"]))
         return info
+    if tool == 'create_directory':
+        requested = str(tool_call.get("path", "") or "").strip()
+        info["requested_paths"] = [requested]
+        info["scope_source"] = "exact_directory_write_target"
+        try:
+            context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+            target = context.require_write(
+                requested, require_absolute=True, forbid_glob=True,
+            )
+            if explicit_paths and not any(target == root for root in explicit_paths):
+                raise PathSecurityError(
+                    "directory_target_not_exact_original_request", requested,
+                )
+            if not target.parent.is_dir():
+                raise PathSecurityError(
+                    "directory_parent_not_existing_directory", str(target.parent),
+                )
+            info["resolved_paths"] = [str(target)]
+        except (PathSecurityError, ValueError, OSError, RuntimeError) as exc:
+            info.update(allowed=False, error=str(exc))
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info.get("error", ""), allowed=bool(info["allowed"]),
+        )
+        return info
     if tool == 'delete_path':
         requested = str(tool_call.get('path', '') or '')
         info['requested_paths'] = [requested]
@@ -1503,7 +1528,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             action_id=tool_call.get('action_id',''),
             request_id=getattr(agent,'current_request_id','') if agent else '',
             task_id=getattr(agent,'current_task_id','') if agent else '')
-    if tool not in {'read_file','write_file','list_directory','find_file','run_command','upload_file','upload_files','return_artifact',
+    if tool not in {'read_file','write_file','create_directory','list_directory','find_file','run_command','upload_file','upload_files','return_artifact',
                     'download_artifact','web_edit_file','execute_artifact_bundle',
                     'web_search','save_session_summary','google_drive_upload','ask_executor'} | P1_TOOLS:
         return result
@@ -1621,6 +1646,70 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         from .tool_result_contract import encode_result
         return encode_result('REJECTED', 'COMMAND_SCOPE_REJECTED', tool=tool,
                              executed=False, detail=str(scope.get("error", "")))
+    if tool == "create_directory":
+        from .tool_result_contract import encode_result
+        if not scope.get("allowed") or len(scope.get("resolved_paths") or []) != 1:
+            return encode_result(
+                "REJECTED", "DIRECTORY_SCOPE_REJECTED",
+                tool=tool, executed=False, requested_path=tool_call.get("path", ""),
+                data={"scope_reason_code": (
+                    (scope.get("scope_diagnostic") or {}).get("reason_code", "")
+                ), "terminal_eligible": False},
+            )
+        target = Path(scope["resolved_paths"][0])
+        # One exact directory only; no recursive parent creation.
+        try:
+            target.mkdir(parents=False, exist_ok=False)
+        except FileExistsError:
+            return encode_result(
+                "REJECTED", "DIRECTORY_ALREADY_EXISTS_REOBSERVE",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"directory_created": False, "terminal_eligible": False},
+            )
+        except FileNotFoundError:
+            return encode_result(
+                "REJECTED", "DIRECTORY_PARENT_MISSING",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"directory_created": False, "terminal_eligible": False},
+            )
+        except PermissionError:
+            return encode_result(
+                "REJECTED", "DIRECTORY_WRITE_PERMISSION_DENIED",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"directory_created": False, "terminal_eligible": False},
+            )
+        except OSError as exc:
+            return encode_result(
+                "UNKNOWN", "DIRECTORY_CREATE_OUTCOME_UNCERTAIN",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"execution_confirmed": False,
+                      "possible_partial_execution": True,
+                      "error_class": type(exc).__name__,
+                      "terminal_eligible": False},
+            )
+        try:
+            verified = target.is_dir() and not target.is_symlink()
+        except OSError:
+            verified = False
+        if not verified:
+            return encode_result(
+                "UNKNOWN", "DIRECTORY_CREATION_VERIFY_UNCERTAIN",
+                tool=tool, executed=True, requested_path=str(target),
+                data={"execution_confirmed": True,
+                      "directory_created": True,
+                      "terminal_eligible": False},
+            )
+        return encode_result(
+            "SUCCEEDED", "DIRECTORY_CREATED",
+            tool=tool, executed=True,
+            requested_path=str(target), resolved_path=str(target),
+            data={"directory_created": True, "observed_exists": True,
+                  "observed_is_directory": True,
+                  "observation_status": "CONFIRMED",
+                  "no_existing_files_overwritten": True,
+                  "no_parent_directories_created": True,
+                  "goal_completion_verified": False},
+        )
     if tool == "run_command":
         workspace = security_context.workspace_root
         try:
