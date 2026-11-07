@@ -122,7 +122,21 @@ def _path(proposal: object, document: object) -> tuple[object, dict]:
             or len(selected) != len(set(selected))):
         return proposal, row("NEEDS_INFORMATION", "semantic_path_planner_selection_invalid")
     if selected != verified:
-        return proposal, row("REJECT_REPLAN", "semantic_path_planner_selection_mismatch", count=len(selected))
+        # Strictly lexical Windows separator equivalence, not case folding,
+        # dot-segment elimination, symlink resolution or a new path choice.
+        # The target is copied only from the Runtime-verified original span.
+        separators_equivalent = (
+            len(selected) == len(verified)
+            and all(type(candidate) is str and
+                    candidate.replace("/", "\\\\") == original.replace("/", "\\\\")
+                    for candidate, original in zip(selected, verified))
+        )
+        if not separators_equivalent:
+            return proposal, row("REJECT_REPLAN",
+                                 "semantic_path_planner_selection_mismatch", count=len(selected))
+        data["selected_paths"] = list(verified)
+        rules.append("WINDOWS_SEPARATOR_EQUIVALENCE")
+        changed.append("selected_paths")
     if "schema" not in data:
         data["schema"] = PATH_SCHEMA
         rules.append("ADD_FIXED_PATH_SCHEMA")
