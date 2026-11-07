@@ -185,9 +185,16 @@ def reset_initialization_composer(*, endpoint, url, journal_root, cancel_check=N
         if cancel_check:
             cancel_check()
         if result.get('status') != 'INIT_RESET_CONFIRMED':
+            latest = read_json_retry(journal)
+            if latest.get('operation_id') != record['operation_id']:
+                raise ComposerOperationError('composer_initialization_reset_identity_changed')
+            latest['initialization_reset_failure'] = result
+            write_json_atomic(journal, latest)
+            reason = result.get('reason_code')
             raise ComposerOperationError(
                 'composer_initialization_reset_required:'
-                + str(result.get('status', 'UNKNOWN')), result)
+                + str(result.get('status', 'UNKNOWN'))
+                + (':' + reason if reason else ''), result)
         latest = read_json_retry(journal)
         if latest.get('operation_id') != record['operation_id']:
             raise ComposerOperationError('composer_initialization_reset_identity_changed')
@@ -197,6 +204,7 @@ def reset_initialization_composer(*, endpoint, url, journal_root, cancel_check=N
             archive.mkdir(exist_ok=True)
             archived = dict(latest, initialization_reset_reason='user_authorized_init_only')
             write_json_atomic(archive / (latest['operation_id'] + '.json'), archived)
+        latest.pop('initialization_reset_failure', None)
         latest.update(
             state='RECOVERED',
             initialization_reset=dict(status='INIT_RESET_CONFIRMED',
@@ -612,6 +620,31 @@ def _wait_for_prewrite_stability(
 
 
 
+def _scroll_conversation_to_bottom(scraper):
+    """Settle the conversation viewport before taking a writable baseline."""
+    adapter = scraper._web_ui_adapter()
+    turns = adapter.turn_elements('assistant') or adapter.turn_elements('user')
+    if not turns:
+        return dict(status='NO_TURNS')
+    return turns[-1].evaluate("""anchor => {
+        for (let el = anchor.parentElement; el; el = el.parentElement) {
+            const overflow = getComputedStyle(el).overflowY;
+            if (!['auto', 'scroll', 'overlay'].includes(overflow) ||
+                el.clientHeight <= 0 || el.scrollHeight <= el.clientHeight + 1) continue;
+            const before = Math.round(el.scrollHeight - el.clientHeight - el.scrollTop);
+            el.scrollTo({top: el.scrollHeight, behavior: 'instant'});
+            const after = Math.round(el.scrollHeight - el.clientHeight - el.scrollTop);
+            return {status: Math.abs(after) <= 2 ? 'AT_BOTTOM' : 'NOT_AT_BOTTOM', before, after};
+        }
+        const root = document.scrollingElement;
+        if (!root || root.scrollHeight <= root.clientHeight + 1) return {status: 'NO_SCROLL_RANGE'};
+        const before = Math.round(root.scrollHeight - root.clientHeight - root.scrollTop);
+        root.scrollTo({top: root.scrollHeight, behavior: 'instant'});
+        const after = Math.round(root.scrollHeight - root.clientHeight - root.scrollTop);
+        return {status: Math.abs(after) <= 2 ? 'AT_BOTTOM' : 'NOT_AT_BOTTOM', before, after};
+    }""")
+
+
 def _reset_initialized_page(scraper, *, sleep=None):
     """Reset one stable, idle bound editor without submitting or changing tabs."""
     sleep = sleep if sleep is not None else time.sleep
@@ -635,11 +668,18 @@ def _reset_initialized_page(scraper, *, sleep=None):
             return dict(status='INIT_RESET_CLEAR_FAILED', cleared=False)
         changed = True
     final = _page_snapshot(scraper, '')
-    ready = (final.get('composer_empty') is True
-             and not final.get('generation_active')
-             and _same_turns(second, final))
-    return dict(status='INIT_RESET_CONFIRMED' if ready else 'INIT_RESET_UNCONFIRMED',
-                cleared=changed)
+    comparison = _snapshot_difference(second, final)
+    reasons = []
+    if final.get('composer_empty') is not True:
+        reasons.append('COMPOSER_NOT_EMPTY')
+    if final.get('generation_active'):
+        reasons.append('GENERATION_ACTIVE')
+    if not comparison['same_turns']:
+        reasons.append('TURN_CHANGED')
+    if reasons:
+        return dict(status='INIT_RESET_UNCONFIRMED', cleared=changed,
+                    reason_code=','.join(reasons), comparison=comparison)
+    return dict(status='INIT_RESET_CONFIRMED', cleared=changed)
 
 
 def _recover_page(scraper,record):
@@ -1260,6 +1300,20 @@ def helper_main():
             return
         scraper=WebLLMScraper('chatgpt',slow_mo=0)
         scraper._page=pages[0];scraper._browser=pages[0].context
+        if payload['mode'] in {'initialization_reset', 'write'}:
+            try:
+                scroll = _scroll_conversation_to_bottom(scraper)
+            except Exception as exc:
+                scroll = dict(status='SCROLL_FAILED', error_type=type(exc).__name__)
+            scraper._log_stage('composer_scroll_bottom', json.dumps(scroll))
+            if scroll.get('status') not in {'AT_BOTTOM', 'NO_TURNS', 'NO_SCROLL_RANGE'}:
+                status = ('INIT_RESET_PAGE_NOT_STABLE' if payload['mode']=='initialization_reset'
+                          else 'PREWRITE_UNSTABLE')
+                print('COMPOSER_RESULT '+json.dumps(dict(
+                    status=status, reason_code='CONVERSATION_SCROLL_NOT_READY',
+                    scroll=scroll, cleared=False, samples_observed=0,
+                    mutation_possible=False)), flush=True)
+                return
         if payload['mode']=='initialization_reset':
             print('COMPOSER_RESULT ' + json.dumps(
                 _reset_initialized_page(scraper)), flush=True)
