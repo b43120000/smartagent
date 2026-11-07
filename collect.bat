@@ -350,6 +350,25 @@ try {
                     }
                 }
                 $row.field_issues_codes = @($issues | Select-Object -First 30)
+                $admissionScope = @()
+                foreach ($d in @($rec.diagnostics)) {
+                    if ($null -eq $d -or -not $d.scope_reason_code) { continue }
+                    $admissionScope += [ordered]@{
+                        reason=(Safe-Code $d.reason)
+                        action_id=(Safe-Code $d.action_id)
+                        tool=(Safe-Code $d.tool)
+                        scope_reason_code=(Safe-Code $d.scope_reason_code)
+                        scope_category=(Safe-Code $d.scope_category)
+                        scope_path_role=(Safe-Code $d.scope_path_role)
+                        scope_transition=(Safe-Code $d.scope_transition)
+                        scope_required_field=(Safe-Code $d.scope_required_field)
+                        executed=$false
+                        authorization_granted=$false
+                    }
+                }
+                if ($admissionScope.Count -gt 0) {
+                    $row.admission_scope_diagnostics = @($admissionScope | Select-Object -First 12)
+                }
                 $contractDiffs = @()
                 foreach ($d in @($rec.diagnostics)) {
                     $unified = $d.unified_contract
@@ -719,6 +738,7 @@ try {
             diagnostic_markers=@($_.diagnostic_markers)
             field_issues=@($_.field_issues_codes)
             unified_contract_issue_diffs=@($_.unified_contract_issue_diffs)
+            admission_scope_diagnostics=@($_.admission_scope_diagnostics)
             command_reject_field=$_.command_reject_field
             executed=$false
             authorization_granted=$false
@@ -731,10 +751,14 @@ try {
                      'TOOL_SCOPE_REJECTED','scope_preflight_rejected')
         }).Count -gt 0
     } | ForEach-Object {
+        $firstScope = @($_.admission_scope_diagnostics | Select-Object -First 1)
         [ordered]@{
             event='ACTION_ADMISSION_REJECTED'
             round=$_.round
-            action_id=''
+            action_id=$(if ($firstScope.Count -gt 0) { $firstScope[0].action_id } else { '' })
+            scope_reason_code=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_reason_code } else { 'ADMISSION_SCOPE_DENIED' })
+            scope_category=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_category } else { 'UNKNOWN' })
+            scope_path_role=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_path_role } else { 'UNKNOWN' })
             scope_allowed=$false
             admission_only=$true
             reason_codes=@($_.diagnostic_reasons)
