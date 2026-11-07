@@ -1599,6 +1599,20 @@ class WebAgentProtocolLoop:
         self._last_prerequisite_transition_receipt = dict(
             context_info.get("prerequisite_transition_gate") or {}
         )
+        prereq = self._last_prerequisite_transition_receipt
+        self._emit(
+            "prerequisite_transition_prepared",
+            request_id=self.run_id, round=self.turn_id,
+            stage=prereq.get("stage", "NOT_APPLICABLE"),
+            progress_transition=prereq.get("progress_transition", ""),
+            access_state=prereq.get("access_state", "UNKNOWN"),
+            scope_preflight_status=prereq.get("scope_preflight_status", ""),
+            scope_preflight_reason_code=prereq.get("scope_preflight_reason_code", ""),
+            probe_evidence_present=bool(prereq.get("probe_evidence_present")),
+            guidance_is_evidence=False,
+            authorization_granted=False,
+            executed=False,
+        )
         remote_access = context_info.get("remote_artifact_access_readiness") or {}
         inventory = context_info.get("runtime_software_inventory") or {}
         self._emit(
