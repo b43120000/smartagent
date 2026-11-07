@@ -114,6 +114,40 @@ class CausalReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["replan"]["next_evaluation"],
                          "INSPECT_ACTUAL_GIT_FAILURE_EVIDENCE")
 
+    def test_nongit_tool_failures_preserve_reason_without_wrong_route(self):
+        from agent_core.tool_result_contract import encode_result
+        other = "G27-READ-MISSING"
+        result = encode_result(
+            "FAILED", "FILE_NOT_FOUND", tool="read_file", executed=False,
+        )
+        action = {other: {"action": {
+            "tool": "read_file", "action_id": other,
+            "path": "/verified/missing",
+        }, "result": result}}
+        evidence = {other: {
+            "tool": "read_file", "result_status": "FAILED",
+            "request_id": REQ, "task_epoch": EPOCH,
+            "evidence_status": "ACTIVE",
+        }}
+        receipt = build_failure_receipt(
+            other, action_ledger=action, result_ledger=evidence,
+            request_id=REQ, task_epoch=EPOCH,
+        )
+        self.assertEqual(receipt["execution"]["reason_code"], "FILE_NOT_FOUND")
+        self.assertEqual(receipt["replan"]["next_evaluation"],
+                         "INSPECT_TYPED_TOOL_RESULT_AND_SCOPE")
+        self.assertFalse(receipt["authorization_granted"])
+
+    def test_nongit_command_unclassified_routes_to_command_diagnosis(self):
+        actions, evidence = ledgers("fatal: unspecified")
+        actions[ACT]["action"]["operation"] = "INSPECT"
+        receipt = build_failure_receipt(
+            ACT, action_ledger=actions, result_ledger=evidence,
+            request_id=REQ, task_epoch=EPOCH,
+        )
+        self.assertEqual(receipt["replan"]["next_evaluation"],
+                         "INSPECT_ACTUAL_COMMAND_FAILURE_EVIDENCE")
+
     def test_source_code_and_command_mention_do_not_classify_stderr(self):
         actions, evidence = ledgers("error: unspecified")
         actions[ACT]["action"]["command"] += " Could not resolve host"
