@@ -341,6 +341,7 @@ def build_planner_context_snapshot(runtime) -> dict:
         "goal_prerequisite_resolution": prerequisite_view,
         "deployment_path_prerequisites": path_prerequisites,
         "action_resolution_trace": action_resolution_traces,
+        "unified_contract_transaction": dict(getattr(runtime, "_last_unified_contract_receipt", {}) or {}),
         "canonical_contract_resolution": [
             dict(row) for row in list(getattr(runtime, "_last_canonical_contract_receipts", []) or [])[-4:]
             if isinstance(row, Mapping)
@@ -495,6 +496,11 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "equivalent to ls-remote and must be planned with separate "
             "destination/parent write readiness. "
             "Absence never grants creation permission. "
+            "unified_contract_transaction is the shared Request/Prerequisite/Progress/"
+            "Replan/Action/Action Recovery/Evidence/Authorization decision language. "
+            "It is request-and-epoch bound, does not grant Scope, create Evidence, "
+            "or turn a held Action into an executed operation. Every subsequent "
+            "Plan revision must pass the original Runtime admission gates. "
             "canonical_contract_resolution lists exact, bounded, non-authorizing "
             "Progress contract repairs. REWRITE_SAFE_EQUIVALENT means only "
             "a proven structural equivalent was normalized before the full "
