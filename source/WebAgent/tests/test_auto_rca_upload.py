@@ -72,6 +72,46 @@ class AutoRcaUploadTest(unittest.TestCase):
         self.assertEqual(len(fake.calls), 4)
         self.assertTrue(self.archive.exists())
 
+    def test_causal_coverage_partial_is_uploaded_but_not_claimed_complete(self):
+        coverage = {
+            "schema": "SMARTAGENT_RCA_CAUSAL_COVERAGE_V1",
+            "status": "PARTIAL",
+            "issues": ["ACTION_FAILURE_CAUSAL_RECEIPT_MISSING"],
+        }
+        with zipfile.ZipFile(self.archive, "w") as z:
+            z.writestr("manifest.json", json.dumps({
+                "schema": "SMARTAGENT_LIVE_RCA_V3",
+                "task_id": "TASK-EXAMPLE", "request_id": "RR-EXAMPLE",
+                "causal_coverage_schema": coverage["schema"],
+                "causal_coverage_status": coverage["status"],
+            }))
+            z.writestr("rca_causal_coverage.json", json.dumps(coverage))
+        fake = FakeGitHub(self.archive)
+        result = collect_and_upload("TASK-EXAMPLE", "RR-EXAMPLE",
+                                    collector=self.collector, run=fake)
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(result["reason"],
+                         "UPLOAD_VERIFIED_CAUSAL_COVERAGE_PARTIAL")
+        self.assertFalse(result["causal_coverage_complete"])
+        self.assertEqual(result["causal_coverage_issue_codes"],
+                         ["ACTION_FAILURE_CAUSAL_RECEIPT_MISSING"])
+        self.assertTrue(any("PUT" in cmd for cmd in fake.calls))
+
+    def test_claimed_causal_coverage_without_required_file_fails_closed(self):
+        with zipfile.ZipFile(self.archive, "w") as z:
+            z.writestr("manifest.json", json.dumps({
+                "schema": "SMARTAGENT_LIVE_RCA_V3",
+                "task_id": "TASK-EXAMPLE", "request_id": "RR-EXAMPLE",
+                "causal_coverage_schema": "SMARTAGENT_RCA_CAUSAL_COVERAGE_V1",
+                "causal_coverage_status": "COVERED_WITH_BOUNDED_WINDOW",
+            }))
+        fake = FakeGitHub(self.archive)
+        result = collect_and_upload("TASK-EXAMPLE", "RR-EXAMPLE",
+                                    collector=self.collector, run=fake)
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(result["reason"], "RCA_CAUSAL_COVERAGE_MISSING")
+        self.assertFalse(any(cmd[0] == "gh" for cmd in fake.calls))
+
     def test_legacy_v2_archive_supported(self):
         with zipfile.ZipFile(self.archive, "w") as z:
             z.writestr("manifest.json", json.dumps({
