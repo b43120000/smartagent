@@ -214,7 +214,7 @@ class OriginalGoalDirectoryIntegration(unittest.TestCase):
                 "strategy_candidates": registry,
             })
             self.assertEqual(
-                board["sections"]["goal"]["data"]["semantic_action_translation"][
+                board["sections"]["goal"]["value"]["semantic_action_translation"][
                     "selected_capability"], "directory.create",
             )
             decision_event = next(
