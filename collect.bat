@@ -796,6 +796,115 @@ try {
     })
     Write-Json (Join-Path $stage 'goal_transition_summary.json') @($goalTransitions)
 
+    # Typed, bounded Git27 causal records. Never export raw command/stream.
+    $transitions = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('prerequisite_transition_prepared','prerequisite_transition_evaluated')
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            event=$_.event
+            transition_stage=$(if ($_.transition_stage) { $_.transition_stage } else { 'MISSING' })
+            progress_transition=$_.progress_transition
+            access_state=$_.access_state
+            scope_preflight_status=$_.scope_preflight_status
+            scope_preflight_reason_code=$_.scope_preflight_reason_code
+            probe_evidence_present=$_.probe_evidence_present
+            latest_probe_failure_category=$_.latest_probe_failure_category
+            latest_probe_failure_ref=$_.latest_probe_failure_ref
+            next_failure_evaluation=$_.next_failure_evaluation
+            guidance_is_evidence=$false
+            authorization_granted=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'prerequisite_transition_summary.json') @($transitions)
+    $failures = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'tool_failure_causal_receipt_recorded'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            action_id=$_.action_id
+            task_epoch=$_.task_epoch
+            tool=$_.tool
+            operation=$_.operation
+            result_status=$_.result_status
+            result_reason=$_.result_reason
+            executed=$_.executed
+            exit_code=$_.exit_code
+            timed_out=$_.timed_out
+            failure_category=$_.failure_category
+            classification_verified=$_.classification_verified
+            stderr_present=$_.stderr_present
+            stderr_sha256=$_.stderr_sha256
+            blocking_evidence_ref=$_.blocking_evidence_ref
+            next_evaluation=$_.next_evaluation
+            authorization_granted=$false
+            raw_stderr_included=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'failure_causal_summary.json') @($failures)
+    $contracts = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'unified_contract_transaction_resolved'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            phase=$_.phase
+            reason_codes=@($_.reason_codes)
+            decision_codes=@($_.decision_codes)
+            contract_names=@($_.contract_names)
+            pending_action_ids=@($_.pending_action_ids)
+            admitted_action_ids=@($_.admitted_action_ids)
+            ccrc_mode=$_.ccrc_mode
+            failure_count=$_.failure_count
+            last_failure_category=$_.last_failure_category
+            authorization_granted=$false
+            executed=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'unified_contract_summary.json') @($contracts)
+    $coverageIssues = New-Object 'System.Collections.Generic.List[string]'
+    $missingStages = @($transitions | Where-Object {
+        $_.transition_stage -in @('MISSING','[REDACTED_NONCODE]')
+    }).Count
+    if ($missingStages -gt 0) { $coverageIssues.Add('PREREQUISITE_TRANSITION_STAGE_MISSING') }
+    $failedIDs = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'action_evidence_recorded' -and
+        $_.result_status -in @('FAILED','REJECTED','PARTIAL')
+    } | ForEach-Object { Safe-Code $_.action_id } |
+        Where-Object { $_ -and $_ -ne '[REDACTED_NONCODE]' } | Sort-Object -Unique)
+    $knownIDs = @($failures | ForEach-Object { $_.action_id } |
+        Where-Object { $_ } | Sort-Object -Unique)
+    $missingIDs = @($failedIDs | Where-Object { $knownIDs -cnotcontains $_ })
+    if ($missingIDs.Count -gt 0) { $coverageIssues.Add('ACTION_FAILURE_CAUSAL_RECEIPT_MISSING') }
+    if (@($warnings | Where-Object { $_ -like 'Timeline capped*' }).Count -gt 0) {
+        $coverageIssues.Add('TIMELINE_ROW_CAP_REACHED')
+    }
+    if ($progressSummary.runtime_state -in @('PAUSED','INTERRUPTED') -and
+        -not $progressSummary.interruption_reason_present) {
+        $coverageIssues.Add('TASK_INTERRUPTION_REASON_MISSING')
+    }
+    $coverage = [ordered]@{
+        schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
+        status=$(if ($coverageIssues.Count -eq 0) { 'COVERED_WITH_BOUNDED_WINDOW' } else { 'PARTIAL' })
+        issues=@($coverageIssues.ToArray())
+        transition_count=$transitions.Count
+        transition_missing_stage=$missingStages
+        failed_action_count=$failedIDs.Count
+        failure_receipt_count=$failures.Count
+        missing_failure_action_ids=@($missingIDs | Select-Object -First 24)
+        admission_rejection_count=$admissionRejections.Count
+        contract_receipt_count=$contracts.Count
+        log_window_tail_lines=25000
+        log_window_bounded=$true
+        timeline_row_cap=3500
+        raw_tool_output_included=$false
+        source_integrity_guaranteed=$false
+        authorization_granted=$false
+    }
+    Write-Json (Join-Path $stage 'rca_causal_coverage.json') $coverage
+    if ($coverageIssues.Count -gt 0) {
+        $warnings.Add('RCA causal coverage PARTIAL: ' + ($coverageIssues -join ','))
+    }
+
     # RemoteEventStore persists the Telegram OUTBOUND terminal summary after
     # worker completion. Select by BOTH IDs when available; never include any
     # reply_route/chat_id, raw Telegram update, or original event payload.
