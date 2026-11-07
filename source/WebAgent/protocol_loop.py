@@ -5471,11 +5471,6 @@ class WebAgentProtocolLoop:
         # One initial Progress-only condition-registration exchange, not a
         # reusable no-action loophole. Normal ACK, ledger and stagnation guards
         # still apply, and no Runtime Tool Action is dispatched on this turn.
-        action_consistency = None if (
-            getattr(self, '_single_action_probe', False) or strict_first_registration
-        ) else self._progress_action_consistency_diagnostic(normalized_progress, operational)
-        if action_consistency:
-            return [], [action_consistency]
         # A failed, evidence-bound prerequisite may not be "continued" by
         # committing Progress prose without the next Action.  Check BEFORE
         # record_model_progress/ack_accepted to avoid a false step advance.
@@ -5522,6 +5517,11 @@ class WebAgentProtocolLoop:
                         "blocked. No grant, evidence or result is inferred."
                     ),
                 }]
+        action_consistency = None if (
+            getattr(self, '_single_action_probe', False) or strict_first_registration
+        ) else self._progress_action_consistency_diagnostic(normalized_progress, operational)
+        if action_consistency:
+            return [], [action_consistency]
         if decision == "CONTINUE" and float(normalized_progress["current_step"]) >= float(normalized_progress["total_steps"]):
             evidence_actions = [
                 item for item in operational
