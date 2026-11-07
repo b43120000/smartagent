@@ -145,7 +145,23 @@ class DirectorySemanticBlackboardTests(unittest.TestCase):
             }
 
             gaps = reconstruct_goal_gaps(runtime)
-            self.assertEqual(gaps["active_count"], 1)
+            from agent_core.semantic_path_resolution import same_original_request_path
+            self.assertEqual(gaps["active_count"], 1, {
+                "gaps": gaps,
+                "bound_target": contract["requested_target"],
+                "native_observed_result": observed,
+                "path_link_check": [
+                    {
+                        "observed_path": row["path"],
+                        "same": same_original_request_path(
+                            contract["requested_target"], row["path"]),
+                        "parent_same": (
+                            Path(contract["requested_target"]).parent.resolve(strict=False)
+                            == Path(row["path"]).parent.resolve(strict=False)
+                        ),
+                    } for row in gaps["gaps"]
+                ],
+            })
             self.assertEqual(gaps["known_absences"][0]["path"], str(target))
             self.assertEqual(gaps["goal_policy"]["intent"], "REMEDIATION_CANDIDATE")
             rule = evaluate_directory_decision(runtime, gaps)
