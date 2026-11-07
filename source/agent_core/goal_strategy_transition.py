@@ -106,11 +106,11 @@ def _confirmed_directory_observation(record: Mapping, original: Mapping) -> dict
         return None
     row = paths[0]
     path = row.get("path")
+    from .semantic_path_resolution import same_original_request_path
     if (not isinstance(path, str) or not path or row.get("authorized") is not True
             or row.get("inaccessible_count") != 0
             or not isinstance(row.get("errors"), list)
-            or ntpath.normcase(ntpath.normpath(path)) !=
-                ntpath.normcase(ntpath.normpath(requested[0]))):
+            or not same_original_request_path(path, requested[0])):
         return None
     errors, exists = row["errors"], row.get("exists")
     if (exists is False and errors == ["path_not_found"]

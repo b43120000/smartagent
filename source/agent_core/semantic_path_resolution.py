@@ -55,7 +55,17 @@ def same_original_request_path(left: object, right: object) -> bool:
     if os.name != "nt":
         return False
     try:
-        return Path(a).resolve(strict=False) == Path(b).resolve(strict=False)
+        p, q = Path(a), Path(b)
+        if p.resolve(strict=False) == q.resolve(strict=False):
+            return True
+        # Windows short-name aliases can persist for a *missing* child path
+        # even though its existing parents resolve to one physical directory.
+        # The final component is compared exactly modulo Windows casing.
+        return bool(
+            p.name.casefold() == q.name.casefold()
+            and p.parent.is_dir() and q.parent.is_dir()
+            and p.parent.resolve(strict=True) == q.parent.resolve(strict=True)
+        )
     except (OSError, RuntimeError, ValueError):
         return False
 
