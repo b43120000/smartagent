@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agent_core.webgpt_rate_governor import WebGPTRateGovernor, WebGPTRateLimited
 from agent_core.payload_budget import ensure_webgpt_prompt_budget
+from agent_core.conversation_chunk_transport import make_chunk_messages, validate_chunk_ack
 
 
 class WebAgentBrowserClient:
@@ -79,6 +80,46 @@ class WebAgentBrowserClient:
                 self._sleep(0.5)
 
     def ask(
+        self,
+        prompt: str,
+        *,
+        stage: str,
+        attachment_paths: list[str] | None = None,
+        protocol_expected: dict | None = None,
+    ) -> str:
+        """Logical request: verified, sequential physical sends with one COMMIT."""
+        messages = make_chunk_messages(prompt)
+        if len(messages) == 1:
+            return self._ask_single(
+                prompt, stage=stage, attachment_paths=attachment_paths,
+                protocol_expected=protocol_expected,
+            )
+        if attachment_paths:
+            # Attachments may only accompany the committing turn; future support
+            # requires an explicitly tested attachment-scoped chunk transaction.
+            raise RuntimeError("CHUNKED_PROMPT_WITH_ATTACHMENTS_UNSUPPORTED")
+        self._emit("chunk_transfer_started", stage=stage, chunks=len(messages))
+        for index, (message, ack) in enumerate(messages, 1):
+            self._emit("chunk_submit_started", stage=stage, index=index, total=len(messages))
+            result = self._ask_single(
+                message, stage=stage, protocol_expected=protocol_expected if ack is None else None,
+            )
+            if ack is not None:
+                try:
+                    validate_chunk_ack(result, ack)
+                except Exception as exc:
+                    self._emit("chunk_transfer_interrupted", stage=stage, index=index,
+                               error=str(exc))
+                    raise
+                self._emit("chunk_ack_confirmed", stage=stage, index=index,
+                           total=len(messages))
+            else:
+                self._emit("chunk_transfer_committed", stage=stage,
+                           chunks=len(messages))
+                return result
+        raise RuntimeError("CHUNK_TRANSFER_MISSING_COMMIT")
+
+    def _ask_single(
         self,
         prompt: str,
         *,
