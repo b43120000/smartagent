@@ -4329,6 +4329,16 @@ class WebAgentProtocolLoop:
         )
         if wrapper_diagnostic:
             return [], [wrapper_diagnostic]
+        # One shared Canonical Resolver for Core Progress, Path and SCR.
+        # Conflict is NOT rewritten; existing Progress diagnostics decide.
+        from agent_core.canonical_contract_resolver import resolve_core_progress_fields
+        core_progress_receipt = None
+        try:
+            normalized_progress_action, core_progress_receipt = (
+                resolve_core_progress_fields(normalized_progress_action)
+            )
+        except ValueError:
+            pass
         from agent_core.initial_progress_normalization import (
             normalize_initial_progress, materialize_unadmitted_first_full,
         )
@@ -4473,8 +4483,14 @@ class WebAgentProtocolLoop:
                 path_document=self._spr_path_resolution,
             )
         )
-        self._last_canonical_contract_receipts = contract_receipts[-4:]
-        for receipt in contract_receipts:
+        merged_contract_receipts = (
+            ([core_progress_receipt]
+             if core_progress_receipt is not None
+             and core_progress_receipt["rewrite_applied"] else [])
+            + contract_receipts
+        )
+        self._last_canonical_contract_receipts = merged_contract_receipts[-6:]
+        for receipt in merged_contract_receipts:
             self._emit(
                 "planner_contract_resolved",
                 request_id=self.run_id, round=self.turn_id, **receipt,
