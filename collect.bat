@@ -213,6 +213,8 @@ $scalarKeys = @(
     'resolved_issue_count','introduced_issue_count','converging','full_admission_passed',
     'project_root_matches_workspace','explicit_path_count','request_paths_grant_write',
     'candidate_count','selected_count','strategy_candidate_count','untried_candidate_count',
+    'state_id','old_state_id','new_state_id','new_blackboard_snapshot_id',
+    'rule_id','observed_evidence_ref','required_transition',
     'artifact_candidate_count','artifact_count',
     'catalog_status','registration_status','catalog_path_authority',
     'registration_path_authority','goal_identity_status',
@@ -368,7 +370,8 @@ try {
                                'decision_codes','pending_action_ids',
                                'admitted_action_ids','changed_fields',
                                'rewrite_rule_ids','planner_failure_action_ids',
-                               'strategy_candidate_route_ids','strategy_candidate_statuses')) {
+                               'strategy_candidate_route_ids','strategy_candidate_statuses',
+                               'allowed_next_actions')) {
                 $prop = $rec.PSObject.Properties[$key]
                 if ($null -ne $prop -and $null -ne $prop.Value) {
                     $row[$key] = Safe-CodeList $prop.Value
