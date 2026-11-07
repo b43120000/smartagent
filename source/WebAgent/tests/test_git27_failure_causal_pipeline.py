@@ -182,7 +182,6 @@ class CausalReceiptTests(unittest.TestCase):
             loop.action_ledger.update(actions)
             loop.action_result_ledger.update(evidence)
             progress = dict(initial())
-            progress["next_action"] = ""
             proposed = [progress, {"tool": "turn_commit", "action_count": 1}]
             _, diagnostics = loop._accept_v8_ack(proposed, {})
             self.assertIn("failed_prerequisite_continue_requires_action",
