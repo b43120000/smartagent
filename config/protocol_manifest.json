@@ -68,7 +68,7 @@
     "source/agent_core/bounded_repair.py": "004e316f316b2a3925ee8f89cf5e8ea6f3badc949790e4d17cf8e33155e01480",
     "source/agent_core/bp1_observation_terminal.py": "c059bc55262f96d1ca7ca952a100376adf3faaac19ec27e0a98dcd16672a5abe",
     "source/agent_core/browser_preferences.py": "4aadf625407015633a89c0b82e198988c4f8f9c758233add82e01662ec499011",
-    "source/agent_core/canonical_contract_resolver.py": "6e88627061a3cf3218585fa0bd9cdeb875e5ce6f0a0926383ca50ac5b489a0fa",
+    "source/agent_core/canonical_contract_resolver.py": "d59902372655362c2533739a9d6d006ddfaead7e0c8d3746c5396a9cc4bbe868",
     "source/agent_core/capability_recovery.py": "4f8d69c43683e874da7421b25af403c23d0be3187fff98069bfa22a317264ed3",
     "source/agent_core/chunked_write.py": "cf5acd5ae5229dfdc62164957b34c21dbd29b6af5006c78265072f6b00bd74e0",
     "source/agent_core/command_operation.py": "cdf7f95493be12618197df6a0b2be7e208ac5d69dd46b3642c8f4e7d4d119faa",
@@ -262,7 +262,7 @@
     "source/WebAgent/protocol_loop.py": "eec72fd16310cfaeadb77be4425709c5b38c7be9cd428b94c5b4992ce7622e64",
     "source/WebAgent/protocol.py": "8130749035ee3c2e5ab20f5cc663417db410e9c062f52ca4c4dffe915b030b22",
     "source/WebAgent/session.py": "a3e3cedda8e42611705c09b71228ec59e13f63f49e1f7e10297b64198699bd6e",
-    "source/WebAgent/tests/test_git24_canonical_contract_resolution.py": "3a0af39f1dbf83724b672aa3c628e7a89b4874f5094700aa264c2f8222cd4b47",
+    "source/WebAgent/tests/test_git24_canonical_contract_resolution.py": "77afc942715ebc7451e6c65ba7b0838d739118497204af1f220ec7f6f9bf9d47",
     "source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py": "7be7da2abad8d3bfb8a299d36ab390b3507f7fee430a17b3f84350145ae1a3ea",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0"
   },
