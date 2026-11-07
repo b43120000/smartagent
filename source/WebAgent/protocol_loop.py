@@ -7154,14 +7154,6 @@ class WebAgentProtocolLoop:
             if ack_diagnostics:
                 self._record_preexecution_predicate_rejection(calls, ack_diagnostics)
                 ccrc_decision = self._ccrc_rejected(calls, ack_diagnostics)
-                # Use the same contract vocabulary across Progress, Action,
-                # Replan and Request/Prerequisite; retain original diagnostics.
-                unified_receipt = self._publish_unified_contract(
-                    calls=calls, diagnostics=ack_diagnostics,
-                    ccrc=ccrc_decision, phase="REJECTED",
-                )
-                if ack_diagnostics:
-                    ack_diagnostics[0]["unified_contract"] = unified_receipt
                 self.protocol_state = "REJECTED"
                 if self.pending_action_repair and not any(
                     item.get("repair_scope") == "ACTION_BATCH"
@@ -7178,22 +7170,43 @@ class WebAgentProtocolLoop:
                         action_ids=invalidated_ids,
                         reason="non_action_batch_rejection",
                     )
-                if self.pending_progress_repair_actions and not any(
-                    item.get("reason") == "invalid_progress_payload"
-                    for item in ack_diagnostics
-                ):
-                    invalidated_ids = [
-                        str(action.get("action_id", "") or "")
-                        for action in self.pending_progress_repair_actions
-                    ]
-                    self.pending_progress_repair_actions = []
-                    self._emit(
-                        "progress_repair_actions_invalidated",
-                        request_id=self.run_id,
-                        round=self.turn_id,
-                        action_ids=invalidated_ids,
-                        reason="non_progress_admission_rejection",
-                    )
+                from agent_core.unified_contract_transaction import (
+                    retain_hold_for_progress_repair,
+                )
+                if self.pending_progress_repair_actions:
+                    if retain_hold_for_progress_repair(
+                        ack_diagnostics, submitted=calls,
+                    ):
+                        self._record_unified_action_recovery(
+                            "RETAINED_FOR_PROGRESS_REPAIR",
+                            self.pending_progress_repair_actions,
+                        )
+                    else:
+                        abandoned = list(self.pending_progress_repair_actions)
+                        invalidated_ids = [
+                            str(action.get("action_id", "") or "")
+                            for action in abandoned
+                        ]
+                        self.pending_progress_repair_actions = []
+                        self._pending_progress_repair_binding = {}
+                        self._record_unified_action_recovery(
+                            "INVALIDATED_BY_NON_PROGRESS_ADMISSION", abandoned,
+                        )
+                        self._emit(
+                            "progress_repair_actions_invalidated",
+                            request_id=self.run_id,
+                            round=self.turn_id,
+                            action_ids=invalidated_ids,
+                            reason="non_progress_admission_rejection",
+                        )
+                # Publish after invalidation/retention, so Planner sees the
+                # *effective* never-executed recovery state, not a stale hold.
+                unified_receipt = self._publish_unified_contract(
+                    calls=calls, diagnostics=ack_diagnostics,
+                    ccrc=ccrc_decision, phase="REJECTED",
+                )
+                if ack_diagnostics:
+                    ack_diagnostics[0]["unified_contract"] = unified_receipt
                 self._record_rejected_action_resolutions(calls, ack_diagnostics)
                 self._planner_context_diagnostics = list(ack_diagnostics)
                 self._emit(
