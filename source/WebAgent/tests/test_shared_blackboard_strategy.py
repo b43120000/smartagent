@@ -280,6 +280,46 @@ class SharedBlackboardTests(unittest.TestCase):
             diagnostic["reason"], "strategy_candidate_target_mismatch"
         )
 
+    def test_registered_git_probe_candidate_preserves_exact_command(self):
+        strategy_id = "STRAT-0123456789ABCDEF0123"
+        expected = "git ls-remote https://github.com/b43120000/test.git HEAD"
+        registry = {
+            "schema": CANDIDATE_SCHEMA,
+            "request_id": REQUEST,
+            "task_epoch": EPOCH,
+            "candidates": [{
+                "strategy_id": strategy_id,
+                "status": "UNTRIED",
+                "tool": "run_command",
+                "operation": "GIT_INSPECT",
+                "working_directory": PARENT,
+                "planner_action_contract": {
+                    "tool": "run_command",
+                    "operation": "GIT_INSPECT",
+                    "command": expected,
+                    "working_directory": PARENT,
+                },
+            }],
+        }
+        action = {
+            "tool": "run_command",
+            "action_id": "ACT-GIT-PROBE-001",
+            "strategy_id": strategy_id,
+            "operation": "GIT_INSPECT",
+            "command": expected,
+            "working_directory": PARENT,
+        }
+        self.assertIsNone(validate_strategy_candidate_bindings(
+            [action], registry, request_id=REQUEST, task_epoch=EPOCH,
+        ))
+        changed = {**action, "command": expected + " refs/heads/main"}
+        diagnostic = validate_strategy_candidate_bindings(
+            [changed], registry, request_id=REQUEST, task_epoch=EPOCH,
+        )
+        self.assertEqual(
+            diagnostic["reason"], "strategy_candidate_command_mismatch"
+        )
+
     def test_candidate_matching_action_requires_explicit_strategy_id(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime = create_runtime(temp)

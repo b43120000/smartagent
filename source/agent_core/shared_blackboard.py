@@ -217,6 +217,13 @@ def _candidate_action_matches(candidate: Mapping, action: Mapping) -> bool:
     if working_directory:
         if _path_key(action.get("working_directory")) != _path_key(working_directory):
             return False
+        contract = candidate.get("planner_action_contract")
+        expected_command = (
+            str(contract.get("command") or "")
+            if isinstance(contract, Mapping) else ""
+        )
+        if expected_command:
+            return str(action.get("command") or "") == expected_command
         if operation == "GIT_MUTATE":
             return bool(
                 re.search(r"(?i)\bgit(?:\.exe)?\b", str(action.get("command") or ""))
@@ -262,7 +269,7 @@ def _attempt_state(candidate: Mapping, result: Mapping | None,
                 "schema", "field", "verification_contract", "unexpected_field",
                 "wrong_field", "missing_required", "tool_mismatch",
                 "operation_mismatch", "working_directory_mismatch",
-                "target_outside_root", "target_mismatch",
+                "target_outside_root", "target_mismatch", "command_mismatch",
                 "strategy_candidate_id_required", "strategy_candidate_reference_unknown",
                 "strategy_candidate_reference_invalid",
             )) for item in reasons):
@@ -894,6 +901,19 @@ def validate_strategy_candidate_bindings(
                 "reason": "strategy_candidate_target_mismatch",
                 "detail": "the candidate deployment target is not present in the proposed command",
                 "suggestion": "保留 Runtime candidate target；不得以同一 strategy_id 改寫或擴大部署目標。",
+                "authorization_granted": False, "executed": False,
+            }
+        contract = candidate.get("planner_action_contract")
+        expected_command = (
+            str(contract.get("command") or "")
+            if isinstance(contract, Mapping) else ""
+        )
+        if expected_command and str(action.get("command") or "") != expected_command:
+            return {
+                "marker": "[SMARTAGENT_STRATEGY_REFERENCE_REJECTED]",
+                "reason": "strategy_candidate_command_mismatch",
+                "detail": "this candidate is bound to the exact Runtime-registered probe command",
+                "suggestion": "保留 Runtime 提供的精確 probe command；若要改用其他操作，請提出新的策略並通過正常 Admission。",
                 "authorization_granted": False, "executed": False,
             }
         root = str(candidate.get("target_path_root") or "")
