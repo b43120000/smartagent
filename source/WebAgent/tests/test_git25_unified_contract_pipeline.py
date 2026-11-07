@@ -12,6 +12,7 @@ from agent_core.canonical_contract_resolver import resolve_core_progress_fields
 from agent_core.progress_reply_contract import normalize_progress_fields
 from agent_core.unified_contract_transaction import (
     SCHEMA, build_transaction, diagnostic_receipts, render_transaction,
+    retain_hold_for_progress_repair,
 )
 from WebAgent.protocol_loop import WebAgentProtocolLoop
 from WebAgent.tests.validate_flexible_progress_admission import initial
@@ -82,6 +83,29 @@ class UnifiedLanguageTests(unittest.TestCase):
                 row = diagnostic_receipts([{"reason": reason}], submitted=[])[0]
                 self.assertEqual((row["contract"], row["decision"]),
                                  (contract, route))
+
+    def test_case_d_round6_progress_error_keeps_hold_but_action_error_clears(self):
+        progress = {"tool": "report_progress", "action_id": "P",
+                    "current_step": 0, "total_steps": 5,
+                    "current_focus": "Discover", "evidence_ref": "UNTRUSTED"}
+        held = {"tool": "inspect_directory", "action_id": "ACT-D4-TARGET",
+                "paths": ["X"]}
+        progress_diagnostic = [{"reason": "unexpected_field",
+                                "tool": "report_progress"}]
+        self.assertTrue(retain_hold_for_progress_repair(
+            progress_diagnostic, submitted=[progress, held]))
+        self.assertTrue(retain_hold_for_progress_repair(
+            [{"reason": "invalid_progress_payload"}],
+            submitted=[progress, held]))
+        unsafe = {**held, "allow_outside_scope": True}
+        self.assertFalse(retain_hold_for_progress_repair(
+            [{"reason": "unexpected_field"}], submitted=[progress, unsafe]))
+        self.assertFalse(retain_hold_for_progress_repair(
+            [{"reason": "TOOL_SCOPE_REJECTED", "tool": "inspect_directory"}],
+            submitted=[progress, held]))
+        self.assertFalse(retain_hold_for_progress_repair(
+            [{"reason": "unexpected_field"}],
+            submitted=[progress, held]))
 
     def test_core_progress_exact_alias_is_safe_but_no_forged_evidence(self):
         planner = {
@@ -165,6 +189,27 @@ class IntegratedUnifiedPipelineTests(unittest.TestCase):
             self.assertEqual(executed, ["ACT-READ"])
             self.assertEqual(len(rounds), 2)
             self.assertEqual(loop._last_unified_contract_receipt["phase"], "ADMITTED")
+
+    def test_held_action_is_rejected_across_task_epoch(self):
+        with tempfile.TemporaryDirectory(prefix="git25-epoch-") as temp:
+            root = Path(temp).resolve()
+            loop = WebAgentProtocolLoop(root, lambda *x: "", progress_root=root)
+            loop.run_id = loop.task_id = "G25-EPOCH"
+            loop.task_epoch = "EPOCH-A"
+            loop.pending_progress_repair_actions = [{
+                "tool": "list_directory", "action_id": "OLD-ACT",
+                "path": str(root)}]
+            loop._pending_progress_repair_binding = {
+                "request_id": loop.run_id, "task_epoch": "EPOCH-A"}
+            loop.task_epoch = "EPOCH-B"
+            calls = [dict(initial()), {"tool": "turn_commit",
+                                        "action_count": 1}]
+            restored = loop._restore_progress_repair_actions(calls)
+            self.assertEqual(restored, calls)
+            self.assertFalse(loop.pending_progress_repair_actions)
+            self.assertEqual(
+                loop._unified_action_recovery_events[-1]["status"],
+                "REQUEST_EPOCH_MISMATCH_REJECTED")
 
     def test_bad_progress_holds_and_restores_exact_action_without_dispatch(self):
         from agent_core.task_progress import initialize_progress
