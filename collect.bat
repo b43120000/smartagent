@@ -640,7 +640,9 @@ try {
             response_sha256=$entry.response_sha256
             progress_found=[bool]$scr.progress_found
             scr_present=[bool]$scr.scr_present
-            schema_valid=[bool]$scr.schema_valid
+            schema_valid=$(if ($scr.scr_present) { [bool]$scr.schema_valid } else { $null })
+            schema_status=$(if (-not $scr.scr_present) { 'NOT_SUBMITTED' }
+                elseif ($scr.schema_valid) { 'VALID' } else { 'INVALID' })
             proposal_changed_from_previous=$changed
             shape_changed_from_previous=$shapeChanged
             schema_matches=[bool]$scr.schema_matches
