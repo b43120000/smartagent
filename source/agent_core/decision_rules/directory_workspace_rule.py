@@ -69,7 +69,12 @@ def evaluate_directory_decision(runtime, gap_view: Mapping | None) -> dict:
     rejected Actions or directory-not-found error messages.
     """
     gap = gap_view if isinstance(gap_view, Mapping) else {}
-    contract = getattr(runtime, "_target_path_contract", None) or {}
+    # Directory creation has its own exact-input binding; Deployment Target
+    # Contract is intentionally not required for a simple "創立資料夾".
+    contract = (
+        getattr(runtime, "_directory_target_contract", None)
+        or getattr(runtime, "_target_path_contract", None) or {}
+    )
     if not isinstance(contract, Mapping):
         contract = {}
     path = str(contract.get("requested_target") or "")

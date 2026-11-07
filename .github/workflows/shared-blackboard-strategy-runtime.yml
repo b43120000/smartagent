@@ -6,6 +6,7 @@ on:
       - feat/shared-blackboard-capability-strategy-20261107
       - fix/strategy-after-access-verified-20261107
       - git24/directory-decision-rules-20261107
+      - fix/scr-blackboard-action-loop-integration-20261107
   workflow_dispatch:
 
 permissions:
@@ -38,6 +39,9 @@ jobs:
           source/agent_core/shared_blackboard.py
           source/agent_core/decision_rules/__init__.py
           source/agent_core/decision_rules/directory_workspace_rule.py
+          source/agent_core/directory_goal_contract.py
+          source/agent_core/conditional_goal_policy.py
+          source/agent_core/semantic_capability_resolution.py
           source/agent_core/tools.py
           source/agent_core/goal_strategy_transition.py
           source/agent_core/action_readiness.py
@@ -52,10 +56,13 @@ jobs:
           source/WebAgent/protocol_loop.py
           source/WebAgent/tests/test_shared_blackboard_strategy.py
           source/WebAgent/tests/test_directory_decision_rule.py
+          source/WebAgent/tests/test_semantic_blackboard_directory_e2e.py
       - name: Shared Blackboard, capability and strategy-exhaustion contracts
         run: python -B source/WebAgent/tests/test_shared_blackboard_strategy.py
       - name: DIR-001 two-round routing and native creation regression
         run: python -B source/WebAgent/tests/test_directory_decision_rule.py
+      - name: SCR + Action Loop + Blackboard original-Chinese Goal E2E
+        run: python -B source/WebAgent/tests/test_semantic_blackboard_directory_e2e.py
       - name: Existing Git27 causal receipts
         run: python -B source/WebAgent/tests/test_git27_failure_causal_pipeline.py
       - name: Existing Git26 prerequisite transition

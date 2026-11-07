@@ -331,6 +331,9 @@ class WebAgentProtocolLoop:
         self._planner_context_diagnostics: list[dict] = []
         self._last_shared_blackboard_snapshot: dict = {}
         self._last_strategy_candidate_registry: dict = {}
+        self._directory_target_contract: dict = {}
+        self._semantic_action_translation: dict = {}
+        self._last_directory_decision: dict = {}
         self._last_terminal_readiness: dict = {}
         self._tri_one_origin = "WEB_DIRECT"
         self._tri_one_has_attached_context = False
@@ -1911,9 +1914,14 @@ class WebAgentProtocolLoop:
                     ),
                 })
         from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+        from agent_core.decision_rules.directory_workspace_rule import evaluate_directory_decision
+        goal_gaps = reconstruct_goal_gaps(self)
+        directory_decision = evaluate_directory_decision(self, goal_gaps)
+        self._last_directory_decision = directory_decision
         self.action_loop_state = build_action_loop_state(
             transport_state=self.protocol_state,
-            goal_gap_view=reconstruct_goal_gaps(self),
+            goal_gap_view=goal_gaps,
+            directory_decision=directory_decision,
             progress=self._progress_state_payload(),
             action=action,
             result=result,
@@ -1925,6 +1933,17 @@ class WebAgentProtocolLoop:
             action_records=action_records,
             admission_records=list(getattr(self, 'deferred_action_repairs', {}).values()),
             available_tools=sorted(set(SUPPORTED_ACTION_TOOLS) | {'final_response'}),
+        )
+        self._emit(
+            "action_loop_decision_evaluated",
+            request_id=self.run_id, task_id=self.task_id, task_epoch=self.task_epoch,
+            state_id=self.action_loop_state.get("state_id", ""),
+            rule_id=(self.action_loop_state.get("decision_basis") or {}).get("rule_id", ""),
+            observed_evidence_ref=(self.action_loop_state.get("decision_basis") or {}).get("evidence_ref", ""),
+            required_transition=self.action_loop_state.get("required_transition", ""),
+            allowed_next_actions=list(self.action_loop_state.get("allowed_next_actions") or []),
+            reason_code=(self.action_loop_state.get("decision_basis") or {}).get("reason_code", ""),
+            authorization_granted=False,
         )
         return dict(self.action_loop_state)
 
@@ -4659,10 +4678,28 @@ class WebAgentProtocolLoop:
         if bound is not None and old_resolution is None:
             return [], [{"marker": "[WEBAGENT_SEMANTIC_CAPABILITY_REJECTED]",
                 "reason": "semantic_capability_binding_identity_mismatch"}]
+        # Reuse the existing SCR translator for an exact original Goal.
+        # The Planner selected the concrete native Action; Runtime may attest
+        # its fixed semantic meaning without treating it as write authorization.
+        directory_binding = dict(getattr(self, "_directory_target_contract", {}) or {})
+        semantic_translation = dict(getattr(self, "_semantic_action_translation", {}) or {})
+        attested_caps = (
+            {"directory.create"}
+            if directory_binding.get("binding_status") == "BOUND"
+            and directory_binding.get("capability") == "directory.create"
+            and semantic_translation.get("selected_capability") == "directory.create"
+            and any(
+                action.get("tool") == "create_directory"
+                and action.get("path") == directory_binding.get("requested_target")
+                for action in operational
+            )
+            else set()
+        )
         try:
             verify_resolution_for_actions(
                 normalized_progress_action.get("capability_resolution"),
                 old_resolution, operational,
+                attested_goal_capabilities=attested_caps,
             )
         except SemanticCapabilityError as exc:
             from agent_core.semantic_capability_resolution import describe_resolution_repair
@@ -6575,6 +6612,9 @@ class WebAgentProtocolLoop:
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
         self._target_path_contract = None
+        self._directory_target_contract = {}
+        self._semantic_action_translation = {}
+        self._last_directory_decision = {}
         self._target_pre_mutation = None
         self._target_path_verdict = {}
         self._preexec_strategy_blocked = {}
@@ -6722,6 +6762,29 @@ class WebAgentProtocolLoop:
             request_paths_grant_write=False,
         )
         self.tools.begin_run(self.run_id, request, authorized)
+        from agent_core.semantic_capability_resolution import translate_request_action
+        from agent_core.directory_goal_contract import bind_directory_goal_target
+        self._semantic_action_translation = translate_request_action(request)
+        self._directory_target_contract = bind_directory_goal_target(
+            request, self.authorized_paths,
+            path_resolution=self._spr_path_resolution,
+            translation=self._semantic_action_translation,
+        )
+        self._emit(
+            "original_goal_semantic_binding_prepared",
+            request_id=self.run_id, task_id=self.task_id, task_epoch=self.task_epoch,
+            selected_capability=self._semantic_action_translation.get(
+                "selected_capability", ""),
+            canonical_tool=self._semantic_action_translation.get(
+                "canonical_tool", ""),
+            directory_binding_status=self._directory_target_contract.get(
+                "binding_status", "UNBOUND"),
+            directory_binding_reason_code=self._directory_target_contract.get(
+                "reason_code", ""),
+            original_request_digest=self._directory_target_contract.get(
+                "request_sha256", ""),
+            authorization_granted=False,
+        )
         # Bind the immutable original deployment destination before the first
         # Tool Action. A read-only observation is never a write authorization
         # and does not assert that the deployment has succeeded.

@@ -380,6 +380,15 @@ def build_planner_context_snapshot(runtime) -> dict:
     )
     capability_manifest = build_runtime_capability_manifest(runtime)
     from .decision_rules.directory_workspace_rule import evaluate_directory_decision
+    from .semantic_capability_resolution import translate_request_action
+    semantic_action = dict(
+        getattr(runtime, "_semantic_action_translation", {}) or
+        translate_request_action(
+            str(getattr(runtime, "task_request", "") or
+                getattr(getattr(runtime, "progress_ledger", None), "goal", "") or "")
+        )
+    )
+    directory_target = dict(getattr(runtime, "_directory_target_contract", {}) or {})
     directory_decision = evaluate_directory_decision(runtime, gap_view)
     strategy_candidates = build_strategy_candidate_registry(
         runtime, capability_manifest=capability_manifest,
@@ -405,6 +414,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         ),
         "goal_transition_readiness": goal_transition_readiness,
         "persistent_goal_gaps": gap_view,
+        "semantic_action_translation": semantic_action,
+        "directory_target_binding": directory_target,
         "directory_decision_rule": directory_decision,
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,

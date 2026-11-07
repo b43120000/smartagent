@@ -6,18 +6,99 @@ Scope, ACL, write ceilings and execution evidence are checked separately.
 from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
+import hashlib
+import re
 
 SCHEMA = "SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1"
 CAPABILITY_TO_TOOL = MappingProxyType({
     "directory.list": "list_directory",
     "directory.inspect_metadata": "inspect_directory",
     "directory.find": "find_file",
+    "directory.create": "create_directory",
     "project.inspect_scope": "inspect_project_scope",
     "project.inspect_working_set": "inspect_project_working_set",
 })
 TOOL_TO_CAPABILITY = MappingProxyType({
     tool: cap for cap, tool in CAPABILITY_TO_TOOL.items()
 })
+
+
+# Extension of the existing finite Semantic Capability Resolution (SCR).
+# Fixed language aliases live ONLY here; Goal/Rule/ActionLoop must consume
+# translated capabilities instead of maintaining independent verb tables.
+TRANSLATION_SCHEMA = "SMARTAGENT_ACTION_SEMANTIC_TRANSLATION_V1"
+ACTION_VOCABULARY = MappingProxyType({
+    "directory.create": (
+        r"創立|建立|創建|新增|新建|建一個|mkdir\b|\bcreate\b|\bmake\b",
+        r"資料夾|目錄|\bfolder\b|\bdirectory\b",
+    ),
+    "directory.inspect_metadata": (
+        r"檢查|確認|查看|觀測|\binspect\b|\bcheck\b",
+        r"資料夾|目錄|\bfolder\b|\bdirectory\b",
+    ),
+    "directory.list": (
+        r"列出|列舉|瀏覽|\blist\b",
+        r"資料夾|目錄|檔案|\bfolder\b|\bdirectory\b",
+    ),
+    "directory.find": (
+        r"搜尋|尋找|找出|\bfind\b|\bsearch\b",
+        r"檔案|資料夾|\bfile\b|\bfolder\b",
+    ),
+    "project.inspect_scope": (
+        r"檢查|確認|查看|\binspect\b|\bcheck\b",
+        r"專案範圍|專案邊界|\bproject scope\b",
+    ),
+    "project.inspect_working_set": (
+        r"檢查|確認|查看|\binspect\b|\bcheck\b",
+        r"工作集合|\bworking set\b",
+    ),
+})
+
+
+def validate_action_vocabulary() -> None:
+    """CI invariant: every fixed-language entry uses canonical SCR/Tool schema."""
+    from .smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
+    if set(ACTION_VOCABULARY) != set(CAPABILITY_TO_TOOL):
+        raise SemanticCapabilityError("fixed_action_vocabulary_registry_drift")
+    for capability, tool in CAPABILITY_TO_TOOL.items():
+        if tool not in TOOL_ENVELOPE_SCHEMAS:
+            raise SemanticCapabilityError("fixed_action_tool_schema_missing:" + tool)
+        phrases = ACTION_VOCABULARY[capability]
+        if len(phrases) != 2 or not all(isinstance(p, str) and p for p in phrases):
+            raise SemanticCapabilityError("fixed_action_vocabulary_invalid:" + capability)
+
+
+def translate_request_action(request: object) -> dict:
+    """Translate bounded original user semantics into SCR capabilities.
+
+    A translation is a candidate, never a Planner selection, write grant,
+    scope expansion, tool invocation or filesystem observation. For a request
+    containing inspect+create, explicit create is the Goal action and inspect
+    remains a prerequisite. Ambiguous/non-directory text has no match.
+    """
+    text = str(request or "")[:32768]
+    matches = [
+        capability for capability, (verb, noun) in ACTION_VOCABULARY.items()
+        if re.search(verb, text, re.I) and re.search(noun, text, re.I)
+    ]
+    # Existing precondition rule performs observation before mutation.
+    selected = (
+        "directory.create" if "directory.create" in matches else
+        matches[0] if len(matches) == 1 else ""
+    )
+    return {
+        "schema": TRANSLATION_SCHEMA,
+        "registry": SCHEMA,
+        "request_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "status": "MATCHED" if selected else "AMBIGUOUS" if matches else "NO_MATCH",
+        "selected_capability": selected,
+        "canonical_tool": CAPABILITY_TO_TOOL.get(selected, ""),
+        "matched_capabilities": matches[:12],
+        "translation_is_authorization": False,
+        "translation_is_planner_selection": False,
+        "translation_is_execution_evidence": False,
+    }
+
 
 
 class SemanticCapabilityError(ValueError):
@@ -38,7 +119,9 @@ def normalize_resolution(proposal: object) -> dict:
     return {"schema": SCHEMA, "capabilities": list(caps)}
 
 
-def verify_resolution_for_actions(proposal, previous, actions):
+def verify_resolution_for_actions(
+    proposal, previous, actions, *, attested_goal_capabilities=(),
+):
     """Validate semantic plan before admission; do not alter existing guards."""
     old = normalize_resolution(previous) if previous is not None else None
     new = normalize_resolution(proposal) if proposal is not None else old
@@ -47,10 +130,16 @@ def verify_resolution_for_actions(proposal, previous, actions):
     selected = set(new["capabilities"])
     if old is not None and not set(old["capabilities"]).issubset(selected):
         raise SemanticCapabilityError("semantic_capability_removal_forbidden")
+    trusted = set(attested_goal_capabilities or ())
+    if not trusted.issubset(CAPABILITY_TO_TOOL):
+        raise SemanticCapabilityError("goal_translation_capability_unknown")
     for action in actions:
         tool = str(action.get("tool", "") or "")
         cap = TOOL_TO_CAPABILITY.get(tool)
-        if cap is not None and cap not in selected:
+        # A concrete Planner Action also expresses semantic selection.
+        # A runtime-attested exact original Goal translation can satisfy this
+        # *selection-only* guard; it does NOT bind SCR, grant ACL or write scope.
+        if cap is not None and cap not in selected and cap not in trusted:
             raise SemanticCapabilityError("semantic_capability_not_selected:" + tool)
     return new
 
@@ -157,7 +246,7 @@ def resolution_decision_shape(proposal: object) -> dict:
 def render_planner_contract():
     registry = "; ".join(k + " => " + v for k, v in CAPABILITY_TO_TOOL.items())
     return (
-        "SCR V1: For read-only directory/project inspection requests, "
+        "SCR V1: For directory/project capability requests, "
         "translate the user's intent into report_progress.capability_resolution "
         "on the first Progress, with schema " + SCHEMA
         + " and capabilities selected from the finite registry. "

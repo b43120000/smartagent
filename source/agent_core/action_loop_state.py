@@ -297,6 +297,7 @@ def build_action_loop_state(
     admission_records: Sequence[Mapping[str, Any]] | None = None,
     available_tools: Sequence[str] | None = None,
     goal_gap_view: Mapping[str, Any] | None = None,
+    directory_decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one complete, model-readable, Runtime-owned state snapshot."""
     progress = dict(progress or {})
@@ -397,6 +398,48 @@ def build_action_loop_state(
     else:
         transition = "CONTINUE_PLAN"
         allowed = sorted(KNOWN_ACTION_TOOLS)
+    # Use DIR-001 (the same decision as Planner/Blackboard) to allow the
+    # native Goal action immediately after a verified negative observation.
+    # A candidate is guidance, never a write/scope admission. Do not override
+    # pending operations, explicit verification or active recovery.
+    directory_rule = (
+        dict(directory_decision)
+        if isinstance(directory_decision, Mapping) else {}
+    )
+    directory_candidate = directory_rule.get("candidate") or {}
+    goal_create_ready = (
+        directory_rule.get("rule_id") == "DIR-001"
+        and directory_rule.get("decision") == "CREATE_DIRECTORY_REQUIRED"
+        and directory_rule.get("candidate_status") == "UNTRIED"
+        and isinstance(directory_candidate, Mapping)
+        and directory_candidate.get("tool") == "create_directory"
+        and directory_candidate.get("target") == directory_rule.get("target")
+        and bool(directory_rule.get("observed_evidence_ref"))
+        and transition in {"REPLAN_REQUIRED", "CONTINUE_PLAN"}
+        and not recovery.get("active")
+        and not pending_verification
+        and evidence_state != "PENDING"
+        and "create_directory" not in blocked
+    )
+    if goal_create_ready:
+        transition = "REPLAN_REQUIRED"
+        allowed = ["create_directory"]
+        missing = ["DIR-001 exact Goal directory creation needs ordinary Tool/Scope admission"]
+    decision_basis = {
+        "rule_id": str(directory_rule.get("rule_id") or "")[:80],
+        "decision": str(directory_rule.get("decision") or "")[:80],
+        "evidence_ref": str(directory_rule.get("observed_evidence_ref") or "")[:160],
+        "reason_code": (
+            "GOAL_DIRECTORY_ABSENCE_CONFIRMED"
+            if goal_create_ready else
+            str(directory_rule.get("reason_code") or "NO_GOAL_DIRECTORY_DECISION")[:120]
+        ),
+        "canonical_tool": "create_directory" if goal_create_ready else "",
+        "target": str(directory_rule.get("target") or "")[:1024],
+        "candidate_status": str(directory_rule.get("candidate_status") or "")[:80],
+        "admission_required": True,
+        "authorization_granted": False,
+    }
     if available_tools is not None:
         available = set(available_tools)
         allowed = [name for name in allowed if name in available]
@@ -555,6 +598,7 @@ def build_action_loop_state(
         "verification_status": str(verification_status or "UNKNOWN").upper(),
         "expectation_status": str(expectation_status or "").upper(),
         "evidence_state": evidence_state,
+        "decision_basis": decision_basis,
         "required_transition": transition if transition in TRANSITIONS else "REPLAN_REQUIRED",
         "allowed_next_actions": list(dict.fromkeys(allowed)),
         "blocked_actions": list(dict.fromkeys(blocked)),

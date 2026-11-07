@@ -1263,6 +1263,30 @@ def _event_projection(runtime, payload: Mapping) -> tuple[list[dict], bool]:
         }
         event["event_id"] = "BBE-" + _digest(event)[:20].upper()
         events.append(event)
+    # The Action Loop decision and the earlier Action/Tool receipts share this
+    # request+epoch snapshot. The event is a projection of the current
+    # Runtime-owned state; it is not a new evidence grant or an event-store write.
+    als = dict(getattr(runtime, "action_loop_state", {}) or {})
+    if als.get("state_id"):
+        basis = dict(als.get("decision_basis") or {})
+        event = {
+            "event_type": "ACTION_LOOP_DECISION_EVALUATED",
+            "source_owner": "ACTION_LOOP_STATE",
+            "round": int(getattr(runtime, "turn_id", 0) or 0),
+            "state_id": str(als.get("state_id") or "")[:120],
+            "required_transition": _code(als.get("required_transition")),
+            "allowed_next_actions": [_code(t) for t in list(
+                als.get("allowed_next_actions") or []
+            )[:32]],
+            "evidence_state": _code(als.get("evidence_state")),
+            "evidence_ref": str(basis.get("evidence_ref") or "")[:160],
+            "rule_id": _code(basis.get("rule_id"), "NONE"),
+            "reason_code": _code(basis.get("reason_code")),
+            "authorization_granted": False,
+            "executed": False,
+        }
+        event["event_id"] = "BBE-" + _digest(event)[:20].upper()
+        events.append(event)
     events.sort(key=lambda item: (int(item.get("round", 0) or 0), item["event_id"]))
     truncated = len(events) > 64
     return events[-64:], truncated
@@ -1290,6 +1314,8 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         "goal_status": dict(payload.get("goal") or {}),
         "goal_transition_readiness": dict(payload.get("goal_transition_readiness") or {}),
         "persistent_goal_gaps": dict(payload.get("persistent_goal_gaps") or {}),
+        "semantic_action_translation": dict(payload.get("semantic_action_translation") or {}),
+        "directory_target_binding": dict(payload.get("directory_target_binding") or {}),
     }
     environment_data = {
         "observed_runtime_facts": list(payload.get("observed_runtime_facts") or [])[:32],
@@ -1317,6 +1343,24 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         "recent_action_provenance": list(payload.get("recent_action_provenance") or [])[:24],
         "action_resolution_trace": list(payload.get("action_resolution_trace") or [])[:24],
         "action_loop_blockers": list(payload.get("action_loop_blockers") or [])[:24],
+        "action_loop_decision": {
+            "schema": "SMARTAGENT_ACTION_LOOP_DECISION_PROJECTION_V1",
+            "state_id": str(
+                (getattr(runtime, "action_loop_state", {}) or {}).get("state_id") or ""
+            )[:120],
+            "required_transition": _code(
+                (getattr(runtime, "action_loop_state", {}) or {}).get("required_transition")
+            ),
+            "allowed_next_actions": [
+                _code(t) for t in list(
+                    (getattr(runtime, "action_loop_state", {}) or {}).get("allowed_next_actions") or []
+                )[:32]
+            ],
+            "decision_basis": dict(
+                (getattr(runtime, "action_loop_state", {}) or {}).get("decision_basis") or {}
+            ),
+            "authorization_granted": False,
+        },
     }
     evidence_data = {
         "failure_causal_receipts": list(payload.get("failure_causal_receipts") or [])[:16],

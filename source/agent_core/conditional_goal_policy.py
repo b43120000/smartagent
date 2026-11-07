@@ -62,8 +62,16 @@ def conditional_goal_policy(goal: str) -> dict:
     """
     text = str(goal or "")
     clauses = _clauses(text)
-    positive = bool(_POSITIVE_REMEDIATION.search(text))
-    conditional = bool(_CONDITIONAL_REMEDIATION.search(text))
+    # Directory-specific language is owned by existing SCR translator.
+    # No second, drifting synonym list in Goal Policy.
+    from .semantic_capability_resolution import translate_request_action
+    semantic_action = translate_request_action(text)
+    directory_creation = semantic_action["selected_capability"] == "directory.create"
+    positive = bool(_POSITIVE_REMEDIATION.search(text)) or directory_creation
+    conditional = bool(_CONDITIONAL_REMEDIATION.search(text)) or bool(
+        directory_creation and re.search(r"(?:如果|若|當|確認|if|when)", text, re.I)
+        and re.search(r"(?:缺少|缺失|不存在|沒有|missing|absent)", text, re.I)
+    )
     first_read = bool(_READ_ONLY_STAGE.search(text))
     no_mutation = bool(_GLOBAL_NO_MUTATION.search(text))
     # Explicit no-write clauses about specific named files or avoiding
@@ -110,6 +118,7 @@ def conditional_goal_policy(goal: str) -> dict:
         "mutation_is_authorized": False,
         "only_runtime_scope_and_permission_can_authorize": True,
         "unresolved_authorization_is_not_denial": True,
+        "semantic_translation": semantic_action,
     }
 
 
