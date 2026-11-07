@@ -1987,8 +1987,8 @@ class WebAgentProtocolLoop:
             if (identity.get("request_id") == self.run_id
                     and identity.get("task_epoch") == self.task_epoch):
                 sections = board.get("sections") or {}
-                progress_section = (sections.get("progress") or {}).get("data") or {}
-                action_section = (sections.get("actions") or {}).get("data") or {}
+                progress_section = (sections.get("progress") or {}).get("value") or {}
+                action_section = (sections.get("actions") or {}).get("value") or {}
                 frozen_loop = progress_section.get("action_loop_state") or {}
                 frozen_decision = action_section.get("action_loop_decision") or {}
                 if (

@@ -216,11 +216,11 @@ class DirectorySemanticBlackboardTests(unittest.TestCase):
             self.assertEqual(event["allowed_next_actions"], ["create_directory"])
             self.assertFalse(event["authorization_granted"])
             self.assertEqual(
-                board["sections"]["actions"]["data"]["action_loop_decision"]["state_id"],
+                board["sections"]["actions"]["value"]["action_loop_decision"]["state_id"],
                 als["state_id"],
             )
             self.assertEqual(
-                board["sections"]["capabilities"]["data"]
+                board["sections"]["capabilities"]["value"]
                 ["action_semantic_translation"]["canonical_tool"],
                 "create_directory",
             )
