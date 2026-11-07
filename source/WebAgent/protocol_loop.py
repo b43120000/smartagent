@@ -316,6 +316,7 @@ class WebAgentProtocolLoop:
         self.progress_root = Path(progress_root).resolve() if progress_root is not None else None
         self.progress_ledger = None
         self._spr_path_resolution = None
+        self._last_canonical_contract_receipts: list[dict] = []
         self._source_candidate_history = {"schema": "SMARTAGENT_SOURCE_HISTORY_V1", "candidates": []}
         self._source_discovery_bootstrap = {}
         self.continuation_store = continuation_store
@@ -4404,6 +4405,24 @@ class WebAgentProtocolLoop:
                                action_ids=[a.get('action_id') for a in reads])
                 return admitted, errors
             return [], [diagnostic]
+        # Resolve only proven structural equivalence before the existing
+        # semantic, schema, scope, ACL and human-approval admission gates.
+        # No Action can execute merely because a contract was rewritten.
+        from agent_core.canonical_contract_resolver import resolve_planner_contracts
+        normalized_progress_action, contract_receipts, contract_errors = (
+            resolve_planner_contracts(
+                normalized_progress_action,
+                path_document=self._spr_path_resolution,
+            )
+        )
+        self._last_canonical_contract_receipts = contract_receipts[-4:]
+        for receipt in contract_receipts:
+            self._emit(
+                "planner_contract_resolved",
+                request_id=self.run_id, round=self.turn_id, **receipt,
+            )
+        if contract_errors:
+            return [], contract_errors
         progress_index = actions.index(progress_actions[0])
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
@@ -6295,6 +6314,7 @@ class WebAgentProtocolLoop:
         # Saved-plan and external trusted scope are NEVER reconstructed from
         # model prose. Original-request candidate evidence grants no write.
         self._spr_path_resolution = None
+        self._last_canonical_contract_receipts = []
         spr_candidate_request = (
             trusted_authorized_paths is None
             and _SAVED_PLAN_OPEN not in request
