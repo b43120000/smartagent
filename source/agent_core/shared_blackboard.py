@@ -1241,6 +1241,33 @@ def _event_projection(runtime, payload: Mapping) -> tuple[list[dict], bool]:
         }
         event["event_id"] = "BBE-" + _digest(event)[:20].upper()
         events.append(event)
+    # Every Planner/Runtime consumer sees the exact same Action Loop
+    # transition verdict, bound to the same Blackboard snapshot. This is
+    # decision evidence, not independent execution or authorization evidence.
+    loop = dict(payload.get("action_loop_decision") or {})
+    if loop and loop.get("state_id"):
+        event = {
+            "event_type": "ACTION_LOOP_DECISION_EVALUATED",
+            "source_owner": "ACTION_LOOP_STATE",
+            "round": int(getattr(runtime, "turn_id", 0) or 0),
+            "state_id": str(loop.get("state_id") or "")[:64],
+            "required_transition": _code(loop.get("required_transition")),
+            "allowed_next_actions": [
+                _code(item) for item in list(loop.get("allowed_next_actions") or [])[:24]
+            ],
+            "evidence_state": _code(loop.get("evidence_state")),
+            "decision_rule_id": _code(loop.get("decision_rule_id"), ""),
+            "reason_code": _code(loop.get("decision_reason_code"), "STATE_MACHINE_TRANSITION"),
+            "observed_evidence_ref": str(loop.get("decision_evidence_ref") or "")[:160],
+            "target_bound": bool(loop.get("decision_target")),
+            "candidate_strategy_id": str(loop.get("decision_strategy_id") or "")[:40],
+            "decision_source": _code(loop.get("decision_source")),
+            "authorization_granted": False,
+            "executed": False,
+            "not_an_action_result": True,
+        }
+        event["event_id"] = "BBE-" + _digest(event)[:20].upper()
+        events.append(event)
     progress = getattr(runtime, "progress_ledger", None)
     strategy_state = dict(getattr(progress, "strategy_state", {}) or {})
     for row in list(strategy_state.get("history") or [])[-16:]:
@@ -1290,6 +1317,7 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         "goal_status": dict(payload.get("goal") or {}),
         "goal_transition_readiness": dict(payload.get("goal_transition_readiness") or {}),
         "persistent_goal_gaps": dict(payload.get("persistent_goal_gaps") or {}),
+        "action_semantic_translation": dict(payload.get("action_semantic_translation") or {}),
     }
     environment_data = {
         "observed_runtime_facts": list(payload.get("observed_runtime_facts") or [])[:32],
@@ -1297,6 +1325,7 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         "runtime_software_inventory": dict(payload.get("runtime_software_inventory") or {}),
     }
     capability_data = {
+        "action_semantic_translation": dict(payload.get("action_semantic_translation") or {}),
         "manifest": dict(payload.get("runtime_capability_manifest") or {}),
         "semantic_capability_state": dict(
             payload.get("runtime_capability_state") or {}
@@ -1313,6 +1342,7 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         "authorization_granted_by_candidate": False,
     }
     action_data = {
+        "action_loop_decision": dict(payload.get("action_loop_decision") or {}),
         "recent_action_evidence": list(payload.get("recent_action_evidence") or [])[:24],
         "recent_action_provenance": list(payload.get("recent_action_provenance") or [])[:24],
         "action_resolution_trace": list(payload.get("action_resolution_trace") or [])[:24],
@@ -1352,7 +1382,7 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
                 getattr(progress, "matched_condition_id", "") or ""
             )[:160],
         },
-        "action_loop_state": dict(getattr(runtime, "action_loop_state", {}) or {}),
+        "action_loop_state": dict(payload.get("action_loop_state") or getattr(runtime, "action_loop_state", {}) or {}),
         "runtime_transition": str(payload.get("runtime_transition") or "UNKNOWN"),
     }
     terminal_data = dict(payload.get("terminal_readiness") or {})

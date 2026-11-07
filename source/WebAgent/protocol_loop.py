@@ -1911,9 +1911,13 @@ class WebAgentProtocolLoop:
                     ),
                 })
         from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+        from agent_core.decision_rules.directory_workspace_rule import evaluate_directory_decision
+        gap_view = reconstruct_goal_gaps(self)
+        directory_decision = evaluate_directory_decision(self, gap_view)
         self.action_loop_state = build_action_loop_state(
             transport_state=self.protocol_state,
-            goal_gap_view=reconstruct_goal_gaps(self),
+            goal_gap_view=gap_view,
+            directory_decision=directory_decision,
             progress=self._progress_state_payload(),
             action=action,
             result=result,
@@ -1974,6 +1978,35 @@ class WebAgentProtocolLoop:
         transition = str(state.get("required_transition", "CONTINUE_PLAN") or "CONTINUE_PLAN")
         allowed = {str(item) for item in list(state.get("allowed_next_actions") or []) if str(item)}
         actual_tools = [str(item.get("tool", "") or "") for item in operational]
+        if "create_directory" in actual_tools:
+            # DIR-001 is derived from the current immutable read projection.
+            # Action Loop cannot contradict the state sent to this Planner
+            # turn; no candidate ever grants a write permission.
+            board = dict(getattr(self, "_last_shared_blackboard_snapshot", {}) or {})
+            identity = board.get("identity") or {}
+            if (identity.get("request_id") == self.run_id
+                    and identity.get("task_epoch") == self.task_epoch):
+                sections = board.get("sections") or {}
+                progress_section = (sections.get("progress") or {}).get("data") or {}
+                action_section = (sections.get("actions") or {}).get("data") or {}
+                frozen_loop = progress_section.get("action_loop_state") or {}
+                frozen_decision = action_section.get("action_loop_decision") or {}
+                if (
+                    frozen_loop.get("decision_rule_id") == "DIR-001"
+                    and (
+                        frozen_loop.get("state_id") != state_id
+                        or frozen_decision.get("state_id") != state_id
+                        or "create_directory" not in frozen_decision.get(
+                            "allowed_next_actions", []
+                        )
+                    )
+                ):
+                    return {
+                        "marker": "[ACTION_LOOP_STATE_REJECTED]",
+                        "reason": "blackboard_action_loop_snapshot_drift",
+                        "detail": "DIR-001 candidate must use identical current-epoch Blackboard state",
+                        "suggestion": "刷新共用 Blackboard、Action Loop 與 Goal-Gap Evidence；不得用舊的候選 Action。",
+                    }
         if transition in {"PREREQUISITE_REQUIRED", "VERIFY_REQUIRED", "REPLAN_REQUIRED", "WAIT_RUNTIME"}:
             # Progress-only replies are admitted here so the existing bounded
             # dead-end/verification recovery can issue one complete prompt and

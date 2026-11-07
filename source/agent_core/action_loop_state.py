@@ -297,6 +297,7 @@ def build_action_loop_state(
     admission_records: Sequence[Mapping[str, Any]] | None = None,
     available_tools: Sequence[str] | None = None,
     goal_gap_view: Mapping[str, Any] | None = None,
+    directory_decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one complete, model-readable, Runtime-owned state snapshot."""
     progress = dict(progress or {})
@@ -400,6 +401,40 @@ def build_action_loop_state(
     if available_tools is not None:
         available = set(available_tools)
         allowed = [name for name in allowed if name in available]
+
+    # DIR-001 and Action Loop consume the SAME trusted current-epoch native
+    # observation; there is no independent natural-language inference here.
+    rule = dict(directory_decision or {})
+    rule_ref = str(rule.get("observed_evidence_ref") or "")
+    candidate = rule.get("candidate") or {}
+    if not isinstance(candidate, Mapping):
+        candidate = {}
+    permit_directory_create = bool(
+        action and action.get("tool") == "inspect_directory"
+        and evidence_state == "OBSERVED_NEGATIVE"
+        and rule.get("decision") == "CREATE_DIRECTORY_REQUIRED"
+        and rule.get("candidate_status") == "UNTRIED"
+        and rule.get("rule_id") == "DIR-001"
+        and rule_ref and rule_ref == action.get("action_id")
+        and candidate.get("tool") == "create_directory"
+        and candidate.get("status") == "UNTRIED"
+        and (available_tools is None or "create_directory" in set(available_tools))
+        and not recovery.get("active") and not verification
+        and transition == "REPLAN_REQUIRED"
+    )
+    if permit_directory_create:
+        allowed = ["create_directory"]
+        missing = [
+            "confirmed absent original Goal directory; create exact target "
+            "subject to ordinary Runtime write admission"
+        ]
+        directory_reason_code = "GOAL_DIRECTORY_ABSENCE_CONFIRMED"
+    else:
+        directory_reason_code = ""
+    if tool == "create_directory" and evidence_state == "UNVERIFIED" and (
+        available_tools is None or "inspect_directory" in set(available_tools)
+    ):
+        allowed.append("inspect_directory")
 
     blockers = []
     if transition in {'PREREQUISITE_REQUIRED','VERIFY_REQUIRED','REPLAN_REQUIRED'} or evidence_state == 'PENDING':
@@ -555,6 +590,13 @@ def build_action_loop_state(
         "verification_status": str(verification_status or "UNKNOWN").upper(),
         "expectation_status": str(expectation_status or "").upper(),
         "evidence_state": evidence_state,
+        "decision_rule_id": "DIR-001" if permit_directory_create else "",
+        "decision_reason_code": directory_reason_code,
+        "decision_evidence_ref": rule_ref if permit_directory_create else "",
+        "decision_target": str(rule.get("target") or "") if permit_directory_create else "",
+        "decision_strategy_id": str(candidate.get("strategy_id") or "") if permit_directory_create else "",
+        "decision_source": "RUNTIME_DIRECTORY_RULE" if permit_directory_create else "ACTION_LOOP_STATE_MACHINE",
+        "decision_grants_authorization": False,
         "required_transition": transition if transition in TRANSITIONS else "REPLAN_REQUIRED",
         "allowed_next_actions": list(dict.fromkeys(allowed)),
         "blocked_actions": list(dict.fromkeys(blocked)),

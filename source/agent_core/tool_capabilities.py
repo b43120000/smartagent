@@ -183,6 +183,8 @@ def validate_capability_registry() -> None:
         raise ValueError(
             f"tool_capability_registry_drift:missing={missing};extra={extra}"
         )
+    from .semantic_capability_resolution import validate_action_semantic_registry
+    validate_action_semantic_registry()
 
 
 validate_capability_registry()

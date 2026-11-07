@@ -254,6 +254,25 @@ def build_planner_context_snapshot(runtime) -> dict:
     selected = sorted(set(resolution.get("capabilities", ()))) if matched else []
     old_binding_mismatch = isinstance(resolution, Mapping) and not matched
     als = dict(getattr(runtime, "action_loop_state", {}) or {})
+    # A single Runtime-owned decision projection feeds the Planner Context
+    # and shared Blackboard; never ask another module to infer a second
+    # transition from textual Tool Results.
+    action_loop_decision = {
+        "state_id": str(als.get("state_id") or "")[:64],
+        "required_transition": _code(als.get("required_transition"), "UNKNOWN"),
+        "allowed_next_actions": [
+            _code(x) for x in list(als.get("allowed_next_actions") or [])[:32]
+        ],
+        "evidence_state": _code(als.get("evidence_state"), "UNKNOWN"),
+        "decision_rule_id": _code(als.get("decision_rule_id")),
+        "decision_reason_code": _code(als.get("decision_reason_code")),
+        "decision_source": _code(als.get("decision_source")),
+        "decision_evidence_ref": str(als.get("decision_evidence_ref") or "")[:160],
+        "decision_strategy_id": str(als.get("decision_strategy_id") or "")[:40],
+        "decision_target": str(als.get("decision_target") or "")[:1024],
+        "candidate_is_not_authorization": True,
+        "source_owner": "ACTION_LOOP_STATE",
+    }
     candidate_tools = list(dict.fromkeys(str(t) for t in list(als.get("allowed_next_actions") or []) if t))
     tool_readiness = []
     for tool in candidate_tools:
@@ -296,6 +315,9 @@ def build_planner_context_snapshot(runtime) -> dict:
     from .action_readiness import current_action_readiness
     goal_transition_readiness = build_transition_readiness(runtime)
     gap_view = reconstruct_goal_gaps(runtime)
+    semantic_translation = dict(
+        (gap_view.get("goal_policy") or {}).get("semantic_action_translation") or {}
+    )
     source_view = build_source_candidate_ledger(runtime, gap_view)
     artifact_view = getattr(runtime, "_source_discovery_bootstrap", None) or {}
     from .remote_artifact_access_readiness import (
@@ -405,6 +427,9 @@ def build_planner_context_snapshot(runtime) -> dict:
         ),
         "goal_transition_readiness": goal_transition_readiness,
         "persistent_goal_gaps": gap_view,
+        "action_semantic_translation": semantic_translation,
+        "action_loop_decision": action_loop_decision,
+        "action_loop_state": als,
         "directory_decision_rule": directory_decision,
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,

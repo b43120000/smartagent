@@ -62,7 +62,11 @@ def conditional_goal_policy(goal: str) -> dict:
     """
     text = str(goal or "")
     clauses = _clauses(text)
-    positive = bool(_POSITIVE_REMEDIATION.search(text))
+    from .semantic_capability_resolution import translate_goal_action
+    semantic = translate_goal_action(text)
+    positive = bool(_POSITIVE_REMEDIATION.search(text)) or (
+        semantic["semantic_intent"] == "CREATE_DIRECTORY"
+    )
     conditional = bool(_CONDITIONAL_REMEDIATION.search(text))
     first_read = bool(_READ_ONLY_STAGE.search(text))
     no_mutation = bool(_GLOBAL_NO_MUTATION.search(text))
@@ -104,6 +108,7 @@ def conditional_goal_policy(goal: str) -> dict:
     return {
         "schema": SCHEMA,
         "intent": intent,
+        "semantic_action_translation": semantic,
         "read_only_first": first_read,
         "conditional_remediation": conditional and not no_mutation,
         "restrictions": restrictions,

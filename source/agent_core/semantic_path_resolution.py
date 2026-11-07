@@ -48,7 +48,12 @@ def readonly_narrowing_allowed(request: str, lexical_paths: list[str]) -> bool:
     text = str(request or "")
     positions = [text.find(value) for value in lexical_paths if value and text.find(value) >= 0]
     prefix = text[:min(positions)] if positions else text
-    return not bool(_EFFECT_IMPERATIVE.search(prefix))
+    from .semantic_capability_resolution import translate_goal_action
+    translated = translate_goal_action(prefix)
+    return not (
+        bool(_EFFECT_IMPERATIVE.search(prefix))
+        or translated["semantic_intent"] == "CREATE_DIRECTORY"
+    )
 
 
 def _path_exists(path: str, probe: Callable[[str], bool]) -> bool:

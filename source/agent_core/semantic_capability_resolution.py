@@ -168,3 +168,174 @@ def render_planner_contract():
         "This proposal is NOT authorization: never grant write, broaden paths, "
         "override ACL or claim success/evidence from this field."
     )
+
+
+# Shared fixed-vocabulary action translator. This extends the existing SCR
+# module; it does not create a competing Goal Intent Resolver. The legacy
+# report_progress.capability_resolution registry remains read-only and stable.
+ACTION_SEMANTIC_SCHEMA = "SMARTAGENT_ACTION_SEMANTIC_TRANSLATION_V1"
+_ACTION_ALIASES = MappingProxyType({
+    "create_directory": {
+        "capability": "directory.create",
+        "verbs": ("創立", "創建", "建立", "新增", "開設", "mkdir", "make directory",
+                  "create directory", "create folder", "make folder"),
+        "objects": ("資料夾", "目錄", "directory", "folder"),
+        "intent": "CREATE_DIRECTORY",
+        "requires": ("literal_goal_target", "directory.exists=false",
+                     "runtime_write_scope_admission"),
+        "side_effect": "CREATE_DIRECTORY_ONLY",
+    },
+    "inspect_directory": {
+        "capability": "directory.inspect_metadata",
+        "verbs": ("檢查", "確認", "查看", "探查", "inspect"),
+        "objects": ("資料夾", "目錄", "directory", "folder"),
+        "intent": "INSPECT_DIRECTORY",
+        "requires": ("literal_goal_target", "runtime_read_scope_admission"),
+        "side_effect": "READ_ONLY",
+    },
+    "list_directory": {
+        "capability": "directory.list",
+        "verbs": ("列出", "列舉", "列印", "list", "ls"),
+        "objects": ("資料夾", "目錄", "directory", "folder", "內容", "files"),
+        "intent": "LIST_DIRECTORY",
+        "requires": ("literal_goal_target", "runtime_read_scope_admission"),
+        "side_effect": "READ_ONLY",
+    },
+    "find_file": {
+        "capability": "directory.find",
+        "verbs": ("尋找", "搜尋", "找出", "find"),
+        "objects": ("檔案", "文件", "file", "folder"),
+        "intent": "FIND_FILE",
+        "requires": ("runtime_read_scope_admission",),
+        "side_effect": "READ_ONLY",
+    },
+    "read_file": {
+        "capability": "file.read",
+        "verbs": ("讀取", "開啟", "閱讀", "read"),
+        "objects": ("檔案", "文件", "file"),
+        "intent": "READ_FILE",
+        "requires": ("runtime_read_scope_admission",),
+        "side_effect": "READ_ONLY",
+    },
+    "write_file": {
+        "capability": "file.write",
+        "verbs": ("寫入", "儲存", "存入", "write", "save"),
+        "objects": ("檔案", "文件", "file"),
+        "intent": "WRITE_FILE",
+        "requires": ("runtime_write_scope_admission",),
+        "side_effect": "WRITE_FILE",
+    },
+    "delete_path": {
+        "capability": "path.delete",
+        "verbs": ("刪除", "移除", "delete", "remove"),
+        "objects": ("資料夾", "目錄", "檔案", "folder", "directory", "file"),
+        "intent": "DELETE_PATH",
+        "requires": ("runtime_write_scope_admission",),
+        "side_effect": "DELETE_PATH",
+    },
+})
+
+def action_semantic_registry() -> dict:
+    """Describe every canonical Tool, with aliases only where declared.
+
+    The canonical Tool Envelope is the *single* inventory: adding a new Tool
+    cannot silently create a second vocabulary. Tools without specialized
+    synonyms remain selectable by canonical name/Planner meaning, and are
+    never inferred from arbitrary natural-language keywords.
+    """
+    from .smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
+    return {
+        tool: {
+            "tool": tool,
+            "capability": str(_ACTION_ALIASES.get(tool, {}).get(
+                "capability") or ("tool." + tool)),
+            "fixed_aliases": list(_ACTION_ALIASES.get(tool, {}).get("verbs") or ()),
+            "object_hints": list(_ACTION_ALIASES.get(tool, {}).get("objects") or ()),
+            "required_fields": sorted(
+                name for name in schema.get("required", {})
+                if name != "action_id"
+            ),
+            "prerequisite_kinds": list(
+                _ACTION_ALIASES.get(tool, {}).get("requires") or ()
+            ),
+            "side_effect": str(_ACTION_ALIASES.get(tool, {}).get(
+                "side_effect") or "CANONICAL_TOOL_POLICY"),
+            "aliases_are_non_authorizing": True,
+            "tool_admission_required": True,
+        }
+        for tool, schema in sorted(TOOL_ENVELOPE_SCHEMAS.items())
+    }
+
+
+def translate_goal_action(goal: object) -> dict:
+    """Bounded semantic *hint* for original Goal text, never write permission.
+
+    A recognized action requires both a registered verb and its object class.
+    Negation of the verb is not a positive mutation request. Ambiguous or
+    unrelated prose stays unmapped for the Planner, not guessed by Runtime.
+    """
+    import re
+    text = str(goal or "")[:32768]
+    matches = []
+    for tool, entry in _ACTION_ALIASES.items():
+        objects = entry["objects"]
+        for verb in entry["verbs"]:
+            pattern = re.compile(re.escape(verb), re.I)
+            for found in pattern.finditer(text):
+                start, end = found.span()
+                prefix = text[max(0, start - 10):start]
+                if re.search(
+                    r"(?:不|別|勿|禁止|不得|不要|無須|無需|not|never|don't|do not)\s*$",
+                    prefix, re.I,
+                ):
+                    continue
+                # Constrain to the same bounded instruction clause. Paths and
+                # subsequent prose cannot create an imaginary target class.
+                clause_start = max(
+                    text.rfind(mark, 0, start) for mark in ("\n", "。", "；", ";")
+                ) + 1
+                ends = [text.find(mark, end) for mark in ("\n", "。", "；", ";")]
+                clause_end = min((v for v in ends if v >= 0), default=len(text))
+                chunk = text[clause_start:clause_end]
+                if not any(re.search(re.escape(obj), chunk, re.I) for obj in objects):
+                    continue
+                matches.append((start, tool, entry, verb))
+                break
+    # Only one distinct canonical Tool may be semantically bound. In mixed
+    # tasks leave ordering to the Planner, not a regex priority guess.
+    unique = {tool for _, tool, _, _ in matches}
+    status = ("MATCHED" if len(unique) == 1 else
+              "AMBIGUOUS" if len(unique) > 1 else "UNMAPPED")
+    selected = min(matches, key=lambda row: row[0]) if status == "MATCHED" else None
+    return {
+        "schema": ACTION_SEMANTIC_SCHEMA,
+        "status": status,
+        "canonical_tool": selected[1] if selected else "",
+        "capability": selected[2]["capability"] if selected else "",
+        "semantic_intent": selected[2]["intent"] if selected else "",
+        "matched_registered_verb": selected[3] if selected else "",
+        "matching_tools": sorted(unique)[:12],
+        "original_text_sha256": __import__("hashlib").sha256(
+            text.encode("utf-8")
+        ).hexdigest(),
+        "semantic_translation_is_not_authorization": True,
+        "target_path_binding_required": True,
+        "tool_admission_required": True,
+    }
+
+
+def validate_action_semantic_registry() -> None:
+    """Fail CI on registry drift, ambiguous canonical ownership or alias gaps."""
+    from .smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
+    catalog = action_semantic_registry()
+    if set(catalog) != set(TOOL_ENVELOPE_SCHEMAS):
+        raise SemanticCapabilityError("action_semantic_tool_registry_drift")
+    for tool, spec in catalog.items():
+        if spec["tool"] != tool or not spec["capability"]:
+            raise SemanticCapabilityError("action_semantic_canonical_mapping_invalid:" + tool)
+        if not spec["required_fields"] and TOOL_ENVELOPE_SCHEMAS[tool].get("required"):
+            required = set(TOOL_ENVELOPE_SCHEMAS[tool]["required"])
+            if required != {"action_id"}:
+                raise SemanticCapabilityError("action_semantic_required_fields_missing:" + tool)
+    if "創立" not in catalog["create_directory"]["fixed_aliases"]:
+        raise SemanticCapabilityError("action_semantic_directory_create_alias_missing")

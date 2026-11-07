@@ -62,6 +62,50 @@ def _digest(value: object) -> str:
 def extract_target_contract(request: str) -> dict | None:
     """Only explicit labeled target paths; never infer a target from incidental paths."""
     text = str(request or "")
+    # Extend the *existing* target binding with an exact directory-only
+    # contract. The same SCR translator owns verbs and object classes;
+    # this function owns only the original-request literal target.
+    from .semantic_capability_resolution import translate_goal_action
+    translated = translate_goal_action(text)
+    if translated["semantic_intent"] == "CREATE_DIRECTORY":
+        # A quoted path may include spaces. An unquoted path is bounded by
+        # whitespace/punctuation; never invent a destination or fall back
+        # to an existing parent/workspace.
+        quoted = re.findall(
+            r'["\x60]((?:[A-Za-z]:[\\/]|/)[^"\x60\r\n<>|?*]+)["\x60]',
+            text,
+        )
+        unquoted = re.findall(
+            r'(?<![A-Za-z0-9])((?:[A-Za-z]:[\\/]|/)[^\s\x60"<>|?*,，。；;\r\n\)\]]+)',
+            text,
+        )
+        candidates = quoted or unquoted
+        # A quoted literal is authoritative over substring lexical matches.
+        normalized = {
+            ntpath.normcase(ntpath.normpath(str(value).strip()))
+            for value in candidates
+        }
+        exact = str(candidates[0]).strip() if candidates and len(normalized) == 1 else ""
+        if exact and not (
+            re.match(r'^[A-Za-z]:[\\/][^\\/]+', exact)
+            or (exact.startswith("/") and not exact.startswith("//") and len(exact) > 1)
+        ):
+            exact = ""
+        return {
+            "schema": SCHEMA,
+            "requested_target": exact,
+            "binding_status": "BOUND" if exact else "AMBIGUOUS",
+            "target_kind": "DIRECTORY_ONLY",
+            "goal_intent": translated["semantic_intent"],
+            "canonical_tool": translated["canonical_tool"],
+            "semantic_translation_schema": translated["schema"],
+            "relocation_permitted_if_collision": False,
+            "required_top_level_entries": [],
+            "source": "ORIGINAL_REQUEST_DIRECTORY_INTENT",
+            "revalidation_requested": False,
+            "request_anchor_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "authorization_granted": False,
+        }
     # The target label alone is NOT an imperative to deploy. In particular,
     # observation-only requests must not be forced through a mutation gate.
     intent = _LABEL.sub(" ", text)
@@ -283,6 +327,19 @@ def verify_target_completion(contract: Mapping | None, baseline: Mapping | None,
         result["preservation_verified_nodes"] = 0
         result["preservation_verified_bytes"] = 0
         result["metadata_only_directory_changes"] = 0
+    if contract.get("target_kind") == "DIRECTORY_ONLY":
+        # A folder-only Goal must not require payload files. Verification
+        # and preexisting-data preservation above still apply.
+        result.update(
+            status="PASS", reason=(
+                "DIRECTORY_ROOT_CREATED_AND_VERIFIED"
+                if pre["state"] == "ABSENT"
+                else "EXISTING_DIRECTORY_VERIFIED"
+            ),
+            actual_target=requested,
+            mutation_applied=pre["state"] == "ABSENT",
+        )
+        return result
     if _at_root(post, required) and post["state"] == "OCCUPIED":
         new_entries = set(post["entries"]) - set(old)
         if (pre["state"] == "ABSENT"
