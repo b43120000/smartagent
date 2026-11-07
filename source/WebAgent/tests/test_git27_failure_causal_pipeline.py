@@ -196,6 +196,45 @@ class CausalReceiptTests(unittest.TestCase):
             "authorization_state": "Bearer secret",
         })["authorization_state"], "***REDACTED***")
 
+    def test_nongit_failed_tool_requires_action_before_progress_commit(self):
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from WebAgent.tests.validate_flexible_progress_admission import initial
+        from agent_core.task_progress import (
+            initialize_progress, record_model_progress,
+        )
+        from agent_core.tool_result_contract import encode_result
+        with tempfile.TemporaryDirectory(prefix="git27-typed-fail-") as temp:
+            root = Path(temp).resolve()
+            loop = WebAgentProtocolLoop(root, lambda *args: "", progress_root=root)
+            loop.run_id = loop.task_id = REQ
+            loop.task_epoch = EPOCH
+            loop.intent_digest = "f" * 64
+            initialize_progress(loop.task_id, request_id=REQ,
+                                goal="Read authorized file", root=root)
+            loop.progress_ledger = record_model_progress(
+                loop.task_id, initial(), request_id=REQ,
+                goal="Read authorized file", round_id=1, root=root)
+            aid = "NON-GIT-FAILED-READ"
+            loop.action_ledger[aid] = {
+                "action": {"tool": "read_file", "action_id": aid,
+                           "path": str(root / "not_found")},
+                "result": encode_result("FAILED", "FILE_NOT_FOUND",
+                                        tool="read_file", executed=False),
+            }
+            loop.action_result_ledger[aid] = {
+                "tool": "read_file", "result_status": "FAILED",
+                "execution_status": "FAILED", "request_id": REQ,
+                "task_epoch": EPOCH, "evidence_status": "ACTIVE",
+            }
+            initial_step = loop.progress_ledger.current_step
+            proposals = [dict(initial()), {"tool": "turn_commit", "action_count": 1}]
+            accepted, diagnostics = loop._accept_v8_ack(proposals, {})
+            self.assertFalse(accepted)
+            self.assertIn("failed_prerequisite_continue_requires_action",
+                          [d.get("reason") for d in diagnostics])
+            self.assertEqual(diagnostics[0]["blocking_evidence_ref"], aid)
+            self.assertEqual(loop.progress_ledger.current_step, initial_step)
+
     def test_real_loop_progress_fails_before_commit_without_new_action(self):
         from WebAgent.protocol_loop import WebAgentProtocolLoop
         from WebAgent.tests.validate_flexible_progress_admission import initial
