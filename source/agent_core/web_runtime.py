@@ -4993,13 +4993,7 @@ class WebLLMScraper:
             prompt = self._web_file_planner_prompt(prompt)
             prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
 
-        # Physical submit ceiling, including every browser-added envelope.
-        if len(prompt) > 10_000:
-            raise WebScraperStageError(
-                "WEB_PROMPT_CHAR_LIMIT_EXCEEDED chars=" + str(len(prompt))
-                + " hard_limit=10000; use chunked conversation transport",
-                stage="prompt_budget", safe_to_retry=False,
-            )
+        # The legacy 512 KiB UTF-8 budget below is the only active submit limit.
         try:
             prompt_bytes = ensure_webgpt_prompt_budget(prompt)
         except PromptBudgetExceeded as exc:
