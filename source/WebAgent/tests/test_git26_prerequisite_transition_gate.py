@@ -204,6 +204,35 @@ class PrerequisiteTransitionGateTests(unittest.TestCase):
         no_proof = transition(actions=without_result, evidence=evidence)
         self.assertEqual(no_proof["stage"], "READY_FOR_TOOL_ADMISSION")
 
+    def test_runtime_real_scope_preflight_for_registered_remote_head_read(self):
+        # Exercise the actual Runtime Scope evaluator, not just a stub:
+        # the missing deployment destination must not become command CWD.
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        with tempfile.TemporaryDirectory(prefix="git26-bound-probe-") as temp:
+            bound = Path(temp).resolve()
+            missing_target = bound / "missing-deployment-root"
+            self.assertFalse(missing_target.exists())
+            loop = WebAgentProtocolLoop(bound, lambda *_: "",
+                                        progress_root=bound)
+            loop.tools._registered_remote_artifact_view = ARTIFACT
+            loop.tools._authorized_local_paths = [str(missing_target)]
+            remote, prereq = setup_view()
+            view = build_prerequisite_transition(
+                artifact_view=ARTIFACT,
+                prerequisite_view=prereq,
+                remote_view=remote,
+                request_id=REQ,
+                task_epoch=EPOCH,
+                bound_workspace=str(bound),
+                tool_scope_preview=loop.tools.preview_tool_scope,
+            )
+            self.assertEqual(view["stage"], "READY_FOR_TOOL_ADMISSION", view)
+            self.assertEqual(view["probe_action"]["working_directory"],
+                             str(bound))
+            self.assertFalse(missing_target.exists())
+            self.assertFalse(view["authorization_granted"])
+            self.assertFalse(view["action_dispatched"])
+
     def test_unknown_or_unavailable_preflight_not_claimed_verified(self):
         def unavailable(_action):
             raise OSError("blocked in fixture")
