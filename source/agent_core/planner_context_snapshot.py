@@ -329,6 +329,27 @@ def build_planner_context_snapshot(runtime) -> dict:
         action_ledger=actions, result_ledger=evidence,
         guidance_issued=bool(getattr(runtime, "_remote_access_probe_guidance_issued", False)),
     )
+    # Preserve failure causality independently of the last-16 Action window.
+    from .failure_causal_receipt import recent_failure_receipts
+    failure_receipts = recent_failure_receipts(
+        action_ledger=actions, result_ledger=evidence,
+        request_id=str(getattr(runtime, "run_id", "") or ""),
+        task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
+    )
+    if transition_view.get("actual_probe_attempts"):
+        remote_access_view = {
+            **remote_access_view,
+            # Attempted tool execution is not an authorization receipt.
+            "network_request_attempted": any(
+                item.get("executed") is True
+                for item in transition_view["actual_probe_attempts"]
+            ),
+            "probe_failure_evidence_ref": str(
+                (transition_view.get("latest_probe_failure") or {}).get(
+                    "action_id", ""
+                )
+            ),
+        }
     from .action_resolution_trace import (
         deployment_path_prerequisites, bounded_action_trace_projection,
     )
@@ -354,6 +375,8 @@ def build_planner_context_snapshot(runtime) -> dict:
         "interrupt_readiness": interruption_view,
         "goal_prerequisite_resolution": prerequisite_view,
         "prerequisite_transition_gate": transition_view,
+        "failure_causal_receipts": failure_receipts,
+        "failure_causal_receipt_count": len(failure_receipts),
         "deployment_path_prerequisites": path_prerequisites,
         "action_resolution_trace": action_resolution_traces,
         "unified_contract_transaction": dict(getattr(runtime, "_last_unified_contract_receipt", {}) or {}),
@@ -498,6 +521,14 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "This is a Runtime-owned, read-only decision snapshot. Candidate tools are NOT grants. "
             "Honor executed/verification states and do not treat UNKNOWN as absence. "
             "Goal Transition Readiness only classifies evidence: Planner decides any changed strategy. "
+            "failure_causal_receipts are immutable Runtime projections of exact "
+            "current-request Tool Results; they survive intermediate schema repairs. "
+            "Use their failure.category and replan.next_evaluation before choosing "
+            "a new prerequisite diagnostic, and avoid replaying identical failed "
+            "actions. A failure reason is not authorization denial; an unmatched "
+            "cause stays UNCLASSIFIED_FAILURE. Never guess paths, credentials "
+            "or success. A suggested next_evaluation is not an executable Action "
+            "or permission: full Tool Admission and Planner choice remain required. "
             "prerequisite_transition_gate is a causal constraint on Progress, Replan "
             "and INTERRUPTION. If READY_FOR_TOOL_ADMISSION, use its exact "
             "probe_action in a CONTINUE proposal and pass full Tool/Scope/Network "
