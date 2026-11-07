@@ -11,9 +11,9 @@ import math
 import uuid
 
 MAX_SUBMIT_CHARS = 10_000
-# Headroom for browser-owned submit IDs and provider-specific prompt envelopes.
-MAX_CHUNK_MESSAGE_CHARS = 9_000
-CHUNK_DATA_CHARS = 7_500
+# Headroom for browser submit IDs, request-ownership scope and protocol contracts.
+MAX_CHUNK_MESSAGE_CHARS = 7_800
+CHUNK_DATA_CHARS = 6_000
 
 
 class ChunkTransferError(RuntimeError):
