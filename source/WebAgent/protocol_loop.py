@@ -5019,8 +5019,26 @@ class WebAgentProtocolLoop:
                         )
                     else:
                         suggestion = '提供本 request 授權範圍內的絕對目錄 working_directory。'
-                    return [], [{'reason':'run_command_working_directory_rejected',
-                        'detail':scope_error, 'suggestion':suggestion}]
+                    scope_diag = dict(cwd_scope.get("scope_diagnostic") or {})
+                    return [], [{
+                        'reason': 'run_command_working_directory_rejected',
+                        'tool': 'run_command',
+                        'action_id': str(action.get('action_id', '') or ''),
+                        'scope_reason_code': str(
+                            scope_diag.get('reason_code') or "CWD_PREFLIGHT_DENIED"
+                        ),
+                        'scope_category': str(scope_diag.get('category') or "OTHER"),
+                        'scope_path_role': str(scope_diag.get('path_role') or "OTHER"),
+                        'scope_transition': str(
+                            scope_diag.get('eligible_transition') or ""
+                        ),
+                        'scope_required_field': str(
+                            scope_diag.get('required_field') or "working_directory"
+                        ),
+                        'executed': False,
+                        'authorization_granted': False,
+                        'detail': scope_error, 'suggestion': suggestion,
+                    }]
                 if (self._pending_bound_cwd_repair.get('request_id') == self.run_id
                         and self._pending_bound_cwd_repair.get('command') == str(action.get('command', '') or '')
                         and cwd_scope.get('resolved_paths') == [str(self.workspace)]):
