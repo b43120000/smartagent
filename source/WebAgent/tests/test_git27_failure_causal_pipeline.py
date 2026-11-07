@@ -165,7 +165,7 @@ class CausalReceiptTests(unittest.TestCase):
     def test_real_loop_progress_fails_before_commit_without_new_action(self):
         from WebAgent.protocol_loop import WebAgentProtocolLoop
         from WebAgent.tests.validate_flexible_progress_admission import initial
-        from agent_core.task_progress import initialize_progress
+        from agent_core.task_progress import initialize_progress, record_model_progress
         with tempfile.TemporaryDirectory(prefix="git27-precommit-") as temp:
             root = Path(temp).resolve()
             loop = WebAgentProtocolLoop(root, lambda *args: "", progress_root=root)
@@ -175,6 +175,9 @@ class CausalReceiptTests(unittest.TestCase):
             loop.progress_ledger = initialize_progress(
                 loop.task_id, request_id=REQ,
                 goal="Inspect registered Git source", root=root)
+            loop.progress_ledger = record_model_progress(
+                loop.task_id, initial(), request_id=REQ,
+                goal="Inspect registered Git source", round_id=1, root=root)
             actions, evidence = ledgers("fatal: Could not resolve host: github.com")
             loop.action_ledger.update(actions)
             loop.action_result_ledger.update(evidence)
@@ -183,8 +186,8 @@ class CausalReceiptTests(unittest.TestCase):
             proposed = [progress, {"tool": "turn_commit", "action_count": 1}]
             _, diagnostics = loop._accept_v8_ack(proposed, {})
             self.assertIn("failed_prerequisite_continue_requires_action",
-                          [row.get("reason") for row in diagnostics])
-            self.assertEqual(loop.progress_ledger.current_step, 0)
+                          [row.get("reason") for row in diagnostics], diagnostics)
+            self.assertEqual(loop.progress_ledger.current_step, 0.5)
             self.assertEqual(loop.action_result_ledger[ACT]["result_status"], "FAILED")
 
 
