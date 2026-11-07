@@ -33,7 +33,7 @@ GOAL = (
     r"E:\SmartAgent_GoalDriven_IT_GH_v1 without overwriting existing files."
 )
 TARGET = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
-PARENT = r"E:\"
+PARENT = "E:\\"
 ARTIFACTS = {
     "artifact_references": [{
         "kind": "REMOTE_ARTIFACT_REFERENCE",
