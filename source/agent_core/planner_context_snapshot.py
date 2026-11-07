@@ -341,6 +341,10 @@ def build_planner_context_snapshot(runtime) -> dict:
         "goal_prerequisite_resolution": prerequisite_view,
         "deployment_path_prerequisites": path_prerequisites,
         "action_resolution_trace": action_resolution_traces,
+        "canonical_contract_resolution": [
+            dict(row) for row in list(getattr(runtime, "_last_canonical_contract_receipts", []) or [])[-4:]
+            if isinstance(row, Mapping)
+        ],
         "source_candidate_ledger": source_view,
         "source_discovery_bootstrap": artifact_view,
         "remote_artifact_access_readiness": remote_access_view,
@@ -491,6 +495,16 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "equivalent to ls-remote and must be planned with separate "
             "destination/parent write readiness. "
             "Absence never grants creation permission. "
+            "canonical_contract_resolution lists exact, bounded, non-authorizing "
+            "Progress contract repairs. REWRITE_SAFE_EQUIVALENT means only "
+            "a proven structural equivalent was normalized before the full "
+            "original admission gates; consult rewrite_rule_ids and expected_keys "
+            "for future Planner submissions. NEEDS_INFORMATION requires a "
+            "canonical Planner correction or genuine USER_INPUT if the original "
+            "path remains ambiguous. REJECT_REPLAN denotes semantic selection "
+            "conflict: never change verified paths, authority or Goal to fit "
+            "a malformed response. The original scope and human approval "
+            "checks are never bypassed. "
             "action_resolution_trace preserves Planner-requested, Runtime-rewritten "
             "or rejected, and actually-dispatched operations separately. "
             "Every changed Action field is a Rewrite, even when only normalized "
