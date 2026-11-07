@@ -68,13 +68,26 @@ class SCREndToEnd(unittest.TestCase):
                         task_epoch="EPOCH-SCR-IT",
                         trusted_authorized_paths=[str(folder)],
                     )
-            self.assertIn("SCR-LIST", loop.action_result_ledger,
-                          "SCR round events: " + repr(events[-25:]))
-            self.assertEqual("SCR-META" in loop.action_result_ledger, expect_inspect)
-            self.assertEqual(loop.tools._runtime_semantic_capability_resolution["request_id"], "RR-SCR-IT")
-            if not expect_inspect:
-                self.assertTrue(any("semantic_capability_not_selected" in str(data)
-                                    for _, data in events), events)
+            if expect_inspect:
+                self.assertIn("SCR-LIST", loop.action_result_ledger,
+                              "SCR round events: " + repr(events[-25:]))
+                self.assertIn("SCR-META", loop.action_result_ledger)
+                self.assertEqual(
+                    loop.tools._runtime_semantic_capability_resolution["request_id"],
+                    "RR-SCR-IT",
+                )
+            else:
+                # The canonical multi-Action transaction is atomic: a missing
+                # explicitly selected capability rejects the whole envelope.
+                # It must not execute the first sibling and silently reject
+                # only the second; no admitted capability binding is persisted.
+                self.assertNotIn("SCR-LIST", loop.action_result_ledger)
+                self.assertNotIn("SCR-META", loop.action_result_ledger)
+                self.assertIsNone(loop.tools._runtime_semantic_capability_resolution)
+                self.assertTrue(any(
+                    "semantic_capability_not_selected" in str(data)
+                    for _, data in events
+                ), events)
 
     def test_positive(self):
         self.case(["directory.list", "directory.inspect_metadata"], True)

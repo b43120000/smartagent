@@ -1992,12 +1992,43 @@ class WebAgentProtocolLoop:
                  board_state.get("required_transition") != state.get("required_transition") or
                  board_state.get("allowed_next_actions") !=
                     list(state.get("allowed_next_actions") or []))):
-            return {
-                "marker": "[SHARED_BLACKBOARD_STATE_REJECTED]",
-                "reason": "action_loop_blackboard_state_drift",
-                "detail": "Current Runtime Action Loop differs from same-request Blackboard snapshot",
-                "suggestion": "Refresh the current Request/Epoch Planner context before any new Action.",
-            }
+            # A legitimate Progress materialization may refresh Action Loop
+            # after the Planner Context was rendered. Rebuild the current
+            # Ledger-owned read projection; a stale *derived* Blackboard is
+            # not an authorization failure and cannot override current facts.
+            from agent_core.planner_context_snapshot import build_planner_context_snapshot
+            fresh_context = build_planner_context_snapshot(self)
+            fresh_board = dict(fresh_context.get("shared_blackboard") or {})
+            refreshed = read_action_loop_blackboard(
+                fresh_board,
+                request_id=str(getattr(self, "run_id", "") or ""),
+                task_epoch=str(getattr(self, "task_epoch", "") or ""),
+            )
+            if (refreshed.get("status") != "BOUND" or
+                    refreshed.get("state_id") != state_id or
+                    refreshed.get("required_transition") != state.get("required_transition") or
+                    refreshed.get("allowed_next_actions") !=
+                        list(state.get("allowed_next_actions") or [])):
+                return {
+                    "marker": "[SHARED_BLACKBOARD_STATE_REJECTED]",
+                    "reason": "action_loop_blackboard_state_drift_unreconciled",
+                    "detail": "Current Request/Epoch Action Loop projection cannot be reconciled",
+                    "suggestion": "Rebuild the Runtime-owned Planner context; no stale state authorizes execution.",
+                }
+            previous_id = str(board_state.get("state_id") or "")
+            self._last_shared_blackboard_snapshot = fresh_board
+            self._last_strategy_candidate_registry = dict(
+                fresh_context.get("strategy_candidates") or {}
+            )
+            self._emit(
+                "action_loop_blackboard_snapshot_reconciled",
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, round=self.turn_id,
+                old_state_id=previous_id, new_state_id=state_id,
+                new_blackboard_snapshot_id=fresh_board.get("snapshot_id", ""),
+                reason_code="LEDGER_STATE_ADVANCED_AFTER_PLANNER_CONTEXT",
+                authorization_granted=False, executed=False,
+            )
         # These fields describe Runtime facts already present in the same turn.
         # Never ask the model to echo them and never reject a valid action because
         # the model copied an old or semantically different value.

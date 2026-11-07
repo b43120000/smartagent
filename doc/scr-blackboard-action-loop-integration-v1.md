@@ -56,9 +56,13 @@ The read projection \`SMARTAGENT_SHARED_BLACKBOARD_V1\` contains:
 
 The exported \`read_action_loop_blackboard\` validates request/epoch and
 Action Loop state ID before sharing decision data with another module.
-\`WebAgentProtocolLoop._normalize_action_loop_decision\` reads it and rejects
-stale inconsistent snapshots, instead of silently accepting contradictory
-allowed-next-action sets.
+\`WebAgentProtocolLoop._normalize_action_loop_decision\` reads the Blackboard snapshot. A legitimate accepted Progress update can
+advance the Runtime-owned Action Loop after the Planner prompt was rendered.
+The derived Blackboard is refreshed from current authoritative Ledgers and
+`action_loop_blackboard_snapshot_reconciled` records old/new State IDs.
+Only an unreconcilable inconsistency is rejected; the latest Runtime Action
+Loop still decides allowed tools, and no stale Blackboard entry grants
+permission.
 
 The durable Action/Result and authoritative Scope Ledgers remain the
 sources of truth; Blackboard is a versioned read snapshot, not a new

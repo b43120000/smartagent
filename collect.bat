@@ -756,13 +756,16 @@ try {
     # Only bounded enum codes and trusted action/evidence identifiers survive;
     # no raw paths, user prose, commands, or Tool output are exported.
     $loopDecisions = @($timeline.ToArray() | Where-Object {
-        $_.event -eq 'action_loop_decision_evaluated'
+        $_.event -in @('action_loop_decision_evaluated','action_loop_blackboard_snapshot_reconciled')
     } | ForEach-Object {
         [ordered]@{
             source=$_.source
             event=$_.event
             round=$_.round
             state_id=(Safe-Code $_.state_id)
+            previous_state_id=(Safe-Code $_.old_state_id)
+            current_state_id=(Safe-Code $_.new_state_id)
+            blackboard_snapshot_id=(Safe-Code $_.new_blackboard_snapshot_id)
             rule_id=(Safe-Code $_.rule_id)
             observed_evidence_ref=(Safe-Code $_.observed_evidence_ref)
             required_transition=(Safe-Code $_.required_transition)

@@ -239,14 +239,20 @@ class OriginalGoalDirectoryIntegration(unittest.TestCase):
             self.assertEqual(read_action_loop_blackboard(
                 board, request_id="RR-WRONG", task_epoch=EPOCH,
             )["status"], "UNAVAILABLE")
-            # Conflict between a newer live ActionLoop and a prior Blackboard
-            # must not silently admit a different operation.
+            # A legal ActionLoop update after Planner Context is projected
+            # must trigger a bounded Blackboard refresh, not a false denial.
             loop._last_shared_blackboard_snapshot = board
             loop.action_loop_state = build_action_loop_state()
-            conflict = loop._normalize_action_loop_decision(
+            diagnostic = loop._normalize_action_loop_decision(
                 {"decision": "CONTINUE", "outcome": "PENDING"}, [create],
             )
-            self.assertEqual(conflict["reason"], "action_loop_blackboard_state_drift")
+            self.assertIsNone(diagnostic)
+            refreshed = read_action_loop_blackboard(
+                loop._last_shared_blackboard_snapshot,
+                request_id=REQUEST, task_epoch=EPOCH,
+            )
+            self.assertEqual(refreshed["status"], "BOUND")
+            self.assertEqual(refreshed["state_id"], loop.action_loop_state["state_id"])
 
 
 if __name__ == "__main__":

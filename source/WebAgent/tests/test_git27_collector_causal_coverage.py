@@ -76,6 +76,12 @@ class CollectorCausalCoverageTests(unittest.TestCase):
              "allowed_next_actions": ["create_directory"],
              "reason_code": "GOAL_DIRECTORY_ABSENCE_CONFIRMED",
              "authorization_granted": False},
+            {**base, "stage": "action_loop_blackboard_snapshot_reconciled",
+             "round": 4, "old_state_id": "ALS-PREVIOUS",
+             "new_state_id": "ALS-NEW-OWNER-STATE",
+             "new_blackboard_snapshot_id": "BB-NEW-OWNER-STATE",
+             "reason_code": "LEDGER_STATE_ADVANCED_AFTER_PLANNER_CONTEXT",
+             "authorization_granted": False},
             {**base, "stage": "action_resolution_recorded", "round": 2,
              "action_id": ACTION, "tool": "run_command",
              "original_command_sha256": "b" * 64,
@@ -220,8 +226,9 @@ class CollectorCausalCoverageTests(unittest.TestCase):
                          ["PINNED_REMOTE_ARTIFACT_ACQUISITION"])
         self.assertEqual(terminal["strategy_candidate_statuses"], ["UNTRIED"])
         loop_decisions = json.loads(files["action_loop_decision_summary.json"])
-        self.assertEqual(len(loop_decisions), 1)
-        loop_row = loop_decisions[0]
+        self.assertEqual(len(loop_decisions), 2)
+        loop_row = next(row for row in loop_decisions
+                        if row["event"] == "action_loop_decision_evaluated")
         self.assertEqual(loop_row["rule_id"], "DIR-001")
         self.assertEqual(loop_row["observed_evidence_ref"], ACTION)
         self.assertEqual(loop_row["required_transition"], "REPLAN_REQUIRED")
@@ -229,6 +236,13 @@ class CollectorCausalCoverageTests(unittest.TestCase):
         self.assertEqual(loop_row["reason_code"],
                          "GOAL_DIRECTORY_ABSENCE_CONFIRMED")
         self.assertFalse(loop_row["authorization_granted"])
+        superseded = next(row for row in loop_decisions
+                          if row["event"] == "action_loop_blackboard_snapshot_reconciled")
+        self.assertEqual(superseded["previous_state_id"], "ALS-PREVIOUS")
+        self.assertEqual(superseded["current_state_id"], "ALS-NEW-OWNER-STATE")
+        self.assertEqual(superseded["reason_code"],
+                         "LEDGER_STATE_ADVANCED_AFTER_PLANNER_CONTEXT")
+        self.assertFalse(superseded["authorization_granted"])
         action_trace = json.loads(files["action_causal_trace_summary.json"])
         self.assertTrue(any(row["event"] == "action_resolution_recorded"
                             and row["original_command_sha256"] == "b" * 64
