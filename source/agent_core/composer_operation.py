@@ -411,6 +411,30 @@ def _last_turn_readiness(adapter, users, assistants):
     return 'LAST_TURN_ORDER_UNKNOWN'
 
 
+def _composer_is_empty(scraper):
+    """Prove empty DOM, preserving real whitespace and failing closed on reads."""
+    editor = scraper._composer_locator()
+    if editor is None:
+        return False
+    try:
+        return editor.evaluate(r"""el => {
+            if (typeof el.value === 'string') return el.value === '';
+            if (el.getAttribute('contenteditable') !== 'true') return false;
+            if ((el.textContent || '') !== '') return false;
+            // Only the canonical empty paragraph's synthetic caret BR is
+            // ignored. Multiple paragraphs/BRs still represent authored lines.
+            const nodes = [...el.childNodes];
+            if (nodes.length === 0) return true;
+            if (nodes.length !== 1 || nodes[0].nodeName !== 'P') return false;
+            const children = [...nodes[0].childNodes];
+            return children.length === 0 || (children.length === 1 &&
+                children[0].nodeName === 'BR' &&
+                children[0].classList.contains('ProseMirror-trailingBreak'));
+        }""") is True
+    except Exception:
+        return False
+
+
 def _page_snapshot(scraper,prompt):
     adapter=scraper._web_ui_adapter()
     users=adapter.observation_turns('user')
@@ -424,10 +448,9 @@ def _page_snapshot(scraper,prompt):
         observed_length=int(validation.observed_length),
         expected_sha256=str(validation.expected_sha256),
         observed_sha256=str(validation.observed_sha256))
-    from .web_ui.providers.chatgpt.composer import canonical_composer_text
     return dict(composer_matches=bool(validation.matched),
         composer_validation=verification,
-        composer_empty=(canonical_composer_text(scraper._read_composer_text()) == ""),
+        composer_empty=_composer_is_empty(scraper),
         last_turn_status=last_turn_status,
         url=scraper._page.url,
         user_anchors=[[t.structural_id,t.content_digest] for t in users[-2:]],
