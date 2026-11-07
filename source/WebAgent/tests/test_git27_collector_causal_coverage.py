@@ -47,6 +47,27 @@ class CollectorCausalCoverageTests(unittest.TestCase):
             "task_id": TASK, "request_id": REQUEST, "task_epoch": "G27-EPOCH",
         }
         rows = [
+            {**base, "stage": "planner_context_prepared", "round": 3,
+             "context_snapshot_id": "CTX-G27-EXACT",
+             "context_digest": "a" * 64,
+             "failure_causal_receipt_count": 1,
+             "last_failure_category": "DNS_RESOLUTION_FAILED",
+             "planner_failure_action_ids": [ACTION],
+             "prerequisite_transition_stage": "PROBE_EVIDENCE_AVAILABLE_UNRESOLVED"},
+            {**base, "stage": "planner_context_response_correlated", "round": 3,
+             "context_snapshot_id": "CTX-G27-EXACT",
+             "context_digest": "a" * 64,
+             "planner_response_received": True,
+             "failure_causal_receipt_count": 1,
+             "last_failure_category": "DNS_RESOLUTION_FAILED",
+             "planner_failure_action_ids": [ACTION]},
+            {**base, "stage": "action_resolution_recorded", "round": 2,
+             "action_id": ACTION, "tool": "run_command",
+             "original_command_sha256": "b" * 64,
+             "dispatched_command_sha256": "b" * 64,
+             "disposition": "PASS_UNCHANGED", "reason_codes": [],
+             "changed_fields": [], "dispatched": True, "executed": True,
+             "evidence_kind": "ACTUAL_TOOL_RESULT"},
             {**base, "stage": "prerequisite_transition_prepared",
              "operation_stage": "PROBE_EVIDENCE_AVAILABLE_UNRESOLVED",
              "progress_transition": "PLANNER_ASSESS_ACTUAL_PROBE_RESULT",
@@ -139,6 +160,15 @@ class CollectorCausalCoverageTests(unittest.TestCase):
                          "run_command")
         scope = json.loads(files["scope_preflight_summary.json"])
         self.assertTrue(any(item.get("admission_only") for item in scope))
+        delivery = json.loads(files["planner_context_delivery.json"])
+        self.assertEqual(delivery[0]["failure_causal_receipt_count"], 1)
+        self.assertEqual(delivery[0]["planner_failure_action_ids"], [ACTION])
+        self.assertEqual(delivery[0]["prerequisite_transition_stage"],
+                         "PROBE_EVIDENCE_AVAILABLE_UNRESOLVED")
+        action_trace = json.loads(files["action_causal_trace_summary.json"])
+        self.assertTrue(any(row["event"] == "action_resolution_recorded"
+                            and row["original_command_sha256"] == "b" * 64
+                            for row in action_trace))
         ledger = json.loads(files["task_progress_summary.json"])
         self.assertEqual(ledger["interruption_reason"],
                          "bounded_repair:repair_stagnation_soft_deadline")
