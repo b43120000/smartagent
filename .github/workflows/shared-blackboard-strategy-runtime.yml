@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/shared-blackboard-capability-strategy-20261107
+      - fix/strategy-after-access-verified-20261107
   workflow_dispatch:
 
 permissions:

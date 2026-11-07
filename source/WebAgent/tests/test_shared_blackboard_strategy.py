@@ -184,6 +184,130 @@ class SharedBlackboardTests(unittest.TestCase):
         self.assertFalse(candidate["candidate_is_executable_action"])
         self.assertEqual(len(runtime.tools.preview_calls), 1)
 
+    def test_live_case_d_access_verified_without_replan_generates_next_strategy(self):
+        # Reproduction of TASK-DBE1... Round 1/2 -> Round 3:
+        # target absence and successful git ls-remote, but no failed CWD
+        # and therefore no runtime strategy revision history.
+        with tempfile.TemporaryDirectory() as temp:
+            progress = initialize_progress(
+                TASK, request_id=REQUEST, goal=GOAL, root=temp,
+            )
+            self.assertFalse((progress.strategy_state or {}).get("history"))
+            runtime = FakeRuntime(progress)
+            runtime.action_ledger["D-LIVE-GIT-READ"] = {
+                "round": 2,
+                "action": {
+                    "tool": "run_command", "operation": "GIT_INSPECT",
+                    "command": (
+                        "git ls-remote "
+                        "https://github.com/b43120000/test.git HEAD"
+                    ),
+                    "working_directory": PARENT,
+                },
+            }
+            runtime.action_result_ledger["D-LIVE-GIT-READ"] = {
+                "request_id": REQUEST,
+                "task_epoch": EPOCH,
+                "executed": True,
+                "execution_status": "SUCCEEDED",
+                "result_status": "SUCCEEDED",
+                "evidence_status": "ACTIVE",
+            }
+            registry = build_strategy_candidate_registry(
+                runtime,
+                capability_manifest=build_runtime_capability_manifest(runtime),
+                prerequisite_view={
+                    "source_requirement": "REQUIRED",
+                    "next_category": "RESOLVE_REGISTERED_SOURCE_ARTIFACT",
+                },
+                prerequisite_transition={"stage": "ACCESS_VERIFIED"},
+                remote_access_view={
+                    "authorization_state": "AUTHORIZED",
+                    "git_executable_status": "AVAILABLE",
+                    "authorization_evidence_ref": "D-LIVE-GIT-READ",
+                },
+                artifact_view=ARTIFACTS,
+                goal_gap_view=GAPS,
+            )
+        self.assertEqual(registry["candidate_count"], 1)
+        candidate = registry["candidates"][0]
+        self.assertEqual(
+            candidate["route_id"], "PINNED_REMOTE_ARTIFACT_ACQUISITION",
+        )
+        self.assertEqual(candidate["status"], "UNTRIED")
+        self.assertEqual(candidate["source_git_read_evidence_ref"], "D-LIVE-GIT-READ")
+        self.assertEqual(candidate["target_absence_evidence_ref"], "FACT-TARGET-ABSENT-001")
+        self.assertEqual(candidate["operation"], "GIT_MUTATE")
+        self.assertTrue(candidate["mutation_scope_not_yet_verified"])
+        self.assertFalse(candidate["execution_authorized"])
+        self.assertFalse(candidate["source_integrity_verified"])
+        terminal = evaluate_terminal_readiness(
+            registry, request_id=REQUEST, task_epoch=EPOCH,
+        )
+        self.assertFalse(terminal["interrupt_allowed"])
+        self.assertEqual(terminal["decision"], "REPLAN_REQUIRED")
+        self.assertEqual(terminal["untried_candidate_count"], 1)
+        self.assertEqual(
+            interrupt_terminal_diagnostic(terminal)["reason"],
+            "goal_relevant_strategy_not_exhausted",
+        )
+        action = {
+            "tool": "run_command",
+            "action_id": "D-LIVE-ACQUIRE-001",
+            "strategy_id": candidate["strategy_id"],
+            "command": (
+                "git clone https://github.com/b43120000/test.git "
+                "E:\\\\AuthorizedStaging"
+            ),
+            "operation": "GIT_MUTATE",
+            "working_directory": PARENT,
+        }
+        self.assertIsNone(validate_strategy_candidate_bindings(
+            [action], registry, request_id=REQUEST, task_epoch=EPOCH,
+        ))
+        wrong_repo = {
+            **action,
+            "command": "git clone https://github.com/unrelated/repository.git E:\\\\AuthorizedStaging",
+        }
+        diagnostic = validate_strategy_candidate_bindings(
+            [wrong_repo], registry, request_id=REQUEST, task_epoch=EPOCH,
+        )
+        self.assertEqual(
+            diagnostic["reason"], "strategy_candidate_source_repository_mismatch",
+        )
+        # This is only admission planning; no file or directory was created.
+
+    def test_access_verified_requires_current_epoch_git_read_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = FakeRuntime(initialize_progress(
+                TASK, request_id=REQUEST, goal=GOAL, root=temp,
+            ))
+            runtime.action_ledger["STALE-GIT-READ"] = {
+                "action": {
+                    "tool": "run_command", "operation": "GIT_INSPECT",
+                    "command": "git ls-remote https://github.com/b43120000/test.git HEAD",
+                    "working_directory": PARENT,
+                },
+            }
+            runtime.action_result_ledger["STALE-GIT-READ"] = {
+                "request_id": REQUEST, "task_epoch": "WRONG-EPOCH",
+                "result_status": "SUCCEEDED", "executed": True,
+            }
+            registry = build_strategy_candidate_registry(
+                runtime,
+                prerequisite_view={
+                    "next_category": "RESOLVE_REGISTERED_SOURCE_ARTIFACT",
+                },
+                prerequisite_transition={"stage": "ACCESS_VERIFIED"},
+                remote_access_view={
+                    "authorization_state": "AUTHORIZED",
+                    "git_executable_status": "AVAILABLE",
+                },
+                artifact_view=ARTIFACTS,
+                goal_gap_view=GAPS,
+            )
+        self.assertEqual(registry["candidate_count"], 0)
+
     def test_untried_candidate_blocks_interrupt_until_strategy_is_attempted(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime = create_runtime(temp)

@@ -1672,6 +1672,21 @@ class WebAgentProtocolLoop:
                     "stage", ""
                 )
             ),
+            strategy_candidate_count=(
+                (context_info.get("strategy_candidates") or {}).get("candidate_count", 0)
+            ),
+            strategy_candidate_route_ids=[
+                str(item.get("route_id") or "")[:100]
+                for item in list(
+                    (context_info.get("strategy_candidates") or {}).get("candidates") or []
+                )[:8] if isinstance(item, dict)
+            ],
+            strategy_candidate_statuses=[
+                str(item.get("status") or "")[:100]
+                for item in list(
+                    (context_info.get("strategy_candidates") or {}).get("candidates") or []
+                )[:8] if isinstance(item, dict)
+            ],
         )
         trace = (
             "[WEBAGENT_REQUEST_TRACE]\n"
@@ -5382,6 +5397,20 @@ class WebAgentProtocolLoop:
                     "strategy_space_state", "UNKNOWN"
                 ),
                 candidate_count=terminal_readiness.get("candidate_count", 0),
+                strategy_candidate_route_ids=[
+                    str(item.get("route_id") or "")[:100]
+                    for item in list(
+                        (getattr(self, "_last_strategy_candidate_registry", {}) or {})
+                        .get("candidates") or []
+                    )[:8] if isinstance(item, dict)
+                ],
+                strategy_candidate_statuses=[
+                    str(item.get("status") or "")[:100]
+                    for item in list(
+                        (getattr(self, "_last_strategy_candidate_registry", {}) or {})
+                        .get("candidates") or []
+                    )[:8] if isinstance(item, dict)
+                ],
                 untried_candidate_count=terminal_readiness.get(
                     "untried_candidate_count", 0
                 ),

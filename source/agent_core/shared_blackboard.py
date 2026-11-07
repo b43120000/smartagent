@@ -225,6 +225,14 @@ def _candidate_action_matches(candidate: Mapping, action: Mapping) -> bool:
         if expected_command:
             return str(action.get("command") or "") == expected_command
         if operation == "GIT_MUTATE":
+            if candidate.get("route_id") == "PINNED_REMOTE_ARTIFACT_ACQUISITION":
+                source = candidate.get("source_artifact") or {}
+                repository = str(source.get("repository") or "").lower()
+                return bool(
+                    repository
+                    and ("github.com/" + repository) in
+                        str(action.get("command") or "").lower()
+                )
             return bool(
                 re.search(r"(?i)\bgit(?:\.exe)?\b", str(action.get("command") or ""))
                 and _command_mentions_target(action, candidate)
@@ -569,6 +577,159 @@ def build_strategy_candidate_registry(
             candidate["candidate_is_executable_action"] = False
             candidates.append(candidate)
 
+    # The first successful registered Git HEAD probe is not a CWD failure.
+    # Therefore it MUST produce the next source-acquisition planning candidate
+    # directly from current Goal Gap + Runtime Evidence. Replan history may
+    # legitimately be empty. Without this transition the terminal gate would
+    # see zero candidates and permit an unsupported INTERRUPT.
+    if (
+        need == "REQUIRED"
+        and prerequisite.get("next_category") == "RESOLVE_REGISTERED_SOURCE_ARTIFACT"
+        and transition.get("stage") == "ACCESS_VERIFIED"
+        and remote_state == "AUTHORIZED"
+        and git_status == "AVAILABLE"
+        and len(artifact_refs) == 1
+        and "run_command" in allowed_tools
+    ):
+        from .action_resolution_trace import registered_remote_git_read
+        source = artifact_refs[0]
+        repository = str(source.get("repository") or "")
+        commit_sha = str(source.get("commit_sha") or "")
+        archive_path = str(source.get("artifact_path") or "")
+        known_targets = [
+            gap for gap in list(gaps.get("active_gaps") or [])[:32]
+            if isinstance(gap, Mapping)
+            and gap.get("observation_status") == "CONFIRMED"
+            and gap.get("status") == "UNRESOLVED"
+            and gap.get("observed_value") is False
+            and gap.get("observed_fact_ref")
+            and gap.get("path")
+        ]
+        # Never select an arbitrary source, target or missing workspace.
+        # A single pinned source and single observed absent Goal target are
+        # required for this bounded candidate. This is NOT a write grant.
+        if (
+            len(known_targets) == 1
+            and repository
+            and re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha)
+            and archive_path
+            and not ntpath.isabs(archive_path)
+            and ":" not in archive_path.split("/")[0]
+            and not archive_path.startswith(("/", chr(92)))
+            and ".." not in archive_path.replace(chr(92), "/").split("/")
+        ):
+            actions = dict(getattr(runtime, "action_ledger", {}) or {})
+            results = dict(getattr(runtime, "action_result_ledger", {}) or {})
+            for action_id in reversed(list(results)):
+                evidence = results[action_id]
+                recorded = actions.get(action_id) or {}
+                action = (
+                    recorded.get("action")
+                    if isinstance(recorded, Mapping) else None
+                )
+                if not (
+                    isinstance(evidence, Mapping)
+                    and evidence.get("request_id") == request_id
+                    and evidence.get("task_epoch") == task_epoch
+                    and evidence.get("executed") is True
+                    and evidence.get("result_status") == "SUCCEEDED"
+                    and evidence.get("evidence_status", "ACTIVE") == "ACTIVE"
+                    and isinstance(action, Mapping)
+                    and registered_remote_git_read(action, artifacts)
+                ):
+                    continue
+                cwd = str(action.get("working_directory") or "")
+                if not cwd:
+                    # Only an actual bound workspace may be used as a CWD
+                    # candidate when the admitted read omitted the field.
+                    cwd = str(getattr(runtime, "workspace", "") or "")
+                if not cwd:
+                    break
+                scope_status, scope_reason = _preview_scope(
+                    runtime, {
+                        "tool": "run_command", "operation": "GIT_INSPECT",
+                        "command": str(action.get("command") or ""),
+                        "working_directory": cwd,
+                    }, cwd,
+                )
+                status = (
+                    "UNTRIED" if scope_status == "PASS" else
+                    "NEEDS_USER_AUTHORIZATION" if scope_status == "DENIED" else
+                    "RUNTIME_PREFLIGHT_RECONCILIATION_REQUIRED"
+                )
+                target = str(known_targets[0]["path"])
+                evidence_ref = str(known_targets[0]["observed_fact_ref"])[:160]
+                seed = _digest({
+                    "source_candidate_id": str(source.get("candidate_id") or ""),
+                    "repository": repository, "commit_sha": commit_sha,
+                    "archive_path": archive_path, "target": _path_key(target),
+                    "git_read_action_id": str(action_id),
+                    "target_absence_ref": evidence_ref,
+                })
+                candidate = {
+                    "strategy_id": _strategy_id(
+                        request_id, task_epoch, seed,
+                        "PINNED_REMOTE_ARTIFACT_ACQUISITION",
+                    ),
+                    "revision": int(strategy_state.get("revision", 1) or 1),
+                    "route_id": "PINNED_REMOTE_ARTIFACT_ACQUISITION",
+                    "goal_relevance": "ACQUIRE_AND_VERIFY_PINNED_SOURCE_BEFORE_DEPLOYMENT",
+                    "tool": "run_command",
+                    "operation": "GIT_MUTATE",
+                    "working_directory": cwd,
+                    "target": target,
+                    "target_path_root": "",
+                    "target_absence_evidence_ref": evidence_ref,
+                    "source_artifact": {
+                        "candidate_id": str(source.get("candidate_id") or "")[:80],
+                        "repository": repository,
+                        "commit_sha": commit_sha,
+                        "artifact_path": archive_path,
+                    },
+                    "source_git_read_evidence_ref": str(action_id)[:160],
+                    "purpose": (
+                        "Acquire the exact registered pinned remote archive "
+                        "under a separately admitted write destination and "
+                        "independently verify the commit, archive hash and "
+                        "contents before changing the missing Goal target."
+                    ),
+                    "required_action_fields": [
+                        "command", "operation", "working_directory",
+                        "success_criteria", "verify",
+                    ],
+                    "working_directory_scope_preflight": scope_status,
+                    "working_directory_scope_reason_code": scope_reason,
+                    "scope_preview_is_read_only_git_probe": True,
+                    "mutation_scope_not_yet_verified": True,
+                    "source_integrity_verified": False,
+                    "target_write_admission_required": True,
+                    "normal_tool_admission_required": True,
+                    "planner_must_construct_action": True,
+                    "authorization_granted": False,
+                    "execution_authorized": False,
+                    "executed": False,
+                    "status": status,
+                    "evidence_digest": seed,
+                }
+                attempts = _find_attempts(runtime, candidate)
+                if attempts:
+                    latest = attempts[-1]
+                    candidate.update({
+                        "status": latest["status"],
+                        "attempt_count": len(attempts),
+                        "attempted_action_id": latest["action_id"],
+                        "attempted_reason_code": latest["reason_code"],
+                    })
+                else:
+                    candidate["attempt_count"] = 0
+                    candidate["attempted_action_id"] = ""
+                    candidate["attempted_reason_code"] = ""
+                candidate["blocks_interrupt"] = candidate["status"] in _BLOCKING_STATES
+                candidate["requires_user_input"] = candidate["status"] in _USER_INPUT_STATES
+                candidate["candidate_is_executable_action"] = False
+                candidates.append(candidate)
+                break
+
     # Include the already-supported exact Git readiness probe in the same
     # candidate vocabulary; the prerequisite transition gate remains owner.
     probe = dict(transition.get("probe_action") or {})
@@ -895,6 +1056,7 @@ def validate_strategy_candidate_bindings(
             }
         if (str(candidate.get("tool") or "") == "run_command"
                 and operation == "GIT_MUTATE"
+                and candidate.get("route_id") != "PINNED_REMOTE_ARTIFACT_ACQUISITION"
                 and not _command_mentions_target(action, candidate)):
             return {
                 "marker": "[SMARTAGENT_STRATEGY_REFERENCE_REJECTED]",
@@ -903,6 +1065,18 @@ def validate_strategy_candidate_bindings(
                 "suggestion": "保留 Runtime candidate target；不得以同一 strategy_id 改寫或擴大部署目標。",
                 "authorization_granted": False, "executed": False,
             }
+        if candidate.get("route_id") == "PINNED_REMOTE_ARTIFACT_ACQUISITION":
+            source = candidate.get("source_artifact") or {}
+            repository = str(source.get("repository") or "").lower()
+            command_text = str(action.get("command") or "").lower()
+            if not repository or ("github.com/" + repository) not in command_text:
+                return {
+                    "marker": "[SMARTAGENT_STRATEGY_REFERENCE_REJECTED]",
+                    "reason": "strategy_candidate_source_repository_mismatch",
+                    "detail": "source acquisition must use the exactly registered repository",
+                    "suggestion": "使用 Runtime source_artifact.repository 所指定的固定來源；任何新路徑仍須獨立授權。",
+                    "authorization_granted": False, "executed": False,
+                }
         contract = candidate.get("planner_action_contract")
         expected_command = (
             str(contract.get("command") or "")

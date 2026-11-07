@@ -91,3 +91,29 @@ A terminal block is a Runtime constraint, not a Planner strategy choice. It does
 ## V1 boundary / follow-up
 
 V1 unifies the Planner-facing state contract and makes candidate strategy use traceable. It does not yet migrate all persistent ledgers into one append-only physical event store, nor claim that the Runtime can enumerate every conceivable strategy. The candidate registry is explicitly a bounded set of Runtime-grounded alternatives. A later migration can move owner-ledger persistence behind the Blackboard event API without changing the section and identity contracts.
+
+## Live Case D regression (2026-11-07)
+
+An actual Case D run (TASK-DBE1E32A34FC2BE84EFE, installed HEAD
+`07f5369c76874586cc360228c9cb79ffb2fbcf1f`) exposed a missing
+transition in the V1 strategy registry. A confirmed absent target and an
+authorized current-epoch `git ls-remote` succeeded, but no CWD
+rejection occurred. Because V1 produced acquisition candidates only
+from recorded Replan history, the strategy registry returned zero
+candidates at `ACCESS_VERIFIED`; Runtime then accepted a premature
+`INTERRUPT`. No source acquisition or deployment Action was executed.
+
+The patch derives a `PINNED_REMOTE_ARTIFACT_ACQUISITION` candidate
+directly from current Goal-Gap Evidence, exactly one registered artifact,
+a successful current-epoch Git HEAD read and the Runtime's current
+readiness state. The earlier Git read's existing CWD is checked by a
+non-executing scope preview. The candidate is planning guidance,
+**not** a write admission, acquisition result, ZIP verification or
+directory creation. It requires a new canonical Action with the exact
+candidate `strategy_id`, repository identity and normal Tool/Scope/
+Network/Approval checks. A candidate still in `UNTRIED` state blocks
+unsupported `INTERRUPT`, while an actual Runtime denial can be
+correlated and reported as evidence rather than guessed.
+
+Regression `test_live_case_d_access_verified_without_replan_generates_next_strategy`
+replays the exact relevant stage transition without a Replan history.
