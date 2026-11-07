@@ -162,7 +162,8 @@ class DirectorySemanticBlackboardTests(unittest.TestCase):
                     } for row in gaps["gaps"]
                 ],
             })
-            self.assertEqual(gaps["known_absences"][0]["path"], str(target))
+            self.assertTrue(same_original_request_path(
+                gaps["known_absences"][0]["path"], str(target)))
             self.assertEqual(gaps["goal_policy"]["intent"], "REMEDIATION_CANDIDATE")
             rule = evaluate_directory_decision(runtime, gaps)
             self.assertEqual(rule["decision"], "CREATE_DIRECTORY_REQUIRED")
