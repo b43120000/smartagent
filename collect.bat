@@ -272,12 +272,54 @@ try {
             continue
         }
         $file = Get-Item -LiteralPath $path
+        $scanMode = 'FULL_FILE_STREAM'
+        $tailLimit = 0
+        # Full streaming scan of normally sized JSONL logs. Only the matching
+        # Task/Request rows are retained, not unrelated conversations.
+        # Oversized logs are safely bounded and explicitly flagged PARTIAL.
+        $lines = New-Object 'System.Collections.Generic.List[string]'
+        try {
+            if ($file.Length -gt 134217728) {
+                $scanMode = 'TAIL_FALLBACK'
+                $tailLimit = 25000
+                $warnings.Add('SOURCE_FULL_SCAN_SIZE_LIMIT: ' + $source.name)
+                foreach ($item in @(Get-Content -LiteralPath $path -Tail 25000 -Encoding UTF8 -ErrorAction Stop)) {
+                    $lines.Add([string]$item)
+                }
+            } else {
+                $stream = [IO.File]::Open(
+                    $path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                    [IO.FileShare]::ReadWrite
+                )
+                try {
+                    $reader = [IO.StreamReader]::new(
+                        $stream, [Text.Encoding]::UTF8, $true
+                    )
+                    try {
+                        while ($null -ne ($item = $reader.ReadLine())) {
+                            if (($task -and $item.Contains($task)) -or
+                                ($request -and $item.Contains($request))) {
+                                $lines.Add($item)
+                                if ($lines.Count -ge 3500) {
+                                    $warnings.Add('Full scan matching row cap reached: ' + $source.name)
+                                    break
+                                }
+                            }
+                        }
+                    } finally { $reader.Dispose() }
+                } finally { $stream.Dispose() }
+            }
+        } catch {
+            $warnings.Add('Unable to read source: ' + $source.name)
+            continue
+        }
         $sourceInfo.Add([ordered]@{
             source=$source.name; exists=$true; bytes=$file.Length;
-            modified_utc=$file.LastWriteTimeUtc.ToString('o'); tail_limit=25000
+            modified_utc=$file.LastWriteTimeUtc.ToString('o');
+            scan_mode=$scanMode; tail_limit=$tailLimit;
+            scan_guarantees_unlimited_history=($scanMode -eq 'FULL_FILE_STREAM' -and
+                @($warnings | Where-Object { $_ -eq ('Full scan matching row cap reached: ' + $source.name) }).Count -eq 0)
         })
-        try { $lines = @(Get-Content -LiteralPath $path -Tail 25000 -Encoding UTF8 -ErrorAction Stop) }
-        catch { $warnings.Add('Unable to read source: ' + $source.name); continue }
         foreach ($line in $lines) {
             if (-not $line) { continue }
             $matched = ($task -and $line.Contains($task)) -or ($request -and $line.Contains($request))
@@ -951,13 +993,20 @@ try {
     if (@($warnings | Where-Object { $_ -like 'Timeline capped*' }).Count -gt 0) {
         $coverageIssues.Add('TIMELINE_ROW_CAP_REACHED')
     }
+    if (@($warnings | Where-Object { $_ -like 'Full scan matching row cap reached*' }).Count -gt 0) {
+        $coverageIssues.Add('FULL_SCAN_MATCH_ROW_CAP_REACHED')
+    }
+    if (@($warnings | Where-Object { $_ -like 'SOURCE_FULL_SCAN_SIZE_LIMIT*' }).Count -gt 0) {
+        $coverageIssues.Add('SOURCE_LOG_TOO_LARGE_TAIL_ONLY')
+    }
     if ($progressSummary.runtime_state -in @('PAUSED','INTERRUPTED') -and
         -not $progressSummary.interruption_reason_present) {
         $coverageIssues.Add('TASK_INTERRUPTION_REASON_MISSING')
     }
     $coverage = [ordered]@{
         schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
-        status=$(if ($coverageIssues.Count -eq 0) { 'COVERED_WITH_BOUNDED_WINDOW' } else { 'PARTIAL' })
+        status=$(if ($coverageIssues.Count -gt 0) { 'PARTIAL' }
+            else { 'FULL_AVAILABLE_LOG_SCAN' })
         issues=@($coverageIssues.ToArray())
         transition_count=$transitions.Count
         transition_missing_stage=$missingStages
@@ -973,7 +1022,10 @@ try {
         action_trace_event_count=$actionTrace.Count
         planner_context_delivery_event_count=@($delivery).Count
         log_window_tail_lines=25000
-        log_window_bounded=$true
+        log_window_bounded=[bool](@($sourceInfo.ToArray() | Where-Object {
+            $_.scan_mode -eq 'TAIL_FALLBACK'
+        }).Count -gt 0)
+        complete_available_log_scan=($coverageIssues.Count -eq 0)
         timeline_row_cap=3500
         raw_tool_output_included=$false
         source_integrity_guaranteed=$false
