@@ -1638,6 +1638,14 @@ class WebAgentProtocolLoop:
         )
         self._last_planner_context_digest = context_info["context_digest"]
         self._last_planner_context_snapshot_id = context_info["context_snapshot_id"]
+        context_failures = list(context_info.get("failure_causal_receipts") or [])[-12:]
+        self._last_planner_failure_action_ids = [
+            str(row.get("action_id", "") or "") for row in context_failures
+        ]
+        self._last_planner_failure_category = (
+            str((context_failures[-1].get("failure") or {}).get("category") or "")
+            if context_failures else ""
+        )
         self._emit(
             "planner_context_prepared",
             request_id=self.run_id, round=self.turn_id,
@@ -1647,6 +1655,14 @@ class WebAgentProtocolLoop:
             omitted_active_blocker_count=context_info["omitted_active_blocker_count"],
             critical_context_omitted=context_info["critical_context_omitted"],
             diagnostic_count=len(context_info["latest_protocol_diagnostics"]),
+            failure_causal_receipt_count=len(context_failures),
+            last_failure_category=self._last_planner_failure_category,
+            planner_failure_action_ids=self._last_planner_failure_action_ids,
+            prerequisite_transition_stage=(
+                (context_info.get("prerequisite_transition_gate") or {}).get(
+                    "stage", ""
+                )
+            ),
         )
         trace = (
             "[WEBAGENT_REQUEST_TRACE]\n"
@@ -7200,6 +7216,15 @@ class WebAgentProtocolLoop:
                 context_snapshot_id=getattr(self, "_last_planner_context_snapshot_id", ""),
                 context_digest=getattr(self, "_last_planner_context_digest", ""),
                 planner_response_received=True,
+                failure_causal_receipt_count=len(getattr(
+                    self, "_last_planner_failure_action_ids", []
+                )),
+                planner_failure_action_ids=list(getattr(
+                    self, "_last_planner_failure_action_ids", []
+                )),
+                last_failure_category=getattr(
+                    self, "_last_planner_failure_category", ""
+                ),
             )
             action_id_seed = f"{expected.get('run_id', '')}:{expected.get('turn_id', '')}"
             parsed_transport = parse_v9_tool_transport_detailed(
