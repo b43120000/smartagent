@@ -68,7 +68,8 @@ class SCREndToEnd(unittest.TestCase):
                         task_epoch="EPOCH-SCR-IT",
                         trusted_authorized_paths=[str(folder)],
                     )
-            self.assertIn("SCR-LIST", loop.action_result_ledger)
+            self.assertIn("SCR-LIST", loop.action_result_ledger,
+                          "SCR round events: " + repr(events[-25:]))
             self.assertEqual("SCR-META" in loop.action_result_ledger, expect_inspect)
             self.assertEqual(loop.tools._runtime_semantic_capability_resolution["request_id"], "RR-SCR-IT")
             if not expect_inspect:
