@@ -1,0 +1,65 @@
+name: Shared Blackboard and Strategy-Aware Runtime
+
+on:
+  push:
+    branches:
+      - feat/shared-blackboard-capability-strategy-20261107
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shared-blackboard:
+    name: Shared Blackboard - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install existing test-import dependency
+        run: python -m pip install --disable-pip-version-check playwright
+      - name: Compile shared Blackboard and affected Runtime
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/shared_blackboard.py
+          source/agent_core/task_progress.py
+          source/agent_core/smartagent_protocol.py
+          source/agent_core/action_loop_state.py
+          source/agent_core/runtime_fact_ledger.py
+          source/agent_core/failure_causal_receipt.py
+          source/agent_core/unified_contract_transaction.py
+          source/agent_core/tool_capabilities.py
+          source/agent_core/planner_context_snapshot.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_shared_blackboard_strategy.py
+      - name: Shared Blackboard, capability and strategy-exhaustion contracts
+        run: python -B source/WebAgent/tests/test_shared_blackboard_strategy.py
+      - name: Existing Git27 causal receipts
+        run: python -B source/WebAgent/tests/test_git27_failure_causal_pipeline.py
+      - name: Existing Git26 prerequisite transition
+        run: python -B source/WebAgent/tests/test_git26_prerequisite_transition_gate.py
+      - name: Existing Case D conditional interrupt
+        run: python -B source/WebAgent/tests/test_conditional_goal_interrupt_case_d.py
+      - name: Existing Planner Context bridge
+        run: python -B source/WebAgent/tests/validate_planner_context_bridge_it.py
+      - name: Existing Goal Strategy Transition
+        run: python -B source/WebAgent/tests/validate_goal_strategy_transition_it.py
+      - name: Existing CCRC and Replan
+        run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Existing Tool Scope hardening
+        run: python -B source/WebAgent/tests/validate_tool_scope_hardening.py
+      - name: Existing Windows-native preexecution Replan
+        if: matrix.os == 'windows-latest'
+        run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py

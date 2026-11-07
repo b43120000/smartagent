@@ -769,6 +769,26 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
     if tool not in {'report_progress', 'final_response', 'turn_commit'}:
         allowed_fields.add('depends_on')
         allowed_fields.add('replaces_action_id')
+        # Runtime-issued candidate correlation only; this never grants
+        # execution, authorization, Scope or a semantic rewrite.
+        allowed_fields.add('strategy_id')
+        if "strategy_id" in call:
+            strategy_id = call.get("strategy_id")
+            valid_strategy_id = (
+                isinstance(strategy_id, str)
+                and len(strategy_id) == 26
+                and strategy_id.startswith("STRAT-")
+                and all(char in "0123456789ABCDEF" for char in strategy_id[6:])
+            )
+            if not valid_strategy_id:
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]",
+                    "strategy_candidate_reference_invalid",
+                    tool=tool,
+                    detail="strategy_id must be a Runtime-issued STRAT- plus 20 uppercase hex characters",
+                    suggestion="只使用本輪 Runtime shared_blackboard.strategy.candidates 提供的 strategy_id。",
+                    block_index=block_index,
+                )
         replacement = call.get('replaces_action_id')
         if replacement is not None and (not isinstance(replacement,str) or not replacement.strip()):
             return False, _diagnostic('[TOOL_ENVELOPE_REJECTED]', 'action_replacement_invalid',

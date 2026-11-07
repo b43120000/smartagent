@@ -329,6 +329,9 @@ class WebAgentProtocolLoop:
         self._preexec_strategy_blocked: dict = {}
         self._runtime_strategy_replan_note = ""
         self._planner_context_diagnostics: list[dict] = []
+        self._last_shared_blackboard_snapshot: dict = {}
+        self._last_strategy_candidate_registry: dict = {}
+        self._last_terminal_readiness: dict = {}
         self._tri_one_origin = "WEB_DIRECT"
         self._tri_one_has_attached_context = False
         self.tools.configure_project_sync_transport(
@@ -1596,6 +1599,12 @@ class WebAgentProtocolLoop:
     def _with_commit(self, prompt: str, expected: dict) -> str:
         from agent_core.planner_context_snapshot import render_planner_context_snapshot
         planner_context, context_info = render_planner_context_snapshot(self)
+        self._last_shared_blackboard_snapshot = dict(
+            context_info.get("shared_blackboard") or {}
+        )
+        self._last_strategy_candidate_registry = dict(
+            context_info.get("strategy_candidates") or {}
+        )
         self._last_prerequisite_transition_receipt = dict(
             context_info.get("prerequisite_transition_gate") or {}
         )
@@ -4390,6 +4399,13 @@ class WebAgentProtocolLoop:
         held = {str(item.get('action_id', '')): item for item in self.pending_progress_repair_actions
                 if str(item.get('action_id', '')) not in self.action_ledger}
         submitted = [item for item in actions if item.get('tool') != 'report_progress']
+        from agent_core.shared_blackboard import validate_strategy_candidate_bindings
+        strategy_binding_diagnostic = validate_strategy_candidate_bindings(
+            submitted, getattr(self, "_last_strategy_candidate_registry", {}),
+            request_id=self.run_id, task_epoch=self.task_epoch,
+        )
+        if strategy_binding_diagnostic:
+            return [], [strategy_binding_diagnostic]
         if (held and str(progress_actions[0].get('decision', '')).upper() != 'INTERRUPT'
                 and not (self._failed_predeclared_fact(progress_actions[0])
                          and self._read_only_unexecuted_repairs(held.values()))):
@@ -5349,6 +5365,36 @@ class WebAgentProtocolLoop:
                 return [], [gated]
             if prerequisite_diagnostic:
                 return [], [prerequisite_diagnostic]
+            from agent_core.shared_blackboard import (
+                evaluate_terminal_readiness, interrupt_terminal_diagnostic,
+            )
+            terminal_readiness = evaluate_terminal_readiness(
+                getattr(self, "_last_strategy_candidate_registry", {}),
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
+            self._last_terminal_readiness = dict(terminal_readiness)
+            self._emit(
+                "strategy_terminal_readiness_evaluated",
+                request_id=self.run_id, round=self.turn_id,
+                decision=terminal_readiness.get("decision", "UNKNOWN"),
+                reason_code=terminal_readiness.get("reason_code", "UNKNOWN"),
+                strategy_space_state=terminal_readiness.get(
+                    "strategy_space_state", "UNKNOWN"
+                ),
+                candidate_count=terminal_readiness.get("candidate_count", 0),
+                untried_candidate_count=terminal_readiness.get(
+                    "untried_candidate_count", 0
+                ),
+                blocking_candidate_ids=list(
+                    terminal_readiness.get("blocking_candidate_ids") or []
+                )[:8],
+                authorization_granted=False, tool_executed=False,
+            )
+            strategy_terminal_diagnostic = interrupt_terminal_diagnostic(
+                terminal_readiness
+            )
+            if strategy_terminal_diagnostic:
+                return [], [strategy_terminal_diagnostic]
             spec = self._safe_protocol_spec_rejection()
             if (spec and request.get('kind') == 'BLOCKED'
                     and request.get('blocking_action_id') == spec['action_id']):

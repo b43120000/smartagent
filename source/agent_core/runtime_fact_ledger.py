@@ -20,7 +20,7 @@ SCHEMA = "SMARTAGENT_ACTION_PROVENANCE_V1"
 FACT_SCHEMA = "SMARTAGENT_RUNTIME_FACT_V1"
 PUBLIC_FIELDS = (
     "tool", "action_id", "path", "paths", "working_directory",
-    "workspace", "project_root", "operation", "verifies_action_id",
+    "workspace", "project_root", "operation", "verifies_action_id", "strategy_id",
 )
 MAX_PUBLIC_STRING = 1024
 

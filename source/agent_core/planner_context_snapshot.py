@@ -374,6 +374,24 @@ def build_planner_context_snapshot(runtime) -> dict:
         request_id=str(getattr(runtime, "run_id", "") or ""),
         task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
     )
+    from .shared_blackboard import (
+        build_runtime_capability_manifest, build_strategy_candidate_registry,
+        evaluate_terminal_readiness, build_shared_blackboard,
+    )
+    capability_manifest = build_runtime_capability_manifest(runtime)
+    strategy_candidates = build_strategy_candidate_registry(
+        runtime, capability_manifest=capability_manifest,
+        prerequisite_view=prerequisite_view,
+        prerequisite_transition=transition_view,
+        remote_access_view=remote_access_view,
+        artifact_view=artifact_view,
+        goal_gap_view=gap_view,
+    )
+    terminal_readiness = evaluate_terminal_readiness(
+        strategy_candidates,
+        request_id=str(getattr(runtime, "run_id", "") or ""),
+        task_epoch=str(getattr(runtime, "task_epoch", "") or ""),
+    )
     from .progress_reply_contract import dynamic_progress_contract
     payload = {
         "schema": SCHEMA,
@@ -518,6 +536,10 @@ def build_planner_context_snapshot(runtime) -> dict:
         "raw_tool_results_included": False,
         "actual_commands_and_raw_results_retained_in_runtime_ledger": True,
     }
+    payload["runtime_capability_manifest"] = capability_manifest
+    payload["strategy_candidates"] = strategy_candidates
+    payload["terminal_readiness"] = terminal_readiness
+    payload["shared_blackboard"] = build_shared_blackboard(runtime, payload)
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     payload["context_digest"] = digest
@@ -527,6 +549,10 @@ def build_planner_context_snapshot(runtime) -> dict:
 
 def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
     payload = build_planner_context_snapshot(runtime)
+    # Planner and Runtime terminal admission consume the exact same
+    # request/epoch-bound candidate registry from this snapshot.
+    runtime._last_shared_blackboard_snapshot = dict(payload.get("shared_blackboard") or {})
+    runtime._last_strategy_candidate_registry = dict(payload.get("strategy_candidates") or {})
     return ("[SMARTAGENT_PLANNER_CONTEXT_V1]\n"
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
             + "\n[/SMARTAGENT_PLANNER_CONTEXT_V1]\n"
@@ -650,4 +676,20 @@ def render_planner_context_snapshot(runtime) -> tuple[str, dict]:
             "{schema: SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1, capabilities: [canonical keys]}. "
             "To add a selected SCR capability, propose a cumulative capability_resolution "
             "and pass all ordinary Tool Admission checks; do not re-run "
-            "rejected actions merely under new IDs.", payload)
+            "rejected actions merely under new IDs. "
+            "shared_blackboard is the canonical current-request/current-epoch read model; "
+            "each section identifies its authoritative owner and source ledger. Read the "
+            "same snapshot rather than reconstructing facts from separate prose fragments. "
+            "runtime_capability_manifest describes the canonical tools, schemas, operation "
+            "classes and side-effect classes exposed by this interface; it is not "
+            "authorization or a Scope grant. strategy_candidates contains Runtime-derived, "
+            "goal-relevant alternatives. When status=UNTRIED, select its exact strategy_id "
+            "and include strategy_id in the new operational Action; preserve the declared "
+            "tool/operation/CWD/target boundary. NEEDS_ACTION_REPAIR means repair the same "
+            "candidate's canonical Action; RECONCILIATION_REQUIRED means resolve uncertain "
+            "effects first. terminal_readiness reports whether an untried candidate or "
+            "unresolved Action prevents INTERRUPT. Do not interrupt while Runtime reports "
+            "a runnable untried candidate. A candidate is guidance, not permission: normal "
+            "Tool/Scope/Network/Approval Admission and independent Evidence Verification "
+            "remain mandatory. Owner metadata is binding: Planner proposals never become "
+            "Runtime observations, authorization decisions or execution evidence.", payload)

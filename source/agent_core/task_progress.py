@@ -755,12 +755,29 @@ def record_runtime_strategy_revision(
         if schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
         else "VERIFIED_FAILED_PREREQUISITE"
     )
+    routes = []
+    for route in list(evidence.get("routes") or [])[:4]:
+        if not isinstance(route, Mapping):
+            continue
+        route_id = str(route.get("id") or route.get("route_id") or "")
+        tool = str(route.get("tool") or "")
+        if route_id not in {"NATIVE_FILE_CREATION", "EXISTING_CWD_CREATION"}:
+            continue
+        if tool not in {"write_file", "run_command"}:
+            continue
+        routes.append({
+            "route_id": route_id,
+            "tool": tool,
+            "rule": str(route.get("rule") or "")[:500],
+        })
     row = {
         "revision": revision, "trigger": trigger,
         "round_id": int(round_id), "evidence_digest": digest,
         "rejected_action_id": str(evidence.get("rejected_action_id", ""))[:128],
         "target": str(evidence.get("target", ""))[:MAX_TEXT],
         "existing_writable_parent": str(evidence.get("existing_writable_parent", ""))[:MAX_TEXT],
+        "routes": routes,
+        "route_count": len(routes),
         "executed": evidence["executed"], "completion_verified": False,
         "evidence_ref": str(evidence.get("evidence_ref", ""))[:128],
         "authorization_granted": False,

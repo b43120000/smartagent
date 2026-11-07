@@ -137,6 +137,7 @@ def build_failure_receipt(action_id: str, *,
         "request_id": request_id,
         "task_epoch": task_epoch,
         "action_id": _code(action_id),
+        "strategy_id": _code(action.get("strategy_id"), ""),
         "tool": tool,
         "operation": _code(action.get("operation"), "") if tool == "run_command" else "",
         "execution": {

@@ -65,7 +65,7 @@ def semantic_action_signature(action: Mapping[str, Any]) -> str:
         if key not in {
             "action_id", "run_id", "turn_id", "request_id", "task_id",
             "task_epoch", "local_nonce", "protocol_version",
-            "depends_on", "replaces_action_id",
+            "depends_on", "replaces_action_id", "strategy_id",
         }
     }
     encoded = json.dumps(

@@ -229,6 +229,7 @@ def build_transaction(*, request_id: str, task_epoch: str, original_goal: str,
         "failure_causal_receipts": [
             {
                 "action_id": _safe(item.get("action_id")),
+                "strategy_id": _safe(item.get("strategy_id")),
                 "tool": _safe(item.get("tool")),
                 "status": _safe((item.get("execution") or {}).get("status")),
                 "reason_code": _safe((item.get("execution") or {}).get("reason_code")),

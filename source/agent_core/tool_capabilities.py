@@ -141,7 +141,7 @@ def render_protocol_tool_section(interface: str) -> str:
             for name, kind in schema.get("optional", {}).items()
         ) or "(none)"
         if TOOL_CATEGORIES.get(tool) != PROTOCOL_CONTROL:
-            optional += ', depends_on:list (prior action IDs), replaces_action_id:str (never-executed deferred action only)'
+            optional += ', depends_on:list (prior action IDs), replaces_action_id:str (never-executed deferred action only), strategy_id:str (Runtime-issued STRAT candidate correlation only; no authority)'
             if str(interface or '').strip().lower().replace('-', '_') in {'web_direct','webdirect','remote'}:
                 optional += ', field_refs:dict (explicit current-request stable input ref_id+version)'
         lines.append(
