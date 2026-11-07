@@ -326,6 +326,12 @@ try {
             if (-not $matched) { continue }
             try { $rec = $line | ConvertFrom-Json -ErrorAction Stop }
             catch { $warnings.Add('Unparseable matching JSONL row in ' + $source.name); continue }
+            # A raw string match does not establish Task/Request identity.
+            # Never join an event that explicitly belongs to another request.
+            if ($task -and $null -ne $rec.PSObject.Properties['task_id'] -and
+                $rec.task_id -and [string]$rec.task_id -cne $task) { continue }
+            if ($request -and $null -ne $rec.PSObject.Properties['request_id'] -and
+                $rec.request_id -and [string]$rec.request_id -cne $request) { continue }
             # RemoteRuntimeLog wraps V9 event as STATUS + stage.
             $envelopeEvent = Safe-Code $rec.event
             $stageName = Safe-Code $rec.stage
@@ -998,6 +1004,12 @@ try {
     }
     if (@($warnings | Where-Object { $_ -like 'SOURCE_FULL_SCAN_SIZE_LIMIT*' }).Count -gt 0) {
         $coverageIssues.Add('SOURCE_LOG_TOO_LARGE_TAIL_ONLY')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Unable to read source*' }).Count -gt 0) {
+        $coverageIssues.Add('SOURCE_LOG_UNREADABLE')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Unparseable matching JSONL row*' }).Count -gt 0) {
+        $coverageIssues.Add('MATCHING_JSONL_ROW_UNPARSEABLE')
     }
     if ($progressSummary.runtime_state -in @('PAUSED','INTERRUPTED') -and
         -not $progressSummary.interruption_reason_present) {
