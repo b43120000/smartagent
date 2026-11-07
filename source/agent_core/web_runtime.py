@@ -4955,6 +4955,29 @@ class WebLLMScraper:
         """
         from .payload_budget import PromptBudgetExceeded, ensure_webgpt_prompt_budget
         from .request_ownership import guard_web_prompt
+        from .conversation_chunk_transport import make_chunk_messages, validate_chunk_ack
+
+        # Universal bottom-level entry: callers that bypass BrowserClient or
+        # WebLLMManager still get ACK-gated splitting before any UI operation.
+        physical_messages = make_chunk_messages(prompt)
+        if len(physical_messages) > 1:
+            if image_paths or attachment_paths or file_paths:
+                raise WebScraperStageError(
+                    "CHUNKED_PROMPT_WITH_ATTACHMENTS_UNSUPPORTED",
+                    stage="prompt_budget", safe_to_retry=False,
+                )
+            final_reply = ""
+            for index, (chunk_prompt, required_ack) in enumerate(physical_messages):
+                final_reply = self.ask(
+                    chunk_prompt,
+                    new_conversation=new_conversation if index == 0 else False,
+                    image_paths=None, attachment_paths=None, file_paths=None,
+                    protocol_expected=protocol_expected if required_ack is None else None,
+                    initialization_composer_reset=initialization_composer_reset,
+                )
+                if required_ack is not None:
+                    validate_chunk_ack(final_reply, required_ack)
+            return final_reply
 
         # A new ask (including a pre-submit failure) retires the previous file
         # scope. Empty request IDs must never reopen a prior response artifact.
