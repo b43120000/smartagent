@@ -5204,18 +5204,61 @@ class WebAgentProtocolLoop:
                 gap_view, interruption_view, source_view, source_integrity_view,
                 artifact_view, remote_view,
             )
+            # Carry the Environment/Prerequisite evaluation into Progress:
+            # a single instruction to try the registered Git read is NEVER
+            # evidence that the read was attempted or its blocker verified.
+            from agent_core.prerequisite_transition_gate import (
+                build_prerequisite_transition, premature_interrupt_diagnostic,
+            )
+            transition = build_prerequisite_transition(
+                artifact_view=artifact_view, prerequisite_view=prerequisite_view,
+                remote_view=remote_view, request_id=self.run_id,
+                task_epoch=self.task_epoch,
+                bound_workspace=str(self.workspace),
+                tool_scope_preview=getattr(self.tools, "preview_tool_scope", None),
+                action_ledger=self.action_ledger,
+                result_ledger=self.action_result_ledger,
+                guidance_issued=bool(
+                    getattr(self, "_remote_access_probe_guidance_issued", False)
+                ),
+            )
+            self._last_prerequisite_transition_receipt = dict(transition)
+            self._emit(
+                "prerequisite_transition_evaluated",
+                request_id=self.run_id, round=self.turn_id,
+                stage=transition["stage"],
+                progress_transition=transition["progress_transition"],
+                access_state=transition["access_state"],
+                scope_preflight_status=transition["scope_preflight_status"],
+                scope_preflight_reason_code=transition["scope_preflight_reason_code"],
+                probe_evidence_present=transition["probe_evidence_present"],
+                guidance_is_evidence=False,
+                authorization_granted=False, executed=False,
+            )
             prerequisite_view["remote_access_probe_guidance_already_issued"] = bool(
                 getattr(self, "_remote_access_probe_guidance_issued", False)
             )
             prerequisite_diagnostic = premature_source_interrupt_diagnostic(
                 request, prerequisite_view,
             )
+            # Initial soft guidance remains for compatible Planner messages,
+            # but it cannot release the hard Evidence/Scope transition gate.
+            if prerequisite_diagnostic and prerequisite_diagnostic.get("reason") == (
+                "remote_access_unknown_git_capability_probe_required"
+            ):
+                self._remote_access_probe_guidance_issued = True
+                prerequisite_diagnostic["prerequisite_transition"] = dict(transition)
+                prerequisite_diagnostic["detail"] = (
+                    "Remote access is UNKNOWN and no current-epoch Git read "
+                    "result exists. The next Planner decision must follow "
+                    "prerequisite_transition.progress_transition; an issued "
+                    "guidance does not prove the prerequisite."
+                )
+                return [], [prerequisite_diagnostic]
+            gated = premature_interrupt_diagnostic(request, transition)
+            if gated:
+                return [], [gated]
             if prerequisite_diagnostic:
-                if (prerequisite_diagnostic.get("reason") ==
-                        "remote_access_unknown_git_capability_probe_required"):
-                    # One bounded hint, not infinite rejection when the
-                    # requested Git probe is itself prohibited by policy.
-                    self._remote_access_probe_guidance_issued = True
                 return [], [prerequisite_diagnostic]
             spec = self._safe_protocol_spec_rejection()
             if (spec and request.get('kind') == 'BLOCKED'
