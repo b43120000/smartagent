@@ -701,6 +701,41 @@ try {
             filesystem_absence_verified=$false
         }
     })
+    # Preserve rejected admission-only CWD/Scope checks; they have NO
+    # tool_started and must not be described as executed operations.
+    $admissionRejections = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'protocol_rejected'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            diagnostic_reasons=@($_.diagnostic_reasons)
+            diagnostic_markers=@($_.diagnostic_markers)
+            field_issues=@($_.field_issues_codes)
+            unified_contract_issue_diffs=@($_.unified_contract_issue_diffs)
+            command_reject_field=$_.command_reject_field
+            executed=$false
+            authorization_granted=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'action_admission_rejections.json') @($admissionRejections)
+    $beforeDispatch = @($admissionRejections | Where-Object {
+        @($_.diagnostic_reasons | Where-Object {
+            $_ -in @('run_command_working_directory_rejected',
+                     'TOOL_SCOPE_REJECTED','scope_preflight_rejected')
+        }).Count -gt 0
+    } | ForEach-Object {
+        [ordered]@{
+            event='ACTION_ADMISSION_REJECTED'
+            round=$_.round
+            action_id=''
+            scope_allowed=$false
+            admission_only=$true
+            reason_codes=@($_.diagnostic_reasons)
+            command_reject_field=$_.command_reject_field
+            filesystem_absence_verified=$false
+        }
+    })
+    $scopePreflights = @($scopePreflights) + @($beforeDispatch)
     Write-Json (Join-Path $stage 'scope_preflight_summary.json') @($scopePreflights)
 
     $contextRepairEvents = @($timeline.ToArray() | Where-Object {
