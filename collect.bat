@@ -1045,6 +1045,12 @@ try {
                              'source\agent_core\bounded_repair.py',
                              'source\agent_core\goal_anchored_recovery.py',
                              'source\agent_core\planner_context_snapshot.py',
+                             'source\agent_core\failure_causal_receipt.py',
+                             'source\agent_core\prerequisite_transition_gate.py',
+                             'source\agent_core\unified_contract_transaction.py',
+                             'source\agent_core\remote_runtime_log.py',
+                             'source\RemoteAgent\telegram_webagent_worker.py',
+                             'source\agent_core\auto_rca_upload.py',
                              'source\agent_core\semantic_capability_resolution.py',
                              'source\agent_core\action_readiness.py',
                              'source\agent_core\context_acquisition.py',
@@ -1072,6 +1078,9 @@ try {
         task_id=(Safe-Code $task)
         request_id=(Safe-Code $request)
         event_count=$timeline.Count
+        causal_coverage_schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
+        causal_coverage_status=$coverage.status
+        causal_coverage_issues=@($coverage.issues)
         snapshot_count=@($snapshots).Count
         pr_a_ledger_found=[bool]$prASummary.found
         pr_bcd_ledger_found=[bool]$prBCDSummary.found
