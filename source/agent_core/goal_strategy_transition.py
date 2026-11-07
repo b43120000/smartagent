@@ -146,9 +146,13 @@ def _confirmed_created_directory(record: Mapping, original: Mapping) -> dict | N
         or data.get("observed_exists") is not True
         or data.get("observed_is_directory") is not True
         or data.get("observation_status") != "CONFIRMED"
+        # The Runtime may canonicalize Windows 8.3 aliases in resolved_path.
+        # Bind the exact requested Action path and Runtime action_id instead;
+        # the native Tool has already independently stat-verified its target.
         or ntpath.normcase(ntpath.normpath(path)) != ntpath.normcase(
-            ntpath.normpath(str(typed.get("resolved_path") or ""))
+            ntpath.normpath(str(typed.get("requested_path") or ""))
         )
+        or not typed.get("resolved_path")
     ):
         return None
     return {"kind": "directory.exists", "path": path, "exists": True}
