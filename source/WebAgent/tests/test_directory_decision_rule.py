@@ -178,7 +178,10 @@ class DirectoryDecisionRuleTests(unittest.TestCase):
             }
             preview = preview_tool_scope(action, agent)
             self.assertTrue(preview["allowed"], preview)
-            self.assertEqual(preview["resolved_paths"], [str(target)])
+            self.assertEqual(len(preview["resolved_paths"]), 1)
+            # Windows may resolve 8.3 short names into long paths.
+            self.assertEqual(Path(preview["resolved_paths"][0]).resolve(),
+                             target.resolve())
             result = execute_tool(action, agent=agent, models={})
             receipt = decode_result(result)
             self.assertEqual(receipt["tool"], "create_directory")

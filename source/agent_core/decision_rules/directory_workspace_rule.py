@@ -119,7 +119,11 @@ def evaluate_directory_decision(runtime, gap_view: Mapping | None) -> dict:
         if isinstance(preview, Mapping):
             resolved = list(preview.get("resolved_paths") or [])
             if preview.get("allowed") is True and len(resolved) == 1 and (
-                    _path_key(resolved[0]) == _path_key(path)):
+                    _path_key(resolved[0]) == _path_key(path)
+                    or (
+                        list(preview.get("requested_paths") or []) == [path]
+                        and preview.get("scope_source") == "exact_directory_write_target"
+                    )):
                 scope, code = "PASS", "RUNTIME_EXACT_WRITE_SCOPE_PASS"
             elif preview.get("allowed") is False:
                 scope = "DENIED"
