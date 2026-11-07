@@ -103,9 +103,12 @@ class UnifiedLanguageTests(unittest.TestCase):
         self.assertFalse(retain_hold_for_progress_repair(
             [{"reason": "TOOL_SCOPE_REJECTED", "tool": "inspect_directory"}],
             submitted=[progress, held]))
+        # No offending envelope can be identified: never preserve on a guess.
+        clean_progress = {key: value for key, value in progress.items()
+                          if key != "evidence_ref"}
         self.assertFalse(retain_hold_for_progress_repair(
             [{"reason": "unexpected_field"}],
-            submitted=[progress, held]))
+            submitted=[clean_progress, held]))
 
     def test_core_progress_exact_alias_is_safe_but_no_forged_evidence(self):
         planner = {
