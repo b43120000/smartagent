@@ -128,7 +128,7 @@ def _path(proposal: object, document: object) -> tuple[object, dict]:
         separators_equivalent = (
             len(selected) == len(verified)
             and all(type(candidate) is str and
-                    candidate.replace("/", "\\\\") == original.replace("/", "\\\\")
+                    candidate.replace("/", "\\") == original.replace("/", "\\")
                     for candidate, original in zip(selected, verified))
         )
         if not separators_equivalent:
