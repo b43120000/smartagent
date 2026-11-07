@@ -10,9 +10,14 @@ import hashlib
 import math
 import uuid
 
-MAX_SUBMIT_CHARS = 10_000
-# Headroom for browser submit IDs, request-ownership scope and protocol contracts.
-MAX_CHUNK_MESSAGE_CHARS = 7_800
+from .payload_budget import WEBGPT_PROMPT_HARD_MAX_BYTES, ensure_webgpt_prompt_budget
+
+# Preserve chunk/ACK/COMMIT support, but keep the legacy single-submit default.
+# UTF-8 byte length >= Unicode character count. Thus any prompt accepted by
+# the 512 KiB total byte budget is also below this default chunk threshold.
+# To re-enable chunking later, lower MAX_CHUNK_MESSAGE_CHARS deliberately.
+MAX_SUBMIT_CHARS = WEBGPT_PROMPT_HARD_MAX_BYTES
+MAX_CHUNK_MESSAGE_CHARS = MAX_SUBMIT_CHARS
 CHUNK_DATA_CHARS = 6_000
 
 
@@ -23,6 +28,9 @@ class ChunkTransferError(RuntimeError):
 def make_chunk_messages(prompt: str, *, limit: int = MAX_CHUNK_MESSAGE_CHARS) -> list[tuple[str, str | None]]:
     """Return (physical_prompt, exact_expected_ack) in original order."""
     prompt = str(prompt)
+    # Reject over-budget logical requests before attempting any physical chunk.
+    # This prevents large inputs from bypassing the old total-send budget.
+    ensure_webgpt_prompt_budget(prompt)
     if len(prompt) <= limit:
         return [(prompt, None)]
     transfer_id = uuid.uuid4().hex.upper()
