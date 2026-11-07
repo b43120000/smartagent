@@ -62,7 +62,8 @@ jobs:
         run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
       - name: Existing flexible Progress Admission
         run: python -B source/WebAgent/tests/validate_flexible_progress_admission.py
-      - name: Existing preexecution Replan
+      - name: Existing Windows-native preexecution Replan
+        if: matrix.os == 'windows-latest'
         run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
       - name: Existing Scope and Command safety
         run: python -B source/WebAgent/tests/validate_tool_scope_hardening.py
