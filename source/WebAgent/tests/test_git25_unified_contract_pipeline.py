@@ -206,7 +206,7 @@ class IntegratedUnifiedPipelineTests(unittest.TestCase):
                 rounds.append(prompt)
                 if len(rounds) == 1:
                     p = dict(initial())
-                    p["matched_condition"] = "NOT_A_DECLARED_CONDITION"
+                    p["evidence_refs"] = None  # Explicit invalid value is not normalized.
                     return response(p, {
                         "tool": "list_directory", "action_id": "CASE-D-HELD-READ",
                         "path": str(root),
