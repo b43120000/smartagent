@@ -1,4 +1,4 @@
-"""Bind a directory Goal target through the existing SCR translation + SPR path preflight.
+r"""Bind a directory Goal target through the existing SCR translation + SPR path preflight.
 
 This is a read-only input contract, not a new intent translator or an ACL.
 Unlike Deployment Target Contract, it covers a simple original request such
