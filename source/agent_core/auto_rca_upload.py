@@ -63,6 +63,30 @@ def collect_and_upload(task_id: str, request_id: str, *, collector: Path = COLLE
                 raise ValueError("ARCHIVE_TASK_ID_MISMATCH")
             if manifest.get("schema") not in {"SMARTAGENT_LIVE_RCA_V2", "SMARTAGENT_LIVE_RCA_V3"}:
                 raise ValueError("ARCHIVE_SCHEMA_MISMATCH")
+            # New Collector output is required to carry explicit causal
+            # coverage. A valid archive is not a verified complete RCA.
+            declared = manifest.get("causal_coverage_schema")
+            if declared:
+                if declared != "SMARTAGENT_RCA_CAUSAL_COVERAGE_V1":
+                    raise ValueError("RCA_CAUSAL_COVERAGE_SCHEMA_UNKNOWN")
+                try:
+                    coverage = json.loads(handle.read("rca_causal_coverage.json"))
+                except (KeyError, ValueError, UnicodeDecodeError):
+                    raise ValueError("RCA_CAUSAL_COVERAGE_MISSING") from None
+                if (coverage.get("schema") != declared
+                        or coverage.get("status") != manifest.get("causal_coverage_status")
+                        or coverage.get("status") not in {
+                            "COVERED_WITH_BOUNDED_WINDOW", "PARTIAL"
+                        }):
+                    raise ValueError("RCA_CAUSAL_COVERAGE_INVALID")
+                result["causal_coverage_status"] = coverage["status"]
+                result["causal_coverage_complete"] = (
+                    coverage["status"] == "COVERED_WITH_BOUNDED_WINDOW"
+                )
+                result["causal_coverage_issue_codes"] = [
+                    str(x)[:80] for x in list(coverage.get("issues") or [])[:16]
+                    if isinstance(x, str) and re.fullmatch(r"[A-Z_]{1,80}", x)
+                ]
         archive_bytes = archive.read_bytes()
         digest = hashlib.sha256(archive_bytes).hexdigest()
         result["sha256"] = digest
@@ -100,7 +124,11 @@ def collect_and_upload(task_id: str, request_id: str, *, collector: Path = COLLE
                        errors="replace", timeout=30)
         if verified.returncode != 0 or (verified.stdout or "").strip() != blob_sha:
             raise ValueError("GITHUB_UPLOADED_BLOB_VERIFICATION_FAILED")
-        result.update(status="SUCCESS", phase="COMPLETE", reason="UPLOAD_VERIFIED",
+        result.update(
+            status="SUCCESS", phase="COMPLETE",
+            reason=("UPLOAD_VERIFIED_CAUSAL_COVERAGE_PARTIAL"
+                    if result.get("causal_coverage_status") == "PARTIAL"
+                    else "UPLOAD_VERIFIED"),
                       github_url=f"https://github.com/{REPOSITORY}/blob/{BRANCH}/{remote_path}",
                       github_commit=commit["sha"], github_path=remote_path)
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile,
