@@ -81,6 +81,13 @@ def reconstruct_goal_gaps(runtime) -> dict:
             continue
         exists = observation.get("environment_observed_exists")
         path = observation.get("environment_observed_path", "")
+        from .semantic_path_resolution import same_original_request_path
+        if bound_target and same_original_request_path(path, bound_target):
+            # One physical Goal directory can have 8.3 and long Windows
+            # spellings across inspect/create receipts. Rebuild under the
+            # *original bound path* so the newer positive fact replaces the
+            # earlier confirmed absence, instead of creating two gaps.
+            path = bound_target
         key = _path_key(path)
         if not key or type(exists) is not bool:
             continue
