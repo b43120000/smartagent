@@ -224,6 +224,8 @@ $scalarKeys = @(
     'failure_category','classification_verified','stderr_present',
     'stderr_sha256','exit_code','timed_out','blocking_evidence_ref',
     'next_evaluation','failure_count','last_failure_category',
+    'failure_causal_receipt_count','prerequisite_transition_stage',
+    'phase','ccrc_mode',
     'git_executable_status','next_verification','registered_artifact_count',
     'disposition','rewrite_reason_code','target_absence_evidence_ref',
     'original_command_sha256','dispatched_command_sha256',
@@ -316,7 +318,8 @@ try {
             foreach ($key in @('reason_codes','pending_kinds','action_ids',
                                'issue_codes','issue_fields','contract_names',
                                'decision_codes','pending_action_ids',
-                               'admitted_action_ids')) {
+                               'admitted_action_ids','changed_fields',
+                               'rewrite_rule_ids','planner_failure_action_ids')) {
                 $prop = $rec.PSObject.Properties[$key]
                 if ($null -ne $prop -and $null -ne $prop.Value) {
                     $row[$key] = Safe-CodeList $prop.Value
@@ -670,6 +673,10 @@ try {
             diagnostic_count=$_.diagnostic_count
             critical_context_omitted=$_.critical_context_omitted
             planner_response_received=$_.planner_response_received
+            failure_causal_receipt_count=$_.failure_causal_receipt_count
+            last_failure_category=$_.last_failure_category
+            planner_failure_action_ids=@($_.planner_failure_action_ids)
+            prerequisite_transition_stage=$_.prerequisite_transition_stage
         }
     })
     Write-Json (Join-Path $stage 'planner_context_delivery.json') @($delivery)
@@ -861,6 +868,45 @@ try {
         }
     })
     Write-Json (Join-Path $stage 'unified_contract_summary.json') @($contracts)
+
+    # Three-stage Action lineage: Planner request shape/digest, Runtime
+    # rewrite/denial, actual Execution/Evidence. IDs join events, never
+    # assume a rejected, held or rewritten proposal was dispatched.
+    $actionTrace = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('action_resolution_recorded',
+                      'action_runtime_rewrite_applied',
+                      'action_runtime_rewrite_candidate_rejected',
+                      'tool_started','tool_completed',
+                      'action_evidence_recorded',
+                      'tool_failure_causal_receipt_recorded')
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            action_id=$_.action_id
+            tool=$_.tool
+            event=$_.event
+            disposition=$_.disposition
+            original_command_sha256=$_.original_command_sha256
+            dispatched_command_sha256=$_.dispatched_command_sha256
+            changed_fields=@($_.changed_fields)
+            rewrite_reason_code=$_.rewrite_reason_code
+            rewrite_rule_ids=@($_.rewrite_rule_ids)
+            reason_codes=@($_.reason_codes)
+            scope_allowed=$_.scope_allowed
+            scope_reason_code=$_.scope_reason_code
+            execution_status=$_.execution_status
+            result_status=$_.result_status
+            result_reason=$_.result_reason
+            failure_category=$_.failure_category
+            executed=$_.executed
+            dispatched=$_.dispatched
+            evidence_kind=$_.evidence_kind
+            execution_evidence_ref=$_.execution_evidence_ref
+            raw_command_included=$false
+            raw_result_included=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'action_causal_trace_summary.json') @($actionTrace)
     $coverageIssues = New-Object 'System.Collections.Generic.List[string]'
     $missingStages = @($transitions | Where-Object {
         $_.transition_stage -in @('MISSING','[REDACTED_NONCODE]')
@@ -893,6 +939,8 @@ try {
         missing_failure_action_ids=@($missingIDs | Select-Object -First 24)
         admission_rejection_count=$admissionRejections.Count
         contract_receipt_count=$contracts.Count
+        action_trace_event_count=$actionTrace.Count
+        planner_context_delivery_event_count=@($delivery).Count
         log_window_tail_lines=25000
         log_window_bounded=$true
         timeline_row_cap=3500
