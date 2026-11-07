@@ -193,6 +193,69 @@ class IntegratedUnifiedPipelineTests(unittest.TestCase):
             self.assertEqual(len(rounds), 2)
             self.assertEqual(loop._last_unified_contract_receipt["phase"], "ADMITTED")
 
+    def test_progress_unexpected_field_then_repair_preserves_one_read(self):
+        # Reproduce the Case D Round 5/6 pattern with a real ProtocolLoop:
+        # failed Progress -> pending read -> Progress unexpected field ->
+        # corrected Progress -> exact held Action dispatched once.
+        with tempfile.TemporaryDirectory(prefix="git25-case-d-repair-") as temp:
+            root = Path(temp).resolve()
+            (root / "case_d_marker.txt").write_text("GOOD", encoding="utf-8")
+            rounds, executed, events = [], [], []
+
+            def planner(prompt, expected, attachments):
+                rounds.append(prompt)
+                if len(rounds) == 1:
+                    p = dict(initial())
+                    p["matched_condition"] = "NOT_A_DECLARED_CONDITION"
+                    return response(p, {
+                        "tool": "list_directory", "action_id": "CASE-D-HELD-READ",
+                        "path": str(root),
+                    })
+                if len(rounds) == 2:
+                    self.assertIn("invalid_progress_payload", prompt)
+                    p = dict(initial())
+                    p["evidence_ref"] = "UNSUPPORTED_FIELD"
+                    return response(p)
+                if len(rounds) == 3:
+                    self.assertIn("unexpected_field", prompt)
+                    self.assertIn("unified_contract_transaction", prompt.lower())
+                    self.assertIn("evidence_ref", prompt)
+                    return response(dict(initial()))
+                self.assertIn("case_d_marker.txt", prompt)
+                p = dict(initial())
+                p.update(decision="COMPLETE", outcome="SUCCESS",
+                         current_step=1,
+                         steps=[{"step": 1, "desc": "讀取目錄",
+                                 "status": "COMPLETED"}],
+                         matched_condition="目錄資料已讀取",
+                         evidence_refs=["CASE-D-HELD-READ"])
+                p.pop("next_action", None)
+                return response(p, {"tool": "final_response",
+                                    "action_id": "G25-CASE-D-FINAL",
+                                    "content": "CASE_D_CROSS_CONTRACT_OK"})
+
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root,
+                event_sink=lambda event, **kw: events.append((event, kw)),
+            )
+            original_execute = loop._execute_action
+            def track(action):
+                executed.append(action["action_id"])
+                return original_execute(action)
+            loop._execute_action = track
+            result = loop.run("僅列出授權目錄\\n" + str(root),
+                              trusted_authorized_paths=[str(root)])
+            self.assertEqual(result, "CASE_D_CROSS_CONTRACT_OK")
+            self.assertEqual(executed, ["CASE-D-HELD-READ"])
+            self.assertEqual(len(rounds), 4)
+            statuses = [
+                item.get("status") for item in
+                loop._unified_action_recovery_events
+            ]
+            self.assertIn("HELD_UNADMITTED", statuses)
+            self.assertIn("RESTORED_FOR_FULL_ADMISSION", statuses)
+            self.assertIn("RETAINED_FOR_PROGRESS_REPAIR", statuses)
+
     def test_held_action_is_rejected_across_task_epoch(self):
         with tempfile.TemporaryDirectory(prefix="git25-epoch-") as temp:
             root = Path(temp).resolve()
