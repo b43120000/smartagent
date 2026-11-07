@@ -40,6 +40,7 @@ def _current_probe_attempts(artifact_view: Mapping | None, *,
     """Only actual current-epoch Tool Result Evidence counts as attempted."""
     from .action_resolution_trace import registered_remote_git_read
     from .tool_result_contract import decode_result
+    from .failure_causal_receipt import build_failure_receipt
     actions = action_ledger if isinstance(action_ledger, Mapping) else {}
     results = result_ledger if isinstance(result_ledger, Mapping) else {}
     attempts: list[dict] = []
@@ -61,10 +62,17 @@ def _current_probe_attempts(artifact_view: Mapping | None, *,
                 or (tool_result.get("executed") is False
                     and tool_result.get("status") != "REJECTED")):
             continue
+        failure_receipt = build_failure_receipt(
+            str(action_id), action_ledger=actions, result_ledger=results,
+            request_id=request_id, task_epoch=task_epoch,
+        )
         attempts.append({
             "action_id": str(action_id)[:160],
             "result_status": str(evidence.get("result_status") or "UNKNOWN")[:40],
             "execution_status": str(evidence.get("execution_status") or "UNKNOWN")[:40],
+            "executed": tool_result.get("executed") is True,
+            "result_reason": str(tool_result.get("reason") or "UNKNOWN")[:64],
+            "failure_receipt": failure_receipt or {},
         })
     return attempts[-8:]
 
@@ -179,6 +187,18 @@ def build_prerequisite_transition(*, artifact_view: Mapping | None,
         "scope_preflight_reason_code": scope_reason,
         "scope_preflight_is_network_authorization": False,
         "actual_probe_attempts": attempts,
+        "latest_probe_failure": next((
+            dict(item["failure_receipt"]) for item in reversed(attempts)
+            if item.get("failure_receipt")
+        ), {}),
+        "latest_probe_failure_category": next((
+            item["failure_receipt"]["failure"]["category"]
+            for item in reversed(attempts) if item.get("failure_receipt")
+        ), ""),
+        "next_failure_evaluation": next((
+            item["failure_receipt"]["replan"]["next_evaluation"]
+            for item in reversed(attempts) if item.get("failure_receipt")
+        ), ""),
         "probe_evidence_present": bool(attempts),
         "guidance_previously_issued": bool(guidance_issued),
         "guidance_is_evidence": False,
