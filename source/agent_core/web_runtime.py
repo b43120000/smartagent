@@ -4970,6 +4970,13 @@ class WebLLMScraper:
             prompt = self._web_file_planner_prompt(prompt)
             prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
 
+        # Physical submit ceiling, including every browser-added envelope.
+        if len(prompt) > 10_000:
+            raise WebScraperStageError(
+                "WEB_PROMPT_CHAR_LIMIT_EXCEEDED chars=" + str(len(prompt))
+                + " hard_limit=10000; use chunked conversation transport",
+                stage="prompt_budget", safe_to_retry=False,
+            )
         try:
             prompt_bytes = ensure_webgpt_prompt_budget(prompt)
         except PromptBudgetExceeded as exc:
@@ -5698,6 +5705,14 @@ class ScraperManager:
         prompt when only DOM acknowledgement/response detection failed.
         """
         from .payload_budget import PromptBudgetExceeded, ensure_webgpt_prompt_budget
+        from .conversation_chunk_transport import make_chunk_messages, validate_chunk_ack
+
+        logical_messages = make_chunk_messages(prompt)
+        if len(logical_messages) > 1 and any((image_paths, attachment_paths, file_paths)):
+            raise WebScraperStageError(
+                "CHUNKED_PROMPT_WITH_ATTACHMENTS_UNSUPPORTED",
+                stage="prompt_budget", safe_to_retry=False,
+            )
 
         try:
             ensure_webgpt_prompt_budget(prompt)
@@ -5746,7 +5761,20 @@ class ScraperManager:
                         detail="global_submit_lock_acquired",
                     )
             try:
-                result = scraper.ask(prompt, **kwargs)
+                result = ""
+                completed_chunks = 0
+                for chunk_index, (chunk_text, expected_ack) in enumerate(logical_messages):
+                    chunk_kwargs = dict(kwargs)
+                    chunk_kwargs["protocol_expected"] = (
+                        protocol_expected if expected_ack is None else None
+                    )
+                    chunk_kwargs["new_conversation"] = (
+                        new_conversation if chunk_index == 0 else False
+                    )
+                    result = scraper.ask(chunk_text, **chunk_kwargs)
+                    completed_chunks += 1
+                    if expected_ack is not None:
+                        validate_chunk_ack(result, expected_ack)
                 if service == "chatgpt":
                     try:
                         self._rate_governor.record_success()
@@ -5789,6 +5817,13 @@ class ScraperManager:
                 scraper = self.get_or_create(service, headless)
                 if rate_lease is not None:
                     scraper._rate_submit_lease = rate_lease
+                # Reconnect may be safe, but replaying a logical multi-submit
+                # transaction is not. Fail closed rather than duplicate chunks.
+                if len(logical_messages) > 1:
+                    raise WebScraperStageError(
+                        "CHUNK_TRANSFER_RESTART_REQUIRES_RECONCILIATION",
+                        stage="chunk_transfer", safe_to_retry=False,
+                    ) from exc
                 return scraper.ask(prompt, **kwargs)
             except Exception as exc:
                 _debug_log(f"MANAGER_UNKNOWN_ERROR service={service} exc={exc!r}")
