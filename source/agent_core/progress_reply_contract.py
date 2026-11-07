@@ -110,14 +110,8 @@ def materialize_progress(
 
 def normalize_progress_fields(payload):
     """Normalize spelling/types only when the interpretation is unique."""
-    result = deepcopy(dict(payload))
-    for alias, canonical in {'current step':'current_step', 'total steps':'total_steps',
-                              'current focus':'current_focus', 'next action':'next_action',
-                              'base evaluation':'base_evaluation'}.items():
-        if alias in result:
-            if canonical in result and result[canonical] != result[alias]:
-                raise ValueError('conflicting_progress_alias:'+canonical)
-            result[canonical] = result.pop(alias)
+    from .canonical_contract_resolver import resolve_core_progress_fields
+    result, _receipt = resolve_core_progress_fields(deepcopy(dict(payload)))
     def number(value):
         if isinstance(value, str) and re.fullmatch(r'(?:0|[1-9][0-9]*)(?:\.[0-9]+)?', value.strip()):
             return float(value.strip()) if '.' in value else int(value.strip())
