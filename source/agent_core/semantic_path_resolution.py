@@ -37,6 +37,29 @@ _EFFECT_IMPERATIVE = re.compile(
 )
 
 
+def same_original_request_path(left: object, right: object) -> bool:
+    """Compare two observed original-target paths without granting scope.
+
+    On Windows the SecurityContext resolver expands 8.3 aliases (RUNNER~1),
+    even while the original Goal and inspect Action keep the short spelling.
+    Semantic binding needs identity equivalence; authorization still belongs
+    to the independent native Tool Scope/ACL guard.
+    """
+    import ntpath
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a or not b:
+        return False
+    if ntpath.normcase(ntpath.normpath(a)) == ntpath.normcase(ntpath.normpath(b)):
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        return Path(a).resolve(strict=False) == Path(b).resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def readonly_narrowing_allowed(request: str, lexical_paths: list[str]) -> bool:
     """Use only the instruction prefix before the first literal path.
 

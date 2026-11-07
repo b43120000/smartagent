@@ -26,9 +26,15 @@ def _path_key(value: object) -> str:
     return ntpath.normcase(ntpath.normpath(path))
 
 
-def _goal_link(goal: str, path: str) -> str:
-    """An intent hint only; it never grants write permission."""
-    if _path_key(path) not in _path_key(goal) and path.casefold() not in goal.casefold():
+def _goal_link(goal: str, path: str, bound_target: str = "") -> str:
+    """Bind a verified observation to the original Goal, never to a new root."""
+    from .semantic_path_resolution import same_original_request_path
+    is_exact_goal_target = bool(
+        bound_target and same_original_request_path(bound_target, path)
+    )
+    if (not is_exact_goal_target
+            and _path_key(path) not in _path_key(goal)
+            and path.casefold() not in goal.casefold()):
         return "UNBOUND"
     policy = conditional_goal_policy(goal)
     if policy["intent"] == "READ_ONLY_ONLY":
@@ -55,6 +61,12 @@ def reconstruct_goal_gaps(runtime) -> dict:
     goal = str(getattr(progress, "goal", "") or getattr(runtime, "task_request", "") or "")
     policy = conditional_goal_policy(goal)
     source_need = source_requirement(goal, policy)
+    target_contract = getattr(runtime, "_target_path_contract", None) or {}
+    bound_target = (
+        str(target_contract.get("requested_target") or "")
+        if isinstance(target_contract, Mapping)
+        and target_contract.get("binding_status") == "BOUND" else ""
+    )
     ordered = {}
     for action_id, row in ledger.items():
         if not isinstance(row, Mapping):
@@ -74,7 +86,7 @@ def reconstruct_goal_gaps(runtime) -> dict:
             continue
         gap_id = "GAP-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16].upper()
         previous = ordered.get(key)
-        goal_link = _goal_link(goal, path)
+        goal_link = _goal_link(goal, path, bound_target)
         linked = goal_link in {"REMEDIATION_INTENT_CANDIDATE",
                                "CONDITIONAL_REMEDIATION_CANDIDATE"}
         status = ("RESOLVED" if linked and exists else

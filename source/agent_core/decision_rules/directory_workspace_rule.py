@@ -82,9 +82,11 @@ def evaluate_directory_decision(runtime, gap_view: Mapping | None) -> dict:
     if policy.get("intent") not in _INTENTS:
         return _base(runtime, path, "NOT_APPLICABLE",
                      reason="NO_EXPLICIT_CREATION_OR_REMEDIATION_INTENT")
+    from ..semantic_path_resolution import same_original_request_path
     rows = [
         x for x in list(gap.get("gaps") or [])[:32]
-        if isinstance(x, Mapping) and _path_key(x.get("path")) == _path_key(path)
+        if isinstance(x, Mapping)
+        and same_original_request_path(x.get("path"), path)
         and x.get("observation_status") == "CONFIRMED"
         and isinstance(x.get("observed_value"), bool)
         and x.get("observed_fact_ref")
