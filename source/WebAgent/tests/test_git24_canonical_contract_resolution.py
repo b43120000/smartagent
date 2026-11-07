@@ -75,6 +75,28 @@ class CanonicalContractResolutionTests(unittest.TestCase):
         self.assertNotIn("source", result["path_resolution"])
         self.assertIn("REMOVE_EXACT_PREFLIGHT_ECHO", receipts[-1]["rewrite_rule_ids"])
 
+    def test_windows_slash_separator_only_is_canonical_equivalence(self):
+        candidate = self.target.replace("\\", "/")
+        result, receipts, errors = self.resolve({"selected_paths": [candidate]})
+        self.assertFalse(errors)
+        self.assertEqual(result["path_resolution"]["selected_paths"], [self.target])
+        self.assertIn("WINDOWS_SEPARATOR_EQUIVALENCE", receipts[-1]["rewrite_rule_ids"])
+        changed_case = self.target.replace("SmartAgent", "smartagent")
+        _, receipts, errors = self.resolve({"selected_paths": [changed_case]})
+        self.assertEqual(receipts[-1]["decision"], "REJECT_REPLAN")
+        self.assertTrue(errors)
+
+    def test_repair_feedback_serializes_structured_schema_diff(self):
+        import json
+        _, receipts, errors = self.resolve({"schema": PATH_SCHEMA, "status": "LEXICAL_EXACT"})
+        self.assertTrue(errors)
+        error = errors[-1]
+        payload = json.loads(error["detail"])
+        self.assertEqual(payload, error["canonical_contract"])
+        self.assertIn("selected_paths", payload["missing_keys"])
+        self.assertEqual(payload["next_step"], "PLANNER_CORRECT_CANONICAL_CONTRACT")
+        self.assertNotIn(self.target, error["detail"])
+
     def test_conflicting_or_untrusted_path_cannot_be_rewritten(self):
         cases = [
             {"schema": PATH_SCHEMA, "selected_paths": [r"E:\OtherProject"]},
