@@ -7,6 +7,7 @@ The ordinary Progress, Action, Scope, ACL and approval gates remain mandatory.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 
 from .semantic_path_resolution import SCHEMA as PATH_SCHEMA
 from .semantic_capability_resolution import (
@@ -53,6 +54,11 @@ def _record(contract: str, decision: str, reason: str,
         "authorization_granted": False,
         "executed": False,
         "evidence_created": False,
+        "next_step": (
+            "REQUEST_USER_INPUT" if reason == "semantic_path_resolution_ambiguous"
+            else "REPLAN_WITHIN_ORIGINAL_SCOPE" if decision == "REJECT_REPLAN"
+            else "PLANNER_CORRECT_CANONICAL_CONTRACT"
+        ),
     }
 
 
@@ -201,11 +207,18 @@ def _feedback(receipt: dict) -> dict:
            if kind == "REJECT_REPLAN" else
            "Provide the missing or corrected fields; never assume actions executed.")
     )
+    if receipt["reason_code"] == "semantic_path_resolution_ambiguous":
+        suggestion += (" Original Request paths are ambiguous: ask the user for "
+                       "a quoted exact path. Do not execute any path operation.")
     return {
         "marker": "[SMARTAGENT_CANONICAL_CONTRACT_REJECTED]",
         "reason": receipt["reason_code"],
         "repair_scope": "SEMANTIC_CONFLICT" if kind == "REJECT_REPLAN" else "CANONICAL_SCHEMA",
         "canonical_contract": receipt,
+        # Existing Planner diagnostic formatter emits detail/suggestion only;
+        # serialize the bounded structured receipt so the *immediate* retry
+        # receives exact missing/extra keys, not an incomplete generic hint.
+        "detail": json.dumps(receipt, ensure_ascii=False, separators=(",", ":")),
         "suggestion": suggestion,
     }
 
