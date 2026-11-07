@@ -1246,12 +1246,15 @@ try {
         'scope preflight reason codes and context_request subfield repair codes; no raw paths',
         'command repair modes, field codes and convergence counters; no command text',
         'Goal transition acceptance/rejection codes with condition IDs; no Planner rationale',
-        'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.'
+        'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.',
+        'Git27: typed Prerequisite, Failure Causality, Contract, Action Admission and Action Trace summaries.',
+        'Git27: causal coverage status explicitly reports any missing field, source truncation or parse failure.',
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
         'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
         'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
         'Note: collector_process_l4_enabled reflects this CLI process, not a previously started Worker.',
-        'Scan-window limit: most recent 25000 lines per known JSONL source.',
+        'Scan: stream entire available JSONL source <=128MiB; fallback to last 25000 lines for larger files.',
+        'Task/Request match and 3500-row timeline cap apply; coverage flags any truncated source.',
         'If the wrong task was auto-selected, rerun collect.bat TASK-... RR-... .',
         'Review ZIP contents before sharing.'
     )
