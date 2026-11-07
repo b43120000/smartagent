@@ -1609,6 +1609,13 @@ class WebAgentProtocolLoop:
             scope_preflight_status=prereq.get("scope_preflight_status", ""),
             scope_preflight_reason_code=prereq.get("scope_preflight_reason_code", ""),
             probe_evidence_present=bool(prereq.get("probe_evidence_present")),
+            latest_probe_failure_category=prereq.get(
+                "latest_probe_failure_category", ""
+            ),
+            latest_probe_failure_ref=(
+                (prereq.get("latest_probe_failure") or {}).get("action_id", "")
+            ),
+            next_failure_evaluation=prereq.get("next_failure_evaluation", ""),
             guidance_is_evidence=False,
             authorization_granted=False,
             executed=False,
@@ -3569,6 +3576,12 @@ class WebAgentProtocolLoop:
         restore previously executed operations. Every validator stays owner.
         """
         from agent_core.unified_contract_transaction import build_transaction
+        from agent_core.failure_causal_receipt import recent_failure_receipts
+        causality = recent_failure_receipts(
+            action_ledger=self.action_ledger,
+            result_ledger=self.action_result_ledger,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+        )
         record = build_transaction(
             request_id=self.run_id, task_epoch=self.task_epoch,
             original_goal=getattr(self, "task_request", ""),
@@ -3582,6 +3595,7 @@ class WebAgentProtocolLoop:
             prerequisite_transition=getattr(
                 self, "_last_prerequisite_transition_receipt", {}
             ),
+            failure_receipts=causality,
             evidence_count=len(self.action_result_ledger),
         )
         if not getattr(self, "_action_admission_probe", False):
@@ -3596,6 +3610,11 @@ class WebAgentProtocolLoop:
                 pending_action_ids=record["pending_action_ids"],
                 admitted_action_ids=record["admitted_action_ids"],
                 ccrc_mode=record["ccrc_mode"],
+                failure_count=len(record["failure_causal_receipts"]),
+                last_failure_category=(
+                    record["failure_causal_receipts"][-1]["failure_category"]
+                    if record["failure_causal_receipts"] else ""
+                ),
                 authorization_granted=False, executed=False,
             )
         return record
@@ -5253,6 +5272,13 @@ class WebAgentProtocolLoop:
                 scope_preflight_status=transition["scope_preflight_status"],
                 scope_preflight_reason_code=transition["scope_preflight_reason_code"],
                 probe_evidence_present=transition["probe_evidence_present"],
+                latest_probe_failure_category=transition.get(
+                    "latest_probe_failure_category", ""
+                ),
+                latest_probe_failure_ref=(
+                    (transition.get("latest_probe_failure") or {}).get("action_id", "")
+                ),
+                next_failure_evaluation=transition.get("next_failure_evaluation", ""),
                 guidance_is_evidence=False,
                 authorization_granted=False, executed=False,
             )
@@ -5432,6 +5458,52 @@ class WebAgentProtocolLoop:
         ) else self._progress_action_consistency_diagnostic(normalized_progress, operational)
         if action_consistency:
             return [], [action_consistency]
+        # A failed, evidence-bound prerequisite may not be "continued" by
+        # committing Progress prose without the next Action.  Check BEFORE
+        # record_model_progress/ack_accepted to avoid a false step advance.
+        # Normal initial plan registration and WAIT_RUNTIME remain unaffected.
+        if (decision == "CONTINUE" and not operational
+                and self.action_result_ledger
+                and not getattr(self, "_single_action_probe", False)
+                and not getattr(self, "_action_admission_probe", False)
+                and not (self.pending_result_recovery or {}).get("active")
+                and str((self.action_loop_state or {}).get(
+                    "required_transition", "")) != "WAIT_RUNTIME"):
+            from agent_core.failure_causal_receipt import recent_failure_receipts
+            failures = recent_failure_receipts(
+                action_ledger=self.action_ledger,
+                result_ledger=self.action_result_ledger,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
+            active_failed_read = next((
+                item for item in reversed(failures)
+                if item.get("tool") == "run_command"
+                and item.get("operation") == "GIT_INSPECT"
+                and item.get("execution", {}).get("status") == "FAILED"
+            ), None)
+            if active_failed_read:
+                return [], [{
+                    "marker": "[WEBAGENT_FAILURE_CAUSAL_ACTION_REQUIRED]",
+                    "reason": "failed_prerequisite_continue_requires_action",
+                    "tool": "report_progress",
+                    "action_id": str(progress_actions[0].get("action_id") or ""),
+                    "blocking_evidence_ref": active_failed_read["action_id"],
+                    "failure_category": active_failed_read["failure"]["category"],
+                    "next_evaluation": active_failed_read["replan"]["next_evaluation"],
+                    "field_issues": [{
+                        "field": "operational_action",
+                        "code": "CONTINUE_REQUIRES_CAUSALLY_GROUNDED_ACTION",
+                    }],
+                    "suggestion": (
+                        "Git Probe has an actual FAILED Runtime Tool Result. "
+                        "Do not commit CONTINUE with no operational Action. "
+                        "Use the failure_causal_receipts current-epoch evidence "
+                        "and choose one safe, materially different diagnostic "
+                        "under full Runtime Tool/Scope Admission. Or propose "
+                        "a supported evidence-bound interruption if genuinely "
+                        "blocked. No grant, evidence or result is inferred."
+                    ),
+                }]
         if decision == "CONTINUE" and float(normalized_progress["current_step"]) >= float(normalized_progress["total_steps"]):
             evidence_actions = [
                 item for item in operational
@@ -8374,6 +8446,38 @@ class WebAgentProtocolLoop:
                     tool=action.get("tool", ""),
                     result=result,
                 )
+                from agent_core.failure_causal_receipt import build_failure_receipt
+                failure_receipt = build_failure_receipt(
+                    str(action.get("action_id", "") or ""),
+                    action_ledger=self.action_ledger,
+                    result_ledger=self.action_result_ledger,
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                )
+                if failure_receipt:
+                    self._emit(
+                        "tool_failure_causal_receipt_recorded",
+                        request_id=self.run_id, round=self.turn_id,
+                        task_epoch=self.task_epoch,
+                        action_id=failure_receipt["action_id"],
+                        tool=failure_receipt["tool"],
+                        operation=failure_receipt["operation"],
+                        result_status=failure_receipt["execution"]["status"],
+                        result_reason=failure_receipt["execution"]["reason_code"],
+                        executed=failure_receipt["execution"]["executed"],
+                        exit_code=failure_receipt["execution"]["exit_code"],
+                        timed_out=failure_receipt["execution"]["timed_out"],
+                        failure_category=failure_receipt["failure"]["category"],
+                        classification_verified=failure_receipt["failure"][
+                            "classification_verified"
+                        ],
+                        stderr_present=failure_receipt["failure"]["stderr_present"],
+                        stderr_sha256=failure_receipt["failure"]["stderr_sha256"],
+                        blocking_evidence_ref=failure_receipt["prerequisite"][
+                            "blocking_evidence_ref"
+                        ],
+                        next_evaluation=failure_receipt["replan"]["next_evaluation"],
+                        authorization_granted=False,
+                    )
                 return result
             if self.active_stage_manifest is not None and WEBAGENT_STAGED_PROTOCOL == "on":
                 stage_result = execute_stage(self.active_stage_manifest, actions, execute_with_events, workspace=str(self.workspace))
