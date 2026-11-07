@@ -170,7 +170,12 @@ class PrerequisiteTransitionGateTests(unittest.TestCase):
             "tool": "run_command", "operation": "GIT_INSPECT",
             "command": "git ls-remote https://github.com/b43120000/test.git HEAD",
         }
-        actions = {"GIT-PROBE-A": {"action": action}}
+        from agent_core.tool_result_contract import encode_result
+        typed_failure = encode_result(
+            "FAILED", "COMMAND_EXITED", tool="run_command", executed=True,
+            data={"process_state": "EXITED", "exit_code": 128},
+        )
+        actions = {"GIT-PROBE-A": {"action": action, "result": typed_failure}}
         evidence = {"GIT-PROBE-A": {
             "request_id": REQ, "task_epoch": EPOCH,
             "evidence_status": "ACTIVE", "result_status": "FAILED",
@@ -189,9 +194,15 @@ class PrerequisiteTransitionGateTests(unittest.TestCase):
                             evidence={"GIT-PROBE-A": stale})
         self.assertEqual(result["stage"], "READY_FOR_TOOL_ADMISSION")
         forged = {"action": {**action,
-                            "command": action["command"] + "; whoami"}}
+                            "command": action["command"] + "; whoami"},
+                  "result": typed_failure}
         result = transition(actions={"GIT-PROBE-A": forged}, evidence=evidence)
         self.assertEqual(result["stage"], "READY_FOR_TOOL_ADMISSION")
+        # Fake ledger entries with a known Action ID but no ToolResult must
+        # never suppress the mandatory first Runtime probe.
+        without_result = {"GIT-PROBE-A": {"action": action}}
+        no_proof = transition(actions=without_result, evidence=evidence)
+        self.assertEqual(no_proof["stage"], "READY_FOR_TOOL_ADMISSION")
 
     def test_unknown_or_unavailable_preflight_not_claimed_verified(self):
         def unavailable(_action):
