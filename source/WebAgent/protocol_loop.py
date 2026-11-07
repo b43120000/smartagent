@@ -6373,6 +6373,8 @@ class WebAgentProtocolLoop:
         # model prose. Original-request candidate evidence grants no write.
         self._spr_path_resolution = None
         self._last_canonical_contract_receipts = []
+        self._last_unified_contract_receipt = {}
+        self._unified_action_recovery_events = []
         spr_candidate_request = (
             trusted_authorized_paths is None
             and _SAVED_PLAN_OPEN not in request
@@ -7458,9 +7460,9 @@ class WebAgentProtocolLoop:
                         accepted_plan=has_accepted_plan(self.progress_ledger),
                     )
                 from agent_core.unified_contract_transaction import render_transaction
-                repair_note += "\\n" + render_transaction(unified_receipt)
+                repair_note += "\n" + render_transaction(unified_receipt)
                 prompt = (
-                    "[WEBAGENT_ACK_REJECTED]\\n"
+                    "[WEBAGENT_ACK_REJECTED]\n"
                     + format_tool_parse_diagnostics(ack_diagnostics)
                     + "\n修正 compact v9 response 後重送同一決策；不得重做尚未執行的 action。"
                     + repair_note
