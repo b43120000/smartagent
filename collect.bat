@@ -761,6 +761,17 @@ try {
     $loopDecisions = @($timeline.ToArray() | Where-Object {
         $_.event -in @('action_loop_decision_evaluated','action_loop_blackboard_snapshot_reconciled')
     } | ForEach-Object {
+        # Safe-CodeList intentionally returns an array as one PowerShell
+        # object. Flatten it here before JSON serialization; otherwise a
+        # single allowed action may become nested as [[]] or [ ["tool"] ].
+        $cleanAllowedTools = @()
+        foreach ($rawAllowed in @($_.allowed_next_actions)) {
+            foreach ($toolName in @($rawAllowed)) {
+                if ($toolName -is [string] -and $toolName) {
+                    $cleanAllowedTools += (Safe-Code $toolName)
+                }
+            }
+        }
         [ordered]@{
             source=$_.source
             event=$_.event
@@ -772,7 +783,7 @@ try {
             rule_id=(Safe-Code $_.rule_id)
             observed_evidence_ref=(Safe-Code $_.observed_evidence_ref)
             required_transition=(Safe-Code $_.required_transition)
-            allowed_next_actions=@(Safe-CodeList $_.allowed_next_actions)
+            allowed_next_actions=@($cleanAllowedTools | Select-Object -First 40)
             reason_code=(Safe-Code $_.reason_code)
             authorization_granted=$false
         }
