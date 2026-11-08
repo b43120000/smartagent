@@ -128,7 +128,7 @@ def test_one_generic_agent_loop_completes_check_create_verify_finish_and_blackbo
     assert all("permitted_tools_by_phase" not in prompt for prompt in loop.prompts)
     assert "Runtime repair" not in loop.prompts[0]
     assert '"isSuccess":true' in loop.prompts[1]
-    assert '"exists' in loop.prompts[1]
+    assert "file.exists" in loop.prompts[1]
     assert "已觀測不存在" in answer
     assert "Goal Driver：DISABLED" in answer
     assert "Prerequisite：DISABLED" in answer
