@@ -6512,7 +6512,15 @@ class WebAgentProtocolLoop:
             )
             if self.continuation_store:
                 self.continuation_store.snapshot(self)
-                self.continuation_store.finish(task_id, 'COMPLETED', result, outcome=self.terminal_outcome)
+                # Unverified model finish is not a verified goal completion.
+                minimal = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() == "minimal"
+                finished_state = (
+                    "PAUSED" if minimal and self.terminal_outcome != "SUCCESS"
+                    else "COMPLETED"
+                )
+                self.continuation_store.finish(
+                    task_id, finished_state, result, outcome=self.terminal_outcome
+                )
             return result
         except BaseException as exc:
             if registered:
