@@ -33,13 +33,15 @@ jobs:
         run: >-
           python -B -m compileall -q
           source/WebAgent/minimal_core_loop.py
+          source/WebAgent/minimal_admission.py
           source/WebAgent/minimal_goal_driver.py
           source/WebAgent/minimal_deployment_terminal.py
           source/agent_core/tri_one_runtime_terminal.py
           source/WebAgent/tests/test_git26_minimal_deployment_terminal.py
+          source/WebAgent/tests/test_git26_safe_operation_alias.py
           source/WebAgent/tests/test_git26_minimal_collector_live_rca.py
-      - name: Case D independent Terminal and no premature PASS
-        run: python -B -m unittest WebAgent.tests.test_git26_minimal_deployment_terminal -v
+      - name: Case D independent Terminal and safe operation aliases
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_deployment_terminal WebAgent.tests.test_git26_safe_operation_alias -v
       - name: Case D v10 baseline
         run: python -B -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_minimal_core_collector_windows.py -q
       - name: Case D existing source and scope tests
