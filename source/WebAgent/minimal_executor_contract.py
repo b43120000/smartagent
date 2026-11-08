@@ -9,7 +9,9 @@ import re
 from collections.abc import Mapping
 
 ATOMIC_MODEL_DECISION_LIMIT = 2
-TERMINAL_OUTCOMES = frozenset({"VERIFIED", "BLOCKED", "NEEDS_PREREQUISITE", "UNKNOWN"})
+TERMINAL_OUTCOMES = frozenset({"VERIFIED", "BLOCKED", "NEEDS_PREREQUISITE"})
+# UNKNOWN may occur only in tool observations, never in Executor Terminal.
+INTERMEDIATE_STATES = frozenset({"OBSERVING", "RESOLVING"})
 _PREREQUISITES = ("PARENT_MISSING", "PREREQUISITE", "DEPENDENCY", "SOURCE_REQUIRED",
                   "SOURCE_LOCATION", "ENVIRONMENT_MISSING")
 _DENIALS = ("SCOPE_REJECTED", "PERMISSION_DENIED", "WRITE_CEILING", "NOT_AUTHORIZED")
@@ -100,12 +102,12 @@ def blocked_disposition(goal_context: Mapping, history: list[dict],
             return "NEEDS_PREREQUISITE", reason[:120]
         if any(code in reason for code in _DENIALS):
             return "BLOCKED", reason[:120]
-        return "UNKNOWN", "ACTION_RESULT_" + status
+        return "BLOCKED", "ACTION_RESULT_UNRESOLVED_" + status
     for entry in reversed(rejected[-2:]):
         reason = str(entry.get("reason_code") or "").upper()
         if any(code in reason for code in _DENIALS):
             return "BLOCKED", reason[:120]
-    return "UNKNOWN", "PLANNER_UNCERTAINTY_NOT_VERIFIED"
+    return "BLOCKED", "PLANNER_UNCERTAINTY_NOT_VERIFIED"
 
 
 def action_result_receipt(action: dict, receipt: dict,
@@ -114,15 +116,9 @@ def action_result_receipt(action: dict, receipt: dict,
     status = str(receipt.get("status") or "UNKNOWN").upper()
     reason = str(receipt.get("reason") or "UNKNOWN")[:120]
     executed = receipt.get("executed") is True
-    if status == "SUCCEEDED" and executed:
-        outcome = "VERIFIED" if (receipt.get("data") or {}).get(
-            "verification_status") == "PASS" else "UNKNOWN"
-    elif any(code in reason.upper() for code in _PREREQUISITES):
-        outcome = "NEEDS_PREREQUISITE"
-    elif status == "REJECTED":
-        outcome = "BLOCKED"
-    else:
-        outcome = "UNKNOWN"
+    # Action observations are NEVER terminal, regardless of tool success.
+    # Only Runtime GoalEvidence can publish the terminal VERIFIED receipt.
+    outcome = "RESOLVING" if status in {"UNKNOWN", "RUNNING"} else "OBSERVING"
     return {
         "schema": "SMARTAGENT_ATOMIC_EXECUTOR_RESULT_V1", "outcome": outcome,
         "reason_code": reason, "tool_status": status,
@@ -130,15 +126,22 @@ def action_result_receipt(action: dict, receipt: dict,
         "action_id": str(action.get("action_id") or "")[:96],
         "evidence_ref": str(evidence_ref)[:128], "model_round": int(model_round),
         "executed": executed, "goal_verified": False,
+        "executor_state": outcome, "terminal_status": "",
+        "original_tool_status": status,
+        "side_effect_may_have_occurred": False,
     }
 
 
 def blocked_result(outcome: str, reason: str, model_round: int) -> dict:
-    state = outcome if outcome in TERMINAL_OUTCOMES else "UNKNOWN"
+    # An unresolved attempt is a BLOCKED verification process, not a claim
+    # that the original side effect failed. Never export UNKNOWN.
+    state = outcome if outcome in TERMINAL_OUTCOMES else "BLOCKED"
     return {
         "schema": "SMARTAGENT_ATOMIC_EXECUTOR_RESULT_V1", "outcome": state,
         "reason_code": str(reason)[:120], "tool_status": "NOT_EXECUTED",
         "tool": "", "action_id": "", "evidence_ref": "",
         "model_round": int(model_round), "executed": False,
-        "goal_verified": False,
+        "goal_verified": False, "executor_state": "TERMINAL",
+        "terminal_status": state, "original_tool_status": "",
+        "side_effect_outcome_confirmed": False,
     }
