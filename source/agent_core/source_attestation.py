@@ -125,6 +125,101 @@ def _disk_git_head(root):
         return ""
 
 
+def build_task_result_source_metadata(attestation: dict, *, root: Path) -> dict:
+    """Project source capture onto Tri-One V1's non-authorizing metadata.
+
+    A disk Git HEAD is NEVER signed loaded-code provenance. Only explicitly
+    matched live/recompiled code may be labelled as loaded-code PASS, and the
+    commit always remains NOT_ATTESTED without an independent trust verifier.
+    """
+    import json
+    import re
+
+    source = attestation if isinstance(attestation, dict) else {}
+    values = source.get("modules")
+    values = values if isinstance(values, dict) else {}
+    root = Path(root).resolve()
+    projected = {}
+    for name, row in values.items():
+        if not isinstance(name, str) or not isinstance(row, dict) or row.get("loaded") is not True:
+            continue
+        relative = str(row.get("source_path") or "")
+        disk_sha = str(row.get("disk_sha256_at_capture") or "")
+        if (not relative.startswith("source/") or ".." in relative.split("/")
+                or not re.fullmatch(r"[0-9a-fA-F]{64}", disk_sha)):
+            continue
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if not candidate.is_file():
+            continue
+        comparisons = row.get("live_matches_recompiled_disk")
+        if not isinstance(comparisons, dict):
+            comparisons = {}
+        code_hashes = row.get("live_code_sha256")
+        code_hashes = code_hashes if isinstance(code_hashes, dict) else {}
+        disk_hashes = row.get("recompiled_disk_code_sha256")
+        disk_hashes = disk_hashes if isinstance(disk_hashes, dict) else {}
+        safe_matches = {
+            str(key): value for key, value in comparisons.items()
+            if isinstance(key, str) and type(value) is bool
+        }
+        safe_live = {
+            str(key): value for key, value in code_hashes.items()
+            if isinstance(key, str) and (
+                value is None or (isinstance(value, str) and
+                                  re.fullmatch(r"[0-9a-fA-F]{64}", value)))
+        }
+        safe_disk = {
+            str(key): value for key, value in disk_hashes.items()
+            if isinstance(key, str) and (
+                value is None or (isinstance(value, str) and
+                                  re.fullmatch(r"[0-9a-fA-F]{64}", value)))
+        }
+        projected[name] = {
+            "source_path": relative,
+            "disk_sha256": disk_sha.lower(),
+            "live_matches_recompiled_disk": safe_matches,
+            "functions": dict(safe_matches),
+            "live_code_sha256": safe_live,
+            "recompiled_disk_code_sha256": safe_disk,
+            "comparison_method": str(row.get("comparison_method") or "")[:96],
+        }
+    guard = projected.get("agent_core.tools") or {}
+    matches = guard.get("live_matches_recompiled_disk") or {}
+    guarded = ("_task_scoped_chunked_write_manager", "_execute_tool_impl")
+    loaded_pass = bool(
+        source.get("schema") == "SMARTAGENT_SOURCE_ATTESTATION_V1"
+        and source.get("manifest_verified_before_capture") is True
+        and all(matches.get(key) is True for key in guarded)
+    )
+    disk_claim = str(source.get("disk_git_head_only") or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", disk_claim):
+        disk_claim = ""
+    canonical = json.dumps(projected, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":")).encode("utf-8")
+    return {
+        "schema": "SMARTAGENT_TASK_RESULT_SOURCE_METADATA_V1",
+        "loaded_code_status": "PASS" if loaded_pass else "NOT_ATTESTED",
+        "source_commit_status": "NOT_ATTESTED",
+        "source_commit": "NOT_ATTESTED",
+        "source_commit_claim": disk_claim or None,
+        "source_commit_claim_status": "DISK_ONLY_UNVERIFIED" if disk_claim else "UNAVAILABLE",
+        "source_commit_trust": None,
+        "attestation_sha256": hashlib.sha256(canonical).hexdigest(),
+        "protocol_manifest_sha256": None,
+        "update_manifest_sha256": None,
+        "source_provenance_sha256": None,
+        "source_tree_sha": None,
+        "publisher_signature_status": "NOT_PROVIDED",
+        "modules": projected,
+        "reason": ("live_writer_code_verified_without_commit_attestation"
+                   if loaded_pass else "loaded_source_not_fully_attested"),
+    }
+
+
 def require_writer_loaded_source_attestation(attestation: dict) -> dict:
     """Fail closed unless in-process Writer/dispatch code matches verified disk.
 
