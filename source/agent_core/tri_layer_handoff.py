@@ -121,6 +121,7 @@ def build_handoff(record: Mapping) -> dict:
             ),
             "executor_causal_basis": str(record.get("causal_basis") or ""),
             "executor_goal_verified": bool(record.get("goal_verified")),
+            "executor_fact_observation": dict(record.get("fact_observation") or {}),
             "executor_result_not_parent_completion": True,
         },
         "prerequisite_handoff": {
