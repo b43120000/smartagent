@@ -60,7 +60,13 @@ def build_goal_driver_context(runtime, goal: str, history: list[dict],
     from agent_core.goal_prerequisite_resolution import resolve_goal_prerequisites
     from agent_core.goal_gap_ledger import reconstruct_goal_gaps
 
-    requirement = assess_task_requirement(goal)
+    requirement = assess_task_requirement(
+        goal,
+        attachments=bool(getattr(runtime, "_tri_one_has_attached_context", False)),
+        authorized_paths=False,  # ambient workspace != user-requested resource
+        image_or_artifact_request=bool(getattr(runtime, "image_delivery_plan", None)),
+        continuation=bool(getattr(runtime, "continuation_source", None)),
+    )
     metadata = {
         "schema": SCHEMA,
         "goal_anchor_sha256": _digest(goal),
@@ -79,7 +85,14 @@ def build_goal_driver_context(runtime, goal: str, history: list[dict],
                 "next_category": "ANSWER_ONLY_ELIGIBLE",
                 "next_decision_hint": "FINISH_WITH_TEXT_NO_TOOL",
                 "evidence_refs": [],
-                "verified_text_only_requires_no_runtime_operations": True}
+                "verified_text_only_requires_no_runtime_operations": True,
+                "recent_rejections": [
+                    {"tool": _code(row.get("tool")),
+                     "reason_code": _code(row.get("reason_code")),
+                     "round": int(row.get("round") or 0)}
+                    for row in list(rejections or [])[-3:]
+                    if isinstance(row, Mapping)
+                ]}
 
     policy = conditional_goal_policy(goal)
     semantic = translate_goal_action(goal)
