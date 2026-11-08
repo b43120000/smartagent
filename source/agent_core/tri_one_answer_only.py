@@ -116,7 +116,9 @@ def classify_original_request(
     """
     if attachments or authorized_paths or image_or_artifact_request or continuation:
         return False, "structured_tool_or_continuation_required"
-    from .task_requirement import enabled as pr0_enabled, assess_task_requirement
+    from .task_requirement import (
+        enabled as pr0_enabled, assess_task_requirement, no_tool_terminal_candidate,
+    )
     if pr0_enabled():
         assessed = assess_task_requirement(
             request, attachments=attachments,
@@ -124,8 +126,8 @@ def classify_original_request(
             image_or_artifact_request=image_or_artifact_request,
             continuation=continuation,
         )
-        if assessed["route"] == "ANSWER_ONLY":
-            return True, "bounded_text_only_intent"
+        if no_tool_terminal_candidate(assessed):
+            return True, "requirement_gated_no_tool_candidate"
         reason = str(assessed["reason"])
         if reason in ("structured_tool_or_continuation_required",
                       "empty_or_unbounded_input",
