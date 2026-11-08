@@ -43,13 +43,26 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
                 "truncated": True, "complete_result_available_in_blackboard": False,
             }, ensure_ascii=False, separators=(",", ":"))
         return {"isSuccess": True, "data": text, "error": None}
+    details = ""
+    if isinstance(payload, Mapping):
+        process = {
+            key: payload[key] for key in (
+                "process_state", "exit_code", "timed_out",
+                "verification_status", "expectation_status",
+            )
+            if key in payload
+        }
+        if process:
+            details = "; " + json.dumps(
+                process, ensure_ascii=False, separators=(",", ":"),
+            )[:600]
     return {
         "isSuccess": False, "data": None,
         "error": (
             ("EXECUTION_OUTCOME_UNCERTAIN:" if status in {"UNKNOWN", "RUNNING", "PARTIAL"}
              else "ACTION_NOT_EXECUTED:" if status == "REJECTED"
              else "TOOL_FAILED:")
-            + str(reason or "UNCLASSIFIED_RESULT")[:240]
+            + str(reason or "UNCLASSIFIED_RESULT")[:240] + details
         ),
     }
 
@@ -347,6 +360,14 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "side_effect_may_have_occurred": bool(
                     mutating and receipt.get("executed")
                 ),
+                "process": {
+                    key: result_data[key] for key in (
+                        "process_state", "exit_code", "timed_out",
+                        "verification_status", "execution_status",
+                        "expectation_status", "pid",
+                    )
+                    if isinstance(result_data, Mapping) and key in result_data
+                },
             },
         })
         recent.append({
