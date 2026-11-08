@@ -490,12 +490,13 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
         from .tool_result_contract import decode_result
         from WebAgent.executor_only_validation import (
             directory_sequence_contract, evaluate_executor_sequence,
+            executor_only_enabled,
         )
         source_actions = getattr(loop, "_canonical_action_proposals", None)
         if not isinstance(source_actions, Mapping):
             raise ValueError("executor_only_canonical_actions_missing")
         contract = directory_sequence_contract(str(getattr(loop, "task_request", "") or ""))
-        if not contract or getattr(loop, "executor_only_mode", None) is not True:
+        if not contract or not executor_only_enabled(loop):
             raise ValueError("executor_only_contract_not_active")
         current = []
         for action_id, entry in ledger.items():
