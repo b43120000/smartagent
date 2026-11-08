@@ -484,6 +484,53 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
                 or item.get("result_status") != "SUCCEEDED"
                 or item.get("evidence_status") != "ACTIVE"):
             raise ValueError("terminal_evidence_identity_or_status_mismatch")
+    if proof.goal_kind == "EXECUTOR_ONLY_DIRECTORY_SEQUENCE":
+        # Independent terminal verifier replays ALL executed actions from
+        # this request and epoch, not only refs chosen by the Planner.
+        from .tool_result_contract import decode_result
+        from WebAgent.executor_only_validation import (
+            directory_sequence_contract, evaluate_executor_sequence,
+        )
+        source_actions = getattr(loop, "_canonical_action_proposals", None)
+        if not isinstance(source_actions, Mapping):
+            raise ValueError("executor_only_canonical_actions_missing")
+        contract = directory_sequence_contract(str(getattr(loop, "task_request", "") or ""))
+        if not contract or getattr(loop, "executor_only_mode", None) is not True:
+            raise ValueError("executor_only_contract_not_active")
+        current = []
+        for action_id, entry in ledger.items():
+            if not isinstance(entry, Mapping):
+                raise ValueError("executor_only_evidence_row_invalid")
+            if (entry.get("request_id") != loop.run_id
+                    or entry.get("task_id") != loop.task_id
+                    or entry.get("task_epoch") != loop.task_epoch
+                    or entry.get("evidence_status") != "ACTIVE"
+                    or entry.get("executed") is not True
+                    or entry.get("result_status") != "SUCCEEDED"):
+                raise ValueError("executor_only_evidence_identity_or_status_invalid")
+            action = source_actions.get(action_id)
+            raw = entry.get("result")
+            if (not isinstance(action, Mapping)
+                    or action.get("action_id") != action_id
+                    or not isinstance(raw, str)):
+                raise ValueError("executor_only_action_result_missing")
+            digest = entry.get("result_sha256")
+            if not digest or hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest:
+                raise ValueError("executor_only_result_sha256_mismatch")
+            typed = decode_result(raw)
+            if not isinstance(typed, Mapping) or typed.get("status") != entry["result_status"]:
+                raise ValueError("executor_only_result_unparseable")
+            current.append((int(entry.get("produced_round") or 0), action_id,
+                            {"action": action, "receipt": typed}))
+        if len(current) != len(source_actions) or len({item[0] for item in current}) != len(current):
+            raise ValueError("executor_only_action_sequence_missing_or_duplicate")
+        ordered = [item[2] for item in sorted(current)]
+        replay = evaluate_executor_sequence(contract, ordered)
+        if (not replay.verified or replay.goal_kind != proof.goal_kind
+                or replay.reason != proof.reason
+                or replay.evidence_refs != proof.evidence_refs
+                or _normal_path(replay.target) != _normal_path(proof.target)):
+            raise ValueError("executor_only_terminal_replay_mismatch")
     if proof.goal_kind == "SINGLE_FACT_QUERY":
         # Replay the original current-request ActionResult, not model prose.
         # A copied evidence reference or foreign/stale action cannot complete.
@@ -574,6 +621,18 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
         "verification_status": "PASS",
         "goal_evidence_reason": proof.reason,
     }
+    if proof.goal_kind == "EXECUTOR_ONLY_DIRECTORY_SEQUENCE":
+        record["executor_only_sequence"] = {
+            "executor_sequence_state": "VERIFIED",
+            "executor_sequence_reason": proof.reason,
+            "executor_sequence_action_refs": list(proof.evidence_refs),
+            "executor_sequence_target": proof.target,
+            "executor_directory_created_this_task": (
+                proof.reason == "EXECUTOR_DIRECTORY_CREATED_AND_INDEPENDENTLY_VERIFIED"
+            ),
+            "goal_driver_decisions_enabled": False,
+            "prerequisite_decisions_enabled": False,
+        }
     if proof.goal_kind == "SINGLE_FACT_QUERY":
         request = str(getattr(loop, "task_request", "") or "")
         target = _normal_path(proof.target)
@@ -714,6 +773,10 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
 
 
 def format_runtime_goal_summary(proof: GoalEvidence) -> str:
+    if proof.goal_kind == "EXECUTOR_ONLY_DIRECTORY_SEQUENCE" and proof.verified:
+        return ("已建立並獨立確認目錄：" if
+                proof.reason == "EXECUTOR_DIRECTORY_CREATED_AND_INDEPENDENTLY_VERIFIED"
+                else "已確認既有目錄，未重複建立：") + "\n" + proof.target
     if proof.goal_kind == "SINGLE_FACT_QUERY" and proof.verified:
         if proof.reason == "SINGLE_FACT_QUERY_ABSENCE_CONFIRMED":
             return "已確認指定目標不存在：\n" + proof.target
