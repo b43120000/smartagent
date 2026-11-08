@@ -268,6 +268,34 @@ def test_same_generic_loop_accepts_shell_tool_success_and_failure(tmp_path, monk
     assert result["runtimeEvidence"]["status"] == "SUCCEEDED"
 
 
+def test_shell_nonzero_exit_is_failure_with_typed_process_receipt(
+    tmp_path, monkeypatch,
+):
+    request = "執行 git status --short 並回報失敗原因"
+    replies = [
+        tool_json("run_command", command="git status --short", operation="GIT_INSPECT"),
+        '{"type":"blocked","reason":"命令 exit_code=1，不能宣告成功"}',
+    ]
+    loop, _ = _loop(tmp_path, monkeypatch, replies, request=request)
+    def fail(action):
+        loop.executed.append(dict(action))
+        return _result(action, status="FAILED")
+    loop._execute_action = fail
+    answer = run_minimal_core(loop, request)
+    board = read_executor_run(tmp_path, task_id=loop.task_id)
+    result = next(row for row in board["events"] if row["kind"] == "TOOL_RESULT")
+    assert result["toolResult"]["isSuccess"] is False
+    assert result["toolResult"]["data"] is None
+    assert "TOOL_FAILED" in result["toolResult"]["error"]
+    assert '"exit_code":1' in result["toolResult"]["error"]
+    assert result["runtimeEvidence"]["status"] == "FAILED"
+    assert result["runtimeEvidence"]["process"]["exit_code"] == 1
+    assert result["runtimeEvidence"]["process"]["timed_out"] is False
+    assert "exit_code" in loop.prompts[1]
+    assert board["executor_state"] == "BLOCKED"
+    assert loop.terminal_acceptance == {}
+
+
 def test_unknown_side_effect_stops_without_replay(tmp_path, monkeypatch):
     replies = [
         tool_json("create_directory", path=TARGET),
