@@ -129,15 +129,15 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "Workspace: " + str(context.workspace_root) + "\n"
         "Available tools: " + json.dumps(tool_catalog(context), separators=(",", ":")) + "\n"
         "Original goal: " + request + "\n"
-        ("Runtime Executor-only context (Goal Driver and Prerequisite decision"
+        + ("Runtime Executor-only context (Goal Driver and Prerequisite decision"
          " engines DISABLED, no new permission): "
          if executor_only_mode else
          "Runtime Goal-Driven Blackboard (read-only, never permission): ")
         + goal_driver_context + "\n"
-        "If this is a no-tool TEXT_ONLY request, output Finish with your "
+        + "If this is a no-tool TEXT_ONLY request, output Finish with your "
         "actual answer. Runtime admits it without Action evidence only when "
         "the trusted original request is answer-only and no tool was executed. "
-        ("Otherwise execute the user's explicit instructions one admitted "
+        + ("Otherwise execute the user's explicit instructions one admitted "
          "action at a time, following the Runtime Executor-only phase and "
          "real ToolResults. Do not Finish before independent postcondition "
          "verification and Blackboard persistence. Never repeat a mutation. "
