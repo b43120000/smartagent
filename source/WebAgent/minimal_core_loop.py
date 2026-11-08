@@ -527,6 +527,7 @@ def run_minimal_core(loop, request: str) -> str:
                 continue
             loop.terminal_outcome = "UNKNOWN"
             loop.protocol_state = "MODEL_FINISHED_UNVERIFIED"
+            publish_executor_result(blocked_result("UNKNOWN", proof.reason, round_id))
             loop.terminal_acceptance = {}
             journal.append("model_finish", round=round_id,
                            outcome="UNKNOWN", verified=False,
@@ -556,8 +557,10 @@ def run_minimal_core(loop, request: str) -> str:
                 "shell, Git, web or external tools. Return ONE finish JSON "
                 "containing only the requested text answer."
             )
-            if consecutive_action_rejections >= 2:
+            if consecutive_action_rejections >= ATOMIC_MODEL_DECISION_LIMIT:
                 loop.protocol_state = "BLOCKED"
+                publish_executor_result(blocked_result(
+                    "BLOCKED", "ANSWER_ONLY_REPEATED_TOOL_PROPOSAL", round_id))
                 set_runtime_state(loop.task_id, "PAUSED",
                                   reason="ANSWER_ONLY_REPEATED_TOOL_PROPOSAL",
                                   root=loop.progress_root)
@@ -606,8 +609,10 @@ def run_minimal_core(loop, request: str) -> str:
                        proposal_sha256=_digest(decision.arguments),
                        goal_context_sha256=context_digest,
                        executed=False)
-            if consecutive_action_rejections >= 3:
+            if consecutive_action_rejections >= ATOMIC_MODEL_DECISION_LIMIT:
                 loop.protocol_state = "BLOCKED"
+                publish_executor_result(blocked_result(
+                    "BLOCKED", "GOAL_ACTION_REPAIR_EXHAUSTED:" + rejection, round_id))
                 set_runtime_state(loop.task_id, "PAUSED",
                                   reason="GOAL_ACTION_REPAIR_EXHAUSTED",
                                   root=loop.progress_root)
@@ -640,8 +645,10 @@ def run_minimal_core(loop, request: str) -> str:
                 "Use the Blackboard's next_category, find a genuinely "
                 "admitted prerequisite, then retry only after new evidence."
             )
-            if consecutive_action_rejections >= 3:
+            if consecutive_action_rejections >= ATOMIC_MODEL_DECISION_LIMIT:
                 loop.protocol_state = "BLOCKED"
+                publish_executor_result(blocked_result(
+                    "NEEDS_PREREQUISITE", "GOAL_PREREQUISITE_REPLAN_EXHAUSTED", round_id))
                 set_runtime_state(loop.task_id, "PAUSED",
                                   reason="GOAL_PREREQUISITE_REPLAN_EXHAUSTED",
                                   root=loop.progress_root)
@@ -649,6 +656,7 @@ def run_minimal_core(loop, request: str) -> str:
             continue
         consecutive_action_rejections = 0
         consecutive_unverified_finishes = 0
+        unsupported_blocked_decisions = 0
         if operation_rewrite:
             if not hasattr(loop, "_runtime_action_rewrite_notes"):
                 loop._runtime_action_rewrite_notes = {}
@@ -685,7 +693,7 @@ def run_minimal_core(loop, request: str) -> str:
                            tool=action["tool"], fingerprint=fingerprint)
             raise RuntimeError("MINIMAL_MUTATION_REPLAY_UNCERTAIN")
         repeated = repeated + 1 if fingerprint == last_action_digest else 0
-        if repeated >= 2:
+        if repeated >= 1:
             loop.protocol_state = "INTERRUPTED"
             journal.append("stuck_action", round=round_id,
                            tool=action["tool"], fingerprint=fingerprint)
@@ -741,6 +749,8 @@ def run_minimal_core(loop, request: str) -> str:
             "evidence_status": "ACTIVE",
             "evidence_ref": ref,
         }
+        publish_executor_result(action_result_receipt(
+            action, receipt, ref, round_id))
         journal.append("action_observed", round=round_id, tool=action["tool"],
                        action_id=action["action_id"], fingerprint=fingerprint,
                        result_sha256=result_digest, evidence_ref=ref,
