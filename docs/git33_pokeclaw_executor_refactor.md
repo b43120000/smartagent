@@ -64,4 +64,6 @@ Git33 增加對後接「執行…驗證／測試／任務：」的自然語句�
 
 交付 Telegram。這不是六步任務已獲得獨立 Goal PASS 的宣稱；但能顯示已觀測的各工具結果與 Handoff ID，並清楚區分工具事實與模型總結。
 
+Git33 的 Telegram Worker 不會將 Executor-only 的模型 Finish 發布為 `publish_completed_plan` 紀錄，避免把未驗證的結果當成已接受的 Goal 計畫；每輪 Executor 事實仍持久化於專用 Blackboard。
+
 後續若需整體 Goal PASS，應以獨立可驗證契約額外交付，而不是重新把「六步需求文字」寫回 Executor 的執行順序或條件。
