@@ -179,7 +179,7 @@
     "source/agent_core/task_continuation.py": "6359297d4576b36cc69bc0b8227a52a133c5844864eb2b677eecef74e1c1128b",
     "source/agent_core/task_plan.py": "390f01fa76c88b6afd66b76385216aaa4157e43875786628d265610ceec736fb",
     "source/agent_core/task_progress.py": "06f3014136724f0136540b50f667b0e7155c101b9d279ab4b743ace5f50790a9",
-    "source/agent_core/task_requirement.py": "beac23e05fc3ef25a49273b0da776595198c3774a8cf0186a2aa59cb65342242",
+    "source/agent_core/task_requirement.py": "a31dfc3ca7d2367ced4324e7f0c1eeb8fda6b16a6e256320494a8dc0556f7fee",
     "source/agent_core/task_state.py": "4aea6ecf3a1ee431e126667bdadc7bcbd2cb0f5a76fd5b31693e61e355999a0b",
     "source/agent_core/task_transport.py": "57089b1bce75c87e71260637099ecd97a223b2f4b3550bf9c91aa326f1ecab06",
     "source/agent_core/task_workspace_resolver.py": "519e26068464784fd005e8857eede24d3096ff4dd6f0612726811d6c6834294d",
