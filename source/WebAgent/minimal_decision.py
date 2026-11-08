@@ -169,6 +169,18 @@ def parse_minimal_decision_with_diagnostics(
         raise MinimalDecisionError("decision_empty", meta)
     if meta["response_bytes"] > MAX_RESPONSE_BYTES:
         raise MinimalDecisionError("decision_oversized", meta)
+    legacy_marker = (r"(?im)^[ \\t]*" + re.escape(chr(96) * 3)
+                     + r"smartagent_tool\\b")
+    if re.search(legacy_marker, source):
+        raise MinimalDecisionError("legacy_protocol_response", meta)
+    # A JSON array is not a single decision, even if it contains one object.
+    if source.startswith("[") and source.endswith("]"):
+        try:
+            outer = json.loads(source, object_pairs_hook=_unique_keys)
+        except (json.JSONDecodeError, MinimalDecisionError):
+            outer = None
+        if isinstance(outer, list):
+            raise MinimalDecisionError("decision_object_required", meta)
 
     fence = re.escape(chr(96) * 3)
     full_fence = re.fullmatch(
