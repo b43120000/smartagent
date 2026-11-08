@@ -3,7 +3,7 @@
   "provider": "chatgpt",
   "source_origin": "https://chatgpt.com",
   "scope": "partial_conversation",
-  "revision": "shared-default-20261021",
+  "revision": "shared-default-20261108",
   "elements": {
     "assistant_content": {
       "kind": "assistant_content",
@@ -29,6 +29,7 @@
     },
     "composer": {
       "kind": "contenteditable",
+      "scope": "page",
       "selector": "div[aria-label=\"問問 ChatGPT\"]",
       "tag": "div",
       "validation": {
@@ -61,7 +62,7 @@
     "user_content": {
       "kind": "user_content",
       "scope": "user_turn",
-      "selector": "div.whitespace-pre-wrap",
+      "selector": "div.bg-user-message",
       "tag": "div",
       "validation": {
         "content_verified": true,
@@ -149,14 +150,21 @@
           "tokens": [
             "something went wrong",
             "error generating",
+            "unable to complete your request",
             "發生錯誤",
-            "無法產生回覆"
+            "無法產生回覆",
+            "無法完成您的要求"
           ]
         }
       ],
       "validation": {
         "normal_page_verified": true,
         "rules_verified": true
+      }
+    },
+    "conversation_loop": {
+      "validation": {
+        "loop_verified": true
       }
     },
     "generation_state": {

@@ -8,9 +8,19 @@ from ..dom_config import config_path, load_dom_config, save_composer
 
 class SharedDOMDefaultsTests(unittest.TestCase):
     def test_four_public_defaults_are_valid_and_have_no_run_records(self):
-        for provider in ('chatgpt', 'gemini', 'claude', 'm365'):
-            doc = load_dom_config(provider)
-            self.assertEqual(doc['revision'], 'shared-default-20261021')
+        revisions = {
+            'chatgpt': 'shared-default-20261108', 'gemini': 'shared-default-20261108',
+            'claude': 'shared-default-20261108', 'm365': 'shared-default-20261021',
+        }
+        for provider, revision in revisions.items():
+            shipped_default = config_path(provider).with_name('dom_config.default.json')
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                fallback = config_path(provider, root=root).with_name('dom_config.default.json')
+                fallback.parent.mkdir(parents=True)
+                fallback.write_bytes(shipped_default.read_bytes())
+                doc = load_dom_config(provider, root=root)
+            self.assertEqual(doc['revision'], revision)
             self.assertNotIn('created_at', doc)
             for cap in doc['capabilities'].values():
                 self.assertFalse({'response_id', 'rounds', 'trace', 'response_samples'} & cap.keys())

@@ -38,6 +38,47 @@ class GeminiBusyTests(unittest.TestCase):
                               ('user_content','.user-text'),('assistant_turn','article[data-message-author-role="assistant"]')]:
             dom_config.save_element('gemini',self.page.url,name,selector,{}, {dom_config.VALIDATION_KEYS[name]:True})
 
+    def test_stage3_reads_multiline_gemini_query_as_one_turn(self):
+        from ..component_calibration import calibrate_stage
+        from ..selection_preflight import check_component_selection
+
+        selector = 'article[data-message-author-role="user"]'
+        dom_config.save_element('gemini', self.page.url, 'user_content',
+                                'p.query-text-line', {}, {'content_verified': True})
+        self.page.locator('#send').evaluate(r"""button => {
+            const submit = button.onclick;
+            button.onclick = () => {
+                submit();
+                const body = [...document.querySelectorAll('.user-text')].at(-1);
+                const lines = body.textContent.split('\n');
+                body.className = 'query-text';
+                body.replaceChildren(...lines.map(text => {
+                    const p = document.createElement('p');
+                    p.className = 'query-text-line';
+                    p.textContent = text;
+                    return p;
+                }));
+            };
+        }""")
+
+        def select(page, stage, probe):
+            page.evaluate("""selector => {
+                const selected = [...document.querySelectorAll(selector)].at(-1);
+                window.__smartAgentComponentPicker = {
+                    getSelectedElement: () => selected, finish: () => {}
+                };
+            }""", selector)
+            selection = {'selector': selector, 'tag': 'article'}
+            preflight = check_component_selection(page, stage, probe, selection)
+            self.assertTrue(preflight['passed'], preflight)
+            return selection
+
+        with patch('agent_core.web_ui.component_calibration.select_component', side_effect=select):
+            result = calibrate_stage(self.page, 3, Path(self.temp.name), no_wait=True)
+        self.assertTrue(result['repeated_turn_verified'])
+        self.assertTrue(result['runtime_config_loaded'])
+        self.assertEqual(len(set(result['distinct_user_turn_ids'])), 2)
+
     def completed_reply(self):
         probe=flow.content_probe(self.page);scope=flow.begin_request(self.page,probe)
         adapter=create_web_ui_for_page(self.page)

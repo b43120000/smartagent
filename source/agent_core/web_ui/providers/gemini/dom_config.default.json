@@ -3,12 +3,12 @@
   "provider": "gemini",
   "source_origin": "https://gemini.google.com",
   "scope": "partial_conversation",
-  "revision": "shared-default-20261021",
+  "revision": "shared-default-20261108",
   "elements": {
     "assistant_content": {
       "kind": "assistant_content",
       "scope": "assistant_turn",
-      "selector": ":scope",
+      "selector": "div.markdown",
       "tag": "div",
       "validation": {
         "content_verified": true,
@@ -19,7 +19,7 @@
     "assistant_turn": {
       "kind": "assistant_turn",
       "scope": "page",
-      "selector": "div.markdown",
+      "selector": "div.response-container",
       "tag": "div",
       "validation": {
         "distinct_probe_markers_verified": true,
@@ -62,8 +62,8 @@
     "user_content": {
       "kind": "user_content",
       "scope": "user_turn",
-      "selector": "p.query-text-line",
-      "tag": "p",
+      "selector": ":scope",
+      "tag": "span",
       "validation": {
         "content_verified": true,
         "distinct_probe_markers_verified": true,
