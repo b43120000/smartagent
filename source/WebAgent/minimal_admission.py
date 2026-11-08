@@ -24,6 +24,40 @@ def action_is_mutating(action: dict) -> bool:
     return action.get("tool") not in _READ_ONLY_TOOLS
 
 
+def canonicalize_safe_observation_alias(decision):
+    """Narrow semantic translator for noncanonical READ aliases.
+
+    It only changes an alias if the unchanged command passes the positive
+    read-only grammar under the exact canonical operation. Full envelope,
+    network credentials, Tool Scope and Write Ceiling admission still apply.
+    Never silently classify a mutation or verification as an INSPECT.
+    """
+    if decision.kind != "tool_call" or decision.tool != "run_command":
+        return decision, {}
+    args = dict(decision.arguments or {})
+    old = str(args.get("operation") or "").strip().upper()
+    if old not in {"READ", "READ_ONLY", "LIST", "GIT_READ"}:
+        return decision, {}
+    command = str(args.get("command") or "").strip()
+    if not command:
+        return decision, {}
+    import re
+    candidates = (("GIT_INSPECT",) if re.match(r"^git(?:\\.exe)?\\s", command, re.I)
+                  else ("INSPECT",))
+    for operation in candidates:
+        trial = {**args, "operation": operation}
+        if command_is_proven_observation(trial):
+            from .minimal_decision import MinimalDecision
+            return MinimalDecision(decision.kind, decision.tool, trial, decision.message), {
+                "rewrite_reason_code": "PROVEN_READ_ALIAS_TO_CANONICAL_OPERATION",
+                "rewrite_changed_fields": ["operation"],
+                "original_operation": old,
+                "canonical_operation": operation,
+                "authorizes_action": False,
+            }
+    return decision, {}
+
+
 def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
     """Schema, authority and classification are checked before side effects."""
     if decision.kind != "tool_call":
