@@ -58,6 +58,63 @@ def canonicalize_safe_observation_alias(decision):
     return decision, {}
 
 
+
+def canonicalize_exact_target_inspection(decision, tool_context):
+    """Narrow one inspect_directory proposal to ONE trusted request target.
+
+    This is a deterministic scope *reduction*, not new authorization.
+    The original proposal remains available for causal trace. Only an exact
+    target or its ancestor may be replaced; sibling, traversal, UNC, multi-
+    path and unbound scopes are never rewritten. Admission still runs after.
+    """
+    if decision.kind != "tool_call" or decision.tool != "inspect_directory":
+        return decision, {}
+    from pathlib import Path
+    import ntpath
+    import hashlib
+
+    roots = list(getattr(tool_context, "_authorized_local_paths", ()) or ())
+    if len(roots) != 1:
+        return decision, {}
+    original_request = str(getattr(tool_context, "current_request_text", "") or "")
+    target = str(roots[0]).strip()
+    if (not re.fullmatch(r"[A-Za-z]:[\\/][^:*?"<>|]*", target)
+            or target not in original_request):
+        return decision, {}
+    args = dict(decision.arguments or {})
+    values = args.get("paths")
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str):
+        return decision, {}
+    proposed = values[0].strip()
+    if not re.fullmatch(r"[A-Za-z]:[\\/][^:*?"<>|]*", proposed):
+        return decision, {}
+    t = ntpath.normcase(ntpath.normpath(target))
+    p = ntpath.normcase(ntpath.normpath(proposed))
+    # Explicitly reduce an ancestor stat to the exact path; no invented path.
+    if p != t:
+        try:
+            if ntpath.commonpath([t, p]) != p:
+                return decision, {}
+        except ValueError:
+            return decision, {}
+    if p == t and args.get("recursive") is False:
+        return decision, {}
+    replacement = {**args, "paths": [target], "recursive": False}
+    from .minimal_decision import MinimalDecision
+    return MinimalDecision(decision.kind, decision.tool, replacement, decision.message), {
+        "schema": "SMARTAGENT_SCOPE_NARROWING_V1",
+        "rewrite_reason_code": "EXACT_REQUEST_TARGET_READ_SCOPE_NARROWED",
+        "changed_fields": [
+            key for key in ("paths", "recursive") if args.get(key) != replacement[key]
+        ],
+        "proposal_sha256": hashlib.sha256(proposed.encode("utf-8")).hexdigest(),
+        "target_sha256": hashlib.sha256(target.encode("utf-8")).hexdigest(),
+        "authorizes_action": False,
+        "scope_expanded": False,
+        "original_request_bound": True,
+    }
+
+
 def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
     """Schema, authority and classification are checked before side effects."""
     if decision.kind != "tool_call":
