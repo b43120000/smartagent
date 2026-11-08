@@ -212,3 +212,64 @@ Continuous integration:
 - Strict Linux + Windows protocol manifest hash verification
 
 Passing CI is not equivalent to an actual Windows user-machine/DOM live PASS.
+
+
+## Goal-Driven and Text-only v10 restoration (2026-11-08)
+
+### TEXT_ONLY: no ToolResult is expected
+
+The uploaded RCA TASK-29A728E9E4874A639DB7 demonstrated a valid first-round
+model Finish for an AI/gravity joke, incorrectly PAUSED as
+MODEL_FINISHED_UNVERIFIED. v10 now uses the existing Runtime
+task_requirement classifier plus original-task identity to admit narrowly
+bounded no-tool textual answers. The Runtime-owned accept_runtime_answer_only
+creates a V1 accepted terminal with completion_kind ANSWER_ONLY,
+admission_reason ANSWER_ONLY_RESPONSE_ADMITTED,
+evidence_verdict UNVERIFIED, evidence_refs empty, and a response SHA256.
+It does NOT fabricate ActionResult evidence or externally verified facts.
+Tri-One TaskResult maps the same outcome on all shared ingress routes.
+
+Resource, current-news, file, command and deployment requests cannot use
+TEXT_ONLY. The model cannot add tool authority to a text-only goal. Pending
+attachments, continuation or prior Action Ledger prevent the shortcut.
+V9/5A opt-in behavior remains unchanged; the explicit Runtime v10 receipt
+is its own narrowly verified admission path.
+
+### Goal-Driven: canonical shared Blackboard, compact model transport
+
+v10 imports existing build_planner_context_snapshot and projects a bounded
+read-only subset in minimal_goal_driver.py:
+- persistent_goal_gaps (only CONFIRMED absence counts as missing);
+- goal_prerequisite_resolution and prerequisite_transition_gate;
+- directory_decision_rule and strategy_candidates;
+- action_loop_decision, action readiness, causal failure/rejection codes;
+- conditional_goal_policy and semantic_capability_resolution.
+
+Planner still emits ONE compact JSON decision per turn. The Runtime updates
+its trusted ActionResult and Action Ledgers after a real Tool execution,
+recomputes the Blackboard, and offers a grounded next step. When an exact
+goal-bound directory is confirmed absent, the Runtime prevents a read that
+requires that directory to exist (list_directory, query_project, etc.) and
+returns a prerequisite evidence ref, without interpreting rejection as
+absence or extending scope. Admission and write ceilings remain separate.
+
+For compound goals, one successful tool is NOT enough for full completion.
+An unresolved confirmed Goal Gap can trigger one bounded evidence-guided
+replan instead of immediate model-finish PAUSED. A generic multi-stage
+completion verifier is not invented by this bridge; without sufficient
+Goal-level proof, Runtime retains UNKNOWN/PAUSED.
+
+### Required Live checks
+
+1. Original AI/gravity joke: one Finish, no Tool, Runtime text-only receipt,
+   COMPLETED/SUCCESS and Tri-One ANSWER_ONLY on Telegram.
+2. Text-only request prompting a ToolCall: reject before execution, no side
+   effects, no fake ActionResult.
+3. Exact authorized mkdir: verified ToolResult -> automatic Goal PASS;
+   distinguish it from no-tool answer-only completion.
+4. Confirm absent workspace via a genuine observation; propose query_project:
+   prevent hopeless read and provide evidence-backed prerequisite/replan hint.
+5. Compound mkdir + write + test: cannot auto-finish from mkdir alone.
+6. Compare Terminal/TaskResult across all shared Agent Mode routes.
+
+Offline and Windows CI are not equivalent to ChatGPT DOM / Telegram Live PASS.
