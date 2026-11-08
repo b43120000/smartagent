@@ -278,7 +278,7 @@
     "source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py": "7be7da2abad8d3bfb8a299d36ab390b3507f7fee430a17b3f84350145ae1a3ea",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "source/WebAgent/minimal_decision.py": "f2d044c70a63145820fc668fbedfa4b5a243988ad89eca5eac4ceebdfec644fc",
-    "source/WebAgent/minimal_admission.py": "a234fda0d15799c7397cd69543ba31fa8c0cb7e8dd5db0019c3f18a49d5dfcef",
+    "source/WebAgent/minimal_admission.py": "04ff342d8b87bab87660711ac731829dba71a71faeb69d2937353c405a67d176",
     "source/WebAgent/minimal_core_loop.py": "ae928f066febdb107d24254a1504efaceb5584291181e03eb8f504d58a24e071",
     "source/agent_core/tri_one_runtime_terminal.py": "97c4cd3bbdbf25b630852d4ec6d946e5ddb7945d026557396bdde139d6c7b732",
     "source/agent_core/test_signal_transport.py": "4e64cae2fa4cd89d4ff21c554dd83e57371f8fedbabc670f3f782b6d6de43d22",
