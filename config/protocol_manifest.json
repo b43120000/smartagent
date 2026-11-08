@@ -266,7 +266,7 @@
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
     "source/WebAgent/controller.py": "a92ab375dff2784f7317ee6d018661a725b61376729864c2c7a4efb269643545",
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
-    "source/WebAgent/protocol_loop.py": "e72c9f6bd54ad28d65094b635bf067a04be1ab769bf6f452c0097a6a4f6cf501",
+    "source/WebAgent/protocol_loop.py": "e74f670fcb31f9b29b309ce7f8ba59c0451b632808b9b2603f648de6a9916778",
     "source/WebAgent/protocol.py": "6a11212e6eb42b94e9f79234955f8b2b9d522580213e7a386ecad6b7bc3d8d81",
     "source/WebAgent/session.py": "a3e3cedda8e42611705c09b71228ec59e13f63f49e1f7e10297b64198699bd6e",
     "source/WebAgent/tests/test_auto_rca_upload.py": "5002c6aec91c3bf6df3d0c53ab18b71441a40ca9ffe137305838fe86e636c243",
@@ -279,7 +279,7 @@
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "source/WebAgent/minimal_decision.py": "f2d044c70a63145820fc668fbedfa4b5a243988ad89eca5eac4ceebdfec644fc",
     "source/WebAgent/minimal_admission.py": "85a8b1b4501b30154d8eb561010d4f27dc2cd6b25d717381e140de9a19736271",
-    "source/WebAgent/minimal_core_loop.py": "b3b3481942c98a8bee327174f23289a1e7fdf6c8406feb009358b32b13738fc2",
+    "source/WebAgent/minimal_core_loop.py": "94e83aeadf1db88c82e4d1564d53d70af7a3b6848683d3d7f9fbdcc21690b74f",
     "source/agent_core/tri_one_runtime_terminal.py": "346aa2ce6192be9dfd0205bb72cad8b9927508942b993ea121a832634db17d3d",
     "source/agent_core/test_signal_transport.py": "4e64cae2fa4cd89d4ff21c554dd83e57371f8fedbabc670f3f782b6d6de43d22",
     "source/WebAgent/minimal_goal_driver.py": "f7d58f8fe27a15916aceb2c34a0ebbd34e0ca2615a0778ffa3ecae59af41436b",
@@ -292,7 +292,9 @@
     "source/WebAgent/minimal_resolution.py": "9c7562a548c8cea3a4b7c5113b63c1f7339cc865de6e6fd581ef538a715cf889",
     "source/agent_core/executor_blackboard.py": "1b2fdb5e6ef257e848d1a361e27fe01291b8033e6ff93037b51094f9342449ab",
     "source/agent_core/tri_layer_handoff.py": "b3f1d0208e1f9e962d742efca4ddaac2e657e98233ec8510f3b221451c7976f9",
-    "source/WebAgent/executor_only_validation.py": "d44af0f7c6e28c32d376d340d41d23339ecd14c9349646b5df2fd753bd589d4d"
+    "source/WebAgent/executor_only_validation.py": "d44af0f7c6e28c32d376d340d41d23339ecd14c9349646b5df2fd753bd589d4d",
+    "source/WebAgent/pokeclaw_executor_loop.py": "c0ffba90119673fa8fca731495fd2db3d5684fab1f293e0d157d67e26dfb64bb",
+    "source/agent_core/executor_run_blackboard.py": "335f2fcc075a11f4e1a9a7bff852f1d3545e24bd66a0108736529eed5a74dc0d"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
