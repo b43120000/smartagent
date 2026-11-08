@@ -13,7 +13,7 @@ import re
 import time
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
-from .minimal_decision import MinimalDecisionError, parse_minimal_decision
+from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
 
 
 def _digest(value) -> str:
@@ -152,6 +152,58 @@ def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
     return False
 
 
+def _format_repair_hint(error: MinimalDecisionError) -> str:
+    """Return bounded, actionable format guidance; no raw rejected model text."""
+    code = error.code
+    sample = json.dumps({
+        "type": "tool_call", "name": "create_directory",
+        "arguments": {"path": r"E:\ExampleFolder"},
+    }, ensure_ascii=False, separators=(",", ":"))
+    if code == "json_invalid_escape":
+        return ("Invalid JSON escape in previous response. Escape Windows path "
+                "backslashes by writing TWO backslashes for each path separator. "
+                "Valid example: " + sample)
+    if code in {"json_syntax_invalid", "json_control_character",
+                "json_unterminated_string"}:
+        loc = error.diagnostic.get("json_error_line")
+        col = error.diagnostic.get("json_error_column")
+        return (f"JSON syntax invalid at line {loc}, column {col}. "
+                "Return exactly ONE complete JSON object, no commentary.")
+    if code in {"legacy_protocol_response", "json_object_not_found",
+                "decision_not_found", "decision_type_required"}:
+        return ("Do NOT use the older smartagent_tool v9 format. "
+                "Use the v10 one-object decision contract with type=tool_call, "
+                "name and arguments. No progress, turn_commit or prose. "
+                "One canonical example: " + sample)
+    if code.startswith("ambiguous_"):
+        return ("Multiple JSON objects were detected. Return exactly ONE actual "
+                "decision. Do not quote examples or include explanations.")
+    if code in {"tool_call_fields_invalid", "tool_name_or_arguments_invalid",
+                "conflicting_alias_fields", "decision_required_field_missing"}:
+        return ("Tool decision fields invalid: emit one JSON object with "
+                "type=tool_call, name=<canonical tool>, arguments=<object>. "
+                "Do not include runtime-owned fields.")
+    return ("Previous response rejected: " + code +
+            ". Return ONE minimal decision JSON object only.")
+
+
+def _decision_event_fields(meta: dict) -> dict:
+    """Primitive-only, allowlisted telemetry suitable for sanitized RCA."""
+    return {
+        "response_sha256": str(meta.get("response_sha256", "")),
+        "response_chars": int(meta.get("response_chars", 0)),
+        "candidate_count": int(meta.get("candidate_count", 0)),
+        "valid_decision_count": int(meta.get("valid_decision_count", 0)),
+        "normalization": str(meta.get("normalization", "NONE")),
+        "source_kind": str(meta.get("source_kind", "UNKNOWN")),
+        "json_error_message_code": str(meta.get("json_error_message_code", "")),
+        "json_error_line": int(meta.get("json_error_line", 0)),
+        "json_error_column": int(meta.get("json_error_column", 0)),
+        "legacy_fence_detected": bool(meta.get("legacy_fence_detected", False)),
+        "fence_detected": bool(meta.get("fence_detected", False)),
+    }
+
+
 def run_minimal_core(loop, request: str) -> str:
     """Use existing WebAgentToolContext, action ledger and security dispatcher."""
     from agent_core.tool_result_contract import decode_result
@@ -187,16 +239,31 @@ def run_minimal_core(loop, request: str) -> str:
             loop.protocol_state = "INTERRUPTED"
             raise
         try:
-            decision = parse_minimal_decision(response)
+            decision, decision_meta = parse_minimal_decision_with_diagnostics(
+                response, original_goal=request)
         except MinimalDecisionError as exc:
             invalids += 1
-            repair_hint = str(exc)
+            meta = exc.diagnostic
+            repair_hint = _format_repair_hint(exc)
+            trace_fields = _decision_event_fields(meta)
             journal.append("decision_rejected", round=round_id,
-                           reason=repair_hint, response_sha256=_digest(response))
+                           reason=exc.code, **trace_fields,
+                           response_structure_redacted=meta.get("response_structure_redacted", ""))
+            loop._emit("minimal_decision_rejected",
+                       request_id=loop.run_id, task_id=loop.task_id,
+                       round=round_id, diagnostic_reason=exc.code,
+                       **trace_fields)
             if invalids >= 2:
                 loop.protocol_state = "INTERRUPTED"
-                raise RuntimeError("MINIMAL_DECISION_FORMAT_FAILED:" + repair_hint)
+                raise RuntimeError("MINIMAL_DECISION_FORMAT_FAILED:" + exc.code)
             continue
+        journal.append("decision_accepted", round=round_id,
+                       decision_type=decision.kind,
+                       **_decision_event_fields(decision_meta))
+        loop._emit("minimal_decision_accepted", request_id=loop.run_id,
+                   task_id=loop.task_id, round=round_id,
+                   decision_type=decision.kind,
+                   **_decision_event_fields(decision_meta))
         invalids = 0
         repair_hint = ""
 
