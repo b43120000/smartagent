@@ -544,20 +544,29 @@ def main(argv: list[str] | None = None) -> int:
                     from WebAgent.bootstrap_provisioning import finish_bootstrap_provisioning
                     bootstrap_state = finish_bootstrap_provisioning(runtime_root, final_content)
                 print(f"[WebAgent] 本機工具迴圈完成: {final_content}", flush=True)
+                core_minimal = (
+                    os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower()
+                    != "legacy_v9"
+                )
                 if lifecycle is not None:
-                    lifecycle.emit("WAITING_WEB_ACK", request_id=loop.run_id)
+                    if not core_minimal:
+                        lifecycle.emit("WAITING_WEB_ACK", request_id=loop.run_id)
                     lifecycle.emit("RESPONDING", request_id=loop.run_id)
-                rendered = render_final_ack(
-                    client,
-                    final_content,
-                    request_id=loop.run_id,
-                    round_count=loop.turn_id,
-                    ack_id=loop.pending_web_ack_id,
-                    original_request=loop.task_request,
-                    base_evaluation=str(getattr(loop.progress_ledger, "base_evaluation", "") or ""),
-                    task_id=loop.task_id,
-                    outcome=loop.terminal_outcome,
-                    source_task_id=(loop.continuation_source or {}).get('task_id', ''),
+                # The second model decision already includes the final summary.
+                # Do not spend an extra ChatGPT turn merely to render it again.
+                rendered = (
+                    final_content if core_minimal else render_final_ack(
+                        client,
+                        final_content,
+                        request_id=loop.run_id,
+                        round_count=loop.turn_id,
+                        ack_id=loop.pending_web_ack_id,
+                        original_request=loop.task_request,
+                        base_evaluation=str(getattr(loop.progress_ledger, "base_evaluation", "") or ""),
+                        task_id=loop.task_id,
+                        outcome=loop.terminal_outcome,
+                        source_task_id=(loop.continuation_source or {}).get('task_id', ''),
+                    )
                 )
                 task_result_fields = {}
                 if str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower() in {"1", "true", "yes"}:
@@ -585,11 +594,18 @@ def main(argv: list[str] | None = None) -> int:
                         task_id=loop.task_id,
                         **task_result_fields,
                     )
-                if "smartagent_tool" in str(rendered):
+                if core_minimal:
+                    print("[WebAgent] Minimal Core 已在第二次模型回覆結束；"
+                          "Runtime 不追加最終 ACK 對話。", flush=True)
+                    runtime_log.emit("request_completed", request_id=loop.run_id,
+                                     rendered_response=rendered,
+                                     completion_verified=loop.terminal_outcome == "SUCCESS")
+                elif "smartagent_tool" in str(rendered):
                     print("[WebAgent][WARN] 最終呈現仍是 protocol envelope；不自動重送。", flush=True)
                 else:
                     print("[WebAgent] 自然語言 ACK 已回填 ChatGPT。", flush=True)
-                    runtime_log.emit("request_completed", request_id=loop.run_id, rendered_response=rendered)
+                    runtime_log.emit("request_completed", request_id=loop.run_id,
+                                     rendered_response=rendered)
                 if test_envelope is not None and test_signal_receiver is not None:
                     test_signal_receiver.complete(
                         test_envelope,
@@ -611,7 +627,8 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     lifecycle.emit("WAITING_WEBGPT_SIGNAL")
                 from agent_core.task_progress import delete_progress
-                delete_progress(loop.task_id, root=loop.progress_root)
+                if not core_minimal or loop.terminal_outcome == "SUCCESS":
+                    delete_progress(loop.task_id, root=loop.progress_root)
                 if bootstrap_active:
                     if bootstrap_state.get("status") == "COMPLETED":
                         print("[WebAgent Provisioning] COMPLETED. Run Edit_workspace.bat.", flush=True)
