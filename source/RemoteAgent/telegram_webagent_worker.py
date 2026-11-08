@@ -745,19 +745,25 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "outbound_artifacts": terminal_payload["artifacts"],
                 "artifact_rejections": terminal_payload["artifact_rejections"],
                 "protocol_family": terminal_payload["protocol_family"],
+                "executor_result": dict(getattr(loop, "executor_result", {}) or {}),
             }
+            # Keep the precise Executor pause reason instead of overwriting it
+            # with the generic Tri-One terminal projection.
+            prior_progress = read_progress(task.task_id, root=root)
+            pause_reason = str(getattr(prior_progress, "interruption_reason", "") or terminal.reason)
             paused = queue.pause_running(
-                task.task_id, terminal.reason, result=paused_result)
+                task.task_id, pause_reason, result=paused_result)
             if paused is None:
                 raise RuntimeError("TRI_ONE_PAUSE_STATE_TRANSITION_FAILED")
             set_runtime_state(task.task_id, "PAUSED",
-                              reason=terminal.reason, root=root)
+                              reason=pause_reason, root=root)
             events.emit("TASK_PAUSED", paused, status="PAUSED",
                         payload={**terminal_payload, "pause_is_nonterminal": True})
             runtime_log.write(
                 "TASK_PAUSED", component="telegram_webagent_worker",
                 stage="TRI_ONE_EGRESS_PAUSED", task_id=task.task_id,
                 request_id=task.request_id, terminal_reason=terminal.reason)
+            _auto_rca_debug_hook(runtime_log, task, "PAUSED")
             return 0
         if terminal.state != "COMPLETED":
             raise RuntimeError("TRI_ONE_TERMINAL_NOT_COMPLETED:" + terminal.reason)
