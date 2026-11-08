@@ -290,8 +290,8 @@
     ".github/workflows/git26-v10-case-d-repair.yml": "65f146220f1acad0a9ec0a8f3bdd0f09ee9f22abc7ace1e0e09181166a591bf8",
     "source/WebAgent/minimal_executor_contract.py": "6751315a3c1e5898c98a38dcb3209deb93ad871b7040fd31637508643f3c56e7",
     "source/WebAgent/minimal_resolution.py": "9c7562a548c8cea3a4b7c5113b63c1f7339cc865de6e6fd581ef538a715cf889",
-    "source/agent_core/executor_blackboard.py": "637718abecf74436b1a36a7d81bdb4aafd58f979ab2a29ec9e79d03836453d24",
-    "source/agent_core/tri_layer_handoff.py": "848a1abfe1b757ed3cdc0888a3e06b8df0ccd26602a8d0a657632d04de732c20"
+    "source/agent_core/executor_blackboard.py": "8ce5272faa11dccca4992d3c4982e9d3970ea2a5c4df75589058b2462249deb5",
+    "source/agent_core/tri_layer_handoff.py": "ffc56c79d84e9e8ab7733c88595b7404332bb1a4434c0876e4614e7cdedbe4a3"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
