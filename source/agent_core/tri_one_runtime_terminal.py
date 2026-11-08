@@ -551,6 +551,14 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
 
 
 def format_runtime_goal_summary(proof: GoalEvidence) -> str:
+    if proof.goal_kind == "RESOLVED_SINGLE_DIRECTORY" and proof.verified:
+        # A later directory observation proves the postcondition, NOT which
+        # process created it. Never assert that an uncertain mutation ran.
+        return "已透過獨立唯讀觀測確認資料夾存在：\\n" + proof.target
+    if proof.goal_kind == "RESOLVED_SINGLE_FILE_WRITE" and proof.verified:
+        return "已重新讀取並確認目標檔案內容符合要求：\\n" + proof.target
+    if proof.goal_kind == "RESOLVED_SINGLE_OBSERVATION" and proof.verified:
+        return "已重新取得並驗證指定目標的觀測結果：\\n" + proof.target
     if proof.goal_kind == "SINGLE_CREATE_DIRECTORY" and proof.verified:
         return "已建立並確認資料夾：\n" + proof.target
     if proof.goal_kind == "CONDITIONAL_DIRECTORY_EXISTS" and proof.verified:
