@@ -481,11 +481,23 @@ def run_minimal_core(loop, request: str) -> str:
                    action_id=value.get("action_id", ""),
                    evidence_ref=value.get("evidence_ref", ""))
         if is_terminal:
-            proof_refs = (
+            # Action IDs are the Terminal Verifier's identity-bound refs.
+            # MIN-EV IDs are real ToolResult refs; both must survive egress,
+            # with distinguishable namespaces (never merge their semantics).
+            verification_action_refs = (
                 list(getattr(loop, "terminal_acceptance", {}).get("evidence_refs") or [])
-                if outcome == "VERIFIED"
-                else list(value.get("evidence_refs") or [])
+                if outcome == "VERIFIED" else []
             )
+            tool_evidence_refs = [
+                str(item.get("evidence_ref"))
+                for item in history
+                if str(item.get("evidence_ref") or "").startswith("MIN-EV-")
+            ]
+            value["verification_action_refs"] = verification_action_refs
+            value["tool_evidence_refs"] = tool_evidence_refs
+            proof_refs = list(dict.fromkeys(
+                verification_action_refs + list(value.get("evidence_refs") or [])
+            ))[:48]
             if executor_only:
                 value["orchestration_mode"] = "EXECUTOR_ONLY"
             persisted = publish_executor_terminal(
