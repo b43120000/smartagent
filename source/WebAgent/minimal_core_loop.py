@@ -565,12 +565,17 @@ def run_minimal_core(loop, request: str) -> str:
                 loop, request, history, action_rejections)
             goal_context_text = compact_goal_driver_context(goal_context)
         context_digest = hashlib.sha256(goal_context_text.encode("utf-8")).hexdigest()
-        journal.append("goal_driver_context_ready", round=round_id,
+        journal.append(
+            "executor_only_context_ready" if executor_only else "goal_driver_context_ready",
+            round=round_id,
                        snapshot_source=goal_context.get("snapshot_source"),
                        next_category=goal_context.get("next_category"),
                        active_goal_gap_count=goal_context.get("goal_gap_count", 0),
                        context_sha256=context_digest)
-        loop._emit("minimal_goal_driver_context", request_id=loop.run_id,
+        loop._emit(
+            "minimal_executor_only_context" if executor_only
+            else "minimal_goal_driver_context",
+            request_id=loop.run_id,
                    task_id=loop.task_id, round=round_id,
                    snapshot_source=goal_context.get("snapshot_source"),
                    next_category=goal_context.get("next_category"),
