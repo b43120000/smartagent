@@ -19,7 +19,8 @@ from typing import Any
 
 TEST_PROTOCOL = "TRI_ONE_TEST_V1"
 TARGETS = frozenset({"local", "webdirect", "remote"})
-TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "ABORTED", "REJECTED"})
+# PAUSED closes this one test-signal exchange, not the underlying agent task.
+TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "ABORTED", "REJECTED", "PAUSED"})
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
