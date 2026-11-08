@@ -101,3 +101,12 @@ def test_all_origins_same_evidence_and_outcome_except_source_route():
     assert all(tuple(record[field] for field in fields) ==
                tuple(results[0][field] for field in fields)
                for record in results[1:])
+
+
+
+def test_local_test_result_transport_reports_paused_without_forged_complete():
+    from agent_core.test_signal_transport import TERMINAL_STATUSES
+    assert "PAUSED" in TERMINAL_STATUSES
+    task, event, verdict = terminal_task("LOCAL_TEST", verified=False)
+    assert event == "TASK_PAUSED"
+    assert verdict.state == "PAUSED"
