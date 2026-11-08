@@ -1,0 +1,60 @@
+name: Git32 Executor Only Security, Sequence and Blackboard
+
+on:
+  push:
+    branches:
+      - git32/executor-only-evidence-sequence-20261109
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  executor-only:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile changed Executor sources
+        run: >-
+          python -B -m compileall -q
+          source/WebAgent/executor_only_validation.py
+          source/WebAgent/minimal_core_loop.py
+          source/agent_core/tri_one_runtime_terminal.py
+          source/agent_core/tri_layer_handoff.py
+          source/agent_core/executor_blackboard.py
+          source/agent_core/tool_result_policy.py
+          source/RemoteAgent/telegram_webagent_worker.py
+          source/WebAgent/tests/test_git32_executor_only_sequence.py
+      - name: Git32 exact six-step Executor-only integration
+        run: python -B -m pytest source/WebAgent/tests/test_git32_executor_only_sequence.py -q
+      - name: Git31 negative fact terminal
+        run: python -B -m pytest source/WebAgent/tests/test_git31_single_fact_query_terminal.py -q
+      - name: Git30 causal Scope/Evidence contracts
+        run: python -B -m pytest source/WebAgent/tests/test_git30_executor_causal_reasons.py -q
+      - name: Git29 Scope and tri-layer Handoff
+        run: python -B -m pytest source/WebAgent/tests/test_git29_exact_scope_handoff.py -q
+      - name: Git28 Unknown Resolution
+        run: python -B -m pytest source/WebAgent/tests/test_git28_executor_resolution_blackboard.py -q
+      - name: v10 baseline and Text Only
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_auto_rca_upload.py -q
+      - name: Case D independent verification and safe aliases
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_deployment_terminal WebAgent.tests.test_git26_safe_operation_alias -v
+      - name: Collector compatibility
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_collector_windows.py -q
+      - name: Protocol manifest
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; from agent_core.paths import install_root; require_protocol_manifest(install_root()); print('MANIFEST_PASS')"
