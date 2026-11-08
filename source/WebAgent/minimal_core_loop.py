@@ -14,6 +14,7 @@ import time
 
 from .minimal_admission import (
     admit_minimal_action, action_is_mutating, canonicalize_safe_observation_alias,
+    canonicalize_exact_target_inspection,
 )
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
 from agent_core.tri_one_runtime_terminal import (
@@ -626,6 +627,30 @@ def run_minimal_core(loop, request: str) -> str:
         # Exact, positively proven read-only aliases may be canonicalized
         # before normal admission. The raw Planner proposal remains separate.
         resolved_decision, operation_rewrite = canonicalize_safe_observation_alias(decision)
+        resolved_decision, scope_narrowing = canonicalize_exact_target_inspection(
+            resolved_decision, loop.tools,
+        )
+        if scope_narrowing:
+            journal.append(
+                "action_exact_scope_narrowed", round=round_id,
+                tool=decision.tool,
+                rewrite_reason_code=scope_narrowing["rewrite_reason_code"],
+                changed_fields=scope_narrowing["changed_fields"],
+                proposal_sha256=_digest(decision.arguments),
+                canonical_sha256=_digest(resolved_decision.arguments),
+                executed=False,
+            )
+            loop._emit(
+                "minimal_action_exact_scope_narrowed",
+                request_id=loop.run_id, task_id=loop.task_id,
+                task_epoch=loop.task_epoch, round=round_id,
+                tool=decision.tool,
+                rewrite_reason_code=scope_narrowing["rewrite_reason_code"],
+                changed_fields=scope_narrowing["changed_fields"],
+                proposal_sha256=_digest(decision.arguments),
+                canonical_sha256=_digest(resolved_decision.arguments),
+                authorizes_action=False, executed=False,
+            )
         action, rejection = admit_minimal_action(resolved_decision, loop.tools)
         if rejection:
             consecutive_action_rejections += 1
@@ -770,11 +795,21 @@ def run_minimal_core(loop, request: str) -> str:
                        mutating=mutating)
         if mutating:
             seen_mutations.add(fingerprint)
-        if operation_rewrite:
+        if operation_rewrite or scope_narrowing:
             loop._planner_original_actions[action["action_id"]] = {
                 "tool": decision.tool, **dict(decision.arguments or {}),
                 "action_id": action["action_id"],
             }
+            if scope_narrowing:
+                if not hasattr(loop, "_runtime_action_rewrite_notes"):
+                    loop._runtime_action_rewrite_notes = {}
+                loop._runtime_action_rewrite_notes[action["action_id"]] = {
+                    "rewrite_reason_code": scope_narrowing["rewrite_reason_code"],
+                    "rewrite_changed_fields": scope_narrowing["changed_fields"],
+                    "authorizes_action": False,
+                    "original_proposal_sha256": _digest(decision.arguments),
+                    "canonical_action_sha256": _digest(resolved_decision.arguments),
+                }
         else:
             loop._planner_original_actions[action["action_id"]] = dict(action)
         loop._canonical_action_proposals[action["action_id"]] = dict(action)
