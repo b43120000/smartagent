@@ -100,7 +100,8 @@ def recent_results(history: list[dict]) -> list[dict]:
 
 def build_minimal_prompt(request: str, context, history: list[dict],
                          *, round_id: int, max_turns: int, repair_hint: str = "",
-                         goal_driver_context: str = "") -> str:
+                         goal_driver_context: str = "",
+                         executor_only_mode: bool = False) -> str:
     return (
         "[SMARTAGENT_MINIMAL_CORE_V1]\n"
         "PRIMARY DECISION PROTOCOL FOR THIS REQUEST. This is NOT a legacy v9 "
@@ -128,14 +129,22 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "Workspace: " + str(context.workspace_root) + "\n"
         "Available tools: " + json.dumps(tool_catalog(context), separators=(",", ":")) + "\n"
         "Original goal: " + request + "\n"
-        "Runtime Goal-Driven Blackboard (read-only, never permission): "
+        ("Runtime Executor-only context (Goal Driver and Prerequisite decision"
+         " engines DISABLED, no new permission): "
+         if executor_only_mode else
+         "Runtime Goal-Driven Blackboard (read-only, never permission): ")
         + goal_driver_context + "\n"
         "If this is a no-tool TEXT_ONLY request, output Finish with your "
         "actual answer. Runtime admits it without Action evidence only when "
         "the trusted original request is answer-only and no tool was executed. "
-        "Otherwise use Goal Gaps, confirmed Prerequisites, Action Readiness "
-        "and failure causes to replan one admitted action at a time. "
-        "NEVER infer missing files from failed or denied tools. "
+        ("Otherwise execute the user's explicit instructions one admitted "
+         "action at a time, following the Runtime Executor-only phase and "
+         "real ToolResults. Do not Finish before independent postcondition "
+         "verification and Blackboard persistence. Never repeat a mutation. "
+         if executor_only_mode else
+         "Otherwise use Goal Gaps, confirmed Prerequisites, Action Readiness "
+         "and failure causes to replan one admitted action at a time. ")
+        + "NEVER infer missing files from failed or denied tools. "
         "A suggested action is not scope authorization.\n"
         "Round: " + str(round_id) + "/" + str(max_turns) + "\n"
         "Observed tool results: " +
@@ -295,7 +304,14 @@ def run_minimal_core(loop, request: str) -> str:
         blocked_result, action_result_receipt, isolated_task_model_budget,
     )
     from .minimal_resolution import resolve_unknown_action
-    from agent_core.executor_blackboard import publish_executor_terminal
+    from agent_core.executor_blackboard import (
+        publish_executor_terminal, read_executor_terminal,
+    )
+    from .executor_only_validation import (
+        executor_only_enabled, directory_sequence_contract,
+        sequence_progress, evaluate_executor_sequence,
+        next_action_gate, format_executor_blackboard_report,
+    )
 
     root = Path(loop.progress_root or loop.workspace)
     # Remote Worker passes <install>/source, Collector uses <install>/localdata.
@@ -318,7 +334,45 @@ def run_minimal_core(loop, request: str) -> str:
     unsupported_blocked_decisions = 0
     loop.executor_result = {}
     loop.executor_blackboard_terminal = {}
-    atomic_budget = isolated_task_model_budget(request, loop)
+    executor_only = executor_only_enabled(loop)
+    executor_sequence = (
+        directory_sequence_contract(request) if executor_only else {}
+    )
+    # The bounded multi-action sequence must not inherit a two-decision
+    # atomic budget. Do not increase the caller's own max_turns.
+    atomic_budget = (
+        None if executor_sequence else isolated_task_model_budget(request, loop)
+    )
+    executor_max_turns = (
+        min(loop.max_turns, 10) if executor_sequence else
+        min(loop.max_turns, atomic_budget or loop.max_turns)
+    )
+    if executor_only:
+        journal.append(
+            "executor_only_mode_entered", request_id=loop.run_id,
+            task_epoch=loop.task_epoch,
+            sequence_contract=executor_sequence.get("schema", "NONE"),
+            goal_driver_enabled=False, prerequisite_enabled=False,
+            max_model_turns=executor_max_turns,
+        )
+
+    def executor_only_report(proof):
+        stored = read_executor_terminal(
+            root, task_id=loop.task_id, request_id=loop.run_id,
+            task_epoch=loop.task_epoch,
+        )
+        if (not stored or stored.get("terminal_receipt_id")
+                != loop.terminal_acceptance.get("receipt_id")
+                or stored.get("goal_sha256") != hashlib.sha256(
+                    request.encode("utf-8")).hexdigest()):
+            raise ValueError("executor_only_blackboard_readback_mismatch")
+        journal.append(
+            "executor_only_blackboard_readback_verified",
+            terminal_receipt_id=stored["terminal_receipt_id"],
+            handoff_id=(stored.get("tri_layer_handoff") or {}).get("handoff_id"),
+            evidence_refs=list(stored.get("evidence_refs") or []),
+        )
+        return format_executor_blackboard_report(proof, stored)
 
     def publish_executor_result(value):
         value = dict(value)
@@ -432,6 +486,8 @@ def run_minimal_core(loop, request: str) -> str:
                 if outcome == "VERIFIED"
                 else list(value.get("evidence_refs") or [])
             )
+            if executor_only:
+                value["orchestration_mode"] = "EXECUTOR_ONLY"
             persisted = publish_executor_terminal(
                 loop, value, root=root, goal=request, evidence_refs=proof_refs,
                 resolution_attempts=int(value.get("resolution_attempts") or 0),
@@ -449,13 +505,48 @@ def run_minimal_core(loop, request: str) -> str:
                        parent_task_id=persisted.get("parent_task_id", ""),
                        evidence_refs=proof_refs)
 
-    for round_id in range(1, min(loop.max_turns, atomic_budget or loop.max_turns) + 1):
+    for round_id in range(1, executor_max_turns + 1):
         loop._check_cancelled()
         loop.turn_id = round_id
         loop.tools._protocol_turn_seq = round_id
-        goal_context = build_goal_driver_context(
-            loop, request, history, action_rejections)
-        goal_context_text = compact_goal_driver_context(goal_context)
+        if executor_only:
+            from agent_core.task_requirement import assess_task_requirement
+            goal_context = {
+                "snapshot_source": "EXECUTOR_ONLY_NO_PARENT_DECISIONS",
+                "request_route": assess_task_requirement(request).get(
+                    "route", "RESOURCE_REQUIRED"),
+                "active_goal_gaps": [], "goal_gap_count": 0,
+                "goal_driver_status": "DISABLED_EXECUTOR_ONLY",
+                "prerequisite_status": "DISABLED_EXECUTOR_ONLY",
+            }
+            seq_state = (
+                sequence_progress(executor_sequence, history)
+                if executor_sequence else {}
+            )
+            goal_context_text = json.dumps({
+                "mode": "EXECUTOR_ONLY",
+                "goal_driver": "DISABLED",
+                "prerequisite": "DISABLED",
+                "sequence": {
+                    "target": executor_sequence.get("display_target", ""),
+                    "phase": seq_state.get("phase", "UNSPECIFIED_GOAL"),
+                    "reason_code": seq_state.get("reason", ""),
+                    "permitted_tools_by_phase": {
+                        "INITIAL_CHECK": ["observe_fact", "inspect_directory", "list_directory"],
+                        "CREATE_REQUIRED": ["create_directory"],
+                        "TYPE_VERIFY_EXISTING": ["list_directory", "inspect_directory"],
+                        "POSTCREATE_TYPE_VERIFY": ["list_directory", "inspect_directory"],
+                    },
+                    "independent_type_verification_required": True,
+                    "readback_required": True,
+                },
+                "parent_agents_do_not_make_decisions": True,
+                "permissions_unchanged": True,
+            }, ensure_ascii=False, separators=(",", ":"))
+        else:
+            goal_context = build_goal_driver_context(
+                loop, request, history, action_rejections)
+            goal_context_text = compact_goal_driver_context(goal_context)
         context_digest = hashlib.sha256(goal_context_text.encode("utf-8")).hexdigest()
         journal.append("goal_driver_context_ready", round=round_id,
                        snapshot_source=goal_context.get("snapshot_source"),
@@ -474,7 +565,8 @@ def run_minimal_core(loop, request: str) -> str:
         prompt = build_minimal_prompt(request, loop.tools, history,
                                       round_id=round_id, max_turns=loop.max_turns,
                                       repair_hint=repair_hint,
-                                      goal_driver_context=goal_context_text)
+                                      goal_driver_context=goal_context_text,
+                                      executor_only_mode=executor_only)
         attachments = loop.tools.take_pending_attachments()
         loop.protocol_state = "DECIDING"
         try:
@@ -593,7 +685,10 @@ def run_minimal_core(loop, request: str) -> str:
                     return decision.message
                 journal.append("runtime_text_only_ineligible", round=round_id,
                                reason=answer_reason)
-            proof = _verified_proof(request, history, loop)
+            proof = (
+                evaluate_executor_sequence(executor_sequence, history)
+                if executor_sequence else _verified_proof(request, history, loop)
+            )
             verified = proof.verified
             if verified:
                 receipt = _accept_and_record_goal(loop, proof, journal,
@@ -606,8 +701,12 @@ def run_minimal_core(loop, request: str) -> str:
                 verified_executor.setdefault("evidence_ref", "")
                 verified_executor.setdefault("executed", False)
                 publish_executor_result(verified_executor)
+                summary = (
+                    executor_only_report(proof)
+                    if executor_sequence else None
+                )
                 set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
-                summary = (format_runtime_goal_summary(proof)
+                summary = (summary or format_runtime_goal_summary(proof)
                            if proof.goal_kind in {
                                "SINGLE_CREATE_DIRECTORY", "CONDITIONAL_DIRECTORY_EXISTS",
                                "DEPLOYMENT_CONTENT_VERIFIED", "SINGLE_FACT_QUERY",
@@ -635,9 +734,13 @@ def run_minimal_core(loop, request: str) -> str:
                 }
             )
             can_replan = (
-                goal_context.get("request_route") != "ANSWER_ONLY"
-                and bool(history) and (bool(pending_gaps) or pending_deployment_proof)
-                and consecutive_unverified_finishes < 1
+                (executor_sequence and consecutive_unverified_finishes < 2)
+                or (
+                    not executor_sequence
+                    and goal_context.get("request_route") != "ANSWER_ONLY"
+                    and bool(history) and (bool(pending_gaps) or pending_deployment_proof)
+                    and consecutive_unverified_finishes < 1
+                )
             )
             journal.append("model_finish_rejected", round=round_id,
                            outcome="UNKNOWN", reason=proof.reason,
@@ -645,6 +748,10 @@ def run_minimal_core(loop, request: str) -> str:
             if can_replan:
                 consecutive_unverified_finishes += 1
                 repair_hint = (
+                    "Finish rejected: Executor-only sequence is incomplete. "
+                    "Use the current phase and real ToolResults; perform only "
+                    "the next permitted action, then independent verification. "
+                    if executor_sequence else
                     "Finish rejected by Runtime: Goal gaps remain. "
                     "Use the current Blackboard prerequisites and admitted "
                     "Tool actions to close them. Do NOT claim success or "
@@ -732,7 +839,25 @@ def run_minimal_core(loop, request: str) -> str:
                 canonical_sha256=_digest(resolved_decision.arguments),
                 authorizes_action=False, executed=False,
             )
-        action, rejection = admit_minimal_action(resolved_decision, loop.tools)
+        if executor_sequence:
+            stage_issue = next_action_gate(
+                executor_sequence, history, {
+                    "tool": resolved_decision.tool,
+                    **dict(resolved_decision.arguments or {}),
+                },
+            )
+            if stage_issue:
+                try:
+                    setattr(loop.tools, "_last_minimal_admission_diagnostic", {})
+                except (AttributeError, TypeError):
+                    pass
+                action, rejection = None, stage_issue
+            else:
+                action, rejection = admit_minimal_action(
+                    resolved_decision, loop.tools,
+                )
+        else:
+            action, rejection = admit_minimal_action(resolved_decision, loop.tools)
         if rejection:
             consecutive_action_rejections += 1
             item = classify_rejection(decision.tool, rejection, round_id)
@@ -832,7 +957,10 @@ def run_minimal_core(loop, request: str) -> str:
 
         # Causal guard: a confirmed absent directory cannot be read as an
         # existing project. Resolve its missing prerequisite instead.
-        missing_guard = gate_known_absent_directory(action, goal_context)
+        missing_guard = (
+            None if executor_only else
+            gate_known_absent_directory(action, goal_context)
+        )
         if missing_guard:
             consecutive_action_rejections += 1
             code = missing_guard["reason_code"]
@@ -1017,11 +1145,14 @@ def run_minimal_core(loop, request: str) -> str:
         # and another harmless inspection cannot invalidate this proof.
         # Keep the historical narrow read-only task on the model's Finish
         # route. Only strict Runtime-owned Goal proof may auto-finish.
-        proof = evaluate_goal_evidence(request, history)
-        from .minimal_deployment_terminal import evaluate_deployment_goal
-        deployment = evaluate_deployment_goal(loop, request, history)
-        if deployment is not None:
-            proof = deployment
+        if executor_sequence:
+            proof = evaluate_executor_sequence(executor_sequence, history)
+        else:
+            proof = evaluate_goal_evidence(request, history)
+            from .minimal_deployment_terminal import evaluate_deployment_goal
+            deployment = evaluate_deployment_goal(loop, request, history)
+            if deployment is not None:
+                proof = deployment
         if proof.verified:
             terminal_receipt = _accept_and_record_goal(
                 loop, proof, journal, round_id=round_id)
@@ -1029,11 +1160,15 @@ def run_minimal_core(loop, request: str) -> str:
             verified_executor.update(outcome="VERIFIED", reason_code=proof.reason,
                                      goal_verified=True)
             publish_executor_result(verified_executor)
+            report = (
+                executor_only_report(proof)
+                if executor_sequence else format_runtime_goal_summary(proof)
+            )
             set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
             journal.append("runtime_autofinish", round=round_id,
                            receipt_id=terminal_receipt["receipt_id"],
                            goal_kind=proof.goal_kind)
-            return format_runtime_goal_summary(proof)
+            return report
         if receipt.get("status") in {"UNKNOWN", "RUNNING"}:
             # Mandatory child Agent Loop. Never use a regular Finish/Blocked
             # response while a possibly executed mutation remains ambiguous.
