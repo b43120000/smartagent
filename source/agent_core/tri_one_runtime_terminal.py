@@ -446,7 +446,7 @@ def accept_runtime_answer_only(
     Runtime accepted the eligible model reply, never external factual truth.
     """
     from .tri_one_answer_only import classify_original_request, _UNSUPPORTED_CLAIM
-    from .task_requirement import assess_task_requirement
+    from .task_requirement import assess_task_requirement, no_tool_terminal_candidate
 
     if not isinstance(answer, str) or not answer.strip() or len(answer) > 3000:
         return None, "ANSWER_ONLY_CONTENT_INVALID"
@@ -470,7 +470,7 @@ def accept_runtime_answer_only(
         image_or_artifact_request=False, continuation=False,
     )
     eligible, reason = classify_original_request(goal)
-    if requirement.get("route") != "ANSWER_ONLY" or not eligible:
+    if not no_tool_terminal_candidate(requirement) or not eligible:
         return None, "ANSWER_ONLY_REQUEST_NOT_ELIGIBLE:" + str(reason)[:100]
     if _UNSUPPORTED_CLAIM.search(answer):
         return None, "ANSWER_ONLY_UNVERIFIED_EXECUTION_CLAIM"
