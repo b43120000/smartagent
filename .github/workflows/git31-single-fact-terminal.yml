@@ -1,0 +1,55 @@
+name: Git31 Single Fact Terminal, Blackboard & v10 Regression
+
+on:
+  push:
+    branches:
+      - git31/v10-single-fact-goal-terminal-20261109
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  single-fact-terminal:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install tests
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile changed modules
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/tri_one_runtime_terminal.py
+          source/agent_core/executor_blackboard.py
+          source/agent_core/tri_layer_handoff.py
+          source/WebAgent/minimal_core_loop.py
+          source/WebAgent/tests/test_git31_single_fact_query_terminal.py
+      - name: Git31 single existence fact terminal and evidence integrity
+        run: python -B -m pytest source/WebAgent/tests/test_git31_single_fact_query_terminal.py -q
+      - name: Git30 Executor causal contract
+        run: python -B -m pytest source/WebAgent/tests/test_git30_executor_causal_reasons.py -q
+      - name: Git29 Scope and independent Handoff
+        run: python -B -m pytest source/WebAgent/tests/test_git29_exact_scope_handoff.py -q
+      - name: Git28 mandatory Unknown resolution
+        run: python -B -m pytest source/WebAgent/tests/test_git28_executor_resolution_blackboard.py -q
+      - name: v10 Core and Text Only
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_auto_rca_upload.py -q
+      - name: Case D independent and operation aliases
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_deployment_terminal WebAgent.tests.test_git26_safe_operation_alias -v
+      - name: Windows collector compatibility
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_collector_windows.py -q
+      - name: Verify protocol manifest
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; from agent_core.paths import install_root; require_protocol_manifest(install_root()); print('MANIFEST_PASS')"
