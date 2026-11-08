@@ -235,7 +235,12 @@ def publish_executor_terminal(loop, result: Mapping, *,
         "resolution_state": str(resolution_state)[:40],
         "model_round": max(0, int(result.get("model_round") or 0)),
         "parent_consumption": {
-            "status": "PENDING", "stage_verification": "NOT_EVALUATED",
+            "status": (
+                "NOT_APPLICABLE_EXECUTOR_ONLY"
+                if result.get("orchestration_mode") == "EXECUTOR_ONLY"
+                else "PENDING"
+            ),
+            "stage_verification": "NOT_EVALUATED",
             "consumer_evidence_refs": [],
         },
         "grants_authorization": False,
