@@ -42,7 +42,7 @@ def canonicalize_safe_observation_alias(decision):
     if not command:
         return decision, {}
     import re
-    candidates = (("GIT_INSPECT",) if re.match(r"^git(?:\\.exe)?\\s", command, re.I)
+    candidates = (("GIT_INSPECT",) if re.match(r"^git(?:\.exe)?\s", command, re.I)
                   else ("INSPECT",))
     for operation in candidates:
         trial = {**args, "operation": operation}
