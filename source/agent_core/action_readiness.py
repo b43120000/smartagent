@@ -54,68 +54,170 @@ def tool_readiness_contract(tool: object) -> dict:
     }
 
 
+# Stable, non-authorizing causal codes. Never expose the original path or
+# exception message in a Planner / Blackboard reason.
+_SCOPE_ERROR_CODES = (
+    "directory_target_not_exact_original_request",
+    "directory_parent_not_existing_directory",
+    "directory_parent_not_a_directory",
+    "directory_parent_access_denied",
+    "directory_parent_stat_failed",
+    "workspace_not_found_or_not_directory",
+    "explicit_path_scope_requires_workspace",
+    "explicit_path_scope_requires_paths",
+    "explicit_path_scope_requires_path",
+    "explicit_path_scope_requires_root",
+    "inspect_project_scope_unsupported_fields",
+    "project_working_set_paths_invalid",
+    "project_working_set_path_outside_workspace",
+    "semantic_capability_binding_identity_mismatch",
+    "semantic_capability_not_selected",
+    "resolved_scope_expands_beyond_explicit_path",
+    "workspace_not_authorized",
+    "path_outside_authorized_roots",
+    "path_outside_authorized_root",
+    "path_independent_command_cwd_outside_bound_workspace",
+    "command_working_directory_outside_request_scope",
+    "command_working_directory_not_directory",
+    "command_working_directory_invalid",
+    "request_write_ceiling_tool_not_authorized",
+    "request_write_ceiling_unresolved",
+    "request_write_ceiling_command_unverified",
+    "runtime_owned_security_state",
+    "absolute_path_required",
+    "parent_traversal_forbidden",
+    "alternate_data_stream_forbidden",
+    "device_path_forbidden",
+    "unc_path_forbidden",
+    "glob_path_forbidden",
+    "nul_in_path",
+    "empty_path",
+    "relative_path_without_base",
+    "path_resolution_failed",
+    "reparse_or_symlink_forbidden",
+    "authorized_root_delete_forbidden",
+    "project_sync_target_outside_request_scope",
+    "project_sync_root_required",
+    "project_sync_root_conflict",
+    "project_sync_strategy_invalid",
+    "workspace_scope",
+    "workspace_not_authorized",
+)
+_SCOPE_CODE_SET = frozenset(_SCOPE_ERROR_CODES)
+
+
 def _error_code(raw: object) -> str:
-    value = str(raw or "")
-    # Longest / most specific matches precede short generic "not_found".
-    for code in (
-        "workspace_not_found_or_not_directory",
-        "explicit_path_scope_requires_workspace",
-        "explicit_path_scope_requires_paths",
-        "explicit_path_scope_requires_path",
-        "explicit_path_scope_requires_root",
-        "inspect_project_scope_unsupported_fields",
-        "project_working_set_paths_invalid",
-        "semantic_capability_binding_identity_mismatch",
-        "semantic_capability_not_selected",
-        "resolved_scope_expands_beyond_explicit_path",
-        "workspace_not_authorized",
-        "path_outside_authorized_roots",
-        "request_write_ceiling_tool_not_authorized",
-        "request_write_ceiling_unresolved",
-        "request_write_ceiling_command_unverified",
-    ):
-        if value.startswith(code) or code in value:
-            return code
-    return "OTHER_SCOPE_REJECTION" if value else "NONE"
+    """Preserve exact *known* Runtime cause; unknown causes fail closed."""
+    value = str(raw or "").strip()
+    if not value:
+        return "SCOPE_REJECTION_MISSING_CAUSE"
+    # PathSecurityError's original string is <stable-code>:<target-path>.
+    # Never parse/forward the target path itself.
+    head = value.split(":", 1)[0].strip().lower()
+    if head in _SCOPE_CODE_SET:
+        return head.upper()
+    if head == "permissionerror":
+        return "SCOPE_PERMISSION_DENIED"
+    if head == "filenotfounderror":
+        return "SCOPE_RESOURCE_NOT_FOUND"
+    if head == "notadirectoryerror":
+        return "SCOPE_PARENT_NOT_DIRECTORY"
+    if head in {"oserror", "valueerror", "runtimeerror"}:
+        return "SCOPE_FILESYSTEM_OR_POLICY_EXCEPTION"
+    return "UNMAPPED_SCOPE_PREFLIGHT_CAUSE"
 
 
 def classify_scope_preflight(tool: object, error: object = "", *, allowed: bool) -> dict:
-    """Return bounded status codes, not attacker-controlled error text/paths."""
+    """Typed causal stage / recovery, never a filesystem fact or scope grant."""
+    import hashlib
+
     tool_name = str(tool or "")
     code = _error_code(error) if not allowed else "SCOPE_ALLOWED"
     field = {
-        "explicit_path_scope_requires_workspace": "workspace",
-        "explicit_path_scope_requires_paths": "paths",
-        "explicit_path_scope_requires_path": "path",
-        "explicit_path_scope_requires_root": "root",
-        "project_working_set_paths_invalid": "paths",
+        "EXPLICIT_PATH_SCOPE_REQUIRES_WORKSPACE": "workspace",
+        "EXPLICIT_PATH_SCOPE_REQUIRES_PATHS": "paths",
+        "EXPLICIT_PATH_SCOPE_REQUIRES_PATH": "path",
+        "EXPLICIT_PATH_SCOPE_REQUIRES_ROOT": "root",
+        "PROJECT_WORKING_SET_PATHS_INVALID": "paths",
+        "DIRECTORY_TARGET_NOT_EXACT_ORIGINAL_REQUEST": "path",
+        "DIRECTORY_PARENT_NOT_EXISTING_DIRECTORY": "path",
+        "DIRECTORY_PARENT_NOT_A_DIRECTORY": "path",
     }.get(code, "")
     if allowed:
-        category, next_transition = "READY_FOR_TOOL_ADMISSION", "CONTINUE"
-    elif field or code == "inspect_project_scope_unsupported_fields":
-        category, next_transition = "ACTION_FIELD_INVALID", "ACTION_REPAIR"
-    elif code == "workspace_not_found_or_not_directory":
-        category, next_transition = "PROJECT_WORKSPACE_UNAVAILABLE_OR_NOT_DIRECTORY", "EVIDENCE_ACQUISITION"
-    elif code.startswith("semantic_capability_"):
-        category, next_transition = "CAPABILITY_BINDING_BLOCKED", "ACTION_REPAIR"
+        category, transition, stage = "READY_FOR_TOOL_ADMISSION", "CONTINUE", "ADMITTED_SCOPE"
     elif code in {
-        "resolved_scope_expands_beyond_explicit_path", "workspace_not_authorized",
-        "path_outside_authorized_roots", "request_write_ceiling_tool_not_authorized",
-        "request_write_ceiling_unresolved", "request_write_ceiling_command_unverified",
+        "DIRECTORY_PARENT_NOT_EXISTING_DIRECTORY", "DIRECTORY_PARENT_NOT_A_DIRECTORY",
+        "SCOPE_RESOURCE_NOT_FOUND", "SCOPE_PARENT_NOT_DIRECTORY",
     }:
-        category, next_transition = "AUTHORIZATION_OR_SCOPE_BLOCKED", "EVIDENCE_ACQUISITION"
+        category, transition, stage = (
+            "PREREQUISITE_NOT_MET", "PREREQUISITE_DISCOVERY", "PARENT_DIRECTORY",
+        )
+    elif code == "DIRECTORY_TARGET_NOT_EXACT_ORIGINAL_REQUEST":
+        category, transition, stage = "ACTION_TARGET_MISMATCH", "ACTION_REPAIR", "ORIGINAL_REQUEST_BINDING"
+    elif field or code == "INSPECT_PROJECT_SCOPE_UNSUPPORTED_FIELDS":
+        category, transition, stage = "ACTION_FIELD_INVALID", "ACTION_REPAIR", "ACTION_SCHEMA"
+    elif code == "WORKSPACE_NOT_FOUND_OR_NOT_DIRECTORY":
+        category, transition, stage = (
+            "PROJECT_WORKSPACE_UNAVAILABLE_OR_NOT_DIRECTORY", "PREREQUISITE_DISCOVERY",
+            "PROJECT_WORKSPACE",
+        )
+    elif code.startswith("SEMANTIC_CAPABILITY_"):
+        category, transition, stage = "CAPABILITY_BINDING_BLOCKED", "ACTION_REPAIR", "CAPABILITY"
+    elif code.startswith("REQUEST_WRITE_CEILING_"):
+        category, transition, stage = (
+            "AUTHORIZATION_OR_SCOPE_BLOCKED", "REVIEW_WRITE_CEILING", "REQUEST_WRITE_CEILING",
+        )
+    elif code in {
+        "PATH_OUTSIDE_AUTHORIZED_ROOTS", "PATH_OUTSIDE_AUTHORIZED_ROOT",
+        "RUNTIME_OWNED_SECURITY_STATE", "REPARSE_OR_SYMLINK_FORBIDDEN",
+        "DIRECTORY_PARENT_ACCESS_DENIED", "SCOPE_PERMISSION_DENIED",
+    }:
+        category, transition, stage = (
+            "AUTHORIZATION_OR_SCOPE_BLOCKED", "REVIEW_AUTHORIZATION",
+            "WRITE_AUTHORIZATION" if tool_name == "create_directory" else "READ_AUTHORIZATION",
+        )
+    elif code in {
+        "RESOLVED_SCOPE_EXPANDS_BEYOND_EXPLICIT_PATH", "WORKSPACE_NOT_AUTHORIZED",
+        "PROJECT_WORKING_SET_PATH_OUTSIDE_WORKSPACE",
+        "PROJECT_SYNC_TARGET_OUTSIDE_REQUEST_SCOPE",
+        "COMMAND_WORKING_DIRECTORY_OUTSIDE_REQUEST_SCOPE",
+    }:
+        category, transition, stage = (
+            "AUTHORIZATION_OR_SCOPE_BLOCKED", "ACTION_REPAIR", "REQUEST_READ_SCOPE",
+        )
+    elif code in {
+        "ABSOLUTE_PATH_REQUIRED", "PARENT_TRAVERSAL_FORBIDDEN",
+        "ALTERNATE_DATA_STREAM_FORBIDDEN", "DEVICE_PATH_FORBIDDEN",
+        "UNC_PATH_FORBIDDEN", "GLOB_PATH_FORBIDDEN", "NUL_IN_PATH",
+        "EMPTY_PATH", "RELATIVE_PATH_WITHOUT_BASE",
+    }:
+        category, transition, stage = "UNSAFE_OR_INVALID_PATH", "ACTION_REPAIR", "PATH_CANONICALIZATION"
     else:
-        category, next_transition = "OTHER_PREFLIGHT_REJECTION", "EVIDENCE_ACQUISITION"
+        category, transition, stage = (
+            "RUNTIME_SCOPE_CONTRACT_UNRESOLVED", "RUNTIME_CAUSAL_REVIEW",
+            "UNCLASSIFIED_PREFLIGHT" if code == "UNMAPPED_SCOPE_PREFLIGHT_CAUSE"
+            else "SCOPE_PREFLIGHT",
+        )
+    if tool_name == "create_directory" and code == "SCOPE_ALLOWED":
+        stage = "EXACT_DIRECTORY_WRITE_SCOPE"
     return {
         "schema": SCHEMA,
         "tool": tool_name if tool_name in ACTION_FIELDS else "OTHER",
         "scope_allowed": bool(allowed),
         "reason_code": code,
-        "category": category,
+        "cause_digest": hashlib.sha256(str(error or "").encode("utf-8")).hexdigest(),
+        "cause_classification": (
+            "MAPPED_RUNTIME_CAUSE" if code not in {
+                "UNMAPPED_SCOPE_PREFLIGHT_CAUSE", "SCOPE_REJECTION_MISSING_CAUSE"}
+            else "RUNTIME_CAUSE_UNCLASSIFIED_FAIL_CLOSED"
+        ),
+        "category": category, "failure_stage": stage,
         "required_field": field,
-        "path_role": ("PROJECT_WORKSPACE" if tool_name in PROJECT_WORKSPACE_TOOLS
-                      else "ACTION_PATH" if tool_name in ACTION_FIELDS else "OTHER"),
-        "eligible_transition": next_transition,
+        "path_role": (
+            "PROJECT_WORKSPACE" if tool_name in PROJECT_WORKSPACE_TOOLS
+            else "ACTION_PATH" if tool_name in ACTION_FIELDS else "OTHER"
+        ),
+        "eligible_transition": transition,
         "filesystem_absence_verified": False,
         "can_expand_authorized_scope": False,
         "authorization_granted": False,
@@ -143,8 +245,9 @@ def current_action_readiness(
         # Do not copy any paths, exception strings, or untrusted proposal.
         accepted = {
             key: diagnostic.get(key) for key in (
-                "schema", "tool", "scope_allowed", "reason_code", "category",
-                "required_field", "path_role", "eligible_transition",
+                "schema", "tool", "scope_allowed", "reason_code",
+                "cause_digest", "cause_classification", "failure_stage",
+                "category", "required_field", "path_role", "eligible_transition",
                 "filesystem_absence_verified", "can_expand_authorized_scope",
                 "authorization_granted", "tool_admission_still_required",
             )
