@@ -214,6 +214,48 @@ def build_goal_driver_context(runtime, goal: str, history: list[dict],
              "strategy_id": _code(row.get("strategy_id"), "")}
             for row in list(choices)[:4] if isinstance(row, Mapping)
         ]
+    # Keep the evidence-bound deployment target and registered artifact visible
+    # to the v10 Planner. A catalog reference is not an acquisition, permission
+    # receipt or verification of source bytes.
+    from agent_core.target_path_contract import extract_target_contract
+    contract = getattr(runtime, "_target_path_contract", None) or extract_target_contract(goal)
+    if isinstance(contract, Mapping) and contract.get("binding_status") == "BOUND":
+        result["target_contract"] = {
+            "requested_target": _path(contract.get("requested_target")),
+            "required_top_level_entries": [
+                _code(x, "") for x in list(contract.get("required_top_level_entries") or [])[:24]
+            ],
+            "revalidation_requested": bool(contract.get("revalidation_requested")),
+            "authorization_granted": False,
+        }
+    source_bootstrap = snapshot.get("source_discovery_bootstrap") if isinstance(snapshot, Mapping) else {}
+    if not isinstance(source_bootstrap, Mapping):
+        source_bootstrap = {}
+    result["registered_source_artifacts"] = [
+        {
+            "repository": _code(row.get("repository"), ""),
+            "artifact_path": _path(row.get("artifact_path")),
+            "commit": _code(row.get("commit"), ""),
+            "expected_sha256": _code(row.get("expected_sha256"), ""),
+            "source_is_deployment_ready": bool(row.get("source_is_deployment_ready") is True),
+            "network_authorized": False,
+            "normal_admission_required": True,
+        }
+        for row in list(source_bootstrap.get("artifact_references") or [])[:2]
+        if isinstance(row, Mapping)
+    ]
+    if isinstance(trans, Mapping):
+        probe = trans.get("probe_action") or {}
+        if (isinstance(probe, Mapping)
+                and trans.get("stage") == "READY_FOR_TOOL_ADMISSION"):
+            result["registered_source_probe"] = {
+                "tool": _code(probe.get("tool"), ""),
+                "operation": _code(probe.get("operation"), ""),
+                "command": str(probe.get("command") or "")[:240],
+                "working_directory": _path(probe.get("working_directory")),
+                "action_dispatched": False,
+                "normal_admission_required": True,
+            }
     if failure_receipts:
         result["failure_causes"] = [
             {"reason": _code((row.get("failure") or {}).get("reason_code"), ""),
@@ -242,7 +284,9 @@ def compact_goal_driver_context(context: dict, *, max_chars: int = MAX_CONTEXT_C
     keep = ("schema", "goal_anchor_sha256", "request_id", "task_epoch",
             "request_route", "intent", "semantic_tool", "source_requirement",
             "next_category", "prerequisite_reason_code", "snapshot_source",
-            "goal_gap_count", "confirmed_missing_targets", "recent_rejections")
+            "prerequisite_transition_stage", "prerequisite_transition_reason",
+            "goal_gap_count", "confirmed_missing_targets", "recent_rejections",
+            "target_contract", "registered_source_artifacts", "registered_source_probe")
     compact = {key: compact[key] for key in keep if key in compact}
     compact["context_compacted"] = True
     compact["full_context_sha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
