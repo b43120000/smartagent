@@ -279,7 +279,7 @@
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "source/WebAgent/minimal_decision.py": "f2d044c70a63145820fc668fbedfa4b5a243988ad89eca5eac4ceebdfec644fc",
     "source/WebAgent/minimal_admission.py": "85a8b1b4501b30154d8eb561010d4f27dc2cd6b25d717381e140de9a19736271",
-    "source/WebAgent/minimal_core_loop.py": "c911ab99c00db45937ed84a84184887ebe7d8f8e60ce175eaaf362c039d4d9ca",
+    "source/WebAgent/minimal_core_loop.py": "acf4edc96ddcd5b49619179d00000000730481ff03eaab023b45947c208dd1ea",
     "source/agent_core/tri_one_runtime_terminal.py": "346aa2ce6192be9dfd0205bb72cad8b9927508942b993ea121a832634db17d3d",
     "source/agent_core/test_signal_transport.py": "4e64cae2fa4cd89d4ff21c554dd83e57371f8fedbabc670f3f782b6d6de43d22",
     "source/WebAgent/minimal_goal_driver.py": "f7d58f8fe27a15916aceb2c34a0ebbd34e0ca2615a0778ffa3ecae59af41436b",
