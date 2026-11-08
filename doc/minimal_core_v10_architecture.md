@@ -104,3 +104,42 @@ from a real logged-in ChatGPT browser, Telegram and Windows execution test.
   attempted/UNKNOWN mutation fingerprints across process lifetimes.
 - Initial request bootstrap still invokes some existing runtime-local
   environment/scope preparation; no new Planner turns are required for this.
+
+
+## v10 Decision Format Recovery (2026-11-08)
+
+The prior Minimal Core parser applied whole-response JSON decoding. Real
+ChatGPT DOM replies can wrap one JSON object in explanatory prose or markdown.
+The primary transport now:
+
+1. Records a bounded SHA256/size/structure-only response diagnostic.
+2. Extracts outermost balanced JSON objects (not nested argument objects).
+3. Accepts exactly one valid decision. Rejects arrays, multiple decisions,
+   mixed valid/invalid objects, duplicate keys and legacy v9 tool fences.
+4. Normalizes only unambiguous PokeClaw tool/type/argument aliases, then
+   performs canonical Schema and Authorization checks.
+5. Corrects only one exact user-provided unescaped absolute Windows 'path' or
+   'working_directory' string by doubling backslashes; never guesses the
+   target and never rewrites command/Python/Git/CMD bodies.
+6. On failure, returns a precise, bounded JSON-repair instruction for one
+   retry, including safe error reason and line/column when applicable.
+7. On acceptance, invokes existing SmartAgent Tool Executor. Prose-only model
+   replies are not silently treated as a successful Finish.
+
+Runtime MinimalCoreJournal stores decision_rejected/decision_accepted events
+including response hash, candidate counts, error codes, location and a
+syntax-only masked preview (no raw model response).
+collect.bat exports only bounded request-scoped scalar parser diagnostics in
+minimal_core_decision_diagnostics.json; raw response text and masked local
+journal previews are not uploaded.
+
+The design deliberately differs from PokeClaw's permissive prose Finish
+fallback: a model claim cannot replace executed ToolResult or verification.
+
+Regression:
+  PYTHONPATH=source python -m pytest source/WebAgent/tests/test_minimal_core_v10.py
+
+Windows collector integration:
+  PYTHONPATH=source python -m pytest source/WebAgent/tests/test_minimal_core_collector_windows.py
+
+Offline/CI PASS does not establish a ChatGPT Web DOM / Telegram Live PASS.
