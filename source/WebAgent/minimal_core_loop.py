@@ -101,7 +101,13 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "must be escaped. The Runtime will execute only admitted actions. "
         "Never invent observations or claim an unverified success. If a tool observation preview is truncated, do not claim to have seen the entire file or listing. "
         "Windows shell for run_command is PowerShell 5.1 (cmd /c invokes CMD). "
-        "For run_command provide command and operation. For commands that "
+        "For run_command provide command and operation. Use only the canonical "
+        "operation values INSPECT, MUTATE, BUILD, TEST, VERIFY, GIT_INSPECT, "
+        "GIT_MUTATE, PROCESS, TRANSFER, GENERAL. READ/READ_ONLY/LIST are invalid. "
+        "For registered remote source probes use GIT_INSPECT from an existing "
+        "authorized workspace; never use a missing deployment target as CWD. "
+        "Do not inspect broader unrequested project/workspace scope. "
+        "For commands that "
         "are not provably read-only also provide nonempty success_criteria "
         "and verify checks. Unknown execution outcome is NOT safe to replay.\n"
         "Workspace: " + str(context.workspace_root) + "\n"
@@ -129,6 +135,11 @@ def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
     """No broad semantic inference from a model finish or mere exit code."""
     if evaluate_goal_evidence(goal, history).verified:
         return True
+    # Do not let one successful listing finish a multi-file deployment Goal.
+    from agent_core.target_path_contract import extract_target_contract
+    target_contract = extract_target_contract(goal)
+    if target_contract and target_contract.get("required_top_level_entries"):
+        return False
     if len(history) != 1:
         return False
     entry = history[0]
