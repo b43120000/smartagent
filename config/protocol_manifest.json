@@ -288,9 +288,9 @@
     "source/WebAgent/tests/test_git26_minimal_collector_live_rca.py": "077830d5c66b860fca5e49bd70ca077119860ba598552798a134d0b3d55f3dd1",
     "source/WebAgent/tests/test_git26_safe_operation_alias.py": "dbd64177aa217137f5c936b007fbf637810503bd7a322cede14b9e9af94baca4",
     ".github/workflows/git26-v10-case-d-repair.yml": "65f146220f1acad0a9ec0a8f3bdd0f09ee9f22abc7ace1e0e09181166a591bf8",
-    "source/WebAgent/minimal_executor_contract.py": "2ce71e3d15f4df83eaf751c14da5000d3f1e17a678ebac6422e6797f6fcec973",
+    "source/WebAgent/minimal_executor_contract.py": "154f8c9f1b6092c62c25e2f3b4bea7eee57cba74602f9a68c167476cec712a5b",
     "source/WebAgent/minimal_resolution.py": "4a8068127a63259dda8a85ca2ce43ef909780c8b752a4f202dde618f364d9004",
-    "source/agent_core/executor_blackboard.py": "620824dc75795edff1913cd0006b1961daa03a7e341a152130ed4dfb84b49569"
+    "source/agent_core/executor_blackboard.py": "469a4178333b4f21737224a8ea820c4e6db78af8694152970d217b48ee24eff1"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
