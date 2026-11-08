@@ -249,6 +249,16 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
     ):
         sources.add("GITHUB")
         ops.add("READ")
+    # A local-object request may use a text verb such as 列出, but still
+    # requires real filesystem evidence. The noun is the dependency;
+    # only explicit conceptual explanations or self-contained creative
+    # writing can be answer-only without reading files.
+    local_object_required = (
+        bool(_LOCAL.search(cleaned)) and not concept
+        and not bool(_CREATIVE_TEXT.search(cleaned)) and not inline
+    )
+    if local_object_required and not ops:
+        ops.add("READ")
     if _LOCAL.search(cleaned) and ops:
         sources.add("LOCAL")
     if _EXTERNAL.search(cleaned) and ops:
