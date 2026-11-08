@@ -22,6 +22,18 @@ _TEXT = re.compile(
     r"提供|分析|review|Review|檢視以下|檢查以下)|什麼是|何謂)",
     re.I,
 )
+# Creative text generated entirely in the reply (not a file or action).
+# Keep this request-local, never use it to authorize a tool or external source.
+_CREATIVE_TEXT = re.compile(
+    r"^\s*(?:(?:請|請你|幫我|請幫我|麻煩你)\s*)?"
+    r"(?:說|講)\s*(?:一個|個|一段|段)?"
+    r"(?:[^。；;\n]{0,100}?)?(?:笑話|故事)"
+    r"(?:[。！!\s]|$)"
+    r"|^\s*(?:(?:please)\s+)?(?:tell\s+me|make\s+up|write|compose)"
+    r"\s+(?:a|an|one)?\s*(?:.{0,80}?\s)?(?:joke|story)\b",
+    re.I,
+)
+
 _CONCEPT = re.compile(
     r"^\s*(?:(?:please\s+)?(?:explain|define|describe|"
     r"what\s+is|how\s+(?:to|does)|compare)\b|"
@@ -249,7 +261,7 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
     if ops or sources:
         return _result(original, "RESOURCE_REQUIRED", sources, ops,
                        "external_resource_or_action_required", restrictions)
-    if not _TEXT.search(cleaned):
+    if not (_TEXT.search(cleaned) or _CREATIVE_TEXT.search(cleaned)):
         return _result(original, "AMBIGUOUS", sources, ops,
                        "text_intent_not_unambiguously_classified", restrictions)
     return _result(original, "ANSWER_ONLY", {"INLINE"} if inline else set(), set(),
