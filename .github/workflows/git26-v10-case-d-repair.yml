@@ -1,0 +1,50 @@
+name: Git26 V10 Case D Causal Repair
+
+on:
+  push:
+    branches:
+      - git26/v10-case-d-causal-repair-20261108
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v10-causal-regressions:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Existing test imports
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile changed source and tests
+        run: >-
+          python -B -m compileall -q
+          source/WebAgent/minimal_core_loop.py
+          source/WebAgent/minimal_goal_driver.py
+          source/WebAgent/minimal_deployment_terminal.py
+          source/agent_core/tri_one_runtime_terminal.py
+          source/WebAgent/tests/test_git26_minimal_deployment_terminal.py
+          source/WebAgent/tests/test_git26_minimal_collector_live_rca.py
+      - name: Case D independent Terminal and no premature PASS
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_deployment_terminal -v
+      - name: Case D v10 baseline
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_minimal_core_collector_windows.py -q
+      - name: Case D existing source and scope tests
+        run: python -B -m unittest WebAgent.tests.test_conditional_goal_interrupt_case_d WebAgent.tests.test_git26_prerequisite_transition_gate -v
+      - name: Collector real Windows v10
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_collector_live_rca -v
+      - name: Existing v9 Collector causal coverage
+        run: python -B -m unittest WebAgent.tests.test_git27_collector_causal_coverage -v
