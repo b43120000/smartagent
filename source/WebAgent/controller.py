@@ -548,14 +548,26 @@ def main(argv: list[str] | None = None) -> int:
                     os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower()
                     != "legacy_v9"
                 )
+                from agent_core.tri_one_runtime_terminal import terminal_verdict_from_loop
+                terminal = terminal_verdict_from_loop(loop, minimal=core_minimal)
                 if lifecycle is not None:
                     if not core_minimal:
                         lifecycle.emit("WAITING_WEB_ACK", request_id=loop.run_id)
                     lifecycle.emit("RESPONDING", request_id=loop.run_id)
-                # The second model decision already includes the final summary.
-                # Do not spend an extra ChatGPT turn merely to render it again.
+                # Local and remote interfaces render from the same Runtime
+                # state, outcome and receipt. The model does not author status.
                 rendered = (
-                    final_content if core_minimal else render_final_ack(
+                    render_task_reply(
+                        original_request=loop.task_request,
+                        base=str(getattr(loop.progress_ledger, "base_evaluation", "") or ""),
+                        conclusion=final_content,
+                        task_id=loop.task_id,
+                        request_id=loop.run_id,
+                        state=terminal.state,
+                        outcome=terminal.outcome,
+                        terminal_acceptance=terminal.receipt,
+                        source_task_id=(loop.continuation_source or {}).get("task_id", ""),
+                    ) if core_minimal else render_final_ack(
                         client,
                         final_content,
                         request_id=loop.run_id,
@@ -569,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
                 task_result_fields = {}
-                if str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower() in {"1", "true", "yes"}:
+                if core_minimal or str(os.environ.get("TRI_ONE_TASK_RESULT_V1", "")).strip().lower() in {"1", "true", "yes"}:
                     contract_error_type = ()
                     try:
                         from agent_core.tri_one_task_result import (
@@ -595,11 +607,15 @@ def main(argv: list[str] | None = None) -> int:
                         **task_result_fields,
                     )
                 if core_minimal:
-                    print("[WebAgent] Minimal Core 已在第二次模型回覆結束；"
-                          "Runtime 不追加最終 ACK 對話。", flush=True)
-                    runtime_log.emit("request_completed", request_id=loop.run_id,
-                                     rendered_response=rendered,
-                                     completion_verified=loop.terminal_outcome == "SUCCESS")
+                    print("[WebAgent] Minimal Core 使用 Runtime 統一結案狀態，"
+                          "不追加 ChatGPT ACK 回合。", flush=True)
+                    runtime_log.emit(
+                        "request_completed" if terminal.is_complete else "request_paused",
+                        request_id=loop.run_id, task_id=loop.task_id,
+                        rendered_response=rendered, runtime_state=terminal.state,
+                        outcome=terminal.outcome,
+                        completion_verified=(terminal.outcome == "SUCCESS"
+                                             and terminal.is_complete))
                 elif "smartagent_tool" in str(rendered):
                     print("[WebAgent][WARN] 最終呈現仍是 protocol envelope；不自動重送。", flush=True)
                 else:
@@ -609,8 +625,8 @@ def main(argv: list[str] | None = None) -> int:
                 if test_envelope is not None and test_signal_receiver is not None:
                     test_signal_receiver.complete(
                         test_envelope,
-                        status="COMPLETED",
-                        completion_text=f"已完成\n{final_content}",
+                        status=terminal.state,
+                        completion_text=rendered,
                         metadata={
                             "ack_ids": list(loop.accepted_ack_ids),
                             "uploaded_attachments": list(loop.sent_attachment_paths),
@@ -620,14 +636,14 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 if lifecycle is not None:
                     lifecycle.emit(
-                        "TASK_COMPLETED",
+                        "TASK_COMPLETED" if terminal.is_complete else "TASK_PAUSED",
                         request_id=loop.run_id,
-                        message="已完成",
+                        message="已完成" if terminal.is_complete else "等待驗證",
                         **task_result_fields,
                     )
                     lifecycle.emit("WAITING_WEBGPT_SIGNAL")
                 from agent_core.task_progress import delete_progress
-                if not core_minimal or loop.terminal_outcome == "SUCCESS":
+                if not core_minimal or terminal.is_complete:
                     delete_progress(loop.task_id, root=loop.progress_root)
                 if bootstrap_active:
                     if bootstrap_state.get("status") == "COMPLETED":
