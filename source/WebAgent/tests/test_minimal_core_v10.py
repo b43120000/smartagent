@@ -44,6 +44,8 @@ class FakeLoop:
         self.protocol_state = "ACTIVE"
         self._planner_original_actions = {}
         self._canonical_action_proposals = {}
+        self.action_result_ledger = {}
+        self.continuation_store = None
 
     def planner(self, prompt, expected, attachments):
         self.expected_protocols.append(expected)
@@ -131,6 +133,8 @@ def test_two_model_rounds_single_directory_listing(tmp_path, monkeypatch):
     assert len(loop.executed) == 1
     assert loop.expected_protocols == [None, None]
     assert loop.executed[0]["action_id"].startswith("MIN-")
+    assert len(loop.action_result_ledger) == 1
+    assert list(loop.action_result_ledger.values())[0]["result_status"] == "SUCCEEDED"
     assert (tmp_path / "localdata/runtime/minimal_core/TASK-MINIMAL-TEST.jsonl").is_file()
 
 
