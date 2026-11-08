@@ -296,7 +296,11 @@ def _decision_event_fields(meta: dict) -> dict:
 
 
 def run_minimal_core(loop, request: str) -> str:
-    """Use existing WebAgentToolContext, action ledger and security dispatcher."""
+    """PokeClaw Executor on Executor-only tasks, legacy otherwise."""
+    from .executor_only_validation import executor_only_enabled
+    if executor_only_enabled(loop):
+        from .pokeclaw_executor_loop import run_pokeclaw_executor
+        return run_pokeclaw_executor(loop, request)
     from agent_core.tool_result_contract import decode_result
     from agent_core.task_progress import set_runtime_state
     from .minimal_executor_contract import (
