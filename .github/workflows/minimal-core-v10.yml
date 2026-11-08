@@ -28,6 +28,10 @@ jobs:
           python -m py_compile source/WebAgent/protocol.py
           python -m py_compile source/RemoteAgent/telegram_webagent_worker.py
           python -m py_compile source/agent_core/action_dependencies.py
+      - name: Validate source protocol manifest (fail closed)
+        env:
+          PYTHONPATH: source
+        run: python -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.')['hash_verification'])"
       - name: Validate preexisting Tri-One V1 contract and shared-worker selection
         env:
           PYTHONPATH: source
@@ -75,6 +79,10 @@ jobs:
             }
             throw "COLLECTOR_POWERSHELL_SYNTAX_INVALID"
           }
+      - name: Validate Windows source protocol manifest (fail closed)
+        env:
+          PYTHONPATH: source
+        run: python -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.')['hash_verification'])"
       - name: Windows real filesystem and Collector RCA regression
         env:
           PYTHONPATH: source
