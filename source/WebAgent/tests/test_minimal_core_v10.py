@@ -735,3 +735,74 @@ def test_goal_driver_rejection_feedback_reaches_next_planner_round(tmp_path, mon
 def test_text_only_route_does_not_confuse_local_paths_with_prose(user_goal, expected):
     from agent_core.task_requirement import assess_task_requirement
     assert assess_task_requirement(user_goal)["route"] == expected
+
+
+
+@pytest.mark.skipif(__import__("os").name != "nt",
+                    reason="Windows native directory observation regression")
+def test_actual_windows_inspect_absence_goal_gap_resolves_after_create(tmp_path):
+    """Real ToolContext ToolResult drives Goal Gap and Prerequisite decisions."""
+    from types import SimpleNamespace
+    from WebAgent.tool_context import WebAgentToolContext
+    from WebAgent.minimal_goal_driver import (
+        build_goal_driver_context, gate_known_absent_directory,
+    )
+    from agent_core.tool_result_contract import decode_result
+
+    path = str(tmp_path / "goal_driver_absent")
+    goal = "如果 " + path + " 資料夾不存在就建立它"
+    tools = WebAgentToolContext(tmp_path)
+    tools.begin_run("RR-WIN-GOAL-GAP", goal, [path])
+    inspect_action, issue = admit_minimal_action(
+        MinimalDecision("tool_call", "inspect_directory", {"paths": [path]}),
+        tools,
+    )
+    assert issue == "", issue
+    observed = tools.execute(inspect_action)
+    receipt = decode_result(observed)
+    assert receipt["status"] == "SUCCEEDED", receipt
+    assert receipt["reason"] == "DIRECTORY_ABSENCE_OBSERVED"
+    assert receipt["executed"] is True
+    assert receipt["data"]["observation_status"] == "CONFIRMED"
+
+    loop = SimpleNamespace(
+        run_id="RR-WIN-GOAL-GAP", task_id="TASK-WIN-GOAL-GAP",
+        task_epoch="goal-epoch", task_request=goal, workspace=str(tmp_path),
+        progress_ledger=SimpleNamespace(goal=goal),
+        action_ledger={inspect_action["action_id"]: {
+            "action": dict(inspect_action), "result": str(observed)}},
+        action_result_ledger={inspect_action["action_id"]: {
+            "tool": "inspect_directory", "result_status": "SUCCEEDED",
+            "result_reason": receipt["reason"], "executed": True,
+            "evidence_status": "ACTIVE", "task_epoch": "goal-epoch",
+            "request_id": "RR-WIN-GOAL-GAP", "result": str(observed)}},
+        tools=tools, authorized_paths=[path],
+    )
+    before = build_goal_driver_context(loop, goal, [])
+    assert before["confirmed_missing_targets"], before
+    assert gate_known_absent_directory(
+        {"tool": "query_project", "project_root": path}, before
+    )["reason_code"] == "CONFIRMED_MISSING_PREREQUISITE_DIRECTORY"
+
+    create_action, issue = admit_minimal_action(
+        MinimalDecision("tool_call", "create_directory", {"path": path}),
+        tools,
+    )
+    assert issue == "", issue
+    created = tools.execute(create_action)
+    created_receipt = decode_result(created)
+    assert created_receipt["status"] == "SUCCEEDED", created_receipt
+    loop.action_ledger[create_action["action_id"]] = {
+        "action": dict(create_action), "result": str(created)
+    }
+    loop.action_result_ledger[create_action["action_id"]] = {
+        "tool": "create_directory", "result_status": "SUCCEEDED",
+        "result_reason": created_receipt["reason"], "executed": True,
+        "evidence_status": "ACTIVE", "task_epoch": "goal-epoch",
+        "request_id": "RR-WIN-GOAL-GAP", "result": str(created),
+    }
+    after = build_goal_driver_context(loop, goal, [])
+    assert not after["confirmed_missing_targets"], after
+    assert gate_known_absent_directory(
+        {"tool": "query_project", "project_root": path}, after
+    ) is None
