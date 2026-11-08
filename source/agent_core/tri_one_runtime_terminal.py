@@ -211,6 +211,7 @@ def _conditional_directory_proof(goal: str, history: list[dict]) -> GoalEvidence
     # Discover target only from a Runtime tool's action path, and bind it
     # against the entire original request before using observations.
     targets = []
+    display_targets = {}
     for row in history:
         action = row.get("action") or {}
         if not isinstance(action, Mapping):
@@ -223,9 +224,15 @@ def _conditional_directory_proof(goal: str, history: list[dict]) -> GoalEvidence
         canonical = _conditional_directory_target(goal, str(path or ""))
         if canonical and canonical not in targets:
             targets.append(canonical)
+            raw_path = str(path or "")
+            index = goal.casefold().find(raw_path.casefold())
+            display_targets[canonical] = (
+                goal[index:index + len(raw_path)] if index >= 0 else raw_path
+            )
     if len(targets) != 1:
         return GoalEvidence("UNKNOWN", "CONDITIONAL_GOAL_TARGET_NOT_UNIQUE")
     target = targets[0]
+    display_target = display_targets.get(target) or target
     observations = []
     creations = []
     directory_inspections = []
@@ -260,7 +267,7 @@ def _conditional_directory_proof(goal: str, history: list[dict]) -> GoalEvidence
                 return GoalEvidence("UNKNOWN", "CONTRADICTORY_LATER_OBSERVATION")
             return GoalEvidence(
                 "PASS", "CONDITIONAL_DIRECTORY_CREATED_AND_REOBSERVED",
-                (before_ref, create_ref, post_ref), target,
+                (before_ref, create_ref, post_ref), display_target,
                 "CONDITIONAL_DIRECTORY_EXISTS",
             )
     # Already existed: never infer directory kind from file.exists alone.
@@ -271,7 +278,7 @@ def _conditional_directory_proof(goal: str, history: list[dict]) -> GoalEvidence
             ):
                 return GoalEvidence(
                     "PASS", "CONDITIONAL_DIRECTORY_ALREADY_PRESENT",
-                    (inspect_ref, post_ref), target,
+                    (inspect_ref, post_ref), display_target,
                     "CONDITIONAL_DIRECTORY_EXISTS",
                 )
     return GoalEvidence("UNKNOWN", "CONDITIONAL_GOAL_EVIDENCE_CHAIN_INCOMPLETE")
