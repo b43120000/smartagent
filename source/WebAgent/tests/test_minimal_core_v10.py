@@ -226,3 +226,29 @@ def test_generic_mutation_not_marked_complete_from_exit_code(tmp_path, monkeypat
     message = run_minimal_core(loop, request)
     assert "尚無足夠證據" in message
     assert loop.terminal_outcome == "UNKNOWN"
+
+
+
+def test_real_registry_creates_one_explicit_authorized_directory(tmp_path):
+    """The original folder-creation Live failure must reach the actual tool."""
+    from WebAgent.tool_context import WebAgentToolContext
+    from agent_core.tool_result_contract import decode_result
+
+    target = tmp_path / "new_directory"
+    context = WebAgentToolContext(tmp_path)
+    context.begin_run(
+        "RR-MINIMAL-MKDIR", "創立 " + str(target), [str(target)]
+    )
+    action, rejection = admit_minimal_action(
+        MinimalDecision("tool_call", "create_directory", {"path": str(target)}),
+        context,
+    )
+    assert not rejection, rejection
+    result = decode_result(context.execute(action))
+    assert result and result["status"] == "SUCCEEDED", result
+    assert result["reason"] == "DIRECTORY_CREATED"
+    assert target.is_dir()
+    # The same target cannot be written a second time through CREATE_NEW.
+    another = decode_result(context.execute({**action, "action_id": "MIN-RETRY"}))
+    assert another and another["status"] == "REJECTED"
+    assert another["reason"] == "DIRECTORY_ALREADY_EXISTS_REOBSERVE"
