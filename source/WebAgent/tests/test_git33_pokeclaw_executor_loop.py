@@ -124,7 +124,8 @@ def test_one_generic_agent_loop_completes_check_create_verify_finish_and_blackbo
     ]
     assert len(loop.prompts) == 4
     assert all("POKECLAW_EXECUTOR_LOOP_V1" in prompt for prompt in loop.prompts)
-    assert all("sequence" not in prompt.lower() for prompt in loop.prompts)
+    assert all("EXECUTOR_ONLY_DIRECTORY_SEQUENCE" not in prompt for prompt in loop.prompts)
+    assert all("permitted_tools_by_phase" not in prompt for prompt in loop.prompts)
     assert "Runtime repair" not in loop.prompts[0]
     assert '"isSuccess":true' in loop.prompts[1]
     assert '"exists' in loop.prompts[1]
