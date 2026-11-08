@@ -96,6 +96,10 @@ def test_command_admission_and_proven_read_only(tmp_path):
         "tool_call", "run_command",
         {"command": "python -m pytest", "operation": "TEST"}), tools)
     assert python is None and reason == "mutation_success_criteria_required"
+    cmd_read, reason = admit_minimal_action(MinimalDecision(
+        "tool_call", "run_command",
+        {"command": "cmd /c dir", "operation": "INSPECT"}), tools)
+    assert cmd_read is not None and not reason and not action_is_mutating(cmd_read)
     cmd, reason = admit_minimal_action(MinimalDecision(
         "tool_call", "run_command",
         {"command": "cmd /c echo ok", "operation": "INSPECT"}), tools)
