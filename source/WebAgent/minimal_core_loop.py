@@ -48,6 +48,17 @@ class MinimalCoreJournal:
             os.fsync(stream.fileno())
 
 
+_ATOMIC_TOOL_HINTS = {
+    "create_directory": "Create one exact new folder; parent must exist, no overwrite; postcondition checked.",
+    "inspect_directory": "Observe exact path existence/type, including confirmed directory absence.",
+    "list_directory": "List existing directory; result may be truncated; no mutation.",
+    "read_file": "Read an authorized text file; result may be truncated.",
+    "write_file": "Write only in requested scope; check actual postcondition.",
+    "run_command": "PowerShell 5.1; canonical operation required; mutations require success_criteria and verify.",
+    "observe_fact": "Read a scoped filesystem fact, never grant write or global completion.",
+}
+
+
 def tool_catalog(context) -> list[dict]:
     from agent_core.tool_capabilities import get_allowed_tools
     from agent_core.smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
@@ -60,6 +71,7 @@ def tool_catalog(context) -> list[dict]:
         names = [name for name in names if name != "download_artifact"]
     return [{
         "name": name,
+        "description": _ATOMIC_TOOL_HINTS.get(name, "Only use when required; normal admission applies."),
         "required": [k for k in TOOL_ENVELOPE_SCHEMAS[name]["required"]
                      if k != "action_id"],
         "optional": [k for k in TOOL_ENVELOPE_SCHEMAS[name]["optional"]
@@ -277,8 +289,16 @@ def run_minimal_core(loop, request: str) -> str:
     """Use existing WebAgentToolContext, action ledger and security dispatcher."""
     from agent_core.tool_result_contract import decode_result
     from agent_core.task_progress import set_runtime_state
+    from .minimal_executor_contract import (
+        ATOMIC_MODEL_DECISION_LIMIT, blocked_disposition,
+        blocked_result, action_result_receipt,
+    )
 
     root = Path(loop.progress_root or loop.workspace)
+    # Remote Worker passes <install>/source, Collector uses <install>/localdata.
+    # Do not create an invisible shadow journal under source/.
+    if root.name.casefold() == "source" and (root.parent / "collect.bat").is_file():
+        root = root.parent
     journal = MinimalCoreJournal(root, loop.task_id)
     journal.append("task_started", request_id=loop.run_id,
                    task_id=loop.task_id, task_epoch=loop.task_epoch,
@@ -292,6 +312,20 @@ def run_minimal_core(loop, request: str) -> str:
     action_rejections = []
     consecutive_action_rejections = 0
     consecutive_unverified_finishes = 0
+    unsupported_blocked_decisions = 0
+    loop.executor_result = {}
+
+    def publish_executor_result(value):
+        loop.executor_result = dict(value)
+        journal.append("executor_result", round=loop.turn_id,
+                       outcome=value["outcome"], reason_code=value["reason_code"],
+                       executed=value["executed"], action_id=value["action_id"],
+                       evidence_ref=value["evidence_ref"])
+        loop._emit("minimal_executor_result", request_id=loop.run_id,
+                   task_id=loop.task_id, round=loop.turn_id,
+                   outcome=value["outcome"], reason_code=value["reason_code"],
+                   executed=value["executed"], action_id=value["action_id"],
+                   evidence_ref=value["evidence_ref"])
 
     for round_id in range(1, loop.max_turns + 1):
         loop._check_cancelled()
@@ -382,14 +416,32 @@ def run_minimal_core(loop, request: str) -> str:
                        proposal_sha256=proposal_hash, executed=False)
 
         if decision.kind == "blocked":
+            disposition, blocker_reason = blocked_disposition(
+                goal_context, history, action_rejections,
+            )
+            journal.append("model_blocked", round=round_id,
+                           reason_sha256=_digest(decision.message),
+                           disposition=disposition, reason_code=blocker_reason)
+            if disposition == "UNKNOWN" and unsupported_blocked_decisions == 0:
+                # Planner uncertainty is not an objective blocker. One bounded
+                # re-decision; no guessed scope/source/action execution.
+                unsupported_blocked_decisions += 1
+                repair_hint = (
+                    "Blocked claim lacks objective Runtime evidence. Select one "
+                    "admitted, goal-relevant tool or identify a precise missing "
+                    "prerequisite. Never invent path, source or authorization."
+                )
+                journal.append("executor_blocked_repair_requested", round=round_id,
+                               reason_code=blocker_reason)
+                continue
             loop.protocol_state = "BLOCKED"
             loop.terminal_outcome = "UNKNOWN"
-            loop.terminal_acceptance = {}  # PAUSED is nonterminal, no accepted receipt.
-            journal.append("model_blocked", round=round_id,
-                           reason_sha256=_digest(decision.message))
-            set_runtime_state(loop.task_id, "PAUSED", reason="MINIMAL_MODEL_BLOCKED",
+            loop.terminal_acceptance = {}
+            publish_executor_result(blocked_result(disposition, blocker_reason, round_id))
+            set_runtime_state(loop.task_id, "PAUSED",
+                              reason="EXECUTOR_" + disposition + ":" + blocker_reason,
                               root=loop.progress_root)
-            return "目前無法繼續（模型尚未證明任務完成）：" + decision.message
+            return "目前無法繼續（整體目標未驗證）：" + decision.message
 
         if decision.kind == "finish":
             # Text-only is a distinct Runtime terminal class; no fake
