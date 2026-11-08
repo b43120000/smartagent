@@ -16,7 +16,11 @@ from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
 from agent_core.tri_one_runtime_terminal import (
     GoalEvidence, evaluate_goal_evidence, accept_runtime_terminal,
-    format_runtime_goal_summary,
+    format_runtime_goal_summary, accept_runtime_answer_only,
+)
+from .minimal_goal_driver import (
+    build_goal_driver_context, compact_goal_driver_context,
+    gate_known_absent_directory, classify_rejection,
 )
 
 
@@ -80,7 +84,8 @@ def recent_results(history: list[dict]) -> list[dict]:
 
 
 def build_minimal_prompt(request: str, context, history: list[dict],
-                         *, round_id: int, max_turns: int, repair_hint: str = "") -> str:
+                         *, round_id: int, max_turns: int, repair_hint: str = "",
+                         goal_driver_context: str = "") -> str:
     return (
         "[SMARTAGENT_MINIMAL_CORE_V1]\n"
         "PRIMARY DECISION PROTOCOL FOR THIS REQUEST. This is NOT a legacy v9 "
@@ -102,6 +107,15 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "Workspace: " + str(context.workspace_root) + "\n"
         "Available tools: " + json.dumps(tool_catalog(context), separators=(",", ":")) + "\n"
         "Original goal: " + request + "\n"
+        "Runtime Goal-Driven Blackboard (read-only, never permission): "
+        + goal_driver_context + "\n"
+        "If this is a no-tool TEXT_ONLY request, output Finish with your "
+        "actual answer. Runtime admits it without Action evidence only when "
+        "the trusted original request is answer-only and no tool was executed. "
+        "Otherwise use Goal Gaps, confirmed Prerequisites, Action Readiness "
+        "and failure causes to replan one admitted action at a time. "
+        "NEVER infer missing files from failed or denied tools. "
+        "A suggested action is not scope authorization.\n"
         "Round: " + str(round_id) + "/" + str(max_turns) + "\n"
         "Observed tool results: " +
         json.dumps(recent_results(history), ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -257,14 +271,33 @@ def run_minimal_core(loop, request: str) -> str:
     repeated = 0
     invalids = 0
     repair_hint = ""
+    action_rejections = []
+    consecutive_action_rejections = 0
+    consecutive_unverified_finishes = 0
 
     for round_id in range(1, loop.max_turns + 1):
         loop._check_cancelled()
         loop.turn_id = round_id
         loop.tools._protocol_turn_seq = round_id
+        goal_context = build_goal_driver_context(
+            loop, request, history, action_rejections)
+        goal_context_text = compact_goal_driver_context(goal_context)
+        context_digest = hashlib.sha256(goal_context_text.encode("utf-8")).hexdigest()
+        journal.append("goal_driver_context_ready", round=round_id,
+                       snapshot_source=goal_context.get("snapshot_source"),
+                       next_category=goal_context.get("next_category"),
+                       active_goal_gap_count=goal_context.get("goal_gap_count", 0),
+                       context_sha256=context_digest)
+        loop._emit("minimal_goal_driver_context", request_id=loop.run_id,
+                   task_id=loop.task_id, round=round_id,
+                   snapshot_source=goal_context.get("snapshot_source"),
+                   next_category=goal_context.get("next_category"),
+                   active_goal_gap_count=goal_context.get("goal_gap_count", 0),
+                   context_sha256=context_digest)
         prompt = build_minimal_prompt(request, loop.tools, history,
                                       round_id=round_id, max_turns=loop.max_turns,
-                                      repair_hint=repair_hint)
+                                      repair_hint=repair_hint,
+                                      goal_driver_context=goal_context_text)
         attachments = loop.tools.take_pending_attachments()
         loop.protocol_state = "DECIDING"
         try:
@@ -315,6 +348,26 @@ def run_minimal_core(loop, request: str) -> str:
             return "目前無法繼續（模型尚未證明任務完成）：" + decision.message
 
         if decision.kind == "finish":
+            # Text-only is a distinct Runtime terminal class; no fake
+            # ActionResult or filesystem evidence is created for prose.
+            if not history:
+                answer_receipt, answer_reason = accept_runtime_answer_only(
+                    loop, goal=request, answer=decision.message,
+                    had_attachments=bool(attachments),
+                )
+                if answer_receipt:
+                    journal.append("runtime_text_only_admitted", round=round_id,
+                                   receipt_id=answer_receipt["receipt_id"],
+                                   answer_sha256=answer_receipt["answer_sha256"])
+                    loop._emit("runtime_text_only_admitted",
+                               request_id=loop.run_id, task_id=loop.task_id,
+                               round=round_id, receipt_id=answer_receipt["receipt_id"],
+                               completion_kind="ANSWER_ONLY")
+                    loop._emit("runtime_terminal_accepted", **answer_receipt)
+                    set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
+                    return decision.message
+                journal.append("runtime_text_only_ineligible", round=round_id,
+                               reason=answer_reason)
             proof = _verified_proof(request, history)
             verified = proof.verified
             if verified:
@@ -330,6 +383,29 @@ def run_minimal_core(loop, request: str) -> str:
                                receipt_id=receipt["receipt_id"],
                                summary_sha256=_digest(summary))
                 return summary
+            # Goal-Driven repair is allowed only when evidence/known gaps
+            # indicate a legitimate further operation, not for unknown prose.
+            pending_gaps = list(goal_context.get("active_goal_gaps") or [])
+            can_replan = (
+                goal_context.get("request_route") != "ANSWER_ONLY"
+                and bool(history) and bool(pending_gaps)
+                and consecutive_unverified_finishes < 1
+            )
+            journal.append("model_finish_rejected", round=round_id,
+                           outcome="UNKNOWN", reason=proof.reason,
+                           pending_gap_count=len(pending_gaps))
+            if can_replan:
+                consecutive_unverified_finishes += 1
+                repair_hint = (
+                    "Finish rejected by Runtime: Goal gaps remain. "
+                    "Use the current Blackboard prerequisites and admitted "
+                    "Tool actions to close them. Do NOT claim success or "
+                    "repeat a denied action without changed evidence."
+                )
+                journal.append("goal_driven_replan_requested", round=round_id,
+                               reason="GOAL_GAPS_UNRESOLVED",
+                               gap_count=len(pending_gaps))
+                continue
             loop.terminal_outcome = "UNKNOWN"
             loop.protocol_state = "MODEL_FINISHED_UNVERIFIED"
             loop.terminal_acceptance = {}
@@ -345,15 +421,68 @@ def run_minimal_core(loop, request: str) -> str:
 
         action, rejection = admit_minimal_action(decision, loop.tools)
         if rejection:
-            invalids += 1
-            repair_hint = rejection
+            consecutive_action_rejections += 1
+            item = classify_rejection(decision.tool, rejection, round_id)
+            action_rejections.append(item)
+            repair_hint = (
+                "Runtime Action Admission denied: " + rejection +
+                ". Repair the schema or select an evidence-grounded "
+                "prerequisite from Goal-Driven Blackboard. "
+                "Denied execution does not prove filesystem absence."
+            )
             journal.append("action_rejected", round=round_id,
                            tool=decision.tool, reason=rejection,
+                           repair_mode=item["repair_mode"],
                            proposal_sha256=_digest(decision.arguments))
-            if invalids >= 2:
-                loop.protocol_state = "INTERRUPTED"
-                raise RuntimeError("MINIMAL_ACTION_ADMISSION_FAILED:" + rejection)
+            loop._emit("minimal_goal_action_rejected",
+                       request_id=loop.run_id, task_id=loop.task_id,
+                       round=round_id, tool=decision.tool,
+                       reason_code=item["reason_code"],
+                       repair_mode=item["repair_mode"],
+                       executed=False)
+            if consecutive_action_rejections >= 3:
+                loop.protocol_state = "BLOCKED"
+                set_runtime_state(loop.task_id, "PAUSED",
+                                  reason="GOAL_ACTION_REPAIR_EXHAUSTED",
+                                  root=loop.progress_root)
+                return "Runtime 已阻止重複無效 Action，任務尚未完成：" + rejection
             continue
+
+        # Causal guard: a confirmed absent directory cannot be read as an
+        # existing project. Resolve its missing prerequisite instead.
+        missing_guard = gate_known_absent_directory(action, goal_context)
+        if missing_guard:
+            consecutive_action_rejections += 1
+            code = missing_guard["reason_code"]
+            action_rejections.append({
+                **classify_rejection(action["tool"], code, round_id),
+                "repair_mode": missing_guard["repair_mode"],
+            })
+            journal.append("goal_driver_preexecution_blocked", round=round_id,
+                           tool=action["tool"], reason=code,
+                           prerequisite_evidence_ref=missing_guard[
+                               "prerequisite_evidence_ref"], executed=False)
+            loop._emit("minimal_goal_driver_blocked",
+                       request_id=loop.run_id, task_id=loop.task_id,
+                       round=round_id, tool=action["tool"],
+                       reason_code=code, executed=False,
+                       prerequisite_evidence_ref=missing_guard[
+                           "prerequisite_evidence_ref"])
+            repair_hint = (
+                "Known verified missing directory prerequisite. "
+                "The requested read has NOT executed. Do NOT repeat it. "
+                "Use the Blackboard's next_category, find a genuinely "
+                "admitted prerequisite, then retry only after new evidence."
+            )
+            if consecutive_action_rejections >= 3:
+                loop.protocol_state = "BLOCKED"
+                set_runtime_state(loop.task_id, "PAUSED",
+                                  reason="GOAL_PREREQUISITE_REPLAN_EXHAUSTED",
+                                  root=loop.progress_root)
+                return "已確認必要資料夾不存在，無可驗收的後續步驟；任務暫停。"
+            continue
+        consecutive_action_rejections = 0
+        consecutive_unverified_finishes = 0
 
         fingerprint = _digest({k: v for k, v in action.items() if k != "action_id"})
         mutating = action_is_mutating(action)
