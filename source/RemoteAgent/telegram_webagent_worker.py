@@ -614,6 +614,20 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 # Attestation must fail closed for every task: otherwise a
                 # source mismatch could reach chunked write Tool execution.
                 raise
+            # Git32 temporary Executor-only lab mode: no parent agents make
+            # decisions. Security Admission, Runtime evidence verification
+            # and durable Blackboard writes remain fully enabled.
+            loop.executor_only_mode = (
+                os.environ.get("SMARTAGENT_EXECUTOR_ONLY_MODE", "1").strip() == "1"
+            )
+            runtime_log.write(
+                "STATUS", component="telegram_webagent_worker",
+                stage="EXECUTOR_ONLY_MODE_SELECTED",
+                task_id=task.task_id, request_id=task.request_id,
+                executor_only_mode=loop.executor_only_mode,
+                goal_driver_decisions_enabled=not loop.executor_only_mode,
+                prerequisite_decisions_enabled=not loop.executor_only_mode,
+            )
             final_content = loop.run(
                 task.request,
                 request_id=task.request_id,
