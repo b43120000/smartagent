@@ -348,7 +348,9 @@ def run_minimal_core(loop, request: str) -> str:
                 if history else ""
             )
             value["last_observed_tool_status"] = (
-                str(history[-1]["receipt"].get("status") or "")
+                str(value.get("last_observed_tool_status") or "")
+                if int(value.get("resolution_attempts") or 0) > 0
+                else str(history[-1]["receipt"].get("status") or "")
                 if history else str(value.get("last_observed_tool_status") or "")
             )
             value["last_tool_result_reason"] = (
@@ -356,8 +358,15 @@ def run_minimal_core(loop, request: str) -> str:
                 if history else ""
             )
             last_rejection = action_rejections[-1] if action_rejections else {}
+            # Resolution's own denied observation is a separate child
+            # admission and can be later than all original action denials.
+            last_admission = (
+                dict(value.get("last_admission_rejection") or {})
+                if int(value.get("resolution_attempts") or 0) > 0
+                else {}
+            ) or last_rejection
             value["last_admission_rejection"] = {
-                key: last_rejection[key]
+                key: last_admission[key]
                 for key in (
                     "tool", "reason_code", "root_cause_code",
                     "scope_failure_stage", "scope_category",
@@ -365,10 +374,14 @@ def run_minimal_core(loop, request: str) -> str:
                     "scope_cause_classification", "directory_preconditions",
                     "admission_evidence_ref", "round", "executed",
                 )
-                if key in last_rejection
+                if key in last_admission
             }
             if outcome == "VERIFIED":
                 value["root_cause_code"] = "NONE"
+            elif int(value.get("resolution_attempts") or 0) > 0:
+                value["root_cause_code"] = str(
+                    value.get("root_cause_code") or "RESOLUTION_CAUSE_NOT_IDENTIFIED"
+                )[:120]
             elif last_rejection and int(last_rejection.get("round") or 0) >= (
                     int(history[-1].get("round") or 0) if history else 0):
                 value["root_cause_code"] = str(
