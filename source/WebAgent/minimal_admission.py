@@ -161,7 +161,38 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
         scope = tool_context.preview_tool_scope(action)
     except Exception as exc:
         return None, "scope_preflight_error:" + type(exc).__name__
+    # Persist the exact, privacy-safe preflight decision from THIS attempt.
+    # Never ask Planner to reverse-engineer the reason from a generic string,
+    # and never make a second scope probe just to collect a failure reason.
+    diagnostic = dict(scope.get("scope_diagnostic") or {})
+    try:
+        setattr(tool_context, "_last_minimal_admission_diagnostic", {
+            "schema": "SMARTAGENT_EXECUTOR_SCOPE_ADMISSION_V1",
+            "tool": decision.tool,
+            "admitted": bool(scope.get("allowed")),
+            "scope_reason_code": str(
+                diagnostic.get("reason_code") or "SCOPE_REJECTION_MISSING_CAUSE"
+            )[:128],
+            "scope_failure_stage": str(diagnostic.get("failure_stage") or "")[:80],
+            "scope_category": str(diagnostic.get("category") or "")[:80],
+            "scope_next_transition": str(
+                diagnostic.get("eligible_transition") or ""
+            )[:80],
+            "scope_cause_digest": str(diagnostic.get("cause_digest") or "")[:64],
+            "scope_cause_classification": str(
+                diagnostic.get("cause_classification") or ""
+            )[:80],
+            "directory_preconditions": dict(
+                scope.get("directory_preconditions") or {}
+            ),
+            "executed": False,
+            "grants_authorization": False,
+        })
+    except (AttributeError, TypeError):
+        pass
     if not scope.get("allowed"):
-        reason = (scope.get("scope_diagnostic") or {}).get("reason_code")
-        return None, "scope_rejected:" + str(reason or scope.get("error") or "unknown")[:128]
+        reason = diagnostic.get("reason_code")
+        return None, "scope_rejected:" + str(
+            reason or "SCOPE_REJECTION_MISSING_CAUSE"
+        )[:128]
     return action, ""
