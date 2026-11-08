@@ -555,6 +555,9 @@ def format_runtime_goal_summary(proof: GoalEvidence) -> str:
                   if proof.reason == "CONDITIONAL_DIRECTORY_CREATED_AND_REOBSERVED"
                   else "已確認既有資料夾存在：\n")
         return prefix + proof.target
+    if proof.goal_kind == "DEPLOYMENT_CONTENT_VERIFIED" and proof.verified:
+        return ("部署根目錄與已釘選來源內容通過獨立 VERIFY：\n"
+                + proof.target)
     raise ValueError("no_verified_runtime_goal_summary")
 
 
