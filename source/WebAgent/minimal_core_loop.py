@@ -419,8 +419,13 @@ def run_minimal_core(loop, request: str) -> str:
                        round=round_id, diagnostic_reason=exc.code,
                        **trace_fields)
             if invalids >= 2:
-                loop.protocol_state = "INTERRUPTED"
-                raise RuntimeError("MINIMAL_DECISION_FORMAT_FAILED:" + exc.code)
+                loop.protocol_state = "BLOCKED"
+                result = blocked_result("BLOCKED",
+                                        "MINIMAL_DECISION_FORMAT_FAILED:" + exc.code, round_id)
+                publish_executor_result(result)
+                set_runtime_state(loop.task_id, "PAUSED",
+                                  reason=result["reason_code"], root=loop.progress_root)
+                return "Executor 模型輸出格式反覆無效，已封鎖且未執行該 Action。"
             continue
         journal.append("decision_accepted", round=round_id,
                        decision_type=decision.kind,
@@ -739,16 +744,24 @@ def run_minimal_core(loop, request: str) -> str:
         fingerprint = _digest({k: v for k, v in action.items() if k != "action_id"})
         mutating = action_is_mutating(action)
         if mutating and fingerprint in seen_mutations:
-            loop.protocol_state = "INTERRUPTED"
+            loop.protocol_state = "BLOCKED"
             journal.append("mutation_replay_blocked", round=round_id,
                            tool=action["tool"], fingerprint=fingerprint)
-            raise RuntimeError("MINIMAL_MUTATION_REPLAY_UNCERTAIN")
+            result = blocked_result("BLOCKED", "MUTATION_REPLAY_DENIED", round_id)
+            publish_executor_result(result)
+            set_runtime_state(loop.task_id, "PAUSED",
+                              reason=result["reason_code"], root=loop.progress_root)
+            return "Executor 拒絕重複執行可能已發生副作用的動作。"
         repeated = repeated + 1 if fingerprint == last_action_digest else 0
         if repeated >= 1:
-            loop.protocol_state = "INTERRUPTED"
+            loop.protocol_state = "BLOCKED"
             journal.append("stuck_action", round=round_id,
                            tool=action["tool"], fingerprint=fingerprint)
-            raise RuntimeError("MINIMAL_REPEATED_ACTION_STUCK")
+            result = blocked_result("BLOCKED", "REPEATED_ACTION_NO_PROGRESS", round_id)
+            publish_executor_result(result)
+            set_runtime_state(loop.task_id, "PAUSED",
+                              reason=result["reason_code"], root=loop.progress_root)
+            return "Executor 偵測到重複動作且沒有新證據，已安全封鎖。"
         last_action_digest = fingerprint
 
         # Write an execution-intent receipt BEFORE any side effect.
@@ -766,7 +779,18 @@ def run_minimal_core(loop, request: str) -> str:
             loop._planner_original_actions[action["action_id"]] = dict(action)
         loop._canonical_action_proposals[action["action_id"]] = dict(action)
         loop.protocol_state = "EXECUTING"
-        result = loop._execute_action(action)
+        try:
+            result = loop._execute_action(action)
+        except Exception as exc:
+            # The action could have mutated before the exception. The only
+            # permitted next route is the read-only Resolution child loop.
+            from agent_core.tool_result_contract import encode_result
+            result = encode_result(
+                "UNKNOWN", "TOOL_EXCEPTION_OUTCOME_UNKNOWN",
+                tool=str(action.get("tool") or ""), executed=True,
+                data={"error_class": type(exc).__name__,
+                      "possible_partial_execution": action_is_mutating(action)},
+            )
         receipt = decode_result(result) or {
             "status": "UNKNOWN", "reason": "UNPARSEABLE_RESULT",
             "executed": True, "data": {},
@@ -900,6 +924,10 @@ def run_minimal_core(loop, request: str) -> str:
                           reason="ATOMIC_DECISION_BUDGET_EXHAUSTED:" + reason,
                           root=loop.progress_root)
         return "單次執行任務達到兩次模型決策上限；未驗證成功，已回報上層。"
-    loop.protocol_state = "INTERRUPTED"
+    loop.protocol_state = "BLOCKED"
     journal.append("max_rounds_exhausted", max_rounds=loop.max_turns)
-    raise RuntimeError("MINIMAL_CORE_MAX_ROUNDS")
+    result = blocked_result("BLOCKED", "EXECUTOR_MAX_ROUNDS_EXHAUSTED", loop.turn_id)
+    publish_executor_result(result)
+    set_runtime_state(loop.task_id, "PAUSED",
+                      reason=result["reason_code"], root=loop.progress_root)
+    return "Executor 已達整體決策上限，沒有足夠證據驗證成功。"
