@@ -602,7 +602,7 @@ def run_minimal_core(loop, request: str) -> str:
                 summary = (format_runtime_goal_summary(proof)
                            if proof.goal_kind in {
                                "SINGLE_CREATE_DIRECTORY", "CONDITIONAL_DIRECTORY_EXISTS",
-                               "DEPLOYMENT_CONTENT_VERIFIED",
+                               "DEPLOYMENT_CONTENT_VERIFIED", "SINGLE_FACT_QUERY",
                            } else decision.message)
                 journal.append("model_finish", round=round_id,
                                outcome="SUCCESS", verified=True,
