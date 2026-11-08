@@ -304,6 +304,9 @@ def run_minimal_core(loop, request: str) -> str:
                    snapshot_source=goal_context.get("snapshot_source"),
                    next_category=goal_context.get("next_category"),
                    active_goal_gap_count=goal_context.get("goal_gap_count", 0),
+                   prerequisite_transition_stage=goal_context.get("prerequisite_transition_stage"),
+                   terminal_readiness_status=goal_context.get("terminal_readiness_status"),
+                   source_requirement=goal_context.get("source_requirement"),
                    context_sha256=context_digest)
         prompt = build_minimal_prompt(request, loop.tools, history,
                                       round_id=round_id, max_turns=loop.max_turns,
@@ -347,6 +350,29 @@ def run_minimal_core(loop, request: str) -> str:
                    **_decision_event_fields(decision_meta))
         invalids = 0
         repair_hint = ""
+        if decision.kind == "tool_call":
+            from agent_core.command_operation import COMMAND_OPERATIONS
+            raw_operation = str((decision.arguments or {}).get("operation") or "")
+            safe_operation = (raw_operation[:40].upper()
+                              if re.fullmatch(r"[A-Za-z_]{1,40}", raw_operation)
+                              else "INVALID_OR_MISSING")
+            proposal_fields = sorted(
+                key for key in (decision.arguments or {})
+                if isinstance(key, str) and re.fullmatch(r"[a-z_]{1,40}", key)
+            )[:24]
+            proposal_hash = _digest(decision.arguments)
+            journal.append("action_proposed", round=round_id, tool=decision.tool,
+                           proposed_operation=safe_operation,
+                           proposed_fields=proposal_fields,
+                           proposal_sha256=proposal_hash)
+            loop._emit("minimal_action_proposed",
+                       request_id=loop.run_id, task_id=loop.task_id,
+                       task_epoch=loop.task_epoch, round=round_id,
+                       tool=decision.tool, operation=safe_operation,
+                       operation_valid=(safe_operation in COMMAND_OPERATIONS
+                                        if decision.tool == "run_command" else True),
+                       proposed_fields=proposal_fields,
+                       proposal_sha256=proposal_hash, executed=False)
 
         if decision.kind == "blocked":
             loop.protocol_state = "BLOCKED"
@@ -468,6 +494,21 @@ def run_minimal_core(loop, request: str) -> str:
                 "prerequisite from Goal-Driven Blackboard. "
                 "Denied execution does not prove filesystem absence."
             )
+            if rejection == "run_command_operation_invalid":
+                repair_hint += (
+                    " Operation MUST be one of INSPECT, MUTATE, BUILD, TEST, "
+                    "VERIFY, GIT_INSPECT, GIT_MUTATE, PROCESS, TRANSFER, "
+                    "GENERAL. READ/READ_ONLY/LIST are not valid operation "
+                    "values. Retain actual command semantics."
+                )
+            if rejection.startswith("scope_rejected:resolved_scope_expands_beyond_explicit_path"):
+                repair_hint += (
+                    " This is a valid request-scope denial: do NOT attempt "
+                    "inspect_project_scope on the fallback or parent workspace. "
+                    "Use only the explicit target scope or a separately "
+                    "admitted registered source prerequisite. If no exact "
+                    "source probe is authorized, report a precise blocker."
+                )
             journal.append("action_rejected", round=round_id,
                            tool=decision.tool, reason=rejection,
                            repair_mode=item["repair_mode"],
@@ -477,6 +518,9 @@ def run_minimal_core(loop, request: str) -> str:
                        round=round_id, tool=decision.tool,
                        reason_code=item["reason_code"],
                        repair_mode=item["repair_mode"],
+                       proposed_operation=(safe_operation if decision.tool == "run_command" else ""),
+                       proposal_sha256=_digest(decision.arguments),
+                       goal_context_sha256=context_digest,
                        executed=False)
             if consecutive_action_rejections >= 3:
                 loop.protocol_state = "BLOCKED"
@@ -521,6 +565,13 @@ def run_minimal_core(loop, request: str) -> str:
             continue
         consecutive_action_rejections = 0
         consecutive_unverified_finishes = 0
+        loop._emit("minimal_action_admitted",
+                   request_id=loop.run_id, task_id=loop.task_id,
+                   task_epoch=loop.task_epoch, round=round_id,
+                   action_id=action["action_id"], tool=action["tool"],
+                   operation=str(action.get("operation") or ""),
+                   proposal_sha256=_digest(decision.arguments),
+                   executed=False)
 
         fingerprint = _digest({k: v for k, v in action.items() if k != "action_id"})
         mutating = action_is_mutating(action)
@@ -590,6 +641,8 @@ def run_minimal_core(loop, request: str) -> str:
                    task_id=loop.task_id, round=round_id,
                    action_id=action["action_id"], tool=action["tool"],
                    status=receipt.get("status", "UNKNOWN"), evidence_ref=ref,
+                   result_reason=str(receipt.get("reason") or "UNKNOWN")[:120],
+                   verification_status=verification,
                    executed=receipt.get("executed") is True)
         loop.protocol_state = "OBSERVED"
         if loop.continuation_store:
