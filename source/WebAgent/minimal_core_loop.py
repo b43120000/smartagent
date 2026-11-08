@@ -114,10 +114,26 @@ def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
     if receipt.get("status") != "SUCCEEDED" or receipt.get("executed") is not True:
         return False
     data = receipt.get("data") if isinstance(receipt.get("data"), dict) else {}
+    tool = action["tool"]
+    if tool == "run_command":
+        from agent_core.action_dependencies import command_is_proven_observation
+        command = str(action.get("command") or "")
+        operation = str(action.get("operation") or "").upper()
+        if not command or command.lower() not in goal.lower():
+            return False
+        if data.get("exit_code") != 0 or data.get("timed_out"):
+            return False
+        if not data.get("terminal_eligible"):
+            return False
+        if operation in {"INSPECT", "GIT_INSPECT"}:
+            return command_is_proven_observation(action)
+        if operation in {"BUILD", "TEST"}:
+            return str(data.get("verification_status") or "").upper() == "PASS"
+        # Mutation correctness is never inferred from only one command result.
+        return False
     path = str(action.get("path") or "")
     if not path or path.lower() not in goal.lower():
         return False
-    tool = action["tool"]
     if tool == "list_directory":
         return bool(data.get("terminal_eligible") is True and re.search(
             r"列出|清單|檔案|資料夾|list|files|directory", goal, re.I))
