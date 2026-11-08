@@ -152,9 +152,9 @@ def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
         return bool(data.get("terminal_eligible") is True and re.search(
             r"讀取|查看|顯示|read|show|cat", goal, re.I))
     if tool == "create_directory":
-        return bool(data.get("directory_created") is True
-                    and data.get("observed_is_directory") is True
-                    and re.search(r"建立|創立|新增|create|mkdir", goal, re.I))
+        # Runtime's strict GoalEvidence evaluator already handles mkdir.
+        # Never promote a larger multi-step goal because a single mkdir passed.
+        return False
     return False
 
 
