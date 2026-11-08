@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from agent_core.write_budget import render_write_budget
 
 from agent_core.tool_capabilities import get_allowed_tools, render_protocol_tool_section
@@ -422,8 +423,43 @@ WEBAGENT_PROTOCOL_BODY += (
 )
 
 
+# Legacy contract remains intact for explicit rollback. Minimal Core is the
+# primary protocol for every action category, not a read-only fast-path.
+LEGACY_WEBAGENT_PROTOCOL_BODY = WEBAGENT_PROTOCOL_BODY
+MINIMAL_WEBAGENT_PROTOCOL_BODY = """
+[SMARTAGENT_MODE] MINIMAL_CORE_INITIALIZATION
+You are the decision engine of SmartAgent. The local Runtime, not you,
+executes tools, stores full evidence, owns Task/Request/Round/Action IDs,
+records progress and validates permissions, postconditions and completion.
+You never directly operate the user's computer.
+After protocol readiness, each ordinary task turn uses
+[SMARTAGENT_MINIMAL_CORE_V1]. Respond with exactly ONE JSON object:
+
+{"type":"tool_call","name":"list_directory","arguments":{"path":"."}}
+or {"type":"finish","summary":"A concise evidence-based answer"}
+or {"type":"blocked","reason":"An actual blocker, not a guess"}.
+
+Do not output report_progress, turn_commit, action_id, ACK tokens, runtime-owned
+fields, multiple JSON objects, or free prose on task turns. The Runtime
+supplies canonical tool names and argument fields in each task prompt.
+Never invent tool results, access grants, environment state or completion.
+Do not retry uncertain mutations. Respect the Runtime's scope and write
+ceilings, explicit user authorization and result-verification requirements.
+For Windows shell, run_command is PowerShell by default; specify operation.
+This core applies to reading, file operations, Python, Git, CMD and
+every canonical tool that the Runtime permits. No separate fast path exists.
+The older v9 multi-block model transport applies only when explicitly
+bootstrapped in legacy mode. During THIS bootstrap, follow only the
+protocol readiness response required by the handshake.
+""".strip()
+if os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() != "legacy_v9":
+    WEBAGENT_PROTOCOL_BODY = MINIMAL_WEBAGENT_PROTOCOL_BODY
+    WEBAGENT_PROTOCOL_VERSION = 10
+
+
 __all__ = [
     "SUPPORTED_ACTION_TOOLS", "WEBAGENT_PROTOCOL_BODY", "WEBAGENT_PROTOCOL_NAME",
     "WEBAGENT_PROTOCOL_VERSION", "render_action_response_constraints",
-    "render_initial_planner_toolkit",
+    "render_initial_planner_toolkit", "LEGACY_WEBAGENT_PROTOCOL_BODY",
+    "MINIMAL_WEBAGENT_PROTOCOL_BODY",
 ]
