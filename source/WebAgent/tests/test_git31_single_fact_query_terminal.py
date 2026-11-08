@@ -155,6 +155,33 @@ def test_positive_generic_path_query_completes_without_claiming_directory_kind(
     assert loop.executor_result["terminal_status"] == "VERIFIED"
 
 
+def test_positive_directory_requires_independent_typed_read_before_final_fact():
+    from agent_core.tool_result_contract import decode_result
+    typed_action = {
+        "tool": "list_directory", "path": TARGET, "action_id": "A-DIR-TYPE",
+    }
+    fact_action = {
+        "tool": "observe_fact", "path": TARGET, "action_id": "A-DIR-STAT",
+    }
+    typed = decode_result(encode_result(
+        "SUCCEEDED", "DIRECTORY_LISTED",
+        tool="list_directory", executed=True,
+        requested_path=TARGET, resolved_path=TARGET,
+        data={"terminal_eligible": True, "entries": []},
+    ))
+    fact = decode_result(_runtime_fact(fact_action, True))
+    proof = evaluate_goal_evidence(GOAL, [
+        {"action": typed_action, "receipt": typed},
+        {"action": fact_action, "receipt": fact},
+    ])
+    assert proof.verified
+    assert proof.goal_kind == "SINGLE_FACT_QUERY"
+    assert proof.reason == "SINGLE_FACT_QUERY_DIRECTORY_PRESENT_CONFIRMED"
+    assert proof.evidence_refs == ("A-DIR-TYPE", "A-DIR-STAT")
+    # A model finish cannot upgrade file.exists=True to directory kind on
+    # its own; typed list evidence is independently required.
+
+
 def test_positive_file_query_does_not_assume_existing_directory_is_file():
     target = TARGET
     request = "這個檔案存在嗎?\n" + target
