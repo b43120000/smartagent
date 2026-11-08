@@ -22,6 +22,8 @@ jobs:
           python -m py_compile source/WebAgent/minimal_decision.py
           python -m py_compile source/WebAgent/minimal_admission.py
           python -m py_compile source/WebAgent/minimal_core_loop.py
+          python -m py_compile source/agent_core/tri_one_runtime_terminal.py
+          python -m py_compile source/agent_core/tri_one_task_result.py
           python -m py_compile source/WebAgent/protocol_loop.py
           python -m py_compile source/WebAgent/protocol.py
           python -m py_compile source/RemoteAgent/telegram_webagent_worker.py
@@ -29,7 +31,7 @@ jobs:
       - name: Execute isolated core regressions
         env:
           PYTHONPATH: source
-        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py -v --tb=short
+        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_tri_one_runtime_terminal.py -v --tb=short
 
   windows-smoke:
     runs-on: windows-latest
@@ -70,4 +72,4 @@ jobs:
       - name: Windows real filesystem and Collector RCA regression
         env:
           PYTHONPATH: source
-        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_minimal_core_collector_windows.py source/WebAgent/tests/validate_collect_rca_v3_it.py source/WebAgent/tests/test_git27_collector_causal_coverage.py -v --tb=short
+        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_tri_one_runtime_terminal.py source/WebAgent/tests/test_minimal_core_collector_windows.py source/WebAgent/tests/validate_collect_rca_v3_it.py source/WebAgent/tests/test_git27_collector_causal_coverage.py -v --tb=short
