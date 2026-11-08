@@ -163,10 +163,29 @@ def publish_executor_terminal(loop, result: Mapping, *,
             )
         }
     causal_basis = (
-        "RUNTIME_ADMISSION_DENIAL" if admission_refs
+        "ACTUAL_TOOL_EVIDENCE_WITH_PRIOR_DENIAL" if (
+            status == "VERIFIED" and admission_refs
+        ) else "ACTUAL_TOOL_EVIDENCE" if status == "VERIFIED"
+        else "RUNTIME_ADMISSION_DENIAL" if admission_refs
         else "ACTUAL_TOOL_EVIDENCE" if evidence
         else "EXECUTOR_DECISION_CONTRACT"
     )
+    verification_action_refs = list(dict.fromkeys(
+        str(ref)[:160] for ref in (result.get("verification_action_refs") or [])
+        if isinstance(ref, str) and ref
+    ))[:24]
+    tool_evidence_refs = list(dict.fromkeys(
+        str(ref)[:160] for ref in (result.get("tool_evidence_refs") or [])
+        if isinstance(ref, str) and ref.startswith("MIN-EV-")
+    ))[:24]
+    if status == "VERIFIED" and (
+            verification_action_refs != list(
+                trusted_acceptance.get("evidence_refs") or []
+            )
+            or not tool_evidence_refs
+            or not set(verification_action_refs).issubset(set(evidence))
+            or not set(tool_evidence_refs).issubset(set(evidence))):
+        raise ValueError("executor_blackboard_verified_evidence_classes_unbound")
     existing = _load(_path(root, task_id))
     if existing and (existing["request_id"], existing["task_epoch"]) != (request_id, epoch):
         # A task ID may not silently overwrite a previous request/epoch receipt.
@@ -208,6 +227,8 @@ def publish_executor_terminal(loop, result: Mapping, *,
             result.get("last_tool_result_reason") or "NO_TOOL_RESULT_OBSERVED"
         ),
         "evidence_refs": evidence,
+        "verification_action_refs": verification_action_refs,
+        "tool_evidence_refs": tool_evidence_refs,
         "admission_rejection_refs": admission_refs,
         "last_admission_rejection": last_denial,
         "resolution_attempts": min(16, max(0, int(resolution_attempts))),
@@ -317,7 +338,8 @@ def project_executor_for_parent(value: Mapping | None) -> dict:
         "orchestration_mode", "original_tool_status", "last_observed_tool_status",
         "side_effect_outcome_confirmed", "side_effect_may_have_occurred",
         "action_ids", "last_observed_action_id", "last_tool_result_reason",
-        "evidence_refs", "admission_rejection_refs",
+        "evidence_refs", "verification_action_refs", "tool_evidence_refs",
+        "admission_rejection_refs",
         "last_admission_rejection", "resolution_attempts",
         "resolution_state", "parent_consumption", "grants_authorization",
         "advances_parent_stage",
