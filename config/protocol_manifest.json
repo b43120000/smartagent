@@ -229,7 +229,7 @@
     "source/agent_core/web_ui/providers/claude/compatibility.py": "4c861d038eb7e1813de9e0222fd3dd95256b21c9e71698fe6bf21808ba549cc5",
     "source/agent_core/web_ui/providers/claude/composer.py": "2e38f4988c40bdcfad1c126bb5eca6389e3171d0f44544a96b24da2070cccce2",
     "source/agent_core/web_ui/providers/claude/profiles.py": "fd0978ea6897d031688d2bb0fefc5caeeb51959d3b83e045702be7436bd0c164",
-    "source/agent_core/web_ui/providers/gemini/adapter.py": "c2d066cc9a19e151316dda2b3b7e66d6fd22cfabd509b9e2b042da3575a0bc75",
+    "source/agent_core/web_ui/providers/gemini/adapter.py": "a111aad67ffc377260e9e590255a1672c87cad03843feb29417e69c2349a4058",
     "source/agent_core/web_ui/providers/gemini/attachments.py": "dee0f9569604c26a2ea50ac409aaa40d809e7fd9248f68081ad8cc9121710c98",
     "source/agent_core/web_ui/providers/gemini/bridge.py": "606e1d3e2273dcaf50a1a730aae15d8a60bb6014ea2ce7ea91c86e07d742d45a",
     "source/agent_core/web_ui/providers/gemini/compatibility.py": "c1fafc426d6ffd253cc1ba2d86154e0f324da80c291b51ca43e21e031f2c423d",

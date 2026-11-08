@@ -3,7 +3,7 @@
   "provider": "claude",
   "source_origin": "https://claude.ai",
   "scope": "partial_conversation",
-  "revision": "shared-default-20261021",
+  "revision": "shared-default-20261108",
   "elements": {
     "assistant_content": {
       "kind": "assistant_content",

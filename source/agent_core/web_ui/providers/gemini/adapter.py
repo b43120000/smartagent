@@ -6,6 +6,7 @@ import logging
 
 from ...base_adapter import BaseWebUIAdapter
 from ...contracts import CompatibilityReport, RequestScope, TurnRef, text_digest
+from ...message_text import read_message_text
 from . import attachments
 from .bridge import BRIDGE_SCRIPT, BRIDGE_VERSION
 from .compatibility import probe_profile
@@ -103,6 +104,15 @@ class GeminiUIAdapter(BaseWebUIAdapter):
             return str(element.get_attribute(name) or "")
         except Exception:
             return ""
+
+    def _turn_text(self, element, role: str) -> str:
+        # Older Gemini calibrations target a single line. On current Gemini,
+        # the submit marker and prompt are separate siblings in one message.
+        if role == "user" and self.profile.user_content_selector == "p.query-text-line":
+            bodies = element.query_selector_all("div.query-text:has(> p.query-text-line)")
+            if len(bodies) == 1 and len(bodies[0].query_selector_all(":scope > p.query-text-line")) > 1:
+                return read_message_text(bodies[0])
+        return super()._turn_text(element, role)
 
     def _turn_ref(self, element, role: str, ordinal: int) -> TurnRef:
         attrs = tuple(
