@@ -13,6 +13,13 @@ TERMINAL_OUTCOMES = frozenset({"VERIFIED", "BLOCKED", "NEEDS_PREREQUISITE", "UNK
 _PREREQUISITES = ("PARENT_MISSING", "PREREQUISITE", "DEPENDENCY", "SOURCE_REQUIRED",
                   "SOURCE_LOCATION", "ENVIRONMENT_MISSING")
 _DENIALS = ("SCOPE_REJECTED", "PERMISSION_DENIED", "WRITE_CEILING", "NOT_AUTHORIZED")
+_MULTI_STAGE = re.compile(
+    r"(?:如果|若|倘若|當).{0,100}?(?:不存在|缺失|沒有|失敗).{0,100}?"
+    r"(?:建立|創建|新增|修復|下載|安裝)"
+    r"|(?:最後|接著|然後|再(?:次)?).{0,30}?(?:驗證|確認|檢查)"
+    r"|\\bif\\b.{0,100}?\\b(?:missing|absent)\\b.{0,100}?\\b(?:create|repair)\\b",
+    re.I,
+)
 _COMPOUND_ACTION = re.compile(
     r"(?:並|且|還要|再|接著|然後|同時).{0,32}?"
     r"(?:寫入|修改|刪除|編譯|下載|部署|安裝|複製|建立檔案|執行命令)"
@@ -62,7 +69,7 @@ def isolated_task_model_budget(goal: str, loop) -> int | None:
     if requirement.get("external_information_required"):
         return None
     ops = set(requirement.get("required_operations") or [])
-    if ops == {"READ"} and not _COMPOUND_ACTION.search(goal):
+    if ops == {"READ"} and not _COMPOUND_ACTION.search(goal) and not _MULTI_STAGE.search(goal):
         return ATOMIC_MODEL_DECISION_LIMIT
     from agent_core.target_path_contract import extract_target_contract
     target = extract_target_contract(goal)
