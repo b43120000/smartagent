@@ -180,6 +180,10 @@ def publish_executor_terminal(loop, result: Mapping, *,
             "receipt_id", "") or "")[:96] if status == "VERIFIED" else "",
         **binding,
         "executor_state": "TERMINAL", "terminal_status": status,
+        "orchestration_mode": (
+            "EXECUTOR_ONLY" if result.get("orchestration_mode") == "EXECUTOR_ONLY"
+            else "STANDARD"
+        ),
         "reason_code": _code(result.get("reason_code")),
         "root_cause_code": _code(
             result.get("root_cause_code") or result.get("reason_code")
@@ -309,7 +313,8 @@ def project_executor_for_parent(value: Mapping | None) -> dict:
         "parent_task_id", "parent_task_epoch", "stage_id",
         "atomic_task_id", "task_epoch", "terminal_status", "reason_code",
         "root_cause_code", "reason_sha256", "causal_basis",
-        "parent_binding_status", "goal_verified", "fact_observation", "original_tool_status", "last_observed_tool_status",
+        "parent_binding_status", "goal_verified", "fact_observation",
+        "orchestration_mode", "original_tool_status", "last_observed_tool_status",
         "side_effect_outcome_confirmed", "side_effect_may_have_occurred",
         "action_ids", "last_observed_action_id", "last_tool_result_reason",
         "evidence_refs", "admission_rejection_refs",
