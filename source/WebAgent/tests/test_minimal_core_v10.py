@@ -77,7 +77,6 @@ def tool_json(tool, **args):
     '{"type":"tool_call","name":"read_file","arguments":{},"tool":"delete_path"}',
     '{"type":"tool_call","type":"finish","summary":"ok"}',
     '[{"type":"finish","summary":"ok"}]',
-    '{"type":"finish","summary":"ok"} trailing',
 ])
 def test_parser_rejects_ambiguous_transport(bad):
     with pytest.raises(MinimalDecisionError):
@@ -469,3 +468,19 @@ def test_format_repair_hint_contains_code_and_never_executes_bad_reply(tmp_path,
 def test_prose_without_json_remains_failure_not_fake_finish():
     with pytest.raises(MinimalDecisionError, match="json_object_not_found"):
         parse_minimal_decision("The folder has been created, I think.")
+
+
+
+def test_pokeclaw_single_json_with_trailing_explanation_is_accepted():
+    response = '{"type":"finish","summary":"ok"} trailing note'
+    decision, meta = parse_minimal_decision_with_diagnostics(response)
+    assert decision.kind == "finish" and decision.message == "ok"
+    assert meta["candidate_count"] == 1
+    assert meta["source_kind"] == "BALANCED_JSON_EXTRACTION"
+
+
+def test_legacy_v9_envelope_with_valid_json_still_rejected():
+    fence = chr(96) * 3
+    response = fence + "smartagent_tool\n" + tool_json("delete_path", path=r"E:\Erase") + "\n" + fence
+    with pytest.raises(MinimalDecisionError, match="legacy_protocol_response"):
+        parse_minimal_decision(response)
