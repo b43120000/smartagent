@@ -183,8 +183,13 @@ def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
     return False
 
 
-def _verified_proof(goal: str, history: list[dict]) -> GoalEvidence:
-    """Shared goal-level proof, keeping simple legacy read-only goals intact."""
+def _verified_proof(goal: str, history: list[dict], loop=None) -> GoalEvidence:
+    """Runtime-owned proof: preserve simple goals, fail closed on deployments."""
+    if loop is not None:
+        from .minimal_deployment_terminal import evaluate_deployment_goal
+        deployment = evaluate_deployment_goal(loop, goal, history)
+        if deployment is not None:
+            return deployment
     proof = evaluate_goal_evidence(goal, history)
     if proof.verified:
         return proof
@@ -405,7 +410,7 @@ def run_minimal_core(loop, request: str) -> str:
                     return decision.message
                 journal.append("runtime_text_only_ineligible", round=round_id,
                                reason=answer_reason)
-            proof = _verified_proof(request, history)
+            proof = _verified_proof(request, history, loop)
             verified = proof.verified
             if verified:
                 receipt = _accept_and_record_goal(loop, proof, journal,
@@ -414,6 +419,7 @@ def run_minimal_core(loop, request: str) -> str:
                 summary = (format_runtime_goal_summary(proof)
                            if proof.goal_kind in {
                                "SINGLE_CREATE_DIRECTORY", "CONDITIONAL_DIRECTORY_EXISTS",
+                               "DEPLOYMENT_CONTENT_VERIFIED",
                            } else decision.message)
                 journal.append("model_finish", round=round_id,
                                outcome="SUCCESS", verified=True,
@@ -652,7 +658,7 @@ def run_minimal_core(loop, request: str) -> str:
         # Runtime, not Planner, owns the observed completion decision. A
         # verified single-folder creation does not consume another model turn,
         # and another harmless inspection cannot invalidate this proof.
-        proof = evaluate_goal_evidence(request, history)
+        proof = _verified_proof(request, history, loop)
         if proof.verified:
             terminal_receipt = _accept_and_record_goal(
                 loop, proof, journal, round_id=round_id)
