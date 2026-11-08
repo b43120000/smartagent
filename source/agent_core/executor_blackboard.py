@@ -144,6 +144,8 @@ def publish_executor_terminal(loop, result: Mapping, *,
         "grants_authorization": False,
         "advances_parent_stage": False,
     }
+    from .tri_layer_handoff import build_handoff
+    data["tri_layer_handoff"] = build_handoff(data)
     if existing:
         # Idempotent replay of a terminal receipt is safe; contradictory
         # terminal transitions are rejected rather than overwritten.
@@ -214,6 +216,12 @@ def consume_executor_terminal(root: str | Path, *, child_task_id: str,
         "status": "CONSUMED", "stage_verification": stage_verification,
         "consumer_evidence_refs": refs,
     }
+    # This legacy acknowledgement is not the Goal Stage Verifier.
+    # The dedicated prerequisite and goal-stage handoff identities remain
+    # separate; no layer's status is copied onto another.
+    handoff = value.get("tri_layer_handoff")
+    if isinstance(handoff, dict):
+        handoff["handoff_delivery_state"] = "PARENT_ACKNOWLEDGED"
     # Even PASS acknowledges one child, not the entire parent stage.
     value["advances_parent_stage"] = False
     _atomic_write(path, value)
@@ -234,4 +242,78 @@ def project_executor_for_parent(value: Mapping | None) -> dict:
         "resolution_state", "parent_consumption", "grants_authorization",
         "advances_parent_stage",
     )
-    return {k: value[k] for k in fields if k in value}
+    result = {k: value[k] for k in fields if k in value}
+    from .tri_layer_handoff import project_handoff
+    result["tri_layer_handoff"] = project_handoff(value)
+    return result
+
+
+def acknowledge_prerequisite_handoff(root: str | Path, *,
+                                    executor_task_id: str, parent_task_id: str,
+                                    parent_task_epoch: str, readiness_verdict: str,
+                                    evidence_refs: list[str]) -> dict:
+    """Prerequisite owns ONLY its readiness verdict; never marks Goal complete."""
+    if readiness_verdict not in {"READY", "NOT_READY", "NEEDS_REPLAN"}:
+        raise ValueError("prerequisite_readiness_verdict_invalid")
+    path = _path(root, executor_task_id)
+    record = _load(path)
+    handoff = (record or {}).get("tri_layer_handoff") or {}
+    prerequisite = handoff.get("prerequisite_handoff") or {}
+    if not record or (
+            prerequisite.get("prerequisite_owner_task_id") != parent_task_id
+            or prerequisite.get("prerequisite_owner_task_epoch") != parent_task_epoch):
+        raise ValueError("prerequisite_handoff_identity_mismatch")
+    refs = list(dict.fromkeys(str(ref)[:160] for ref in evidence_refs if ref))[:24]
+    if not refs:
+        raise ValueError("prerequisite_handoff_evidence_required")
+    existing = prerequisite.get("prerequisite_readiness_verdict")
+    if existing not in {"NOT_EVALUATED", readiness_verdict}:
+        raise ValueError("prerequisite_handoff_conflict")
+    prerequisite["prerequisite_readiness_verdict"] = readiness_verdict
+    prerequisite["prerequisite_readiness_evidence_refs"] = refs
+    prerequisite["prerequisite_handoff_state"] = (
+        "READY_FOR_GOAL_REVIEW" if readiness_verdict == "READY"
+        else "REPLAN_REQUIRED" if readiness_verdict == "NEEDS_REPLAN"
+        else "READINESS_RECHECK_REQUIRED"
+    )
+    handoff["handoff_delivery_state"] = "PREREQUISITE_CONSUMED"
+    # The Goal Stage owner remains separate and MUST re-evaluate.
+    _atomic_write(path, record)
+    return record
+
+
+def acknowledge_goal_stage_handoff(root: str | Path, *,
+                                   executor_task_id: str, parent_task_id: str,
+                                   parent_task_epoch: str, stage_id: str,
+                                   stage_verdict: str,
+                                   evidence_refs: list[str]) -> dict:
+    """Goal Stage may record a verdict, but not infer Overall Goal SUCCESS."""
+    if stage_verdict not in {"PASS", "FAIL", "NEEDS_RECHECK"}:
+        raise ValueError("goal_stage_verification_verdict_invalid")
+    path = _path(root, executor_task_id)
+    record = _load(path)
+    handoff = (record or {}).get("tri_layer_handoff") or {}
+    goal_stage = handoff.get("goal_stage_handoff") or {}
+    if not record or (
+            goal_stage.get("goal_owner_task_id") != parent_task_id
+            or goal_stage.get("goal_owner_task_epoch") != parent_task_epoch
+            or goal_stage.get("goal_stage_id") != stage_id):
+        raise ValueError("goal_stage_handoff_identity_mismatch")
+    refs = list(dict.fromkeys(str(ref)[:160] for ref in evidence_refs if ref))[:24]
+    if not refs:
+        raise ValueError("goal_stage_handoff_evidence_required")
+    old = goal_stage.get("goal_stage_verification_verdict")
+    if old not in {"NOT_EVALUATED", stage_verdict}:
+        raise ValueError("goal_stage_handoff_conflict")
+    goal_stage["goal_stage_verification_verdict"] = stage_verdict
+    goal_stage["goal_stage_evidence_refs"] = refs
+    goal_stage["goal_stage_handoff_state"] = (
+        "VERIFICATION_RECORDED" if stage_verdict == "PASS"
+        else "WAITING_FOR_REVIEW"
+    )
+    # Does not set Stage COMPLETED or Goal SUCCESS. Those are independent
+    # Goal Driver terminal rules, requiring all stage evidence.
+    handoff["handoff_delivery_state"] = "GOAL_STAGE_CONSUMED"
+    handoff["stage_transition_committed"] = False
+    _atomic_write(path, record)
+    return record
