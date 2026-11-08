@@ -256,6 +256,7 @@ def _bind_real_like_conditional_ledger(loop, history):
     import hashlib
     loop.task_request = CONDITIONAL_GOAL
     loop.action_ledger = {}
+    loop.action_result_ledger = {}  # only this request's actual ordered actions
     for entry in history:
         action, receipt = entry["action"], entry["receipt"]
         action_id = action["action_id"]
