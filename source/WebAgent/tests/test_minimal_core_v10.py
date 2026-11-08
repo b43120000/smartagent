@@ -37,6 +37,7 @@ class FakeLoop:
         self.task_epoch = "epoch"
         self.run_id = "RR-MINIMAL-TEST"
         self.max_turns = 8
+        self.task_request = goal
         self.tools = FakeTools(root, goal)
         self.replies = iter(replies)
         self.result = result
@@ -544,3 +545,178 @@ def test_multi_step_goal_does_not_auto_finish_after_directory_created(tmp_path, 
     assert loop.terminal_outcome == "UNKNOWN"
     assert loop.terminal_acceptance == {}
     assert len(loop.executed) == 1
+
+
+
+def test_live_rca_ai_gravity_joke_text_only_completes_first_round(tmp_path, monkeypatch):
+    """Exact RCA 2026-11-08: valid finish is text-only SUCCESS, not PAUSED."""
+    from agent_core.task_progress import set_runtime_state
+    from agent_core.tri_one_runtime_terminal import terminal_verdict_from_loop
+    from agent_core.tri_one_task_result import make_task_result, validate_task_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    request = "說個關於ai 加上引力理論的笑話"
+    joke = '物理學家問 AI：「你真的理解廣義相對論嗎？」AI 回答：「我的參數足以彎曲時空。」'
+    loop = FakeLoop(tmp_path, request, [
+        json.dumps({"type": "finish", "summary": joke}, ensure_ascii=False),
+    ], "")
+    answer = run_minimal_core(loop, request)
+    assert answer == joke
+    assert not loop.executed
+    assert loop.terminal_outcome == "SUCCESS"
+    receipt = loop.terminal_acceptance
+    assert receipt["completion_kind"] == "ANSWER_ONLY"
+    assert receipt["admission_reason"] == "ANSWER_ONLY_RESPONSE_ADMITTED"
+    assert receipt["evidence_refs"] == []
+    assert receipt["evidence_verdict"] == "UNVERIFIED"
+    assert receipt["answer_sha256"]
+    assert terminal_verdict_from_loop(loop).is_complete
+    payload = make_task_result(
+        request_id=loop.run_id, task_id=loop.task_id,
+        task_epoch=loop.task_epoch, intent_digest="f" * 64,
+        source_interface="TELEGRAM",
+        trusted_reply_route={"transport": "TELEGRAM"},
+        state="COMPLETED", outcome="SUCCESS",
+        terminal_acceptance=receipt, answer_text=answer,
+        evidence_refs=[], operational_action_count=0,
+        operational_action_count_basis="RESULT_LEDGER", artifacts=[],
+    )
+    validate_task_result(payload)
+    assert payload["completion_kind"] == "ANSWER_ONLY"
+    assert payload["outcome"] == "SUCCESS"
+    assert payload["operational_action_count"] == 0
+    assert loop.expected_protocols == [None]
+    journal = (tmp_path / "localdata/runtime/minimal_core/TASK-MINIMAL-TEST.jsonl")
+    events = [json.loads(x)["event"] for x in journal.read_text(encoding="utf-8").splitlines()]
+    assert "runtime_text_only_admitted" in events
+    assert "model_finish" not in events
+
+
+@pytest.mark.parametrize("request", [
+    "創立這個資料夾\nE:\\TestTextOnlyNotAllowed",
+    "請讀取 E:\\private\\data.txt 並幫我說明內容",
+    "說個笑話，然後執行 python -m pytest",
+    "今天最新的引力波研究新聞是什麼？",
+])
+def test_non_text_only_cannot_complete_without_tool_evidence(tmp_path, monkeypatch, request):
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    loop = FakeLoop(tmp_path, request, ['{"type":"finish","summary":"完成"}'], "")
+    answer = run_minimal_core(loop, request)
+    assert "尚無足夠證據" in answer
+    assert loop.terminal_outcome == "UNKNOWN"
+    assert not loop.terminal_acceptance
+
+
+def test_text_only_with_attached_material_needs_real_context_evidence(tmp_path, monkeypatch):
+    from agent_core.tri_one_runtime_terminal import accept_runtime_answer_only
+    request = "說個關於 AI 的笑話"
+    loop = FakeLoop(tmp_path, request, [], "")
+    receipt, reason = accept_runtime_answer_only(
+        loop, goal=request, answer="好笑", had_attachments=True)
+    assert receipt is None and reason == "ANSWER_ONLY_REQUIRES_RESOURCE_CONTEXT"
+
+
+def test_finish_claims_tool_execution_without_evidence_not_answer_only(tmp_path, monkeypatch):
+    from agent_core.tri_one_runtime_terminal import accept_runtime_answer_only
+    goal = "說個關於 AI 的笑話"
+    loop = FakeLoop(tmp_path, goal, [], "")
+    record, reason = accept_runtime_answer_only(
+        loop, goal=goal, answer="我已執行本地工具，現在有笑話。")
+    assert record is None and reason == "ANSWER_ONLY_UNVERIFIED_EXECUTION_CLAIM"
+
+
+def test_goal_driver_context_carries_canonical_gaps_and_denied_read_gate(tmp_path, monkeypatch):
+    from WebAgent.minimal_goal_driver import (
+        build_goal_driver_context, compact_goal_driver_context,
+        gate_known_absent_directory,
+    )
+    path = r"E:\GoalDriver\missing"
+    request = "若 " + path + " 資料夾不存在則建立，並執行測試"
+    loop = FakeLoop(tmp_path, request, [], "")
+    canonical = {
+        "context_snapshot_id": "CTX-FAKE-1",
+        "persistent_goal_gaps": {
+            "active_count": 1,
+            "active_gaps": [{
+                "gap_id": "GAP-1", "kind": "DIRECTORY_EXISTENCE",
+                "path": path, "status": "UNRESOLVED",
+                "observation_status": "CONFIRMED",
+                "observed_value": False, "observed_fact_ref": "MIN-OBS-1",
+                "goal_link": "CONDITIONAL_REMEDIATION_CANDIDATE",
+            }],
+            "gaps": [],
+        },
+        "goal_prerequisite_resolution": {
+            "next_category": "PROPOSE_GOAL_ACTION_FOR_ADMISSION",
+            "source_requirement": "NOT_REQUIRED",
+            "reason_code": "TARGET_ABSENT_SOURCE_NOT_REQUIRED",
+        },
+        "directory_decision_rule": {
+            "decision": "CREATE_DIRECTORY_REQUIRED",
+            "candidate": {"tool": "create_directory", "target": path,
+                          "status": "UNTRIED", "strategy_id": "STRAT-FAKE"},
+        },
+        "strategy_candidates": {"candidates": []},
+        "action_loop_decision": {"required_transition": "CONTINUE"},
+    }
+    monkeypatch.setattr(
+        "agent_core.planner_context_snapshot.build_planner_context_snapshot",
+        lambda runtime: canonical,
+    )
+    context = build_goal_driver_context(loop, request, [])
+    assert context["snapshot_source"] == "CANONICAL_SHARED_BLACKBOARD"
+    assert context["confirmed_missing_targets"][0]["evidence_ref"] == "MIN-OBS-1"
+    assert context["next_category"] == "PROPOSE_GOAL_ACTION_FOR_ADMISSION"
+    assert context["directory_candidate"]["tool"] == "create_directory"
+    assert context["scope_authorization_granted"] is False
+    assert gate_known_absent_directory(
+        {"tool": "query_project", "project_root": path}, context,
+    )["reason_code"] == "CONFIRMED_MISSING_PREREQUISITE_DIRECTORY"
+    assert gate_known_absent_directory(
+        {"tool": "inspect_directory", "paths": [path]}, context,
+    ) is None
+    assert gate_known_absent_directory(
+        {"tool": "create_directory", "path": path}, context,
+    ) is None
+    assert gate_known_absent_directory(
+        {"tool": "query_project", "project_root": r"E:\Other"}, context,
+    ) is None
+    encoded = compact_goal_driver_context(context)
+    assert "MIN-OBS-1" in encoded
+    assert len(encoded) <= 6500
+
+
+def test_goal_driver_snapshot_failure_is_diagnostic_not_an_absence(tmp_path, monkeypatch):
+    from WebAgent.minimal_goal_driver import build_goal_driver_context
+    goal = "建立 E:\\new\\project 並編譯"
+    loop = FakeLoop(tmp_path, goal, [], "")
+    def unavailable(*args):
+        raise RuntimeError("snapshot_not_ready")
+    monkeypatch.setattr(
+        "agent_core.planner_context_snapshot.build_planner_context_snapshot",
+        unavailable,
+    )
+    context = build_goal_driver_context(loop, goal, [])
+    assert context["snapshot_source"] == "DURABLE_GOAL_GAP_FALLBACK"
+    assert context["snapshot_error_type"] == "RuntimeError"
+    assert not context["confirmed_missing_targets"]
+    assert context["scope_authorization_granted"] is False
+
+
+def test_goal_driver_rejection_feedback_reaches_next_planner_round(tmp_path, monkeypatch):
+    from agent_core.tool_result_contract import encode_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    req = "列出 " + str(tmp_path) + " 的檔案"
+    result = encode_result("SUCCEEDED", "DIRECTORY_LISTED",
+                           tool="list_directory", executed=True,
+                           requested_path=str(tmp_path),
+                           data={"entries": [], "terminal_eligible": True})
+    loop = FakeLoop(tmp_path, req, [
+        tool_json("list_directory"),  # missing required path
+        tool_json("list_directory", path=str(tmp_path)),
+        '{"type":"finish","summary":"空資料夾"}',
+    ], result)
+    assert run_minimal_core(loop, req) == "空資料夾"
+    assert len(loop.executed) == 1
+    assert "recent_rejections" in loop.prompts[1]
+    assert "schema" in loop.prompts[1].lower()
+    assert "Runtime Action Admission denied" in loop.prompts[1]
