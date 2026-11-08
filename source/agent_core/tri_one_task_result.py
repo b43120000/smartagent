@@ -641,9 +641,14 @@ def make_task_result_from_webagent_loop(loop: object, answer_text: str, *,
     else:
         action_count = 0
         action_basis = "NO_LEDGER_OBSERVED"
-    outcome = str(getattr(loop, "terminal_outcome", "") or "UNKNOWN").strip().upper()
-    if outcome not in OUTCOMES:
-        outcome = "UNKNOWN"
+    from .tri_one_runtime_terminal import terminal_verdict_from_loop
+    verdict = terminal_verdict_from_loop(
+        loop, minimal=os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower()
+        != "legacy_v9",
+    )
+    outcome = verdict.outcome
+    receipt = verdict.receipt
+    refs = list(receipt.get("evidence_refs", []))
     return make_task_result(
         request_id=str(getattr(loop, "run_id", "") or ""),
         task_id=str(getattr(loop, "task_id", "") or ""),
@@ -651,7 +656,7 @@ def make_task_result_from_webagent_loop(loop: object, answer_text: str, *,
         intent_digest=str(getattr(loop, "intent_digest", "") or ""),
         source_interface=source_interface,
         trusted_reply_route=route,
-        state="COMPLETED",
+        state=verdict.state,
         outcome=outcome,
         terminal_acceptance=receipt,
         answer_text=str(answer_text),
