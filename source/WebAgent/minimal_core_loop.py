@@ -375,8 +375,9 @@ def run_minimal_core(loop, request: str) -> str:
                                                  round_id=round_id)
                 set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
                 summary = (format_runtime_goal_summary(proof)
-                           if proof.goal_kind == "SINGLE_CREATE_DIRECTORY"
-                           else decision.message)
+                           if proof.goal_kind in {
+                               "SINGLE_CREATE_DIRECTORY", "CONDITIONAL_DIRECTORY_EXISTS",
+                           } else decision.message)
                 journal.append("model_finish", round=round_id,
                                outcome="SUCCESS", verified=True,
                                evidence_refs=list(proof.evidence_refs),
