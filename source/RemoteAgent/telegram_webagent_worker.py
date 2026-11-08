@@ -683,7 +683,10 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         )
         progress_snapshot = read_progress(task.task_id, root=root)
         plan_id = ""
-        if terminal.is_complete:
+        if terminal.is_complete and not getattr(loop, "executor_only_mode", False):
+            # PokeClaw Executor Finish is model-reported, not an independently
+            # verified Goal or a publishable completed plan. Its durable
+            # per-action record lives in executor_run_blackboard instead.
             final_content, plan_id = publish_completed_plan(
                 ledger=PlanLedger.from_task_store(remote_tasks_path(root)),
                 task=task,
