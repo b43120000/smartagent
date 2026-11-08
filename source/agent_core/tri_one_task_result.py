@@ -332,7 +332,16 @@ def make_task_result(
         if not answer_only_receipt:
             raise TaskResultContractError("answer_only_not_implemented_in_2a")
         from .tri_one_answer_only import enabled as answer_only_enabled
-        if not (enabled() and answer_only_enabled(source=source_interface)):
+        # v10 has its own Runtime-owned, request-scoped text admission.
+        # Preserve the optional v9/5A feature flag for all older receipts.
+        minimal_v10_receipt = (
+            receipt.get("decision") == "MINIMAL_TEXT_ONLY_FINISH_V1"
+            and receipt.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+            and str(receipt.get("answer_sha256") or "")
+            and len(str(receipt.get("answer_sha256") or "")) == 64
+        )
+        if not (minimal_v10_receipt or
+                (enabled() and answer_only_enabled(source=source_interface))):
             raise TaskResultContractError("answer_only_feature_disabled")
     if kind == "ANSWER_ONLY" and not (
         answer_only_receipt and state == "COMPLETED" and outcome == "SUCCESS"
