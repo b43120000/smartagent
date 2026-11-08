@@ -106,5 +106,68 @@ class MinimalDeploymentTerminalTests(unittest.TestCase):
                              "PINNED_SOURCE_BLOB_MISMATCH")
 
 
+    def test_pinned_source_bytes_are_compared_not_just_directory_names(self):
+        import hashlib
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        import WebAgent.minimal_deployment_terminal as module
+
+        with tempfile.TemporaryDirectory(prefix="v10-source-pins-") as tmp:
+            root = Path(tmp)
+            fake_module = root / "source" / "WebAgent" / "minimal_deployment_terminal.py"
+            fake_module.parent.mkdir(parents=True)
+            catalog = root / "config" / "source_discovery_catalog.json"
+            catalog.parent.mkdir(parents=True)
+            target = root / "deployment"
+            target.mkdir()
+            samples = {
+                "case_a/data.csv": b"id,value\\n1,20\\n",
+                "case_a/process.py": b"print('a')\\n",
+                "case_b/data.csv": b"id,value\\n2,30\\n",
+                "case_b/run.py": b"print('b')\\n",
+                "case_c/main.cpp": b"int main() {return 0;}\\n",
+                "check_results.py": b"print('check')\\n",
+            }
+            manifest = {
+                "source_input_hashes": {
+                    "case_a/data.csv": hashlib.sha256(
+                        samples["case_a/data.csv"]).hexdigest(),
+                    "case_b/data.csv": hashlib.sha256(
+                        samples["case_b/data.csv"]).hexdigest(),
+                }
+            }
+            samples["fixture_manifest.json"] = json.dumps(
+                manifest, sort_keys=True).encode("utf-8")
+            pins = {}
+            for name, content in samples.items():
+                path = target.joinpath(*name.split("/"))
+                path.parent.mkdir(exist_ok=True, parents=True)
+                path.write_bytes(content)
+                pins[name] = hashlib.sha1(
+                    b"blob " + str(len(content)).encode("ascii")
+                    + bytes([0]) + content).hexdigest()
+            catalog.write_text(json.dumps({"records": [{
+                "requested_target": str(target),
+                "artifact": {"pinned_source_blobs": pins}
+            }]}), encoding="utf-8")
+            class Scope:
+                def require_read(self, path, *, require_absolute=False):
+                    value = Path(path)
+                    assert value.is_absolute()
+                    assert value.is_relative_to(target)
+                    return value
+            with patch.object(module, "__file__", str(fake_module)):
+                good, reason = module._pinned_blob_integrity(
+                    str(target), Scope(), REQUIRED)
+                self.assertTrue(good, reason)
+                (target / "case_a" / "data.csv").write_bytes(b"CHANGED")
+                good, reason = module._pinned_blob_integrity(
+                    str(target), Scope(), REQUIRED)
+                self.assertFalse(good)
+                self.assertEqual(reason, "PINNED_SOURCE_BLOB_MISMATCH")
+
+
 if __name__ == "__main__":
     unittest.main()
