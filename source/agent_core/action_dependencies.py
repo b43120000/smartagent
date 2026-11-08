@@ -74,6 +74,8 @@ def command_is_proven_observation(action):
         rf'Write-Output\s+{literal}',
         rf'git\s+-C\s+{literal}\s+(?:status\s+--short|rev-parse\s+HEAD|branch\s+--show-current|log\s+-1\s+--oneline)',
         r'git\s+(?:status(?:\s+--short)?|rev-parse\s+HEAD|branch\s+--show-current|log\s+-1\s+--oneline)',
+        r'cmd(?:\.exe)?\s+/c\s+(?:dir|ver)',
+        r'git\s+diff\s+--(?:stat|name-only)',
     )
     from .action_resolution_trace import exact_remote_git_read_repository
     # A single fixed HEAD remote read is a safe *command classification*;
