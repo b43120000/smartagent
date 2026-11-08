@@ -285,3 +285,76 @@ def test_conditional_directory_ledger_identity_mismatch_cannot_be_accepted():
     with pytest.raises(ValueError, match="identity_or_status"):
         accept_runtime_terminal(loop, proof)
     assert loop.terminal_outcome == "UNKNOWN"
+
+
+
+def test_preexisting_file_is_not_mistaken_for_verified_directory():
+    # An existence-only stat cannot tell a regular file from a folder.
+    rows = [_observed_entry(True, action_id="MIN-EXISTS-1"),
+            _observed_entry(True, action_id="MIN-EXISTS-2")]
+    assert not evaluate_goal_evidence(CONDITIONAL_GOAL, rows).verified
+
+
+def test_preexisting_directory_with_confirmed_listing_is_verified():
+    listing = {
+        "action": {"tool": "list_directory", "path": CONDITIONAL_PATH,
+                   "action_id": "MIN-LIST-EXISTING"},
+        "receipt": {
+            "tool": "list_directory", "status": "SUCCEEDED",
+            "reason": "DIRECTORY_LISTED", "executed": True,
+            "requested_path": CONDITIONAL_PATH,
+            "data": {"terminal_eligible": True, "entries": []},
+        },
+    }
+    rows = [_observed_entry(True, action_id="MIN-EXISTS-1"),
+            listing, _observed_entry(True, action_id="MIN-EXISTS-2")]
+    proof = evaluate_goal_evidence(CONDITIONAL_GOAL, rows)
+    assert proof.verified
+    assert proof.reason == "CONDITIONAL_DIRECTORY_ALREADY_PRESENT"
+    assert proof.evidence_refs == ("MIN-LIST-EXISTING", "MIN-EXISTS-2")
+
+
+def test_goal_gap_reconstructs_real_observe_fact_false_and_preserves_create_resolution():
+    from types import SimpleNamespace
+    from agent_core.tool_result_contract import attach_runtime_result
+    from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+
+    action_ledger, action_result_ledger = {}, {}
+    loop = SimpleNamespace(
+        run_id="RR-TRI-ONE-FACT-TEST", task_epoch="epoch-fact-1",
+        task_request=CONDITIONAL_GOAL,
+        progress_ledger=SimpleNamespace(goal=CONDITIONAL_GOAL),
+        action_ledger=action_ledger, action_result_ledger=action_result_ledger,
+    )
+
+    def record_history(entry):
+        action, receipt = entry["action"], entry["receipt"]
+        action_id = action["action_id"]
+        result = attach_runtime_result(
+            "{}", receipt["status"], receipt["reason"],
+            tool=action["tool"], executed=receipt["executed"],
+            requested_path=receipt.get("requested_path", action.get("path", "")),
+            resolved_path=receipt.get("resolved_path"),
+            data=receipt["data"], action_id=action_id,
+            request_id=loop.run_id, task_id="TASK-TRI-ONE-FACT-TEST",
+        )
+        action_ledger[action_id] = {"action": action, "result": result}
+        action_result_ledger[action_id] = {
+            "tool": action["tool"], "request_id": loop.run_id,
+            "task_epoch": loop.task_epoch, "result": result,
+            "result_status": receipt["status"], "result_reason": receipt["reason"],
+            "executed": receipt["executed"], "evidence_status": "ACTIVE",
+        }
+        return reconstruct_goal_gaps(loop)
+
+    before = record_history(_observed_entry(False, action_id="MIN-FACT-MISSING"))
+    assert before["active_count"] == 1, before
+    assert before["active_gaps"][0]["observed_fact_ref"] == "MIN-FACT-MISSING"
+    after_create = record_history(_entry(
+        path=CONDITIONAL_PATH, action_id="MIN-FACT-CREATED"))
+    assert after_create["active_count"] == 0, after_create
+    after_restat = record_history(_observed_entry(
+        True, action_id="MIN-FACT-REOBSERVED"))
+    assert after_restat["active_count"] == 0
+    assert after_restat["gaps"][0]["status"] == "RESOLVED"
+    assert after_restat["gaps"][0]["observed_fact_ref"] == "MIN-FACT-CREATED"
