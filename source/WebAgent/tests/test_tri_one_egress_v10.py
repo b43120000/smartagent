@@ -110,3 +110,52 @@ def test_local_test_result_transport_reports_paused_without_forged_complete():
     task, event, verdict = terminal_task("LOCAL_TEST", verified=False)
     assert event == "TASK_PAUSED"
     assert verdict.state == "PAUSED"
+
+
+
+@pytest.mark.parametrize("transport", SOURCES)
+def test_ai_gravity_joke_answer_only_is_one_tri_one_contract(transport):
+    """No tool, no fake Action Evidence, but real Runtime-accepted Finish."""
+    import hashlib
+    from agent_core.tri_one_runtime_terminal import (
+        accept_runtime_answer_only, terminal_verdict_from_loop,
+    )
+    goal = "說個關於ai 加上引力理論的笑話"
+    answer = 'AI 說：「我的引力模型強到連參數也逃不出事件視界。」'
+    loop = SimpleNamespace(
+        run_id="RR-TEXT-ONLY-TEST", task_id="TASK-TEXT-ONLY-TEST",
+        task_epoch="epoch-text-1", turn_id=1, task_request=goal,
+        action_result_ledger={}, action_ledger={}, condition_result_ledger={},
+        terminal_outcome="UNKNOWN", terminal_acceptance={},
+        protocol_state="ACTIVE",
+    )
+    receipt, reason = accept_runtime_answer_only(loop, goal=goal, answer=answer)
+    assert reason == "ANSWER_ONLY_RESPONSE_ADMITTED"
+    assert receipt["evidence_refs"] == []
+    terminal = terminal_verdict_from_loop(loop)
+    assert terminal.state == "COMPLETED" and terminal.outcome == "SUCCESS"
+    route = {"transport": transport, "endpoint": "secret-must-not-export"}
+    task = SimpleNamespace(
+        request_id=loop.run_id, task_id=loop.task_id, task_epoch=loop.task_epoch,
+        state=terminal.state, completed_at=1700000000,
+        reply_route=route,
+        metadata={"transport": transport, "reply_route": route,
+                  "intent_digest": hashlib.sha256(goal.encode("utf-8")).hexdigest()},
+        result_ledger={"final": {
+            "response": answer,
+            "task_outcome": "SUCCESS",
+            "terminal_acceptance": receipt,
+            "action_result_ledger": {}, "outbound_artifacts": [],
+        }},
+        action_ledger={},
+    )
+    result = make_task_result_from_remote_event(
+        task, "TASK_COMPLETED", {"summary": answer})
+    assert result["completion_kind"] == "ANSWER_ONLY"
+    assert result["outcome"] == "SUCCESS"
+    assert result["task_state"] == "COMPLETED"
+    assert result["evidence_refs"] == []
+    assert result["operational_action_count"] == 0
+    assert result["terminal_acceptance"]["evidence_verdict"] == "UNVERIFIED"
+    assert "endpoint" not in str(result)
+    validate_task_result(result)
