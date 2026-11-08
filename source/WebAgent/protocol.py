@@ -439,6 +439,20 @@ After protocol readiness, each ordinary task turn uses
 or {"type":"finish","summary":"A concise evidence-based answer"}
 or {"type":"blocked","reason":"An actual blocker, not a guess"}.
 
+For a self-contained TEXT-ONLY request (such as writing a joke, translation
+or conceptual explanation without external sources), respond directly with
+{"type":"finish","summary":"the actual requested textual answer"}.
+A Text-only Finish is admitted only by Runtime's trusted original-request
+classification and only if no Tool Action or external dependency is needed.
+Never fabricate ActionResult evidence for a text-only answer.
+
+Each task round supplies a bounded Runtime-owned Goal-Driven Blackboard:
+confirmed Goal Gaps, prerequisites, strategy candidates and Action Readiness.
+Use its current evidence to choose a new prerequisite, repair fields or
+replan after failure. UNKNOWN and tool rejection are NOT evidence of absence.
+Planner selects ONE next Action; Runtime alone authorizes and verifies it.
+Do not add v9 report_progress/goal_transition transport fields.
+
 Do not output report_progress, turn_commit, action_id, ACK tokens, runtime-owned
 fields, multiple JSON objects, or free prose on task turns. The Runtime
 supplies canonical tool names and argument fields in each task prompt.
