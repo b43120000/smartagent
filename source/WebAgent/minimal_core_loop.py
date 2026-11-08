@@ -62,13 +62,15 @@ def recent_results(history: list[dict]) -> list[dict]:
     for entry in history[-4:]:
         receipt = entry["receipt"]
         data = receipt.get("data") if isinstance(receipt.get("data"), dict) else {}
+        encoded_data = json.dumps(data, ensure_ascii=False, default=str)
         result.append({
             "tool": entry["action"]["tool"], "action_id": entry["action"]["action_id"],
             "status": receipt.get("status", "UNKNOWN"),
             "reason": receipt.get("reason", "UNPARSEABLE"),
             "executed": receipt.get("executed", False),
             "evidence_ref": entry["evidence_ref"],
-            "data_preview": json.dumps(data, ensure_ascii=False, default=str)[:4500],
+            "data_preview": encoded_data[:4500],
+            "preview_truncated": len(encoded_data) > 4500,
         })
     return result
 
@@ -88,7 +90,7 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "Choose ONE tool per round. Tool names and fields are canonical; "
         "all paths must be inside authorized scope. JSON Windows backslashes "
         "must be escaped. The Runtime will execute only admitted actions. "
-        "Never invent observations or claim an unverified success. "
+        "Never invent observations or claim an unverified success. If a tool observation preview is truncated, do not claim to have seen the entire file or listing. "
         "Windows shell for run_command is PowerShell 5.1 (cmd /c invokes CMD). "
         "For run_command provide command and operation. For commands that "
         "are not provably read-only also provide nonempty success_criteria "
@@ -115,6 +117,9 @@ def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
         return False
     data = receipt.get("data") if isinstance(receipt.get("data"), dict) else {}
     tool = action["tool"]
+    if tool in {"list_directory", "read_file"}:
+        if len(json.dumps(data, ensure_ascii=False, default=str)) > 4500:
+            return False
     if tool == "run_command":
         from agent_core.action_dependencies import command_is_proven_observation
         command = str(action.get("command") or "")
