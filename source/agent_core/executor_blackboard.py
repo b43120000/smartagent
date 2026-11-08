@@ -103,6 +103,7 @@ def publish_executor_terminal(loop, result: Mapping, *,
                               resolution_state: str = "NOT_REQUIRED") -> dict:
     """Reject UNKNOWN and reject VERIFIED without binding to real runtime proof."""
     status = str(result.get("outcome") or "")
+    trusted_acceptance = getattr(loop, "terminal_acceptance", {})
     if status not in TERMINAL:
         raise ValueError("executor_blackboard_nonterminal_status")
     if status == "VERIFIED" and (
@@ -119,6 +120,18 @@ def publish_executor_terminal(loop, result: Mapping, *,
     ))[:24]
     if status == "VERIFIED" and not evidence:
         raise ValueError("executor_blackboard_verified_without_evidence_refs")
+    # No model text or tool prose can manufacture a confirmed fact.
+    fact = {}
+    if status == "VERIFIED" and trusted_acceptance.get(
+            "matched_condition_id") == "SINGLE_FACT_QUERY":
+        expected = trusted_acceptance.get("fact_observation")
+        if (not isinstance(expected, dict)
+                or result.get("fact_observation") != expected
+                or expected.get("fact_observation_status") != "CONFIRMED"
+                or type(expected.get("fact_observed_value")) is not bool
+                or expected.get("fact_evidence_ref") not in evidence):
+            raise ValueError("executor_blackboard_single_fact_provenance_invalid")
+        fact = dict(expected)
     action_ids = list(dict.fromkeys(
         str(ref)[:160] for ref in [result.get("action_id", "")] if ref
     ))
@@ -176,6 +189,7 @@ def publish_executor_terminal(loop, result: Mapping, *,
         ).hexdigest(),
         "causal_basis": causal_basis,
         "goal_verified": status == "VERIFIED",
+        "fact_observation": fact,
         "original_tool_status": str(result.get("original_tool_status") or
                                     result.get("tool_status") or "")[:24],
         "last_observed_tool_status": str(result.get("last_observed_tool_status") or
@@ -295,7 +309,7 @@ def project_executor_for_parent(value: Mapping | None) -> dict:
         "parent_task_id", "parent_task_epoch", "stage_id",
         "atomic_task_id", "task_epoch", "terminal_status", "reason_code",
         "root_cause_code", "reason_sha256", "causal_basis",
-        "parent_binding_status", "goal_verified", "original_tool_status", "last_observed_tool_status",
+        "parent_binding_status", "goal_verified", "fact_observation", "original_tool_status", "last_observed_tool_status",
         "side_effect_outcome_confirmed", "side_effect_may_have_occurred",
         "action_ids", "last_observed_action_id", "last_tool_result_reason",
         "evidence_refs", "admission_rejection_refs",
