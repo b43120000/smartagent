@@ -113,7 +113,7 @@ def test_two_model_rounds_single_directory_listing(tmp_path, monkeypatch):
     from agent_core.tool_result_contract import encode_result
     monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
     request = "列出 " + str(tmp_path) + " 底下檔案"
-    result = encode_result("done", "SUCCEEDED", "DIRECTORY_LISTED",
+    result = encode_result("SUCCEEDED", "DIRECTORY_LISTED",
                            tool="list_directory", executed=True,
                            requested_path=str(tmp_path),
                            data={"entries": [{"name": "main.py", "kind": "FILE"}],
@@ -134,7 +134,7 @@ def test_unknown_result_cannot_be_verified(tmp_path, monkeypatch):
     from agent_core.tool_result_contract import encode_result
     monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
     request = "建立 " + str(tmp_path / "new")
-    result = encode_result("uncertain", "UNKNOWN", "TOOL_OUTCOME_UNKNOWN",
+    result = encode_result("UNKNOWN", "TOOL_OUTCOME_UNKNOWN",
                            tool="create_directory", executed=True)
     loop = FakeLoop(tmp_path, request, [
         tool_json("create_directory", path=str(tmp_path / "new")),
@@ -154,7 +154,7 @@ def test_invalid_reply_never_runs_action(tmp_path):
 def test_uncertain_mutation_not_replayed(tmp_path):
     from agent_core.tool_result_contract import encode_result
     request = "創立 " + str(tmp_path / "new")
-    result = encode_result("unknown", "UNKNOWN", "UNKNOWN", tool="create_directory", executed=True)
+    result = encode_result("UNKNOWN", "UNKNOWN", tool="create_directory", executed=True)
     call = tool_json("create_directory", path=str(tmp_path / "new"))
     loop = FakeLoop(tmp_path, request, [call, call], result)
     with pytest.raises(RuntimeError, match="MINIMAL_MUTATION_REPLAY_UNCERTAIN"):
