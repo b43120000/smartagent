@@ -6918,7 +6918,9 @@ class WebAgentProtocolLoop:
                 authorized_paths=bool(authorized),
                 image_or_artifact_request=bool(self.image_delivery_plan),
                 continuation=bool(self.continuation_source),
-            ) if pr0_enabled() else {}
+            ) if pr0_enabled() and not getattr(
+                self, "executor_only_mode", False
+            ) else {}
         )
         if self.task_requirement:
             self._emit(
