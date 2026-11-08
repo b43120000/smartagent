@@ -210,7 +210,8 @@ def test_blackboard_exposes_same_child_receipt_to_goal_and_prerequisite(tmp_path
         authorized_paths=[],
     )
     state = build_goal_driver_context(fake, "執行一個專案", [])
-    assert state["executor_child_results"] == state["prerequisite_executor_results"]
     assert state["executor_child_results"][0]["terminal_status"] == "VERIFIED"
+    assert state["prerequisite_executor_results"] == state["prerequisite_handoffs"]
+    assert state["goal_stage_handoffs"] == []
     assert state["executor_results_do_not_complete_parent_stage"] is True
     monkeypatch.setattr(planner_context_snapshot, "build_planner_context_snapshot", original)
