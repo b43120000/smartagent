@@ -150,6 +150,8 @@ def resolve_unknown_action(loop, *, original: dict, original_receipt: dict,
     attempts = 0
     final_proof = None
     terminal = None
+    resolution_admission_refs = []
+    resolution_last_denial = {}
 
     def event(name, **fields):
         journal.append(name, original_action_id=original_id, **fields)
@@ -210,10 +212,38 @@ def resolve_unknown_action(loop, *, original: dict, original_receipt: dict,
             continue
         action, rejection = admit_minimal_action(decision, loop.tools)
         if rejection or not action or not _resolution_action_allowed(original, action):
-            last_reason = ("RESOLUTION_ACTION_DENIED" if rejection
-                           else "RESOLUTION_NONOBSERVATION_PROPOSED")
+            # A child Resolution admission denial is evidence about the
+            # verification process, not proof that the original mutation
+            # succeeded/failed. Preserve the actual Runtime rejection code.
+            admission_cause = str(rejection or "RESOLUTION_SCOPE_NOT_ALLOWED")[:95]
+            last_reason = "RESOLUTION_ACTION_DENIED:" + admission_cause
+            diag = dict(getattr(
+                loop.tools, "_last_minimal_admission_diagnostic", {}
+            ) or {})
+            material = "|".join((
+                str(loop.run_id), str(loop.task_epoch), original_id,
+                str(attempt), admission_cause,
+            ))
+            rejection_ref = "MIN-ADM-" + hashlib.sha256(
+                material.encode("utf-8")
+            ).hexdigest()[:24]
+            resolution_admission_refs.append(rejection_ref)
+            resolution_last_denial = {
+                "tool": str(decision.tool or "")[:64],
+                "reason_code": admission_cause,
+                "root_cause_code": str(diag.get("scope_reason_code") or admission_cause)[:120],
+                "scope_failure_stage": str(diag.get("scope_failure_stage") or "")[:80],
+                "scope_category": str(diag.get("scope_category") or "")[:80],
+                "scope_cause_digest": str(diag.get("scope_cause_digest") or "")[:64],
+                "admission_evidence_ref": rejection_ref,
+                "round": int(loop.turn_id),
+                "executed": False,
+            }
             event("minimal_resolution_action_rejected", resolution_attempt=attempt,
-                  reason_code=last_reason, executed=False)
+                  reason_code=last_reason, admission_evidence_ref=rejection_ref,
+                  root_cause_code=resolution_last_denial["root_cause_code"],
+                  failure_stage=resolution_last_denial["scope_failure_stage"],
+                  executed=False)
             continue
         event("minimal_resolution_action_admitted", resolution_attempt=attempt,
               action_id=action["action_id"], tool=action["tool"], executed=False)
@@ -288,6 +318,11 @@ def resolve_unknown_action(loop, *, original: dict, original_receipt: dict,
         resolution_state=("EVIDENCE_VERIFIED" if terminal == "VERIFIED"
                           else "RESOLUTION_BLOCKED"),
         evidence_refs=refs,
+        admission_rejection_refs=resolution_admission_refs,
+        last_admission_rejection=resolution_last_denial,
+        root_cause_code=(
+            resolution_last_denial.get("root_cause_code") or last_reason
+        ),
     )
     event("minimal_resolution_concluded", terminal_status=terminal,
           resolution_attempts=attempts, reason_code=last_reason,
