@@ -25,6 +25,7 @@ CORE_FILES = (
     'source/WebAgent/minimal_decision.py',
     'source/WebAgent/minimal_admission.py',
     'source/WebAgent/minimal_core_loop.py',
+    'source/WebAgent/minimal_goal_driver.py',
     'source/agent_core/tri_one_runtime_terminal.py',
     'source/agent_core/test_signal_transport.py',
     'source/agent_core/path_integrity_trace.py',
