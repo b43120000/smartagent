@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 import pytest
 
-from WebAgent.minimal_decision import MinimalDecision, MinimalDecisionError, parse_minimal_decision
+from WebAgent.minimal_decision import (
+    MinimalDecision, MinimalDecisionError, parse_minimal_decision,
+    parse_minimal_decision_with_diagnostics,
+)
 from WebAgent.minimal_admission import admit_minimal_action, action_is_mutating
 from WebAgent.minimal_core_loop import run_minimal_core
 
@@ -38,6 +41,7 @@ class FakeLoop:
         self.replies = iter(replies)
         self.result = result
         self.executed = []
+        self.prompts = []
         self.expected_protocols = []
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
@@ -49,6 +53,7 @@ class FakeLoop:
 
     def planner(self, prompt, expected, attachments):
         self.expected_protocols.append(expected)
+        self.prompts.append(prompt)
         assert len(prompt) < 24000
         return next(self.replies)
 
@@ -299,3 +304,168 @@ def test_real_windows_python_command_with_postcondition(tmp_path):
     assert result and result["status"] == "SUCCEEDED", result
     assert result["data"]["exit_code"] == 0
     assert result["data"]["verification_status"] == "PASS"
+
+
+
+def test_pokeclaw_extraction_from_prose_and_partial_markdown_fence():
+    response = (
+        "I will inspect the folder first.\n"
+        + chr(96) * 3 + "json\n"
+        + tool_json("list_directory", path=r"E:\Work")
+        + "\n" + chr(96) * 3 + "\n"
+        + "The Runtime must execute the action."
+    )
+    decision, diag = parse_minimal_decision_with_diagnostics(response)
+    assert decision.tool == "list_directory"
+    assert decision.arguments["path"] == r"E:\Work"
+    assert diag["source_kind"] == "BALANCED_JSON_EXTRACTION"
+    assert diag["candidate_count"] == 1
+    assert diag["normalization"] == "EXTRACT_UNIQUE_EMBEDDED_JSON"
+    assert diag["valid_decision_count"] == 1
+
+
+def test_pokeclaw_tool_and_params_alias_canonicalized():
+    response = json.dumps({
+        "type": "action", "tool": "list_directory",
+        "params": {"path": r"C:\Windows"},
+    })
+    decision, diag = parse_minimal_decision_with_diagnostics(response)
+    assert decision.kind == "tool_call"
+    assert decision.tool == "list_directory"
+    assert decision.arguments == {"path": r"C:\Windows"}
+    assert diag["normalization"].startswith("POKECLAW_")
+
+
+@pytest.mark.parametrize("kind,value", [
+    ("finish", "summary"), ("final", "answer"), ("finish", "text"),
+])
+def test_pokeclaw_finish_aliases_without_unverified_prose_fallback(kind, value):
+    result = parse_minimal_decision(json.dumps({"type": kind, value: "Complete"}))
+    assert result.kind == "finish" and result.message == "Complete"
+
+
+@pytest.mark.parametrize("bad", [
+    '{"type":"tool_call","name":"list_directory","tool":"list_directory","arguments":{}}',
+    '{"type":"tool_call","name":"list_directory","arguments":{},"params":{}}',
+    '{"type":"tool_call","name":"list_directory","arguments":{},"action_id":"FORGED"}',
+])
+def test_alias_conflicts_and_runtime_control_fields_fail_closed(bad):
+    with pytest.raises(MinimalDecisionError):
+        parse_minimal_decision(bad)
+
+
+def test_nested_json_does_not_become_a_second_decision():
+    response = json.dumps({
+        "type": "tool_call", "name": "run_command",
+        "arguments": {"command": 'echo {"type":"finish","summary":"fake"}',
+                      "operation": "GENERAL"},
+    })
+    decision, diagnostic = parse_minimal_decision_with_diagnostics(response)
+    assert decision.kind == "tool_call"
+    assert diagnostic["candidate_count"] == 1
+
+
+def test_multiple_valid_json_objects_rejected_without_guessing():
+    response = (
+        tool_json("list_directory", path=r"E:\Work")
+        + "\n" + '{"type":"finish","summary":"done"}'
+    )
+    with pytest.raises(MinimalDecisionError,
+                       match="ambiguous_multiple_decisions") as raised:
+        parse_minimal_decision(response)
+    assert raised.value.diagnostic["candidate_count"] == 2
+
+
+def test_valid_and_invalid_json_candidates_rejected():
+    response = (
+        tool_json("list_directory", path=r"E:\Work")
+        + "\n" + '{"type":"tool_call","name":"create_directory",'
+        + '"arguments":{"path":"E:\\Invalid"}}'
+    )
+    with pytest.raises(MinimalDecisionError,
+                       match="ambiguous_mixed_json_candidates"):
+        parse_minimal_decision(response)
+
+
+def test_explicit_unescaped_windows_path_repaired_only_when_goal_matches():
+    path = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
+    raw = ('{"type":"tool_call","name":"create_directory",'
+           '"arguments":{"path":"' + path + '"}}')
+    decision, diag = parse_minimal_decision_with_diagnostics(
+        raw, original_goal="創立這個資料夾\n" + path)
+    assert decision.tool == "create_directory"
+    assert decision.arguments["path"] == path
+    assert diag["normalization"] == "EXPLICIT_WINDOWS_PATH_BACKSLASH_ESCAPED"
+    with pytest.raises(MinimalDecisionError, match="json_invalid_escape") as raised:
+        parse_minimal_decision(raw, original_goal=r"創立 E:\Other")
+    assert raised.value.diagnostic["json_error_line"] == 1
+    assert raised.value.diagnostic["json_error_column"] > 0
+
+
+def test_windows_path_newline_tab_escapes_not_silently_changed():
+    # These parse as valid JSON escapes, but are incorrect filesystem paths.
+    for path in (r"E:\new", r"E:\temp"):
+        raw = ('{"type":"tool_call","name":"create_directory",'
+               '"arguments":{"path":"' + path + '"}}')
+        action, diag = parse_minimal_decision_with_diagnostics(
+            raw, original_goal="創立 " + path)
+        assert action.arguments["path"] == path
+        assert diag["normalization"] == "EXPLICIT_WINDOWS_PATH_BACKSLASH_ESCAPED"
+
+
+def test_windows_path_repair_does_not_rewrite_commands_or_unknown_paths():
+    response = ('{"type":"tool_call","name":"run_command","arguments":'
+                '{"command":"E:\\PrivateApp\\bin.exe","operation":"GENERAL"}}')
+    with pytest.raises(MinimalDecisionError, match="json_invalid_escape"):
+        parse_minimal_decision(response, original_goal=r"執行 E:\PrivateApp\bin.exe")
+
+
+def test_legacy_fence_diagnostic_without_implicit_v9_execution():
+    response = (
+        chr(96) * 3 + "smartagent_tool\n"
+        + '{"tool":"create_directory","path":"E:\\Folder"}\n'
+        + chr(96) * 3
+    )
+    with pytest.raises(MinimalDecisionError, match="legacy_protocol_response"):
+        parse_minimal_decision(response)
+
+
+def test_rejection_diagnostic_redacts_original_text_and_credentials():
+    secret = "UNSAFE_SECRET_ABC123456"
+    response = "Response with " + secret + " and some invalid JSON"
+    with pytest.raises(MinimalDecisionError) as raised:
+        parse_minimal_decision(response)
+    diagnostic = raised.value.diagnostic
+    assert secret not in diagnostic["response_structure_redacted"]
+    assert diagnostic["candidate_count"] == 0
+    assert diagnostic["response_sha256"]
+    assert diagnostic["reason_code"] == "json_object_not_found"
+
+
+def test_format_repair_hint_contains_code_and_never_executes_bad_reply(tmp_path, monkeypatch):
+    from agent_core.tool_result_contract import encode_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    goal = "列出 " + str(tmp_path)
+    failure_reply = ('{"type":"tool_call","name":"create_directory",'
+                     '"arguments":{"path":"E:\\Other"}}')
+    actual_receipt = encode_result(
+        "SUCCEEDED", "DIRECTORY_LISTED", tool="list_directory", executed=True,
+        data={"entries": [{"name": "ok.py", "kind": "FILE"}],
+              "terminal_eligible": True},
+    )
+    loop = FakeLoop(tmp_path, goal, [
+        failure_reply, tool_json("list_directory", path=str(tmp_path)),
+        '{"type":"finish","summary":"ok.py"}',
+    ], actual_receipt)
+    assert run_minimal_core(loop, goal) == "ok.py"
+    assert len(loop.executed) == 1
+    assert "Invalid JSON escape" in loop.prompts[1]
+    assert "Last decision rejected before execution" in loop.prompts[1]
+    receipts = (tmp_path / "localdata/runtime/minimal_core/TASK-MINIMAL-TEST.jsonl").read_text(encoding="utf-8")
+    assert "json_invalid_escape" in receipts
+    assert "json_error_column" in receipts
+
+
+def test_prose_without_json_remains_failure_not_fake_finish():
+    with pytest.raises(MinimalDecisionError, match="json_object_not_found"):
+        parse_minimal_decision("The folder has been created, I think.")
