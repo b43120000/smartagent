@@ -220,9 +220,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "summary_sha256": hashlib.sha256(
                     decision.message.encode("utf-8")
                 ).hexdigest(),
-                "prior_tool_observation_count": sum(
-                    row.get("kind") == "TOOL_RESULT" for row in board["events"]
-                ),
+                "prior_tool_observation_count": len(recent),
             })
             return _finish(
                 loop, root, request, kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
@@ -305,16 +303,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             raw_result = loop._execute_action(action)
         except Exception as exc:
             # Never replay a possibly side-effecting command.
-            raw_result = json.dumps({
-                "_runtime_result": {
-                    "schema": "SMARTAGENT_RUNTIME_TOOL_RESULT_V1",
-                    "tool": action["tool"], "status": "UNKNOWN",
-                    "reason": "TOOL_EXCEPTION_OUTCOME_UNKNOWN",
-                    "executed": True, "requested_path": "",
-                    "resolved_path": None,
-                    "data": {"exception_class": type(exc).__name__},
-                },
-            })
+            from agent_core.tool_result_contract import encode_result
+            raw_result = encode_result(
+                "UNKNOWN", "TOOL_EXCEPTION_OUTCOME_UNKNOWN",
+                tool=action["tool"], executed=True,
+                data={"exception_class": type(exc).__name__},
+            )
         receipt = decode_result(raw_result) or {
             "status": "UNKNOWN", "reason": "UNPARSEABLE_TOOL_RESULT",
             "executed": False, "data": {},
