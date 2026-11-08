@@ -251,16 +251,36 @@ def test_conditional_directory_fail_closed_when_required_evidence_missing(change
     assert not evaluate_goal_evidence(goal, history).verified
 
 
-def test_conditional_directory_acceptance_uses_all_three_action_ledger_refs():
-    history = _conditional_history()
-    proof = evaluate_goal_evidence(CONDITIONAL_GOAL, history)
-    loop = _loop()
-    for action_id in proof.evidence_refs:
+def _bind_real_like_conditional_ledger(loop, history):
+    from agent_core.tool_result_contract import attach_runtime_result
+    import hashlib
+    loop.task_request = CONDITIONAL_GOAL
+    loop.action_ledger = {}
+    for entry in history:
+        action, receipt = entry["action"], entry["receipt"]
+        action_id = action["action_id"]
+        raw = attach_runtime_result(
+            "{}", receipt["status"], receipt["reason"],
+            tool=action["tool"], executed=receipt["executed"],
+            requested_path=receipt.get("requested_path", action.get("path", "")),
+            resolved_path=receipt.get("resolved_path"),
+            data=receipt["data"], action_id=action_id,
+            request_id=loop.run_id, task_id=loop.task_id,
+        )
+        loop.action_ledger[action_id] = {"action": dict(action), "result": raw}
         loop.action_result_ledger[action_id] = {
             "request_id": loop.run_id, "task_id": loop.task_id,
             "task_epoch": loop.task_epoch, "executed": True,
             "result_status": "SUCCEEDED", "evidence_status": "ACTIVE",
+            "result": raw, "result_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         }
+
+
+def test_conditional_directory_acceptance_uses_all_three_action_ledger_refs():
+    history = _conditional_history()
+    proof = evaluate_goal_evidence(CONDITIONAL_GOAL, history)
+    loop = _loop()
+    _bind_real_like_conditional_ledger(loop, history)
     receipt = accept_runtime_terminal(loop, proof)
     assert receipt["evidence_refs"] == list(proof.evidence_refs)
     assert terminal_verdict_from_loop(loop).state == "COMPLETED"
@@ -275,12 +295,7 @@ def test_conditional_directory_ledger_identity_mismatch_cannot_be_accepted():
     history = _conditional_history()
     proof = evaluate_goal_evidence(CONDITIONAL_GOAL, history)
     loop = _loop()
-    for action_id in proof.evidence_refs:
-        loop.action_result_ledger[action_id] = {
-            "request_id": loop.run_id, "task_id": loop.task_id,
-            "task_epoch": loop.task_epoch, "executed": True,
-            "result_status": "SUCCEEDED", "evidence_status": "ACTIVE",
-        }
+    _bind_real_like_conditional_ledger(loop, history)
     loop.action_result_ledger["MIN-CHECK-BEFORE"]["task_epoch"] = "other-epoch"
     with pytest.raises(ValueError, match="identity_or_status"):
         accept_runtime_terminal(loop, proof)
@@ -358,3 +373,16 @@ def test_goal_gap_reconstructs_real_observe_fact_false_and_preserves_create_reso
     assert after_restat["active_count"] == 0
     assert after_restat["gaps"][0]["status"] == "RESOLVED"
     assert after_restat["gaps"][0]["observed_fact_ref"] == "MIN-FACT-CREATED"
+
+
+
+def test_conditional_terminal_rejects_replayed_result_bytes_changed_after_proof():
+    history = _conditional_history()
+    proof = evaluate_goal_evidence(CONDITIONAL_GOAL, history)
+    loop = _loop()
+    _bind_real_like_conditional_ledger(loop, history)
+    loop.action_result_ledger["MIN-CHECK-AFTER"]["result"] = "forged"
+    with pytest.raises(ValueError, match="digest_mismatch"):
+        accept_runtime_terminal(loop, proof)
+    assert loop.terminal_outcome == "UNKNOWN"
+    assert loop.terminal_acceptance == {}
