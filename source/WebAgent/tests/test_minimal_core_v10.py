@@ -188,3 +188,41 @@ def test_real_smartagent_registry_lists_directory_without_planner_progress(tmp_p
     assert result["reason"] == "DIRECTORY_LISTED"
     assert result["executed"] is True
     assert any(entry["name"] == "sample.txt" for entry in result["data"]["entries"])
+
+
+
+def test_two_round_git_status_finishes_with_verified_observation(tmp_path, monkeypatch):
+    from agent_core.tool_result_contract import encode_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    request = "請執行 git status --short"
+    receipt = encode_result(
+        "SUCCEEDED", "COMMAND_EXITED", tool="run_command", executed=True,
+        data={"exit_code": 0, "terminal_eligible": True,
+              "observation_confirmed": True, "verification_status": "UNVERIFIED"},
+    )
+    loop = FakeLoop(tmp_path, request, [
+        tool_json("run_command", command="git status --short", operation="GIT_INSPECT"),
+        '{"type":"finish","summary":"Git status obtained"}',
+    ], receipt)
+    assert run_minimal_core(loop, request) == "Git status obtained"
+    assert loop.terminal_outcome == "SUCCESS"
+    assert len(loop.executed) == 1
+
+
+def test_generic_mutation_not_marked_complete_from_exit_code(tmp_path, monkeypatch):
+    from agent_core.tool_result_contract import encode_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    request = "請執行 git commit -m update"
+    receipt = encode_result("SUCCEEDED", "COMMAND_EXITED", tool="run_command",
+                            executed=True, data={"exit_code": 0,
+                                                 "terminal_eligible": True,
+                                                 "verification_status": "PASS"})
+    loop = FakeLoop(tmp_path, request, [
+        tool_json("run_command", command="git commit -m update",
+                  operation="GIT_MUTATE", success_criteria="commit verified",
+                  verify=[{"action": "run_command", "command": "git rev-parse HEAD"}]),
+        '{"type":"finish","summary":"committed"}',
+    ], receipt)
+    message = run_minimal_core(loop, request)
+    assert "尚無足夠證據" in message
+    assert loop.terminal_outcome == "UNKNOWN"
