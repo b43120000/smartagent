@@ -118,6 +118,8 @@ def publish_executor_terminal(loop, result: Mapping, *,
         "schema": SCHEMA, "task_id": task_id, "request_id": request_id,
         "task_epoch": epoch,
         "goal_sha256": hashlib.sha256(str(goal).encode("utf-8")).hexdigest(),
+        "terminal_receipt_id": str(getattr(loop, "terminal_acceptance", {}).get(
+            "receipt_id", "") or "")[:96] if status == "VERIFIED" else "",
         **binding,
         "executor_state": "TERMINAL", "terminal_status": status,
         "reason_code": _code(result.get("reason_code")),
@@ -223,7 +225,8 @@ def project_executor_for_parent(value: Mapping | None) -> dict:
     if not value or value.get("terminal_status") not in TERMINAL:
         return {}
     fields = (
-        "task_id", "parent_task_id", "parent_task_epoch", "stage_id",
+        "task_id", "request_id", "goal_sha256", "terminal_receipt_id",
+        "parent_task_id", "parent_task_epoch", "stage_id",
         "atomic_task_id", "task_epoch", "terminal_status", "reason_code",
         "goal_verified", "original_tool_status", "last_observed_tool_status",
         "side_effect_outcome_confirmed", "side_effect_may_have_occurred",
