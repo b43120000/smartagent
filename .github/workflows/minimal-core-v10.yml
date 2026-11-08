@@ -70,4 +70,4 @@ jobs:
       - name: Windows real filesystem and Collector RCA regression
         env:
           PYTHONPATH: source
-        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_minimal_core_collector_windows.py -v --tb=short
+        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_minimal_core_collector_windows.py source/WebAgent/tests/validate_collect_rca_v3_it.py source/WebAgent/tests/test_git27_collector_causal_coverage.py -v --tb=short
