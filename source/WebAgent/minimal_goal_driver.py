@@ -200,8 +200,21 @@ def build_goal_driver_context(runtime, goal: str, history: list[dict],
                isinstance(snapshot, Mapping) else {}) or {}
     result["executor_task_result"] = dict(handoff.get("task_result") or {})
     result["executor_child_results"] = list(handoff.get("child_results") or [])[-8:]
-    result["prerequisite_executor_results"] = result["executor_child_results"]
+    # Separate parent projections: each module sees its OWN status field.
+    # A Prerequisite READY does not mean Goal Stage COMPLETED; an Executor
+    # VERIFIED does not mean Prerequisite READY.
+    result["prerequisite_handoffs"] = list(
+        handoff.get("prerequisite_handoffs") or []
+    )[-8:]
+    result["goal_stage_handoffs"] = list(
+        handoff.get("goal_stage_handoffs") or []
+    )[-8:]
+    result["executor_handoffs"] = list(
+        handoff.get("tri_layer_handoffs") or []
+    )[-8:]
+    result["prerequisite_executor_results"] = result["prerequisite_handoffs"]
     result["executor_results_do_not_complete_parent_stage"] = True
+    result["layer_states_are_not_interchangeable"] = True
     if isinstance(directory, Mapping):
         candidate = directory.get("candidate")
         if isinstance(candidate, Mapping):
