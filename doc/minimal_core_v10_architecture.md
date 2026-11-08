@@ -273,3 +273,61 @@ Goal-level proof, Runtime retains UNKNOWN/PAUSED.
 6. Compare Terminal/TaskResult across all shared Agent Mode routes.
 
 Offline and Windows CI are not equivalent to ChatGPT DOM / Telegram Live PASS.
+
+
+## 2026-11-08 conditional directory Live RCA: task created but PAUSED
+
+Original Live case:
+- Task ID TASK-02D4A8B2A612BB5E546B
+- Request ID RR-TELEGRAM-C3EF3F593C1B8C4E
+- Installed base 0dc18964612724c6d861b43446018afdead6b83f
+- Goal: check specified authorized folder, create if missing, finally
+  independently verify it exists.
+
+RCA event sequence (recorded in supplied sanitized ZIP):
+- Round 1 list_directory was rejected at scope admission, NOT executed.
+- Round 2 observe_fact(file.exists=False) SUCCEEDED.
+- Round 3 create_directory DIRECTORY_CREATED SUCCEEDED.
+- Round 4 observe_fact(file.exists=True) SUCCEEDED.
+- Round 5 model Finish was parsed/accepted as one valid JSON decision,
+  but Goal Verification returned UNKNOWN and Tri-One emitted TASK_PAUSED.
+- Telegram delivery was successful. The failure was the Runtime's
+  *goal-level completion evidence classification*, not the model parser,
+  filesystem executor or delivery adapter.
+
+Root causes:
+1. The previous GoalEvidence contract accepted only one standalone
+   create_directory request and a few narrow single ToolResult goals.
+   It did not recognize an ordered conditionally created directory
+   goal requiring pre- and post-observation.
+2. Goal Gap Ledger reconstructed directory existence primarily from
+   inspect_directory/create_directory. It lacked a strict projection
+   of Runtime observe_fact FALSE into a goal-bound missing prerequisite.
+
+Implementation:
+- The terminal authority verifies a bounded, fully parsed original
+  conditional-directory Goal with the same target path throughout.
+- For a missing target it requires three real, same-task receipts in
+  order: confirmed filesystem.stat false; native create_directory with
+  verified directory type; confirmed filesystem.stat true.
+- For a pre-existing target it requires separately confirmed directory
+  type, not merely file.exists=True.
+- An unverified/freshness-mismatched/path-mismatched fact, a missing
+  creation receipt, a later contradictory observation, or an extra
+  requested subtask prevents automatic successful admission.
+- Runtime independently replays the original ActionResult Ledger
+  (including identity, status and result digest) before accepting the
+  evidence-backed Tri-One terminal. No model prose is trusted for PASS.
+- This contract produces EVIDENCE_BACKED, not ANSWER_ONLY, and preserves
+  existing Scope, Write Ceiling, Goal anchor and normal Tool Admission.
+- Goal-Driven Blackboard now sees confirmed filesystem.stat absence as
+  a missing directory prerequisite; file.exists=True alone is NEVER
+  sufficient proof of directory type.
+- After the final trusted observation, Minimal Core may issue one
+  Runtime-owned Terminal Receipt and finish without an additional
+  model Finish turn. Existing standalone mkdir and text-only behavior
+  is unchanged.
+
+CI verifies negative evidence cases and a real Windows authorized
+observe_fact -> mkdir -> observe_fact round-trip. Real user-machine
+Telegram/ChatGPT DOM acceptance is still independently required.
