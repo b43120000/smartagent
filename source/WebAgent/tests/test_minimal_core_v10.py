@@ -168,3 +168,23 @@ def test_uncertain_mutation_not_replayed(tmp_path):
     with pytest.raises(RuntimeError, match="MINIMAL_MUTATION_REPLAY_UNCERTAIN"):
         run_minimal_core(loop, request)
     assert len(loop.executed) == 1
+
+
+
+def test_real_smartagent_registry_lists_directory_without_planner_progress(tmp_path):
+    """Exercise the actual canonical scope and tool dispatch, not just a mock."""
+    from WebAgent.tool_context import WebAgentToolContext
+    from agent_core.tool_result_contract import decode_result
+
+    (tmp_path / "sample.txt").write_text("hi", encoding="utf-8")
+    context = WebAgentToolContext(tmp_path)
+    context.begin_run("RR-MINIMAL-SMOKE", "列出 " + str(tmp_path), [str(tmp_path)])
+    decision = MinimalDecision("tool_call", "list_directory", {"path": str(tmp_path)})
+    action, rejection = admit_minimal_action(decision, context)
+    assert rejection == ""
+    assert action and action["tool"] == "list_directory"
+    result = decode_result(context.execute(action))
+    assert result["status"] == "SUCCEEDED"
+    assert result["reason"] == "DIRECTORY_LISTED"
+    assert result["executed"] is True
+    assert any(entry["name"] == "sample.txt" for entry in result["data"]["entries"])
