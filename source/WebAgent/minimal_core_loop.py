@@ -803,6 +803,20 @@ def run_minimal_core(loop, request: str) -> str:
         if receipt.get("status") in {"UNKNOWN", "RUNNING"}:
             repair_hint = ("Last action outcome is uncertain or running. "
                            "Observe current state; NEVER replay a mutation blindly.")
+        # The second model decision may have been spent repairing a rejected
+        # proposal. A verified narrow read need not consume a THIRD reply just
+        # to restate the real bounded ToolResult.
+        if atomic_budget is not None and round_id >= atomic_budget:
+            final_proof = _verified_proof(request, history, loop)
+            if final_proof.verified and final_proof.goal_kind == "SINGLE_OBSERVATION":
+                _accept_and_record_goal(loop, final_proof, journal, round_id=round_id)
+                verified_executor = dict(loop.executor_result)
+                verified_executor.update(outcome="VERIFIED", reason_code=final_proof.reason,
+                                         goal_verified=True)
+                publish_executor_result(verified_executor)
+                set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
+                bounded = recent_results(history)[-1]
+                return "Runtime 已驗證單次觀測結果：\n" + bounded["data_preview"]
 
     if atomic_budget is not None:
         # Return a typed child result to Goal/Prerequisite. A two-turn
