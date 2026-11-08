@@ -711,12 +711,12 @@ def test_goal_driver_rejection_feedback_reaches_next_planner_round(tmp_path, mon
                            requested_path=str(tmp_path),
                            data={"entries": [], "terminal_eligible": True})
     loop = FakeLoop(tmp_path, req, [
-        tool_json("list_directory"),  # missing required path
+        tool_json("list_directory", action_id="FORGED"),  # Runtime-owned field forbidden
         tool_json("list_directory", path=str(tmp_path)),
         '{"type":"finish","summary":"空資料夾"}',
     ], result)
     assert run_minimal_core(loop, req) == "空資料夾"
     assert len(loop.executed) == 1
     assert "recent_rejections" in loop.prompts[1]
-    assert "schema" in loop.prompts[1].lower()
+    assert "runtime_owned_argument_rejected" in loop.prompts[1]
     assert "Runtime Action Admission denied" in loop.prompts[1]
