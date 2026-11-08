@@ -695,10 +695,15 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         terminal_payload["plan_id"] = plan_id
         terminal_payload['task_outcome'] = loop.terminal_outcome
         terminal_payload['terminal_acceptance'] = dict(getattr(loop, 'terminal_acceptance', {}) or {})
+        core_minimal = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() != "legacy_v9"
+        goal_verified = loop.terminal_outcome == "SUCCESS"
+        # Queue processing may finish even when the user's actual goal was not
+        # proved. Do not label a model-only finish as goal COMPLETED.
+        task_state_label = "PAUSED" if core_minimal and not goal_verified else "COMPLETED"
         terminal_payload['summary'] = render_task_reply(
             original_request=loop.task_request, base=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
             conclusion=terminal_payload['summary'], task_id=task.task_id, request_id=task.request_id,
-            state='COMPLETED', outcome=loop.terminal_outcome,
+            state=task_state_label, outcome=loop.terminal_outcome,
             terminal_acceptance=loop.terminal_acceptance,
             source_task_id=(loop.continuation_source or {}).get('task_id', ''))
         final_content = terminal_payload["summary"]
@@ -712,8 +717,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "elapsed_sec": elapsed,
                 "protocol_engine": "web_agent_direct",
                 "ack_ids": list(loop.accepted_ack_ids),
-                "protocol_family": "SMARTAGENT_V9",
-                "protocol_version": 9,
+                "protocol_family": "SMARTAGENT_MINIMAL_CORE_V10" if core_minimal else "SMARTAGENT_V9",
+                "protocol_version": 10 if core_minimal else 9,
                 "task_id": task.task_id,
                 "task_epoch": task.task_epoch,
                 "intent_digest": loop.intent_digest,
