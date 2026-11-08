@@ -28,8 +28,11 @@ def _id(value: object) -> str:
 
 
 def _code(value: object) -> str:
-    text = str(value or "").strip()
-    return text[:160] if _CODE.fullmatch(text) else "UNCLASSIFIED_BLOCKER"
+    # All producer reasons are Runtime-owned. Preserve their stable composite
+    # tokens regardless of case: a lower-case "scope_rejected:" must NOT
+    # collapse to UNCLASSIFIED_BLOCKER at Blackboard egress.
+    text = str(value or "").strip().upper()[:160]
+    return text if _CODE.fullmatch(text) else "UNMAPPED_TERMINAL_REASON_FORMAT"
 
 
 def _root(root: str | Path) -> Path:
@@ -74,12 +77,22 @@ def _parent_binding(loop) -> dict:
             or contract.get("schema") != "SMARTAGENT_ATOMIC_TASK_V1"
             or contract.get("task_id") != getattr(loop, "task_id", None)):
         return {"parent_task_id": "", "parent_task_epoch": "",
-                "stage_id": "", "atomic_task_id": str(getattr(loop, "task_id", ""))}
+                "stage_id": "", "atomic_task_id": str(getattr(loop, "task_id", "")),
+                "parent_binding_status": "ROOT_TASK_PARENT_NOT_BOUND"}
+    parent = str(contract.get("parent_task_id") or "")[:160]
+    epoch = str(contract.get("parent_task_epoch") or "")[:160]
+    stage = str(contract.get("stage_id") or "")[:160]
+    if parent and epoch and stage:
+        return {
+            "parent_task_id": parent, "parent_task_epoch": epoch,
+            "stage_id": stage,
+            "atomic_task_id": str(contract.get("atomic_task_id") or loop.task_id)[:160],
+            "parent_binding_status": "BOUND",
+        }
     return {
-        "parent_task_id": str(contract.get("parent_task_id") or "")[:160],
-        "parent_task_epoch": str(contract.get("parent_task_epoch") or "")[:160],
-        "stage_id": str(contract.get("stage_id") or "")[:160],
+        "parent_task_id": "", "parent_task_epoch": "", "stage_id": "",
         "atomic_task_id": str(contract.get("atomic_task_id") or loop.task_id)[:160],
+        "parent_binding_status": "ROOT_TASK_PARENT_NOT_BOUND",
     }
 
 
@@ -109,6 +122,38 @@ def publish_executor_terminal(loop, result: Mapping, *,
     action_ids = list(dict.fromkeys(
         str(ref)[:160] for ref in [result.get("action_id", "")] if ref
     ))
+    admission_refs = list(dict.fromkeys(
+        str(ref)[:160] for ref in (result.get("admission_rejection_refs") or [])
+        if isinstance(ref, str) and ref.startswith("MIN-ADM-")
+    ))[:24]
+    denial = result.get("last_admission_rejection")
+    denial = denial if isinstance(denial, Mapping) else {}
+    # Safe only: no original proposal paths, command, or raw exception text.
+    denial_keys = (
+        "tool", "reason_code", "root_cause_code",
+        "scope_failure_stage", "scope_category", "scope_next_transition",
+        "scope_cause_digest", "scope_cause_classification",
+        "admission_evidence_ref", "round", "executed",
+    )
+    last_denial = {
+        key: denial[key] for key in denial_keys
+        if key in denial
+    }
+    raw_preconditions = denial.get("directory_preconditions") or {}
+    if isinstance(raw_preconditions, Mapping):
+        last_denial["directory_preconditions"] = {
+            key: str(raw_preconditions.get(key) or "")[:72]
+            for key in (
+                "write_authorization_verdict",
+                "target_binding_verdict",
+                "parent_directory_verdict",
+            )
+        }
+    causal_basis = (
+        "RUNTIME_ADMISSION_DENIAL" if admission_refs
+        else "ACTUAL_TOOL_EVIDENCE" if evidence
+        else "EXECUTOR_DECISION_CONTRACT"
+    )
     existing = _load(_path(root, task_id))
     if existing and (existing["request_id"], existing["task_epoch"]) != (request_id, epoch):
         # A task ID may not silently overwrite a previous request/epoch receipt.
@@ -123,6 +168,11 @@ def publish_executor_terminal(loop, result: Mapping, *,
         **binding,
         "executor_state": "TERMINAL", "terminal_status": status,
         "reason_code": _code(result.get("reason_code")),
+        "root_cause_code": _code(result.get("root_cause_code")),
+        "reason_sha256": hashlib.sha256(
+            str(result.get("reason_code") or "").encode("utf-8")
+        ).hexdigest(),
+        "causal_basis": causal_basis,
         "goal_verified": status == "VERIFIED",
         "original_tool_status": str(result.get("original_tool_status") or
                                     result.get("tool_status") or "")[:24],
@@ -133,7 +183,11 @@ def publish_executor_terminal(loop, result: Mapping, *,
         "side_effect_may_have_occurred": bool(
             result.get("side_effect_may_have_occurred", False)),
         "action_ids": action_ids,
+        "last_observed_action_id": str(result.get("last_observed_action_id") or "")[:160],
+        "last_tool_result_reason": _code(result.get("last_tool_result_reason")),
         "evidence_refs": evidence,
+        "admission_rejection_refs": admission_refs,
+        "last_admission_rejection": last_denial,
         "resolution_attempts": min(16, max(0, int(resolution_attempts))),
         "resolution_state": str(resolution_state)[:40],
         "model_round": max(0, int(result.get("model_round") or 0)),
@@ -236,9 +290,12 @@ def project_executor_for_parent(value: Mapping | None) -> dict:
         "task_id", "request_id", "goal_sha256", "terminal_receipt_id",
         "parent_task_id", "parent_task_epoch", "stage_id",
         "atomic_task_id", "task_epoch", "terminal_status", "reason_code",
-        "goal_verified", "original_tool_status", "last_observed_tool_status",
+        "root_cause_code", "reason_sha256", "causal_basis",
+        "parent_binding_status", "goal_verified", "original_tool_status", "last_observed_tool_status",
         "side_effect_outcome_confirmed", "side_effect_may_have_occurred",
-        "action_ids", "evidence_refs", "resolution_attempts",
+        "action_ids", "last_observed_action_id", "last_tool_result_reason",
+        "evidence_refs", "admission_rejection_refs",
+        "last_admission_rejection", "resolution_attempts",
         "resolution_state", "parent_consumption", "grants_authorization",
         "advances_parent_stage",
     )
