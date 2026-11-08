@@ -207,6 +207,9 @@ $sources = @(
 $scalarKeys = @(
     'action_id','tool','operation','verification_status','result_status','result_reason','executed','effective_verification_status',
     'execution_status','last_reason','repair_status','diagnostic_reason','error_type',
+    'response_sha256','response_chars','valid_decision_count','decision_type',
+    'normalization','source_kind','json_error_message_code','json_error_line',
+    'json_error_column','legacy_fence_detected','fence_detected',
     'scope_allowed','scope_error_code','scope_source','runtime_fact_ref_count',
     'scope_reason_code','scope_category','scope_path_role','scope_transition','scope_required_field',
     'repair_mode','issue_count','previous_issue_count','current_issue_count',
@@ -681,6 +684,32 @@ try {
     }
     Write-Json (Join-Path $stage 'pr_bcd_recovery_summary.json') $prBCDSummary
     Write-Json (Join-Path $stage 'timeline.json') @($timeline.ToArray())
+
+    # Minimal Core v10: preserve bounded parser error location, exact decision
+    # counts and format recovery reasons. Never include raw DOM content,
+    # commands, tool arguments or masked local journal text in the ZIP.
+    $minimalDecisionDiagnostics = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('minimal_decision_rejected', 'minimal_decision_accepted')
+    } | Select-Object -Last 120 | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            event=$_.event
+            diagnostic_reason=$_.diagnostic_reason
+            response_sha256=$_.response_sha256
+            response_chars=$_.response_chars
+            source_kind=$_.source_kind
+            candidate_count=$_.candidate_count
+            valid_decision_count=$_.valid_decision_count
+            normalization=$_.normalization
+            decision_type=$_.decision_type
+            fence_detected=$_.fence_detected
+            legacy_fence_detected=$_.legacy_fence_detected
+            json_error_message_code=$_.json_error_message_code
+            json_error_line=$_.json_error_line
+            json_error_column=$_.json_error_column
+        }
+    })
+    Write-Json (Join-Path $stage 'minimal_core_decision_diagnostics.json') @($minimalDecisionDiagnostics)
 
     # Correlate bounded, non-sensitive Planner decisions with explicit
     # Context digests and fail-closed SCR shape checks. No raw reply survives.
@@ -1253,6 +1282,7 @@ try {
         'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.',
         'Git27: typed Prerequisite, Failure Causality, Contract, Action Admission and Action Trace summaries.',
         'Git27: causal coverage status explicitly reports any missing field, source truncation or parse failure.',
+        'Minimal Core v10: schema-only, request-scoped JSON parser diagnostics; no raw model response.',
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
         'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
         'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
