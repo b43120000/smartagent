@@ -153,14 +153,18 @@ def test_unknown_result_cannot_be_verified(tmp_path, monkeypatch):
         tool_json("create_directory", path=str(tmp_path / "new")),
         '{"type":"finish","summary":"done"}',
     ], result)
-    assert "尚無足夠證據" in run_minimal_core(loop, request)
-    assert loop.terminal_outcome == "UNKNOWN"
+    message = run_minimal_core(loop, request)
+    assert "無法安全確認結果" in message
+    assert loop.terminal_outcome == "UNKNOWN"  # Tri-One PAUSED, not Executor terminal
+    assert loop.executor_result["terminal_status"] == "BLOCKED"
+    assert loop.executor_result["original_tool_status"] == "UNKNOWN"
 
 
 def test_invalid_reply_never_runs_action(tmp_path):
     loop = FakeLoop(tmp_path, "list", ["bad", "bad"], "")
-    with pytest.raises(RuntimeError, match="MINIMAL_DECISION_FORMAT_FAILED"):
-        run_minimal_core(loop, "list")
+    answer = run_minimal_core(loop, "list")
+    assert "輸出格式反覆無效" in answer
+    assert loop.executor_result["terminal_status"] == "BLOCKED"
     assert not loop.executed
 
 
@@ -170,8 +174,9 @@ def test_uncertain_mutation_not_replayed(tmp_path):
     result = encode_result("UNKNOWN", "UNKNOWN", tool="create_directory", executed=True)
     call = tool_json("create_directory", path=str(tmp_path / "new"))
     loop = FakeLoop(tmp_path, request, [call, call], result)
-    with pytest.raises(RuntimeError, match="MINIMAL_MUTATION_REPLAY_UNCERTAIN"):
-        run_minimal_core(loop, request)
+    answer = run_minimal_core(loop, request)
+    assert "無法安全確認結果" in answer
+    assert loop.executor_result["terminal_status"] == "BLOCKED"
     assert len(loop.executed) == 1
 
 
@@ -986,7 +991,7 @@ def test_git27_atomic_rejection_budget_max_two_model_decisions(tmp_path, monkeyp
     assert loop.executor_result["goal_verified"] is False
 
 
-def test_git27_ungrounded_blocked_gets_one_redecision_then_typed_unknown(tmp_path, monkeypatch):
+def test_git28_ungrounded_blocked_gets_one_redecision_then_typed_blocked(tmp_path, monkeypatch):
     monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
     goal = "列出 " + str(tmp_path) + " 的檔案"
     blocked = '{"type":"blocked","reason":"我不知道要做什麼"}'
@@ -994,7 +999,8 @@ def test_git27_ungrounded_blocked_gets_one_redecision_then_typed_unknown(tmp_pat
     answer = run_minimal_core(loop, goal)
     assert "整體目標未驗證" in answer
     assert len(loop.expected_protocols) == 2
-    assert loop.executor_result["outcome"] == "UNKNOWN"
+    assert loop.executor_result["terminal_status"] == "BLOCKED"
+    assert loop.executor_result["outcome"] == "BLOCKED"
     assert loop.executor_result["reason_code"] == "PLANNER_UNCERTAINTY_NOT_VERIFIED"
 
 
