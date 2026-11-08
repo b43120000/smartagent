@@ -70,6 +70,19 @@ def structured_outcome(tool, payload, *, expected_outcome=None):
                 status='SUCCEEDED' if good==len(rows) and not errors else 'PARTIAL' if good else 'REJECTED' if any(not row.get('authorized') for row in rows) else 'FAILED'
                 reason='DIRECTORY_INSPECTED' if status=='SUCCEEDED' else 'DIRECTORY_INSPECTION_INCOMPLETE'
                 executed=good>0
+                # A successful, single-root inspect only reaches exists=True
+                # after an actual stat.S_ISDIR check in tool_inspect_directory.
+                # Preserve that typed root fact in ToolResult for independent
+                # Executor verification; not inferred from a directory name.
+                if status=='SUCCEEDED' and len(rows)==1:
+                    data.update(
+                        observation_status='CONFIRMED',
+                        observation_kind='directory.exists_and_type',
+                        observed_exists=True,
+                        observed_is_directory=True,
+                        observed_path=row['path'],
+                        terminal_eligible=True,
+                    )
     elif tool=='query_project':
         if business=='REJECTED': status,reason='REJECTED',str(payload.get('error','QUERY_REJECTED'))
         elif business in {'READY','INCOMPLETE'} and isinstance(payload.get('results'),list):
