@@ -116,6 +116,7 @@ def action_result_receipt(action: dict, receipt: dict,
     status = str(receipt.get("status") or "UNKNOWN").upper()
     reason = str(receipt.get("reason") or "UNKNOWN")[:120]
     executed = receipt.get("executed") is True
+    from .minimal_admission import action_is_mutating
     # Action observations are NEVER terminal, regardless of tool success.
     # Only Runtime GoalEvidence can publish the terminal VERIFIED receipt.
     outcome = "RESOLVING" if status in {"UNKNOWN", "RUNNING"} else "OBSERVING"
@@ -128,7 +129,7 @@ def action_result_receipt(action: dict, receipt: dict,
         "executed": executed, "goal_verified": False,
         "executor_state": outcome, "terminal_status": "",
         "original_tool_status": status,
-        "side_effect_may_have_occurred": False,
+        "side_effect_may_have_occurred": bool(executed and action_is_mutating(action)),
     }
 
 
