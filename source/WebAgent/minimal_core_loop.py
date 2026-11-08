@@ -658,7 +658,13 @@ def run_minimal_core(loop, request: str) -> str:
         # Runtime, not Planner, owns the observed completion decision. A
         # verified single-folder creation does not consume another model turn,
         # and another harmless inspection cannot invalidate this proof.
-        proof = _verified_proof(request, history, loop)
+        # Keep the historical narrow read-only task on the model's Finish
+        # route. Only strict Runtime-owned Goal proof may auto-finish.
+        proof = evaluate_goal_evidence(request, history)
+        from .minimal_deployment_terminal import evaluate_deployment_goal
+        deployment = evaluate_deployment_goal(loop, request, history)
+        if deployment is not None:
+            proof = deployment
         if proof.verified:
             terminal_receipt = _accept_and_record_goal(
                 loop, proof, journal, round_id=round_id)
