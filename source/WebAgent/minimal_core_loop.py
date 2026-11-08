@@ -402,8 +402,16 @@ def run_minimal_core(loop, request: str) -> str:
         )
         value["terminal_status"] = outcome if is_terminal else ""
         if is_terminal and outcome == "VERIFIED":
-            if not getattr(loop, "terminal_acceptance", {}).get("evidence_verdict") == "PASS":
+            accepted = getattr(loop, "terminal_acceptance", {})
+            if accepted.get("evidence_verdict") != "PASS":
                 raise ValueError("executor_verified_without_runtime_terminal_evidence")
+            # Fact observation belongs to Executor's current accepted goal
+            # proof; no Planner-supplied value can set a VERIFIED fact field.
+            if accepted.get("matched_condition_id") == "SINGLE_FACT_QUERY":
+                fact = accepted.get("fact_observation")
+                if not isinstance(fact, dict):
+                    raise ValueError("executor_single_fact_query_receipt_missing")
+                value["fact_observation"] = dict(fact)
         loop.executor_result = value
         journal.append("executor_result", round=loop.turn_id,
                        outcome=outcome, executor_state=value["executor_state"],
