@@ -469,6 +469,14 @@ def run_minimal_core(loop, request: str) -> str:
             if verified:
                 receipt = _accept_and_record_goal(loop, proof, journal,
                                                  round_id=round_id)
+                verified_executor = dict(getattr(loop, "executor_result", {}) or {})
+                verified_executor.update(outcome="VERIFIED", reason_code=proof.reason,
+                                         goal_verified=True)
+                verified_executor.setdefault("schema", "SMARTAGENT_ATOMIC_EXECUTOR_RESULT_V1")
+                verified_executor.setdefault("action_id", "")
+                verified_executor.setdefault("evidence_ref", "")
+                verified_executor.setdefault("executed", False)
+                publish_executor_result(verified_executor)
                 set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
                 summary = (format_runtime_goal_summary(proof)
                            if proof.goal_kind in {
@@ -782,6 +790,10 @@ def run_minimal_core(loop, request: str) -> str:
         if proof.verified:
             terminal_receipt = _accept_and_record_goal(
                 loop, proof, journal, round_id=round_id)
+            verified_executor = dict(loop.executor_result)
+            verified_executor.update(outcome="VERIFIED", reason_code=proof.reason,
+                                     goal_verified=True)
+            publish_executor_result(verified_executor)
             set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
             journal.append("runtime_autofinish", round=round_id,
                            receipt_id=terminal_receipt["receipt_id"],
