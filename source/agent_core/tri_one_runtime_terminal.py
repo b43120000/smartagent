@@ -65,9 +65,12 @@ def _simple_mkdir_target(goal: str, target: str) -> str:
         return ""
     begin = goal.casefold().find(target.casefold())
     remainder = goal[:begin] + goal[begin + len(target):]
-    if not _SINGLE_MKDIR.fullmatch(remainder):
-        return ""
-    return normalized
+    if _SINGLE_MKDIR.fullmatch(remainder):
+        return normalized
+    # Reuse the exact request-bound atomic contract for equivalent word orders.
+    # This does NOT allow extra operations or infer mutation from incidental paths.
+    from WebAgent.minimal_executor_contract import single_directory_contract_target
+    return single_directory_contract_target(goal, target)
 
 
 # A finite, fully-anchored directory Goal contract. Matching a phrase such as
