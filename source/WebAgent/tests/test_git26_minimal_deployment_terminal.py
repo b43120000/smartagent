@@ -7,11 +7,11 @@ from unittest.mock import patch
 from WebAgent.minimal_core_loop import narrow_goal_verified
 from WebAgent.minimal_deployment_terminal import evaluate_deployment_goal
 
-TARGET = r"E:\\SmartAgent_GoalDriven_IT_GH_v1"
+TARGET = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
 GOAL = (
-    "請重新驗證並完成 Case D 的部署目標。\\n"
-    "預期部署根目錄：" + TARGET + "\\n"
-    "預期包含：case_a、case_b、case_c、fixture_manifest.json、check_results.py。\\n"
+    "請重新驗證並完成 Case D 的部署目標。\n"
+    "預期部署根目錄：" + TARGET + "\n"
+    "預期包含：case_a、case_b、case_c、fixture_manifest.json、check_results.py。\n"
     "以上五個項目必須直接位於指定根目錄。"
 )
 REQUIRED = ["case_a", "case_b", "case_c", "fixture_manifest.json", "check_results.py"]
@@ -80,7 +80,7 @@ class MinimalDeploymentTerminalTests(unittest.TestCase):
             self.assertTrue(proof.verified)
             self.assertEqual(proof.evidence_refs, (VERIFY,))
             self.assertEqual(proof.goal_kind, "DEPLOYMENT_CONTENT_VERIFIED")
-            history[-1]["action"]["working_directory"] = r"E:\\Other"
+            history[-1]["action"]["working_directory"] = r"E:\Other"
             self.assertFalse(evaluate_deployment_goal(runtime, GOAL, history).verified)
 
     def test_rejects_missing_verify_postcondition_or_foreign_epoch(self):
