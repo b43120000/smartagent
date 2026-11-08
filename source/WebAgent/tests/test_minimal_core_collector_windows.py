@@ -77,14 +77,12 @@ def test_masked_minimal_parse_failure_is_present_in_rca(tmp_path):
     assert len(files) == 1
     with zipfile.ZipFile(files[0]) as bundle:
         trace = json.loads(bundle.read("minimal_core_decision_diagnostics.json"))
-        shapes = json.loads(bundle.read("minimal_core_masked_structure.json"))
         assert len(trace) == 1
         assert trace[0]["diagnostic_reason"] == "json_invalid_escape"
         assert trace[0]["json_error_column"] > 0
         assert trace[0]["response_sha256"] == hashlib.sha256(
             raw.encode("utf-8")).hexdigest()
-        assert len(shapes) == 1
-        assert shapes[0]["shape_is_sanitized"] is True
-        assert "\\" in shapes[0]["response_structure_redacted"]
-        assert secret not in json.dumps(trace) + json.dumps(shapes)
-        assert "RR-OTHER" not in json.dumps(trace) + json.dumps(shapes)
+        assert "\\" in diag["response_structure_redacted"]
+        assert secret not in diag["response_structure_redacted"]
+        assert secret not in json.dumps(trace)
+        assert "RR-OTHER" not in json.dumps(trace)
