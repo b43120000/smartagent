@@ -78,15 +78,16 @@ def canonicalize_exact_target_inspection(decision, tool_context):
         return decision, {}
     original_request = str(getattr(tool_context, "current_request_text", "") or "")
     target = str(roots[0]).strip()
-    if (not re.fullmatch(r'^[A-Za-z]:[\\/][^:*?"<>|]* target)
-            or target not in original_request):
+    valid_path = re.compile(r"^[A-Za-z]:[\\/][^:*?<>|]*$")
+    if (not valid_path.fullmatch(target)
+            or '"' in target or target not in original_request):
         return decision, {}
     args = dict(decision.arguments or {})
     values = args.get("paths")
     if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str):
         return decision, {}
     proposed = values[0].strip()
-    if not re.fullmatch(r"[A-Za-z]:[\\/][^:*?"<>|]*", proposed):
+    if not valid_path.fullmatch(proposed) or '"' in proposed:
         return decision, {}
     t = ntpath.normcase(ntpath.normpath(target))
     p = ntpath.normcase(ntpath.normpath(proposed))
