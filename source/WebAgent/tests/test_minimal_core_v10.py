@@ -715,7 +715,13 @@ def test_goal_driver_rejection_feedback_reaches_next_planner_round(tmp_path, mon
         tool_json("list_directory", path=str(tmp_path)),
         '{"type":"finish","summary":"空資料夾"}',
     ], result)
-    assert run_minimal_core(loop, req) == "空資料夾"
+    # A repaired ToolCall uses the second atomic decision. Its already
+    # verified bounded observation is rendered without a THIRD model reply.
+    observed = run_minimal_core(loop, req)
+    assert "Runtime 已驗證單次觀測結果" in observed
+    assert len(loop.expected_protocols) == 2
+    assert loop.terminal_outcome == "SUCCESS"
+    assert loop.executor_result["outcome"] == "VERIFIED"
     assert len(loop.executed) == 1
     assert "recent_rejections" in loop.prompts[1]
     assert "runtime_owned_argument_rejected" in loop.prompts[1]
@@ -935,3 +941,99 @@ def test_real_windows_conditional_goal_observe_create_observe_is_terminal(tmp_pa
     assert terminal_verdict_from_loop(loop).is_complete
     assert target in str(tmp_path / "conditional_directory_live")
     assert (tmp_path / "conditional_directory_live").is_dir()
+
+
+@pytest.mark.parametrize("greeting", ["你好", "早安", "Hello", "謝謝", "在嗎"])
+def test_git27_requirement_gated_no_tool_greeting_finishes_one_round(tmp_path, monkeypatch, greeting):
+    from agent_core.task_requirement import assess_task_requirement, no_tool_terminal_candidate
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    assert no_tool_terminal_candidate(assess_task_requirement(greeting))
+    loop = FakeLoop(tmp_path, greeting, ['{"type":"finish","summary":"收到你的訊息"}'], "")
+    assert run_minimal_core(loop, greeting) == "收到你的訊息"
+    assert loop.terminal_outcome == "SUCCESS"
+    assert loop.terminal_acceptance["completion_kind"] == "ANSWER_ONLY"
+    assert len(loop.expected_protocols) == 1
+    assert loop.executed == []
+
+
+@pytest.mark.parametrize("request", [
+    "建立資料夾 E:\\NotTextOnly", "讀取 E:\\secret.txt 並分析",
+    "下載 https://example.com/a.zip", "今天最新的財經新聞",
+    "我的專案檔案在哪",
+])
+def test_git27_requirement_gated_no_tool_does_not_elevate_operations(request):
+    from agent_core.task_requirement import assess_task_requirement, no_tool_terminal_candidate
+    from agent_core.tri_one_answer_only import classify_original_request
+    assert not no_tool_terminal_candidate(assess_task_requirement(request))
+    assert not classify_original_request(request)[0]
+
+
+def test_git27_atomic_rejection_budget_max_two_model_decisions(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    goal = "列出 " + str(tmp_path) + " 的檔案"
+    malformed = tool_json("list_directory", action_id="MODEL-FORGED", path=str(tmp_path))
+    loop = FakeLoop(tmp_path, goal, [malformed, malformed, '{"type":"finish","summary":"not consumed"}'], "")
+    answer = run_minimal_core(loop, goal)
+    assert "Runtime 已阻止" in answer
+    assert len(loop.expected_protocols) == 2
+    assert loop.executed == []
+    assert loop.executor_result["outcome"] == "BLOCKED"
+    assert loop.executor_result["goal_verified"] is False
+
+
+def test_git27_ungrounded_blocked_gets_one_redecision_then_typed_unknown(tmp_path, monkeypatch):
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    goal = "列出 " + str(tmp_path) + " 的檔案"
+    blocked = '{"type":"blocked","reason":"我不知道要做什麼"}'
+    loop = FakeLoop(tmp_path, goal, [blocked, blocked, blocked], "")
+    answer = run_minimal_core(loop, goal)
+    assert "整體目標未驗證" in answer
+    assert len(loop.expected_protocols) == 2
+    assert loop.executor_result["outcome"] == "UNKNOWN"
+    assert loop.executor_result["reason_code"] == "PLANNER_UNCERTAINTY_NOT_VERIFIED"
+
+
+def test_git27_confirmed_missing_parent_returns_prerequisite(tmp_path, monkeypatch):
+    from agent_core.tool_result_contract import encode_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    path = r"E:\\FutureParent\\Child"
+    goal = "建立資料夾 " + path
+    result = encode_result("REJECTED", "DIRECTORY_PARENT_MISSING",
+                           tool="create_directory", executed=False)
+    loop = FakeLoop(tmp_path, goal, [
+        tool_json("create_directory", path=path),
+        '{"type":"blocked","reason":"父目錄不存在"}',
+    ], result)
+    run_minimal_core(loop, goal)
+    assert loop.executor_result["outcome"] == "NEEDS_PREREQUISITE"
+    assert len(loop.expected_protocols) == 2
+    assert len(loop.executed) == 1
+
+
+def test_git27_atomic_mkdir_contract_accepts_equivalent_word_order_only():
+    from WebAgent.minimal_executor_contract import single_directory_contract_target
+    path = r"E:\\UnitFolder"
+    assert single_directory_contract_target("在 " + path + " 建立資料夾", path)
+    assert not single_directory_contract_target(
+        "在 " + path + " 建立資料夾並寫入 README.md", path)
+
+
+def test_git27_rca_hook_is_on_normal_paused_egress():
+    import ast
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "RemoteAgent" / "telegram_webagent_worker.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    matches = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "terminal.state == 'PAUSED'"
+    ]
+    assert len(matches) == 1
+    assert any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "_auto_rca_debug_hook"
+        for statement in matches[0].body for node in ast.walk(statement)
+    )
+    from agent_core.auto_rca_upload import COLLECTOR
+    from agent_core.paths import install_root
+    assert COLLECTOR == install_root() / "collect.bat"
