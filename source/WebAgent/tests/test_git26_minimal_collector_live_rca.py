@@ -59,7 +59,7 @@ class V10CollectorTests(unittest.TestCase):
                              "executed": False})
             log = root / "localdata" / "logs" / "remote_runtime.jsonl"
             log.parent.mkdir(parents=True)
-            log.write_text("\\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+            log.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
             process = subprocess.run(
                 ["cmd.exe", "/d", "/c", str(root / "collect.bat"), TASK, REQUEST],
                 cwd=root, capture_output=True, text=True, timeout=120)
@@ -88,7 +88,7 @@ class V10CollectorTests(unittest.TestCase):
                 self.assertTrue(any(x.get("next_category") ==
                                     "RESOLVE_REGISTERED_SOURCE_ARTIFACT" for x in delivery))
                 self.assertNotIn("SHOULD_NOT_BE_EXPORTED",
-                                 "\\n".join(z.read(name).decode("utf-8")
+                                 "\n".join(z.read(name).decode("utf-8")
                                              for name in z.namelist()))
 
 
