@@ -956,16 +956,16 @@ def test_git27_requirement_gated_no_tool_greeting_finishes_one_round(tmp_path, m
     assert loop.executed == []
 
 
-@pytest.mark.parametrize("request", [
+@pytest.mark.parametrize("goal_text", [
     "建立資料夾 E:\\NotTextOnly", "讀取 E:\\secret.txt 並分析",
     "下載 https://example.com/a.zip", "今天最新的財經新聞",
     "我的專案檔案在哪",
 ])
-def test_git27_requirement_gated_no_tool_does_not_elevate_operations(request):
+def test_git27_requirement_gated_no_tool_does_not_elevate_operations(goal_text):
     from agent_core.task_requirement import assess_task_requirement, no_tool_terminal_candidate
     from agent_core.tri_one_answer_only import classify_original_request
-    assert not no_tool_terminal_candidate(assess_task_requirement(request))
-    assert not classify_original_request(request)[0]
+    assert not no_tool_terminal_candidate(assess_task_requirement(goal_text))
+    assert not classify_original_request(goal_text)[0]
 
 
 def test_git27_atomic_rejection_budget_max_two_model_decisions(tmp_path, monkeypatch):
