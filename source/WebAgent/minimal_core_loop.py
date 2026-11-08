@@ -324,6 +324,66 @@ def run_minimal_core(loop, request: str) -> str:
         value = dict(value)
         outcome = str(value.get("outcome") or "")
         is_terminal = outcome in TERMINAL_OUTCOMES
+        if is_terminal:
+            # An Executor terminal is a causal handoff, not just an enum.
+            # Preserve the *real* Action Evidence and the pre-execution
+            # admission denials in separate namespaces.
+            actual_refs = [
+                str(item.get("evidence_ref"))
+                for item in history if item.get("evidence_ref")
+            ]
+            admitted_refs = [
+                str(item.get("admission_evidence_ref"))
+                for item in action_rejections
+                if item.get("admission_evidence_ref")
+            ]
+            value["evidence_refs"] = list(dict.fromkeys(
+                list(value.get("evidence_refs") or []) + actual_refs
+            ))[-24:]
+            value["admission_rejection_refs"] = list(dict.fromkeys(
+                list(value.get("admission_rejection_refs") or []) + admitted_refs
+            ))[-24:]
+            value["last_observed_action_id"] = (
+                str(history[-1]["action"].get("action_id") or "")
+                if history else ""
+            )
+            value["last_observed_tool_status"] = (
+                str(history[-1]["receipt"].get("status") or "")
+                if history else str(value.get("last_observed_tool_status") or "")
+            )
+            value["last_tool_result_reason"] = (
+                str(history[-1]["receipt"].get("reason") or "")[:120]
+                if history else ""
+            )
+            last_rejection = action_rejections[-1] if action_rejections else {}
+            value["last_admission_rejection"] = {
+                key: last_rejection[key]
+                for key in (
+                    "tool", "reason_code", "root_cause_code",
+                    "scope_failure_stage", "scope_category",
+                    "scope_next_transition", "scope_cause_digest",
+                    "scope_cause_classification", "directory_preconditions",
+                    "admission_evidence_ref", "round", "executed",
+                )
+                if key in last_rejection
+            }
+            if outcome == "VERIFIED":
+                value["root_cause_code"] = "NONE"
+            elif last_rejection and int(last_rejection.get("round") or 0) >= (
+                    int(history[-1].get("round") or 0) if history else 0):
+                value["root_cause_code"] = str(
+                    last_rejection.get("root_cause_code")
+                    or "UNMAPPED_ADMISSION_CAUSE"
+                )
+            elif history:
+                value["root_cause_code"] = str(
+                    history[-1]["receipt"].get("reason")
+                    or "TOOL_RESULT_REASON_MISSING"
+                )[:120]
+            else:
+                value["root_cause_code"] = str(
+                    value.get("reason_code") or "NO_OBSERVATION_EVIDENCE"
+                )[:120]
         value["executor_state"] = "TERMINAL" if is_terminal else (
             "RESOLVING" if outcome == "RESOLVING" else "OBSERVING"
         )
@@ -655,6 +715,45 @@ def run_minimal_core(loop, request: str) -> str:
         if rejection:
             consecutive_action_rejections += 1
             item = classify_rejection(decision.tool, rejection, round_id)
+            # Exactly this rejected proposal, exactly this Runtime preflight.
+            # A refusal is pre-execution evidence, never a fake ToolResult.
+            scoped = dict(getattr(
+                loop.tools, "_last_minimal_admission_diagnostic", {}
+            ) or {})
+            proposal_sha256 = _digest(decision.arguments)
+            ref_material = json.dumps({
+                "request_id": loop.run_id, "task_epoch": loop.task_epoch,
+                "round": round_id, "tool": decision.tool,
+                "reason": rejection, "proposal": proposal_sha256,
+            }, sort_keys=True, ensure_ascii=False)
+            item["admission_evidence_ref"] = "MIN-ADM-" + hashlib.sha256(
+                ref_material.encode("utf-8")
+            ).hexdigest()[:24]
+            item["root_cause_code"] = str(
+                scoped.get("scope_reason_code") or (
+                    rejection.split(":", 1)[1]
+                    if rejection.startswith("scope_rejected:")
+                    else rejection
+                )
+            ).upper()[:120]
+            item["scope_failure_stage"] = str(
+                scoped.get("scope_failure_stage") or ""
+            )[:80]
+            item["scope_category"] = str(
+                scoped.get("scope_category") or ""
+            )[:80]
+            item["scope_next_transition"] = str(
+                scoped.get("scope_next_transition") or ""
+            )[:80]
+            item["scope_cause_digest"] = str(
+                scoped.get("scope_cause_digest") or ""
+            )[:64]
+            item["scope_cause_classification"] = str(
+                scoped.get("scope_cause_classification") or ""
+            )[:80]
+            item["directory_preconditions"] = dict(
+                scoped.get("directory_preconditions") or {}
+            )
             action_rejections.append(item)
             repair_hint = (
                 "Runtime Action Admission denied: " + rejection +
@@ -679,12 +778,22 @@ def run_minimal_core(loop, request: str) -> str:
                 )
             journal.append("action_rejected", round=round_id,
                            tool=decision.tool, reason=rejection,
+                           root_cause_code=item["root_cause_code"],
+                           failure_stage=item["scope_failure_stage"],
+                           scope_category=item["scope_category"],
+                           scope_cause_digest=item["scope_cause_digest"],
+                           admission_evidence_ref=item["admission_evidence_ref"],
                            repair_mode=item["repair_mode"],
-                           proposal_sha256=_digest(decision.arguments))
+                           proposal_sha256=proposal_sha256)
             loop._emit("minimal_goal_action_rejected",
                        request_id=loop.run_id, task_id=loop.task_id,
                        round=round_id, tool=decision.tool,
                        reason_code=item["reason_code"],
+                       root_cause_code=item["root_cause_code"],
+                       failure_stage=item["scope_failure_stage"],
+                       scope_category=item["scope_category"],
+                       scope_cause_digest=item["scope_cause_digest"],
+                       admission_evidence_ref=item["admission_evidence_ref"],
                        repair_mode=item["repair_mode"],
                        proposed_operation=(safe_operation if decision.tool == "run_command" else ""),
                        proposal_sha256=_digest(decision.arguments),
@@ -834,7 +943,10 @@ def run_minimal_core(loop, request: str) -> str:
         ref = "MIN-EV-" + hashlib.sha256(
             (action["action_id"] + "\0" + result_digest).encode("utf-8")
         ).hexdigest()[:24]
-        history.append({"action": action, "receipt": receipt, "evidence_ref": ref})
+        history.append({
+            "action": action, "receipt": receipt,
+            "evidence_ref": ref, "round": round_id,
+        })
         # Publish the same observed result into the shared Runtime action ledger.
         # Neither the model's summary nor the synthetic ref creates proof:
         # the immutable real ToolResult and digest are retained locally.
