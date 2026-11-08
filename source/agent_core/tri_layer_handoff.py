@@ -88,6 +88,15 @@ def build_handoff(record: Mapping) -> dict:
     # A root task can advertise a routing recommendation but has NOT been
     # dispatched to a separate parent Agent Loop.
     parent_bound = record.get("parent_binding_status") == "BOUND"
+    parent_agents_enabled = record.get("orchestration_mode") != "EXECUTOR_ONLY"
+    if not parent_agents_enabled:
+        route = {
+            "prerequisite_handoff_state": "DISABLED_EXECUTOR_ONLY",
+            "prerequisite_issue_code": "PARENT_DECISIONS_SUSPENDED",
+            "goal_stage_handoff_state": "DISABLED_EXECUTOR_ONLY",
+            "goal_stage_reason_code": "PARENT_DECISIONS_SUSPENDED",
+            "next_owner": "",
+        }
     parent_id = str(record.get("parent_task_id") or "") if parent_bound else ""
     parent_epoch = str(record.get("parent_task_epoch") or "") if parent_bound else ""
     origin = "|".join((
@@ -99,14 +108,18 @@ def build_handoff(record: Mapping) -> dict:
     return {
         "schema": SCHEMA, "handoff_id": handoff_id,
         "handoff_delivery_state": (
+            "EXECUTOR_ONLY_RECORDED_NO_PARENT_CONSUMPTION"
+            if not parent_agents_enabled else
             "PENDING_PARENT_CONSUMPTION" if parent_bound
             else "ROOT_TASK_RESULT_AVAILABLE_NO_PARENT_BOUND"
         ),
+        "parent_agents_enabled": parent_agents_enabled,
         "parent_binding_status": (
             "BOUND" if parent_bound else "ROOT_TASK_PARENT_NOT_BOUND"
         ),
         "parent_dispatch_state": (
-            "PENDING_PARENT_CONSUMPTION" if parent_bound else "NOT_DISPATCHED"
+            "PENDING_PARENT_CONSUMPTION"
+            if parent_bound and parent_agents_enabled else "NOT_DISPATCHED"
         ),
         "executor_handoff": {
             "executor_terminal_status": terminal,
@@ -146,8 +159,12 @@ def build_handoff(record: Mapping) -> dict:
             "goal_stage_evidence_refs": [],
             "goal_stage_completion_inferred": False,
         },
-        "next_parent_owner": route["next_owner"] if parent_bound else "",
-        "recommended_parent_owner": route["next_owner"],
+        "next_parent_owner": (
+            route["next_owner"] if parent_bound and parent_agents_enabled else ""
+        ),
+        "recommended_parent_owner": (
+            route["next_owner"] if parent_agents_enabled else ""
+        ),
         "authorization_granted": False,
         "stage_transition_committed": False,
     }
@@ -163,6 +180,7 @@ def project_handoff(record: Mapping | None) -> dict:
         "schema": SCHEMA,
         "handoff_id": handoff["handoff_id"],
         "handoff_delivery_state": handoff["handoff_delivery_state"],
+        "parent_agents_enabled": handoff.get("parent_agents_enabled", True),
         "parent_binding_status": handoff.get("parent_binding_status", ""),
         "parent_dispatch_state": handoff.get("parent_dispatch_state", ""),
         "executor_handoff": dict(handoff["executor_handoff"]),
