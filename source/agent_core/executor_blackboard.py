@@ -168,7 +168,9 @@ def publish_executor_terminal(loop, result: Mapping, *,
         **binding,
         "executor_state": "TERMINAL", "terminal_status": status,
         "reason_code": _code(result.get("reason_code")),
-        "root_cause_code": _code(result.get("root_cause_code")),
+        "root_cause_code": _code(
+            result.get("root_cause_code") or result.get("reason_code")
+        ),
         "reason_sha256": hashlib.sha256(
             str(result.get("reason_code") or "").encode("utf-8")
         ).hexdigest(),
@@ -184,7 +186,9 @@ def publish_executor_terminal(loop, result: Mapping, *,
             result.get("side_effect_may_have_occurred", False)),
         "action_ids": action_ids,
         "last_observed_action_id": str(result.get("last_observed_action_id") or "")[:160],
-        "last_tool_result_reason": _code(result.get("last_tool_result_reason")),
+        "last_tool_result_reason": _code(
+            result.get("last_tool_result_reason") or "NO_TOOL_RESULT_OBSERVED"
+        ),
         "evidence_refs": evidence,
         "admission_rejection_refs": admission_refs,
         "last_admission_rejection": last_denial,
