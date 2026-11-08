@@ -163,3 +163,125 @@ def test_foreign_or_mismatched_terminal_receipt_cannot_be_delivered_as_success()
     terminal = terminal_verdict_from_loop(loop)
     assert terminal.state == "PAUSED"
     assert terminal.outcome == "UNKNOWN"
+
+
+
+# Live RCA 2026-11-08 / TASK-02D4A8B2A612BB5E546B:
+# observe_fact(False) -> create_directory -> observe_fact(True) -> Finish.
+CONDITIONAL_PATH = r"E:\SmartAgent_TriOne_Live_Test_B"
+CONDITIONAL_GOAL = (
+    "檢查 " + CONDITIONAL_PATH +
+    " 是否存在，如果不存在就建立，最後確認資料夾確實存在。"
+)
+
+
+def _observed_entry(value: bool, *, action_id: str, path: str = CONDITIONAL_PATH,
+                    freshness: str = "CURRENT", observed: str = "CONFIRMED",
+                    fact_ref: str = "", executed: bool = True):
+    from agent_core.evidence_foundation import observation
+    fact = observation(
+        "file.exists", value, source="filesystem.stat", scope=path,
+        raw_ref=fact_ref or action_id, status=observed,
+    )
+    fact["freshness"] = freshness
+    return {
+        "action": {"tool": "observe_fact", "path": path, "action_id": action_id},
+        "receipt": {
+            "tool": "observe_fact", "status": "SUCCEEDED", "reason": "FACT_OBSERVED",
+            "executed": executed, "action_id": action_id,
+            "requested_path": path, "resolved_path": path,
+            "data": {"observations": [fact], "observation_status": observed},
+        },
+    }
+
+
+def _conditional_history():
+    return [
+        _observed_entry(False, action_id="MIN-CHECK-BEFORE"),
+        _entry(path=CONDITIONAL_PATH, action_id="MIN-CREATE-NEW"),
+        _observed_entry(True, action_id="MIN-CHECK-AFTER"),
+    ]
+
+
+def test_live_conditional_directory_goal_verified_by_three_real_receipt_shapes():
+    history = _conditional_history()
+    proof = evaluate_goal_evidence(CONDITIONAL_GOAL, history)
+    assert proof.verified
+    assert proof.goal_kind == "CONDITIONAL_DIRECTORY_EXISTS"
+    assert proof.reason == "CONDITIONAL_DIRECTORY_CREATED_AND_REOBSERVED"
+    assert proof.evidence_refs == (
+        "MIN-CHECK-BEFORE", "MIN-CREATE-NEW", "MIN-CHECK-AFTER")
+    assert CONDITIONAL_PATH in format_runtime_goal_summary(proof)
+
+
+def test_conditional_directory_goal_has_no_premature_completion_after_mkdir():
+    history = _conditional_history()
+    assert not evaluate_goal_evidence(CONDITIONAL_GOAL, history[:1]).verified
+    assert not evaluate_goal_evidence(CONDITIONAL_GOAL, history[:2]).verified
+
+
+@pytest.mark.parametrize("change", [
+    "bad_fact_ref", "wrong_scope", "not_fresh", "unconfirmed",
+    "missing_execution", "wrong_target", "no_creation", "post_false",
+    "extra_goal", "unobserved_later_mutation",
+])
+def test_conditional_directory_fail_closed_when_required_evidence_missing(change):
+    history = _conditional_history()
+    goal = CONDITIONAL_GOAL
+    if change == "bad_fact_ref":
+        history[2]["receipt"]["data"]["observations"][0]["raw_evidence_ref"] = "MIN-FOREIGN"
+    elif change == "wrong_scope":
+        history[2]["receipt"]["data"]["observations"][0]["scope"] = r"E:\Elsewhere"
+    elif change == "not_fresh":
+        history[2]["receipt"]["data"]["observations"][0]["freshness"] = "STALE"
+    elif change == "unconfirmed":
+        history[2]["receipt"]["data"]["observations"][0]["observation_status"] = "UNKNOWN"
+    elif change == "missing_execution":
+        history[2]["receipt"]["executed"] = False
+    elif change == "wrong_target":
+        history[1]["receipt"]["requested_path"] = r"E:\Foreign"
+    elif change == "no_creation":
+        history[1]["receipt"]["status"] = "UNKNOWN"
+    elif change == "post_false":
+        history[2]["receipt"]["data"]["observations"][0]["value"] = False
+    elif change == "extra_goal":
+        goal += " 並且寫入 README.md"
+    elif change == "unobserved_later_mutation":
+        history.append(_entry(path=CONDITIONAL_PATH, action_id="MIN-POST-MUTATION"))
+    assert not evaluate_goal_evidence(goal, history).verified
+
+
+def test_conditional_directory_acceptance_uses_all_three_action_ledger_refs():
+    history = _conditional_history()
+    proof = evaluate_goal_evidence(CONDITIONAL_GOAL, history)
+    loop = _loop()
+    for action_id in proof.evidence_refs:
+        loop.action_result_ledger[action_id] = {
+            "request_id": loop.run_id, "task_id": loop.task_id,
+            "task_epoch": loop.task_epoch, "executed": True,
+            "result_status": "SUCCEEDED", "evidence_status": "ACTIVE",
+        }
+    receipt = accept_runtime_terminal(loop, proof)
+    assert receipt["evidence_refs"] == list(proof.evidence_refs)
+    assert terminal_verdict_from_loop(loop).state == "COMPLETED"
+    result = make_task_result_from_webagent_loop(
+        loop, format_runtime_goal_summary(proof))
+    assert result["completion_kind"] == "EVIDENCE_BACKED"
+    assert result["evidence_refs"] == list(proof.evidence_refs)
+    validate_task_result(result)
+
+
+def test_conditional_directory_ledger_identity_mismatch_cannot_be_accepted():
+    history = _conditional_history()
+    proof = evaluate_goal_evidence(CONDITIONAL_GOAL, history)
+    loop = _loop()
+    for action_id in proof.evidence_refs:
+        loop.action_result_ledger[action_id] = {
+            "request_id": loop.run_id, "task_id": loop.task_id,
+            "task_epoch": loop.task_epoch, "executed": True,
+            "result_status": "SUCCEEDED", "evidence_status": "ACTIVE",
+        }
+    loop.action_result_ledger["MIN-CHECK-BEFORE"]["task_epoch"] = "other-epoch"
+    with pytest.raises(ValueError, match="identity_or_status"):
+        accept_runtime_terminal(loop, proof)
+    assert loop.terminal_outcome == "UNKNOWN"
