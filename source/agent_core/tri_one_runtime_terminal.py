@@ -169,6 +169,22 @@ def _verified_existing_directory(entry: Mapping, target: str) -> bool:
     action, receipt = entry.get("action") or {}, entry.get("receipt") or {}
     if not isinstance(action, Mapping) or not isinstance(receipt, Mapping):
         return False
+    # A successfully executed list_directory also proves the target is a
+    # directory (unlike file.exists=True, which could be a regular file).
+    if action.get("tool") == "list_directory":
+        data = receipt.get("data") or {}
+        return bool(
+            action.get("action_id")
+            and _normal_path(action.get("path")) == target
+            and receipt.get("tool") == "list_directory"
+            and receipt.get("status") == "SUCCEEDED"
+            and receipt.get("reason") == "DIRECTORY_LISTED"
+            and receipt.get("executed") is True
+            and _normal_path(receipt.get("requested_path")) == target
+            and isinstance(data, Mapping)
+            and data.get("terminal_eligible") is True
+            and isinstance(data.get("entries"), list)
+        )
     # Only a typed inspect_directory listing of one exact path can confirm
     # the directory's type. A generic file.exists=True cannot.
     paths = action.get("paths") or []
