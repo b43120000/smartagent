@@ -56,6 +56,48 @@ def _normal_path(path: object) -> str:
     return ntpath.normcase(ntpath.normpath(raw))
 
 
+# Only a single target and a single existence question; no edits, deployment,
+# counts, content inspection or additional prerequisites are accepted here.
+_SINGLE_FACT_QUERY = re.compile(
+    r"^\s*(?:(?:請問|請|麻煩你|幫我(?:確認|檢查)?|可以幫我(?:確認)?|請幫我(?:確認)?)\s*)?"
+    r"(?:(?:這個|這|該|指定的|以下的|此)\s*)?"
+    r"(?P<kind>資料夾|目錄|folder|directory|檔案|文件|file|路徑|path)\s*"
+    r"(?:(?:是否|有沒有|還)?存在|存不存在|在不在)\s*(?:嗎|呢)?\s*[?？。.!！]?\s*$",
+    re.I,
+)
+_SINGLE_FACT_QUERY_INVERSE = re.compile(
+    r"^\s*(?:(?:請問|請|麻煩你|幫我(?:確認|檢查)?|可以幫我(?:確認)?|請幫我(?:確認)?)\s*)?"
+    r"(?:(?:這個|這|該|指定的|以下的|此)\s*)?"
+    r"(?:(?:路徑|path)\s*)?"
+    r"(?:(?:是否|有沒有)\s*)?存在\s*(?:嗎|呢)?\s*[?？。.!！]?\s*$",
+    re.I,
+)
+
+
+def _single_fact_query_contract(goal: str, path: str) -> tuple[str, str]:
+    """Return bound (Windows target, requested kind) only for one pure query."""
+    raw_goal, raw_path = str(goal or ""), str(path or "")
+    target = _normal_path(raw_path)
+    if (not target or not raw_path
+            or raw_goal.casefold().count(raw_path.casefold()) != 1):
+        return "", ""
+    idx = raw_goal.casefold().find(raw_path.casefold())
+    # Require exactly the one request target and the remainder to be a finite
+    # question grammar. No broad substring match against multiple operations.
+    residue = raw_goal[:idx] + raw_goal[idx + len(raw_path):]
+    if re.search(r"[A-Za-z]:[\\/]", residue):
+        return "", ""
+    m = _SINGLE_FACT_QUERY.fullmatch(residue)
+    if m:
+        kind = m.group("kind").casefold()
+        return target, ("DIRECTORY" if kind in {
+            "資料夾", "目錄", "folder", "directory"
+        } else "FILE" if kind in {"檔案", "文件", "file"} else "PATH")
+    if _SINGLE_FACT_QUERY_INVERSE.fullmatch(residue):
+        return target, "PATH"
+    return "", ""
+
+
 def _simple_mkdir_target(goal: str, target: str) -> str:
     """Only a single explicit directory-creation goal allows auto-finishing."""
     goal = str(goal or "")
@@ -287,8 +329,74 @@ def _conditional_directory_proof(goal: str, history: list[dict]) -> GoalEvidence
     return GoalEvidence("UNKNOWN", "CONDITIONAL_GOAL_EVIDENCE_CHAIN_INCOMPLETE")
 
 
+
+def _single_fact_query_proof(goal: str, history: list[dict]) -> GoalEvidence:
+    """A negative stat answers directory existence; a positive stat does not.
+
+    An existing file might be mistakenly called a folder, so a positive
+    directory query requires a separately verified directory-type observation.
+    The last action must be the relevant observation, and the whole goal must
+    be a bounded single-target query.
+    """
+    if not history:
+        return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_NO_OBSERVATIONS")
+    candidates = []
+    for entry in history:
+        action = entry.get("action") or {}
+        if not isinstance(action, Mapping):
+            continue
+        normalized, kind = _single_fact_query_contract(
+            goal, str(action.get("path") or ""),
+        )
+        if normalized:
+            candidates.append((normalized, kind, str(action["path"])))
+    if not candidates:
+        return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_NOT_BOUND")
+    normalized, kind, display = candidates[-1]
+    if any(item[0] != normalized or item[1] != kind for item in candidates):
+        return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_MULTIPLE_TARGETS")
+    if (history[-1].get("action") or {}).get("tool") != "observe_fact":
+        return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_POSTCONDITION_NOT_LATEST")
+    for entry in reversed(history):
+        action = entry.get("action") or {}
+        if action.get("tool") != "observe_fact" or not action.get("action_id"):
+            continue
+        observed = _confirmed_exists_fact(entry, normalized)
+        if observed is None:
+            continue
+        if action is not history[-1].get("action"):
+            # Conflicting / intervening actions cannot be silently ignored.
+            return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_OBSERVATION_NOT_LATEST")
+        if not observed:
+            return GoalEvidence(
+                "PASS", "SINGLE_FACT_QUERY_ABSENCE_CONFIRMED",
+                (str(action["action_id"]),), display, "SINGLE_FACT_QUERY",
+            )
+        if kind != "DIRECTORY":
+            return GoalEvidence(
+                "PASS", "SINGLE_FACT_QUERY_PATH_PRESENT_CONFIRMED",
+                (str(action["action_id"]),), display, "SINGLE_FACT_QUERY",
+            )
+        # A positive file.exists stat has no directory type information.
+        # A prior typed inspect/list of this exact path is necessary.
+        for prior in reversed(history[:-1]):
+            if _verified_existing_directory(prior, normalized):
+                typed_id = str((prior.get("action") or {}).get("action_id") or "")
+                if typed_id:
+                    return GoalEvidence(
+                        "PASS", "SINGLE_FACT_QUERY_DIRECTORY_PRESENT_CONFIRMED",
+                        (typed_id, str(action["action_id"])), display,
+                        "SINGLE_FACT_QUERY",
+                    )
+        return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_DIRECTORY_TYPE_UNVERIFIED")
+    return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_FACT_NOT_CONFIRMED")
+
+
 def evaluate_goal_evidence(goal: str, history: list[dict]) -> GoalEvidence:
     """Check real ToolResult receipts; extra successful reads do not erase proof."""
+    fact_query = _single_fact_query_proof(goal, history)
+    if fact_query.verified:
+        return fact_query
     conditional = _conditional_directory_proof(goal, history)
     if conditional.verified:
         return conditional
@@ -374,6 +482,39 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
                 or item.get("result_status") != "SUCCEEDED"
                 or item.get("evidence_status") != "ACTIVE"):
             raise ValueError("terminal_evidence_identity_or_status_mismatch")
+    if proof.goal_kind == "SINGLE_FACT_QUERY":
+        # Replay the original current-request ActionResult, not model prose.
+        # A copied evidence reference or foreign/stale action cannot complete.
+        from .tool_result_contract import decode_result
+        action_ledger = getattr(loop, "_canonical_action_proposals", None)
+        if not isinstance(action_ledger, Mapping):
+            raise ValueError("single_fact_query_action_ledger_missing")
+        reconstructed = []
+        for ref in proof.evidence_refs:
+            item = ledger[ref]
+            action = action_ledger.get(ref)
+            raw = item.get("result")
+            if (not isinstance(action, Mapping)
+                    or action.get("action_id") != ref
+                    or not isinstance(raw, str)):
+                raise ValueError("single_fact_query_action_result_missing")
+            digest = item.get("result_sha256")
+            if not digest or hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest:
+                raise ValueError("single_fact_query_evidence_digest_mismatch")
+            typed = decode_result(raw)
+            if not isinstance(typed, Mapping) or typed.get("status") != item.get("result_status"):
+                raise ValueError("single_fact_query_tool_result_invalid")
+            reconstructed.append({"action": action, "receipt": typed})
+        # For positive typed directory facts, evidence refs may be a typed
+        # inspection followed by observe_fact; preserve their order.
+        replay = _single_fact_query_proof(
+            str(getattr(loop, "task_request", "") or ""), reconstructed,
+        )
+        if (not replay.verified
+                or replay.reason != proof.reason
+                or replay.evidence_refs != proof.evidence_refs
+                or _normal_path(replay.target) != _normal_path(proof.target)):
+            raise ValueError("single_fact_query_proof_replay_mismatch")
     if proof.goal_kind == "CONDITIONAL_DIRECTORY_EXISTS":
         # Do not accept only copied in-memory history: replay the same
         # current-request ToolResult from Runtime's durable action/result
@@ -431,6 +572,26 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
         "verification_status": "PASS",
         "goal_evidence_reason": proof.reason,
     }
+    if proof.goal_kind == "SINGLE_FACT_QUERY":
+        request = str(getattr(loop, "task_request", "") or "")
+        target = _normal_path(proof.target)
+        original, requested_kind = _single_fact_query_contract(request, proof.target)
+        if not target or original != target:
+            raise ValueError("single_fact_query_goal_binding_invalid")
+        observed_value = proof.reason != "SINGLE_FACT_QUERY_ABSENCE_CONFIRMED"
+        record["fact_observation"] = {
+            "fact_field": "file.exists",
+            "fact_observed_value": observed_value,
+            "fact_observation_status": "CONFIRMED",
+            "fact_requested_kind": requested_kind,
+            "fact_type_verdict": (
+                "ABSENT" if not observed_value else
+                "DIRECTORY_CONFIRMED" if requested_kind == "DIRECTORY" else
+                "PATH_EXISTS_TYPE_NOT_REQUESTED"
+            ),
+            "fact_evidence_ref": proof.evidence_refs[-1],
+            "fact_result_not_mutation": True,
+        }
     encoded = json.dumps(record, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":")).encode("utf-8")
     record["receipt_id"] = "TERM-" + hashlib.sha256(encoded).hexdigest()[:20].upper()
@@ -551,6 +712,14 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
 
 
 def format_runtime_goal_summary(proof: GoalEvidence) -> str:
+    if proof.goal_kind == "SINGLE_FACT_QUERY" and proof.verified:
+        if proof.reason == "SINGLE_FACT_QUERY_ABSENCE_CONFIRMED":
+            return "已確認指定目標不存在：\n" + proof.target
+        if proof.reason == "SINGLE_FACT_QUERY_DIRECTORY_PRESENT_CONFIRMED":
+            return "已確認指定資料夾存在，且類型為目錄：\n" + proof.target
+        if proof.reason == "SINGLE_FACT_QUERY_PATH_PRESENT_CONFIRMED":
+            return "已確認指定路徑存在（未驗證物件類型）：\n" + proof.target
+        raise ValueError("single_fact_query_unrecognized_proof_reason")
     if proof.goal_kind == "RESOLVED_SINGLE_DIRECTORY" and proof.verified:
         # A later directory observation proves the postcondition, NOT which
         # process created it. Never assert that an uncertain mutation ran.
