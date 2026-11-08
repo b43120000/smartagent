@@ -484,3 +484,63 @@ def test_legacy_v9_envelope_with_valid_json_still_rejected():
     response = fence + "smartagent_tool\n" + tool_json("delete_path", path=r"E:\Erase") + "\n" + fence
     with pytest.raises(MinimalDecisionError, match="legacy_protocol_response"):
         parse_minimal_decision(response)
+
+
+
+def test_runtime_auto_finishes_mkdir_after_first_action_without_model_finish(tmp_path, monkeypatch):
+    """Original Live regression: actual directory creation must not be undone
+    by a second model round or arbitrary number of subsequent observations."""
+    from agent_core.tool_result_contract import encode_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    destination = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
+    goal = "創立這個資料夾\n" + destination
+    evidence = encode_result(
+        "SUCCEEDED", "DIRECTORY_CREATED", tool="create_directory",
+        executed=True, requested_path=destination, resolved_path=destination,
+        data={
+            "directory_created": True, "observed_exists": True,
+            "observed_is_directory": True, "observation_status": "CONFIRMED",
+            "goal_completion_verified": False,
+        },
+    )
+    loop = FakeLoop(tmp_path, goal, [
+        tool_json("create_directory", path=destination),
+        "model should never be asked to finish this proven goal",
+    ], evidence)
+    summary = run_minimal_core(loop, goal)
+    assert destination in summary
+    assert len(loop.executed) == 1
+    assert len(loop.expected_protocols) == 1
+    assert loop.terminal_outcome == "SUCCESS"
+    assert loop.terminal_acceptance["schema"] == "SMARTAGENT_TERMINAL_ACCEPTANCE_V1"
+    assert loop.terminal_acceptance["evidence_verdict"] == "PASS"
+    assert loop.terminal_acceptance["evidence_refs"] == [
+        loop.executed[0]["action_id"]
+    ]
+    journal = (tmp_path / "localdata/runtime/minimal_core/TASK-MINIMAL-TEST.jsonl")
+    events = [json.loads(row)["event"] for row in journal.read_text(encoding="utf-8").splitlines()]
+    assert "runtime_goal_verified" in events
+    assert "runtime_autofinish" in events
+    assert "decision_rejected" not in events
+
+
+def test_multi_step_goal_does_not_auto_finish_after_directory_created(tmp_path, monkeypatch):
+    from agent_core.tool_result_contract import encode_result
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    destination = r"E:\SmartAgent_GoalDriven_IT_GH_v1"
+    goal = "建立 " + destination + " 並寫入 README.md"
+    evidence = encode_result(
+        "SUCCEEDED", "DIRECTORY_CREATED", tool="create_directory",
+        executed=True, requested_path=destination, resolved_path=destination,
+        data={"directory_created": True, "observed_exists": True,
+              "observed_is_directory": True, "observation_status": "CONFIRMED"},
+    )
+    loop = FakeLoop(tmp_path, goal, [
+        tool_json("create_directory", path=destination),
+        '{"type":"finish","summary":"Done!"}',
+    ], evidence)
+    message = run_minimal_core(loop, goal)
+    assert "尚無足夠證據" in message
+    assert loop.terminal_outcome == "UNKNOWN"
+    assert loop.terminal_acceptance == {}
+    assert len(loop.executed) == 1
