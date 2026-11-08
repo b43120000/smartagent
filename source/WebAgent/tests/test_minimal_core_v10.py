@@ -457,7 +457,12 @@ def test_format_repair_hint_contains_code_and_never_executes_bad_reply(tmp_path,
         failure_reply, tool_json("list_directory", path=str(tmp_path)),
         '{"type":"finish","summary":"ok.py"}',
     ], actual_receipt)
-    assert run_minimal_core(loop, goal) == "ok.py"
+    # A repaired tool call on decision #2 returns the confirmed observation;
+    # no third Finish is needed or permitted for this isolated read task.
+    answer = run_minimal_core(loop, goal)
+    assert "ok.py" in answer
+    assert loop.terminal_outcome == "SUCCESS"
+    assert len(loop.expected_protocols) == 2
     assert len(loop.executed) == 1
     assert "Invalid JSON escape" in loop.prompts[1]
     assert "Last decision rejected before execution" in loop.prompts[1]
@@ -996,7 +1001,7 @@ def test_git27_ungrounded_blocked_gets_one_redecision_then_typed_unknown(tmp_pat
 def test_git27_confirmed_missing_parent_returns_prerequisite(tmp_path, monkeypatch):
     from agent_core.tool_result_contract import encode_result
     monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
-    path = r"E:\\FutureParent\\Child"
+    path = r"E:\FutureParent\Child"
     goal = "建立資料夾 " + path
     result = encode_result("REJECTED", "DIRECTORY_PARENT_MISSING",
                            tool="create_directory", executed=False)
@@ -1012,7 +1017,7 @@ def test_git27_confirmed_missing_parent_returns_prerequisite(tmp_path, monkeypat
 
 def test_git27_atomic_mkdir_contract_accepts_equivalent_word_order_only():
     from WebAgent.minimal_executor_contract import single_directory_contract_target
-    path = r"E:\\UnitFolder"
+    path = r"E:\UnitFolder"
     assert single_directory_contract_target("在 " + path + " 建立資料夾", path)
     assert not single_directory_contract_target(
         "在 " + path + " 建立資料夾並寫入 README.md", path)
