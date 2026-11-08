@@ -14,6 +14,10 @@ import time
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
+from agent_core.tri_one_runtime_terminal import (
+    GoalEvidence, evaluate_goal_evidence, accept_runtime_terminal,
+    format_runtime_goal_summary,
+)
 
 
 def _digest(value) -> str:
@@ -109,6 +113,8 @@ def build_minimal_prompt(request: str, context, history: list[dict],
 
 def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
     """No broad semantic inference from a model finish or mere exit code."""
+    if evaluate_goal_evidence(goal, history).verified:
+        return True
     if len(history) != 1:
         return False
     entry = history[0]
@@ -150,6 +156,37 @@ def narrow_goal_verified(goal: str, history: list[dict]) -> bool:
                     and data.get("observed_is_directory") is True
                     and re.search(r"建立|創立|新增|create|mkdir", goal, re.I))
     return False
+
+
+def _verified_proof(goal: str, history: list[dict]) -> GoalEvidence:
+    """Shared goal-level proof, keeping simple legacy read-only goals intact."""
+    proof = evaluate_goal_evidence(goal, history)
+    if proof.verified:
+        return proof
+    if len(history) == 1 and narrow_goal_verified(goal, history):
+        entry = history[0]
+        action = entry["action"]
+        ref = str(action.get("action_id") or "")
+        if ref:
+            return GoalEvidence(
+                "PASS", "SINGLE_OPERATION_RESULT_VERIFIED", (ref,),
+                str(action.get("path") or action.get("command") or ""),
+                "SINGLE_OBSERVATION",
+            )
+    return proof
+
+
+def _accept_and_record_goal(loop, proof: GoalEvidence, journal, *, round_id: int):
+    receipt = accept_runtime_terminal(loop, proof)
+    journal.append("runtime_goal_verified", round=round_id,
+                   evidence_refs=list(proof.evidence_refs),
+                   goal_kind=proof.goal_kind, receipt_id=receipt["receipt_id"])
+    loop._emit("runtime_goal_verified", request_id=loop.run_id,
+               task_id=loop.task_id, round=round_id,
+               outcome="SUCCESS", evidence_refs=list(proof.evidence_refs),
+               receipt_id=receipt["receipt_id"], goal_kind=proof.goal_kind)
+    loop._emit("runtime_terminal_accepted", **receipt)
+    return receipt
 
 
 def _format_repair_hint(error: MinimalDecisionError) -> str:
@@ -270,9 +307,7 @@ def run_minimal_core(loop, request: str) -> str:
         if decision.kind == "blocked":
             loop.protocol_state = "BLOCKED"
             loop.terminal_outcome = "UNKNOWN"
-            loop.terminal_acceptance = {
-                "decision": "BLOCKED", "outcome": "UNKNOWN", "evidence_verified": False,
-            }
+            loop.terminal_acceptance = {}  # PAUSED is nonterminal, no accepted receipt.
             journal.append("model_blocked", round=round_id,
                            reason_sha256=_digest(decision.message))
             set_runtime_state(loop.task_id, "PAUSED", reason="MINIMAL_MODEL_BLOCKED",
@@ -280,24 +315,32 @@ def run_minimal_core(loop, request: str) -> str:
             return "目前無法繼續（模型尚未證明任務完成）：" + decision.message
 
         if decision.kind == "finish":
-            verified = narrow_goal_verified(request, history)
-            ref = history[-1]["evidence_ref"] if history else ""
-            loop.terminal_outcome = "SUCCESS" if verified else "UNKNOWN"
-            loop.protocol_state = "COMPLETED" if verified else "MODEL_FINISHED_UNVERIFIED"
-            loop.terminal_acceptance = {
-                "decision": "FINISH", "outcome": loop.terminal_outcome,
-                "evidence_verified": verified,
-                "verification_scope": "SINGLE_OPERATION" if verified else "UNVERIFIED",
-                "evidence_refs": [ref] if ref else [],
-            }
+            proof = _verified_proof(request, history)
+            verified = proof.verified
+            if verified:
+                receipt = _accept_and_record_goal(loop, proof, journal,
+                                                 round_id=round_id)
+                set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
+                summary = (format_runtime_goal_summary(proof)
+                           if proof.goal_kind == "SINGLE_CREATE_DIRECTORY"
+                           else decision.message)
+                journal.append("model_finish", round=round_id,
+                               outcome="SUCCESS", verified=True,
+                               evidence_refs=list(proof.evidence_refs),
+                               receipt_id=receipt["receipt_id"],
+                               summary_sha256=_digest(summary))
+                return summary
+            loop.terminal_outcome = "UNKNOWN"
+            loop.protocol_state = "MODEL_FINISHED_UNVERIFIED"
+            loop.terminal_acceptance = {}
             journal.append("model_finish", round=round_id,
-                           outcome=loop.terminal_outcome, verified=verified,
-                           evidence_ref=ref, summary_sha256=_digest(decision.message))
-            set_runtime_state(loop.task_id, "COMPLETED" if verified else "PAUSED",
-                              reason="" if verified else "MODEL_FINISHED_UNVERIFIED",
+                           outcome="UNKNOWN", verified=False,
+                           summary_sha256=_digest(decision.message),
+                           reason=proof.reason)
+            set_runtime_state(loop.task_id, "PAUSED",
+                              reason="MODEL_FINISHED_UNVERIFIED",
                               root=loop.progress_root)
-            return (decision.message if verified else
-                    "模型已回覆，但 Runtime 尚無足夠證據確認整體目標完成：\n"
+            return ("模型已回覆，但 Runtime 尚無足夠證據確認整體目標完成：\n"
                     + decision.message)
 
         action, rejection = admit_minimal_action(decision, loop.tools)
@@ -386,6 +429,18 @@ def run_minimal_core(loop, request: str) -> str:
             # A fresh action result must be present before a continuation
             # checkpoint is considered complete.
             loop.continuation_store.snapshot(loop)
+        # Runtime, not Planner, owns the observed completion decision. A
+        # verified single-folder creation does not consume another model turn,
+        # and another harmless inspection cannot invalidate this proof.
+        proof = evaluate_goal_evidence(request, history)
+        if proof.verified:
+            terminal_receipt = _accept_and_record_goal(
+                loop, proof, journal, round_id=round_id)
+            set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
+            journal.append("runtime_autofinish", round=round_id,
+                           receipt_id=terminal_receipt["receipt_id"],
+                           goal_kind=proof.goal_kind)
+            return format_runtime_goal_summary(proof)
         if receipt.get("status") in {"UNKNOWN", "RUNNING"}:
             repair_hint = ("Last action outcome is uncertain or running. "
                            "Observe current state; NEVER replay a mutation blindly.")
