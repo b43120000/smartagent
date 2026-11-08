@@ -12,7 +12,9 @@ from pathlib import Path
 import re
 import time
 
-from .minimal_admission import admit_minimal_action, action_is_mutating
+from .minimal_admission import (
+    admit_minimal_action, action_is_mutating, canonicalize_safe_observation_alias,
+)
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
 from agent_core.tri_one_runtime_terminal import (
     GoalEvidence, evaluate_goal_evidence, accept_runtime_terminal,
@@ -510,7 +512,10 @@ def run_minimal_core(loop, request: str) -> str:
                 return "純文字任務收到未授權的工具提案，未執行任何工具；任務暫停。"
             continue
 
-        action, rejection = admit_minimal_action(decision, loop.tools)
+        # Exact, positively proven read-only aliases may be canonicalized
+        # before normal admission. The raw Planner proposal remains separate.
+        resolved_decision, operation_rewrite = canonicalize_safe_observation_alias(decision)
+        action, rejection = admit_minimal_action(resolved_decision, loop.tools)
         if rejection:
             consecutive_action_rejections += 1
             item = classify_rejection(decision.tool, rejection, round_id)
@@ -592,6 +597,26 @@ def run_minimal_core(loop, request: str) -> str:
             continue
         consecutive_action_rejections = 0
         consecutive_unverified_finishes = 0
+        if operation_rewrite:
+            if not hasattr(loop, "_runtime_action_rewrite_notes"):
+                loop._runtime_action_rewrite_notes = {}
+            loop._runtime_action_rewrite_notes[action["action_id"]] = dict(operation_rewrite)
+            journal.append("action_semantic_rewrite", round=round_id,
+                           action_id=action["action_id"], tool=action["tool"],
+                           proposed_operation=operation_rewrite["original_operation"],
+                           canonical_operation=operation_rewrite["canonical_operation"],
+                           rewrite_reason_code=operation_rewrite["rewrite_reason_code"],
+                           proposal_sha256=_digest(decision.arguments),
+                           executed=False)
+            loop._emit("minimal_action_semantic_rewrite",
+                       request_id=loop.run_id, task_id=loop.task_id,
+                       task_epoch=loop.task_epoch, round=round_id,
+                       action_id=action["action_id"], tool=action["tool"],
+                       proposed_operation=operation_rewrite["original_operation"],
+                       operation=operation_rewrite["canonical_operation"],
+                       rewrite_reason_code=operation_rewrite["rewrite_reason_code"],
+                       changed_fields=["operation"], proposal_sha256=_digest(decision.arguments),
+                       executed=False, authorization_granted=False)
         loop._emit("minimal_action_admitted",
                    request_id=loop.run_id, task_id=loop.task_id,
                    task_epoch=loop.task_epoch, round=round_id,
@@ -621,7 +646,13 @@ def run_minimal_core(loop, request: str) -> str:
                        mutating=mutating)
         if mutating:
             seen_mutations.add(fingerprint)
-        loop._planner_original_actions[action["action_id"]] = dict(action)
+        if operation_rewrite:
+            loop._planner_original_actions[action["action_id"]] = {
+                "tool": decision.tool, **dict(decision.arguments or {}),
+                "action_id": action["action_id"],
+            }
+        else:
+            loop._planner_original_actions[action["action_id"]] = dict(action)
         loop._canonical_action_proposals[action["action_id"]] = dict(action)
         loop.protocol_state = "EXECUTING"
         result = loop._execute_action(action)
