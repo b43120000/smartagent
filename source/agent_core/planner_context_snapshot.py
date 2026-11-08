@@ -600,6 +600,30 @@ def build_planner_context_snapshot(runtime) -> dict:
             "parent_stage_completion_inferred": False,
             "admission_authorized": False,
         }
+        from .tri_layer_handoff import project_handoff
+        active = [v for v in [own, *children] if isinstance(v, Mapping)]
+        by_handoff_id = {
+            h["handoff_id"]: h for h in (project_handoff(row) for row in active)
+            if h
+        }
+        handoff["tri_layer_handoffs"] = list(by_handoff_id.values())[-8:]
+        handoff["prerequisite_handoffs"] = [
+            {
+                "handoff_id": h["handoff_id"],
+                "executor_task_id": h["executor_handoff"]["executor_task_id"],
+                **h["prerequisite_handoff"],
+            }
+            for h in handoff["tri_layer_handoffs"]
+        ]
+        handoff["goal_stage_handoffs"] = [
+            {
+                "handoff_id": h["handoff_id"],
+                "executor_task_id": h["executor_handoff"]["executor_task_id"],
+                **h["goal_stage_handoff"],
+            }
+            for h in handoff["tri_layer_handoffs"]
+        ]
+        handoff["layer_states_are_not_interchangeable"] = True
         payload["executor_blackboard"] = handoff
         payload["shared_blackboard"]["executor_blackboard"] = handoff
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
