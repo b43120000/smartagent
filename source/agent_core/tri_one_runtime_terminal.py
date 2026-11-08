@@ -170,6 +170,73 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
     return record
 
 
+def accept_runtime_answer_only(
+    loop, *, goal: str, answer: str, had_attachments: bool = False,
+) -> tuple[dict | None, str]:
+    """Admit only a no-tool, request-scoped text answer.
+
+    A text answer has no ActionResult evidence. Admission proves only that
+    Runtime accepted the eligible model reply, never external factual truth.
+    """
+    from .tri_one_answer_only import classify_original_request, _UNSUPPORTED_CLAIM
+    from .task_requirement import assess_task_requirement
+
+    if not isinstance(answer, str) or not answer.strip() or len(answer) > 3000:
+        return None, "ANSWER_ONLY_CONTENT_INVALID"
+    if (getattr(loop, "continuation_source", None)
+            or had_attachments
+            or getattr(loop, "_tri_one_has_attached_context", False)
+            or getattr(loop, "image_delivery_plan", None)):
+        return None, "ANSWER_ONLY_REQUIRES_RESOURCE_CONTEXT"
+    if any((
+        getattr(loop, "action_ledger", None),
+        getattr(loop, "action_result_ledger", None),
+        getattr(loop, "condition_result_ledger", None),
+        getattr(loop, "pending_result_recovery", None),
+        getattr(loop, "deferred_action_repairs", None),
+        getattr(loop, "pending_progress_repair_actions", None),
+        getattr(loop, "pending_action_repair", None),
+    )):
+        return None, "ANSWER_ONLY_RUNTIME_ACTION_OR_RECOVERY_PENDING"
+    requirement = assess_task_requirement(
+        goal, attachments=False, authorized_paths=False,
+        image_or_artifact_request=False, continuation=False,
+    )
+    eligible, reason = classify_original_request(goal)
+    if requirement.get("route") != "ANSWER_ONLY" or not eligible:
+        return None, "ANSWER_ONLY_REQUEST_NOT_ELIGIBLE:" + str(reason)[:100]
+    if _UNSUPPORTED_CLAIM.search(answer):
+        return None, "ANSWER_ONLY_UNVERIFIED_EXECUTION_CLAIM"
+    if str(getattr(loop, "task_request", goal) or "") != str(goal):
+        return None, "ANSWER_ONLY_GOAL_IDENTITY_MISMATCH"
+    record = {
+        "schema": TERMINAL_SCHEMA,
+        "admission_status": "ACCEPTED",
+        "admission_reason": "ANSWER_ONLY_RESPONSE_ADMITTED",
+        "completion_kind": "ANSWER_ONLY",
+        "decision": "MINIMAL_TEXT_ONLY_FINISH_V1",
+        "request_id": loop.run_id,
+        "task_id": loop.task_id,
+        "task_epoch": loop.task_epoch,
+        "round": loop.turn_id,
+        "task_outcome": "SUCCESS",
+        "runtime_state": "COMPLETED",
+        "matched_condition_id": "NO_TOOL_TEXT_RESPONSE",
+        "evidence_refs": [],
+        "evidence_verdict": "UNVERIFIED",
+        "verification_status": "NOT_REQUIRED",
+        "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+        "goal_sha256": hashlib.sha256(goal.encode("utf-8")).hexdigest(),
+    }
+    encoded = json.dumps(record, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+    record["receipt_id"] = "TERM-" + hashlib.sha256(encoded).hexdigest()[:20].upper()
+    loop.terminal_acceptance = dict(record)
+    loop.terminal_outcome = "SUCCESS"
+    loop.protocol_state = "COMPLETED"
+    return record, "ANSWER_ONLY_RESPONSE_ADMITTED"
+
+
 def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict:
     """Canonical status projection, not a chance to reinterpret goal evidence."""
     receipt = getattr(loop, "terminal_acceptance", {}) or {}
@@ -185,6 +252,24 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
         state = str(receipt.get("runtime_state") or "").upper()
         if receipt.get("task_outcome") != outcome:
             return TerminalVerdict("PAUSED", "UNKNOWN", {}, "TERMINAL_OUTCOME_MISMATCH")
+        kind = str(receipt.get("completion_kind") or "")
+        refs = receipt.get("evidence_refs")
+        evidence_verdict = str(receipt.get("evidence_verdict") or "")
+        if outcome == "SUCCESS":
+            answer_only = (
+                kind == "ANSWER_ONLY"
+                and receipt.get("decision") == "MINIMAL_TEXT_ONLY_FINISH_V1"
+                and receipt.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+                and refs == [] and evidence_verdict == "UNVERIFIED"
+                and str(receipt.get("answer_sha256") or "")
+            )
+            evidence_backed = (
+                kind != "ANSWER_ONLY" and isinstance(refs, list)
+                and bool(refs) and evidence_verdict == "PASS"
+            )
+            if not (answer_only or evidence_backed):
+                return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                       "SUCCESS_WITHOUT_ACCEPTED_GOAL_PROOF")
         if state == "COMPLETED" and outcome in {"SUCCESS", "PARTIAL", "FAILED", "UNKNOWN"}:
             return TerminalVerdict(state, outcome, receipt, "ACCEPTED_TERMINAL")
         if state == "INTERRUPTED":
@@ -203,6 +288,6 @@ def format_runtime_goal_summary(proof: GoalEvidence) -> str:
 
 __all__ = [
     "GoalEvidence", "TerminalVerdict", "evaluate_goal_evidence",
-    "accept_runtime_terminal", "terminal_verdict_from_loop",
+    "accept_runtime_terminal", "accept_runtime_answer_only", "terminal_verdict_from_loop",
     "format_runtime_goal_summary",
 ]
