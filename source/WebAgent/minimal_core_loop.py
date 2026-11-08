@@ -290,9 +290,11 @@ def run_minimal_core(loop, request: str) -> str:
     from agent_core.tool_result_contract import decode_result
     from agent_core.task_progress import set_runtime_state
     from .minimal_executor_contract import (
-        ATOMIC_MODEL_DECISION_LIMIT, blocked_disposition,
+        ATOMIC_MODEL_DECISION_LIMIT, TERMINAL_OUTCOMES, blocked_disposition,
         blocked_result, action_result_receipt, isolated_task_model_budget,
     )
+    from .minimal_resolution import resolve_unknown_action
+    from agent_core.executor_blackboard import publish_executor_terminal
 
     root = Path(loop.progress_root or loop.workspace)
     # Remote Worker passes <install>/source, Collector uses <install>/localdata.
@@ -314,19 +316,56 @@ def run_minimal_core(loop, request: str) -> str:
     consecutive_unverified_finishes = 0
     unsupported_blocked_decisions = 0
     loop.executor_result = {}
+    loop.executor_blackboard_terminal = {}
     atomic_budget = isolated_task_model_budget(request, loop)
 
     def publish_executor_result(value):
-        loop.executor_result = dict(value)
+        value = dict(value)
+        outcome = str(value.get("outcome") or "")
+        is_terminal = outcome in TERMINAL_OUTCOMES
+        value["executor_state"] = "TERMINAL" if is_terminal else (
+            "RESOLVING" if outcome == "RESOLVING" else "OBSERVING"
+        )
+        value["terminal_status"] = outcome if is_terminal else ""
+        if is_terminal and outcome == "VERIFIED":
+            if not getattr(loop, "terminal_acceptance", {}).get("evidence_verdict") == "PASS":
+                raise ValueError("executor_verified_without_runtime_terminal_evidence")
+        loop.executor_result = value
         journal.append("executor_result", round=loop.turn_id,
-                       outcome=value["outcome"], reason_code=value["reason_code"],
-                       executed=value["executed"], action_id=value["action_id"],
-                       evidence_ref=value["evidence_ref"])
+                       outcome=outcome, executor_state=value["executor_state"],
+                       reason_code=value.get("reason_code", ""),
+                       executed=value.get("executed", False),
+                       action_id=value.get("action_id", ""),
+                       evidence_ref=value.get("evidence_ref", ""))
         loop._emit("minimal_executor_result", request_id=loop.run_id,
                    task_id=loop.task_id, round=loop.turn_id,
-                   outcome=value["outcome"], reason_code=value["reason_code"],
-                   executed=value["executed"], action_id=value["action_id"],
-                   evidence_ref=value["evidence_ref"])
+                   outcome=outcome, executor_state=value["executor_state"],
+                   reason_code=value.get("reason_code", ""),
+                   executed=value.get("executed", False),
+                   action_id=value.get("action_id", ""),
+                   evidence_ref=value.get("evidence_ref", ""))
+        if is_terminal:
+            proof_refs = (
+                list(getattr(loop, "terminal_acceptance", {}).get("evidence_refs") or [])
+                if outcome == "VERIFIED"
+                else list(value.get("evidence_refs") or [])
+            )
+            persisted = publish_executor_terminal(
+                loop, value, root=root, goal=request, evidence_refs=proof_refs,
+                resolution_attempts=int(value.get("resolution_attempts") or 0),
+                resolution_state=str(value.get("resolution_state") or "NOT_REQUIRED"),
+            )
+            loop.executor_blackboard_terminal = persisted
+            journal.append("executor_blackboard_terminal_published",
+                           round=loop.turn_id, terminal_status=outcome,
+                           evidence_refs=proof_refs, parent_task_id=persisted.get(
+                               "parent_task_id", ""), stage_id=persisted.get("stage_id", ""))
+            loop._emit("minimal_executor_blackboard_published",
+                       request_id=loop.run_id, task_id=loop.task_id,
+                       task_epoch=loop.task_epoch, terminal_status=outcome,
+                       stage_id=persisted.get("stage_id", ""),
+                       parent_task_id=persisted.get("parent_task_id", ""),
+                       evidence_refs=proof_refs)
 
     for round_id in range(1, min(loop.max_turns, atomic_budget or loop.max_turns) + 1):
         loop._check_cancelled()
@@ -423,7 +462,9 @@ def run_minimal_core(loop, request: str) -> str:
             journal.append("model_blocked", round=round_id,
                            reason_sha256=_digest(decision.message),
                            disposition=disposition, reason_code=blocker_reason)
-            if disposition == "UNKNOWN" and unsupported_blocked_decisions == 0:
+            if (disposition == "BLOCKED"
+                    and blocker_reason == "PLANNER_UNCERTAINTY_NOT_VERIFIED"
+                    and unsupported_blocked_decisions == 0):
                 # Planner uncertainty is not an objective blocker. One bounded
                 # re-decision; no guessed scope/source/action execution.
                 unsupported_blocked_decisions += 1
@@ -536,7 +577,8 @@ def run_minimal_core(loop, request: str) -> str:
                 continue
             loop.terminal_outcome = "UNKNOWN"
             loop.protocol_state = "MODEL_FINISHED_UNVERIFIED"
-            publish_executor_result(blocked_result("UNKNOWN", proof.reason, round_id))
+            publish_executor_result(blocked_result(
+                "BLOCKED", "GOAL_EVIDENCE_NOT_VERIFIED:" + proof.reason, round_id))
             loop.terminal_acceptance = {}
             journal.append("model_finish", round=round_id,
                            outcome="UNKNOWN", verified=False,
@@ -801,8 +843,37 @@ def run_minimal_core(loop, request: str) -> str:
                            goal_kind=proof.goal_kind)
             return format_runtime_goal_summary(proof)
         if receipt.get("status") in {"UNKNOWN", "RUNNING"}:
-            repair_hint = ("Last action outcome is uncertain or running. "
-                           "Observe current state; NEVER replay a mutation blindly.")
+            # Mandatory child Agent Loop. Never use a regular Finish/Blocked
+            # response while a possibly executed mutation remains ambiguous.
+            resolved = resolve_unknown_action(
+                loop, original=action, original_receipt=receipt,
+                history=history, goal=request, journal=journal,
+            )
+            resolved_result = dict(resolved["result"])
+            if resolved_result["outcome"] == "VERIFIED":
+                resolution_proof = resolved["proof"]
+                if not resolution_proof or not resolution_proof.verified:
+                    raise RuntimeError("RESOLUTION_VERIFIED_WITHOUT_GOAL_EVIDENCE")
+                terminal_receipt = _accept_and_record_goal(
+                    loop, resolution_proof, journal, round_id=round_id,
+                )
+                resolved_result["goal_verified"] = True
+                publish_executor_result(resolved_result)
+                set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
+                journal.append("resolution_runtime_autofinish", round=round_id,
+                               receipt_id=terminal_receipt["receipt_id"])
+                return format_runtime_goal_summary(resolution_proof)
+            # A blocked verification is an objective process blocker. It
+            # does NOT assert the original action failed or had no side effect.
+            loop.protocol_state = "BLOCKED"
+            loop.terminal_outcome = "UNKNOWN"  # Tri-One nonterminal PAUSED.
+            loop.terminal_acceptance = {}
+            publish_executor_result(resolved_result)
+            set_runtime_state(loop.task_id, "PAUSED",
+                              reason=resolved_result["reason_code"],
+                              root=loop.progress_root)
+            return ("Executor 已完成有界釐清，但無法安全確認結果：" +
+                    resolved_result["reason_code"])
         # The second model decision may have been spent repairing a rejected
         # proposal. A verified narrow read need not consume a THIRD reply just
         # to restate the real bounded ToolResult.
@@ -822,8 +893,8 @@ def run_minimal_core(loop, request: str) -> str:
         # Return a typed child result to Goal/Prerequisite. A two-turn
         # budget is not permission to claim success, or repeat a mutation.
         outcome, reason = blocked_disposition(goal_context, history, action_rejections)
-        publish_executor_result(blocked_result(outcome, "ATOMIC_DECISION_BUDGET:" + reason,
-                                               loop.turn_id))
+        publish_executor_result(blocked_result(
+            outcome, "ATOMIC_DECISION_BUDGET:" + reason, loop.turn_id))
         loop.protocol_state = "BLOCKED"
         set_runtime_state(loop.task_id, "PAUSED",
                           reason="ATOMIC_DECISION_BUDGET_EXHAUSTED:" + reason,
