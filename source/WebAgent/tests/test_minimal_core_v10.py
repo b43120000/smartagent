@@ -720,3 +720,18 @@ def test_goal_driver_rejection_feedback_reaches_next_planner_round(tmp_path, mon
     assert "recent_rejections" in loop.prompts[1]
     assert "runtime_owned_argument_rejected" in loop.prompts[1]
     assert "Runtime Action Admission denied" in loop.prompts[1]
+
+
+
+@pytest.mark.parametrize("user_goal,expected", [
+    ("說個關於ai 加上引力理論的笑話", "ANSWER_ONLY"),
+    ("講一個關於相對論的故事", "ANSWER_ONLY"),
+    ("請解釋什麼是廣義相對論", "ANSWER_ONLY"),
+    ("列出 /tmp/project 底下檔案", "RESOURCE_REQUIRED"),
+    ("列出 /tmp/project", "RESOURCE_REQUIRED"),
+    ("列出 E:\\Project\\files", "RESOURCE_REQUIRED"),
+    ("說個笑話，然後執行 python -m pytest", "RESOURCE_REQUIRED"),
+])
+def test_text_only_route_does_not_confuse_local_paths_with_prose(user_goal, expected):
+    from agent_core.task_requirement import assess_task_requirement
+    assert assess_task_requirement(user_goal)["route"] == expected
