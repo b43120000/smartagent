@@ -291,7 +291,7 @@ def run_minimal_core(loop, request: str) -> str:
     from agent_core.task_progress import set_runtime_state
     from .minimal_executor_contract import (
         ATOMIC_MODEL_DECISION_LIMIT, blocked_disposition,
-        blocked_result, action_result_receipt,
+        blocked_result, action_result_receipt, isolated_task_model_budget,
     )
 
     root = Path(loop.progress_root or loop.workspace)
@@ -314,6 +314,7 @@ def run_minimal_core(loop, request: str) -> str:
     consecutive_unverified_finishes = 0
     unsupported_blocked_decisions = 0
     loop.executor_result = {}
+    atomic_budget = isolated_task_model_budget(request, loop)
 
     def publish_executor_result(value):
         loop.executor_result = dict(value)
@@ -327,7 +328,7 @@ def run_minimal_core(loop, request: str) -> str:
                    executed=value["executed"], action_id=value["action_id"],
                    evidence_ref=value["evidence_ref"])
 
-    for round_id in range(1, loop.max_turns + 1):
+    for round_id in range(1, min(loop.max_turns, atomic_budget or loop.max_turns) + 1):
         loop._check_cancelled()
         loop.turn_id = round_id
         loop.tools._protocol_turn_seq = round_id
@@ -803,6 +804,17 @@ def run_minimal_core(loop, request: str) -> str:
             repair_hint = ("Last action outcome is uncertain or running. "
                            "Observe current state; NEVER replay a mutation blindly.")
 
+    if atomic_budget is not None:
+        # Return a typed child result to Goal/Prerequisite. A two-turn
+        # budget is not permission to claim success, or repeat a mutation.
+        outcome, reason = blocked_disposition(goal_context, history, action_rejections)
+        publish_executor_result(blocked_result(outcome, "ATOMIC_DECISION_BUDGET:" + reason,
+                                               loop.turn_id))
+        loop.protocol_state = "BLOCKED"
+        set_runtime_state(loop.task_id, "PAUSED",
+                          reason="ATOMIC_DECISION_BUDGET_EXHAUSTED:" + reason,
+                          root=loop.progress_root)
+        return "單次執行任務達到兩次模型決策上限；未驗證成功，已回報上層。"
     loop.protocol_state = "INTERRUPTED"
     journal.append("max_rounds_exhausted", max_rounds=loop.max_turns)
     raise RuntimeError("MINIMAL_CORE_MAX_ROUNDS")
