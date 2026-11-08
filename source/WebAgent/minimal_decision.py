@@ -195,27 +195,25 @@ def parse_minimal_decision_with_diagnostics(
     valid = []
     first_problem = None
     for index, candidate in enumerate(candidates):
+        # Explicit-path normalization runs before JSON decoding because
+        # unescaped Windows sequences like backslash-n are syntactically
+        # valid JSON but would otherwise silently change the target path.
+        fixed, path_repaired = _repair_explicit_path(candidate, original_goal)
         try:
-            parsed = json.loads(candidate, object_pairs_hook=_unique_keys)
+            parsed = json.loads(fixed, object_pairs_hook=_unique_keys)
         except json.JSONDecodeError as exc:
-            fixed, path_repaired = _repair_explicit_path(candidate, original_goal)
-            if path_repaired:
-                try:
-                    parsed = json.loads(fixed, object_pairs_hook=_unique_keys)
-                except (json.JSONDecodeError, MinimalDecisionError):
-                    path_repaired = False
-            if not path_repaired:
-                if first_problem is None:
-                    meta.update(json_error_line=exc.lineno,
-                                json_error_column=exc.colno,
-                                json_error_position=exc.pos,
-                                json_error_message_code=_json_error_code(exc))
-                    first_problem = _json_error_code(exc)
-                continue
-            meta["normalization"] = "EXPLICIT_WINDOWS_PATH_BACKSLASH_ESCAPED"
+            if first_problem is None:
+                meta.update(json_error_line=exc.lineno,
+                            json_error_column=exc.colno,
+                            json_error_position=exc.pos,
+                            json_error_message_code=_json_error_code(exc))
+                first_problem = _json_error_code(exc)
+            continue
         except MinimalDecisionError as exc:
             first_problem = first_problem or exc.code
             continue
+        if path_repaired:
+            meta["normalization"] = "EXPLICIT_WINDOWS_PATH_BACKSLASH_ESCAPED"
         try:
             decision = _to_decision(parsed, meta)
         except MinimalDecisionError as exc:
@@ -238,6 +236,10 @@ def parse_minimal_decision_with_diagnostics(
             meta["normalization"] = "EXTRACT_UNIQUE_EMBEDDED_JSON"
         meta["status"] = "ACCEPTED"
         return decision, meta
+    if meta["legacy_fence_detected"] and first_problem in {
+        "decision_type_required", "unknown_decision_type", None,
+    }:
+        first_problem = "legacy_protocol_response"
     raise MinimalDecisionError(first_problem or "decision_not_found", meta)
 
 
