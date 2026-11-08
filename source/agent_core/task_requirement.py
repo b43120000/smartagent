@@ -279,6 +279,26 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
                    "bounded_text_only_intent", restrictions)
 
 
+def no_tool_terminal_candidate(assessment: Mapping[str, object]) -> bool:
+    """Requirement-only eligibility for a no-tool model Finish.
+
+    Unknown greetings and other harmless prose need not match a keyword
+    whitelist. Source, action, continuation or ambiguous private-context
+    requirements still fail closed. This never verifies the truth of prose.
+    """
+    if assessment.get("required_operations"):
+        return False
+    if set(assessment.get("resource_sources") or []) != {"NONE"}:
+        return False
+    if assessment.get("external_information_required") or assessment.get("side_effect_required"):
+        return False
+    route = str(assessment.get("route") or "")
+    reason = str(assessment.get("reason") or "")
+    return route == "ANSWER_ONLY" or (
+        route == "AMBIGUOUS" and reason == "text_intent_not_unambiguously_classified"
+    )
+
+
 def render_task_requirement(assessment: Mapping[str, object]) -> str:
     safe = {key: assessment[key] for key in (
         "schema", "route", "resource_sources", "required_operations",
