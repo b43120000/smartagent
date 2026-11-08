@@ -252,3 +252,50 @@ def test_real_registry_creates_one_explicit_authorized_directory(tmp_path):
     another = decode_result(context.execute({**action, "action_id": "MIN-RETRY"}))
     assert another and another["status"] == "REJECTED"
     assert another["reason"] == "DIRECTORY_ALREADY_EXISTS_REOBSERVE"
+
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="PowerShell executor is Windows-only")
+def test_real_windows_git_and_cmd_inspect(tmp_path):
+    import subprocess
+    from WebAgent.tool_context import WebAgentToolContext
+    from agent_core.tool_result_contract import decode_result
+
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    context = WebAgentToolContext(tmp_path)
+    for command, operation in [("git status --short", "GIT_INSPECT"),
+                               ("cmd /c dir", "INSPECT")]:
+        context.begin_run("RR-WIN-CMD", "請執行 " + command, [str(tmp_path)])
+        action, rejection = admit_minimal_action(
+            MinimalDecision("tool_call", "run_command", {
+                "command": command, "operation": operation,
+                "working_directory": str(tmp_path),
+            }), context,
+        )
+        assert not rejection, (command, rejection)
+        result = decode_result(context.execute(action))
+        assert result and result["status"] == "SUCCEEDED", (command, result)
+        assert result["executed"] is True
+        assert result["data"]["exit_code"] == 0
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="PowerShell executor is Windows-only")
+def test_real_windows_python_command_with_postcondition(tmp_path):
+    from WebAgent.tool_context import WebAgentToolContext
+    from agent_core.tool_result_contract import decode_result
+
+    context = WebAgentToolContext(tmp_path)
+    context.begin_run("RR-WIN-PY", "請執行 python --version", [str(tmp_path)])
+    action, rejection = admit_minimal_action(MinimalDecision(
+        "tool_call", "run_command", {
+            "command": "python --version", "operation": "TEST",
+            "working_directory": str(tmp_path),
+            "success_criteria": "Python interpreter returns a version and exits zero",
+            "verify": [{"action": "run_command", "command": "python --version",
+                        "expect_regex": "Python"}],
+        }), context)
+    assert not rejection, rejection
+    result = decode_result(context.execute(action))
+    assert result and result["status"] == "SUCCEEDED", result
+    assert result["data"]["exit_code"] == 0
+    assert result["data"]["verification_status"] == "PASS"
