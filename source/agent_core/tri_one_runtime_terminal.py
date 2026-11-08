@@ -227,6 +227,10 @@ def _conditional_directory_proof(goal: str, history: list[dict]) -> GoalEvidence
     if not observations or observations[-1][1] is not True:
         return GoalEvidence("UNKNOWN", "POSTCONDITION_DIRECTORY_EXISTENCE_NOT_CONFIRMED")
     last_index, _, post_ref = observations[-1]
+    # A later operation may have changed the target. The final admitted
+    # action must therefore be the trusted postcondition observation.
+    if last_index != len(history) - 1:
+        return GoalEvidence("UNKNOWN", "UNVERIFIED_ACTION_AFTER_FINAL_OBSERVATION")
     # Newly created: confirmed missing -> created -> confirmed present.
     for create_index, create_ref in reversed(creations):
         if create_index >= last_index:
