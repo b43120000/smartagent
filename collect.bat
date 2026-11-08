@@ -852,10 +852,15 @@ try {
     # Preserve rejected admission-only CWD/Scope checks; they have NO
     # tool_started and must not be described as executed operations.
     $admissionRejections = @($timeline.ToArray() | Where-Object {
-        $_.event -eq 'protocol_rejected'
+        $_.event -in @('protocol_rejected','minimal_goal_action_rejected')
     } | ForEach-Object {
         [ordered]@{
             round=$_.round
+            event=$_.event; tool=$_.tool
+            reason_code=$_.reason_code; repair_mode=$_.repair_mode
+            proposed_operation=$_.proposed_operation
+            proposal_sha256=$_.proposal_sha256
+            goal_context_sha256=$_.goal_context_sha256
             diagnostic_reasons=@($_.diagnostic_reasons)
             diagnostic_markers=@($_.diagnostic_markers)
             field_issues=@($_.field_issues_codes)
@@ -867,6 +872,20 @@ try {
         }
     })
     Write-Json (Join-Path $stage 'action_admission_rejections.json') @($admissionRejections)
+    # A denied v10 tool has no ToolResult. Preserve Scope denials without
+    # interpreting an unexecuted action as a filesystem observation.
+    $minimalScopeDenials = @($admissionRejections | Where-Object {
+        $_.event -eq 'minimal_goal_action_rejected' -and
+        [string]$_.reason_code -like 'scope_rejected:*'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round; tool=$_.tool; action_id=$null
+            scope_reason_code=$_.reason_code
+            scope_allowed=$false; executed=$false
+            filesystem_absence_verified=$false; authorization_granted=$false
+        }
+    })
+    $scopePreflights = @($scopePreflights) + @($minimalScopeDenials)
     $beforeDispatch = @($admissionRejections | Where-Object {
         @($_.diagnostic_reasons | Where-Object {
             $_ -in @('run_command_working_directory_rejected',
@@ -971,7 +990,8 @@ try {
     })
     Write-Json (Join-Path $stage 'prerequisite_transition_summary.json') @($transitions)
     $failures = @($timeline.ToArray() | Where-Object {
-        $_.event -eq 'tool_failure_causal_receipt_recorded'
+        $_.event -in @('tool_failure_causal_receipt_recorded',
+                       'minimal_goal_action_rejected')
     } | ForEach-Object {
         [ordered]@{
             round=$_.round
@@ -984,7 +1004,14 @@ try {
             executed=$_.executed
             exit_code=$_.exit_code
             timed_out=$_.timed_out
-            failure_category=$_.failure_category
+            failure_category=$(if ($_.event -eq 'minimal_goal_action_rejected') {
+                $_.repair_mode
+            } else { $_.failure_category })
+            rejection_reason=$_.reason_code
+            proposal_sha256=$_.proposal_sha256
+            failure_kind=$(if ($_.event -eq 'minimal_goal_action_rejected') {
+                'PRE_DISPATCH_ADMISSION_REJECTION'
+            } else { 'EXECUTED_ACTION_FAILURE' })
             classification_verified=$_.classification_verified
             stderr_present=$_.stderr_present
             stderr_sha256=$_.stderr_sha256
@@ -1024,13 +1051,22 @@ try {
                       'action_runtime_rewrite_candidate_rejected',
                       'tool_started','tool_completed',
                       'action_evidence_recorded',
-                      'tool_failure_causal_receipt_recorded')
+                      'tool_failure_causal_receipt_recorded',
+                      'minimal_action_proposed','minimal_action_admitted',
+                      'minimal_core_action_observed','minimal_goal_action_rejected')
     } | ForEach-Object {
         [ordered]@{
             round=$_.round
             action_id=$_.action_id
             tool=$_.tool
             event=$_.event
+            operation=$_.operation
+            proposed_operation=$_.proposed_operation
+            proposal_sha256=$_.proposal_sha256
+            proposed_fields=@($_.proposed_fields)
+            repair_mode=$_.repair_mode
+            reason_code=$_.reason_code
+            goal_context_sha256=$_.goal_context_sha256
             disposition=$_.disposition
             original_command_sha256=$_.original_command_sha256
             dispatched_command_sha256=$_.dispatched_command_sha256
@@ -1070,6 +1106,21 @@ try {
         Where-Object { $_ } | Sort-Object -Unique)
     $missingIDs = @($failedIDs | Where-Object { $knownIDs -cnotcontains $_ })
     if ($missingIDs.Count -gt 0) { $coverageIssues.Add('ACTION_FAILURE_CAUSAL_RECEIPT_MISSING') }
+    $minimalRejectCount = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'minimal_goal_action_rejected'
+    }).Count
+    $representedMinimalRejectCount = @($admissionRejections | Where-Object {
+        $_.event -eq 'minimal_goal_action_rejected'
+    }).Count
+    if ($minimalRejectCount -ne $representedMinimalRejectCount) {
+        $coverageIssues.Add('MINIMAL_ADMISSION_REJECTION_CAUSAL_GAP')
+    }
+    $minimalProposedCount = @($minimalLineage | Where-Object {
+        $_.event -eq 'minimal_action_proposed'
+    }).Count
+    if ($minimalRejectCount -gt $minimalProposedCount) {
+        $coverageIssues.Add('MINIMAL_ACTION_PROPOSAL_LINEAGE_MISSING')
+    }
     if (@($warnings | Where-Object { $_ -like 'Timeline capped*' }).Count -gt 0) {
         $coverageIssues.Add('TIMELINE_ROW_CAP_REACHED')
     }
@@ -1104,6 +1155,10 @@ try {
         }).Count
         missing_failure_action_ids=@($missingIDs | Select-Object -First 24)
         admission_rejection_count=$admissionRejections.Count
+        minimal_action_proposed_count=$minimalProposedCount
+        minimal_admission_rejection_count=$minimalRejectCount
+        minimal_admission_rejection_represented_count=$representedMinimalRejectCount
+        minimal_action_lineage_event_count=$minimalLineage.Count
         contract_receipt_count=$contracts.Count
         action_trace_event_count=$actionTrace.Count
         planner_context_delivery_event_count=@($delivery).Count
