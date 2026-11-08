@@ -62,7 +62,10 @@ jobs:
             [ref]$parseErrors
           ) | Out-Null
           if ($parseErrors.Count -gt 0) {
-            throw ($parseErrors | ForEach-Object { $_.Message } | Out-String)
+            foreach ($e in ($parseErrors | Select-Object -First 8)) {
+              Write-Host ("COLLECTOR_PARSE_ERROR at {0}:{1} - {2} - token={3}" -f $e.Extent.StartLineNumber, $e.Extent.StartColumnNumber, $e.Message, $e.Extent.Text)
+            }
+            throw "COLLECTOR_POWERSHELL_SYNTAX_INVALID"
           }
       - name: Windows real filesystem and Collector RCA regression
         env:
