@@ -15,7 +15,10 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-COLLECTOR = Path(r"C:\Users\user\Desktop\remoteagent\smartagent\collect.bat")
+from .paths import install_root
+
+# Installation-owned collector path, independent of developer machine layout.
+COLLECTOR = install_root() / "collect.bat"
 REPOSITORY = "b43120000/test"
 BRANCH = "main"
 DESTINATION = "tasks"
