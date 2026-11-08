@@ -118,6 +118,10 @@ def canonicalize_exact_target_inspection(decision, tool_context):
 
 def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
     """Schema, authority and classification are checked before side effects."""
+    try:
+        setattr(tool_context, "_last_minimal_admission_diagnostic", {})
+    except (AttributeError, TypeError):
+        pass
     if decision.kind != "tool_call":
         return None, "not_a_tool_call"
     if decision.tool not in get_allowed_tools(tool_context.interface_name):
