@@ -746,6 +746,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "artifact_rejections": terminal_payload["artifact_rejections"],
                 "protocol_family": terminal_payload["protocol_family"],
                 "executor_result": dict(getattr(loop, "executor_result", {}) or {}),
+                "executor_blackboard_terminal": dict(getattr(loop, "executor_blackboard_terminal", {}) or {}),
             }
             # Keep the precise Executor pause reason instead of overwriting it
             # with the generic Tri-One terminal projection.
@@ -789,6 +790,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "task_outcome": terminal.outcome,
                 "terminal_acceptance": dict(terminal.receipt),
                 "verification_status": loop.tools.last_verification_status,
+                "executor_result": dict(getattr(loop, "executor_result", {}) or {}),
+                "executor_blackboard_terminal": dict(getattr(loop, "executor_blackboard_terminal", {}) or {}),
                 "execution_state": loop.execution_state,
                 "protocol_state": loop.protocol_state,
                 "terminal_candidate": dict(loop.terminal_candidate),
