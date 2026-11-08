@@ -143,3 +143,72 @@ Windows collector integration:
   PYTHONPATH=source python -m pytest source/WebAgent/tests/test_minimal_core_collector_windows.py
 
 Offline/CI PASS does not establish a ChatGPT Web DOM / Telegram Live PASS.
+
+
+## Tri-One Unified Runtime Terminal (2026-11-08)
+
+The Runtime (not Telegram Worker, WebDirect, or Planner prose) now owns the
+terminal status, outcome and accepted receipt. Shared implementation:
+source/agent_core/tri_one_runtime_terminal.py
+
+State flow:
+
+- Ingress: trusted task/request/epoch, original goal and source reply route
+- Action: Planner outputs one JSON decision; Runtime admits and executes
+- Evidence: actual request-scoped ToolResult is added to Runtime ledger
+- Goal evaluation: strictly bounded, deterministic proof from real ToolResult
+- Terminal: V1-compatible accepted receipt (PASS) or nonterminal PAUSED
+- Egress: Tri-One TaskResult V1 + shared render_task_reply; origin-only delivery
+
+First deliberately bounded auto-finish contract: a SINGLE explicit Windows
+directory-creation goal. Runtime requires a canonical create_directory result,
+SUCCEEDED/DIRECTORY_CREATED, executed=true, same requested/resolved target,
+directory_created/observed_exists/observed_is_directory all true and a confirmed
+observation. This task completes after one model tool_call and no extra Finish
+turn. It cannot auto-complete a compound goal (e.g. mkdir + write README).
+Later successful directory inspection does not negate the existing proof;
+a contradictory observation requires reconciliation.
+
+On an accepted terminal: the receipt includes request_id, task_id, task_epoch,
+receipt_id, evidence_refs, PASS verdict, COMPLETED and SUCCESS. This is the
+trusted source for Tri-One TaskResult V1. The tool action ID is an identity
+reference, not a model-authored evidence claim.
+
+On an unverified model Finish: outcome UNKNOWN, state PAUSED, no accepted
+terminal receipt. The shared Telegram / Local Test / WebCopilot worker uses
+queue.pause_running + TASK_PAUSED and keeps progress, rather than queue.complete
+and deleting evidence. WebDirect and its Local Test signal report the same
+PAUSED status. Delivery success is tracked independently from goal success.
+
+Tri-One TaskResult V1 is generated for v10 common worker by default unless
+explicitly disabled in the environment; v9 legacy opt-in flags remain
+available. The previously missing source metadata adapter is provided,
+without treating Git HEAD as verified loaded-source provenance. Source SHA256
+records in config/protocol_manifest.json are aligned with the branch.
+
+Known boundary: the standalone interactive source/smart_agent.py legacy CLI
+does not run the new Minimal Core, and its unverified chat text must not be
+silently promoted into a Runtime-success receipt. The shared v10 worker,
+WebDirect and Tri-One Local Test are covered; migrating the standalone legacy
+CLI's execution engine itself remains separate work.
+
+Live test priorities:
+1. Reload/restart the current v10 process and use a fresh ChatGPT conversation.
+2. On a DISPOSABLE, authorized Windows path that does not already exist, ask:
+   create the exact folder. Expect one model tool_call, SUCCEEDED and PASS,
+   one Runtime receipt, TASK_COMPLETED/SUCCESS with identical TaskResult V1.
+3. Repeat on an already-present directory; Runtime must not overwrite and
+   must not falsely claim create_directory executed.
+4. Request create folder AND write README. The folder receipt alone MUST NOT
+   complete this compound goal.
+5. Force a model-only Finish with no tool proof: expect PAUSED/UNKNOWN,
+   TASK_PAUSED, preserved progress, no fake accepted receipt.
+6. Run the same terminal mapping through Telegram, Local Test, WebCopilot and
+   WebDirect; verify the source route and delivery receipts remain separate.
+
+Continuous integration:
+- Linux v10 unit regressions and preexisting Tri-One V1 / 5B checks
+- Windows v10 filesystem, commands, actual RCA collector, Tri-One tests
+- Strict Linux + Windows protocol manifest hash verification
+
+Passing CI is not equivalent to an actual Windows user-machine/DOM live PASS.
