@@ -288,7 +288,7 @@
     "source/WebAgent/tests/test_git26_minimal_collector_live_rca.py": "077830d5c66b860fca5e49bd70ca077119860ba598552798a134d0b3d55f3dd1",
     "source/WebAgent/tests/test_git26_safe_operation_alias.py": "dbd64177aa217137f5c936b007fbf637810503bd7a322cede14b9e9af94baca4",
     ".github/workflows/git26-v10-case-d-repair.yml": "65f146220f1acad0a9ec0a8f3bdd0f09ee9f22abc7ace1e0e09181166a591bf8",
-    "source/WebAgent/minimal_executor_contract.py": "28f7c44d6b5fdfc331ba06c02f73d6051ceaf1167864aa4ecfd846ac47f5f571"
+    "source/WebAgent/minimal_executor_contract.py": "81cd3c27feb92260817dce986197d06db2c80031d69fdbc26f1ed617525f0a71"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
