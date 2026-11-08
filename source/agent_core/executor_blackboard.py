@@ -178,7 +178,7 @@ def publish_executor_terminal(loop, result: Mapping, *,
         str(ref)[:160] for ref in (result.get("tool_evidence_refs") or [])
         if isinstance(ref, str) and ref.startswith("MIN-EV-")
     ))[:24]
-    if status == "VERIFIED" and (
+    if status == "VERIFIED" and result.get("orchestration_mode") == "EXECUTOR_ONLY" and (
             verification_action_refs != list(
                 trusted_acceptance.get("evidence_refs") or []
             )
