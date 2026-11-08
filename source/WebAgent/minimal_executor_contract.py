@@ -44,6 +44,34 @@ def single_directory_contract_target(goal: str, action_path: str) -> str:
     return normalized if normalized == ntpath.normcase(ntpath.normpath(action_path)) else ""
 
 
+def isolated_task_model_budget(goal: str, loop) -> int | None:
+    """Bound an explicit atomic task to <=2 model decisions.
+
+    Compound and deployment goals retain the orchestration budget: they must
+    be decomposed into child atomic tasks by their caller, not silently forced
+    into two total turns.
+    """
+    contract = getattr(loop, "atomic_task_contract", None)
+    if isinstance(contract, Mapping) and contract.get("schema") == "SMARTAGENT_ATOMIC_TASK_V1":
+        if contract.get("task_id") == getattr(loop, "task_id", None):
+            return ATOMIC_MODEL_DECISION_LIMIT
+    from agent_core.task_requirement import assess_task_requirement, no_tool_terminal_candidate
+    requirement = assess_task_requirement(goal)
+    if no_tool_terminal_candidate(requirement):
+        return ATOMIC_MODEL_DECISION_LIMIT
+    if requirement.get("external_information_required"):
+        return None
+    ops = set(requirement.get("required_operations") or [])
+    if ops == {"READ"} and not _COMPOUND_ACTION.search(goal):
+        return ATOMIC_MODEL_DECISION_LIMIT
+    from agent_core.target_path_contract import extract_target_contract
+    target = extract_target_contract(goal)
+    if isinstance(target, Mapping) and target.get("target_kind") == "DIRECTORY_ONLY":
+        if target.get("binding_status") == "BOUND" and not _COMPOUND_ACTION.search(goal):
+            return ATOMIC_MODEL_DECISION_LIMIT
+    return None
+
+
 def blocked_disposition(goal_context: Mapping, history: list[dict],
                         rejected: list[dict]) -> tuple[str, str]:
     """A model's uncertainty is not objective evidence of an environment blocker."""
