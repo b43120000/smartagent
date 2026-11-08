@@ -806,3 +806,132 @@ def test_actual_windows_inspect_absence_goal_gap_resolves_after_create(tmp_path)
     assert gate_known_absent_directory(
         {"tool": "query_project", "project_root": path}, after
     ) is None
+
+
+
+def test_live_rca_conditional_directory_goal_auto_terminal_after_real_like_stat(tmp_path, monkeypatch):
+    """RCA TASK-02D4A8B2A612BB5E546B, without a redundant model Finish."""
+    from agent_core.tool_result_contract import attach_runtime_result
+    from agent_core.evidence_foundation import observation
+    from agent_core.tri_one_runtime_terminal import terminal_verdict_from_loop
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
+    destination = r"E:\SmartAgent_TriOne_Live_Test_B"
+    goal = (f"檢查 {destination} 是否存在，如果不存在就建立，"
+            "最後確認資料夾確實存在。")
+    loop = FakeLoop(tmp_path, goal, [
+        tool_json("observe_fact", path=destination),
+        tool_json("create_directory", path=destination),
+        tool_json("observe_fact", path=destination),
+        '{"type":"finish","summary":"Should not need this turn"}',
+    ], "")
+    loop.action_ledger = {}
+    def actual_tool(action):
+        loop.executed.append(action)
+        tool = action["tool"]
+        if tool == "observe_fact":
+            exists = len(loop.executed) == 3
+            fact = observation(
+                "file.exists", exists, source="filesystem.stat",
+                scope=destination, raw_ref=action["action_id"],
+            )
+            payload = {"observations": [fact], "observation_status": "CONFIRMED",
+                       "verification_status": "UNVERIFIED", "terminal_eligible": True}
+            raw = attach_runtime_result(
+                "{}", "SUCCEEDED", "FACT_OBSERVED", tool=tool, executed=True,
+                requested_path=destination, resolved_path=destination,
+                data=payload, action_id=action["action_id"],
+                request_id=loop.run_id, task_id=loop.task_id)
+        else:
+            raw = attach_runtime_result(
+                "{}", "SUCCEEDED", "DIRECTORY_CREATED", tool=tool, executed=True,
+                requested_path=destination, resolved_path=destination,
+                data={"directory_created": True, "observed_exists": True,
+                      "observed_is_directory": True, "observation_status": "CONFIRMED"},
+                action_id=action["action_id"], request_id=loop.run_id,
+                task_id=loop.task_id)
+        loop.action_ledger[action["action_id"]] = {
+            "action": dict(action), "result": raw,
+        }
+        return raw
+    loop._execute_action = actual_tool
+    answer = run_minimal_core(loop, goal)
+    assert destination in answer
+    assert "確認" in answer
+    assert loop.terminal_outcome == "SUCCESS"
+    assert loop.protocol_state == "COMPLETED"
+    assert terminal_verdict_from_loop(loop).is_complete
+    assert len(loop.executed) == 3
+    assert len(loop.expected_protocols) == 3
+    assert list(loop.action_result_ledger) == list(loop.terminal_acceptance["evidence_refs"])
+    assert loop.terminal_acceptance["matched_condition_id"] == "CONDITIONAL_DIRECTORY_EXISTS"
+    journal = (tmp_path / "localdata/runtime/minimal_core/TASK-MINIMAL-TEST.jsonl")
+    events = [json.loads(x)["event"] for x in journal.read_text(encoding="utf-8").splitlines()]
+    assert "runtime_goal_verified" in events
+    assert "runtime_autofinish" in events
+    assert "model_finish" not in events
+
+
+@pytest.mark.skipif(__import__("os").name != "nt",
+                    reason="Native Windows filesystem evidence contract")
+def test_real_windows_conditional_goal_observe_create_observe_is_terminal(tmp_path):
+    from types import SimpleNamespace
+    from WebAgent.tool_context import WebAgentToolContext
+    from agent_core.tri_one_runtime_terminal import (
+        evaluate_goal_evidence, accept_runtime_terminal, terminal_verdict_from_loop,
+    )
+    from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+    from agent_core.tool_result_contract import decode_result
+    import hashlib
+
+    target = str(tmp_path / "conditional_directory_live")
+    goal = (f"檢查 {target} 是否存在，如果不存在就建立，"
+            "最後確認資料夾確實存在。")
+    context = WebAgentToolContext(tmp_path)
+    context.begin_run("RR-WIN-GOAL-TERMINAL", goal, [target])
+    loop = SimpleNamespace(
+        run_id=context.current_request_id, task_id=context.current_task_id,
+        task_epoch=context.current_task_epoch, task_request=goal,
+        turn_id=1, terminal_outcome="UNKNOWN", terminal_acceptance={},
+        protocol_state="ACTIVE", progress_ledger=SimpleNamespace(goal=goal),
+        action_ledger={}, action_result_ledger={},
+    )
+    history = []
+    for turn, (name, values) in enumerate((
+        ("observe_fact", {"path": target}),
+        ("create_directory", {"path": target}),
+        ("observe_fact", {"path": target}),
+    ), 1):
+        loop.turn_id = turn
+        action, rejection = admit_minimal_action(
+            MinimalDecision("tool_call", name, values), context)
+        assert action is not None and not rejection, rejection
+        raw = context.execute(action)
+        receipt = decode_result(raw)
+        assert receipt and receipt["status"] == "SUCCEEDED", receipt
+        assert receipt["executed"] is True
+        if name == "observe_fact":
+            assert receipt["data"]["observations"][0]["value"] is (turn == 3)
+        history.append({"action": action, "receipt": receipt})
+        loop.action_ledger[action["action_id"]] = {
+            "action": action, "result": raw,
+        }
+        loop.action_result_ledger[action["action_id"]] = {
+            "request_id": loop.run_id, "task_id": loop.task_id,
+            "task_epoch": loop.task_epoch, "tool": name,
+            "result_status": receipt["status"],
+            "result_reason": receipt["reason"], "executed": True,
+            "evidence_status": "ACTIVE", "result": raw,
+            "result_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        }
+        gap = reconstruct_goal_gaps(loop)
+        if turn == 1:
+            assert gap["active_count"] == 1, gap
+        if turn >= 2:
+            assert gap["active_count"] == 0, gap
+    proof = evaluate_goal_evidence(goal, history)
+    assert proof.verified and len(proof.evidence_refs) == 3
+    receipt = accept_runtime_terminal(loop, proof)
+    assert receipt["admission_status"] == "ACCEPTED"
+    assert terminal_verdict_from_loop(loop).is_complete
+    assert target in str(tmp_path / "conditional_directory_live")
+    assert (tmp_path / "conditional_directory_live").is_dir()
