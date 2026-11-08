@@ -419,6 +419,32 @@ def run_minimal_core(loop, request: str) -> str:
             return ("模型已回覆，但 Runtime 尚無足夠證據確認整體目標完成：\n"
                     + decision.message)
 
+        # No operational ToolCall can be inferred from an answer-only goal.
+        # Text-only content delivery is not a Scope/Write authorization.
+        if goal_context.get("request_route") == "ANSWER_ONLY":
+            journal.append("answer_only_tool_rejected", round=round_id,
+                           tool=decision.tool,
+                           reason="ANSWER_ONLY_OPERATION_NOT_REQUESTED",
+                           executed=False)
+            loop._emit("minimal_goal_action_rejected",
+                       request_id=loop.run_id, task_id=loop.task_id,
+                       round=round_id, tool=decision.tool,
+                       reason_code="ANSWER_ONLY_OPERATION_NOT_REQUESTED",
+                       repair_mode="TEXT_ONLY_FINISH", executed=False)
+            consecutive_action_rejections += 1
+            repair_hint = (
+                "This original user goal is text-only. Do not call filesystem, "
+                "shell, Git, web or external tools. Return ONE finish JSON "
+                "containing only the requested text answer."
+            )
+            if consecutive_action_rejections >= 2:
+                loop.protocol_state = "BLOCKED"
+                set_runtime_state(loop.task_id, "PAUSED",
+                                  reason="ANSWER_ONLY_REPEATED_TOOL_PROPOSAL",
+                                  root=loop.progress_root)
+                return "純文字任務收到未授權的工具提案，未執行任何工具；任務暫停。"
+            continue
+
         action, rejection = admit_minimal_action(decision, loop.tools)
         if rejection:
             consecutive_action_rejections += 1
