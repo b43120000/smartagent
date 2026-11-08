@@ -569,6 +569,39 @@ def build_planner_context_snapshot(runtime) -> dict:
     payload["strategy_candidates"] = strategy_candidates
     payload["terminal_readiness"] = terminal_readiness
     payload["shared_blackboard"] = build_shared_blackboard(runtime, payload)
+    # Executor is a durable, request/epoch-bound child task result, not an
+    # automatic Stage Transition. Prerequisite and Goal read the SAME receipt.
+    from .executor_blackboard import (
+        read_executor_terminal, executor_child_results, project_executor_for_parent,
+    )
+    blackboard_root = (getattr(runtime, "progress_root", None)
+                       or getattr(runtime, "workspace", None))
+    if blackboard_root:
+        current_task = str(getattr(runtime, "task_id", "") or "")
+        current_epoch = str(getattr(runtime, "task_epoch", "") or "")
+        if current_task:
+            own = read_executor_terminal(
+                blackboard_root, task_id=current_task,
+                request_id=str(getattr(runtime, "run_id", "") or ""),
+                task_epoch=current_epoch,
+            )
+            children = executor_child_results(
+                blackboard_root, parent_task_id=current_task,
+                parent_task_epoch=current_epoch, limit=8,
+            )
+        else:
+            own, children = None, []
+        handoff = {
+            "schema": "SMARTAGENT_EXECUTOR_BLACKBOARD_PROJECTION_V1",
+            "task_result": project_executor_for_parent(own),
+            "child_results": [
+                project_executor_for_parent(row) for row in children
+            ],
+            "parent_stage_completion_inferred": False,
+            "admission_authorized": False,
+        }
+        payload["executor_blackboard"] = handoff
+        payload["shared_blackboard"]["executor_blackboard"] = handoff
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     payload["context_digest"] = digest
