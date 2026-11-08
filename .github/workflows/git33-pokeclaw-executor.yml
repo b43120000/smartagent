@@ -1,0 +1,57 @@
+name: Git33 Generic PokeClaw Executor and Blackboard
+
+on:
+  push:
+    branches:
+      - git33/executor-pokeclaw-loop-blackboard-20261109
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  executor-generic:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install tests
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile changed runtime
+        run: >-
+          python -B -m compileall -q
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/agent_core/executor_run_blackboard.py
+          source/WebAgent/minimal_core_loop.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_git33_pokeclaw_executor_loop.py
+      - name: Git33 generic Executor, Blackboard and safety
+        run: python -B -m pytest source/WebAgent/tests/test_git33_pokeclaw_executor_loop.py -q
+      - name: Git31 fact query regression (legacy mode)
+        run: python -B -m pytest source/WebAgent/tests/test_git31_single_fact_query_terminal.py -q
+      - name: Git30 security reason and Blackboard (legacy mode)
+        run: python -B -m pytest source/WebAgent/tests/test_git30_executor_causal_reasons.py -q
+      - name: Git29 scope and independent parent handoff
+        run: python -B -m pytest source/WebAgent/tests/test_git29_exact_scope_handoff.py -q
+      - name: Git28 unresolved mutation safety
+        run: python -B -m pytest source/WebAgent/tests/test_git28_executor_resolution_blackboard.py -q
+      - name: v10 schema, Tool Admission and Text Only (legacy mode)
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_auto_rca_upload.py -q
+      - name: Real Case D and command safeguards
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_deployment_terminal WebAgent.tests.test_git26_safe_operation_alias -v
+      - name: Collector transport compatibility
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_collector_windows.py -q
+      - name: Source manifest
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; from agent_core.paths import install_root; require_protocol_manifest(install_root()); print('MANIFEST_PASS')"
