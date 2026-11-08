@@ -364,6 +364,47 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
                 or item.get("result_status") != "SUCCEEDED"
                 or item.get("evidence_status") != "ACTIVE"):
             raise ValueError("terminal_evidence_identity_or_status_mismatch")
+    if proof.goal_kind == "CONDITIONAL_DIRECTORY_EXISTS":
+        # Do not accept only copied in-memory history: replay the same
+        # current-request ToolResult from Runtime's durable action/result
+        # ledgers, including intermediate actions that might invalidate the
+        # final existence observation. Never read model-authored prose.
+        from .tool_result_contract import decode_result
+        source_actions = getattr(loop, "action_ledger", None)
+        if not isinstance(source_actions, Mapping):
+            raise ValueError("conditional_terminal_action_ledger_missing")
+        original_goal = str(getattr(loop, "task_request", "") or "")
+        if not original_goal:
+            raise ValueError("conditional_terminal_goal_missing")
+        reconstructed = []
+        for action_id, outcome in ledger.items():
+            if not isinstance(outcome, Mapping):
+                continue
+            if outcome.get("request_id") != loop.run_id or outcome.get("task_epoch") != loop.task_epoch:
+                continue
+            record_action = source_actions.get(action_id)
+            action = (record_action.get("action") or {}
+                      if isinstance(record_action, Mapping) else {})
+            raw = outcome.get("result")
+            if (not isinstance(action, Mapping)
+                    or action.get("action_id") != action_id
+                    or not isinstance(raw, str)):
+                raise ValueError("conditional_terminal_source_action_missing")
+            digest = outcome.get("result_sha256")
+            if digest and hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest:
+                raise ValueError("conditional_terminal_result_digest_mismatch")
+            typed = decode_result(raw)
+            if not isinstance(typed, Mapping):
+                raise ValueError("conditional_terminal_result_unparseable")
+            if outcome.get("result_status") != typed.get("status"):
+                raise ValueError("conditional_terminal_result_status_mismatch")
+            reconstructed.append({"action": action, "receipt": typed})
+        replay = _conditional_directory_proof(original_goal, reconstructed)
+        if (not replay.verified or replay.evidence_refs != proof.evidence_refs
+                or replay.goal_kind != proof.goal_kind
+                or _normal_path(replay.target) != _normal_path(proof.target)):
+            raise ValueError("conditional_terminal_proof_replay_mismatch")
+
     record = {
         "schema": TERMINAL_SCHEMA,
         "admission_status": "ACCEPTED",
