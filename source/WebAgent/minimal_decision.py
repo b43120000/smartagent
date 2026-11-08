@@ -169,8 +169,8 @@ def parse_minimal_decision_with_diagnostics(
         raise MinimalDecisionError("decision_empty", meta)
     if meta["response_bytes"] > MAX_RESPONSE_BYTES:
         raise MinimalDecisionError("decision_oversized", meta)
-    legacy_marker = (r"(?im)^[ \\t]*" + re.escape(chr(96) * 3)
-                     + r"smartagent_tool\\b")
+    legacy_marker = (r"(?im)^[ \t]*" + re.escape(chr(96) * 3)
+                     + r"smartagent_tool\b")
     if re.search(legacy_marker, source):
         raise MinimalDecisionError("legacy_protocol_response", meta)
     # A JSON array is not a single decision, even if it contains one object.
