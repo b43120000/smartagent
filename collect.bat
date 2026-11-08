@@ -711,43 +711,6 @@ try {
     })
     Write-Json (Join-Path $stage 'minimal_core_decision_diagnostics.json') @($minimalDecisionDiagnostics)
 
-    # Optional bounded *syntax shape only*, tied to this exact Task + Request.
-    # Every alphanumeric/content character was already replaced by 'x'
-    # in the Runtime journal. Re-check a narrow whitelist before export.
-    $minimalMaskedStructures = @()
-    if ($task -and $request) {
-        $minimalJournal = Join-Path $root ('localdata\runtime\minimal_core\' + $task + '.jsonl')
-        if ([IO.File]::Exists($minimalJournal)) {
-            $journalBound = $false
-            foreach ($line in [IO.File]::ReadLines($minimalJournal)) {
-                try { $entry = $line | ConvertFrom-Json -ErrorAction Stop }
-                catch { continue }
-                if ([string]$entry.event -ceq 'task_started') {
-                    $journalBound = ([string]$entry.task_id -ceq $task -and
-                                     [string]$entry.request_id -ceq $request)
-                    continue
-                }
-                if (-not $journalBound -or [string]$entry.event -cne 'decision_rejected') { continue }
-                $shape = [string]$entry.response_structure_redacted
-                if ($shape.Length -gt 600) { $shape = $shape.Substring(0, 600) }
-                # Allowlist sanitation is repeated in the collector.
-                $shape = [Regex]::Replace($shape, '[^x{}\[\]:,"\\\s]', '')
-                $digest = [string]$entry.response_sha256
-                if ($digest -cnotmatch '^[0-9a-f]{64}$') { continue }
-                $minimalMaskedStructures += [ordered]@{
-                    round=[int]$entry.round
-                    response_sha256=$digest
-                    reason=(Safe-Code ([string]$entry.reason))
-                    response_structure_redacted=$shape
-                    shape_is_sanitized=$true
-                }
-            }
-        }
-    }
-    Write-Json (Join-Path $stage 'minimal_core_masked_structure.json') @(
-        $minimalMaskedStructures | Select-Object -Last 24
-    )
-
     # Correlate bounded, non-sensitive Planner decisions with explicit
     # Context digests and fail-closed SCR shape checks. No raw reply survives.
     $decisionDiffs = @()
