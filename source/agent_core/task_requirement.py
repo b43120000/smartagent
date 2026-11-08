@@ -82,6 +82,7 @@ _CURRENT = re.compile(
 )
 _PATH = re.compile(
     r"(?:https?://|www\.|[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|"
+    r"(?<![A-Za-z0-9:])/(?:[A-Za-z0-9_.-]+/?)+|"
     r"(?:^|[\s(])(?:\.{1,2}[/\\]|~/))", re.I,
 )
 _GITHUB = re.compile(
