@@ -70,8 +70,207 @@ def _simple_mkdir_target(goal: str, target: str) -> str:
     return normalized
 
 
+# A finite, fully-anchored directory Goal contract. Matching a phrase such as
+# "if missing" alone is NEVER sufficient to skip unrelated Goal conditions.
+_CONDITIONAL_CHECK_CREATE_VERIFY = re.compile(
+    r"^\s*(?:請(?:你|幫我)?\s*)?(?:檢查|確認|查看)\s*"
+    r"(?:這個|該|指定的)?(?:資料夾|目錄)?\s*"
+    r"(?:是否存在|有沒有存在|存不存在)\s*"
+    r"[，,；;]\s*(?:如果|若|倘若)\s*"
+    r"(?:該|這個)?(?:資料夾|目錄)?\s*不存在\s*"
+    r"(?:就|則|請)?\s*(?:建立|創建|新增|建立它|建立該資料夾|建立資料夾)"
+    r"\s*[，,；;]\s*(?:最後|然後|再|並|且|接著)\s*"
+    r"(?:再次|重新)?(?:檢查|確認|驗證)\s*"
+    r"(?:該|這個)?(?:資料夾|目錄)?\s*"
+    r"(?:是否|確實|真的)?\s*(?:存在|已存在)"
+    r"\s*[。.!！]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _conditional_directory_target(goal: str, target: str) -> str:
+    """Return a bound Windows target ONLY for the complete known Goal shape.
+
+    No suffix commands, file writes, extra targets or unbound variables are
+    allowed. All action proofs later need the exact same requested path.
+    """
+    raw = str(goal or "")
+    path = str(target or "")
+    canonical = _normal_path(path)
+    if not canonical or raw.casefold().count(path.casefold()) != 1:
+        return ""
+    start = raw.casefold().find(path.casefold())
+    residue = raw[:start] + raw[start + len(path):]
+    return canonical if _CONDITIONAL_CHECK_CREATE_VERIFY.fullmatch(residue) else ""
+
+
+def _confirmed_exists_fact(entry: Mapping, target: str) -> bool | None:
+    """Independently stat-observed file.exists, never a planner assertion.
+
+    A confirmed file.exists=True only proves existence, not that the object
+    is a directory. Directory type requires a separate create/inspect receipt.
+    """
+    action, receipt = entry.get("action") or {}, entry.get("receipt") or {}
+    if not isinstance(action, Mapping) or not isinstance(receipt, Mapping):
+        return None
+    action_id = action.get("action_id")
+    if (action.get("tool") != "observe_fact" or not action_id
+            or _normal_path(action.get("path")) != target
+            or receipt.get("tool") != "observe_fact"
+            or receipt.get("status") != "SUCCEEDED"
+            or receipt.get("reason") not in {"FACT_OBSERVED", "FACT_PREDICATE_PASSED"}
+            or receipt.get("executed") is not True
+            or receipt.get("action_id") != action_id
+            or _normal_path(receipt.get("requested_path")) != target):
+        return None
+    data = receipt.get("data") or {}
+    obs = data.get("observations") if isinstance(data, Mapping) else None
+    if (not isinstance(obs, list) or len(obs) != 1
+            or not isinstance(obs[0], Mapping)
+            or data.get("observation_status") != "CONFIRMED"):
+        return None
+    fact = obs[0]
+    if (fact.get("schema") != "SMARTAGENT_EVIDENCE_V1"
+            or fact.get("field") != "file.exists"
+            or fact.get("source") != "filesystem.stat"
+            or fact.get("freshness") != "CURRENT"
+            or fact.get("observation_status") != "CONFIRMED"
+            or fact.get("raw_evidence_ref") != action_id
+            or _normal_path(fact.get("scope")) != target
+            or type(fact.get("value")) is not bool):
+        return None
+    return fact["value"]
+
+
+def _verified_created_directory(entry: Mapping, target: str) -> bool:
+    action, receipt = entry.get("action") or {}, entry.get("receipt") or {}
+    if not isinstance(action, Mapping) or not isinstance(receipt, Mapping):
+        return False
+    data = receipt.get("data") or {}
+    return bool(
+        action.get("tool") == "create_directory"
+        and action.get("action_id")
+        and _normal_path(action.get("path")) == target
+        and receipt.get("tool") == "create_directory"
+        and receipt.get("status") == "SUCCEEDED"
+        and receipt.get("reason") == "DIRECTORY_CREATED"
+        and receipt.get("executed") is True
+        and _normal_path(receipt.get("requested_path")) == target
+        and bool(receipt.get("resolved_path"))
+        and isinstance(data, Mapping)
+        and data.get("directory_created") is True
+        and data.get("observed_exists") is True
+        and data.get("observed_is_directory") is True
+        and data.get("observation_status") == "CONFIRMED"
+    )
+
+
+def _verified_existing_directory(entry: Mapping, target: str) -> bool:
+    action, receipt = entry.get("action") or {}, entry.get("receipt") or {}
+    if not isinstance(action, Mapping) or not isinstance(receipt, Mapping):
+        return False
+    # Only a typed inspect_directory listing of one exact path can confirm
+    # the directory's type. A generic file.exists=True cannot.
+    paths = action.get("paths") or []
+    if (action.get("tool") != "inspect_directory"
+            or not action.get("action_id")
+            or not isinstance(paths, list) or len(paths) != 1
+            or _normal_path(paths[0]) != target
+            or receipt.get("tool") != "inspect_directory"
+            or receipt.get("status") != "SUCCEEDED"
+            or receipt.get("reason") != "DIRECTORY_INSPECTED"
+            or receipt.get("executed") is not True):
+        return False
+    data = receipt.get("data") or {}
+    if not isinstance(data, Mapping):
+        return False
+    return bool(
+        data.get("observed_exists") is True
+        and data.get("observed_is_directory") is True
+        and data.get("observation_status") == "CONFIRMED"
+    )
+
+
+def _conditional_directory_proof(goal: str, history: list[dict]) -> GoalEvidence:
+    # Discover target only from a Runtime tool's action path, and bind it
+    # against the entire original request before using observations.
+    targets = []
+    for row in history:
+        action = row.get("action") or {}
+        if not isinstance(action, Mapping):
+            continue
+        path = action.get("path") or (
+            action.get("paths", [""])[0]
+            if isinstance(action.get("paths"), list) and len(action["paths"]) == 1
+            else ""
+        )
+        canonical = _conditional_directory_target(goal, str(path or ""))
+        if canonical and canonical not in targets:
+            targets.append(canonical)
+    if len(targets) != 1:
+        return GoalEvidence("UNKNOWN", "CONDITIONAL_GOAL_TARGET_NOT_UNIQUE")
+    target = targets[0]
+    observations = []
+    creations = []
+    directory_inspections = []
+    for index, row in enumerate(history):
+        action = row.get("action") or {}
+        if not isinstance(action, Mapping) or not action.get("action_id"):
+            continue
+        fact = _confirmed_exists_fact(row, target)
+        if fact is not None:
+            observations.append((index, bool(fact), str(action["action_id"])))
+        if _verified_created_directory(row, target):
+            creations.append((index, str(action["action_id"])))
+        if _verified_existing_directory(row, target):
+            directory_inspections.append((index, str(action["action_id"])))
+    if not observations or observations[-1][1] is not True:
+        return GoalEvidence("UNKNOWN", "POSTCONDITION_DIRECTORY_EXISTENCE_NOT_CONFIRMED")
+    last_index, _, post_ref = observations[-1]
+    # Newly created: confirmed missing -> created -> confirmed present.
+    for create_index, create_ref in reversed(creations):
+        if create_index >= last_index:
+            continue
+        before = [row for row in observations
+                  if row[0] < create_index and row[1] is False]
+        if before:
+            _, _, before_ref = before[-1]
+            # A subsequently observed absence revokes the completion proof.
+            if any(not value for ix, value, _ in observations if ix > create_index):
+                return GoalEvidence("UNKNOWN", "CONTRADICTORY_LATER_OBSERVATION")
+            return GoalEvidence(
+                "PASS", "CONDITIONAL_DIRECTORY_CREATED_AND_REOBSERVED",
+                (before_ref, create_ref, post_ref), target,
+                "CONDITIONAL_DIRECTORY_EXISTS",
+            )
+    # Already existed: never infer directory kind from file.exists alone.
+    if not creations:
+        for inspect_index, inspect_ref in reversed(directory_inspections):
+            if inspect_index <= last_index and not any(
+                not value for ix, value, _ in observations if ix > inspect_index
+            ):
+                return GoalEvidence(
+                    "PASS", "CONDITIONAL_DIRECTORY_ALREADY_PRESENT",
+                    (inspect_ref, post_ref), target,
+                    "CONDITIONAL_DIRECTORY_EXISTS",
+                )
+    return GoalEvidence("UNKNOWN", "CONDITIONAL_GOAL_EVIDENCE_CHAIN_INCOMPLETE")
+
+
 def evaluate_goal_evidence(goal: str, history: list[dict]) -> GoalEvidence:
     """Check real ToolResult receipts; extra successful reads do not erase proof."""
+    conditional = _conditional_directory_proof(goal, history)
+    if conditional.verified:
+        return conditional
+    # A conditional goal must not silently fall through to single-create
+    # admission, even if one tool happened to succeed.
+    if any(
+        _conditional_directory_target(goal, str(
+            (row.get("action") or {}).get("path") or ""
+        ))
+        for row in history if isinstance(row, Mapping)
+    ):
+        return conditional
     matches = []
     for index, entry in enumerate(history):
         if not isinstance(entry, Mapping):
@@ -283,6 +482,11 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
 def format_runtime_goal_summary(proof: GoalEvidence) -> str:
     if proof.goal_kind == "SINGLE_CREATE_DIRECTORY" and proof.verified:
         return "已建立並確認資料夾：\n" + proof.target
+    if proof.goal_kind == "CONDITIONAL_DIRECTORY_EXISTS" and proof.verified:
+        prefix = ("已建立並重新確認資料夾存在：\n"
+                  if proof.reason == "CONDITIONAL_DIRECTORY_CREATED_AND_REOBSERVED"
+                  else "已確認既有資料夾存在：\n")
+        return prefix + proof.target
     raise ValueError("no_verified_runtime_goal_summary")
 
 
