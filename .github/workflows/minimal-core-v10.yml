@@ -24,6 +24,8 @@ jobs:
           python -m py_compile source/WebAgent/minimal_core_loop.py
           python -m py_compile source/WebAgent/protocol_loop.py
           python -m py_compile source/WebAgent/protocol.py
+          python -m py_compile source/RemoteAgent/telegram_webagent_worker.py
+          python -m py_compile source/agent_core/action_dependencies.py
       - name: Execute isolated core regressions
         env:
           PYTHONPATH: source
