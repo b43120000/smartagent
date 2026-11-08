@@ -591,16 +591,16 @@ def test_live_rca_ai_gravity_joke_text_only_completes_first_round(tmp_path, monk
     assert "model_finish" not in events
 
 
-@pytest.mark.parametrize("request", [
+@pytest.mark.parametrize("goal_text", [
     "創立這個資料夾\nE:\\TestTextOnlyNotAllowed",
     "請讀取 E:\\private\\data.txt 並幫我說明內容",
     "說個笑話，然後執行 python -m pytest",
     "今天最新的引力波研究新聞是什麼？",
 ])
-def test_non_text_only_cannot_complete_without_tool_evidence(tmp_path, monkeypatch, request):
+def test_non_text_only_cannot_complete_without_tool_evidence(tmp_path, monkeypatch, goal_text):
     monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **kw: None)
-    loop = FakeLoop(tmp_path, request, ['{"type":"finish","summary":"完成"}'], "")
-    answer = run_minimal_core(loop, request)
+    loop = FakeLoop(tmp_path, goal_text, ['{"type":"finish","summary":"完成"}'], "")
+    answer = run_minimal_core(loop, goal_text)
     assert "尚無足夠證據" in answer
     assert loop.terminal_outcome == "UNKNOWN"
     assert not loop.terminal_acceptance
