@@ -83,7 +83,41 @@ def isolated_task_model_budget(goal: str, loop) -> int | None:
 
 def blocked_disposition(goal_context: Mapping, history: list[dict],
                         rejected: list[dict]) -> tuple[str, str]:
-    """A model's uncertainty is not objective evidence of an environment blocker."""
+    """Converge the latest *actual* runtime failure, not Planner prose.
+
+    A previously successful stat is not proof that a later Action Admission
+    succeeded. Keep the last rejection's exact code and fail closed.
+    """
+    last_rejection = rejected[-1] if rejected else {}
+    last_observation = history[-1] if history else {}
+    rejected_round = int(last_rejection.get("round") or 0)
+    observed_round = int(last_observation.get("round") or 0)
+    if last_rejection and rejected_round >= observed_round:
+        denial = str(last_rejection.get("reason_code") or "").upper()[:120]
+        if any(code in denial for code in (
+            "DIRECTORY_PARENT_NOT_EXISTING_DIRECTORY",
+            "DIRECTORY_PARENT_NOT_A_DIRECTORY", "PARENT_MISSING",
+            "CONFIRMED_MISSING_PREREQUISITE_DIRECTORY",
+            "DIRECTORY_PARENT_MISSING",
+        )):
+            return "NEEDS_PREREQUISITE", "ACTION_PREREQUISITE_MISSING:" + denial[:80]
+        return "BLOCKED", "ACTION_ADMISSION_REJECTED:" + denial[:90]
+    for entry in reversed(history[-2:]):
+        receipt = entry.get("receipt") or {}
+        status = str(receipt.get("status") or "").upper()
+        reason = str(receipt.get("reason") or "").upper()
+        if status not in {"FAILED", "REJECTED", "UNKNOWN"}:
+            continue
+        if any(code in reason for code in (
+            *_PREREQUISITES,
+            "DIRECTORY_PARENT_NOT_EXISTING_DIRECTORY",
+            "DIRECTORY_PARENT_NOT_A_DIRECTORY",
+            "DIRECTORY_PARENT_MISSING",
+        )):
+            return "NEEDS_PREREQUISITE", reason[:120]
+        # A failed actual ToolResult is a concrete blocker, not missing
+        # Planner evidence. Preserve its exact, bounded original code.
+        return "BLOCKED", "ACTION_TOOL_RESULT:" + reason[:95]
     if str(goal_context.get("source_requirement") or "") == "REQUIRED":
         category = str(goal_context.get("next_category") or "")
         if category in {
@@ -92,21 +126,6 @@ def blocked_disposition(goal_context: Mapping, history: list[dict],
             "DISCOVER_SOURCE_WITHIN_SCOPE", "CHECK_DEPLOYMENT_ADMISSION",
         }:
             return "NEEDS_PREREQUISITE", category
-    for entry in reversed(history[-2:]):
-        receipt = entry.get("receipt") or {}
-        status = str(receipt.get("status") or "").upper()
-        reason = str(receipt.get("reason") or "").upper()
-        if status not in {"FAILED", "REJECTED", "UNKNOWN"}:
-            continue
-        if any(code in reason for code in _PREREQUISITES):
-            return "NEEDS_PREREQUISITE", reason[:120]
-        if any(code in reason for code in _DENIALS):
-            return "BLOCKED", reason[:120]
-        return "BLOCKED", "ACTION_RESULT_UNRESOLVED_" + status
-    for entry in reversed(rejected[-2:]):
-        reason = str(entry.get("reason_code") or "").upper()
-        if any(code in reason for code in _DENIALS):
-            return "BLOCKED", reason[:120]
     return "BLOCKED", "PLANNER_UNCERTAINTY_NOT_VERIFIED"
 
 
