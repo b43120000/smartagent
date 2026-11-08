@@ -194,6 +194,14 @@ def build_goal_driver_context(runtime, goal: str, history: list[dict],
         ],
         "full_snapshot_used": bool(snapshot),
     }
+    # Explicit Executor handoff shared by both parent loops; it is evidence,
+    # not an instruction that a Prerequisite or Goal stage is already READY.
+    handoff = (snapshot.get("executor_blackboard") if
+               isinstance(snapshot, Mapping) else {}) or {}
+    result["executor_task_result"] = dict(handoff.get("task_result") or {})
+    result["executor_child_results"] = list(handoff.get("child_results") or [])[-8:]
+    result["prerequisite_executor_results"] = result["executor_child_results"]
+    result["executor_results_do_not_complete_parent_stage"] = True
     if isinstance(directory, Mapping):
         candidate = directory.get("candidate")
         if isinstance(candidate, Mapping):
