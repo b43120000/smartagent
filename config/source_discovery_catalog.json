@@ -19,7 +19,16 @@
         "archive_root": "SmartAgent_GoalDriven_IT",
         "sha256": "c38d634188e23868bd384ad8b0cd12bbe20d778eea8b67338f4ec2bbf747ef62",
         "git_blob_sha": "a0a2a3e2aa3c0a34a5011f2553c0b232ea657bdb",
-        "manifest_path": "goal-driven-replan/v1/SmartAgent_GoalDriven_IT/fixture_manifest.json"
+        "manifest_path": "goal-driven-replan/v1/SmartAgent_GoalDriven_IT/fixture_manifest.json",
+        "pinned_source_blobs": {
+          "case_a/data.csv": "ae85682d5e1a2aeffe6ff609baa221f027a5cad4",
+          "case_a/process.py": "2291ad124f2faf6e9e03219c80c48efb4560f4f6",
+          "case_b/data.csv": "4ea7611f5b60d8e1f58f8c9fa72d558c6d4916da",
+          "case_b/run.py": "605770a33747e19f76332fcf89e818e1e086ac09",
+          "case_c/main.cpp": "f598b7c8a3cd93f7bbab7cdd2977ff3785775472",
+          "fixture_manifest.json": "8a8aefec6c600ef9061a9c0b2061cf79b65fa0fe",
+          "check_results.py": "07f386438650a9dd5428cd54ef0dba0cecfb61cd"
+        }
       },
       "provenance": "b43120000/test:goal-driven-replan/v1/README.md@6b0d680185e40ae654acef03d0eeb9074536fb8e",
       "evidence_level": "E1",
