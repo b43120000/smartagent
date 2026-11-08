@@ -77,9 +77,16 @@ def reconstruct_goal_gaps(runtime) -> dict:
             continue
         historical = actions.get(action_id) or {}
         observation = classify_runtime_evidence(row, historical)
-        if observation.get("environment_observation_kind") != "directory.exists":
-            continue
+        kind = observation.get("environment_observation_kind")
         exists = observation.get("environment_observed_exists")
+        if kind == "file.exists":
+            # A Runtime-scoped filesystem.stat FALSE proves the directory
+            # cannot exist. A TRUE only proves a file system object exists;
+            # it must not overwrite a confirmed directory-creation receipt.
+            if exists is not False:
+                continue
+        elif kind != "directory.exists":
+            continue
         path = observation.get("environment_observed_path", "")
         from .semantic_path_resolution import same_original_request_path
         if bound_target and same_original_request_path(path, bound_target):
