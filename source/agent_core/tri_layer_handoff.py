@@ -129,6 +129,12 @@ def build_handoff(record: Mapping) -> dict:
             "executor_reason_code": record["reason_code"],
             "executor_root_cause_code": record.get("root_cause_code", ""),
             "executor_evidence_refs": list(record.get("evidence_refs") or []),
+            "executor_verification_action_refs": list(
+                record.get("verification_action_refs") or []
+            ),
+            "executor_tool_evidence_refs": list(
+                record.get("tool_evidence_refs") or []
+            ),
             "executor_admission_rejection_refs": list(
                 record.get("admission_rejection_refs") or []
             ),
