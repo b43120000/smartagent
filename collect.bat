@@ -745,6 +745,88 @@ try {
     })
     Write-Json (Join-Path $stage 'minimal_core_action_lineage.json') @($minimalLineage)
 
+    # Cross-check the task's append-only Minimal Core journal, separately from
+    # RemoteRuntimeLog. The first row must bind BOTH Task and Request; only
+    # bounded, safe metadata is exported, never its raw file/command/prose.
+    $minimalJournalSummary = [ordered]@{
+        found=$false; identity_matched=$false; event_count=0;
+        task_epoch=''; rejection_count=0; prepared_count=0;
+        observed_count=0; parser_rejection_count=0;
+        raw_journal_included=$false
+    }
+    $minimalJournalRows = @()
+    if ($task -and $request) {
+        $journalPath = Join-Path $root ('localdata\runtime\minimal_core\' + $task + '.jsonl')
+        if ([IO.File]::Exists($journalPath)) {
+            $minimalJournalSummary.found = $true
+            $info = Get-Item -LiteralPath $journalPath
+            if ($info.Length -gt 8388608) {
+                $warnings.Add('MINIMAL_JOURNAL_TOO_LARGE')
+            } else {
+                try {
+                    $entries = @(Get-Content -LiteralPath $journalPath -Encoding UTF8 -ErrorAction Stop)
+                    if ($entries.Count -gt 2048) {
+                        $warnings.Add('MINIMAL_JOURNAL_ROW_CAP')
+                    } else {
+                        $first = $null
+                        if ($entries.Count -gt 0) {
+                            $first = $entries[0] | ConvertFrom-Json -ErrorAction Stop
+                        }
+                        if ($null -ne $first -and
+                            [string]$first.schema -ceq 'SMARTAGENT_MINIMAL_CORE_JOURNAL_V1' -and
+                            [string]$first.event -ceq 'task_started' -and
+                            [string]$first.task_id -ceq $task -and
+                            [string]$first.request_id -ceq $request) {
+                            $minimalJournalSummary.identity_matched = $true
+                            $minimalJournalSummary.task_epoch = Safe-Code $first.task_epoch
+                            foreach ($line in $entries) {
+                                if (-not $line) { continue }
+                                $rec = $line | ConvertFrom-Json -ErrorAction Stop
+                                if ([string]$rec.schema -cne 'SMARTAGENT_MINIMAL_CORE_JOURNAL_V1') {
+                                    throw 'Unexpected journal schema'
+                                }
+                                $row = [ordered]@{
+                                    event=(Safe-Code $rec.event)
+                                    round=$(if ($null -ne $rec.round) { [int]$rec.round } else { 0 })
+                                    tool=(Safe-Code $rec.tool)
+                                    action_id=(Safe-Code $rec.action_id)
+                                    reason=(Safe-Code $rec.reason)
+                                    repair_mode=(Safe-Code $rec.repair_mode)
+                                    proposed_operation=(Safe-Code $rec.proposed_operation)
+                                    proposal_sha256=(Safe-Code $rec.proposal_sha256)
+                                    fingerprint=(Safe-Code $rec.fingerprint)
+                                    context_sha256=(Safe-Code $rec.context_sha256)
+                                    response_sha256=(Safe-Code $rec.response_sha256)
+                                    result_sha256=(Safe-Code $rec.result_sha256)
+                                    evidence_ref=(Safe-Code $rec.evidence_ref)
+                                    status=(Safe-Code $rec.status)
+                                    executed=$(if ($null -ne $rec.executed) { [bool]$rec.executed } else { $null })
+                                    raw_journal_included=$false
+                                }
+                                $minimalJournalRows += $row
+                            }
+                            $minimalJournalSummary.event_count = $minimalJournalRows.Count
+                            $minimalJournalSummary.rejection_count = @($minimalJournalRows | Where-Object { $_.event -eq 'action_rejected' }).Count
+                            $minimalJournalSummary.prepared_count = @($minimalJournalRows | Where-Object { $_.event -eq 'action_prepared' }).Count
+                            $minimalJournalSummary.observed_count = @($minimalJournalRows | Where-Object { $_.event -eq 'action_observed' }).Count
+                            $minimalJournalSummary.parser_rejection_count = @($minimalJournalRows | Where-Object { $_.event -eq 'decision_rejected' }).Count
+                        } else {
+                            $warnings.Add('MINIMAL_JOURNAL_TASK_REQUEST_IDENTITY_MISMATCH')
+                        }
+                    }
+                } catch {
+                    $minimalJournalRows = @()
+                    $minimalJournalSummary.identity_matched = $false
+                    $warnings.Add('MINIMAL_JOURNAL_UNPARSEABLE')
+                }
+            }
+        }
+    }
+    Write-Json (Join-Path $stage 'minimal_core_journal_summary.json') ([ordered]@{
+        metadata=$minimalJournalSummary
+        events=@($minimalJournalRows | Select-Object -Last 400)
+    })
+
     # Correlate bounded, non-sensitive Planner decisions with explicit
     # Context digests and fail-closed SCR shape checks. No raw reply survives.
     $decisionDiffs = @()
@@ -1121,6 +1203,13 @@ try {
     if ($minimalRejectCount -gt $minimalProposedCount) {
         $coverageIssues.Add('MINIMAL_ACTION_PROPOSAL_LINEAGE_MISSING')
     }
+    if ($minimalJournalSummary.found -and -not $minimalJournalSummary.identity_matched) {
+        $coverageIssues.Add('MINIMAL_JOURNAL_IDENTITY_OR_READ_UNVERIFIED')
+    }
+    if ($minimalJournalSummary.identity_matched -and
+        $minimalJournalSummary.rejection_count -ne $minimalRejectCount) {
+        $coverageIssues.Add('MINIMAL_JOURNAL_RUNTIME_REJECTION_COUNT_MISMATCH')
+    }
     if (@($warnings | Where-Object { $_ -like 'Timeline capped*' }).Count -gt 0) {
         $coverageIssues.Add('TIMELINE_ROW_CAP_REACHED')
     }
@@ -1159,6 +1248,9 @@ try {
         minimal_admission_rejection_count=$minimalRejectCount
         minimal_admission_rejection_represented_count=$representedMinimalRejectCount
         minimal_action_lineage_event_count=$minimalLineage.Count
+        minimal_journal_found=$minimalJournalSummary.found
+        minimal_journal_identity_matched=$minimalJournalSummary.identity_matched
+        minimal_journal_rejection_count=$minimalJournalSummary.rejection_count
         contract_receipt_count=$contracts.Count
         action_trace_event_count=$actionTrace.Count
         planner_context_delivery_event_count=@($delivery).Count
