@@ -687,7 +687,7 @@ try {
 
     # Minimal Core v10: preserve bounded parser error location, exact decision
     # counts and format recovery reasons. Never include raw DOM content,
-    # commands, tool arguments or masked local journal text in the ZIP.
+    # commands, tool arguments or unvalidated local journal text in the ZIP.
     $minimalDecisionDiagnostics = @($timeline.ToArray() | Where-Object {
         $_.event -in @('minimal_decision_rejected', 'minimal_decision_accepted')
     } | Select-Object -Last 120 | ForEach-Object {
@@ -710,6 +710,1242 @@ try {
         }
     })
     Write-Json (Join-Path $stage 'minimal_core_decision_diagnostics.json') @($minimalDecisionDiagnostics)
+
+    # Optional bounded *syntax shape only*, tied to this exact Task + Request.
+    # Every alphanumeric/content character was already replaced by 'x'
+    # in the Runtime journal. Re-check a narrow whitelist before export.
+    $minimalMaskedStructures = @()
+    if ($task -and $request) {
+        $minimalJournal = Join-Path $root ('localdata\runtime\minimal_core\' + $task + '.jsonl')
+        if ([IO.File]::Exists($minimalJournal)) {
+            $journalBound = $false
+            foreach ($line in [IO.File]::ReadLines($minimalJournal)) {
+                try { $entry = $line | ConvertFrom-Json -ErrorAction Stop }
+                catch { continue }
+                if ([string]$entry.event -ceq 'task_started') {
+                    $journalBound = ([string]$entry.task_id -ceq $task -and
+                                     [string]$entry.request_id -ceq $request)
+                    continue
+                }
+                if (-not $journalBound -or [string]$entry.event -cne 'decision_rejected') { continue }
+                $shape = [string]$entry.response_structure_redacted
+                if ($shape.Length -gt 600) { $shape = $shape.Substring(0, 600) }
+                if ($shape -cnotmatch '^[x{}\[\]:,"\\\s]*
+
+    # Correlate bounded, non-sensitive Planner decisions with explicit
+    # Context digests and fail-closed SCR shape checks. No raw reply survives.
+    $decisionDiffs = @()
+    $previousSCR = $null
+    $priorResponse = ''
+    $plannerEvents = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'planner_response_received' -and $null -ne $_.planner_scr
+    } | Sort-Object @{ Expression={ [int]$_.round } }, @{ Expression={ [double]$_.timestamp_unix } })
+    # Mirrored Remote/WebAgent log sources may contain the same response.
+    # Dedupe only identical (round, SHA256), not genuinely different replies.
+    $seenPlannerReplies = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($entry in $plannerEvents) {
+        $replyKey = ([string]$entry.round + '|' + [string]$entry.response_sha256)
+        if (-not $seenPlannerReplies.Add($replyKey)) { continue }
+        $scr = $entry.planner_scr
+        $proposalHash = [string]$scr.proposal_digest
+        $changed = $null
+        $shapeChanged = $null
+        if ($null -ne $previousSCR -and $scr.scr_present -and $previousSCR.scr_present) {
+            $changed = ($proposalHash -cne [string]$previousSCR.proposal_digest)
+            $shapeChanged = ([string]$scr.shape_digest -cne [string]$previousSCR.shape_digest)
+        }
+        $knownCapabilities = @()
+        if ($scr.scr_present) {
+            $knownCapabilities = @($scr.known_capabilities | Where-Object { $_ -is [string] })
+        }
+        $decisionDiffs += [ordered]@{
+            round=$entry.round
+            source=$entry.source
+            response_sha256=$entry.response_sha256
+            progress_found=[bool]$scr.progress_found
+            scr_present=[bool]$scr.scr_present
+            schema_valid=$(if ($scr.scr_present) { [bool]$scr.schema_valid } else { $null })
+            schema_status=$(if (-not $scr.scr_present) { 'NOT_SUBMITTED' }
+                elseif ($scr.schema_valid) { 'VALID' } else { 'INVALID' })
+            proposal_changed_from_previous=$changed
+            shape_changed_from_previous=$shapeChanged
+            schema_matches=[bool]$scr.schema_matches
+            expected_keys_exact=[bool]$scr.expected_keys_exact
+            known_capabilities=$knownCapabilities
+            invalid_capability_count=$scr.invalid_capability_count
+            extra_key_count=$scr.extra_key_count
+            duplicate_count=$scr.duplicate_count
+        }
+        $previousSCR = $scr
+    }
+    Write-Json (Join-Path $stage 'planner_contract_diff.json') @($decisionDiffs)
+
+    $delivery = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('planner_context_prepared','planner_context_response_correlated')
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source; event=$_.event; round=$_.round
+            context_snapshot_id=$_.context_snapshot_id
+            context_digest=$_.context_digest
+            evidence_total=$_.evidence_total
+            diagnostic_count=$_.diagnostic_count
+            critical_context_omitted=$_.critical_context_omitted
+            planner_response_received=$_.planner_response_received
+            failure_causal_receipt_count=$_.failure_causal_receipt_count
+            last_failure_category=$_.last_failure_category
+            planner_failure_action_ids=@($_.planner_failure_action_ids)
+            prerequisite_transition_stage=$_.prerequisite_transition_stage
+            strategy_candidate_count=$_.strategy_candidate_count
+            strategy_candidate_route_ids=@($_.strategy_candidate_route_ids)
+            strategy_candidate_statuses=@($_.strategy_candidate_statuses)
+        }
+    })
+    Write-Json (Join-Path $stage 'planner_context_delivery.json') @($delivery)
+
+    $preflight = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('preexecution_strategy_replan_evaluated',
+                       'preexecution_strategy_revision_unavailable',
+                       'progress_strategy_revision_recorded')
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source; round=$_.round; event=$_.event
+            status=$_.status; reason=$_.reason; reason_code=$_.reason_code
+            revision=$_.revision; authorization_granted=$_.authorization_granted
+        }
+    })
+    Write-Json (Join-Path $stage 'replan_preflight_summary.json') @($preflight)
+
+    $scopePreflights = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'tool_started' -and $_.scope_allowed -eq $false
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round; action_id=$_.action_id; tool=$_.tool
+            scope_reason_code=$_.scope_reason_code
+            scope_category=$_.scope_category
+            scope_path_role=$_.scope_path_role
+            scope_transition=$_.scope_transition
+            scope_required_field=$_.scope_required_field
+            scope_allowed=$false
+            filesystem_absence_verified=$false
+        }
+    })
+    # Preserve rejected admission-only CWD/Scope checks; they have NO
+    # tool_started and must not be described as executed operations.
+    $admissionRejections = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'protocol_rejected'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            diagnostic_reasons=@($_.diagnostic_reasons)
+            diagnostic_markers=@($_.diagnostic_markers)
+            field_issues=@($_.field_issues_codes)
+            unified_contract_issue_diffs=@($_.unified_contract_issue_diffs)
+            admission_scope_diagnostics=@($_.admission_scope_diagnostics)
+            command_reject_field=$_.command_reject_field
+            executed=$false
+            authorization_granted=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'action_admission_rejections.json') @($admissionRejections)
+    $beforeDispatch = @($admissionRejections | Where-Object {
+        @($_.diagnostic_reasons | Where-Object {
+            $_ -in @('run_command_working_directory_rejected',
+                     'TOOL_SCOPE_REJECTED','scope_preflight_rejected')
+        }).Count -gt 0
+    } | ForEach-Object {
+        $firstScope = @($_.admission_scope_diagnostics | Select-Object -First 1)
+        [ordered]@{
+            event='ACTION_ADMISSION_REJECTED'
+            round=$_.round
+            action_id=$(if ($firstScope.Count -gt 0) { $firstScope[0].action_id } else { '' })
+            scope_reason_code=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_reason_code } else { 'ADMISSION_SCOPE_DENIED' })
+            scope_category=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_category } else { 'UNKNOWN' })
+            scope_path_role=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_path_role } else { 'UNKNOWN' })
+            scope_allowed=$false
+            admission_only=$true
+            reason_codes=@($_.diagnostic_reasons)
+            command_reject_field=$_.command_reject_field
+            filesystem_absence_verified=$false
+        }
+    })
+    $scopePreflights = @($scopePreflights) + @($beforeDispatch)
+    Write-Json (Join-Path $stage 'scope_preflight_summary.json') @($scopePreflights)
+
+    $contextRepairEvents = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'protocol_rejected' -and $_.context_request_repair
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            reason_codes=@($_.diagnostic_reasons)
+            field_repairs=@($_.context_request_repair)
+        }
+    })
+    Write-Json (Join-Path $stage 'context_request_repair_summary.json') @($contextRepairEvents)
+
+    $commandRepairs = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('command_repair_readiness_evaluated',
+                       'command_repair_converged') -or
+        ($_.event -eq 'protocol_rejected' -and
+         ($_.command_repair_diagnostics -or $_.command_reject_field))
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source
+            event=$_.event; round=$_.round
+            action_id=$_.action_id
+            repair_mode=$_.repair_mode
+            issue_count=$_.issue_count
+            previous_issue_count=$_.previous_issue_count
+            current_issue_count=$_.current_issue_count
+            resolved_issue_count=$_.resolved_issue_count
+            introduced_issue_count=$_.introduced_issue_count
+            converging=$_.converging
+            full_admission_passed=$_.full_admission_passed
+            issue_codes=@($_.issue_codes)
+            issue_fields=@($_.issue_fields)
+            command_reject_field=$_.command_reject_field
+            command_repair_diagnostics=@($_.command_repair_diagnostics)
+        }
+    })
+    Write-Json (Join-Path $stage 'command_repair_summary.json') @($commandRepairs)
+
+    # Goal-aligned Strategy Transition: codes/refs only; no full Goal or rationale.
+    $goalTransitions = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'goal_transition_accepted' -or
+        ($_.event -eq 'protocol_rejected' -and
+         @($_.diagnostic_reasons | Where-Object { $_ -like 'goal_transition_*' -or
+                     $_ -eq 'goal_alignment_identical_denied_read_without_new_evidence' }).Count -gt 0)
+    } | ForEach-Object {
+        [ordered]@{
+            event=$_.event; round=$_.round; source=$_.source
+            kind=$_.kind
+            evidence_ref=$_.evidence_ref
+            goal_condition_id=$_.goal_condition_id
+            evidence_classification=$_.evidence_classification
+            next_tool=$_.next_tool
+            authorization_granted=$_.authorization_granted
+            completion_verified=$_.completion_verified
+            diagnostic_reasons=@($_.diagnostic_reasons)
+        }
+    })
+    Write-Json (Join-Path $stage 'goal_transition_summary.json') @($goalTransitions)
+
+    # Typed, bounded Git27 causal records. Never export raw command/stream.
+    $transitions = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('prerequisite_transition_prepared','prerequisite_transition_evaluated')
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            event=$_.event
+            transition_stage=$(if ($_.transition_stage) { $_.transition_stage } else { 'MISSING' })
+            progress_transition=$_.progress_transition
+            access_state=$_.access_state
+            scope_preflight_status=$_.scope_preflight_status
+            scope_preflight_reason_code=$_.scope_preflight_reason_code
+            probe_evidence_present=$_.probe_evidence_present
+            latest_probe_failure_category=$_.latest_probe_failure_category
+            latest_probe_failure_ref=$_.latest_probe_failure_ref
+            next_failure_evaluation=$_.next_failure_evaluation
+            guidance_is_evidence=$false
+            authorization_granted=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'prerequisite_transition_summary.json') @($transitions)
+    $failures = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'tool_failure_causal_receipt_recorded'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            action_id=$_.action_id
+            task_epoch=$_.task_epoch
+            tool=$_.tool
+            operation=$_.operation
+            result_status=$_.result_status
+            result_reason=$_.result_reason
+            executed=$_.executed
+            exit_code=$_.exit_code
+            timed_out=$_.timed_out
+            failure_category=$_.failure_category
+            classification_verified=$_.classification_verified
+            stderr_present=$_.stderr_present
+            stderr_sha256=$_.stderr_sha256
+            blocking_evidence_ref=$_.blocking_evidence_ref
+            next_evaluation=$_.next_evaluation
+            authorization_granted=$false
+            raw_stderr_included=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'failure_causal_summary.json') @($failures)
+    $contracts = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'unified_contract_transaction_resolved'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            phase=$_.phase
+            reason_codes=@($_.reason_codes)
+            decision_codes=@($_.decision_codes)
+            contract_names=@($_.contract_names)
+            pending_action_ids=@($_.pending_action_ids)
+            admitted_action_ids=@($_.admitted_action_ids)
+            ccrc_mode=$_.ccrc_mode
+            failure_count=$_.failure_count
+            last_failure_category=$_.last_failure_category
+            authorization_granted=$false
+            executed=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'unified_contract_summary.json') @($contracts)
+
+    # Three-stage Action lineage: Planner request shape/digest, Runtime
+    # rewrite/denial, actual Execution/Evidence. IDs join events, never
+    # assume a rejected, held or rewritten proposal was dispatched.
+    $actionTrace = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('action_resolution_recorded',
+                      'action_runtime_rewrite_applied',
+                      'action_runtime_rewrite_candidate_rejected',
+                      'tool_started','tool_completed',
+                      'action_evidence_recorded',
+                      'tool_failure_causal_receipt_recorded')
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            action_id=$_.action_id
+            tool=$_.tool
+            event=$_.event
+            disposition=$_.disposition
+            original_command_sha256=$_.original_command_sha256
+            dispatched_command_sha256=$_.dispatched_command_sha256
+            changed_fields=@($_.changed_fields)
+            rewrite_reason_code=$_.rewrite_reason_code
+            rewrite_rule_ids=@($_.rewrite_rule_ids)
+            reason_codes=@($_.reason_codes)
+            scope_allowed=$_.scope_allowed
+            scope_reason_code=$_.scope_reason_code
+            execution_status=$_.execution_status
+            result_status=$_.result_status
+            result_reason=$_.result_reason
+            failure_category=$_.failure_category
+            executed=$_.executed
+            dispatched=$_.dispatched
+            evidence_kind=$_.evidence_kind
+            execution_evidence_ref=$_.execution_evidence_ref
+            raw_command_included=$false
+            raw_result_included=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'action_causal_trace_summary.json') @($actionTrace)
+    $coverageIssues = New-Object 'System.Collections.Generic.List[string]'
+    if ($timeline.Count -eq 0) {
+        $coverageIssues.Add('NO_MATCHING_RUNTIME_EVENTS')
+    }
+    $missingStages = @($transitions | Where-Object {
+        $_.transition_stage -in @('MISSING','[REDACTED_NONCODE]')
+    }).Count
+    if ($missingStages -gt 0) { $coverageIssues.Add('PREREQUISITE_TRANSITION_STAGE_MISSING') }
+    $failedIDs = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'action_evidence_recorded' -and
+        $_.result_status -in @('FAILED','REJECTED','PARTIAL')
+    } | ForEach-Object { Safe-Code $_.action_id } |
+        Where-Object { $_ -and $_ -ne '[REDACTED_NONCODE]' } | Sort-Object -Unique)
+    $knownIDs = @($failures | ForEach-Object { $_.action_id } |
+        Where-Object { $_ } | Sort-Object -Unique)
+    $missingIDs = @($failedIDs | Where-Object { $knownIDs -cnotcontains $_ })
+    if ($missingIDs.Count -gt 0) { $coverageIssues.Add('ACTION_FAILURE_CAUSAL_RECEIPT_MISSING') }
+    if (@($warnings | Where-Object { $_ -like 'Timeline capped*' }).Count -gt 0) {
+        $coverageIssues.Add('TIMELINE_ROW_CAP_REACHED')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Full scan matching row cap reached*' }).Count -gt 0) {
+        $coverageIssues.Add('FULL_SCAN_MATCH_ROW_CAP_REACHED')
+    }
+    if (@($warnings | Where-Object { $_ -like 'SOURCE_FULL_SCAN_SIZE_LIMIT*' }).Count -gt 0) {
+        $coverageIssues.Add('SOURCE_LOG_TOO_LARGE_TAIL_ONLY')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Unable to read source*' }).Count -gt 0) {
+        $coverageIssues.Add('SOURCE_LOG_UNREADABLE')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Unparseable matching JSONL row*' }).Count -gt 0) {
+        $coverageIssues.Add('MATCHING_JSONL_ROW_UNPARSEABLE')
+    }
+    if ($progressSummary.runtime_state -in @('PAUSED','INTERRUPTED') -and
+        -not $progressSummary.interruption_reason_present) {
+        $coverageIssues.Add('TASK_INTERRUPTION_REASON_MISSING')
+    }
+    $coverage = [ordered]@{
+        schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
+        status=$(if ($coverageIssues.Count -gt 0) { 'PARTIAL' }
+            else { 'FULL_AVAILABLE_LOG_SCAN' })
+        issues=@($coverageIssues.ToArray())
+        transition_count=$transitions.Count
+        transition_missing_stage=$missingStages
+        failed_action_count=$failedIDs.Count
+        failure_receipt_count=$failures.Count
+        unique_failure_action_count=$knownIDs.Count
+        planner_failure_context_events=@($delivery | Where-Object {
+            $_.failure_causal_receipt_count -gt 0
+        }).Count
+        missing_failure_action_ids=@($missingIDs | Select-Object -First 24)
+        admission_rejection_count=$admissionRejections.Count
+        contract_receipt_count=$contracts.Count
+        action_trace_event_count=$actionTrace.Count
+        planner_context_delivery_event_count=@($delivery).Count
+        log_window_tail_lines=25000
+        log_window_bounded=[bool](@($sourceInfo.ToArray() | Where-Object {
+            $_.scan_mode -eq 'TAIL_FALLBACK'
+        }).Count -gt 0)
+        complete_available_log_scan=($coverageIssues.Count -eq 0)
+        timeline_row_cap=3500
+        raw_tool_output_included=$false
+        source_integrity_guaranteed=$false
+        authorization_granted=$false
+    }
+    Write-Json (Join-Path $stage 'rca_causal_coverage.json') $coverage
+    if ($coverageIssues.Count -gt 0) {
+        $warnings.Add('RCA causal coverage PARTIAL: ' + ($coverageIssues -join ','))
+    }
+
+    # RemoteEventStore persists the Telegram OUTBOUND terminal summary after
+    # worker completion. Select by BOTH IDs when available; never include any
+    # reply_route/chat_id, raw Telegram update, or original event payload.
+    $script:telegramRedactionCount = 0
+    $script:telegramTextTruncated = $false
+    $telegramSummary = [ordered]@{
+        schema='SMARTAGENT_TELEGRAM_TERMINAL_RCA_V1'
+        found=$false
+        source='localdata/runtime/remote_events.json'
+        selection='NOT_FOUND'
+        request_task_bound=$false
+        delivery_confirmed=$false
+        summary_present=$false
+        summary_truncated=$false
+        redaction_count=0
+        terminal_event_type=''
+        event_id=''
+        delivery_state=''
+    }
+    $telegramMessage = '[TELEGRAM_TERMINAL_NOT_FOUND] No matching Telegram terminal event was persisted for the selected Task/Request.'
+    $tgStoreFile = Join-Path $root 'localdata\runtime\remote_events.json'
+    try {
+        if (Test-Path -LiteralPath $tgStoreFile -PathType Leaf) {
+            if ((Get-Item -LiteralPath $tgStoreFile).Length -gt 33554432) {
+                $telegramSummary.selection = 'SOURCE_OVERSIZED'
+                $warnings.Add('Telegram remote_events.json exceeds 32 MiB; skipped.')
+            } else {
+                $tgStore = Read-Json $tgStoreFile
+                if ($null -eq $tgStore -or $null -eq $tgStore.events) {
+                    $telegramSummary.selection = 'SOURCE_UNREADABLE'
+                    $warnings.Add('Telegram terminal source malformed or unreadable.')
+                } else {
+                    $matches = @()
+                    foreach ($entry in $tgStore.events.PSObject.Properties) {
+                        $ev = $entry.Value
+                        if ($null -eq $ev) { continue }
+                        if ($ev.event_type -notin @('TASK_COMPLETED','TASK_FAILED','TASK_PAUSED','TASK_INTERRUPTED')) { continue }
+                        if ([string]$ev.reply_route.transport -ne 'TELEGRAM') { continue }
+                        if ($task -and [string]$ev.task_id -cne $task) { continue }
+                        if ($request -and [string]$ev.request_id -cne $request) { continue }
+                        $matches += $ev
+                    }
+                    if ($matches.Count -gt 0) {
+                        $chosen = @($matches | Sort-Object -Property @{ Expression={ [double]$_.created_at }; Descending=$true })[0]
+                        $p = $chosen.payload
+                        $rawSummary = [string]$p.summary
+                        if (-not $rawSummary -and $chosen.event_type -eq 'TASK_FAILED') {
+                            $rawSummary = [string]$p.error
+                        }
+                        $telegramSummary.found = $true
+                        $telegramSummary.selection = 'MATCHED_TERMINAL_EVENT'
+                        $telegramSummary.request_task_bound = [bool]($task -and $request)
+                        $telegramSummary.task_id = (Safe-Code $chosen.task_id)
+                        $telegramSummary.request_id = (Safe-Code $chosen.request_id)
+                        $telegramSummary.event_id = (Safe-Code $chosen.event_id)
+                        $telegramSummary.terminal_event_type = (Safe-Code $chosen.event_type)
+                        $telegramSummary.status = (Safe-Code $chosen.status)
+                        $telegramSummary.delivery_state = (Safe-Code $chosen.delivery_state)
+                        $telegramSummary.delivery_confirmed = ([string]$chosen.delivery_state -eq 'DELIVERED')
+                        $telegramSummary.delivery_attempts = [int]$chosen.attempts
+                        $telegramSummary.created_at_unix = [double]$chosen.created_at
+                        $telegramSummary.delivered_at_unix = [double]$chosen.delivered_at
+                        $telegramSummary.task_outcome = (Safe-Code $p.task_outcome)
+                        $telegramSummary.summary_present = (-not [string]::IsNullOrWhiteSpace($rawSummary))
+                        if ($telegramSummary.summary_present) {
+                            $telegramSummary.raw_summary_sha256 = Hash-Text $rawSummary
+                            $rendered = Redact-TelegramFinal $rawSummary
+                            $lines = @(
+                                '[TELEGRAM_WORKER_TERMINAL_SUMMARY_REDACTED]',
+                                ('event_id: ' + $telegramSummary.event_id),
+                                ('event_type: ' + $telegramSummary.terminal_event_type),
+                                ('delivery_state: ' + $telegramSummary.delivery_state),
+                                ('request_id: ' + $telegramSummary.request_id),
+                                ('task_id: ' + $telegramSummary.task_id),
+                                '----- SUMMARY -----',
+                                $rendered
+                            )
+                            $telegramMessage = $lines -join [Environment]::NewLine
+                        } else {
+                            $telegramMessage = '[TELEGRAM_TERMINAL_EMPTY] Event exists but worker summary is empty.'
+                        }
+                        $telegramSummary.summary_truncated = [bool]$script:telegramTextTruncated
+                        $telegramSummary.redaction_count = [int]$script:telegramRedactionCount
+                        $terminal = $p.terminal_acceptance
+                        if ($null -ne $terminal) {
+                            $telegramSummary.terminal_acceptance = [ordered]@{
+                                admission_status=(Safe-Code $terminal.admission_status)
+                                decision=(Safe-Code $terminal.decision)
+                                outcome=(Safe-Code $terminal.outcome)
+                                runtime_state=(Safe-Code $terminal.runtime_state)
+                                receipt_id=(Safe-Code $terminal.receipt_id)
+                            }
+                        }
+                        $receipt = $p.delivery_receipt
+                        if ($null -ne $receipt) {
+                            $telegramSummary.delivery_receipt = [ordered]@{
+                                receipt_id=(Safe-Code $receipt.receipt_id)
+                                transport=(Safe-Code $receipt.transport)
+                                receipt_kind=(Safe-Code $receipt.receipt_kind)
+                                adapter_confirmed=[bool]$receipt.adapter_confirmed
+                                reconciled_observed=[bool]$receipt.reconciled_observed
+                                message_count=[int]$receipt.message_count
+                                provider_message_id_count=[int]$receipt.provider_message_id_count
+                            }
+                        }
+                        if (-not $telegramSummary.delivery_confirmed) {
+                            $warnings.Add('Telegram terminal exists but delivery_state is not DELIVERED.')
+                        }
+                    } else {
+                        $telegramSummary.selection = 'NO_MATCHING_TELEGRAM_TERMINAL_EVENT'
+                    }
+                }
+            }
+        } else {
+            $telegramSummary.selection = 'SOURCE_MISSING'
+        }
+    } catch {
+        $telegramSummary.selection = 'SOURCE_READ_ERROR'
+        $telegramSummary.found = $false
+        $telegramSummary.delivery_confirmed = $false
+        $telegramMessage = '[TELEGRAM_TERMINAL_UNAVAILABLE] Collector could not read the persisted Telegram event.'
+        $warnings.Add('Telegram outbound terminal extraction failed: ' + $_.Exception.GetType().Name)
+    }
+    Write-Json (Join-Path $stage 'telegram_terminal_summary.json') $telegramSummary
+    [IO.File]::WriteAllText(
+        (Join-Path $stage 'telegram_final_reply_redacted.txt'),
+        [string]$telegramMessage, (New-Object Text.UTF8Encoding $false)
+    )
+
+    $head = ''
+    $branch = ''
+    try {
+        $head = [string]((& git -C $root rev-parse HEAD 2>$null) | Select-Object -First 1)
+        $branch = [string]((& git -C $root branch --show-current 2>$null) | Select-Object -First 1)
+    } catch { $warnings.Add('Git version inspection unavailable.') }
+    $fingerprints = [ordered]@{}
+    foreach ($relative in @('source\WebAgent\protocol_loop.py',
+                             'source\agent_core\bounded_repair.py',
+                             'source\agent_core\goal_anchored_recovery.py',
+                             'source\agent_core\planner_context_snapshot.py',
+                             'source\agent_core\failure_causal_receipt.py',
+                             'source\agent_core\prerequisite_transition_gate.py',
+                             'source\agent_core\unified_contract_transaction.py',
+                             'source\agent_core\remote_runtime_log.py',
+                             'source\RemoteAgent\telegram_webagent_worker.py',
+                             'source\agent_core\auto_rca_upload.py',
+                             'source\agent_core\semantic_capability_resolution.py',
+                             'source\agent_core\action_readiness.py',
+                             'source\agent_core\context_acquisition.py',
+                             'source\agent_core\progress_recovery.py',
+                             'source\agent_core\goal_strategy_transition.py',
+                             'source\agent_core\prerequisite_runtime_v3.py',
+                             'source\agent_core\project_environment.py',
+                             'source\agent_core\pr_bcd_request_scope.py',
+                             'source\agent_core\dependency_adapters.py',
+                             'source\agent_core\bp1_observation_terminal.py',
+                             'collect.bat',
+                             'config\protocol_manifest.json')) {
+        $fp = Join-Path $root $relative
+        if (Test-Path -LiteralPath $fp -PathType Leaf) {
+            $fingerprints[$relative.Replace('\','/')] = (Hash-File $fp)
+        }
+    }
+    $metadata = [ordered]@{
+        schema='SMARTAGENT_LIVE_RCA_V3'
+        created_utc=(Get-Date).ToUniversalTime().ToString('o')
+        expected_base_commit=$baseSha
+        installed_git_head=(Safe-Code $head)
+        installed_git_branch=(Safe-Code $branch)
+        selected_by=$selection
+        task_id=(Safe-Code $task)
+        request_id=(Safe-Code $request)
+        event_count=$timeline.Count
+        causal_coverage_schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
+        causal_coverage_status=$coverage.status
+        causal_coverage_issues=@($coverage.issues)
+        snapshot_count=@($snapshots).Count
+        pr_a_ledger_found=[bool]$prASummary.found
+        pr_bcd_ledger_found=[bool]$prBCDSummary.found
+        telegram_terminal_found=[bool]$telegramSummary.found
+        telegram_delivery_confirmed=[bool]$telegramSummary.delivery_confirmed
+        telegram_summary_present=[bool]$telegramSummary.summary_present
+        telegram_summary_truncated=[bool]$telegramSummary.summary_truncated
+        collector_process_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
+        log_sources=$sourceInfo.ToArray()
+        source_sha256=$fingerprints
+        warnings=$warnings.ToArray()
+    }
+    Write-Json (Join-Path $stage 'manifest.json') $metadata
+    $notes = @(
+        'SmartAgent GAR Live RCA / sanitized diagnostic bundle',
+        'Read-only collection. Runtime/Source/Task state was not modified.',
+        'Data: request-scoped timeline (event codes, counters, model tool/operation names only),',
+        'sanitized SCR proposal shape/digest, decision differences and context delivery digests,',
+        'preexecution replan evaluation events (status codes only),',
+        'scope preflight reason codes and context_request subfield repair codes; no raw paths',
+        'command repair modes, field codes and convergence counters; no command text',
+        'Goal transition acceptance/rejection codes with condition IDs; no Planner rationale',
+        'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.',
+        'Git27: typed Prerequisite, Failure Causality, Contract, Action Admission and Action Trace summaries.',
+        'Git27: causal coverage status explicitly reports any missing field, source truncation or parse failure.',
+        'Minimal Core v10: schema-only, request-scoped JSON parser diagnostics; no raw model response.',
+        'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
+        'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
+        'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
+        'Note: collector_process_l4_enabled reflects this CLI process, not a previously started Worker.',
+        'Scan: stream entire available JSONL source <=128MiB; fallback to last 25000 lines for larger files.',
+        'Task/Request match and 3500-row timeline cap apply; coverage flags any truncated source.',
+        'If the wrong task was auto-selected, rerun collect.bat TASK-... RR-... .',
+        'Review ZIP contents before sharing.'
+    )
+    [IO.File]::WriteAllLines((Join-Path $stage 'README.txt'), [string[]]$notes)
+    $shortId = if ($task) { $task } elseif ($request) { $request } else { 'UNKNOWN' }
+    $zip = Join-Path $outputDir ('GAR_LIVE_RCA_' + $stamp + '_' + $shortId + '.zip')
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
+    Write-Host ('[COLLECT] Task: ' + $task)
+    Write-Host ('[COLLECT] Request: ' + $request)
+    Write-Host ('[COLLECT] Matched events: ' + $timeline.Count)
+    Write-Host ('[COLLECT] GAR snapshots: ' + @($snapshots).Count)
+    Write-Host ('[COLLECT] Telegram terminal found: ' + [bool]$telegramSummary.found + '; delivery confirmed: ' + [bool]$telegramSummary.delivery_confirmed)
+    Write-Host ('[COLLECT] ZIP: ' + $zip)
+    if ($timeline.Count -eq 0) {
+        Write-Warning 'No matching events found. Confirm that this is the checkout actually used for Live, or pass Task/Request IDs.'
+    }
+} finally {
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+}
+) {
+                    $shape = '[REDACTED_UNSAFE_PREVIEW]'
+                }
+                $digest = [string]$entry.response_sha256
+                if ($digest -cnotmatch '^[0-9a-f]{64}
+
+    # Correlate bounded, non-sensitive Planner decisions with explicit
+    # Context digests and fail-closed SCR shape checks. No raw reply survives.
+    $decisionDiffs = @()
+    $previousSCR = $null
+    $priorResponse = ''
+    $plannerEvents = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'planner_response_received' -and $null -ne $_.planner_scr
+    } | Sort-Object @{ Expression={ [int]$_.round } }, @{ Expression={ [double]$_.timestamp_unix } })
+    # Mirrored Remote/WebAgent log sources may contain the same response.
+    # Dedupe only identical (round, SHA256), not genuinely different replies.
+    $seenPlannerReplies = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($entry in $plannerEvents) {
+        $replyKey = ([string]$entry.round + '|' + [string]$entry.response_sha256)
+        if (-not $seenPlannerReplies.Add($replyKey)) { continue }
+        $scr = $entry.planner_scr
+        $proposalHash = [string]$scr.proposal_digest
+        $changed = $null
+        $shapeChanged = $null
+        if ($null -ne $previousSCR -and $scr.scr_present -and $previousSCR.scr_present) {
+            $changed = ($proposalHash -cne [string]$previousSCR.proposal_digest)
+            $shapeChanged = ([string]$scr.shape_digest -cne [string]$previousSCR.shape_digest)
+        }
+        $knownCapabilities = @()
+        if ($scr.scr_present) {
+            $knownCapabilities = @($scr.known_capabilities | Where-Object { $_ -is [string] })
+        }
+        $decisionDiffs += [ordered]@{
+            round=$entry.round
+            source=$entry.source
+            response_sha256=$entry.response_sha256
+            progress_found=[bool]$scr.progress_found
+            scr_present=[bool]$scr.scr_present
+            schema_valid=$(if ($scr.scr_present) { [bool]$scr.schema_valid } else { $null })
+            schema_status=$(if (-not $scr.scr_present) { 'NOT_SUBMITTED' }
+                elseif ($scr.schema_valid) { 'VALID' } else { 'INVALID' })
+            proposal_changed_from_previous=$changed
+            shape_changed_from_previous=$shapeChanged
+            schema_matches=[bool]$scr.schema_matches
+            expected_keys_exact=[bool]$scr.expected_keys_exact
+            known_capabilities=$knownCapabilities
+            invalid_capability_count=$scr.invalid_capability_count
+            extra_key_count=$scr.extra_key_count
+            duplicate_count=$scr.duplicate_count
+        }
+        $previousSCR = $scr
+    }
+    Write-Json (Join-Path $stage 'planner_contract_diff.json') @($decisionDiffs)
+
+    $delivery = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('planner_context_prepared','planner_context_response_correlated')
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source; event=$_.event; round=$_.round
+            context_snapshot_id=$_.context_snapshot_id
+            context_digest=$_.context_digest
+            evidence_total=$_.evidence_total
+            diagnostic_count=$_.diagnostic_count
+            critical_context_omitted=$_.critical_context_omitted
+            planner_response_received=$_.planner_response_received
+            failure_causal_receipt_count=$_.failure_causal_receipt_count
+            last_failure_category=$_.last_failure_category
+            planner_failure_action_ids=@($_.planner_failure_action_ids)
+            prerequisite_transition_stage=$_.prerequisite_transition_stage
+            strategy_candidate_count=$_.strategy_candidate_count
+            strategy_candidate_route_ids=@($_.strategy_candidate_route_ids)
+            strategy_candidate_statuses=@($_.strategy_candidate_statuses)
+        }
+    })
+    Write-Json (Join-Path $stage 'planner_context_delivery.json') @($delivery)
+
+    $preflight = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('preexecution_strategy_replan_evaluated',
+                       'preexecution_strategy_revision_unavailable',
+                       'progress_strategy_revision_recorded')
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source; round=$_.round; event=$_.event
+            status=$_.status; reason=$_.reason; reason_code=$_.reason_code
+            revision=$_.revision; authorization_granted=$_.authorization_granted
+        }
+    })
+    Write-Json (Join-Path $stage 'replan_preflight_summary.json') @($preflight)
+
+    $scopePreflights = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'tool_started' -and $_.scope_allowed -eq $false
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round; action_id=$_.action_id; tool=$_.tool
+            scope_reason_code=$_.scope_reason_code
+            scope_category=$_.scope_category
+            scope_path_role=$_.scope_path_role
+            scope_transition=$_.scope_transition
+            scope_required_field=$_.scope_required_field
+            scope_allowed=$false
+            filesystem_absence_verified=$false
+        }
+    })
+    # Preserve rejected admission-only CWD/Scope checks; they have NO
+    # tool_started and must not be described as executed operations.
+    $admissionRejections = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'protocol_rejected'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            diagnostic_reasons=@($_.diagnostic_reasons)
+            diagnostic_markers=@($_.diagnostic_markers)
+            field_issues=@($_.field_issues_codes)
+            unified_contract_issue_diffs=@($_.unified_contract_issue_diffs)
+            admission_scope_diagnostics=@($_.admission_scope_diagnostics)
+            command_reject_field=$_.command_reject_field
+            executed=$false
+            authorization_granted=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'action_admission_rejections.json') @($admissionRejections)
+    $beforeDispatch = @($admissionRejections | Where-Object {
+        @($_.diagnostic_reasons | Where-Object {
+            $_ -in @('run_command_working_directory_rejected',
+                     'TOOL_SCOPE_REJECTED','scope_preflight_rejected')
+        }).Count -gt 0
+    } | ForEach-Object {
+        $firstScope = @($_.admission_scope_diagnostics | Select-Object -First 1)
+        [ordered]@{
+            event='ACTION_ADMISSION_REJECTED'
+            round=$_.round
+            action_id=$(if ($firstScope.Count -gt 0) { $firstScope[0].action_id } else { '' })
+            scope_reason_code=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_reason_code } else { 'ADMISSION_SCOPE_DENIED' })
+            scope_category=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_category } else { 'UNKNOWN' })
+            scope_path_role=$(if ($firstScope.Count -gt 0) { $firstScope[0].scope_path_role } else { 'UNKNOWN' })
+            scope_allowed=$false
+            admission_only=$true
+            reason_codes=@($_.diagnostic_reasons)
+            command_reject_field=$_.command_reject_field
+            filesystem_absence_verified=$false
+        }
+    })
+    $scopePreflights = @($scopePreflights) + @($beforeDispatch)
+    Write-Json (Join-Path $stage 'scope_preflight_summary.json') @($scopePreflights)
+
+    $contextRepairEvents = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'protocol_rejected' -and $_.context_request_repair
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            reason_codes=@($_.diagnostic_reasons)
+            field_repairs=@($_.context_request_repair)
+        }
+    })
+    Write-Json (Join-Path $stage 'context_request_repair_summary.json') @($contextRepairEvents)
+
+    $commandRepairs = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('command_repair_readiness_evaluated',
+                       'command_repair_converged') -or
+        ($_.event -eq 'protocol_rejected' -and
+         ($_.command_repair_diagnostics -or $_.command_reject_field))
+    } | ForEach-Object {
+        [ordered]@{
+            source=$_.source
+            event=$_.event; round=$_.round
+            action_id=$_.action_id
+            repair_mode=$_.repair_mode
+            issue_count=$_.issue_count
+            previous_issue_count=$_.previous_issue_count
+            current_issue_count=$_.current_issue_count
+            resolved_issue_count=$_.resolved_issue_count
+            introduced_issue_count=$_.introduced_issue_count
+            converging=$_.converging
+            full_admission_passed=$_.full_admission_passed
+            issue_codes=@($_.issue_codes)
+            issue_fields=@($_.issue_fields)
+            command_reject_field=$_.command_reject_field
+            command_repair_diagnostics=@($_.command_repair_diagnostics)
+        }
+    })
+    Write-Json (Join-Path $stage 'command_repair_summary.json') @($commandRepairs)
+
+    # Goal-aligned Strategy Transition: codes/refs only; no full Goal or rationale.
+    $goalTransitions = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'goal_transition_accepted' -or
+        ($_.event -eq 'protocol_rejected' -and
+         @($_.diagnostic_reasons | Where-Object { $_ -like 'goal_transition_*' -or
+                     $_ -eq 'goal_alignment_identical_denied_read_without_new_evidence' }).Count -gt 0)
+    } | ForEach-Object {
+        [ordered]@{
+            event=$_.event; round=$_.round; source=$_.source
+            kind=$_.kind
+            evidence_ref=$_.evidence_ref
+            goal_condition_id=$_.goal_condition_id
+            evidence_classification=$_.evidence_classification
+            next_tool=$_.next_tool
+            authorization_granted=$_.authorization_granted
+            completion_verified=$_.completion_verified
+            diagnostic_reasons=@($_.diagnostic_reasons)
+        }
+    })
+    Write-Json (Join-Path $stage 'goal_transition_summary.json') @($goalTransitions)
+
+    # Typed, bounded Git27 causal records. Never export raw command/stream.
+    $transitions = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('prerequisite_transition_prepared','prerequisite_transition_evaluated')
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            event=$_.event
+            transition_stage=$(if ($_.transition_stage) { $_.transition_stage } else { 'MISSING' })
+            progress_transition=$_.progress_transition
+            access_state=$_.access_state
+            scope_preflight_status=$_.scope_preflight_status
+            scope_preflight_reason_code=$_.scope_preflight_reason_code
+            probe_evidence_present=$_.probe_evidence_present
+            latest_probe_failure_category=$_.latest_probe_failure_category
+            latest_probe_failure_ref=$_.latest_probe_failure_ref
+            next_failure_evaluation=$_.next_failure_evaluation
+            guidance_is_evidence=$false
+            authorization_granted=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'prerequisite_transition_summary.json') @($transitions)
+    $failures = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'tool_failure_causal_receipt_recorded'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            action_id=$_.action_id
+            task_epoch=$_.task_epoch
+            tool=$_.tool
+            operation=$_.operation
+            result_status=$_.result_status
+            result_reason=$_.result_reason
+            executed=$_.executed
+            exit_code=$_.exit_code
+            timed_out=$_.timed_out
+            failure_category=$_.failure_category
+            classification_verified=$_.classification_verified
+            stderr_present=$_.stderr_present
+            stderr_sha256=$_.stderr_sha256
+            blocking_evidence_ref=$_.blocking_evidence_ref
+            next_evaluation=$_.next_evaluation
+            authorization_granted=$false
+            raw_stderr_included=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'failure_causal_summary.json') @($failures)
+    $contracts = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'unified_contract_transaction_resolved'
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            phase=$_.phase
+            reason_codes=@($_.reason_codes)
+            decision_codes=@($_.decision_codes)
+            contract_names=@($_.contract_names)
+            pending_action_ids=@($_.pending_action_ids)
+            admitted_action_ids=@($_.admitted_action_ids)
+            ccrc_mode=$_.ccrc_mode
+            failure_count=$_.failure_count
+            last_failure_category=$_.last_failure_category
+            authorization_granted=$false
+            executed=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'unified_contract_summary.json') @($contracts)
+
+    # Three-stage Action lineage: Planner request shape/digest, Runtime
+    # rewrite/denial, actual Execution/Evidence. IDs join events, never
+    # assume a rejected, held or rewritten proposal was dispatched.
+    $actionTrace = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('action_resolution_recorded',
+                      'action_runtime_rewrite_applied',
+                      'action_runtime_rewrite_candidate_rejected',
+                      'tool_started','tool_completed',
+                      'action_evidence_recorded',
+                      'tool_failure_causal_receipt_recorded')
+    } | ForEach-Object {
+        [ordered]@{
+            round=$_.round
+            action_id=$_.action_id
+            tool=$_.tool
+            event=$_.event
+            disposition=$_.disposition
+            original_command_sha256=$_.original_command_sha256
+            dispatched_command_sha256=$_.dispatched_command_sha256
+            changed_fields=@($_.changed_fields)
+            rewrite_reason_code=$_.rewrite_reason_code
+            rewrite_rule_ids=@($_.rewrite_rule_ids)
+            reason_codes=@($_.reason_codes)
+            scope_allowed=$_.scope_allowed
+            scope_reason_code=$_.scope_reason_code
+            execution_status=$_.execution_status
+            result_status=$_.result_status
+            result_reason=$_.result_reason
+            failure_category=$_.failure_category
+            executed=$_.executed
+            dispatched=$_.dispatched
+            evidence_kind=$_.evidence_kind
+            execution_evidence_ref=$_.execution_evidence_ref
+            raw_command_included=$false
+            raw_result_included=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'action_causal_trace_summary.json') @($actionTrace)
+    $coverageIssues = New-Object 'System.Collections.Generic.List[string]'
+    if ($timeline.Count -eq 0) {
+        $coverageIssues.Add('NO_MATCHING_RUNTIME_EVENTS')
+    }
+    $missingStages = @($transitions | Where-Object {
+        $_.transition_stage -in @('MISSING','[REDACTED_NONCODE]')
+    }).Count
+    if ($missingStages -gt 0) { $coverageIssues.Add('PREREQUISITE_TRANSITION_STAGE_MISSING') }
+    $failedIDs = @($timeline.ToArray() | Where-Object {
+        $_.event -eq 'action_evidence_recorded' -and
+        $_.result_status -in @('FAILED','REJECTED','PARTIAL')
+    } | ForEach-Object { Safe-Code $_.action_id } |
+        Where-Object { $_ -and $_ -ne '[REDACTED_NONCODE]' } | Sort-Object -Unique)
+    $knownIDs = @($failures | ForEach-Object { $_.action_id } |
+        Where-Object { $_ } | Sort-Object -Unique)
+    $missingIDs = @($failedIDs | Where-Object { $knownIDs -cnotcontains $_ })
+    if ($missingIDs.Count -gt 0) { $coverageIssues.Add('ACTION_FAILURE_CAUSAL_RECEIPT_MISSING') }
+    if (@($warnings | Where-Object { $_ -like 'Timeline capped*' }).Count -gt 0) {
+        $coverageIssues.Add('TIMELINE_ROW_CAP_REACHED')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Full scan matching row cap reached*' }).Count -gt 0) {
+        $coverageIssues.Add('FULL_SCAN_MATCH_ROW_CAP_REACHED')
+    }
+    if (@($warnings | Where-Object { $_ -like 'SOURCE_FULL_SCAN_SIZE_LIMIT*' }).Count -gt 0) {
+        $coverageIssues.Add('SOURCE_LOG_TOO_LARGE_TAIL_ONLY')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Unable to read source*' }).Count -gt 0) {
+        $coverageIssues.Add('SOURCE_LOG_UNREADABLE')
+    }
+    if (@($warnings | Where-Object { $_ -like 'Unparseable matching JSONL row*' }).Count -gt 0) {
+        $coverageIssues.Add('MATCHING_JSONL_ROW_UNPARSEABLE')
+    }
+    if ($progressSummary.runtime_state -in @('PAUSED','INTERRUPTED') -and
+        -not $progressSummary.interruption_reason_present) {
+        $coverageIssues.Add('TASK_INTERRUPTION_REASON_MISSING')
+    }
+    $coverage = [ordered]@{
+        schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
+        status=$(if ($coverageIssues.Count -gt 0) { 'PARTIAL' }
+            else { 'FULL_AVAILABLE_LOG_SCAN' })
+        issues=@($coverageIssues.ToArray())
+        transition_count=$transitions.Count
+        transition_missing_stage=$missingStages
+        failed_action_count=$failedIDs.Count
+        failure_receipt_count=$failures.Count
+        unique_failure_action_count=$knownIDs.Count
+        planner_failure_context_events=@($delivery | Where-Object {
+            $_.failure_causal_receipt_count -gt 0
+        }).Count
+        missing_failure_action_ids=@($missingIDs | Select-Object -First 24)
+        admission_rejection_count=$admissionRejections.Count
+        contract_receipt_count=$contracts.Count
+        action_trace_event_count=$actionTrace.Count
+        planner_context_delivery_event_count=@($delivery).Count
+        log_window_tail_lines=25000
+        log_window_bounded=[bool](@($sourceInfo.ToArray() | Where-Object {
+            $_.scan_mode -eq 'TAIL_FALLBACK'
+        }).Count -gt 0)
+        complete_available_log_scan=($coverageIssues.Count -eq 0)
+        timeline_row_cap=3500
+        raw_tool_output_included=$false
+        source_integrity_guaranteed=$false
+        authorization_granted=$false
+    }
+    Write-Json (Join-Path $stage 'rca_causal_coverage.json') $coverage
+    if ($coverageIssues.Count -gt 0) {
+        $warnings.Add('RCA causal coverage PARTIAL: ' + ($coverageIssues -join ','))
+    }
+
+    # RemoteEventStore persists the Telegram OUTBOUND terminal summary after
+    # worker completion. Select by BOTH IDs when available; never include any
+    # reply_route/chat_id, raw Telegram update, or original event payload.
+    $script:telegramRedactionCount = 0
+    $script:telegramTextTruncated = $false
+    $telegramSummary = [ordered]@{
+        schema='SMARTAGENT_TELEGRAM_TERMINAL_RCA_V1'
+        found=$false
+        source='localdata/runtime/remote_events.json'
+        selection='NOT_FOUND'
+        request_task_bound=$false
+        delivery_confirmed=$false
+        summary_present=$false
+        summary_truncated=$false
+        redaction_count=0
+        terminal_event_type=''
+        event_id=''
+        delivery_state=''
+    }
+    $telegramMessage = '[TELEGRAM_TERMINAL_NOT_FOUND] No matching Telegram terminal event was persisted for the selected Task/Request.'
+    $tgStoreFile = Join-Path $root 'localdata\runtime\remote_events.json'
+    try {
+        if (Test-Path -LiteralPath $tgStoreFile -PathType Leaf) {
+            if ((Get-Item -LiteralPath $tgStoreFile).Length -gt 33554432) {
+                $telegramSummary.selection = 'SOURCE_OVERSIZED'
+                $warnings.Add('Telegram remote_events.json exceeds 32 MiB; skipped.')
+            } else {
+                $tgStore = Read-Json $tgStoreFile
+                if ($null -eq $tgStore -or $null -eq $tgStore.events) {
+                    $telegramSummary.selection = 'SOURCE_UNREADABLE'
+                    $warnings.Add('Telegram terminal source malformed or unreadable.')
+                } else {
+                    $matches = @()
+                    foreach ($entry in $tgStore.events.PSObject.Properties) {
+                        $ev = $entry.Value
+                        if ($null -eq $ev) { continue }
+                        if ($ev.event_type -notin @('TASK_COMPLETED','TASK_FAILED','TASK_PAUSED','TASK_INTERRUPTED')) { continue }
+                        if ([string]$ev.reply_route.transport -ne 'TELEGRAM') { continue }
+                        if ($task -and [string]$ev.task_id -cne $task) { continue }
+                        if ($request -and [string]$ev.request_id -cne $request) { continue }
+                        $matches += $ev
+                    }
+                    if ($matches.Count -gt 0) {
+                        $chosen = @($matches | Sort-Object -Property @{ Expression={ [double]$_.created_at }; Descending=$true })[0]
+                        $p = $chosen.payload
+                        $rawSummary = [string]$p.summary
+                        if (-not $rawSummary -and $chosen.event_type -eq 'TASK_FAILED') {
+                            $rawSummary = [string]$p.error
+                        }
+                        $telegramSummary.found = $true
+                        $telegramSummary.selection = 'MATCHED_TERMINAL_EVENT'
+                        $telegramSummary.request_task_bound = [bool]($task -and $request)
+                        $telegramSummary.task_id = (Safe-Code $chosen.task_id)
+                        $telegramSummary.request_id = (Safe-Code $chosen.request_id)
+                        $telegramSummary.event_id = (Safe-Code $chosen.event_id)
+                        $telegramSummary.terminal_event_type = (Safe-Code $chosen.event_type)
+                        $telegramSummary.status = (Safe-Code $chosen.status)
+                        $telegramSummary.delivery_state = (Safe-Code $chosen.delivery_state)
+                        $telegramSummary.delivery_confirmed = ([string]$chosen.delivery_state -eq 'DELIVERED')
+                        $telegramSummary.delivery_attempts = [int]$chosen.attempts
+                        $telegramSummary.created_at_unix = [double]$chosen.created_at
+                        $telegramSummary.delivered_at_unix = [double]$chosen.delivered_at
+                        $telegramSummary.task_outcome = (Safe-Code $p.task_outcome)
+                        $telegramSummary.summary_present = (-not [string]::IsNullOrWhiteSpace($rawSummary))
+                        if ($telegramSummary.summary_present) {
+                            $telegramSummary.raw_summary_sha256 = Hash-Text $rawSummary
+                            $rendered = Redact-TelegramFinal $rawSummary
+                            $lines = @(
+                                '[TELEGRAM_WORKER_TERMINAL_SUMMARY_REDACTED]',
+                                ('event_id: ' + $telegramSummary.event_id),
+                                ('event_type: ' + $telegramSummary.terminal_event_type),
+                                ('delivery_state: ' + $telegramSummary.delivery_state),
+                                ('request_id: ' + $telegramSummary.request_id),
+                                ('task_id: ' + $telegramSummary.task_id),
+                                '----- SUMMARY -----',
+                                $rendered
+                            )
+                            $telegramMessage = $lines -join [Environment]::NewLine
+                        } else {
+                            $telegramMessage = '[TELEGRAM_TERMINAL_EMPTY] Event exists but worker summary is empty.'
+                        }
+                        $telegramSummary.summary_truncated = [bool]$script:telegramTextTruncated
+                        $telegramSummary.redaction_count = [int]$script:telegramRedactionCount
+                        $terminal = $p.terminal_acceptance
+                        if ($null -ne $terminal) {
+                            $telegramSummary.terminal_acceptance = [ordered]@{
+                                admission_status=(Safe-Code $terminal.admission_status)
+                                decision=(Safe-Code $terminal.decision)
+                                outcome=(Safe-Code $terminal.outcome)
+                                runtime_state=(Safe-Code $terminal.runtime_state)
+                                receipt_id=(Safe-Code $terminal.receipt_id)
+                            }
+                        }
+                        $receipt = $p.delivery_receipt
+                        if ($null -ne $receipt) {
+                            $telegramSummary.delivery_receipt = [ordered]@{
+                                receipt_id=(Safe-Code $receipt.receipt_id)
+                                transport=(Safe-Code $receipt.transport)
+                                receipt_kind=(Safe-Code $receipt.receipt_kind)
+                                adapter_confirmed=[bool]$receipt.adapter_confirmed
+                                reconciled_observed=[bool]$receipt.reconciled_observed
+                                message_count=[int]$receipt.message_count
+                                provider_message_id_count=[int]$receipt.provider_message_id_count
+                            }
+                        }
+                        if (-not $telegramSummary.delivery_confirmed) {
+                            $warnings.Add('Telegram terminal exists but delivery_state is not DELIVERED.')
+                        }
+                    } else {
+                        $telegramSummary.selection = 'NO_MATCHING_TELEGRAM_TERMINAL_EVENT'
+                    }
+                }
+            }
+        } else {
+            $telegramSummary.selection = 'SOURCE_MISSING'
+        }
+    } catch {
+        $telegramSummary.selection = 'SOURCE_READ_ERROR'
+        $telegramSummary.found = $false
+        $telegramSummary.delivery_confirmed = $false
+        $telegramMessage = '[TELEGRAM_TERMINAL_UNAVAILABLE] Collector could not read the persisted Telegram event.'
+        $warnings.Add('Telegram outbound terminal extraction failed: ' + $_.Exception.GetType().Name)
+    }
+    Write-Json (Join-Path $stage 'telegram_terminal_summary.json') $telegramSummary
+    [IO.File]::WriteAllText(
+        (Join-Path $stage 'telegram_final_reply_redacted.txt'),
+        [string]$telegramMessage, (New-Object Text.UTF8Encoding $false)
+    )
+
+    $head = ''
+    $branch = ''
+    try {
+        $head = [string]((& git -C $root rev-parse HEAD 2>$null) | Select-Object -First 1)
+        $branch = [string]((& git -C $root branch --show-current 2>$null) | Select-Object -First 1)
+    } catch { $warnings.Add('Git version inspection unavailable.') }
+    $fingerprints = [ordered]@{}
+    foreach ($relative in @('source\WebAgent\protocol_loop.py',
+                             'source\agent_core\bounded_repair.py',
+                             'source\agent_core\goal_anchored_recovery.py',
+                             'source\agent_core\planner_context_snapshot.py',
+                             'source\agent_core\failure_causal_receipt.py',
+                             'source\agent_core\prerequisite_transition_gate.py',
+                             'source\agent_core\unified_contract_transaction.py',
+                             'source\agent_core\remote_runtime_log.py',
+                             'source\RemoteAgent\telegram_webagent_worker.py',
+                             'source\agent_core\auto_rca_upload.py',
+                             'source\agent_core\semantic_capability_resolution.py',
+                             'source\agent_core\action_readiness.py',
+                             'source\agent_core\context_acquisition.py',
+                             'source\agent_core\progress_recovery.py',
+                             'source\agent_core\goal_strategy_transition.py',
+                             'source\agent_core\prerequisite_runtime_v3.py',
+                             'source\agent_core\project_environment.py',
+                             'source\agent_core\pr_bcd_request_scope.py',
+                             'source\agent_core\dependency_adapters.py',
+                             'source\agent_core\bp1_observation_terminal.py',
+                             'collect.bat',
+                             'config\protocol_manifest.json')) {
+        $fp = Join-Path $root $relative
+        if (Test-Path -LiteralPath $fp -PathType Leaf) {
+            $fingerprints[$relative.Replace('\','/')] = (Hash-File $fp)
+        }
+    }
+    $metadata = [ordered]@{
+        schema='SMARTAGENT_LIVE_RCA_V3'
+        created_utc=(Get-Date).ToUniversalTime().ToString('o')
+        expected_base_commit=$baseSha
+        installed_git_head=(Safe-Code $head)
+        installed_git_branch=(Safe-Code $branch)
+        selected_by=$selection
+        task_id=(Safe-Code $task)
+        request_id=(Safe-Code $request)
+        event_count=$timeline.Count
+        causal_coverage_schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
+        causal_coverage_status=$coverage.status
+        causal_coverage_issues=@($coverage.issues)
+        snapshot_count=@($snapshots).Count
+        pr_a_ledger_found=[bool]$prASummary.found
+        pr_bcd_ledger_found=[bool]$prBCDSummary.found
+        telegram_terminal_found=[bool]$telegramSummary.found
+        telegram_delivery_confirmed=[bool]$telegramSummary.delivery_confirmed
+        telegram_summary_present=[bool]$telegramSummary.summary_present
+        telegram_summary_truncated=[bool]$telegramSummary.summary_truncated
+        collector_process_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
+        log_sources=$sourceInfo.ToArray()
+        source_sha256=$fingerprints
+        warnings=$warnings.ToArray()
+    }
+    Write-Json (Join-Path $stage 'manifest.json') $metadata
+    $notes = @(
+        'SmartAgent GAR Live RCA / sanitized diagnostic bundle',
+        'Read-only collection. Runtime/Source/Task state was not modified.',
+        'Data: request-scoped timeline (event codes, counters, model tool/operation names only),',
+        'sanitized SCR proposal shape/digest, decision differences and context delivery digests,',
+        'preexecution replan evaluation events (status codes only),',
+        'scope preflight reason codes and context_request subfield repair codes; no raw paths',
+        'command repair modes, field codes and convergence counters; no command text',
+        'Goal transition acceptance/rejection codes with condition IDs; no Planner rationale',
+        'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.',
+        'Git27: typed Prerequisite, Failure Causality, Contract, Action Admission and Action Trace summaries.',
+        'Git27: causal coverage status explicitly reports any missing field, source truncation or parse failure.',
+        'Minimal Core v10: schema-only, request-scoped JSON parser diagnostics; no raw model response.',
+        'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
+        'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
+        'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
+        'Note: collector_process_l4_enabled reflects this CLI process, not a previously started Worker.',
+        'Scan: stream entire available JSONL source <=128MiB; fallback to last 25000 lines for larger files.',
+        'Task/Request match and 3500-row timeline cap apply; coverage flags any truncated source.',
+        'If the wrong task was auto-selected, rerun collect.bat TASK-... RR-... .',
+        'Review ZIP contents before sharing.'
+    )
+    [IO.File]::WriteAllLines((Join-Path $stage 'README.txt'), [string[]]$notes)
+    $shortId = if ($task) { $task } elseif ($request) { $request } else { 'UNKNOWN' }
+    $zip = Join-Path $outputDir ('GAR_LIVE_RCA_' + $stamp + '_' + $shortId + '.zip')
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
+    Write-Host ('[COLLECT] Task: ' + $task)
+    Write-Host ('[COLLECT] Request: ' + $request)
+    Write-Host ('[COLLECT] Matched events: ' + $timeline.Count)
+    Write-Host ('[COLLECT] GAR snapshots: ' + @($snapshots).Count)
+    Write-Host ('[COLLECT] Telegram terminal found: ' + [bool]$telegramSummary.found + '; delivery confirmed: ' + [bool]$telegramSummary.delivery_confirmed)
+    Write-Host ('[COLLECT] ZIP: ' + $zip)
+    if ($timeline.Count -eq 0) {
+        Write-Warning 'No matching events found. Confirm that this is the checkout actually used for Live, or pass Task/Request IDs.'
+    }
+} finally {
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+}
+) { continue }
+                $minimalMaskedStructures += [ordered]@{
+                    round=[int]$entry.round
+                    response_sha256=$digest
+                    reason=Safe-Code $entry.reason
+                    response_structure_redacted=$shape
+                    shape_is_sanitized=$true
+                }
+            }
+        }
+    }
+    Write-Json (Join-Path $stage 'minimal_core_masked_structure.json') @(
+        $minimalMaskedStructures | Select-Object -Last 24
+    )
 
     # Correlate bounded, non-sensitive Planner decisions with explicit
     # Context digests and fail-closed SCR shape checks. No raw reply survives.
