@@ -372,11 +372,13 @@ def _single_fact_query_proof(goal: str, history: list[dict]) -> GoalEvidence:
                 "PASS", "SINGLE_FACT_QUERY_ABSENCE_CONFIRMED",
                 (str(action["action_id"]),), display, "SINGLE_FACT_QUERY",
             )
-        if kind != "DIRECTORY":
+        if kind == "PATH":
             return GoalEvidence(
                 "PASS", "SINGLE_FACT_QUERY_PATH_PRESENT_CONFIRMED",
                 (str(action["action_id"]),), display, "SINGLE_FACT_QUERY",
             )
+        if kind == "FILE":
+            return GoalEvidence("UNKNOWN", "SINGLE_FACT_QUERY_FILE_TYPE_UNVERIFIED")
         # A positive file.exists stat has no directory type information.
         # A prior typed inspect/list of this exact path is necessary.
         for prior in reversed(history[:-1]):
