@@ -259,7 +259,11 @@ $scalarKeys = @(
     'critical_context_omitted','diagnostic_count','planner_response_received',
     'goal_condition_id','evidence_classification','next_tool','completion_verified',
     'kind','evidence_ref','authorization_granted',
-    'revision','node_count','graph_digest','checkpoint_name','same_blocker','fresh_repair_attempts','elapsed_sec','elapsed_seconds'
+    'revision','node_count','graph_digest','checkpoint_name','same_blocker','fresh_repair_attempts','elapsed_sec','elapsed_seconds',
+    'operation','operation_valid','proposed_operation','proposal_sha256',
+    'goal_context_sha256','source_requirement','active_goal_gap_count',
+    'prerequisite_transition_stage','terminal_readiness_status',
+    'snapshot_source','next_category','verification_status','result_reason'
 )
 $numericTypes = @('System.Int32','System.Int64','System.Double','System.Decimal','System.Single')
 $timeline = New-Object 'System.Collections.Generic.List[object]'
@@ -371,7 +375,8 @@ try {
                                'decision_codes','pending_action_ids',
                                'admitted_action_ids','changed_fields',
                                'rewrite_rule_ids','planner_failure_action_ids',
-                               'strategy_candidate_route_ids','strategy_candidate_statuses')) {
+                               'strategy_candidate_route_ids','strategy_candidate_statuses',
+                               'proposed_fields')) {
                 $prop = $rec.PSObject.Properties[$key]
                 if ($null -ne $prop -and $null -ne $prop.Value) {
                     $row[$key] = Safe-CodeList $prop.Value
@@ -710,6 +715,35 @@ try {
         }
     })
     Write-Json (Join-Path $stage 'minimal_core_decision_diagnostics.json') @($minimalDecisionDiagnostics)
+    # v10 proposal/decision lineage: only safe field names and operation tokens.
+    # Never export raw model replies, commands, requested paths or tool output.
+    $minimalLineage = @($timeline.ToArray() | Where-Object {
+        $_.event -in @('minimal_action_proposed','minimal_action_admitted',
+                       'minimal_core_action_observed','minimal_goal_action_rejected',
+                       'minimal_goal_driver_context')
+    } | Select-Object -Last 250 | ForEach-Object {
+        [ordered]@{
+            round=$_.round; event=$_.event; task_epoch=$_.task_epoch
+            tool=$_.tool; action_id=$_.action_id
+            operation=$_.operation; operation_valid=$_.operation_valid
+            proposed_operation=$_.proposed_operation
+            proposed_fields=@($_.proposed_fields)
+            proposal_sha256=$_.proposal_sha256
+            goal_context_sha256=$_.goal_context_sha256
+            context_sha256=$_.context_sha256
+            snapshot_source=$_.snapshot_source
+            next_category=$_.next_category
+            prerequisite_transition_stage=$_.prerequisite_transition_stage
+            source_requirement=$_.source_requirement
+            terminal_readiness_status=$_.terminal_readiness_status
+            reason_code=$_.reason_code; repair_mode=$_.repair_mode
+            executed=$_.executed; status=$_.status
+            result_reason=$_.result_reason; verification_status=$_.verification_status
+            evidence_ref=$_.evidence_ref
+            raw_command_included=$false; raw_result_included=$false
+        }
+    })
+    Write-Json (Join-Path $stage 'minimal_core_action_lineage.json') @($minimalLineage)
 
     # Correlate bounded, non-sensitive Planner decisions with explicit
     # Context digests and fail-closed SCR shape checks. No raw reply survives.
@@ -760,7 +794,8 @@ try {
     Write-Json (Join-Path $stage 'planner_contract_diff.json') @($decisionDiffs)
 
     $delivery = @($timeline.ToArray() | Where-Object {
-        $_.event -in @('planner_context_prepared','planner_context_response_correlated')
+        $_.event -in @('planner_context_prepared','planner_context_response_correlated',
+                       'minimal_goal_driver_context')
     } | ForEach-Object {
         [ordered]@{
             source=$_.source; event=$_.event; round=$_.round
@@ -777,6 +812,12 @@ try {
             strategy_candidate_count=$_.strategy_candidate_count
             strategy_candidate_route_ids=@($_.strategy_candidate_route_ids)
             strategy_candidate_statuses=@($_.strategy_candidate_statuses)
+            snapshot_source=$_.snapshot_source
+            next_category=$_.next_category
+            active_goal_gap_count=$_.active_goal_gap_count
+            source_requirement=$_.source_requirement
+            terminal_readiness_status=$_.terminal_readiness_status
+            goal_context_sha256=$_.context_sha256
         }
     })
     Write-Json (Join-Path $stage 'planner_context_delivery.json') @($delivery)
