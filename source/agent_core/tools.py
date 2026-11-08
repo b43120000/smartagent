@@ -168,22 +168,64 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
         requested = str(tool_call.get("path", "") or "").strip()
         info["requested_paths"] = [requested]
         info["scope_source"] = "exact_directory_write_target"
+        # These are Runtime-owned preflight observations, NOT permission grants.
+        info["directory_preconditions"] = {
+            "write_authorization_verdict": "NOT_EVALUATED",
+            "target_binding_verdict": "NOT_EVALUATED",
+            "parent_directory_verdict": "NOT_EVALUATED",
+            "writes_executed": False,
+        }
+        preconditions = info["directory_preconditions"]
         try:
             context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+            # Never bypass ACL/workspace/write-ceiling security, even if a
+            # verified read established that the requested target is absent.
             target = context.require_write(
                 requested, require_absolute=True, forbid_glob=True,
             )
+            preconditions["write_authorization_verdict"] = "AUTHORIZED_BY_EXISTING_POLICY"
             if explicit_paths and not any(target == root for root in explicit_paths):
+                preconditions["target_binding_verdict"] = "TARGET_NOT_EXACT"
                 raise PathSecurityError(
                     "directory_target_not_exact_original_request", requested,
                 )
-            if not target.parent.is_dir():
+            preconditions["target_binding_verdict"] = "EXACT_ORIGINAL_REQUEST_TARGET"
+            # is_dir() collapses FileNotFoundError / NotADirectoryError /
+            # PermissionError to False. Use stat() to preserve the actual
+            # causal precondition failure (still a read, no mutation).
+            try:
+                parent_stat = target.parent.stat()
+            except FileNotFoundError as exc:
+                preconditions["parent_directory_verdict"] = "MISSING"
                 raise PathSecurityError(
                     "directory_parent_not_existing_directory", str(target.parent),
+                ) from exc
+            except NotADirectoryError as exc:
+                preconditions["parent_directory_verdict"] = "NOT_A_DIRECTORY"
+                raise PathSecurityError(
+                    "directory_parent_not_a_directory", str(target.parent),
+                ) from exc
+            except PermissionError as exc:
+                preconditions["parent_directory_verdict"] = "ACCESS_DENIED"
+                raise PathSecurityError(
+                    "directory_parent_access_denied", str(target.parent),
+                ) from exc
+            except OSError as exc:
+                preconditions["parent_directory_verdict"] = "STAT_FAILED"
+                raise PathSecurityError(
+                    "directory_parent_stat_failed", str(target.parent),
+                ) from exc
+            if not stat.S_ISDIR(parent_stat.st_mode):
+                preconditions["parent_directory_verdict"] = "NOT_A_DIRECTORY"
+                raise PathSecurityError(
+                    "directory_parent_not_a_directory", str(target.parent),
                 )
+            preconditions["parent_directory_verdict"] = "EXISTS_AND_IS_DIRECTORY"
             info["resolved_paths"] = [str(target)]
         except (PathSecurityError, ValueError, OSError, RuntimeError) as exc:
             info.update(allowed=False, error=str(exc))
+            if preconditions["write_authorization_verdict"] == "NOT_EVALUATED":
+                preconditions["write_authorization_verdict"] = "REJECTED_OR_UNRESOLVED"
         from .action_readiness import classify_scope_preflight
         info["scope_diagnostic"] = classify_scope_preflight(
             tool, info.get("error", ""), allowed=bool(info["allowed"]),
@@ -1650,11 +1692,23 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         from .tool_result_contract import encode_result
         if not scope.get("allowed") or len(scope.get("resolved_paths") or []) != 1:
             return encode_result(
-                "REJECTED", "DIRECTORY_SCOPE_REJECTED",
+                "REJECTED", "DIRECTORY_SCOPE_REJECTED:" + str(
+                    (scope.get("scope_diagnostic") or {}).get("reason_code")
+                    or "SCOPE_REJECTION_MISSING_CAUSE"
+                ),
                 tool=tool, executed=False, requested_path=tool_call.get("path", ""),
-                data={"scope_reason_code": (
-                    (scope.get("scope_diagnostic") or {}).get("reason_code", "")
-                ), "terminal_eligible": False},
+                data={
+                    "scope_reason_code": (
+                        (scope.get("scope_diagnostic") or {}).get("reason_code", "")
+                    ),
+                    "scope_failure_stage": (
+                        (scope.get("scope_diagnostic") or {}).get("failure_stage", "")
+                    ),
+                    "directory_preconditions": dict(
+                        scope.get("directory_preconditions") or {}
+                    ),
+                    "terminal_eligible": False,
+                },
             )
         target = Path(scope["resolved_paths"][0])
         # One exact directory only; no recursive parent creation.
