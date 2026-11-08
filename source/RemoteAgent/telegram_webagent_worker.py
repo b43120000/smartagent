@@ -735,6 +735,10 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
         if core_minimal:
             os.environ.setdefault("TRI_ONE_TASK_RESULT_V1", "1")
         if terminal.state == "PAUSED":
+            # Handoff is a separate parent-layer state, not the Task Queue
+            # status and not an automatic Goal Stage transition.
+            child_receipt = dict(getattr(loop, "executor_blackboard_terminal", {}) or {})
+            layer_handoff = dict(child_receipt.get("tri_layer_handoff") or {})
             paused_result = {
                 "response": final_content,
                 "task_outcome": terminal.outcome,
@@ -746,7 +750,10 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "artifact_rejections": terminal_payload["artifact_rejections"],
                 "protocol_family": terminal_payload["protocol_family"],
                 "executor_result": dict(getattr(loop, "executor_result", {}) or {}),
-                "executor_blackboard_terminal": dict(getattr(loop, "executor_blackboard_terminal", {}) or {}),
+                "executor_blackboard_terminal": child_receipt,
+                "tri_layer_handoff": layer_handoff,
+                "prerequisite_handoff": dict(layer_handoff.get("prerequisite_handoff") or {}),
+                "goal_stage_handoff": dict(layer_handoff.get("goal_stage_handoff") or {}),
             }
             # Keep the precise Executor pause reason instead of overwriting it
             # with the generic Tri-One terminal projection.
@@ -759,7 +766,28 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             set_runtime_state(task.task_id, "PAUSED",
                               reason=pause_reason, root=root)
             events.emit("TASK_PAUSED", paused, status="PAUSED",
-                        payload={**terminal_payload, "pause_is_nonterminal": True})
+                        payload={
+                            **terminal_payload, "pause_is_nonterminal": True,
+                            "tri_layer_handoff": layer_handoff,
+                            "executor_terminal_status": child_receipt.get("terminal_status", ""),
+                            "goal_stage_completion_inferred": False,
+                        })
+            if layer_handoff:
+                runtime_log.write(
+                    "EXECUTOR_PARENT_HANDOFF_READY",
+                    component="telegram_webagent_worker",
+                    stage="BLACKBOARD_HANDOFF_PUBLISHED",
+                    task_id=task.task_id, request_id=task.request_id,
+                    handoff_id=layer_handoff.get("handoff_id", ""),
+                    executor_terminal_status=child_receipt.get("terminal_status", ""),
+                    prerequisite_handoff_state=(
+                        layer_handoff.get("prerequisite_handoff") or {}
+                    ).get("prerequisite_handoff_state", ""),
+                    goal_stage_handoff_state=(
+                        layer_handoff.get("goal_stage_handoff") or {}
+                    ).get("goal_stage_handoff_state", ""),
+                    parent_owner=layer_handoff.get("next_parent_owner", ""),
+                )
             runtime_log.write(
                 "TASK_PAUSED", component="telegram_webagent_worker",
                 stage="TRI_ONE_EGRESS_PAUSED", task_id=task.task_id,
@@ -792,6 +820,9 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "verification_status": loop.tools.last_verification_status,
                 "executor_result": dict(getattr(loop, "executor_result", {}) or {}),
                 "executor_blackboard_terminal": dict(getattr(loop, "executor_blackboard_terminal", {}) or {}),
+                "tri_layer_handoff": dict(
+                    (getattr(loop, "executor_blackboard_terminal", {}) or {}).get(
+                        "tri_layer_handoff") or {}),
                 "execution_state": loop.execution_state,
                 "protocol_state": loop.protocol_state,
                 "terminal_candidate": dict(loop.terminal_candidate),
