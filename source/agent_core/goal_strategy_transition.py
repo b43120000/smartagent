@@ -185,27 +185,26 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
         if tool == "create_directory" and executed and status == "SUCCEEDED"
         and evidence_status == "ACTIVE" else None
     )
-    verified_absence = bool(directory_observation and directory_observation["exists"] is False)
+    # Reuse the same strict canonical observe_fact validator as the v10
+    # terminal verifier. A confirmed file.exists=False can establish
+    # absence, but file.exists=True alone NEVER proves directory type.
+    fact_observation = None
     if (tool == "observe_fact" and executed and status == "SUCCEEDED"
             and evidence_status == "ACTIVE"):
         from .tool_result_contract import decode_result
-        typed = decode_result(result) or {}
-        data = typed.get("data") or {}
-        observations = data.get("observations")
-        if (typed.get("tool") == "observe_fact" and typed.get("executed") is True
-                and typed.get("action_id") == action.get("action_id")
-                and isinstance(observations, list) and len(observations) == 1
-                and isinstance(observations[0], Mapping)):
-            fact = observations[0]
-            verified_absence = (
-                fact.get("schema") == "SMARTAGENT_EVIDENCE_V1"
-                and fact.get("field") == "file.exists"
-                and fact.get("source") == "filesystem.stat"
-                and fact.get("freshness") == "CURRENT"
-                and fact.get("raw_evidence_ref") == action.get("action_id")
-                and fact.get("observation_status") == "CONFIRMED"
-                and fact.get("value") is False
-            )
+        from .tri_one_runtime_terminal import _confirmed_exists_fact, _normal_path
+        target = _normal_path(action.get("path"))
+        typed = decode_result(result) if target else None
+        if isinstance(typed, Mapping):
+            exists = _confirmed_exists_fact(
+                {"action": action, "receipt": typed}, target)
+            if type(exists) is bool:
+                fact_observation = {
+                    "kind": "file.exists", "exists": exists,
+                    "path": str(action.get("path") or ""),
+                }
+    observation = directory_observation or fact_observation
+    verified_absence = bool(observation and observation["exists"] is False)
     base = {
         "tool": tool, "result_status": status,
         "verification_status": verification,
@@ -218,11 +217,11 @@ def classify_runtime_evidence(record: Mapping, original: Mapping | None = None) 
         "authorizes_execution": False,
         "goal_completion_verified": False,
         "environment_observation_kind": (
-            directory_observation["kind"] if directory_observation else ""),
+            observation["kind"] if observation else ""),
         "environment_observed_exists": (
-            directory_observation["exists"] if directory_observation else None),
+            observation["exists"] if observation else None),
         "environment_observed_path": (
-            directory_observation["path"] if directory_observation else ""),
+            observation["path"] if observation else ""),
         "goal_condition_link_verified": False,
     }
     scope_classification = (
