@@ -293,7 +293,7 @@
     "source/agent_core/executor_blackboard.py": "1b2fdb5e6ef257e848d1a361e27fe01291b8033e6ff93037b51094f9342449ab",
     "source/agent_core/tri_layer_handoff.py": "b3f1d0208e1f9e962d742efca4ddaac2e657e98233ec8510f3b221451c7976f9",
     "source/WebAgent/executor_only_validation.py": "d44af0f7c6e28c32d376d340d41d23339ecd14c9349646b5df2fd753bd589d4d",
-    "source/WebAgent/pokeclaw_executor_loop.py": "c0ffba90119673fa8fca731495fd2db3d5684fab1f293e0d157d67e26dfb64bb",
+    "source/WebAgent/pokeclaw_executor_loop.py": "7ad2748f5999a49cfd7031a5a4bbf8c96bc469696dffd68d223612ebdc810af2",
     "source/agent_core/executor_run_blackboard.py": "335f2fcc075a11f4e1a9a7bff852f1d3545e24bd66a0108736529eed5a74dc0d"
   },
   "manifest_schema_version": 1,
