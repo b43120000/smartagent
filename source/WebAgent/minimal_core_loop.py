@@ -495,9 +495,14 @@ def run_minimal_core(loop, request: str) -> str:
             ]
             value["verification_action_refs"] = verification_action_refs
             value["tool_evidence_refs"] = tool_evidence_refs
-            proof_refs = list(dict.fromkeys(
-                verification_action_refs + list(value.get("evidence_refs") or [])
-            ))[:48]
+            proof_refs = (
+                list(dict.fromkeys(
+                    verification_action_refs + list(value.get("evidence_refs") or [])
+                ))[:48]
+                if executor_sequence else
+                verification_action_refs if outcome == "VERIFIED"
+                else list(value.get("evidence_refs") or [])
+            )
             if executor_only:
                 value["orchestration_mode"] = "EXECUTOR_ONLY"
             persisted = publish_executor_terminal(
