@@ -20,6 +20,7 @@ from agent_core.conversation_registry import ConversationRegistry
 from agent_core.remote_events import RemoteEventStore
 from agent_core.remote_runtime_log import RemoteRuntimeLog
 from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+from agent_core.tri_one_runtime_terminal import terminal_verdict_from_loop
 from agent_core.paths import (install_root, remote_events_path, remote_execution_page_lock_path, remote_control_output_root, remote_runtime_log_path, remote_skill_context_root, remote_tasks_path, remote_webagent_state_root, remote_workers_root)
 from agent_core.task_transport import resolve_task_execution_chatgpt_url
 from agent_core.plan_ledger import PlanLedger, publish_completed_plan
@@ -654,23 +655,37 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 remaining_owners=int(handoff["remaining_owners"]),
             )
         elapsed = round(time.time() - started_at, 3)
-        progress_snapshot = read_progress(task.task_id, root=root)
-        final_content, plan_id = publish_completed_plan(
-            ledger=PlanLedger.from_task_store(remote_tasks_path(root)),
-            task=task,
-            final_summary=final_content,
-            progress=progress_snapshot,
-            authorized_paths=loop.authorized_paths,
+        core_minimal = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() != "legacy_v9"
+        # One Runtime terminal decision is shared by all Tri-One ingress routes.
+        # Worker/transports are not authorized to recalculate goal completion.
+        terminal = terminal_verdict_from_loop(loop, minimal=core_minimal)
+        runtime_log.write(
+            "STATUS", component="telegram_webagent_worker",
+            stage="TRI_ONE_TERMINAL_RECONCILED",
+            task_id=task.task_id, request_id=task.request_id,
+            runtime_state=terminal.state, task_outcome=terminal.outcome,
+            terminal_reason=terminal.reason,
+            receipt_id=str(terminal.receipt.get("receipt_id") or ""),
         )
-        if plan_id:
-            runtime_log.write(
-                "STATUS",
-                component="telegram_webagent_worker",
-                stage="PLAN_PUBLISHED",
-                task_id=task.task_id,
-                request_id=task.request_id,
-                plan_id=plan_id,
+        progress_snapshot = read_progress(task.task_id, root=root)
+        plan_id = ""
+        if terminal.is_complete:
+            final_content, plan_id = publish_completed_plan(
+                ledger=PlanLedger.from_task_store(remote_tasks_path(root)),
+                task=task,
+                final_summary=final_content,
+                progress=progress_snapshot,
+                authorized_paths=loop.authorized_paths,
             )
+            if plan_id:
+                runtime_log.write(
+                    "STATUS",
+                    component="telegram_webagent_worker",
+                    stage="PLAN_PUBLISHED",
+                    task_id=task.task_id,
+                    request_id=task.request_id,
+                    plan_id=plan_id,
+                )
         outbound = loop.tools.take_outbound_artifacts()
         if source_transport == "WEBGPT_COPILOT":
             # WebCopilot delivers TEXT through its original WebGPT outbox.
@@ -693,22 +708,60 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 expect_artifact=False if plan_id else None,
             )
         terminal_payload["plan_id"] = plan_id
-        terminal_payload['task_outcome'] = loop.terminal_outcome
-        terminal_payload['terminal_acceptance'] = dict(getattr(loop, 'terminal_acceptance', {}) or {})
-        core_minimal = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() != "legacy_v9"
-        goal_verified = loop.terminal_outcome == "SUCCESS"
-        # Queue processing may finish even when the user's actual goal was not
-        # proved. Do not label a model-only finish as goal COMPLETED.
-        task_state_label = "PAUSED" if core_minimal and not goal_verified else "COMPLETED"
-        terminal_payload['summary'] = render_task_reply(
-            original_request=loop.task_request, base=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
-            conclusion=terminal_payload['summary'], task_id=task.task_id, request_id=task.request_id,
-            state=task_state_label, outcome=loop.terminal_outcome,
-            terminal_acceptance=loop.terminal_acceptance,
-            source_task_id=(loop.continuation_source or {}).get('task_id', ''))
+        terminal_payload["task_outcome"] = terminal.outcome
+        terminal_payload["terminal_acceptance"] = dict(terminal.receipt)
+        terminal_payload["runtime_state"] = terminal.state
+        terminal_payload["terminal_reason"] = terminal.reason
+        terminal_payload["protocol_family"] = (
+            "SMARTAGENT_MINIMAL_CORE_V10" if core_minimal else "SMARTAGENT_V9"
+        )
+        terminal_payload["summary"] = render_task_reply(
+            original_request=loop.task_request,
+            base=str(getattr(loop.progress_ledger, "base_evaluation", "") or ""),
+            conclusion=terminal_payload["summary"],
+            task_id=task.task_id,
+            request_id=task.request_id,
+            state=terminal.state,
+            outcome=terminal.outcome,
+            terminal_acceptance=terminal.receipt,
+            source_task_id=(loop.continuation_source or {}).get("task_id", ""),
+        )
         final_content = terminal_payload["summary"]
         if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
             raise RemoteTaskCancelled("telegram_interrupt_requested")
+        # A paused/unknown goal is nonterminal. Never queue.complete() it
+        # or delete its progress, even if the model emitted a Finish summary.
+        # The result is delivered through the same source-owned event/outbox.
+        if core_minimal:
+            os.environ.setdefault("TRI_ONE_TASK_RESULT_V1", "1")
+        if terminal.state == "PAUSED":
+            paused_result = {
+                "response": final_content,
+                "task_outcome": terminal.outcome,
+                "terminal_acceptance": {},
+                "intent_digest": loop.intent_digest,
+                "action_result_ledger": dict(loop.action_result_ledger),
+                "condition_result_ledger": dict(loop.condition_result_ledger),
+                "outbound_artifacts": terminal_payload["artifacts"],
+                "artifact_rejections": terminal_payload["artifact_rejections"],
+                "protocol_family": terminal_payload["protocol_family"],
+            }
+            paused = queue.pause_running(
+                task.task_id, terminal.reason, result=paused_result)
+            if paused is None:
+                raise RuntimeError("TRI_ONE_PAUSE_STATE_TRANSITION_FAILED")
+            set_runtime_state(task.task_id, "PAUSED",
+                              reason=terminal.reason, root=root)
+            events.emit("TASK_PAUSED", paused, status="PAUSED",
+                        payload={**terminal_payload, "pause_is_nonterminal": True})
+            runtime_log.write(
+                "TASK_PAUSED", component="telegram_webagent_worker",
+                stage="TRI_ONE_EGRESS_PAUSED", task_id=task.task_id,
+                request_id=task.request_id, terminal_reason=terminal.reason)
+            return 0
+        if terminal.state != "COMPLETED":
+            raise RuntimeError("TRI_ONE_TERMINAL_NOT_COMPLETED:" + terminal.reason)
+
         completed = queue.complete(
             task.task_id,
             result={
@@ -727,8 +780,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "uploaded_attachments": list(loop.sent_attachment_paths),
                 "outbound_artifacts": terminal_payload["artifacts"],
                 "artifact_rejections": terminal_payload["artifact_rejections"],
-                "task_outcome": loop.terminal_outcome,
-                "terminal_acceptance": dict(getattr(loop, 'terminal_acceptance', {}) or {}),
+                "task_outcome": terminal.outcome,
+                "terminal_acceptance": dict(terminal.receipt),
                 "verification_status": loop.tools.last_verification_status,
                 "execution_state": loop.execution_state,
                 "protocol_state": loop.protocol_state,
