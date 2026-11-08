@@ -719,8 +719,8 @@ try {
     # Never export raw model replies, commands, requested paths or tool output.
     $minimalLineage = @($timeline.ToArray() | Where-Object {
         $_.event -in @('minimal_action_proposed','minimal_action_admitted',
-                       'minimal_core_action_observed','minimal_goal_action_rejected',
-                       'minimal_goal_driver_context')
+                       'minimal_action_semantic_rewrite','minimal_core_action_observed',
+                       'minimal_goal_action_rejected','minimal_goal_driver_context')
     } | Select-Object -Last 250 | ForEach-Object {
         [ordered]@{
             round=$_.round; event=$_.event; task_epoch=$_.task_epoch
@@ -737,6 +737,7 @@ try {
             source_requirement=$_.source_requirement
             terminal_readiness_status=$_.terminal_readiness_status
             reason_code=$_.reason_code; repair_mode=$_.repair_mode
+            rewrite_reason_code=$_.rewrite_reason_code
             executed=$_.executed; status=$_.status
             result_reason=$_.result_reason; verification_status=$_.verification_status
             evidence_ref=$_.evidence_ref
@@ -793,6 +794,8 @@ try {
                                     reason=(Safe-Code $rec.reason)
                                     repair_mode=(Safe-Code $rec.repair_mode)
                                     proposed_operation=(Safe-Code $rec.proposed_operation)
+                                    canonical_operation=(Safe-Code $rec.canonical_operation)
+                                    rewrite_reason_code=(Safe-Code $rec.rewrite_reason_code)
                                     proposal_sha256=(Safe-Code $rec.proposal_sha256)
                                     fingerprint=(Safe-Code $rec.fingerprint)
                                     context_sha256=(Safe-Code $rec.context_sha256)
@@ -1135,6 +1138,7 @@ try {
                       'action_evidence_recorded',
                       'tool_failure_causal_receipt_recorded',
                       'minimal_action_proposed','minimal_action_admitted',
+                      'minimal_action_semantic_rewrite',
                       'minimal_core_action_observed','minimal_goal_action_rejected')
     } | ForEach-Object {
         [ordered]@{
