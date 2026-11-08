@@ -430,9 +430,22 @@ def run_minimal_core(loop, request: str) -> str:
             # Goal-Driven repair is allowed only when evidence/known gaps
             # indicate a legitimate further operation, not for unknown prose.
             pending_gaps = list(goal_context.get("active_goal_gaps") or [])
+            # An already complete deployment root may have zero missing Goal
+            # gaps but still lacks the independently bound VERIFY receipt.
+            # Refuse premature Finish and permit one evidence-guided repair.
+            pending_deployment_proof = (
+                bool(goal_context.get("target_contract", {}).get(
+                    "required_top_level_entries"))
+                and proof.reason in {
+                    "EXACT_ROOT_INDEPENDENT_VERIFY_REQUIRED",
+                    "VERIFY_SOURCE_ACTION_NOT_OBSERVED",
+                    "VERIFY_LEDGER_IDENTITY_OR_STATUS_INVALID",
+                    "EXACT_ROOT_REUSE_VERIFY_NOT_LINKED",
+                }
+            )
             can_replan = (
                 goal_context.get("request_route") != "ANSWER_ONLY"
-                and bool(history) and bool(pending_gaps)
+                and bool(history) and (bool(pending_gaps) or pending_deployment_proof)
                 and consecutive_unverified_finishes < 1
             )
             journal.append("model_finish_rejected", round=round_id,
@@ -446,6 +459,14 @@ def run_minimal_core(loop, request: str) -> str:
                     "Tool actions to close them. Do NOT claim success or "
                     "repeat a denied action without changed evidence."
                 )
+                if pending_deployment_proof:
+                    repair_hint += (
+                        " This deployment has an exact target but no accepted "
+                        "independent content VERIFY. Use an admitted read-only "
+                        "VERIFY action with exact target working_directory, "
+                        "a current successful verifies_action_id and real verify "
+                        "checks. Do not invent IDs, alter files or bypass scope."
+                    )
                 journal.append("goal_driven_replan_requested", round=round_id,
                                reason="GOAL_GAPS_UNRESOLVED",
                                gap_count=len(pending_gaps))
