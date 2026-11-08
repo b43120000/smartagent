@@ -39,6 +39,8 @@ jobs:
           source/WebAgent/tests/test_git33_pokeclaw_executor_loop.py
       - name: Git33 generic Executor, Blackboard and safety
         run: python -B -m pytest source/WebAgent/tests/test_git33_pokeclaw_executor_loop.py -q
+      - name: Git32 specialized sequence removal compatibility
+        run: python -B -m pytest source/WebAgent/tests/test_git32_executor_only_sequence.py -q
       - name: Git31 fact query regression (legacy mode)
         run: python -B -m pytest source/WebAgent/tests/test_git31_single_fact_query_terminal.py -q
       - name: Git30 security reason and Blackboard (legacy mode)
