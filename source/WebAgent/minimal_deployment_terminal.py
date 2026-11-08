@@ -73,7 +73,7 @@ def _pinned_blob_integrity(target: str, scope, required: list[str]) -> tuple[boo
             payload = resolved.read_bytes()
             total += len(payload)
             blob = hashlib.sha1(
-                b"blob " + str(len(payload)).encode("ascii") + b"\\x00" + payload
+                b"blob " + str(len(payload)).encode("ascii") + b"\x00" + payload
             ).hexdigest()
             if blob != expected:
                 return False, "PINNED_SOURCE_BLOB_MISMATCH"
