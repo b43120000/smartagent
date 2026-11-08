@@ -279,8 +279,8 @@
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "source/WebAgent/minimal_decision.py": "f2d044c70a63145820fc668fbedfa4b5a243988ad89eca5eac4ceebdfec644fc",
     "source/WebAgent/minimal_admission.py": "85a8b1b4501b30154d8eb561010d4f27dc2cd6b25d717381e140de9a19736271",
-    "source/WebAgent/minimal_core_loop.py": "2a73b8c5c0da5a96b730b23edfc22e487985060a9b0e9c5230d074b520297419",
-    "source/agent_core/tri_one_runtime_terminal.py": "f4ed57b0cc0ca77555e7291625cfe97975a8140a1f02f3c7743823858ffffcf7",
+    "source/WebAgent/minimal_core_loop.py": "71e0e3deca7b026823a066a1fc1667cbf81bd435cdbac060d8cb2ff6f7026427",
+    "source/agent_core/tri_one_runtime_terminal.py": "8cbd35a13c2ac4c8b521b88ed25f11749050304799f421266a75689ba4e7cc78",
     "source/agent_core/test_signal_transport.py": "4e64cae2fa4cd89d4ff21c554dd83e57371f8fedbabc670f3f782b6d6de43d22",
     "source/WebAgent/minimal_goal_driver.py": "f7d58f8fe27a15916aceb2c34a0ebbd34e0ca2615a0778ffa3ecae59af41436b",
     "source/WebAgent/minimal_deployment_terminal.py": "c7787987cb61876a328c648d9036f52976165fec649e3db8aa3b627563f05261",
@@ -290,8 +290,8 @@
     ".github/workflows/git26-v10-case-d-repair.yml": "65f146220f1acad0a9ec0a8f3bdd0f09ee9f22abc7ace1e0e09181166a591bf8",
     "source/WebAgent/minimal_executor_contract.py": "6751315a3c1e5898c98a38dcb3209deb93ad871b7040fd31637508643f3c56e7",
     "source/WebAgent/minimal_resolution.py": "9c7562a548c8cea3a4b7c5113b63c1f7339cc865de6e6fd581ef538a715cf889",
-    "source/agent_core/executor_blackboard.py": "8ce5272faa11dccca4992d3c4982e9d3970ea2a5c4df75589058b2462249deb5",
-    "source/agent_core/tri_layer_handoff.py": "ffc56c79d84e9e8ab7733c88595b7404332bb1a4434c0876e4614e7cdedbe4a3"
+    "source/agent_core/executor_blackboard.py": "15df554634d58474bd46f244f1b46da2d54eddbd69a5d384594d78ae80f51472",
+    "source/agent_core/tri_layer_handoff.py": "22887fb98d545e1e02c99e5769da1c42552a8a87cd04b654e07197bce62b9520"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
