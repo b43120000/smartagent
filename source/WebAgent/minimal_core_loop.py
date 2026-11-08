@@ -706,11 +706,14 @@ def run_minimal_core(loop, request: str) -> str:
                     if executor_sequence else None
                 )
                 set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
-                summary = (summary or format_runtime_goal_summary(proof)
-                           if proof.goal_kind in {
-                               "SINGLE_CREATE_DIRECTORY", "CONDITIONAL_DIRECTORY_EXISTS",
-                               "DEPLOYMENT_CONTENT_VERIFIED", "SINGLE_FACT_QUERY",
-                           } else decision.message)
+                if summary is None:
+                    summary = (
+                        format_runtime_goal_summary(proof)
+                        if proof.goal_kind in {
+                            "SINGLE_CREATE_DIRECTORY", "CONDITIONAL_DIRECTORY_EXISTS",
+                            "DEPLOYMENT_CONTENT_VERIFIED", "SINGLE_FACT_QUERY",
+                        } else decision.message
+                    )
                 journal.append("model_finish", round=round_id,
                                outcome="SUCCESS", verified=True,
                                evidence_refs=list(proof.evidence_refs),
