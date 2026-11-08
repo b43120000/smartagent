@@ -258,6 +258,30 @@ def run_minimal_core(loop, request: str) -> str:
             (action["action_id"] + "\0" + result_digest).encode("utf-8")
         ).hexdigest()[:24]
         history.append({"action": action, "receipt": receipt, "evidence_ref": ref})
+        # Publish the same observed result into the shared Runtime action ledger.
+        # Neither the model's summary nor the synthetic ref creates proof:
+        # the immutable real ToolResult and digest are retained locally.
+        data = receipt.get("data") if isinstance(receipt.get("data"), dict) else {}
+        verification = str(data.get("verification_status", "UNVERIFIED") or "UNVERIFIED")
+        loop.action_result_ledger[action["action_id"]] = {
+            "action_id": action["action_id"],
+            "tool": action["tool"],
+            "request_id": loop.run_id,
+            "task_id": loop.task_id,
+            "task_epoch": loop.task_epoch,
+            "produced_round": round_id,
+            "result_id": ref,
+            "result": str(result),
+            "result_sha256": result_digest,
+            "result_status": receipt.get("status", "UNKNOWN"),
+            "result_reason": receipt.get("reason", "UNKNOWN"),
+            "execution_status": receipt.get("status", "UNKNOWN"),
+            "verification_status": verification,
+            "effective_verification_status": verification,
+            "executed": receipt.get("executed") is True,
+            "evidence_status": "ACTIVE",
+            "evidence_ref": ref,
+        }
         journal.append("action_observed", round=round_id, tool=action["tool"],
                        action_id=action["action_id"], fingerprint=fingerprint,
                        result_sha256=result_digest, evidence_ref=ref,
@@ -270,6 +294,10 @@ def run_minimal_core(loop, request: str) -> str:
                    status=receipt.get("status", "UNKNOWN"), evidence_ref=ref,
                    executed=receipt.get("executed") is True)
         loop.protocol_state = "OBSERVED"
+        if loop.continuation_store:
+            # A fresh action result must be present before a continuation
+            # checkpoint is considered complete.
+            loop.continuation_store.snapshot(loop)
         if receipt.get("status") in {"UNKNOWN", "RUNNING"}:
             repair_hint = ("Last action outcome is uncertain or running. "
                            "Observe current state; NEVER replay a mutation blindly.")
