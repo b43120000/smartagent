@@ -7224,6 +7224,21 @@ class WebAgentProtocolLoop:
             selection_owner="WEBGPT",
         )
 
+        # New default main architecture: one model JSON decision at a time.
+        # The previous v9 multi-block transport is retained only as an explicit
+        # rollback option; this is not a per-tool fast-path.
+        core_mode = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower()
+        if core_mode not in {"minimal", "legacy_v9"}:
+            raise ValueError("SMARTAGENT_CORE_LOOP must be minimal or legacy_v9")
+        if core_mode == "minimal":
+            from .minimal_core_loop import run_minimal_core
+            self._emit(
+                "minimal_core_selected", request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, state_owner="RUNTIME",
+                planner_transport="SINGLE_JSON_DECISION",
+            )
+            return run_minimal_core(self, request)
+
         for _ in range(self.max_turns):
             self._check_cancelled()
             # Only a continuous stretch of rejected Planner turns without
