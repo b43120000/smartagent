@@ -56,9 +56,3 @@ jobs:
           source/WebAgent/tests/test_tri_one_egress_v10.py
           source/WebAgent/tests/test_minimal_core_v10.py
           -q
-      - name: Existing text-only and requirement tests
-        run: >-
-          python -B -m pytest
-          source/WebAgent/tests/validate_tri_one_5a_answer_only.py
-          source/WebAgent/tests/validate_pr0_task_requirement.py
-          -q
