@@ -208,3 +208,106 @@ def test_pre_resume_no_challenge_when_no_paused_pending_command(tmp_path):
                    goal="task",workspace=tmp_path,owner=owner)
     store.finish(source,"PAUSED","no pending")
     assert begin(tmp_path,source,owner,tmp_path) is None
+
+
+def test_superseded_resume_button_cannot_enqueue_child(tmp_path):
+    owner="telegram:123:456"
+    source, action, _=setup_source(tmp_path,owner,tmp_path)
+    gate=ResumeCommandGate(tmp_path)
+    first=begin(tmp_path,source,owner,tmp_path)
+    later=begin(tmp_path,source,owner,tmp_path)
+    assert first["approval_id"] != later["approval_id"]
+    assert gate.public(first["approval_id"])["state"]=="SUPERSEDED"
+    with pytest.raises(ResumeApprovalError,match="already_decided"):
+        gate.decide(first["approval_id"],allowed=True,owner=owner,channel_id="456")
+    assert gate.public(later["approval_id"])["state"]=="PENDING"
+
+
+def test_telegram_software_prompt_and_callback_queue_only_after_choice(tmp_path):
+    from agent_core.transport_message import NormalizedInboundMessage
+    from RemoteAgent.telegram_transport import TelegramReceiver
+
+    owner="telegram:123:456"
+    source, action, _=setup_source(tmp_path,owner,tmp_path)
+    sent=[]
+    enqueued=[]
+    accepted_events=[]
+    class Client:
+        def send_message(self,chat_id,text,**kwargs):
+            sent.append((chat_id,text,kwargs))
+            return {"ok":True}
+    class Gateway:
+        def accept(self, inbound, *, workspace):
+            enqueued.append((inbound,workspace))
+            return SimpleNamespace(
+                task=SimpleNamespace(
+                    task_id="TASK-"+"D"*20, state="QUEUED",
+                ),
+                created=True, session_id="SEC-ONE",
+            )
+    receiver=TelegramReceiver(
+        config=SimpleNamespace(workspace=str(tmp_path),validate=lambda:None),
+        client=Client(), offset_store=SimpleNamespace(),
+        ingress=Gateway(), runtime_log=None,
+        task_admission_guard=lambda message:(True,""),
+        accepted_handler=lambda task:accepted_events.append(task.task_id),
+        install_root=tmp_path,
+    )
+    parent=NormalizedInboundMessage(
+        transport="TELEGRAM",endpoint="api.telegram.org",
+        conversation_key="telegram://chat/456",
+        sender_id="123",source_message_id="99",
+        text=f"接續工作 {source}", received_at=123456.0,
+        idempotency_key="TG-IDEMPOTENT-99",
+        reply_context={"chat_id":456,"message_id":99},metadata={},
+    )
+    assert receiver._offer_pre_resume_decision(parent,update_id=1)
+    assert not enqueued and not accepted_events
+    assert "允許執行一次" in sent[0][2]["reply_markup"]["inline_keyboard"][0][0]["text"]
+    gate=ResumeCommandGate(tmp_path)
+    challenge=next(iter(gate._load()["challenges"].values()))
+    approval_id=challenge["approval_id"]
+    choice=NormalizedInboundMessage(
+        transport=parent.transport,endpoint=parent.endpoint,
+        conversation_key=parent.conversation_key,
+        sender_id=parent.sender_id,source_message_id="callback-1",
+        text="security_approve_once "+approval_id,received_at=123500.0,
+        idempotency_key="TG-CB-1",
+        reply_context={"chat_id":456,"message_id":101}, metadata={},
+    )
+    assert receiver._process_pre_resume_choice(choice,update_id=2)
+    assert len(enqueued)==1
+    assert enqueued[0][0].metadata["resume_approval_id"]==approval_id
+    assert accepted_events==["TASK-"+"D"*20]
+    assert gate._load()["challenges"][approval_id]["child_task_id"]=="TASK-"+"D"*20
+    assert gate.public(approval_id)["state"]=="APPROVED"
+    assert not any("python check.py" in text for _,text,_ in sent[1:])
+
+
+def test_telegram_wrong_user_cannot_accept_resume(tmp_path):
+    from agent_core.transport_message import NormalizedInboundMessage
+    from RemoteAgent.telegram_transport import TelegramReceiver
+    owner="telegram:123:456"
+    source, action, _=setup_source(tmp_path,owner,tmp_path)
+    gate=ResumeCommandGate(tmp_path)
+    pre=begin(tmp_path,source,owner,tmp_path)
+    enqueued=[]
+    class FakeClient:
+        def send_message(self,*args,**kwargs): return {"ok":True}
+    receiver=TelegramReceiver(
+        config=SimpleNamespace(workspace=str(tmp_path),validate=lambda:None),
+        client=FakeClient(), offset_store=SimpleNamespace(),
+        ingress=SimpleNamespace(accept=lambda *a,**kw:enqueued.append(True)),
+        install_root=tmp_path,
+    )
+    stolen=NormalizedInboundMessage(
+        transport="TELEGRAM",endpoint="api.telegram.org",
+        conversation_key="telegram://chat/456",
+        sender_id="999",source_message_id="callback-2",
+        text="security_approve_once "+pre["approval_id"],
+        received_at=123500.,idempotency_key="TG-CB-OTHER",
+        reply_context={"chat_id":456,"message_id":103},metadata={},
+    )
+    assert receiver._process_pre_resume_choice(stolen,update_id=3)
+    assert enqueued==[]
+    assert gate.public(pre["approval_id"])["state"]=="PENDING"

@@ -552,6 +552,16 @@ def main():
                 _poll_webcopilot_task_states(task_queue, tracked_tasks, page)
                 if pending_resume is not None:
                     approval_id = pending_resume["approval_id"]
+                    if time.time() >= float(pending_resume["expires_at"]):
+                        close_resume_dialog(page, approval_id)
+                        _present_webcopilot_notice(
+                            page,
+                            "接續授權等待已超過10分鐘；沒有執行指令。"
+                            "請重新輸入「接續工作 TASK-ID」開啟新確認。",
+                            "error",
+                        )
+                        pending_resume = None
+                        continue
                     show_resume_dialog(
                         page, pending_resume,
                         format_resume_approval_prompt(pending_resume),

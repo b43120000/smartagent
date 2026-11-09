@@ -207,6 +207,12 @@ class ResumeCommandGate:
                 "state": "PENDING", "child_task_id": "",
                 "expires_at": record["expires_at"],
             }
+            for other in obj["challenges"].values():
+                if (other.get("source_task_id") == source_id
+                        and other.get("state") == "PENDING"):
+                    # Re-submitting a continuation supersedes old buttons;
+                    # the former APR can never enqueue an additional child.
+                    other["state"] = "SUPERSEDED"
             obj["challenges"][record["approval_id"]] = challenge
             self._save(obj)
         return self.public(record["approval_id"])
