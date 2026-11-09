@@ -209,8 +209,15 @@ def is_valid_turbo_root(path: str | Path, workspace: str | Path,
                         denied_write_roots=()) -> bool:
     """Turbo is an opt-in within an *existing* writable workspace, never ACL."""
     try:
-        target = Path(path).expanduser().resolve(strict=True)
-        root = Path(workspace).expanduser().resolve(strict=True)
+        # Check original path components BEFORE resolving symlinks/junctions.
+        # Otherwise an in-root symlink can disappear from a canonicalized path.
+        requested = Path(path).expanduser().absolute()
+        parent = Path(workspace).expanduser().absolute()
+        if not is_within(requested, parent):
+            return False
+        reject_reparse_components(requested, parent)
+        target = requested.resolve(strict=True)
+        root = parent.resolve(strict=True)
         if not target.is_dir() or not root.is_dir() or target == root:
             return False
         if not is_within(target, root):
@@ -229,7 +236,8 @@ def is_valid_turbo_root(path: str | Path, workspace: str | Path,
         return False
 
 
-def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None) -> dict:
+def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
+                     expected_revision: int | None = None) -> dict:
     """Atomic shared policy; Telegram and Workspace Manager read same source.
 
     The exact writable workspace is supplied by the authenticated caller.
@@ -239,6 +247,9 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None) -> dic
     lock = policy_path.with_name("workspace_access_policy.lock")
     with exclusive_process_lock(lock, label="turbo-workspace-policy"):
         current = load_workspace_access_policy()
+        if (expected_revision is not None and
+                int(current.get("revision", 0) or 0) != expected_revision):
+            raise RuntimeError("turbo_policy_concurrent_update_detected")
         writable = current["writable_workspaces"]
         read_only = current["read_only_roots"]
         denied = current["denied_write_roots"]
@@ -281,7 +292,8 @@ def set_turbo_root(path: str | Path, *, workspace: str | Path,
             path, parent, existing["writable_workspaces"],
             existing["read_only_roots"], existing["denied_write_roots"]):
         raise ValueError("turbo_root_not_strict_writable_workspace_child")
-    return save_turbo_roots(candidates)
+    return save_turbo_roots(candidates,
+                            expected_revision=int(existing.get("revision", 0) or 0))
 
 def require_writable_workspace(path: str | Path) -> str:
     candidate = str(Path(path).expanduser().resolve())
