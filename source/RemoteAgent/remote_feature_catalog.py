@@ -116,7 +116,8 @@ def command_for_remote_callback(data: str) -> str | None:
 def security_approval_inline_keyboard(approval_id: str, *, allow_permanent: bool = False, approval_kind: str = "DELETE") -> dict:
     value = str(approval_id or "")
     kind = str(approval_kind or "DELETE").upper()
-    approve_label = "允許執行一次" if kind in {"EXECUTION", "UNKNOWN_COMMAND", "RESUME_UNKNOWN_COMMAND"} else "確認刪除一次"
+    approve_label = ("允許本任務同類指令" if kind in {"UNKNOWN_COMMAND", "RESUME_UNKNOWN_COMMAND"}
+                     else "允許執行一次" if kind == "EXECUTION" else "確認刪除一次")
     rows = [[
         {"text": approve_label, "callback_data": SECURITY_APPROVAL_CALLBACK_PREFIX + value},
         {"text": "拒絕", "callback_data": SECURITY_REJECT_CALLBACK_PREFIX + value},
