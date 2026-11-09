@@ -80,6 +80,7 @@ def _safe_archive_members(archive: Path) -> bool:
         count = 0
         total = 0
         paths = set()
+        regular_files = set()
         with tarfile.open(archive, mode="r:*") as source:
             for entry in source:
                 count += 1
@@ -91,15 +92,29 @@ def _safe_archive_members(archive: Path) -> bool:
                         or any(p == ".." for p in name.split("/"))):
                     return False
                 parts = [p for p in name.split("/") if p and p != "."]
-                if not parts or any(part.rstrip(". ").upper() in {
-                    "CON", "PRN", "AUX", "NUL", *("COM" + str(i) for i in range(1, 10)),
-                    *("LPT" + str(i) for i in range(1, 10)),
-                } for part in parts):
+                if not parts:
                     return False
+                reserved = {"CON", "PRN", "AUX", "NUL"} | {
+                    prefix + str(i) for prefix in ("COM", "LPT") for i in range(1, 10)
+                }
+                for part in parts:
+                    if (len(part) > 255 or part != part.rstrip(" .")
+                            or any(ord(ch) < 32 or ch in '<>:"|?*' for ch in part)
+                            or part.split(".", 1)[0].upper() in reserved):
+                        return False
                 normalized = "/".join(parts).casefold()
                 if normalized in paths:
                     return False
+                for i in range(1, len(parts)):
+                    if "/".join(parts[:i]).casefold() in regular_files:
+                        return False
+                if entry.isfile() and any(
+                    known.startswith(normalized + "/") for known in paths
+                ):
+                    return False
                 paths.add(normalized)
+                if entry.isfile():
+                    regular_files.add(normalized)
                 total += max(0, entry.size)
                 if total > 512 * 1024 * 1024:
                     return False
