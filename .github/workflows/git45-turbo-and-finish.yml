@@ -46,6 +46,15 @@ jobs:
           source/RemoteAgent/telegram_transport.py
           source/WebAgent/pokeclaw_executor_loop.py
           source/WebAgent/minimal_core_loop.py
+      - name: Collector PowerShell syntax (Windows 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $script = [IO.File]::ReadAllText('collect.bat')
+          $marker = '# POWERSHELL_BEGIN'
+          $index = $script.LastIndexOf($marker, [StringComparison]::Ordinal)
+          if ($index -lt 0) { throw 'Missing PowerShell collector marker' }
+          [ScriptBlock]::Create($script.Substring($index + $marker.Length)) | Out-Null
       - name: Git45 P0/P1 runtime unit and regression
         run: python -B -m pytest source/WebAgent/tests/test_git45_turbo_policy_and_finish_status.py -q
       - name: Git44 Telegram Manager Turbo form tests
