@@ -501,7 +501,24 @@ def _security_menu() -> int:
     writable = list(snapshot["writable_workspaces"])
     read_only = _editable_read_only(snapshot)
     turbo = list(snapshot.get("turbo_roots") or ())
+    baseline = (list(writable), list(read_only), list(turbo))
+    base_revision = int(snapshot["policy"].get("revision", 0) or 0)
     while True:
+        # Telegram/WebGPT and this Manager share one policy file. Never apply
+        # a stale, locally edited draft over a newer external configuration.
+        latest_revision = int(load_workspace_access_policy().get("revision", 0) or 0)
+        if latest_revision != base_revision:
+            if (writable, read_only, turbo) != baseline:
+                print("[!] Workspace policy changed externally while editing; "
+                      "reopen this menu before applying to avoid lost changes.")
+                return 3
+            snapshot = access_snapshot()
+            profile = snapshot["profile"]
+            writable = list(snapshot["writable_workspaces"])
+            read_only = _editable_read_only(snapshot)
+            turbo = list(snapshot.get("turbo_roots") or ())
+            baseline = (list(writable), list(read_only), list(turbo))
+            base_revision = latest_revision
         print("\nSecurity / Workspace Access")
         print("Writable workspaces:")
         for i, value in enumerate(writable, 1):
