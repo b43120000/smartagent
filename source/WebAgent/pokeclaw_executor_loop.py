@@ -71,7 +71,7 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
 
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
-            evidence_requirement=None) -> str:
+            evidence_requirement=None, environment_inventory=None) -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
     return (
@@ -113,6 +113,15 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Runtime compares claims AND checks the original Goal; model "
         "cannot grant PASS merely by declaring it.\n"
         f"Workspace: {tools.workspace_root}\n"
+        "Environment Inventory (Runtime-owned; recorded paths require a fresh scoped re-probe):\n"
+        + json.dumps(environment_inventory or {}, ensure_ascii=False,
+                     separators=(",", ":"))[:5000] + "\n"
+        "If an extra tool was installed, verify its executable using an admitted "
+        "absolute-path --version command; only Runtime evidence may update the "
+        "shared Software Registry. Reuse existing probed environments before "
+        "installing. Recorded paths never grant ACL or execution authority.\n"
+        "For local Project Sync, use strategy=INDEX_ONLY (including text-only "
+        "browser transport); FULL_BUNDLE and DELTA need browser upload.\n"
         "Available tools: " + json.dumps(
             catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
         "Original user request:\n" + request + "\n"
@@ -297,6 +306,26 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
     seen_mutations = set()
     pending_unknown_timeout = None
+    # The Executor-only path previously skipped Planner's environment context.
+    # Build one bounded, observational inventory per task; never refresh
+    # executables on every model turn or trust a historic record as authority.
+    try:
+        from agent_core.runtime_environment import planner_environment_snapshot
+        from agent_core.project_environment import planner_environment_hint
+        from agent_core.runtime_software_inventory import build_runtime_software_inventory
+        from agent_core.software_registry import software_registry_snapshot
+        bundled = getattr(loop, "_planner_environment_snapshot", None)
+        if not isinstance(bundled, Mapping) or not bundled.get("tools"):
+            bundled = planner_environment_snapshot()
+        project_index = planner_environment_hint(loop.workspace)
+        environment_inventory = build_runtime_software_inventory(
+            bundled, project_index,
+        )
+        environment_inventory["external_software_registry"] = software_registry_snapshot()
+    except (OSError, ValueError, RuntimeError, TypeError):
+        environment_inventory = {
+            "status": "INVENTORY_UNAVAILABLE", "execution_authorized": False,
+        }
     max_rounds = min(int(loop.max_turns), 30)
     for turn in range(1, max_rounds + finish_grace_rounds + 1):
         # Extra turns are strictly for repairing an already submitted Finish;
@@ -311,6 +340,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             max_rounds=max_rounds, hint=hint,
             field_catalog=finish_runtime_field_catalog(loop),
             evidence_requirement=requirement,
+            environment_inventory=environment_inventory,
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()
@@ -764,6 +794,33 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 },
             },
         })
+        # Publish only real successful executable version probes; an install
+        # command's success alone never proves an environment is usable.
+        try:
+            from agent_core.software_registry import register_verified_software_probe
+            registered_software = register_verified_software_probe(
+                action, receipt, evidence_ref,
+            )
+            if registered_software is not None:
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "SOFTWARE_REGISTRY_UPDATED",
+                    "toolName": action["tool"], "action_id": action["action_id"],
+                    "evidence_ref": evidence_ref,
+                    "software": registered_software["name"],
+                    "executed": False, "authorization_granted": False,
+                })
+                environment_inventory["external_software_registry"] = (
+                    __import__(
+                        "agent_core.software_registry",
+                        fromlist=["software_registry_snapshot"],
+                    ).software_registry_snapshot()
+                )
+        except (OSError, ValueError, RuntimeError, TypeError) as exc:
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "SOFTWARE_REGISTRY_WRITE_FAILED",
+                "error_class": type(exc).__name__,
+                "evidence_ref": evidence_ref, "executed": False,
+            })
         if (unknown_approval is not None
                 and unknown_approval.get("state") == "APPROVED"
                 and unknown_approval.get("reason") != "same_task_command_family_reused"
