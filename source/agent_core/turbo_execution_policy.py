@@ -40,7 +40,7 @@ _DISALLOWED = re.compile(
     r"git\s+(?:clean|reset|push|rebase)|invoke-expression|iex|"
     r"start-process|powershell|pwsh|cmd|python|py|node|bash|sh|wsl)\b"
 )
-_PATH_TOKEN = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\s'\";|&<>]+")
+_PATH_TOKEN = re.compile(r"(?i)(?<![a-z0-9])(?:[a-z]:[\\/]|\\\\)[^\s'\";|&<>]+")
 _SHELL_META = ";\r\n|&<>$(){}@" + chr(96)
 _SHA = re.compile(r"(?i)[0-9a-f]{40}")
 _REPO_URL = re.compile(r"(?i)https://[a-z0-9.-]+/[a-z0-9._/-]+(?:\.git)?")
