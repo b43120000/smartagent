@@ -68,7 +68,7 @@ def tool_catalog(context) -> list[dict]:
     transfer = context.web_file_capabilities()
     if not transfer.get("browser_upload", False):
         names = [name for name in names if name not in {
-            "upload_file", "upload_files", "project_sync"}]
+            "upload_file", "upload_files"}]
     if not transfer.get("browser_download", False):
         names = [name for name in names if name != "download_artifact"]
     def schema_type(spec):
@@ -109,6 +109,16 @@ def tool_catalog(context) -> list[dict]:
                     "permission, and postcondition verification."
                 ),
             }
+        if name == "project_sync":
+            # INDEX_ONLY is local and does not require browser upload.
+            # Keep it visible even when attachment transfer is unavailable.
+            entry["allowed_strategies"] = (["INDEX_ONLY", "FULL_BUNDLE", "DELTA"]
+                if transfer.get("browser_upload", False) else ["INDEX_ONLY"])
+            entry["description"] = (
+                "Create/query local project snapshot via INDEX_ONLY without browser transfer. "
+                "FULL_BUNDLE and DELTA require browser_upload=true. "
+                "All strategies retain scope/write admission."
+            )
         result.append(entry)
     return result
 
