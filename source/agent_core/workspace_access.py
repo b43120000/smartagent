@@ -6,6 +6,9 @@ import os
 import time
 from pathlib import Path
 
+from .path_security import reject_reparse_components, is_within
+from .process_file_lock import exclusive_process_lock
+
 from .windows_security import acl_mode, default_profile_path, load_security_profile
 
 
@@ -100,6 +103,7 @@ def _policy_from_profile(profile: dict) -> dict:
         "denied_write_roots": list(
             _normalized_roots(profile.get("denied_write_roots") or ())
         ),
+        "turbo_roots": [],
     }
 
 
@@ -126,6 +130,7 @@ def load_workspace_access_policy(*, profile: dict | None = None) -> dict:
             "denied_write_roots": list(
                 _normalized_roots(value.get("denied_write_roots") or ())
             ),
+            "turbo_roots": list(_normalized_roots(value.get("turbo_roots") or ())),
         }
     return _policy_from_profile(profile if profile is not None else _load_local_profile())
 
@@ -143,6 +148,9 @@ def save_workspace_access_policy(
     if overlap:
         raise ValueError(f"workspace_access_policy_mode_overlap:{sorted(overlap)[0]}")
     previous = load_workspace_access_policy()
+    turbo = [path for path in previous.get("turbo_roots", [])
+             if any(is_valid_turbo_root(path, parent, writable,
+                                        read_only, denied) for parent in writable)]
     payload = {
         "schema": ACCESS_POLICY_SCHEMA,
         "revision": int(previous.get("revision", 0) or 0) + 1,
@@ -150,6 +158,7 @@ def save_workspace_access_policy(
         "writable_workspaces": list(writable),
         "read_only_roots": list(read_only),
         "denied_write_roots": list(denied),
+        "turbo_roots": list(turbo),
     }
     path = workspace_access_policy_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -190,8 +199,89 @@ def access_snapshot() -> dict:
         "policy": policy,
         "writable_workspaces": writable,
         "read_only_roots": read_only,
+        "turbo_roots": tuple(policy.get("turbo_roots") or ()),
     }
 
+
+
+def is_valid_turbo_root(path: str | Path, workspace: str | Path,
+                        writable_roots, read_only_roots=(),
+                        denied_write_roots=()) -> bool:
+    """Turbo is an opt-in within an *existing* writable workspace, never ACL."""
+    try:
+        target = Path(path).expanduser().resolve(strict=True)
+        root = Path(workspace).expanduser().resolve(strict=True)
+        if not target.is_dir() or not root.is_dir() or target == root:
+            return False
+        if not is_within(target, root):
+            return False
+        # Reject symlink/reparse traversal, including pre-existing junctions.
+        reject_reparse_components(target, root)
+        if not any(is_within(root, Path(p).expanduser().resolve())
+                   for p in writable_roots):
+            return False
+        if any(is_within(target, Path(p).expanduser().resolve()) or
+               is_within(Path(p).expanduser().resolve(), target)
+               for p in (*read_only_roots, *denied_write_roots)):
+            return False
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None) -> dict:
+    """Atomic shared policy; Telegram and Workspace Manager read same source.
+
+    The exact writable workspace is supplied by the authenticated caller.
+    Do not infer it from arbitrary user text or from a model's action.
+    """
+    policy_path = workspace_access_policy_path()
+    lock = policy_path.with_name("workspace_access_policy.lock")
+    with exclusive_process_lock(lock, label="turbo-workspace-policy"):
+        current = load_workspace_access_policy()
+        writable = current["writable_workspaces"]
+        read_only = current["read_only_roots"]
+        denied = current["denied_write_roots"]
+        parent = str(Path(workspace).expanduser().resolve()) if workspace else ""
+        requested = list(_normalized_roots(turbo_roots))
+        for item in requested:
+            parents = [parent] if parent else writable
+            if not any(is_valid_turbo_root(item, root, writable, read_only, denied)
+                       for root in parents):
+                raise ValueError("turbo_root_not_strict_writable_workspace_child:" + item)
+        payload = dict(current)
+        payload["turbo_roots"] = requested
+        payload["revision"] = int(current.get("revision", 0) or 0) + 1
+        payload["updated_at"] = int(time.time())
+        policy_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = policy_path.with_name(policy_path.name + f".{os.getpid()}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, policy_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return payload
+
+
+def set_turbo_root(path: str | Path, *, workspace: str | Path,
+                   enabled: bool = True) -> dict:
+    """User-control entrypoint; never grants filesystem rights by itself."""
+    parent = Path(workspace).expanduser().resolve()
+    existing = load_workspace_access_policy()
+    candidates = [p for p in existing.get("turbo_roots", [])
+                  if _key(p) != _key(path)]
+    if enabled:
+        candidates.append(str(Path(path).expanduser().resolve()))
+    # Validates *all* requested turbo roots using registered workspace parents
+    # and the new root against the caller's exact active workspace.
+    if enabled and not is_valid_turbo_root(
+            path, parent, existing["writable_workspaces"],
+            existing["read_only_roots"], existing["denied_write_roots"]):
+        raise ValueError("turbo_root_not_strict_writable_workspace_child")
+    return save_turbo_roots(candidates)
 
 def require_writable_workspace(path: str | Path) -> str:
     candidate = str(Path(path).expanduser().resolve())
@@ -211,4 +301,5 @@ __all__ = [
     "save_workspace_access_policy",
     "software_only_mode_enabled",
     "workspace_access_policy_path",
+    "is_valid_turbo_root", "save_turbo_roots", "set_turbo_root",
 ]
