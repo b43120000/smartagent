@@ -548,21 +548,78 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
         unknown_approval = None
-        if action and decision.tool == "run_command":
+        risk_class = ""
+        turbo = None
+        if decision.tool == "run_command":
+            # Persist EVERY Turbo decision, including disabled/mismatched
+            # Workspace and pre-execution Admission rejections. Never only
+            # record successful auto approvals: Planner and RCA require cause.
             from agent_core.command_risk import classify_command
-            risk_class = classify_command(action)
             from agent_core.turbo_execution_policy import evaluate_turbo_confirmation
-            turbo = (evaluate_turbo_confirmation(loop, action)
-                     if risk_class == "UNKNOWN" else None)
-            if turbo is not None and turbo.get("auto_confirm") is True:
-                # This is only the secondary UNKNOWN confirmation. The Action
-                # already passed Schema, Scope, ACL and Write Ceiling admission.
+            if action:
+                risk_class = classify_command(action)
+                turbo = evaluate_turbo_confirmation(loop, action)
+            else:
+                risk_class = "NOT_ADMITTED"
+                turbo = {
+                    "schema": "SMARTAGENT_TURBO_DECISION_V2",
+                    "auto_confirm": False,
+                    "reason_code": "PRIOR_ACTION_ADMISSION_REJECTED",
+                    "policy_revision": 0,
+                    "turbo_root": "",
+                    "workspace_root": str(loop.workspace),
+                    "confirmation_scope": "SECONDARY_UNKNOWN_ONLY",
+                    "authorization_granted": False,
+                }
+            auto_confirm = bool(
+                action and risk_class == "UNKNOWN"
+                and turbo.get("auto_confirm") is True
+            )
+            decision_reason = (
+                str(turbo.get("reason_code") or "TURBO_REASON_MISSING")
+                if risk_class == "UNKNOWN" or not action
+                else "TURBO_SECOND_GATE_NOT_REQUIRED_" + risk_class
+            )
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "TURBO_DECISION",
+                "schema": "SMARTAGENT_TURBO_DECISION_V2",
+                "toolName": "run_command",
+                "action_id": str((action or {}).get("action_id") or ""),
+                "arguments_sha256": _digest(decision.arguments),
+                "command_sha256": hashlib.sha256(
+                    str((decision.arguments or {}).get("command") or "")
+                    .encode("utf-8")
+                ).hexdigest(),
+                "risk_class": risk_class,
+                "admission_status": "ADMITTED" if action else "REJECTED_BEFORE_EXECUTION",
+                "admission_reason_code": str(rejected or "")[:128],
+                "auto_confirm": auto_confirm,
+                "decision": (
+                    "AUTO_CONFIRM" if auto_confirm
+                    else "NORMAL_ADMISSION" if action and risk_class != "UNKNOWN"
+                    else "HUMAN_CONFIRMATION_REQUIRED" if action
+                    else "ADMISSION_REJECTED"
+                ),
+                "reason_code": decision_reason,
+                "workspace_root": str(loop.workspace),
+                "working_directory": str(
+                    (action or decision.arguments or {}).get("working_directory")
+                    or loop.workspace
+                )[:1024],
+                "turbo_root": str(turbo.get("turbo_root") or ""),
+                "policy_revision": int(turbo.get("policy_revision") or 0),
+                "confirmation_scope": "SECONDARY_UNKNOWN_ONLY",
+                "executed": False, "authorization_granted": False,
+            })
+        if action and decision.tool == "run_command":
+            if auto_confirm:
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "TURBO_AUTO_ADMITTED",
                     "toolName": "run_command", "action_id": action["action_id"],
                     "policy_revision": turbo["policy_revision"],
                     "reason_code": turbo["reason_code"],
                     "turbo_root": turbo["turbo_root"],
+                    "risk_class": risk_class,
                     "arguments_sha256": _digest(decision.arguments),
                     "executed": False, "authorization_granted": False,
                 })
