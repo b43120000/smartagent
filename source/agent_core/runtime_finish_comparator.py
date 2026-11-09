@@ -56,14 +56,18 @@ def _lookup(receipt: Mapping, field: str) -> tuple[bool, object]:
 
 
 def _fail(reason: str, refs: list[str] | None = None, *,
-          mismatches: list[dict] | None = None, tool_results: list[dict] | None = None) -> dict:
-    return {
+          mismatches: list[dict] | None = None, tool_results: list[dict] | None = None,
+          finish_diagnostic: dict | None = None) -> dict:
+    result = {
         "verdict": "FAIL", "reason_code": reason,
         "goal_kind": "", "goal_evidence_reason": reason,
         "evidence_refs": list(refs or []),
         "mismatches": list(mismatches or [])[:20],
         "tool_results": list(tool_results or []),
     }
+    if finish_diagnostic is not None:
+        result["finish_diagnostic"] = dict(finish_diagnostic)
+    return result
 
 
 def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list[dict], list[str], dict | None, str]:
@@ -505,7 +509,12 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
             history, refs, claimed, goal_checks,
         )
         if not ok:
-            return _fail(reason, refs, mismatches=deviations, tool_results=results)
+            diagnostic = None
+            if reason == "MODEL_GOAL_CHECK_SCHEMA_INVALID":
+                from .finish_schema_diagnostic import diagnose_goal_check_schema
+                diagnostic = diagnose_goal_check_schema(history, claimed, goal_checks)
+            return _fail(reason, refs, mismatches=deviations,
+                         tool_results=results, finish_diagnostic=diagnostic)
     elif proof is None:
         return _fail("MODEL_GOAL_CHECKS_REQUIRED", refs, tool_results=results)
     if proof is not None:
