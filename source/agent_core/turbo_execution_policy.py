@@ -239,8 +239,8 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
                 elif len(args) >= 4 and args[1] == "-C" and args[3] == "archive":
                     ok, reason = _archive_git(args, cwd, root,
                                               str(getattr(loop, "task_request", "") or ""))
-                elif _SAFE_GIT.fullmatch(command) and in_root:
-                    git_repo = _path(args[2], cwd, root) if args[1:2] == ["-C"] else cwd
+                elif _SAFE_GIT.fullmatch(command):
+                    git_repo = _path(args[2], cwd, root) if args[1:2] == ["-C"] and len(args) > 3 else cwd
                     ok = git_repo is not None and is_within(git_repo, root)
                     reason = ("TURBO_KNOWN_NONDESTRUCTIVE_SINGLE_COMMAND" if ok
                               else "TURBO_GIT_REPO_OUT_OF_SCOPE")
