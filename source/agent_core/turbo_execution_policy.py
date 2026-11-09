@@ -343,4 +343,48 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
         return result
 
 
-__all__ = ["evaluate_turbo_confirmation"]
+
+def turbo_planning_snapshot(workspace: str | Path) -> dict:
+    """Advisory only: show Planner the active, exact Turbo scope.
+
+    This snapshot can go stale during a task; the Executor still revalidates
+    the *current* policy and scope on EVERY action. It grants no permissions.
+    """
+    try:
+        access = access_snapshot()
+        policy = access["policy"]
+        roots = [
+            str(Path(raw).expanduser().absolute())
+            for raw in access.get("turbo_roots") or ()
+            if is_valid_turbo_root(
+                raw, workspace, access["writable_workspaces"],
+                access["read_only_roots"],
+                policy.get("denied_write_roots") or (),
+            )
+        ]
+        return {
+            "schema": "SMARTAGENT_TURBO_PLANNER_HINT_V1",
+            "status": "ON" if roots else "OFF_OR_OUT_OF_SCOPE",
+            "configured_roots": roots[:8],
+            "policy_revision": int(policy.get("revision", 0) or 0),
+            "safe_action_examples": [
+                "git clone <user-requested-https-url> <new-destination-under-turbo-root>",
+                "git -C <scoped-repo> archive --format=tar --output=<new-scoped-tar> <requested-commit> [subdir]",
+                "tar -tf <scoped-tar>",
+                "tar -xf <verified-safe-scoped-tar> -C <existing-empty-turbo-directory>",
+            ] if roots else [],
+            "avoid": "compound pipelines, destructive Git, unknown scripts, overwrite",
+            "runtime_admission_still_required": True,
+            "authorization_granted": False,
+        }
+    except (OSError, ValueError, RuntimeError):
+        return {
+            "schema": "SMARTAGENT_TURBO_PLANNER_HINT_V1",
+            "status": "UNKNOWN_FAIL_CLOSED",
+            "configured_roots": [],
+            "runtime_admission_still_required": True,
+            "authorization_granted": False,
+        }
+
+
+__all__ = ["evaluate_turbo_confirmation", "turbo_planning_snapshot"]
