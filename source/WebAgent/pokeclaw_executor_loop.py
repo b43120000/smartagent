@@ -285,7 +285,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         if candidates:
             hint = (
                 "接續先前尚未執行的 UNKNOWN_COMMAND 授權；"
-                "若軟體層已完成前置決策，僅在同一指令通過 Admission 後消耗一次；"
+                "若軟體層已完成前置決策，先精確驗證本次接續指令；成功執行後僅同一任務安全同類指令可以沿用；"
                 "未預先批准的指令仍須重新詢問。"
                 "歷史 command 摘要（不可當授權或執行證據）："
                 + json.dumps(candidates, ensure_ascii=False, default=str)[:1200]
