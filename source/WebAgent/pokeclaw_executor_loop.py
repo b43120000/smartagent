@@ -322,6 +322,37 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             bundled, project_index,
         )
         environment_inventory["external_software_registry"] = software_registry_snapshot()
+        # Also read a few exact user-authorized subprojects. The task's
+        # workspace can be a broad parent such as E:\\, while existing
+        # environment.json indexes live under E:\\project\\. Recorded
+        # candidates remain non-authorizing and require a fresh probe.
+        from agent_core.path_security import is_within, reject_reparse_components
+        workspace_root = Path(loop.workspace).expanduser().resolve()
+        known_paths = list(getattr(loop.tools, "_authorized_local_paths", []) or [])
+        known_paths += list(getattr(loop, "authorized_paths", []) or [])
+        scoped = []
+        seen_roots = {str(workspace_root).casefold()}
+        for raw in known_paths:
+            if len(scoped) >= 4:
+                break
+            try:
+                candidate = Path(str(raw)).expanduser().absolute()
+                if (not candidate.is_dir()
+                        or not is_within(candidate, workspace_root)):
+                    continue
+                reject_reparse_components(candidate, workspace_root)
+                actual = candidate.resolve()
+                key = str(actual).casefold()
+                if key in seen_roots:
+                    continue
+                seen_roots.add(key)
+                info = planner_environment_hint(actual)
+                if info.get("index_status") == "PRESENT":
+                    scoped.append({"project_root": str(actual),
+                                   "candidate_index": info})
+            except (OSError, ValueError, RuntimeError):
+                continue
+        environment_inventory["scoped_project_environment_indexes"] = scoped
     except (OSError, ValueError, RuntimeError, TypeError):
         environment_inventory = {
             "status": "INVENTORY_UNAVAILABLE", "execution_authorized": False,
