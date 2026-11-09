@@ -271,7 +271,7 @@ def test_only_rejections_cannot_claim_pass(tmp_path, monkeypatch):
     run_minimal_core(loop, request)
     board = read_executor_run(tmp_path, task_id=loop.task_id)
     assert board["terminal"]["finish_comparison"]["verdict"] == "FAIL"
-    assert board["terminal"]["finish_comparison"]["reason_code"] == "NO_SUCCEEDED_GOAL_EVIDENCE"
+    assert board["terminal"]["finish_comparison"]["reason_code"] == "NO_EXECUTED_GOAL_EVIDENCE"
 
 
 def test_strict_hash_literal_read_from_bound_cwd_stays_request_scoped(tmp_path):

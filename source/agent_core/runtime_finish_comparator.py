@@ -470,13 +470,16 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if any(item["receipt"]["status"] in {"UNKNOWN", "RUNNING", "PARTIAL"}
            for item in history):
         return _fail("RUNTIME_EXECUTION_NOT_CONFIRMED", refs, tool_results=results)
+    # An executed FAILED command can be valid evidence of an explicitly
+    # requested negative test. Unexecuted REJECTED operations are NOT facts
+    # about execution and never satisfy completion requirements.
     valid_goal_history = [
         item for item in history
-        if item["receipt"]["status"] == "SUCCEEDED"
-        and item["receipt"]["executed"] is True
+        if item["receipt"]["executed"] is True
+        and item["receipt"]["status"] in {"SUCCEEDED", "FAILED"}
     ]
     if not valid_goal_history:
-        return _fail("NO_SUCCEEDED_GOAL_EVIDENCE", refs, tool_results=results)
+        return _fail("NO_EXECUTED_GOAL_EVIDENCE", refs, tool_results=results)
     if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED"}
            for item in history):
         return _fail("RUNTIME_RESULT_STATUS_UNSUPPORTED", refs, tool_results=results)
@@ -490,8 +493,8 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     ):
         return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs, tool_results=results)
     if goal_checks is not None:
-        # A rejected/failed tool may be faithfully reported, but may not
-        # satisfy the model-declared *positive* completion goal.
+        # A rejected/unexecuted tool may be faithfully reported, but may
+        # not satisfy goal checks; an executed negative-test failure can.
         good_refs = {item["evidence_ref"] for item in valid_goal_history}
         if not any(isinstance(check, dict)
                    and check.get("evidence_ref") in good_refs
