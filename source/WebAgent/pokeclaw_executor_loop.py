@@ -475,7 +475,22 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         if action and decision.tool == "run_command":
             from agent_core.command_risk import classify_command
             risk_class = classify_command(action)
-            if risk_class == "UNKNOWN":
+            from agent_core.turbo_execution_policy import evaluate_turbo_confirmation
+            turbo = (evaluate_turbo_confirmation(loop, action)
+                     if risk_class == "UNKNOWN" else None)
+            if turbo is not None and turbo.get("auto_confirm") is True:
+                # This is only the secondary UNKNOWN confirmation. The Action
+                # already passed Schema, Scope, ACL and Write Ceiling admission.
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "TURBO_AUTO_ADMITTED",
+                    "toolName": "run_command", "action_id": action["action_id"],
+                    "policy_revision": turbo["policy_revision"],
+                    "reason_code": turbo["reason_code"],
+                    "turbo_root": turbo["turbo_root"],
+                    "arguments_sha256": _digest(decision.arguments),
+                    "executed": False, "authorization_granted": False,
+                })
+            elif risk_class == "UNKNOWN":
                 if pending_unknown_timeout:
                     return _finish(
                         loop, root, request, kind="BLOCKED",
