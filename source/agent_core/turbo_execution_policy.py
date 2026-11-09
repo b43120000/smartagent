@@ -64,7 +64,7 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
             return result
         command = str(action.get("command") or "").strip()
         if (not command or len(command) > 4096
-                or any(c in command for c in ";\r\n|&<>$" + chr(96))
+                or any(c in command for c in ";\r\n|&<>$(){}@" + chr(96))
                 or _DISALLOWED.search(command)):
             result["reason_code"] = "TURBO_UNPROVEN_COMMAND"
             return result
