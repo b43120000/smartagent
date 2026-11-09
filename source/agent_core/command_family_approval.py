@@ -53,6 +53,8 @@ def _inside(path: str, workspace: str) -> bool:
             root = ntpath.normcase(ntpath.normpath(str(root_win)))
             target = ntpath.normcase(ntpath.normpath(str(target_win)))
             return ntpath.commonpath([root, target]) == root
+        if re.match(r"(?i)^[a-z]:[\\/]|^\\\\", path):
+            return False  # Do not treat Windows absolute paths as POSIX relative paths.
         root = Path(workspace).resolve()
         target = Path(path)
         return (target if target.is_absolute() else root / target).resolve().is_relative_to(root)
@@ -106,10 +108,9 @@ def command_family_signature(action: Mapping, workspace: str) -> str | None:
     relative_program = (tokens[0].lower().endswith(_SCRIPT_SUFFIX)
                         and not PureWindowsPath(tokens[0]).is_absolute()
                         and not Path(tokens[0]).is_absolute())
-    relative_script = (executable in {"python", "python.exe", "py", "py.exe", "node", "node.exe"}
-                       and len(tokens) > 1 and tokens[1].lower().endswith(_SCRIPT_SUFFIX)
-                       and not PureWindowsPath(tokens[1]).is_absolute()
-                       and not Path(tokens[1]).is_absolute())
+    relative_script = executable in {"python", "python.exe", "py", "py.exe", "node", "node.exe"}
+    # An interpreter may locate relative modules/scripts through its cwd,
+    # even if flags precede the script path. Keep cwd fixed for all of them.
     payload = {"schema": SCHEMA, "operation": operation, "argv_template": normalized}
     if relative_program or relative_script:
         payload["bound_cwd"] = str(Path(cwd).resolve())
