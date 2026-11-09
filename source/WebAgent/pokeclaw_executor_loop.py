@@ -72,7 +72,7 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
             evidence_requirement=None, environment_inventory=None,
-            runtime_status_catalog=None) -> str:
+            runtime_status_catalog=None, turbo_planning_context=None) -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
     return (
@@ -114,6 +114,10 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Runtime compares claims AND checks the original Goal; model "
         "cannot grant PASS merely by declaring it.\n"
         f"Workspace: {tools.workspace_root}\n"
+        "Turbo configured scope (advisory only; every Action is independently "
+        "readmitted, never assume this grants permission):\n"
+        + json.dumps(turbo_planning_context or {}, ensure_ascii=False,
+                     separators=(",", ":"))[:1600] + "\n"
         "Environment Inventory (Runtime-owned; recorded paths require a fresh scoped re-probe):\n"
         + json.dumps(environment_inventory or {}, ensure_ascii=False,
                      separators=(",", ":"))[:5000] + "\n"
@@ -381,6 +385,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 __import__("agent_core.runtime_finish_status_repair",
                            fromlist=["finish_runtime_status_catalog"])
                 .finish_runtime_status_catalog(loop)
+            ),
+            turbo_planning_context=(
+                __import__("agent_core.turbo_execution_policy",
+                           fromlist=["turbo_planning_snapshot"])
+                .turbo_planning_snapshot(loop.workspace)
             ),
         )
         hint = ""
