@@ -663,24 +663,23 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
     return record
 
 
-def accept_runtime_answer_only(
+def validate_runtime_answer_only(
     loop, *, goal: str, answer: str, had_attachments: bool = False,
-) -> tuple[dict | None, str]:
-    """Admit only a no-tool, request-scoped text answer.
+) -> tuple[bool, str]:
+    """Shared no-tool Finish eligibility; no terminal state is mutated.
 
-    A text answer has no ActionResult evidence. Admission proves only that
-    Runtime accepted the eligible model reply, never external factual truth.
+    A valid text delivery is not an assertion that external claims are true.
     """
     from .tri_one_answer_only import classify_original_request, _UNSUPPORTED_CLAIM
     from .task_requirement import assess_task_requirement, no_tool_terminal_candidate
 
     if not isinstance(answer, str) or not answer.strip() or len(answer) > 3000:
-        return None, "ANSWER_ONLY_CONTENT_INVALID"
+        return False, "ANSWER_ONLY_CONTENT_INVALID"
     if (getattr(loop, "continuation_source", None)
             or had_attachments
             or getattr(loop, "_tri_one_has_attached_context", False)
             or getattr(loop, "image_delivery_plan", None)):
-        return None, "ANSWER_ONLY_REQUIRES_RESOURCE_CONTEXT"
+        return False, "ANSWER_ONLY_REQUIRES_RESOURCE_CONTEXT"
     if any((
         getattr(loop, "action_ledger", None),
         getattr(loop, "action_result_ledger", None),
@@ -690,18 +689,30 @@ def accept_runtime_answer_only(
         getattr(loop, "pending_progress_repair_actions", None),
         getattr(loop, "pending_action_repair", None),
     )):
-        return None, "ANSWER_ONLY_RUNTIME_ACTION_OR_RECOVERY_PENDING"
+        return False, "ANSWER_ONLY_RUNTIME_ACTION_OR_RECOVERY_PENDING"
     requirement = assess_task_requirement(
         goal, attachments=False, authorized_paths=False,
         image_or_artifact_request=False, continuation=False,
     )
     eligible, reason = classify_original_request(goal)
     if not no_tool_terminal_candidate(requirement) or not eligible:
-        return None, "ANSWER_ONLY_REQUEST_NOT_ELIGIBLE:" + str(reason)[:100]
+        return False, "ANSWER_ONLY_REQUEST_NOT_ELIGIBLE:" + str(reason)[:100]
     if _UNSUPPORTED_CLAIM.search(answer):
-        return None, "ANSWER_ONLY_UNVERIFIED_EXECUTION_CLAIM"
+        return False, "ANSWER_ONLY_UNVERIFIED_EXECUTION_CLAIM"
     if str(getattr(loop, "task_request", goal) or "") != str(goal):
-        return None, "ANSWER_ONLY_GOAL_IDENTITY_MISMATCH"
+        return False, "ANSWER_ONLY_GOAL_IDENTITY_MISMATCH"
+    return True, "ANSWER_ONLY_RESPONSE_ADMITTED"
+
+
+def accept_runtime_answer_only(
+    loop, *, goal: str, answer: str, had_attachments: bool = False,
+) -> tuple[dict | None, str]:
+    """Legacy text terminal, backed by the same shared admission predicate."""
+    admitted, reason = validate_runtime_answer_only(
+        loop, goal=goal, answer=answer, had_attachments=had_attachments,
+    )
+    if not admitted:
+        return None, reason
     record = {
         "schema": TERMINAL_SCHEMA,
         "admission_status": "ACCEPTED",
@@ -760,7 +771,24 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
                 kind != "ANSWER_ONLY" and isinstance(refs, list)
                 and bool(refs) and evidence_verdict == "PASS"
             )
-            if not (answer_only or evidence_backed):
+            board = getattr(loop, "executor_blackboard_terminal", {}) or {}
+            terminal_board = (
+                board.get("terminal") or {} if isinstance(board, Mapping) else {}
+            )
+            comparator_text = (
+                kind == "ANSWER_ONLY"
+                and receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1"
+                and receipt.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+                and receipt.get("matched_condition_id") == "ANSWER_ONLY"
+                and receipt.get("goal_coverage_basis") == "RUNTIME_TEXT_ADMISSION"
+                and refs == [] and evidence_verdict == "PASS"
+                and receipt.get("answer_sha256")
+                    == terminal_board.get("summary_sha256")
+                and receipt.get("answer_sha256")
+                    == (terminal_board.get("finish_comparison") or {}).get("answer_sha256")
+                and receipt.get("goal_sha256") == board.get("request_sha256")
+            )
+            if not (answer_only or comparator_text or evidence_backed):
                 return TerminalVerdict("PAUSED", "UNKNOWN", {},
                                        "SUCCESS_WITHOUT_ACCEPTED_GOAL_PROOF")
         if receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1":
@@ -779,7 +807,18 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
                     or comparison.get("mismatches") != stored.get("mismatches")
                     or comparison.get("tool_results") != stored.get("tool_results")
                     or refs != stored.get("evidence_refs")
-                    or stored.get("verdict") != expected):
+                    or stored.get("verdict") != expected
+                    or receipt.get("completion_kind")
+                        != stored.get("completion_kind")
+                    or (
+                        stored.get("completion_kind") == "ANSWER_ONLY" and
+                        (outcome != "SUCCESS" or refs != []
+                         or receipt.get("admission_reason")
+                             != "ANSWER_ONLY_RESPONSE_ADMITTED"
+                         or receipt.get("answer_sha256")
+                             != stored.get("answer_sha256"))
+                    )):
+
                 return TerminalVerdict("PAUSED", "UNKNOWN", {},
                                        "FINISH_COMPARATOR_RECEIPT_INVALID")
         if state == "COMPLETED" and outcome in {"SUCCESS", "PARTIAL", "FAILED", "UNKNOWN"}:
@@ -828,6 +867,6 @@ def format_runtime_goal_summary(proof: GoalEvidence) -> str:
 
 __all__ = [
     "GoalEvidence", "TerminalVerdict", "evaluate_goal_evidence",
-    "accept_runtime_terminal", "accept_runtime_answer_only", "terminal_verdict_from_loop",
+    "accept_runtime_terminal", "accept_runtime_answer_only", "validate_runtime_answer_only", "terminal_verdict_from_loop",
     "format_runtime_goal_summary",
 ]

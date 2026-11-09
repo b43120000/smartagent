@@ -19,6 +19,7 @@ from agent_core.executor_run_blackboard import (
 from agent_core.task_progress import set_runtime_state
 from agent_core.tool_result_contract import decode_result
 from agent_core.runtime_finish_comparator import compare_runtime_finish, finish_runtime_field_catalog
+from agent_core.finish_evidence_requirement import assess_finish_evidence_requirement
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
@@ -69,7 +70,8 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
 
 
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
-            max_rounds: int, hint: str = "", field_catalog=None) -> str:
+            max_rounds: int, hint: str = "", field_catalog=None,
+            evidence_requirement=None) -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
     return (
@@ -78,6 +80,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Respond with exactly ONE JSON object per round:\n"
         'Tool call: {"type":"tool_call","name":"observe_fact","arguments":{"path":"C:\\\\example"}}\n'
         'Finish: {"type":"finish","summary":"observations","expected_runtime":[{"evidence_ref":"<actual MIN-EV reference>","fields":{"status":"<actual Runtime status>","data.<task-relevant key>":"<typed observed value>"}}],"goal_checks":[{"criterion":"<requirement from original request>","evidence_ref":"<actual MIN-EV reference>","field":"data.<task-relevant key>","operator":"eq","expected":"<typed expected value>"}]}\n'
+        'Finish for eligible text: {"type":"finish","summary":"the complete answer","expected_runtime":[]}\n'
         'Blocked: {"type":"blocked","reason":"specific tool/error blocker"}\n'
         "No Markdown fences, no invented observations, no claimed success without results.\n"
         "Observe first; decide from actual ToolResult. If missing, a permitted "
@@ -112,6 +115,13 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         f"Round: {round_id}/{max_rounds}\n"
         "Recent actual PokeClaw ToolResults:\n" + json.dumps(
             recent[-6:], ensure_ascii=False, separators=(",", ":")) + "\n"
+        "Upstream evidence requirement (Runtime-owned minimum, not task plan):\n"
+        + json.dumps(evidence_requirement or {}, ensure_ascii=False, separators=(",", ":")) + "\n"
+        "Finish without ToolResult is allowed ONLY if answer_only_eligible=true, "
+        "no action was attempted and the answer is valid. For TEXT-only, "
+        "expected_runtime must be [] (or omitted), goal_checks need no tool. "
+        "For tasks requiring tools or external state, text alone is NEVER "
+        "completion evidence. Mixed tasks must retain all ToolResults.\n"
         "Runtime available Finish fields (derived, NOT a required template):\n"
         + json.dumps(field_catalog or [], ensure_ascii=False, separators=(",", ":"))[:6800] + "\n"
         + (f"Runtime repair information: {hint}\n" if hint else "")
@@ -127,7 +137,7 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
     payload = {
         "schema": TERMINAL_SCHEMA, "admission_status": "ACCEPTED",
         "decision": "RUNTIME_FINISH_COMPARATOR_V1",
-        "completion_kind": "EVIDENCE_BACKED",
+        "completion_kind": comparison.get("completion_kind", "EVIDENCE_BACKED"),
         "request_id": loop.run_id, "task_id": loop.task_id,
         "task_epoch": loop.task_epoch, "round": loop.turn_id,
         "task_outcome": "SUCCESS" if verdict == "PASS" else "FAILED",
@@ -137,6 +147,14 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
         "final_verdict": verdict,
         "goal_evidence_reason": comparison["goal_evidence_reason"],
         "matched_condition_id": comparison["goal_kind"],
+        **({
+            "admission_reason": "ANSWER_ONLY_RESPONSE_ADMITTED",
+            "answer_sha256": comparison["answer_sha256"],
+            "goal_sha256": hashlib.sha256(
+                str(getattr(loop, "task_request", "") or "").encode("utf-8")
+            ).hexdigest(),
+        } if comparison.get("completion_kind") == "ANSWER_ONLY"
+             and comparison["verdict"] == "PASS" else {}),
         "goal_coverage_basis": comparison.get("coverage_basis", "NOT_VERIFIED"),
         "comparison": {
             "reason_code": comparison["reason_code"],
@@ -161,7 +179,8 @@ def _finish(loop, root: Path, request: str, *, kind: str,
     comparison = None
     if complete:
         comparison = compare_runtime_finish(loop, root, request, expected_runtime,
-                                            goal_checks=goal_checks)
+                                            goal_checks=goal_checks,
+                                            answer=summary)
         board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
     loop.executor_result = {
@@ -214,6 +233,12 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         f"Parent Consumption：{p['parent_consumption_state']}\n"
         f"整體目標：{terminal_line}{mismatch_lines}"
     )
+    if comparison and comparison["verdict"] == "PASS" and (
+        comparison.get("completion_kind") == "ANSWER_ONLY"
+    ):
+        # A creative/text response is the artifact. Do not append internal
+        # Blackboard logs to the actual user's joke/translation/answer.
+        return str(summary)
     return str(summary) + trailer
 
 
@@ -222,7 +247,16 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     root = Path(loop.progress_root or loop.workspace)
     if root.name.casefold() == "source" and (root.parent / "collect.bat").is_file():
         root = root.parent
-    board = begin_executor_run(root, loop, request)
+    requirement = assess_finish_evidence_requirement(
+        request,
+        attachments=bool(getattr(loop, "_tri_one_has_attached_context", False)),
+        authorized_paths=bool(getattr(loop.tools, "_authorized_local_paths", ())),
+        image_or_artifact_request=bool(getattr(loop, "image_delivery_plan", None)),
+        continuation=bool(getattr(loop, "continuation_source", None)),
+    )
+    board = begin_executor_run(
+        root, loop, request, evidence_requirement=requirement,
+    )
     loop.executor_blackboard_terminal = board
     loop.executor_result = {}
     loop.terminal_acceptance = {}
@@ -243,6 +277,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             request, loop.tools, recent, round_id=turn,
             max_rounds=max_rounds, hint=hint,
             field_catalog=finish_runtime_field_catalog(loop),
+            evidence_requirement=requirement,
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()
@@ -278,6 +313,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 preview = compare_runtime_finish(
                     loop, root, request, decision.expected_runtime,
                     goal_checks=decision.goal_checks, allow_open=True,
+                    answer=decision.message,
                 )
                 repairable = {
                     "MODEL_FINISH_GOAL_FACT_NOT_DECLARED",

@@ -145,7 +145,13 @@ def classify_original_request(
     if _EXTERNAL_OR_ACTION.search(_without_explicit_noop_clauses(text)):
         return False, "external_information_or_action_indicated"
     if not _TEXT_INTENT.search(text):
-        return False, "text_intent_not_unambiguously_classified"
+        # An upstream requirement may classify harmless greetings/creative
+        # answers as ambiguous but safely no-tool. This is a conservative
+        # fallback AFTER the resource, path and operation exclusions above.
+        from .task_requirement import assess_task_requirement, no_tool_terminal_candidate
+        requirement = assess_task_requirement(text)
+        if not no_tool_terminal_candidate(requirement):
+            return False, "text_intent_not_unambiguously_classified"
     return True, "bounded_text_only_intent"
 
 

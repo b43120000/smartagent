@@ -81,7 +81,19 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
     if not isinstance(ledger, Mapping) or not isinstance(actions, Mapping):
         return [], [], None, "ACTION_LEDGER_MISSING"
     events = [row for row in board.get("events", []) if row.get("kind") == "TOOL_RESULT"]
-    if not events or len(events) > _MAX_CLAIMS:
+    if not events:
+        # A legitimate pure-text Finish has no ActionResult. Verify that no
+        # admitted/pending action or rejected ToolCall is being hidden.
+        if (actions or ledger or any(
+            row.get("kind") in {"ACTION_ADMITTED", "MODEL_TOOL_CALL"}
+            for row in board.get("events", [])
+        )):
+            return [], [], None, "NO_TOOL_FINISH_WITH_PENDING_ACTION"
+        if (not allow_open and
+                board["terminal"].get("tool_evidence_refs") != []):
+            return [], [], None, "BLACKBOARD_EVIDENCE_SET_MISMATCH"
+        return [], [], {"board": board, "results": []}, ""
+    if len(events) > _MAX_CLAIMS:
         return [], [], None, "EVIDENCE_MISSING_OR_EXCESSIVE"
     if any(row.get("runtimeEvidence", {}).get("status") == "REJECTED" for row in events):
         return [], [], None, "ADMISSION_REJECTED_NOT_GOAL_PROOF"
@@ -360,7 +372,8 @@ def finish_runtime_field_catalog(loop, *, max_records: int = 64) -> list[dict]:
 
 def compare_runtime_finish(loop, root: str | Path, goal: str,
                            expected_runtime: object, goal_checks: object = None,
-                           *, allow_open: bool = False) -> dict:
+                           *, allow_open: bool = False,
+                           answer: str = "") -> dict:
     """Binary verdict. Dynamic model fields, Runtime facts and goal validation."""
     history, refs, context, error = _readback(loop, root, allow_open=allow_open)
     if error:
@@ -370,6 +383,38 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     ).hexdigest():
         return _fail("REQUEST_DIGEST_MISMATCH", refs, tool_results=context["results"])
     results = context["results"]
+    from .finish_evidence_requirement import valid_finish_evidence_requirement
+    requirement = context["board"].get("evidence_requirement")
+    if not valid_finish_evidence_requirement(requirement, goal):
+        return _fail("UPSTREAM_EVIDENCE_REQUIREMENT_INVALID", refs, tool_results=results)
+    if not history:
+        if requirement["tool_evidence_required"] or not requirement["answer_only_eligible"]:
+            return _fail("TOOL_EVIDENCE_REQUIRED", refs)
+        if expected_runtime not in (None, []) or goal_checks not in (None, []):
+            return _fail("TEXT_ONLY_FINISH_HAS_UNBACKED_TOOL_CLAIMS", refs)
+        if not isinstance(answer, str):
+            return _fail("ANSWER_ONLY_CONTENT_INVALID", refs)
+        if not allow_open and (
+            context["board"]["terminal"].get("summary_sha256")
+            != hashlib.sha256(answer.encode("utf-8")).hexdigest()
+        ):
+            return _fail("ANSWER_ONLY_DIGEST_MISMATCH", refs)
+        from .tri_one_runtime_terminal import validate_runtime_answer_only
+        eligible, reason = validate_runtime_answer_only(
+            loop, goal=goal, answer=answer,
+            had_attachments=bool(getattr(loop, "_tri_one_has_attached_context", False)),
+        )
+        if not eligible:
+            return _fail("ANSWER_ONLY_ADMISSION_REJECTED:" + str(reason)[:100], refs)
+        return {
+            "verdict": "PASS", "reason_code": "ANSWER_ONLY_RESPONSE_ADMITTED",
+            "goal_kind": "ANSWER_ONLY",
+            "goal_evidence_reason": "TEXT_RESPONSE_ACCEPTED_NO_TOOL_NEEDED",
+            "coverage_basis": "RUNTIME_TEXT_ADMISSION",
+            "completion_kind": "ANSWER_ONLY",
+            "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+            "evidence_refs": [], "mismatches": [], "tool_results": [],
+        }
     if (not isinstance(expected_runtime, list) or
             len(expected_runtime) != len(history) or
             len(expected_runtime) > _MAX_CLAIMS):

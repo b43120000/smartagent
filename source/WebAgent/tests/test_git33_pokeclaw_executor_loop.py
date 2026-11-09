@@ -332,7 +332,7 @@ def test_true_pokeclaw_finish_without_any_tool_fails_closed(
     board = read_executor_run(tmp_path, task_id=loop.task_id)
     assert board["executor_state"] == "MODEL_REPORTED_COMPLETE_UNVERIFIED"
     assert board["terminal"]["goal_verified"] is False
-    assert board["terminal"]["finish_comparison"]["reason_code"] == "EVIDENCE_MISSING_OR_EXCESSIVE"
+    assert board["terminal"]["finish_comparison"]["reason_code"] == "TOOL_EVIDENCE_REQUIRED"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows canonical path/Scope guard")

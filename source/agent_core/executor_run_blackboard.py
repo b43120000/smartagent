@@ -88,7 +88,7 @@ def read_executor_run(root: str | Path, *, task_id: str, request_id: str | None 
     return value
 
 
-def begin_executor_run(root: str | Path, loop, request: str) -> dict:
+def begin_executor_run(root: str | Path, loop, request: str, *, evidence_requirement: Mapping | None = None) -> dict:
     task_id = _id(loop.task_id)
     prior = read_executor_run(root, task_id=task_id)
     if prior:
@@ -98,6 +98,8 @@ def begin_executor_run(root: str | Path, loop, request: str) -> dict:
             raise ValueError("executor_run_blackboard_identity_conflict")
         if prior.get("events"):
             raise ValueError("executor_run_blackboard_restart_requires_continuation")
+        if evidence_requirement is not None and prior.get("evidence_requirement") != dict(evidence_requirement):
+            raise ValueError("executor_run_blackboard_requirement_conflict")
         return prior
     bind = "\0".join((task_id, str(loop.run_id), str(loop.task_epoch)))
     handoff_id = "HOF-" + hashlib.sha256(bind.encode("utf-8")).hexdigest()[:24].upper()
@@ -107,6 +109,7 @@ def begin_executor_run(root: str | Path, loop, request: str) -> dict:
         "task_epoch": str(loop.task_epoch),
         "request_sha256": hashlib.sha256(str(request).encode("utf-8")).hexdigest(),
         "execution_mode": "POKECLAW_AGENT_LOOP",
+        "evidence_requirement": dict(evidence_requirement or {}),
         "executor_state": "RUNNING",
         "goal_driver_state": "DISABLED",
         "prerequisite_state": "DISABLED",
@@ -202,6 +205,8 @@ def record_finish_comparison(root: str | Path, loop, comparison: Mapping) -> dic
         "goal_kind": str(comparison.get("goal_kind") or "")[:160],
         "goal_evidence_reason": str(comparison.get("goal_evidence_reason") or "")[:160],
         "coverage_basis": str(comparison.get("coverage_basis") or "NOT_VERIFIED")[:160],
+        "completion_kind": str(comparison.get("completion_kind") or "EVIDENCE_BACKED")[:80],
+        "answer_sha256": str(comparison.get("answer_sha256") or ""),
         "evidence_refs": list(comparison.get("evidence_refs") or []),
         "mismatches": list(comparison.get("mismatches") or [])[:20],
         "tool_results": list(comparison.get("tool_results") or []),
