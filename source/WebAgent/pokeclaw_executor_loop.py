@@ -270,7 +270,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     repeated = 0
     invalids = 0
     finish_repairs = 0
-    max_finish_repairs = 3
+    max_finish_repairs = 2
     finish_grace_rounds = 2
     finish_repair_only = False
     last_finish_reason = ""
@@ -379,7 +379,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "EXPECTED_RUNTIME_SCHEMA_INVALID",
                     "EXPECTED_RUNTIME_FIELD_TYPE_INVALID",
                 }
-                if preview["reason_code"] in repairable:
+                # Preserve Git34–35 behavior: after two repairs, missing
+                # declarations still reach a formal comparator FAIL. The
+                # Git42-specific schema error remains distinctly reportable.
+                if (preview["reason_code"] in repairable
+                        and not (finish_repairs >= max_finish_repairs
+                                 and preview["reason_code"] != "MODEL_GOAL_CHECK_SCHEMA_INVALID")):
                     last_finish_reason = str(preview["reason_code"])
                     last_finish_diagnostic = preview.get("finish_diagnostic")
                     if (finish_repairs >= max_finish_repairs
