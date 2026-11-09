@@ -54,14 +54,23 @@ def test_turbo_is_off_by_default_and_can_be_enabled_by_explicit_user_control(
     assert workspace_access.load_workspace_access_policy()["turbo_roots"] == []
 
 
-@pytest.mark.parametrize("target", ["workspace", "other", "missing"])
+@pytest.mark.parametrize("target", ["workspace", "other"])
 def test_turbo_cannot_escape_workspace_or_use_root(workspace, target, tmp_path):
     parent, turbo, other = workspace
-    path = {"workspace": parent, "other": other,
-            "missing": parent / "missing"}[target]
+    path = {"workspace": parent, "other": other}[target]
     with pytest.raises(ValueError):
         apply_turbo_control("turbomode=" + str(path), workspace=parent)
     assert workspace_access.load_workspace_access_policy()["turbo_roots"] == []
+
+
+def test_future_turbo_child_can_be_configured_without_creation(workspace):
+    parent, turbo, other = workspace
+    future = turbo / "future-project"
+    assert not future.exists()
+    result = apply_turbo_control("turbomode=" + str(future), workspace=parent)
+    assert result["status"] == "ENABLED"
+    assert not future.exists()
+    assert str(future) in workspace_access.load_workspace_access_policy()["turbo_roots"]
 
 
 def test_turbo_symlink_traversal_is_not_authorized(workspace, tmp_path):
