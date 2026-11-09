@@ -314,9 +314,11 @@ def _evaluate_model_goal_checks(history: list[dict], refs: list[str],
         criterion, ref = check["criterion"], check["evidence_ref"]
         field, op, expected = check["field"], check["operator"], check["expected"]
         if (not isinstance(criterion, str) or not (1 <= len(criterion) <= 240)
-                or criterion in observed_criteria or ref not in index
+                or criterion in observed_criteria
+                or not isinstance(ref, str) or ref not in index
                 or not isinstance(field, str) or not field.startswith("data.")
-                or not _FIELD.fullmatch(field) or op not in {"eq", "ne", "ge", "le"}
+                or not _FIELD.fullmatch(field)
+                or not isinstance(op, str) or op not in {"eq", "ne", "ge", "le"}
                 or type(expected) not in (str, int, float, bool, type(None))
                 or field not in claimed[ref]):
             return False, "MODEL_GOAL_CHECK_SCHEMA_INVALID", []
@@ -501,6 +503,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         # not satisfy goal checks; an executed negative-test failure can.
         good_refs = {item["evidence_ref"] for item in valid_goal_history}
         if not any(isinstance(check, dict)
+                   and isinstance(check.get("evidence_ref"), str)
                    and check.get("evidence_ref") in good_refs
                    for check in goal_checks if isinstance(goal_checks, list)):
             return _fail("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", refs,
