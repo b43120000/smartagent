@@ -315,7 +315,7 @@ def test_unknown_side_effect_stops_without_replay(tmp_path, monkeypatch):
     assert "禁止重送" in result
 
 
-def test_true_pokeclaw_finish_without_any_tool_is_reported_unverified(
+def test_true_pokeclaw_finish_without_any_tool_fails_closed(
     tmp_path, monkeypatch
 ):
     request = "請確認文件是否存在 E:\\example\\config.txt"
@@ -327,10 +327,12 @@ def test_true_pokeclaw_finish_without_any_tool_is_reported_unverified(
     result = run_minimal_core(loop, request)
     assert state["mutations"] == 0
     assert not loop.executed
-    assert loop.terminal_outcome == "UNKNOWN"
+    assert loop.terminal_outcome == "FAILED"
+    assert loop.terminal_acceptance["final_verdict"] == "FAIL"
     board = read_executor_run(tmp_path, task_id=loop.task_id)
     assert board["executor_state"] == "MODEL_REPORTED_COMPLETE_UNVERIFIED"
     assert board["terminal"]["goal_verified"] is False
+    assert board["terminal"]["finish_comparison"]["reason_code"] == "EVIDENCE_MISSING_OR_EXCESSIVE"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows canonical path/Scope guard")
