@@ -107,6 +107,46 @@ def test_manager_status_reads_telegram_policy_without_private_copy(
 
 
 
+def test_tri_one_operator_setting_terminal_requires_runtime_readback(workspace):
+    import hashlib
+    from agent_core.tri_one_runtime_terminal import (
+        TERMINAL_SCHEMA, terminal_verdict_from_loop,
+    )
+    parent, turbo, other = workspace
+    cmd = "turbomode=" + str(turbo)
+    applied = apply_turbo_control(cmd, workspace=parent)
+    receipt = {
+        "schema": TERMINAL_SCHEMA, "admission_status": "ACCEPTED",
+        "decision": "RUNTIME_TURBO_CONTROL_V1",
+        "completion_kind": "OPERATOR_CONTROL",
+        "task_id": "TASK-X", "request_id": "RR-X",
+        "task_epoch": "EPOCH-X", "runtime_state": "COMPLETED",
+        "task_outcome": "SUCCESS", "evidence_refs": [],
+        "workspace": str(parent), "turbo_status": "ENABLED",
+        "turbo_path": str(turbo),
+        "turbo_policy_revision": applied["revision"],
+        "control_sha256": hashlib.sha256(cmd.encode("utf-8")).hexdigest(),
+    }
+    loop = SimpleNamespace(
+        task_id="TASK-X", run_id="RR-X", task_epoch="EPOCH-X",
+        workspace=parent, task_request=cmd, terminal_outcome="SUCCESS",
+        terminal_acceptance=receipt, _turbo_user_control_applied=True,
+    )
+    valid = terminal_verdict_from_loop(loop)
+    assert valid.state == "COMPLETED"
+    assert valid.outcome == "SUCCESS"
+    assert valid.reason == "TURBO_OPERATOR_SETTING_VERIFIED"
+    loop._turbo_user_control_applied = False
+    assert terminal_verdict_from_loop(loop).state == "PAUSED"
+    loop._turbo_user_control_applied = True
+    # A different interface has now changed the shared registry.
+    apply_turbo_control("turbomode=off", workspace=parent)
+    stale = terminal_verdict_from_loop(loop)
+    assert stale.state == "PAUSED"
+    assert stale.reason == "TURBO_CONTROL_POLICY_STALE"
+
+
+
 def test_turbo_secondary_approval_is_not_unrestricted_authority(workspace, monkeypatch):
     parent, turbo, other = workspace
     workspace_access.set_turbo_root(turbo, workspace=parent)
