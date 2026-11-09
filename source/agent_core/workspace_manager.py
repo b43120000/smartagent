@@ -24,6 +24,9 @@ from .workspace_access import (
     access_snapshot,
     require_writable_workspace,
     save_workspace_access_policy,
+    save_turbo_roots,
+    load_workspace_access_policy,
+    is_valid_turbo_root,
     software_only_mode_enabled,
 )
 from .windows_security import acl_mode, default_profile_path
@@ -497,6 +500,7 @@ def _security_menu() -> int:
     profile = snapshot["profile"]
     writable = list(snapshot["writable_workspaces"])
     read_only = _editable_read_only(snapshot)
+    turbo = list(snapshot.get("turbo_roots") or ())
     while True:
         print("\nSecurity / Workspace Access")
         print("Writable workspaces:")
@@ -505,7 +509,11 @@ def _security_menu() -> int:
         print("Read-only roots:")
         for i, value in enumerate(read_only, 1):
             print(f"  R{i}. {value}")
-        print("\n[1] Add writable  [2] Remove writable  [3] Add read-only  [4] Remove read-only  [5] Apply  [0] Back")
+        print("Turbo mode roots (strict writable Workspace descendants):")
+        for i, value in enumerate(turbo, 1):
+            print(f"  T{i}. {value}")
+        print("\n[1] Add writable  [2] Remove writable  [3] Add read-only  [4] Remove read-only")
+        print("[5] Add turbo mode  [6] Remove turbo mode  [7] Apply  [8] Back")
         choice = input("Select: ").strip()
         if choice in {"1", "3"}:
             path = str(Path(input("Path: ").strip().strip('\"')).expanduser().resolve())
@@ -522,12 +530,30 @@ def _security_menu() -> int:
             except (ValueError, IndexError):
                 print("[!] Invalid index.")
         elif choice == "5":
+            path = str(Path(input("Turbo path (existing workspace subdirectory): ").strip().strip('"')).expanduser().resolve())
+            denied = profile.get("denied_write_roots") or ()
+            if not any(is_valid_turbo_root(path, root, writable, read_only, denied)
+                       for root in writable):
+                print("[!] Turbo path must be a strict writable Workspace subdirectory; no read-only/denied overlap.")
+                continue
+            if path not in turbo:
+                turbo.append(path)
+        elif choice == "6":
+            try:
+                del turbo[int(input("Turbo index: ").strip()) - 1]
+            except (ValueError, IndexError):
+                print("[!] Invalid Turbo index.")
+        elif choice == "7":
             try:
                 return_code = (
                     _apply_software_only_access(writable, read_only, profile)
                     if software_only
                     else _apply_access(writable, read_only, profile)
                 )
+                if return_code == 0:
+                    save_turbo_roots(turbo)
+                    if set(map(_path_key, load_workspace_access_policy()["turbo_roots"])) != set(map(_path_key, turbo)):
+                        raise RuntimeError("turbo_root_apply_postcondition_failed")
                 print(f"\nAPPLY_EXIT_CODE={return_code}")
                 _write_apply_log(f"APPLY_MENU_RESULT code={return_code}")
                 return return_code
@@ -537,7 +563,7 @@ def _security_menu() -> int:
                 return 1
             finally:
                 input("\nApply finished. Press Enter to continue...")
-        elif choice == "0":
+        elif choice == "8":
             return 0
 
 
