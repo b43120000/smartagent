@@ -75,9 +75,9 @@ def command_is_proven_observation(action):
         rf"\(Get-FileHash\s+-LiteralPath\s+{literal}\s+-Algorithm\s+SHA256\)\.Hash\s+-eq\s+'[0-9a-fA-F]{{64}}'",
         # Exact native hash commands are reads; no -w/--path filters,
         # pipelines, or side-effecting extra arguments.
-        rf'certutil(?:\\.exe)?\\s+-hashfile\\s+{literal}\\s+SHA256',
-        rf'git(?:\\.exe)?\\s+hash-object\\s+--no-filters\\s+--\\s+{literal}',
-        rf'git(?:\\.exe)?\\s+-C\\s+{literal}\\s+hash-object\\s+--no-filters\\s+--\\s+{literal}',
+        rf'certutil(?:\.exe)?\s+-hashfile\s+{literal}\s+SHA256',
+        rf'git(?:\.exe)?\s+hash-object\s+--no-filters\s+--\s+{literal}',
+        rf'git(?:\.exe)?\s+-C\s+{literal}\s+hash-object\s+--no-filters\s+--\s+{literal}',
         r'Get-Process\s+-Id\s+[0-9]+',
         r'\$PSVersionTable\.PSVersion',
         rf'Write-Output\s+{literal}',
