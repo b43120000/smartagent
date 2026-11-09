@@ -22,7 +22,7 @@ Possible codes include `CHECK_KEYS_MISMATCH`, `DUPLICATED_CRITERION`, `EVIDENCE_
 ## P2 — terminal-turn repair budget
 
 - Ordinary ToolCall budget is unchanged: `min(loop.max_turns, 30)`.
-- If a Finish submission is repairable at the end of the ordinary budget, up to **two additional Finish-only rounds** are available, with at most three total schema repair prompts.
+- If a Finish submission is repairable at the end of the ordinary budget, up to **two additional Finish-only rounds** are available. The existing two repair prompts remain the default budget. Once they are exhausted, schema-invalid checks terminate as `FINISH_CONTRACT_INVALID`; missing declarations and other legacy cases retain the existing Runtime comparator FAIL semantics.
 - Extra turns are not Action rounds; any ToolCall in those turns is rejected without execution. The model may also return an explicit `blocked` decision.
 - If the structural contract is still invalid, the terminal is `FINISH_CONTRACT_INVALID` with `goal_verified=false`, not a misleading generic `MAX_ROUNDS`.
 - A valid Finish is still independently verified by the usual Runtime Comparator; no synthetic PASS.
