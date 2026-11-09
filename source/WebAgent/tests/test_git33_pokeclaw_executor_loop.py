@@ -223,10 +223,11 @@ def test_real_scope_rejection_returns_pokeclaw_error_before_execution(
     board = read_executor_run(tmp_path, task_id=loop.task_id)
     rejected = [row for row in board["events"] if row.get("runtimeEvidence", {}).get("status") == "REJECTED"]
     assert len(rejected) == 1
-    assert rejected[0]["toolResult"] == {
-        "isSuccess": False, "data": None,
-        "error": "ACTION_NOT_EXECUTED:scope_rejected:DIRECTORY_TARGET_NOT_EXACT_ORIGINAL_REQUEST",
-    }
+    assert rejected[0]["kind"] == "ADMISSION_REJECTED"
+    assert "toolResult" not in rejected[0]
+    assert rejected[0]["admission_diagnostic"]["reason_code"] == (
+        "scope_rejected:DIRECTORY_TARGET_NOT_EXACT_ORIGINAL_REQUEST"
+    )
     assert rejected[0]["runtimeEvidence"]["executed"] is False
     assert rejected[0]["runtimeEvidence"]["directory_preconditions"]["target_binding_verdict"] == "TARGET_NOT_EXACT"
     assert "scope_rejected:DIRECTORY_TARGET_NOT_EXACT_ORIGINAL_REQUEST" in loop.prompts[2]
@@ -246,7 +247,8 @@ def test_invalid_schema_then_repair_without_goal_driver(tmp_path, monkeypatch):
     board = read_executor_run(tmp_path, task_id=loop.task_id)
     denied = [row for row in board["events"] if row.get("runtimeEvidence", {}).get("status") == "REJECTED"]
     assert len(denied) == 1
-    assert denied[0]["toolResult"]["isSuccess"] is False
+    assert denied[0]["kind"] == "ADMISSION_REJECTED"
+    assert "toolResult" not in denied[0]
     assert denied[0]["runtimeEvidence"]["executed"] is False
     assert len(loop.executed) == 1
     assert "觀測完畢" in result

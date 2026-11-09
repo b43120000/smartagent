@@ -89,7 +89,11 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "ToolResult.isSuccess means the tool succeeded, NOT that an observed "
         "boolean was true or that the whole user task is verified.\n"
         "Each ToolResult uses EXACT PokeClaw fields: isSuccess, data, error. "
-        "Admission rejection is an Action failure, not a filesystem absence. "
+        "Admission rejection is a separate REJECTED event, never an executed "
+        "ToolResult. A rejected proposal cannot prove filesystem absence. "
+        "When the Admission diagnostic contains field_issues, use its "
+        "actual_value and allowed_values to choose a new legal declaration; "
+        "Runtime never rewrites the command or grants authority. "
         "Incomplete outputs cannot prove missing content. "
         "Runtime security and precise path authorization always apply.\n"
         "Goal Driver and Prerequisite decision engines are DISABLED. "
@@ -267,6 +271,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     invalids = 0
     finish_repairs = 0
     admission_repair_counts = {}
+    consecutive_admission_rejections = 0
+    max_consecutive_admission_rejections = 10
     hint = ""
     seen_mutations = set()
     max_rounds = min(int(loop.max_turns), 30)
@@ -400,23 +406,39 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "scope_failure_stage": str(diagnosis.get("scope_failure_stage") or "")[:80],
                 "scope_cause_digest": str(diagnosis.get("scope_cause_digest") or "")[:64],
             }
+            # Scope by literal command for run_command. Distinct commands
+            # must not share the same issue counter. A separate consecutive
+            # bound prevents endless command changes from evading repair.
+            proposal_identity = (
+                str((decision.arguments or {}).get("command", ""))
+                if decision.tool == "run_command"
+                else _digest(decision.arguments)
+            )
             repair_key = _digest({
-                "tool": decision.tool, "reason": str(rejected),
-                "issues": diagnostic["field_issues"],
+                "tool": decision.tool,
+                "proposal_identity_sha256": hashlib.sha256(
+                    proposal_identity.encode("utf-8")
+                ).hexdigest(),
+                "reason": str(rejected),
+                "issue_fields": [
+                    {"field": item.get("field"), "reason": item.get("reason"),
+                     "constraint_code": item.get("constraint_code", "")}
+                    for item in diagnostic["field_issues"] if isinstance(item, Mapping)
+                ],
             })
             admission_repair_counts[repair_key] = (
                 admission_repair_counts.get(repair_key, 0) + 1
             )
             repairs_for_same_issue = admission_repair_counts[repair_key]
-            tool_result = _tool_result("REJECTED", rejected)
+            consecutive_admission_rejections += 1
             row = append_executor_event(root, loop, {
-                "round": turn, "kind": "TOOL_RESULT",
+                "round": turn, "kind": "ADMISSION_REJECTED",
                 "toolName": decision.tool,
                 "arguments": _safe_arguments(decision.arguments),
                 "arguments_sha256": _digest(decision.arguments),
                 "admission_diagnostic": diagnostic,
                 "admission_repair_attempt": repairs_for_same_issue,
-                "toolResult": tool_result,
+                "admission_rejection_streak": consecutive_admission_rejections,
                 "runtimeEvidence": {
                     "status": "REJECTED", "executed": False,
                     "reason_code": str(rejected)[:160],
@@ -428,25 +450,35 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             })
             recent.append({
                 "round": turn, "tool": decision.tool,
-                "toolResult": tool_result,
                 "admission_verdict": "REJECTED_BEFORE_EXECUTION",
                 "admission_diagnostic": diagnostic,
             })
             hint = (
                 "Tool Admission 拒絕（沒有執行）："
                 + json.dumps(diagnostic, ensure_ascii=False, separators=(",", ":"))[:2500]
-                + "。只根據 field_issues 修正 JSON 型別/必要欄位；"
+                + "。依 field_issues 修正 JSON 型別、合法 Enum 或契約不一致；"
+                "實際 command 和 operation 的語意仍由模型判斷。"
                 "需要權限的 Action 不能藉改名為唯讀或改 operation 繞過。"
                 "修正後重新提交完整 ToolCall；不要重送既有執行成功的 Action。"
             )
-            if repairs_for_same_issue >= 3:
+            if (repairs_for_same_issue >= 3
+                    or consecutive_admission_rejections >= max_consecutive_admission_rejections):
+                budget_reason = (
+                    "同一個 Action 契約問題三次未解："
+                    if repairs_for_same_issue >= 3 else
+                    "連續 Admission 拒絕達上限："
+                )
                 return _finish(
                     loop, root, request, kind="BLOCKED",
-                    summary="相同 Admission 契約問題三次未解：" + str(rejected),
+                    summary=budget_reason + str(rejected),
                     complete=False,
                 )
             continue
 
+        # An admitted action is independent progress. Its actual ToolResult
+        # will determine what to do next; no prior rejection grants proof.
+        consecutive_admission_rejections = 0
+        admission_repair_counts.clear()
         loop._canonical_action_proposals[action["action_id"]] = dict(action)
         loop._planner_original_actions[action["action_id"]] = {
             **proposed, "action_id": action["action_id"],

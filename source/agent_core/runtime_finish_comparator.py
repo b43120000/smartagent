@@ -80,11 +80,26 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
     actions = getattr(loop, "_canonical_action_proposals", None)
     if not isinstance(ledger, Mapping) or not isinstance(actions, Mapping):
         return [], [], None, "ACTION_LEDGER_MISSING"
-    events = [row for row in board.get("events", []) if row.get("kind") == "TOOL_RESULT"]
+    events = [
+        row for row in board.get("events", [])
+        if row.get("kind") == "TOOL_RESULT"
+    ]
+    denied = [
+        row for row in board.get("events", [])
+        if row.get("kind") == "ADMISSION_REJECTED"
+    ]
+    if any(
+        row.get("runtimeEvidence", {}).get("status") != "REJECTED"
+        or row.get("runtimeEvidence", {}).get("executed") is not False
+        or row.get("runtimeEvidence", {}).get("evidence_ref")
+        or row.get("toolResult") is not None
+        for row in denied
+    ):
+        return [], [], None, "ADMISSION_REJECTION_RECORD_INVALID"
     if not events:
         # A legitimate pure-text Finish has no ActionResult. Verify that no
         # admitted/pending action or rejected ToolCall is being hidden.
-        if (actions or ledger or any(
+        if (actions or ledger or denied or any(
             row.get("kind") in {"ACTION_ADMITTED", "MODEL_TOOL_CALL"}
             for row in board.get("events", [])
         )):

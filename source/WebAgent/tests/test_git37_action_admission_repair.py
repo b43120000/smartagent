@@ -89,6 +89,8 @@ def test_git_repair_feedback_then_fresh_admission_without_clone_dispatch(
     assert diagnostic["field_issues"][0]["field"] == "verify"
     assert diagnostic["field_issues"][0]["actual_type"] == "str"
     assert rejected[0]["admission_repair_attempt"] == 1
+    assert rejected[0]["kind"] == "ADMISSION_REJECTED"
+    assert "toolResult" not in rejected[0]
     assert rejected[0]["runtimeEvidence"]["executed"] is False
     assert "untyped verification" not in json.dumps(board)
     assert "git clone" not in json.dumps(board)
@@ -100,7 +102,7 @@ def test_git_repair_feedback_then_fresh_admission_without_clone_dispatch(
     assert board["terminal"]["admission_rejection_count"] == 1
 
 
-def test_repeated_same_schema_issue_stops_even_if_command_changes(
+def test_repeated_same_schema_issue_stops_for_same_command(
     tmp_path, monkeypatch,
 ):
     request = "請使用 git 取得指定來源到 " + TARGET
@@ -108,7 +110,7 @@ def test_repeated_same_schema_issue_stops_even_if_command_changes(
     for i in range(5):
         replies.append(json.dumps({"type": "tool_call", "name": "run_command",
                                    "arguments": {
-                                       "command": f"git clone https://github.com/b43120000/test.git {i}",
+                                       "command": "git clone https://github.com/b43120000/test.git",
                                        "operation": "GIT_MUTATE",
                                        "success_criteria": "clone completed",
                                        "verify": "bad string",

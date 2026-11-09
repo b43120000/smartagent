@@ -63,6 +63,7 @@ _ATOMIC_TOOL_HINTS = {
 def tool_catalog(context) -> list[dict]:
     from agent_core.tool_capabilities import get_allowed_tools
     from agent_core.smartagent_protocol import TOOL_ENVELOPE_SCHEMAS
+    from agent_core.tool_contract_metadata import enum_constraints
     names = sorted(get_allowed_tools(context.interface_name))
     transfer = context.web_file_capabilities()
     if not transfer.get("browser_upload", False):
@@ -92,6 +93,9 @@ def tool_catalog(context) -> list[dict]:
                 k: schema_type(t) for k, t in schema["optional"].items()
                 if k != "action_id"
             },
+            # Same canonical enum values as Admission; never hand-maintained
+            # strings that can drift from Runtime validation.
+            "allowed_values": enum_constraints(name),
         }
         if name == "run_command":
             entry["verify_contract"] = {

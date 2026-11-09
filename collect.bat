@@ -298,7 +298,7 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                 $executorBoardStatus = 'MATCHED'
                 $executorTaskEpoch = Safe-Code $executorBoard.task_epoch
                 foreach ($ev in @($executorBoard.events)) {
-                    if ($null -eq $ev -or [string]$ev.kind -cne 'TOOL_RESULT' -or
+                    if ($null -eq $ev -or [string]$ev.kind -cnotin @('ADMISSION_REJECTED', 'TOOL_RESULT') -or
                         [string]$ev.runtimeEvidence.status -cne 'REJECTED') { continue }
                     $executorObservedRejections++
                     $diag = $ev.admission_diagnostic
@@ -312,6 +312,9 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                             reason=(Safe-Code $issue.reason)
                             expected_type=$(if ($expected -match '^[A-Za-z0-9_ |.\[\]]{1,64}$') { $expected } else { '[REDACTED_TYPE]' })
                             actual_type=$(if ($actual -match '^[A-Za-z0-9_ |.\[\]]{1,64}$') { $actual } else { '[REDACTED_TYPE]' })
+                            actual_value=(Safe-Code $issue.actual_value)
+                            allowed_values=@(Safe-CodeList @($issue.allowed_values))
+                            constraint_code=(Safe-Code $issue.constraint_code)
                         }
                     }
                     $executorRejections += [ordered]@{

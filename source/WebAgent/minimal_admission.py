@@ -7,6 +7,7 @@ import uuid
 from agent_core.smartagent_protocol import validate_tool_envelope
 from agent_core.tool_capabilities import get_allowed_tools
 from agent_core.action_dependencies import command_is_proven_observation
+from agent_core.tool_contract_metadata import enum_issue
 
 
 _READ_ONLY_TOOLS = frozenset({
@@ -157,9 +158,15 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
                 "actual_type": str(item.get("actual") or "MISSING")[:40],
             })
         code = str(fault.get("reason") or "schema_invalid")[:120]
-        repairable = code in {
-            "wrong_field_type", "missing_required_field",
-        }
+        enum_problem = enum_issue(
+            decision.tool, code, arguments, detail=str(fault.get("detail") or ""),
+        )
+        if enum_problem is not None:
+            issues.append(enum_problem)
+        repairable = (
+            code in {"wrong_field_type", "missing_required_field"}
+            or enum_problem is not None
+        )
         diagnostic = {
             "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
             "stage": "SCHEMA_VALIDATION",

@@ -42,9 +42,14 @@ class ExecutorAdmissionCollectorTests(unittest.TestCase):
             events = []
             for i in range(5):
                 if i == 0:
-                    code = "command_not_proven_read_only"
-                    fields = []
-                    stage = "COMMAND_CLASSIFICATION"
+                    code = "run_command_operation_invalid"
+                    fields = [{
+                        "field": "operation", "reason": "invalid_enum",
+                        "expected_type": "enum", "actual_type": "str",
+                        "actual_value": "GIT_CLONE",
+                        "allowed_values": ["GIT_INSPECT", "GIT_MUTATE"],
+                    }]
+                    stage = "SCHEMA_VALIDATION"
                 else:
                     code = "wrong_field_type"
                     fields = [{
@@ -53,7 +58,9 @@ class ExecutorAdmissionCollectorTests(unittest.TestCase):
                     }]
                     stage = "SCHEMA_VALIDATION"
                 events.append({
-                    "kind": "TOOL_RESULT", "round": i + 1,
+                    # The final row exercises historical Git37 compatibility.
+                    "kind": "TOOL_RESULT" if i == 4 else "ADMISSION_REJECTED",
+                    "round": i + 1,
                     "toolName": "run_command", "arguments": {
                         "command": "SECRET_DO_NOT_EXPORT_G37",
                     }, "arguments_sha256": ("%d" % (i + 1)) * 64,
@@ -103,7 +110,12 @@ class ExecutorAdmissionCollectorTests(unittest.TestCase):
         assert len(rejects) == 5
         assert all(row["executed"] is False for row in rejects)
         assert all(row["authorization_granted"] is False for row in rejects)
-        assert rejects[0]["admission_stage"] == "COMMAND_CLASSIFICATION"
+        assert rejects[0]["admission_stage"] == "SCHEMA_VALIDATION"
+        assert rejects[0]["field_issues"][0]["field"] == "operation"
+        assert rejects[0]["field_issues"][0]["actual_value"] == "GIT_CLONE"
+        assert rejects[0]["field_issues"][0]["allowed_values"] == [
+            "GIT_INSPECT", "GIT_MUTATE"
+        ]
         assert rejects[1]["field_issues"][0]["field"] == "verify"
         assert rejects[1]["field_issues"][0]["expected_type"] == "list | dict"
         assert rejects[1]["field_issues"][0]["actual_type"] == "str"
