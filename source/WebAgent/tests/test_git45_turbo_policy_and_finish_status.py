@@ -278,3 +278,59 @@ def test_finish_status_repair_is_nonexecuting_and_keeps_rejected(tmp_path, monke
     assert repair[0]["finish_diagnostic"]["corrections"][0]["runtime_actual_status"] == "REJECTED"
     assert board["terminal"]["finish_comparison"]["verdict"] == "PASS"
     assert loop.terminal_outcome == "SUCCESS"
+
+
+
+def test_executor_records_turbo_decision_and_evidence_link(env, monkeypatch):
+    from WebAgent.tests.test_minimal_core_v10 import FakeLoop
+    workspace, turbo, blocked, owner = env
+    workspace_access.set_turbo_root(turbo, workspace=workspace)
+    request = f"Inspect existing Git repository at {turbo}"
+    replies = [
+        tool_json(
+            "run_command", command="git ls-tree HEAD",
+            operation="GIT_INSPECT", working_directory=str(turbo),
+            success_criteria="git tree inspection completed",
+            verify=[{"action": "run_command", "command": "git status --short",
+                     "expect_exit_code": 0}],
+        ),
+        '{"type":"blocked","reason":"test finished, no claimed completion"}',
+    ]
+    loop = FakeLoop(workspace, request, replies, "")
+    loop.executor_only_mode = True
+    loop.max_turns = 2
+    executed = []
+    def execute(action):
+        executed.append(action)
+        return encode_result(
+            "SUCCEEDED", "COMMAND_EXITED", tool="run_command",
+            executed=True, data={"process_state": "EXITED",
+                                 "exit_code": 0, "timed_out": False},
+        )
+    loop._execute_action = execute
+    run_minimal_core(loop, request)
+    board = read_executor_run(workspace, task_id=loop.task_id)
+    decisions = [x for x in board["events"] if x.get("kind") == "TURBO_DECISION"]
+    confirmed = [x for x in board["events"] if x.get("kind") == "TURBO_AUTO_ADMITTED"]
+    results = [x for x in board["events"] if x.get("kind") == "TOOL_RESULT"]
+    assert len(executed) == len(decisions) == len(confirmed) == len(results) == 1
+    assert decisions[0]["risk_class"] == "UNKNOWN"
+    assert decisions[0]["auto_confirm"] is True
+    assert decisions[0]["reason_code"] == "TURBO_KNOWN_NONDESTRUCTIVE_SINGLE_COMMAND"
+    assert results[0]["runtimeEvidence"]["turbo_auto_confirm"] is True
+    assert results[0]["runtimeEvidence"]["evidence_ref"].startswith("MIN-EV-")
+    assert not any(x.get("kind") == "HUMAN_APPROVAL_REQUESTED" for x in board["events"])
+
+
+def test_collector_exports_privacy_safe_turbo_and_finish_diagnostics():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[3] / "collect.bat").read_text(
+        encoding="utf-8", errors="replace",
+    )
+    assert "executor_turbo_decisions.json" in source
+    assert "MODEL_FINISH_STATUS_REPAIR" in source
+    assert "status_corrections" in source
+    assert "workspace_root_sha256" in source
+    assert "turbo_root_sha256" in source
+    assert "raw_command_included=$false" in source
+    assert "raw_path_included=$false" in source
