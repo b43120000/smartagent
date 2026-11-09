@@ -270,6 +270,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     repeated = 0
     invalids = 0
     finish_repairs = 0
+    max_finish_repairs = 3
+    finish_grace_rounds = 2
+    finish_repair_only = False
+    last_finish_reason = ""
+    last_finish_diagnostic = None
     admission_repair_counts = {}
     consecutive_admission_rejections = 0
     max_consecutive_admission_rejections = 10
@@ -293,7 +298,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     seen_mutations = set()
     pending_unknown_timeout = None
     max_rounds = min(int(loop.max_turns), 30)
-    for turn in range(1, max_rounds + 1):
+    for turn in range(1, max_rounds + finish_grace_rounds + 1):
+        # Extra turns are strictly for repairing an already submitted Finish;
+        # they do not increase the number of executable ToolCall rounds.
+        if turn > max_rounds and not finish_repair_only:
+            break
         loop._check_cancelled()
         loop.turn_id = turn
         loop.tools._protocol_turn_seq = turn
@@ -320,6 +329,18 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "decision_sha256": _digest(str(response)),
                 "error_code": exc.code, "executed": False,
             })
+            if finish_repair_only:
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
+                    "reason_code": "REPAIR_DECISION_FORMAT_INVALID",
+                    "error_code": exc.code, "repair_attempts": finish_repairs,
+                    "executed": False,
+                })
+                return _finish(
+                    loop, root, request, kind="FINISH_CONTRACT_INVALID",
+                    summary="FAIL：Finish 修復回合輸出無效：" + exc.code,
+                    complete=False,
+                )
             if invalids >= 3:
                 return _finish(
                     loop, root, request, kind="FORMAT_ERROR",
@@ -340,10 +361,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 complete=False,
             )
         if decision.kind == "finish":
-            # Only an incomplete Finish contract is repairable. Never re-run
-            # an Action, and never let a semantic/evidence mismatch be rewritten
-            # into PASS by another model attempt.
-            if decision.expected_runtime and finish_repairs < 2:
+            # Each Finish is checked against read-back Runtime evidence before
+            # terminalization. Repairable schema failures get precise, bounded
+            # diagnostics; the Runtime never modifies claims on the model's behalf.
+            if decision.expected_runtime:
                 preview = compare_runtime_finish(
                     loop, root, request, decision.expected_runtime,
                     goal_checks=decision.goal_checks, allow_open=True,
@@ -359,19 +380,47 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "EXPECTED_RUNTIME_FIELD_TYPE_INVALID",
                 }
                 if preview["reason_code"] in repairable:
+                    last_finish_reason = str(preview["reason_code"])
+                    last_finish_diagnostic = preview.get("finish_diagnostic")
+                    if (finish_repairs >= max_finish_repairs
+                            or turn >= max_rounds + finish_grace_rounds):
+                        append_executor_event(root, loop, {
+                            "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
+                            "reason_code": last_finish_reason,
+                            "finish_diagnostic": last_finish_diagnostic,
+                            "repair_attempts": finish_repairs,
+                            "executed": False,
+                        })
+                        return _finish(
+                            loop, root, request, kind="FINISH_CONTRACT_INVALID",
+                            summary="FAIL：Finish 契約多次無效："
+                                    + last_finish_reason + "；未執行新工具，證據未變。",
+                            complete=False,
+                        )
                     finish_repairs += 1
+                    if turn >= max_rounds:
+                        finish_repair_only = True
                     append_executor_event(root, loop, {
                         "round": turn, "kind": "MODEL_FINISH_SCHEMA_REPAIR",
-                        "reason_code": preview["reason_code"],
+                        "reason_code": last_finish_reason,
+                        "finish_diagnostic": last_finish_diagnostic,
+                        "repair_attempt": finish_repairs,
+                        "repair_only": finish_repair_only,
                         "expected_runtime_sha256": _digest(decision.expected_runtime),
                         "executed": False,
                     })
+                    diagnostic = json.dumps(
+                        last_finish_diagnostic or {},
+                        ensure_ascii=False, sort_keys=True,
+                        separators=(",", ":"),
+                    )[:1800]
                     hint = (
-                        "Finish Schema 不完整：" + preview["reason_code"]
-                        + "。請僅依上一輪真實 ToolResult、原始任務與"
-                        " Runtime available Finish fields 重新產生 finish，"
-                        "挑選與 Goal 有關的 data 欄位及 goal_checks。"
-                        " 不要重新呼叫工具，不要自行更改觀測值。"
+                        "Finish 契約修復；reason_code=" + last_finish_reason
+                        + "；欄位級診斷=" + diagnostic
+                        + "。請只修正被指出的 check_index / field / constraint_code；"
+                        "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
+                        "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
+                        "請提交新的 finish（而非 tool_call）。"
                     )
                     continue
             append_executor_event(root, loop, {
@@ -381,13 +430,26 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 ).hexdigest(),
                 "prior_tool_observation_count": len(recent),
                 "expected_runtime_sha256": _digest(decision.expected_runtime),
-            "goal_checks_sha256": _digest(decision.goal_checks),
+                "goal_checks_sha256": _digest(decision.goal_checks),
             })
             return _finish(
                 loop, root, request, kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
                 summary=decision.message, complete=True,
                 expected_runtime=decision.expected_runtime,
-            goal_checks=decision.goal_checks,
+                goal_checks=decision.goal_checks,
+            )
+        # No ToolCall is permitted in a Finish-only grace turn. Refusing to
+        # execute is essential: repairs must never create new side effects.
+        if finish_repair_only and decision.kind != "blocked":
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
+                "reason_code": "REPAIR_ONLY_TOOLCALL_PROHIBITED",
+                "repair_attempts": finish_repairs, "executed": False,
+            })
+            return _finish(
+                loop, root, request, kind="FINISH_CONTRACT_INVALID",
+                summary="FAIL：Finish 修復僅允許 finish 或 blocked，不得再執行工具。",
+                complete=False,
             )
         if decision.kind == "blocked":
             append_executor_event(root, loop, {
@@ -738,6 +800,19 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 summary="可能產生副作用的工具結果未確定，禁止重送：" + runtime_reason,
                 complete=False,
             )
+    if finish_repair_only:
+        append_executor_event(root, loop, {
+            "round": loop.turn_id, "kind": "MODEL_FINISH_CONTRACT_INVALID",
+            "reason_code": last_finish_reason or "FINISH_REPAIR_BUDGET_EXHAUSTED",
+            "finish_diagnostic": last_finish_diagnostic,
+            "repair_attempts": finish_repairs, "executed": False,
+        })
+        return _finish(
+            loop, root, request, kind="FINISH_CONTRACT_INVALID",
+            summary="FAIL：Finish 修復預算已耗盡，未通過欄位契約驗證："
+                    + (last_finish_reason or "FINISH_REPAIR_BUDGET_EXHAUSTED"),
+            complete=False,
+        )
     return _finish(
         loop, root, request, kind="MAX_ROUNDS",
         summary="PokeClaw Executor 已達決策回合上限，尚未收到 Finish。",
