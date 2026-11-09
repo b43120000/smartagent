@@ -71,6 +71,8 @@ def command_is_proven_observation(action):
         rf'(?:Test-Path|Get-Item|Get-Content)\s+-LiteralPath\s+{literal}(?:\s+-Raw)?',
         # A single SHA256 read, no pipe, redirect, expression, or side effects.
         rf'Get-FileHash\s+-LiteralPath\s+{literal}\s+-Algorithm\s+SHA256',
+        # Only a complete literal Get-FileHash SHA256 scalar comparison is proven read.
+        rf"\(Get-FileHash\s+-LiteralPath\s+{literal}\s+-Algorithm\s+SHA256\)\.Hash\s+-eq\s+'[0-9a-fA-F]{{64}}'",
         r'Get-Process\s+-Id\s+[0-9]+',
         r'\$PSVersionTable\.PSVersion',
         rf'Write-Output\s+{literal}',
