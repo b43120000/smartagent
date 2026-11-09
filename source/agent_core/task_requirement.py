@@ -288,7 +288,7 @@ def no_tool_terminal_candidate(assessment: Mapping[str, object]) -> bool:
     """
     if assessment.get("required_operations"):
         return False
-    if not set(assessment.get("resource_sources") or []).issubset({"NONE", "INLINE"}):
+    if set(assessment.get("resource_sources") or []) != {"NONE"}:
         return False
     if assessment.get("external_information_required") or assessment.get("side_effect_required"):
         return False

@@ -665,6 +665,7 @@ def accept_runtime_terminal(loop, proof: GoalEvidence, *, decision: str = "RUNTI
 
 def validate_runtime_answer_only(
     loop, *, goal: str, answer: str, had_attachments: bool = False,
+    upstream_requirement: Mapping | None = None,
 ) -> tuple[bool, str]:
     """Shared no-tool Finish eligibility; no terminal state is mutated.
 
@@ -694,9 +695,21 @@ def validate_runtime_answer_only(
         goal, attachments=False, authorized_paths=False,
         image_or_artifact_request=False, continuation=False,
     )
-    eligible, reason = classify_original_request(goal)
-    if not no_tool_terminal_candidate(requirement) or not eligible:
-        return False, "ANSWER_ONLY_REQUEST_NOT_ELIGIBLE:" + str(reason)[:100]
+    if upstream_requirement is None:
+        # Preserve the existing legacy Text Only admission exactly.
+        eligible, reason = classify_original_request(goal)
+        if not no_tool_terminal_candidate(requirement) or not eligible:
+            return False, "ANSWER_ONLY_REQUEST_NOT_ELIGIBLE:" + str(reason)[:100]
+    else:
+        # The unified Executor has its own upstream, request-bound evidence
+        # minimum. It can admit harmless greetings or creative writing that
+        # the legacy keyword gate intentionally declines. It cannot authorize
+        # tool operation or override actual pending ActionResults.
+        from .finish_evidence_requirement import valid_finish_evidence_requirement
+        if (not valid_finish_evidence_requirement(upstream_requirement, goal)
+                or upstream_requirement.get("answer_only_eligible") is not True
+                or upstream_requirement.get("tool_evidence_required") is not False):
+            return False, "UPSTREAM_ANSWER_ONLY_REQUIREMENT_REJECTED"
     if _UNSUPPORTED_CLAIM.search(answer):
         return False, "ANSWER_ONLY_UNVERIFIED_EXECUTION_CLAIM"
     if str(getattr(loop, "task_request", goal) or "") != str(goal):

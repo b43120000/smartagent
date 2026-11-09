@@ -23,7 +23,18 @@ def assess_finish_evidence_requirement(
         image_or_artifact_request=image_or_artifact_request,
         continuation=continuation,
     )
-    answer_only = bool(no_tool_terminal_candidate(requirement))
+    sources = set(requirement.get("resource_sources") or [])
+    # Inline user-provided text needs no external source, but the legacy
+    # PR0 candidate deliberately excludes INLINE. This is an Executor-only
+    # evidence requirement, not a global change to legacy routing.
+    inline_text = (
+        requirement.get("route") == "ANSWER_ONLY"
+        and sources == {"INLINE"}
+        and not requirement.get("required_operations")
+        and not requirement.get("external_information_required")
+        and not requirement.get("side_effect_required")
+    )
+    answer_only = bool(no_tool_terminal_candidate(requirement) or inline_text)
     return {
         "schema": SCHEMA,
         "request_sha256": hashlib.sha256(str(request).encode("utf-8")).hexdigest(),

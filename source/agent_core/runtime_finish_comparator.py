@@ -403,6 +403,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         eligible, reason = validate_runtime_answer_only(
             loop, goal=goal, answer=answer,
             had_attachments=bool(getattr(loop, "_tri_one_has_attached_context", False)),
+            upstream_requirement=requirement,
         )
         if not eligible:
             return _fail("ANSWER_ONLY_ADMISSION_REJECTED:" + str(reason)[:100], refs)
