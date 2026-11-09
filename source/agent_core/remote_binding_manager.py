@@ -11,6 +11,9 @@ from .process_file_lock import exclusive_process_lock
 from .remote_binding import load, normalize_skill_path, validate
 from .remote_skill_manager import RemoteSkillManager
 from .workspace_access import access_snapshot, require_writable_workspace
+from .workspace_turbo_binding import (
+    turbo_mode_for_workspace, prepare_turbo_mode_update,
+)
 from .paths import remote_binding_transactions_path
 
 
@@ -60,20 +63,23 @@ class RemoteBindingManager:
                 "chat_id": int(chat_id),
                 "created_at": now,
                 "expires_at": now + TRANSACTION_TTL_SEC,
+                "workspace_policy_revision": int((access.get("policy") or {}).get("revision", 0) or 0),
             }
             state["transactions"] = transactions
             write_json_atomic(self.state_path, state)
         workspaces = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["writable_workspaces"], 1)) or "  （尚未設定）"
         read_only = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["read_only_roots"], 1)) or "  （尚未設定）"
+        turbo = turbo_mode_for_workspace(binding["workspace"])
         return "\n".join((
             "目前允許讀寫的 Workspaces：", workspaces, "",
             "目前唯讀路徑：", read_only, "",
-            "支援 ChatGPT、Gemini、Claude、M365 與 Other HTTP(S) URL。Other 網站需先完成 DOM 校準。\n請修改以下三個欄位後，將整段訊息直接送出：",
+            "支援 ChatGPT、Gemini、Claude、M365 與 Other HTTP(S) URL。Other 網站需先完成 DOM 校準。\n請修改 WebGPT URL、Workspace、Turbo Mode 與 Skill Path 後，將整段訊息直接送出。Turbo 必須是 Workspace 的子路徑（off 為預設）：",
             "",
             UPDATE_OPEN,
             f"transaction_id={transaction_id}",
             f"webgpt_url={binding['gpt_url']}",
             f"workspace={binding['workspace']}",
+            f"turbomode={turbo}",
             f"skill_path={binding['skill_path']}",
             UPDATE_CLOSE,
             "",
@@ -87,10 +93,19 @@ class RemoteBindingManager:
             raise ValueError("remote_binding_update_block_invalid")
         body = value[len(UPDATE_OPEN):-len(UPDATE_CLOSE)].strip()
         fields = {}
+        # Telegram may paste a Markdown fenced single turbo field. Treat only
+        # exact backtick-only fence lines as presentation; never eval Markdown.
+        fence_open = False
+        fenced_fields = []
         for line in body.splitlines():
             line = line.strip()
+            if line == "```":
+                fence_open = not fence_open
+                continue
             if not line:
                 continue
+            if fence_open:
+                fenced_fields.append(line)
             if "=" not in line:
                 raise ValueError(f"remote_binding_update_line_invalid:{line[:80]}")
             key, raw = line.split("=", 1)
@@ -98,10 +113,15 @@ class RemoteBindingManager:
             if key in fields:
                 raise ValueError(f"remote_binding_update_duplicate_field:{key}")
             fields[key] = raw.strip()
+        if fence_open or (fenced_fields and
+                          (len(fenced_fields) != 1 or
+                           not fenced_fields[0].startswith("turbomode="))):
+            raise ValueError("remote_binding_update_turbo_fence_invalid")
         expected = {"transaction_id", "webgpt_url", "workspace", "skill_path"}
-        if set(fields) != expected:
+        allowed = expected | {"turbomode"}
+        if not expected.issubset(fields) or set(fields) - allowed:
             missing = sorted(expected - set(fields))
-            extra = sorted(set(fields) - expected)
+            extra = sorted(set(fields) - allowed)
             raise ValueError(
                 "remote_binding_update_fields_invalid:"
                 f"missing={','.join(missing)};extra={','.join(extra)}"
@@ -124,6 +144,10 @@ class RemoteBindingManager:
             ),
         })
         candidate["workspace"] = require_writable_workspace(candidate["workspace"])
+        turbo_value = fields.get("turbomode")
+        # Strict opt-in: old (pre-Git44) manager forms do not change Turbo;
+        # newly generated forms always show explicit off or actual active path.
+        turbo_prepared = prepare_turbo_mode_update(turbo_value, candidate["workspace"])
         transaction_id = fields["transaction_id"]
         now = time.time()
         with exclusive_process_lock(
@@ -137,6 +161,10 @@ class RemoteBindingManager:
                 raise ValueError("remote_binding_transaction_chat_mismatch")
             if float(transaction.get("expires_at", 0.0) or 0.0) <= now:
                 raise ValueError("remote_binding_transaction_expired")
+            if (turbo_prepared is not None and
+                    int(transaction.get("workspace_policy_revision", -1))
+                    != int(turbo_prepared["expected_revision"])):
+                raise ValueError("remote_binding_workspace_policy_stale_retry_manager")
 
             # Persist consumption before invoking the side effect.  A process
             # crash or response-delivery retry can therefore never replay an
@@ -148,13 +176,18 @@ class RemoteBindingManager:
             # The resident host owns the complete binding commit.  Keeping
             # persistence, registry mutation, security attestation and listener
             # hot-apply in one callback prevents a half-published binding.
+            if turbo_prepared is not None:
+                candidate["_turbo_prepared"] = turbo_prepared
             runtime_apply(candidate)
-
+        actual_turbo = turbo_mode_for_workspace(candidate["workspace"])
+        if turbo_prepared is not None and actual_turbo.casefold() != turbo_prepared["mode"].casefold():
+            raise RuntimeError("remote_binding_turbo_postcondition_failed")
         return "\n".join((
-            "✅ WebGPT、workspace 與 skill path 已更新。",
+            "✅ WebGPT、Workspace、Turbo Mode 與 Skill Path 已更新。",
             "",
             f"WebGPT URL：{candidate['gpt_url']}",
             f"Workspace：{candidate['workspace']}",
+            f"Turbo Mode：{actual_turbo}",
             f"Skill Path：{candidate['skill_path']}",
             "",
             "Telegram listener 持續在線；OS 安全預檢已同步更新，下一個遠端任務會使用新設定。",
