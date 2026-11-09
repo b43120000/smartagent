@@ -108,6 +108,48 @@ def _safe_archive_members(archive: Path) -> bool:
         return False
 
 
+def _safe_git_read(tokens: list[str], cwd: Path, root: Path) -> bool:
+    """Constrained read signatures, not a verb-prefix allowlist.
+
+    E.g. git show/diff --output may write files and --ext-diff may execute
+    external programs. Never accept arbitrary flags for a known read verb.
+    """
+    argv = tokens[1:]
+    if len(argv) >= 2 and argv[0] == "-C":
+        repo = _path(argv[1], cwd, root)
+        argv = argv[2:]
+    else:
+        repo = cwd
+    if repo is None or not is_within(repo, root) or not argv:
+        return False
+    verb, args = argv[0].casefold(), argv[1:]
+    case = {
+        "status": [[], ["--short"], ["--porcelain"], ["--porcelain=v1"]],
+        "rev-parse": [["HEAD"], ["--is-inside-work-tree"], ["--show-toplevel"]],
+        "branch": [["--show-current"]],
+        "log": [["-1"], ["-1", "--oneline"]],
+        "diff": [["--stat"], ["--name-only"]],
+        "ls-files": [[], ["--stage"], ["--cached"], ["--others", "--exclude-standard"]],
+        "ls-tree": [["HEAD"], ["-r", "HEAD"], ["--name-only", "HEAD"]],
+        "show": [["--stat", "HEAD"], ["--stat", "--oneline", "HEAD"]],
+        "cat-file": [],
+    }
+    if verb not in case:
+        return False
+    if args in case[verb]:
+        return True
+    if verb in {"cat-file", "ls-tree"} and len(args) == 2:
+        return (
+            (verb == "cat-file" and args[0] in {"-p", "-t", "-s"} and
+             bool(_SHA.fullmatch(args[1])))
+            or (verb == "ls-tree" and args[0] == "-r" and
+                bool(_SHA.fullmatch(args[1])))
+        )
+    if verb == "show" and len(args) == 2:
+        return args[0] == "--stat" and bool(_SHA.fullmatch(args[1]))
+    return False
+
+
 def _new_clone(command: list[str], cwd: Path, root: Path,
                original_request: str) -> tuple[bool, str]:
     args = command[2:]
@@ -240,10 +282,9 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
                     ok, reason = _archive_git(args, cwd, root,
                                               str(getattr(loop, "task_request", "") or ""))
                 elif _SAFE_GIT.fullmatch(command):
-                    git_repo = _path(args[2], cwd, root) if args[1:2] == ["-C"] and len(args) > 3 else cwd
-                    ok = git_repo is not None and is_within(git_repo, root)
+                    ok = _safe_git_read(args, cwd, root)
                     reason = ("TURBO_KNOWN_NONDESTRUCTIVE_SINGLE_COMMAND" if ok
-                              else "TURBO_GIT_REPO_OUT_OF_SCOPE")
+                              else "TURBO_GIT_READ_OPTIONS_UNPROVEN")
             elif re.fullmatch(r"(?i)tar(?:\.exe)?", args[0]):
                 ok, reason = _tar_operation(args, cwd, root)
             elif _SAFE_PS.fullmatch(command) and in_root:
