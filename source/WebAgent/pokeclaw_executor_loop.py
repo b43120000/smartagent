@@ -71,7 +71,8 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
 
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
-            evidence_requirement=None, environment_inventory=None) -> str:
+            evidence_requirement=None, environment_inventory=None,
+            runtime_status_catalog=None) -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
     return (
@@ -126,6 +127,10 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
         "Original user request:\n" + request + "\n"
         f"Round: {round_id}/{max_rounds}\n"
+        "Runtime ToolResult Status Ledger (all actual results, not only recent six; "
+        "rejected admissions are NOT ToolResults):\n"
+        + json.dumps(runtime_status_catalog or [], ensure_ascii=False,
+                     separators=(",", ":"))[:8500] + "\n"
         "Recent actual PokeClaw ToolResults:\n" + json.dumps(
             recent[-6:], ensure_ascii=False, separators=(",", ":")) + "\n"
         "Upstream evidence requirement (Runtime-owned minimum, not task plan):\n"
@@ -372,6 +377,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             field_catalog=finish_runtime_field_catalog(loop),
             evidence_requirement=requirement,
             environment_inventory=environment_inventory,
+            runtime_status_catalog=(
+                __import__("agent_core.runtime_finish_status_repair",
+                           fromlist=["finish_runtime_status_catalog"])
+                .finish_runtime_status_catalog(loop)
+            ),
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()
@@ -431,6 +441,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     goal_checks=decision.goal_checks, allow_open=True,
                     answer=decision.message,
                 )
+                from agent_core.runtime_finish_status_repair import diagnose_finish_status_mismatch
+                status_repair_diagnostic = diagnose_finish_status_mismatch(preview)
                 repairable = {
                     "MODEL_FINISH_GOAL_FACT_NOT_DECLARED",
                     "MODEL_GOAL_CHECKS_REQUIRED",
@@ -440,6 +452,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "EXPECTED_RUNTIME_SCHEMA_INVALID",
                     "EXPECTED_RUNTIME_FIELD_TYPE_INVALID",
                 }
+                if status_repair_diagnostic is not None:
+                    repairable.add("MODEL_RUNTIME_MISMATCH")
                 # Preserve Git34–35 behavior: after two repairs, missing
                 # declarations still reach a formal comparator FAIL. The
                 # Git42-specific schema error remains distinctly reportable.
@@ -447,7 +461,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         and not (finish_repairs >= max_finish_repairs
                                  and preview["reason_code"] != "MODEL_GOAL_CHECK_SCHEMA_INVALID")):
                     last_finish_reason = str(preview["reason_code"])
-                    last_finish_diagnostic = preview.get("finish_diagnostic")
+                    last_finish_diagnostic = status_repair_diagnostic or preview.get("finish_diagnostic")
                     if (finish_repairs >= max_finish_repairs
                             or turn >= max_rounds + finish_grace_rounds):
                         append_executor_event(root, loop, {
@@ -483,7 +497,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     hint = (
                         "Finish Schema 不完整；reason_code=" + last_finish_reason
                         + "；欄位級診斷=" + diagnostic
-                        + "。請只修正被指出的 check_index / field / constraint_code；"
+                        + "。FINISH_STATUS_REPAIR 應按照 runtime_actual_status 修正 fields.status；"
+                        "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
                         "請提交新的 finish（而非 tool_call）。"
