@@ -64,6 +64,40 @@ def test_turbo_cannot_escape_workspace_or_use_root(workspace, target, tmp_path):
     assert workspace_access.load_workspace_access_policy()["turbo_roots"] == []
 
 
+def test_turbo_symlink_traversal_is_not_authorized(workspace, tmp_path):
+    parent, turbo, other = workspace
+    try:
+        link = turbo / "outside-link"
+        link.symlink_to(other, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("This platform does not permit symlink creation")
+    with pytest.raises(ValueError):
+        apply_turbo_control("turbomode=" + str(link), workspace=parent)
+
+
+def test_manager_status_reads_telegram_policy_without_private_copy(
+    workspace, monkeypatch,
+):
+    from agent_core import workspace_manager
+    parent, turbo, other = workspace
+    apply_turbo_control("turbomode=" + str(turbo), workspace=parent)
+    policy = workspace_access.load_workspace_access_policy()
+    monkeypatch.setattr(workspace_manager, "_management_access_snapshot", lambda: {
+        "security_status": "SOFTWARE_ONLY",
+        "writable_workspaces": tuple(policy["writable_workspaces"]),
+        "read_only_roots": tuple(policy["read_only_roots"]),
+        "turbo_roots": tuple(policy["turbo_roots"]),
+        "policy": policy,
+    })
+    monkeypatch.setattr(workspace_manager, "load_remote", lambda *a: {})
+    monkeypatch.setattr(workspace_manager, "load_startup_preferences", lambda: {})
+    monkeypatch.setattr(workspace_manager, "load_gar_webgpt2", lambda: "")
+    result = workspace_manager._binding_snapshot()
+    assert result["turbo_roots"] == [str(turbo)]
+    assert result["policy_revision"] == policy["revision"]
+
+
+
 def test_turbo_secondary_approval_is_not_unrestricted_authority(workspace, monkeypatch):
     parent, turbo, other = workspace
     workspace_access.set_turbo_root(turbo, workspace=parent)
