@@ -572,33 +572,47 @@ def main():
                         continue
                     # Persist the human choice BEFORE enqueue. A denied
                     # command is likewise bound and never executed.
-                    decision = resume_gate.decide(
-                        approval_id, allowed=choice == "APPROVED",
-                        owner=resume_owner, channel_id=resume_channel,
-                    )
-                    fields = decision["incoming"]
-                    from agent_core.current_conversation_adapter import build_webcopilot_message
-                    inbound = build_webcopilot_message(
-                        str(fields["raw_request"]),
-                        conversation_url=str(fields["conversation_url"]),
-                        turn_index=int(fields["turn_index"]),
-                        conversation_title=str(fields.get("conversation_title") or ""),
-                        allow_plain=True,
-                    )
-                    inbound = _dataclass_replace(
-                        inbound, metadata={
-                            **dict(inbound.metadata),
-                            "resume_approval_id": approval_id,
-                        },
-                    )
-                    accepted = ingress_gateway.accept(inbound, workspace=workspace)
-                    task, created = accepted.task, accepted.created
-                    if task is None:
-                        raise ResumeApprovalError("resume_ingress_task_missing")
-                    resume_gate.bind_child(
-                        approval_id, child_task_id=task.task_id,
-                        owner=resume_owner,
-                    )
+                    try:
+                        decision = resume_gate.decide(
+                            approval_id, allowed=choice == "APPROVED",
+                            owner=resume_owner, channel_id=resume_channel,
+                        )
+                        fields = decision["incoming"]
+                        from agent_core.current_conversation_adapter import build_webcopilot_message
+                        inbound = build_webcopilot_message(
+                            str(fields["raw_request"]),
+                            conversation_url=str(fields["conversation_url"]),
+                            turn_index=int(fields["turn_index"]),
+                            conversation_title=str(fields.get("conversation_title") or ""),
+                            allow_plain=True,
+                        )
+                        inbound = _dataclass_replace(
+                            inbound, metadata={
+                                **dict(inbound.metadata),
+                                "resume_approval_id": approval_id,
+                            },
+                        )
+                        accepted = ingress_gateway.accept(inbound, workspace=workspace)
+                        task, created = accepted.task, accepted.created
+                        if task is None:
+                            raise ResumeApprovalError("resume_ingress_task_missing")
+                        resume_gate.bind_child(
+                            approval_id, child_task_id=task.task_id,
+                            owner=resume_owner,
+                        )
+                    except Exception as exc:
+                        # An already-recorded choice does not justify a
+                        # speculative replay or a new queue entry.
+                        close_resume_dialog(page, approval_id)
+                        pending_resume = None
+                        _present_webcopilot_notice(
+                            page,
+                            "接續授權已記錄，但啟動未完成（"
+                            + type(exc).__name__
+                            + "）；請確認任務進度後再接續，不會自動重播指令。",
+                            "error",
+                        )
+                        continue
                     close_resume_dialog(page, approval_id)
                     pending_resume = None
                     tracked_tasks[task.task_id] = str(task.state)
