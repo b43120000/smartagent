@@ -128,7 +128,7 @@ def test_even_matching_unknown_is_not_pass(tmp_path, monkeypatch):
 def test_unproven_multistep_goal_fails_closed(tmp_path, monkeypatch):
     loop, _, board = _run(tmp_path, monkeypatch, request=REQUEST, present=True)
     assert loop.terminal_outcome == "FAILED"
-    assert board["terminal"]["finish_comparison"]["reason_code"] == "GOAL_COVERAGE_NOT_PROVEN"
+    assert board["terminal"]["finish_comparison"]["reason_code"] == "MODEL_GOAL_CHECKS_REQUIRED"
 
 
 def test_command_nonzero_tool_failure_can_pass_explicit_negative_goal(tmp_path, monkeypatch):
