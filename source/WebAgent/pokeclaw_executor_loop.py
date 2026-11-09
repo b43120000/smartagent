@@ -404,6 +404,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         repeated = repeated + 1 if signature == last_fingerprint else 0
         last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
+        unknown_approval = None
         if action and decision.tool == "run_command":
             from agent_core.command_risk import classify_command
             risk_class = classify_command(action)
@@ -420,20 +421,29 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     request_unknown_command_approval,
                 )
                 from agent_core.resume_command_approval import ResumeCommandGate
-                preapproval = ResumeCommandGate(root).consume_for_action(
-                    loop=loop, action=action,
+                from agent_core.command_family_approval import TaskCommandFamilyGrants
+                family_gate = TaskCommandFamilyGrants(root)
+                family_match = family_gate.match(loop=loop, action=action)
+                preapproval = (
+                    None if family_match is not None
+                    else ResumeCommandGate(root).consume_for_action(loop=loop, action=action)
                 )
                 append_executor_event(root, loop, {
-                    "round": turn, "kind": "HUMAN_APPROVAL_REQUESTED",
+                    "round": turn, "kind": (
+                        "HUMAN_APPROVAL_REUSED" if family_match is not None
+                        else "HUMAN_APPROVAL_REQUESTED"
+                    ),
                     "toolName": "run_command",
                     "action_id": action["action_id"],
                     "arguments_sha256": _digest(decision.arguments),
                     "risk_class": "UNKNOWN", "executed": False,
                 })
                 approval = (
-                    preapproval if preapproval is not None
+                    family_match if family_match is not None
+                    else preapproval if preapproval is not None
                     else request_unknown_command_approval(loop, action)
                 )
+                unknown_approval = approval
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "HUMAN_APPROVAL_DECIDED",
                     "toolName": "run_command",
@@ -672,6 +682,22 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 },
             },
         })
+        if (unknown_approval is not None
+                and unknown_approval.get("state") == "APPROVED"
+                and unknown_approval.get("reason") != "same_task_command_family_reused"
+                and runtime_status == "SUCCEEDED"
+                and receipt.get("executed") is True):
+            from agent_core.command_family_approval import TaskCommandFamilyGrants
+            if TaskCommandFamilyGrants(root).remember(
+                    loop=loop, action=action,
+                    approval_id=unknown_approval["approval_id"],
+                    evidence_ref=evidence_ref):
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "COMMAND_FAMILY_GRANT_RECORDED",
+                    "toolName": "run_command", "action_id": action["action_id"],
+                    "approval_id": unknown_approval["approval_id"],
+                    "evidence_ref": evidence_ref, "executed": False,
+                })
         recent.append({
             "round": turn, "tool": action["tool"],
             "action_id": action["action_id"],
