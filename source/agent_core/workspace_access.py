@@ -215,9 +215,12 @@ def is_valid_turbo_root(path: str | Path, workspace: str | Path,
         if not is_within(requested, parent):
             return False
         reject_reparse_components(requested, parent)
-        target = requested.resolve(strict=True)
+        # A future child directory may be preconfigured before a deployment
+        # creates it. Every existing component must still pass reparse checks.
+        target = requested.resolve(strict=False)
         root = parent.resolve(strict=True)
-        if not target.is_dir() or not root.is_dir() or target == root:
+        if (not root.is_dir() or target == root
+                or (target.exists() and not target.is_dir())):
             return False
         if not is_within(target, root):
             return False
