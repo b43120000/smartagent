@@ -155,7 +155,7 @@ def finish_executor_run(root: str | Path, loop, *,
     kind = str(terminal_kind)
     if kind not in {
         "MODEL_REPORTED_COMPLETE_UNVERIFIED", "BLOCKED", "MAX_ROUNDS",
-        "FORMAT_ERROR", "EXECUTION_OUTCOME_UNKNOWN",
+        "FORMAT_ERROR", "EXECUTION_OUTCOME_UNKNOWN", "FINISH_CONTRACT_INVALID",
     }:
         raise ValueError("executor_run_blackboard_terminal_kind_invalid")
     value["executor_state"] = kind
