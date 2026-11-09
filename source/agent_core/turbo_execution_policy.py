@@ -193,8 +193,10 @@ def _archive_git(command: list[str], cwd: Path, root: Path,
     if len(command) not in (7, 8) or command[1] != "-C" or command[3] != "archive":
         return False, "TURBO_ARCHIVE_GRAMMAR_UNPROVEN"
     repo = _path(command[2], cwd, root)
-    if repo is None or not repo.is_dir() or not (repo / ".git").exists():
+    if repo is None or not repo.is_dir() or not (repo / ".git").is_dir():
         return False, "TURBO_ARCHIVE_SOURCE_UNVERIFIED"
+    if _path(str(repo / ".git"), cwd, root) is None:
+        return False, "TURBO_ARCHIVE_GIT_METADATA_OUT_OF_SCOPE"
     if command[4] != "--format=tar" or not command[5].startswith("--output="):
         return False, "TURBO_ARCHIVE_OPTIONS_UNPROVEN"
     if not _SHA.fullmatch(command[6]) or command[6] not in original_request:
