@@ -6471,15 +6471,47 @@ class WebAgentProtocolLoop:
             parse_turbo_control, apply_turbo_control, turbo_control_reply,
         )
         if parse_turbo_control(request) is not None:
+            # This is original authenticated user input, not model output.
+            # Give it a distinct Runtime-owned terminal receipt: the normal
+            # evidence-backed goal terminal must never be forged for settings.
+            import hashlib
+            from agent_core.tri_one_runtime_terminal import TERMINAL_SCHEMA
+            self.run_id = request_id or ("WA-" + uuid.uuid4().hex[:16].upper())
+            self.task_id = task_id or ("TASK-" + uuid.uuid4().hex[:20].upper())
+            self.task_epoch = task_epoch or uuid.uuid4().hex
+            self.task_request = request
+            self._turbo_user_control_applied = True
+            outcome = None
             try:
-                result = apply_turbo_control(request, workspace=self.workspace)
-                self.protocol_state = "CONTROL_APPLIED"
-                self.terminal_outcome = "SUCCESS"
-                return turbo_control_reply(result)
+                outcome = apply_turbo_control(request, workspace=self.workspace)
+                answer = turbo_control_reply(outcome)
+                status = "SUCCESS"
             except (ValueError, OSError, RuntimeError) as exc:
-                self.protocol_state = "CONTROL_REJECTED"
-                self.terminal_outcome = "FAILED"
-                return "Turbo Mode 拒絕：" + str(exc)[:400]
+                answer = "Turbo Mode 拒絕：" + str(exc)[:400]
+                status = "FAILED"
+            self.terminal_outcome = status
+            self.protocol_state = "COMPLETED"
+            self.terminal_acceptance = {
+                "schema": TERMINAL_SCHEMA,
+                "admission_status": "ACCEPTED",
+                "decision": "RUNTIME_TURBO_CONTROL_V1",
+                "completion_kind": "OPERATOR_CONTROL",
+                "request_id": self.run_id,
+                "task_id": self.task_id,
+                "task_epoch": self.task_epoch,
+                "runtime_state": "COMPLETED",
+                "task_outcome": status,
+                "final_verdict": "PASS" if status == "SUCCESS" else "FAIL",
+                "verification_status": "PASS" if status == "SUCCESS" else "FAIL",
+                "evidence_verdict": "PASS" if status == "SUCCESS" else "FAIL",
+                "evidence_refs": [],
+                "workspace": str(self.workspace),
+                "turbo_status": str((outcome or {}).get("status") or "REJECTED"),
+                "turbo_path": str((outcome or {}).get("path") or ""),
+                "turbo_policy_revision": int((outcome or {}).get("revision") or 0),
+                "control_sha256": hashlib.sha256(request.encode("utf-8")).hexdigest(),
+            }
+            return answer
         self.continuation_source = None
         self.continuation_mode = ""
         self._protocol_spec_rejection = {}
