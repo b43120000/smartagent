@@ -313,7 +313,7 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                             expected_type=$(if ($expected -match '^[A-Za-z0-9_ |.\[\]]{1,64}$') { $expected } else { '[REDACTED_TYPE]' })
                             actual_type=$(if ($actual -match '^[A-Za-z0-9_ |.\[\]]{1,64}$') { $actual } else { '[REDACTED_TYPE]' })
                             actual_value=(Safe-Code $issue.actual_value)
-                            allowed_values=@(Safe-CodeList @($issue.allowed_values))
+                            allowed_values=(Safe-CodeList @($issue.allowed_values))
                             constraint_code=(Safe-Code $issue.constraint_code)
                         }
                     }
