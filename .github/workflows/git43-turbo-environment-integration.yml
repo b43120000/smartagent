@@ -53,5 +53,7 @@ jobs:
           source/WebAgent/tests/test_git40_software_resume_approval.py
           source/WebAgent/tests/test_git41_command_family_approval.py
           source/WebAgent/tests/test_git42_finish_contract_repair.py -q
+      - name: ACL OFF Workspace Policy compatibility
+        run: python -B source/WebAgent/tests/validate_acl_off_workspace_manager.py
       - name: Inventory and source readiness
         run: python -B -m pytest source/WebAgent/tests/test_remote_artifact_access_and_software_inventory.py -q
