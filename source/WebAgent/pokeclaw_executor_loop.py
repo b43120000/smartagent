@@ -478,7 +478,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                             complete=False,
                         )
                     finish_repairs += 1
-                    if turn >= max_rounds:
+                    # Status-only Finish repair can never authorize another
+                    # tool, even when ordinary Action rounds remain available.
+                    if turn >= max_rounds or status_repair_diagnostic is not None:
                         finish_repair_only = True
                     append_executor_event(root, loop, {
                         "round": turn, "kind": (
