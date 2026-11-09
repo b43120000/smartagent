@@ -272,6 +272,7 @@ $sourceInfo = New-Object 'System.Collections.Generic.List[object]'
 $warnings = New-Object 'System.Collections.Generic.List[string]'
 $executorRejections = @()
 $executorFinishEvents = @()
+$executorTurboDecisions = @()
 $executorTerminalKind = ''
 $executorBoardStatus = 'NOT_FOUND'
 $executorExpectedRejections = -1
@@ -338,11 +339,21 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                 foreach ($ev in @($executorBoard.events)) {
                     if ($null -eq $ev -or [string]$ev.kind -notin @(
                         'MODEL_DECISION_REJECTED', 'MODEL_FINISH_SCHEMA_REPAIR',
-                        'MODEL_FINISH_CONTRACT_INVALID'
+                        'MODEL_FINISH_STATUS_REPAIR', 'MODEL_FINISH_CONTRACT_INVALID'
                     )) { continue }
                     $diag = $ev.finish_diagnostic
                     $diagnosticFields = @()
+                    $statusCorrections = @()
                     if ($null -ne $diag) {
+                        foreach ($correction in @($diag.corrections) | Select-Object -First 32) {
+                            if ($null -eq $correction) { continue }
+                            $statusCorrections += [ordered]@{
+                                evidence_ref=(Safe-Code $correction.evidence_ref)
+                                field=(Safe-Code $correction.field)
+                                model_claimed_status=(Safe-Code $correction.model_claimed_status)
+                                runtime_actual_status=(Safe-Code $correction.runtime_actual_status)
+                            }
+                        }
                         $diagnosticFields = @(Safe-CodeList @($diag.allowed_values))
                     }
                     $executorFinishEvents += [ordered]@{
@@ -359,8 +370,35 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         expected_type=$(if ($null -ne $diag) { Safe-Code $diag.expected_type } else { '' })
                         actual_type=$(if ($null -ne $diag) { Safe-Code $diag.actual_type } else { '' })
                         allowed_values=@($diagnosticFields)
+                        status_corrections=@($statusCorrections)
                         executed=$false
                         raw_model_response_included=$false
+                    }
+                }
+                foreach ($ev in @($executorBoard.events)) {
+                    if ($null -eq $ev -or [string]$ev.kind -cne 'TURBO_DECISION') { continue }
+                    $executorTurboDecisions += [ordered]@{
+                        schema='SMARTAGENT_TURBO_DECISION_RCA_V1'
+                        round=$(if ($null -ne $ev.round) { [int]$ev.round } else { 0 })
+                        tool=(Safe-Code $ev.toolName)
+                        action_id=(Safe-Code $ev.action_id)
+                        command_sha256=(Safe-Code $ev.command_sha256)
+                        arguments_sha256=(Safe-Code $ev.arguments_sha256)
+                        risk_class=(Safe-Code $ev.risk_class)
+                        admission_status=(Safe-Code $ev.admission_status)
+                        decision=(Safe-Code $ev.decision)
+                        reason_code=(Safe-Code $ev.reason_code)
+                        admission_reason_code=(Safe-Code $ev.admission_reason_code)
+                        auto_confirm=[bool]$ev.auto_confirm
+                        turbo_policy_qualified=[bool]$ev.turbo_policy_qualified
+                        policy_revision=$(if ($null -ne $ev.policy_revision) { [int]$ev.policy_revision } else { 0 })
+                        workspace_root_sha256=(Hash-Text ([string]$ev.workspace_root))
+                        turbo_root_sha256=(Hash-Text ([string]$ev.turbo_root))
+                        working_directory_sha256=(Hash-Text ([string]$ev.working_directory))
+                        executed=$false
+                        authorization_granted=$false
+                        raw_command_included=$false
+                        raw_path_included=$false
                     }
                 }
                 if ($null -ne $executorBoard.terminal) {
@@ -391,9 +429,12 @@ $executorAdmissionSummary = [ordered]@{
     raw_result_included=$false
     terminal_kind=$executorTerminalKind
     finish_diagnostic_event_count=@($executorFinishEvents).Count
+    turbo_decision_event_count=@($executorTurboDecisions).Count
+    turbo_auto_confirm_count=@($executorTurboDecisions | Where-Object { $_.auto_confirm }).Count
 }
 Write-Json (Join-Path $stage 'executor_admission_summary.json') $executorAdmissionSummary
 Write-Json (Join-Path $stage 'executor_finish_diagnostics.json') @($executorFinishEvents)
+Write-Json (Join-Path $stage 'executor_turbo_decisions.json') @($executorTurboDecisions)
 
 try {
     foreach ($source in $sources) {
@@ -1617,6 +1658,8 @@ try {
         'Goal transition acceptance/rejection codes with condition IDs; no Planner rationale',
         'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.',
         'Git27: typed Prerequisite, Failure Causality, Contract, Action Admission and Action Trace summaries.',
+        'Git45: Turbo decisions with risk class, reason code, policy revision and SHA256 root digests; no raw paths.',
+        'Git45: Finish status-only repair diagnostics retain typed REJECTED/FAILED differences; no raw model Finish.',
         'Git27: causal coverage status explicitly reports any missing field, source truncation or parse failure.',
         'Minimal Core v10: schema-only, request-scoped JSON parser diagnostics; no raw model response.',
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
