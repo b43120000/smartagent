@@ -271,6 +271,8 @@ $checkpointNames = New-Object 'System.Collections.Generic.HashSet[string]'
 $sourceInfo = New-Object 'System.Collections.Generic.List[object]'
 $warnings = New-Object 'System.Collections.Generic.List[string]'
 $executorRejections = @()
+$executorFinishEvents = @()
+$executorTerminalKind = ''
 $executorBoardStatus = 'NOT_FOUND'
 $executorExpectedRejections = -1
 $executorObservedRejections = 0
@@ -333,8 +335,37 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         raw_command_included=$false
                     }
                 }
+                foreach ($ev in @($executorBoard.events)) {
+                    if ($null -eq $ev -or [string]$ev.kind -notin @(
+                        'MODEL_DECISION_REJECTED', 'MODEL_FINISH_SCHEMA_REPAIR',
+                        'MODEL_FINISH_CONTRACT_INVALID'
+                    )) { continue }
+                    $diag = $ev.finish_diagnostic
+                    $diagnosticFields = @()
+                    if ($null -ne $diag) {
+                        $diagnosticFields = @(Safe-CodeList @($diag.allowed_values))
+                    }
+                    $executorFinishEvents += [ordered]@{
+                        round=$(if ($null -ne $ev.round) { [int]$ev.round } else { 0 })
+                        event=(Safe-Code $ev.kind)
+                        reason_code=(Safe-Code $ev.reason_code)
+                        error_code=(Safe-Code $ev.error_code)
+                        repair_attempt=$(if ($null -ne $ev.repair_attempt) { [int]$ev.repair_attempt } else { 0 })
+                        repair_attempts=$(if ($null -ne $ev.repair_attempts) { [int]$ev.repair_attempts } else { 0 })
+                        repair_only=[bool]$ev.repair_only
+                        check_index=$(if ($null -ne $diag -and $null -ne $diag.check_index) { [int]$diag.check_index } else { -1 })
+                        field=$(if ($null -ne $diag) { Safe-Code $diag.field } else { '' })
+                        constraint_code=$(if ($null -ne $diag) { Safe-Code $diag.constraint_code } else { '' })
+                        expected_type=$(if ($null -ne $diag) { Safe-Code $diag.expected_type } else { '' })
+                        actual_type=$(if ($null -ne $diag) { Safe-Code $diag.actual_type } else { '' })
+                        allowed_values=@($diagnosticFields)
+                        executed=$false
+                        raw_model_response_included=$false
+                    }
+                }
                 if ($null -ne $executorBoard.terminal) {
                     $executorExpectedRejections = [int]$executorBoard.terminal.admission_rejection_count
+                    $executorTerminalKind = Safe-Code $executorBoard.terminal.kind
                 }
             } else {
                 $warnings.Add('EXECUTOR_BLACKBOARD_IDENTITY_OR_SCHEMA_MISMATCH')
@@ -358,8 +389,11 @@ $executorAdmissionSummary = [ordered]@{
     identity_matched=($executorBoardStatus -eq 'MATCHED')
     raw_command_included=$false
     raw_result_included=$false
+    terminal_kind=$executorTerminalKind
+    finish_diagnostic_event_count=@($executorFinishEvents).Count
 }
 Write-Json (Join-Path $stage 'executor_admission_summary.json') $executorAdmissionSummary
+Write-Json (Join-Path $stage 'executor_finish_diagnostics.json') @($executorFinishEvents)
 
 try {
     foreach ($source in $sources) {
