@@ -185,7 +185,7 @@ def test_webcopilot_modal_renders_explicit_choices_without_model_tool():
     pre={"approval_id":"APR-"+"A"*20}
     assert show_resume_dialog(page,pre,"確認執行 python check.py")
     assert "event.isTrusted" in page.requests[0][0]
-    assert "允許執行一次" in page.requests[0][0]
+    assert "允許本任務同類指令" in page.requests[0][0]
     assert "拒絕" in page.requests[0][0]
     assert "textContent=message" in page.requests[0][0]
     assert poll_resume_dialog(page,pre["approval_id"])=="APPROVED"
@@ -196,7 +196,7 @@ def test_webcopilot_modal_renders_explicit_choices_without_model_tool():
 def test_telegram_resume_button_is_one_time_not_delete():
     markup=security_approval_inline_keyboard("APR-"+"A"*20,approval_kind="RESUME_UNKNOWN_COMMAND")
     buttons=markup["inline_keyboard"][0]
-    assert [b["text"] for b in buttons]==["允許執行一次","拒絕"]
+    assert [b["text"] for b in buttons]==["允許本任務同類指令","拒絕"]
     assert buttons[0]["callback_data"]=="security_approval:APR-"+"A"*20
 
 
@@ -263,7 +263,7 @@ def test_telegram_software_prompt_and_callback_queue_only_after_choice(tmp_path)
     )
     assert receiver._offer_pre_resume_decision(parent,update_id=1)
     assert not enqueued and not accepted_events
-    assert "允許執行一次" in sent[0][2]["reply_markup"]["inline_keyboard"][0][0]["text"]
+    assert "允許本任務同類指令" in sent[0][2]["reply_markup"]["inline_keyboard"][0][0]["text"]
     gate=ResumeCommandGate(tmp_path)
     challenge=next(iter(gate._load()["challenges"].values()))
     approval_id=challenge["approval_id"]
