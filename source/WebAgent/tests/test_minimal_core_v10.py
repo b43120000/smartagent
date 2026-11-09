@@ -110,7 +110,8 @@ def test_command_admission_and_proven_read_only(tmp_path):
     cmd, reason = admit_minimal_action(MinimalDecision(
         "tool_call", "run_command",
         {"command": "cmd /c echo ok", "operation": "INSPECT"}), tools)
-    assert cmd is None and reason == "command_not_proven_read_only"
+    # Unknown INSPECT requires a stronger postcondition contract and then human permission.
+    assert cmd is None and reason == "mutation_success_criteria_required"
 
 
 def test_runtime_owned_field_rejected(tmp_path):
