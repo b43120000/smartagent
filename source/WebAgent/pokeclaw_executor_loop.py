@@ -553,6 +553,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         unknown_approval = None
         risk_class = ""
         turbo = None
+        auto_confirm = False
         if decision.tool == "run_command":
             # Persist EVERY Turbo decision, including disabled/mismatched
             # Workspace and pre-execution Admission rejections. Never only
