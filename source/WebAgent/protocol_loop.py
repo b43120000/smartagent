@@ -6465,6 +6465,21 @@ class WebAgentProtocolLoop:
         trusted_authorized_paths: list[str] | None = None,
     ) -> str:
         """Run one request and always release its browser ownership on failure."""
+        # A human-authored, standalone Turbo control is a host setting, not an
+        # Agent action. Do not ask the model to interpret authorization text.
+        from agent_core.turbo_settings_command import (
+            parse_turbo_control, apply_turbo_control, turbo_control_reply,
+        )
+        if parse_turbo_control(request) is not None:
+            try:
+                result = apply_turbo_control(request, workspace=self.workspace)
+                self.protocol_state = "CONTROL_APPLIED"
+                self.terminal_outcome = "SUCCESS"
+                return turbo_control_reply(result)
+            except (ValueError, OSError, RuntimeError) as exc:
+                self.protocol_state = "CONTROL_REJECTED"
+                self.terminal_outcome = "FAILED"
+                return "Turbo Mode 拒絕：" + str(exc)[:400]
         self.continuation_source = None
         self.continuation_mode = ""
         self._protocol_spec_rejection = {}
