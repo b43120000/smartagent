@@ -318,7 +318,7 @@ def format_resume_approval_prompt(ch: Mapping) -> str:
         f"工作目錄：{ch.get('action', {}).get('working_directory', '')}\n"
         f"指令：{ch.get('action', {}).get('command', '')}\n"
         f"Command SHA256：{ch.get('command_sha256', '')}\n"
-        "請選擇「允許執行一次」或「拒絕」。選擇會先保存，再開始接續。\n"
-        "授權只對相同命令與本次接續有效，不會跳過原有安全、Workspace、ACL 或驗證檢查。\n"
+        "請選擇「允許本任務同類指令」或「拒絕」。選擇會先保存，再開始接續。\n"
+        "首次接續僅允許精確命令；該命令執行成功後，同一任務僅路徑不同的安全指令結構可沿用授權；不會跳過安全、Workspace、ACL 或驗證檢查。\n"
         f"approval_id: {ch.get('approval_id', '')}"
     )
