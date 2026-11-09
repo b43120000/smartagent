@@ -759,6 +759,71 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
     receipt = getattr(loop, "terminal_acceptance", {}) or {}
     receipt = dict(receipt) if isinstance(receipt, Mapping) else {}
     outcome = str(getattr(loop, "terminal_outcome", "UNKNOWN") or "UNKNOWN").upper()
+    if receipt.get("decision") == "RUNTIME_TURBO_CONTROL_V1":
+        # Explicit operator settings are not model Goal PASS. Verify the
+        # Runtime-owned user-control source and the current shared policy;
+        # never accept a fabricated model receipt or a stale revision.
+        if (receipt.get("schema") != TERMINAL_SCHEMA
+                or receipt.get("admission_status") != "ACCEPTED"
+                or getattr(loop, "_turbo_user_control_applied", False) is not True
+                or receipt.get("completion_kind") != "OPERATOR_CONTROL"
+                or receipt.get("evidence_refs") != []
+                or receipt.get("task_outcome") != outcome
+                or receipt.get("runtime_state") != "COMPLETED"
+                or not all(
+                    receipt.get(key) == getattr(loop, attr, None)
+                    for key, attr in (
+                        ("task_id", "task_id"),
+                        ("request_id", "run_id"),
+                        ("task_epoch", "task_epoch"),
+                    )
+                )):
+            return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                   "TURBO_CONTROL_RECEIPT_INVALID")
+        from .turbo_settings_command import parse_turbo_control
+        from .workspace_access import load_workspace_access_policy
+        from pathlib import Path
+        expected_request = str(getattr(loop, "task_request", "") or "")
+        if (parse_turbo_control(expected_request) is None
+                or receipt.get("control_sha256")
+                != hashlib.sha256(expected_request.encode("utf-8")).hexdigest()
+                or receipt.get("workspace") != str(loop.workspace)):
+            return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                   "TURBO_CONTROL_ORIGIN_MISMATCH")
+        if outcome == "FAILED" and receipt.get("turbo_status") == "REJECTED":
+            return TerminalVerdict("COMPLETED", "FAILED", receipt,
+                                   "TURBO_CONTROL_REJECTED")
+        if outcome != "SUCCESS":
+            return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                   "TURBO_CONTROL_OUTCOME_INVALID")
+        try:
+            policy = load_workspace_access_policy()
+            if int(policy.get("revision", 0)) != int(receipt["turbo_policy_revision"]):
+                return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                       "TURBO_CONTROL_POLICY_STALE")
+            roots = {
+                str(Path(value).expanduser().resolve())
+                for value in policy.get("turbo_roots", [])
+            }
+            workspace = Path(str(loop.workspace)).expanduser().resolve()
+            if receipt.get("turbo_status") == "ENABLED":
+                path = str(Path(str(receipt.get("turbo_path"))).expanduser().resolve())
+                valid = path in roots and path != str(workspace) and workspace in Path(path).parents
+            elif receipt.get("turbo_status") == "DISABLED":
+                valid = all(
+                    workspace != Path(item) and workspace not in Path(item).parents
+                    for item in roots
+                )
+            else:
+                valid = False
+            if not valid:
+                return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                       "TURBO_CONTROL_READBACK_MISMATCH")
+            return TerminalVerdict("COMPLETED", "SUCCESS", receipt,
+                                   "TURBO_OPERATOR_SETTING_VERIFIED")
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                   "TURBO_CONTROL_READBACK_UNAVAILABLE")
     if receipt.get("schema") == TERMINAL_SCHEMA and receipt.get("admission_status") == "ACCEPTED":
         identities = (
             ("task_id", "task_id"), ("request_id", "run_id"),
