@@ -481,7 +481,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     if turn >= max_rounds:
                         finish_repair_only = True
                     append_executor_event(root, loop, {
-                        "round": turn, "kind": "MODEL_FINISH_SCHEMA_REPAIR",
+                        "round": turn, "kind": (
+                            "MODEL_FINISH_STATUS_REPAIR" if status_repair_diagnostic
+                            else "MODEL_FINISH_SCHEMA_REPAIR"
+                        ),
                         "reason_code": last_finish_reason,
                         "finish_diagnostic": last_finish_diagnostic,
                         "repair_attempt": finish_repairs,
@@ -594,6 +597,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "admission_status": "ADMITTED" if action else "REJECTED_BEFORE_EXECUTION",
                 "admission_reason_code": str(rejected or "")[:128],
                 "auto_confirm": auto_confirm,
+                "turbo_policy_qualified": bool(turbo.get("auto_confirm")),
                 "decision": (
                     "AUTO_CONFIRM" if auto_confirm
                     else "NORMAL_ADMISSION" if action and risk_class != "UNKNOWN"
@@ -836,6 +840,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "arguments": _safe_arguments(decision.arguments),
             "arguments_sha256": _digest(decision.arguments),
             "mutating": mutating,
+            "turbo_decision": (
+                "NOT_APPLICABLE_TYPED_ACTION" if action["tool"] != "run_command"
+                else ("AUTO_CONFIRM" if auto_confirm
+                      else "NORMAL_ADMISSION" if risk_class != "UNKNOWN"
+                      else "HUMAN_CONFIRMATION_REQUIRED")
+            ),
+            "command_risk_class": risk_class,
         })
         loop.protocol_state = "EXECUTING"
         try:
@@ -884,6 +895,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "status": runtime_status, "reason_code": runtime_reason[:160],
                 "executed": receipt.get("executed") is True,
                 "result_sha256": digest, "evidence_ref": evidence_ref,
+                "turbo_auto_confirm": bool(auto_confirm),
+                "turbo_decision_reason_code": (
+                    str((turbo or {}).get("reason_code") or "")[:120]
+                    if action["tool"] == "run_command" else "NOT_APPLICABLE_TYPED_ACTION"
+                ),
                 "side_effect_may_have_occurred": bool(
                     mutating and receipt.get("executed")
                 ),
