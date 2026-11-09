@@ -415,7 +415,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         separators=(",", ":"),
                     )[:1800]
                     hint = (
-                        "Finish 契約修復；reason_code=" + last_finish_reason
+                        "Finish Schema 不完整；reason_code=" + last_finish_reason
                         + "；欄位級診斷=" + diagnostic
                         + "。請只修正被指出的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
