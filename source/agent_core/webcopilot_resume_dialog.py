@@ -32,7 +32,7 @@ _SHOW = r"""([approvalId, message]) => {
   info.textContent=message;
   info.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 monospace;';
   const note=document.createElement('p');
-  note.textContent='此窗只記錄決策；真正執行前仍會重新檢查權限與安全規則。';
+  note.textContent='核准首條指令；執行成功後，同一任務相同操作與結構（僅安全路徑不同）可免再次詢問。安全、Scope 與執行驗證不會跳過。';
   note.style.cssText='font-size:12px;opacity:.75;';
   const actions=document.createElement('div');
   actions.style.cssText='display:flex;gap:10px;justify-content:flex-end;';
@@ -52,7 +52,7 @@ _SHOW = r"""([approvalId, message]) => {
     return button;
   }
   actions.append(make('拒絕','DENIED','#6b7280'));
-  actions.append(make('允許執行一次','APPROVED','#2563eb'));
+  actions.append(make('允許本任務同類指令','APPROVED','#2563eb'));
   box.append(title,info,note,actions);
   shade.append(box);
   document.body.append(shade);
