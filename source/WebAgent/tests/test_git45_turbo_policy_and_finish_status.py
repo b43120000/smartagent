@@ -163,11 +163,35 @@ def test_tar_members_cannot_escape_or_be_links(env, bad):
     "python script.py", "powershell -Command 'echo hi'",
     "cmd /c del victim",
     "git ls-tree HEAD $(whoami)",
+    "git show --output=secret.txt HEAD",
+    "git diff --ext-diff",
+    "git show --format=%s HEAD",
 ])
 def test_unproven_or_destructive_commands_never_auto_confirm(env, command):
     workspace, turbo, blocked, loop = env
     workspace_access.set_turbo_root(turbo, workspace=workspace)
     assert evaluate(loop, command, turbo)["auto_confirm"] is False
+
+
+def test_git_hash_verification_is_safe_read_not_mutation():
+    from agent_core.action_dependencies import command_is_proven_observation
+    path = r"E:\\Workspace\\project\\input.csv"
+    for cmd in [
+        f"certutil -hashfile '{path}' SHA256",
+        f"git hash-object --no-filters -- '{path}'",
+        f"git -C 'E:\\Workspace\\project' hash-object --no-filters -- '{path}'",
+    ]:
+        assert command_is_proven_observation({
+            "tool": "run_command", "operation": "INSPECT",
+            "command": cmd,
+        }), cmd
+    for bad in [
+        f"git hash-object -w -- '{path}'",
+        f"certutil -hashfile '{path}' SHA256; Remove-Item '{path}'",
+    ]:
+        assert not command_is_proven_observation({
+            "tool": "run_command", "operation": "INSPECT", "command": bad,
+        })
 
 
 def test_runtime_status_diagnostic_only_handles_real_status_mismatch():
@@ -249,7 +273,7 @@ def test_finish_status_repair_is_nonexecuting_and_keeps_rejected(tmp_path, monke
     assert len(called) == 2
     assert len(loop.prompts) == 4
     board = read_executor_run(tmp_path, task_id=loop.task_id)
-    repair = [ev for ev in board["events"] if ev["kind"] == "MODEL_FINISH_SCHEMA_REPAIR"]
+    repair = [ev for ev in board["events"] if ev["kind"] == "MODEL_FINISH_STATUS_REPAIR"]
     assert len(repair) == 1
     assert repair[0]["finish_diagnostic"]["corrections"][0]["runtime_actual_status"] == "REJECTED"
     assert board["terminal"]["finish_comparison"]["verdict"] == "PASS"
