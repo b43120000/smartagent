@@ -22,9 +22,11 @@ _SAFE_GIT = re.compile(
     r")\b(?:\s+[^;&|<>$\r\n\`]+)?$"
 )
 _SAFE_PS = re.compile(
-    r"(?i)^(?:get-command|get-location|get-date|get-process|get-service|"
-    r"get-childitem|get-item|get-content|test-path|get-filehash)"
-    r"(?:\s+[^;&|<>$\r\n\`]+)?$"
+    r"(?i)^(?:Get-Location|Get-Date|Get-Command\s+(?:git|python|cmake|gcc))$"
+    r"|^(?:Get-ChildItem|Get-Item|Get-Content|Test-Path|Get-FileHash)"
+    r"\s+-LiteralPath\s+('[^'\r\n]+'|\"[^\"\r\n]+\")"
+    r"(?:\s+-Algorithm\s+SHA256)?$",
+    re.IGNORECASE,
 )
 _DISALLOWED = re.compile(
     r"(?i)\b(?:remove-item|rm|del|erase|rmdir|rd|clear-content|"
@@ -73,11 +75,34 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
         if not (_SAFE_GIT.fullmatch(command) or _SAFE_PS.fullmatch(command)):
             result["reason_code"] = "TURBO_UNSUPPORTED_COMMAND_GRAMMAR"
             return result
-        for raw in _PATH_TOKEN.findall(command):
-            candidate = Path(raw).expanduser().resolve()
-            if candidate != accepted_root and accepted_root not in candidate.parents:
+        from .path_security import reject_reparse_components, is_within
+        # Reject provider paths, unresolved relative paths and reparse targets
+        # for any PowerShell operation with an explicit file argument.
+        if command.lower().startswith(("get-childitem", "get-item", "get-content",
+                                       "test-path", "get-filehash")):
+            from shlex import split
+            try:
+                tokens = split(command, posix=False)
+            except ValueError:
+                result["reason_code"] = "TURBO_PATH_TOKEN_INVALID"
+                return result
+            if "-literalpath" not in [p.casefold() for p in tokens]:
+                result["reason_code"] = "TURBO_PATH_NOT_LITERAL"
+                return result
+            index = [p.casefold() for p in tokens].index("-literalpath")
+            raw = tokens[index + 1].strip("'\\\"")
+            candidate = Path(raw).expanduser().absolute()
+            if (not candidate.is_absolute() or
+                    not is_within(candidate, accepted_root)):
                 result["reason_code"] = "TURBO_COMMAND_PATH_OUT_OF_SCOPE"
                 return result
+            reject_reparse_components(candidate, accepted_root)
+        for raw in _PATH_TOKEN.findall(command):
+            candidate = Path(raw).expanduser().absolute()
+            if not is_within(candidate, accepted_root):
+                result["reason_code"] = "TURBO_COMMAND_PATH_OUT_OF_SCOPE"
+                return result
+            reject_reparse_components(candidate, accepted_root)
         result["auto_confirm"] = True
         result["reason_code"] = "TURBO_KNOWN_NONDESTRUCTIVE_SINGLE_COMMAND"
         result["turbo_root"] = str(accepted_root)
