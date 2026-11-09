@@ -178,7 +178,9 @@ def test_git_hash_verification_is_safe_read_not_mutation():
     path = r"E:\\Workspace\\project\\input.csv"
     for cmd in [
         f"certutil -hashfile '{path}' SHA256",
+        f'certutil -hashfile "{path}" SHA256',
         f"git hash-object --no-filters -- '{path}'",
+        f'git hash-object --no-filters -- "{path}"',
         f"git -C 'E:\\Workspace\\project' hash-object --no-filters -- '{path}'",
     ]:
         assert command_is_proven_observation({
@@ -187,6 +189,7 @@ def test_git_hash_verification_is_safe_read_not_mutation():
         }), cmd
     for bad in [
         f"git hash-object -w -- '{path}'",
+        'certutil -hashfile "$(whoami)" SHA256',
         f"certutil -hashfile '{path}' SHA256; Remove-Item '{path}'",
     ]:
         assert not command_is_proven_observation({
