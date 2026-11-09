@@ -1,0 +1,54 @@
+name: Git35 Task-Generated Finish and Runtime Evidence Comparison
+
+on:
+  push:
+    branches:
+      - git35/generic-model-finish-schema-20261109
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generic-finish:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile changed runtime
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/runtime_finish_comparator.py
+          source/agent_core/executor_run_blackboard.py
+          source/agent_core/tri_one_runtime_terminal.py
+          source/agent_core/tri_one_task_result.py
+          source/WebAgent/minimal_decision.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/tests/test_git35_dynamic_finish_contract.py
+      - name: Generic Finish and Schema Repair
+        run: python -B -m pytest source/WebAgent/tests/test_git35_dynamic_finish_contract.py -q
+      - name: Git34 Comparator and negative goal regression
+        run: python -B -m pytest source/WebAgent/tests/test_git34_runtime_finish_comparator.py -q
+      - name: Git33 PokeClaw loop regression
+        run: python -B -m pytest source/WebAgent/tests/test_git33_pokeclaw_executor_loop.py -q
+      - name: Tri-One / fact-query / v10 compatibility
+        run: >-
+          python -B -m pytest
+          source/WebAgent/tests/test_git31_single_fact_query_terminal.py
+          source/WebAgent/tests/test_tri_one_egress_v10.py
+          source/WebAgent/tests/test_minimal_core_v10.py
+          -q

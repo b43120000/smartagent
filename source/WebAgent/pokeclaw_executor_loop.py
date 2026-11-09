@@ -18,7 +18,7 @@ from agent_core.executor_run_blackboard import (
 )
 from agent_core.task_progress import set_runtime_state
 from agent_core.tool_result_contract import decode_result
-from agent_core.runtime_finish_comparator import compare_runtime_finish
+from agent_core.runtime_finish_comparator import compare_runtime_finish, finish_runtime_field_catalog
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
@@ -69,7 +69,7 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
 
 
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
-            max_rounds: int, hint: str = "") -> str:
+            max_rounds: int, hint: str = "", field_catalog=None) -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
     return (
@@ -77,7 +77,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "You are the planning/decision brain. The local Runtime owns execution.\n"
         "Respond with exactly ONE JSON object per round:\n"
         'Tool call: {"type":"tool_call","name":"observe_fact","arguments":{"path":"C:\\\\example"}}\n'
-        'Finish: {"type":"finish","summary":"observations","expected_runtime":[{"evidence_ref":"MIN-EV-from-last-result","fields":{"status":"SUCCEEDED","data.observed_exists":true}}]}\n'
+        'Finish: {"type":"finish","summary":"observations","expected_runtime":[{"evidence_ref":"<actual MIN-EV reference>","fields":{"status":"<actual Runtime status>","data.<task-relevant key>":"<typed observed value>"}}],"goal_checks":[{"criterion":"<requirement from original request>","evidence_ref":"<actual MIN-EV reference>","field":"data.<task-relevant key>","operator":"eq","expected":"<typed expected value>"}]}\n'
         'Blocked: {"type":"blocked","reason":"specific tool/error blocker"}\n'
         "No Markdown fences, no invented observations, no claimed success without results.\n"
         "Observe first; decide from actual ToolResult. If missing, a permitted "
@@ -96,8 +96,15 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "of every requested step, not invented parent results. At Finish include "
         "one expected_runtime entry for EACH actual ToolResult evidence_ref, "
         "using full Runtime status and dotted typed data fields. Never omit failed "
-        "tools or invent evidence. Runtime compares claims AND independently "
-        "checks original Goal coverage; model cannot grant PASS.\n"
+        "tools or invent evidence. Generate the Finish fields yourself from the "
+        "original user request and actual ToolResults; there is NO fixed "
+        "tool-specific Finish template. Use dotted scalar paths from the "
+        "Runtime field catalogue. For goals without independent Runtime "
+        "postcondition proof, add goal_checks expressing each requested "
+        "completion condition as an evidence-backed predicate. Use typed "
+        "boolean/number/string/null values, never strings for booleans. "
+        "Runtime compares claims AND checks the original Goal; model "
+        "cannot grant PASS merely by declaring it.\n"
         f"Workspace: {tools.workspace_root}\n"
         "Available tools: " + json.dumps(
             catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -105,6 +112,8 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         f"Round: {round_id}/{max_rounds}\n"
         "Recent actual PokeClaw ToolResults:\n" + json.dumps(
             recent[-6:], ensure_ascii=False, separators=(",", ":")) + "\n"
+        "Runtime available Finish fields (derived, NOT a required template):\n"
+        + json.dumps(field_catalog or [], ensure_ascii=False, separators=(",", ":"))[:6800] + "\n"
         + (f"Runtime repair information: {hint}\n" if hint else "")
         + "[/POKECLAW_EXECUTOR_LOOP_V1]"
     )
@@ -128,6 +137,7 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
         "final_verdict": verdict,
         "goal_evidence_reason": comparison["goal_evidence_reason"],
         "matched_condition_id": comparison["goal_kind"],
+        "goal_coverage_basis": comparison.get("coverage_basis", "NOT_VERIFIED"),
         "comparison": {
             "reason_code": comparison["reason_code"],
             "mismatches": list(comparison["mismatches"]),
@@ -142,14 +152,16 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
 
 
 def _finish(loop, root: Path, request: str, *, kind: str,
-            summary: str, complete: bool, expected_runtime=None) -> str:
+            summary: str, complete: bool, expected_runtime=None,
+            goal_checks=None) -> str:
     board = finish_executor_run(
         root, loop, terminal_kind=kind, summary=summary,
         reported_outcome="UNKNOWN",
     )
     comparison = None
     if complete:
-        comparison = compare_runtime_finish(loop, root, request, expected_runtime)
+        comparison = compare_runtime_finish(loop, root, request, expected_runtime,
+                                            goal_checks=goal_checks)
         board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
     loop.executor_result = {
@@ -219,6 +231,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     last_fingerprint = ""
     repeated = 0
     invalids = 0
+    finish_repairs = 0
     hint = ""
     seen_mutations = set()
     max_rounds = min(int(loop.max_turns), 30)
@@ -229,6 +242,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         prompt = _prompt(
             request, loop.tools, recent, round_id=turn,
             max_rounds=max_rounds, hint=hint,
+            field_catalog=finish_runtime_field_catalog(loop),
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()
@@ -257,6 +271,39 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             continue
         invalids = 0
         if decision.kind == "finish":
+            # Only an incomplete Finish contract is repairable. Never re-run
+            # an Action, and never let a semantic/evidence mismatch be rewritten
+            # into PASS by another model attempt.
+            if decision.expected_runtime and finish_repairs < 2:
+                preview = compare_runtime_finish(
+                    loop, root, request, decision.expected_runtime,
+                    goal_checks=decision.goal_checks, allow_open=True,
+                )
+                repairable = {
+                    "MODEL_FINISH_GOAL_FACT_NOT_DECLARED",
+                    "MODEL_GOAL_CHECKS_REQUIRED",
+                    "MODEL_GOAL_CHECK_SCHEMA_INVALID",
+                    "MODEL_GOAL_CHECK_OPERATOR_TYPE_INVALID",
+                    "EXPECTED_RUNTIME_FIELDS_INVALID",
+                    "EXPECTED_RUNTIME_SCHEMA_INVALID",
+                    "EXPECTED_RUNTIME_FIELD_TYPE_INVALID",
+                }
+                if preview["reason_code"] in repairable:
+                    finish_repairs += 1
+                    append_executor_event(root, loop, {
+                        "round": turn, "kind": "MODEL_FINISH_SCHEMA_REPAIR",
+                        "reason_code": preview["reason_code"],
+                        "expected_runtime_sha256": _digest(decision.expected_runtime),
+                        "executed": False,
+                    })
+                    hint = (
+                        "Finish Schema 不完整：" + preview["reason_code"]
+                        + "。請僅依上一輪真實 ToolResult、原始任務與"
+                        " Runtime available Finish fields 重新產生 finish，"
+                        "挑選與 Goal 有關的 data 欄位及 goal_checks。"
+                        " 不要重新呼叫工具，不要自行更改觀測值。"
+                    )
+                    continue
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_FINISH",
                 "summary_sha256": hashlib.sha256(
@@ -264,11 +311,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 ).hexdigest(),
                 "prior_tool_observation_count": len(recent),
                 "expected_runtime_sha256": _digest(decision.expected_runtime),
+            "goal_checks_sha256": _digest(decision.goal_checks),
             })
             return _finish(
                 loop, root, request, kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
                 summary=decision.message, complete=True,
                 expected_runtime=decision.expected_runtime,
+            goal_checks=decision.goal_checks,
             )
         if decision.kind == "blocked":
             append_executor_event(root, loop, {

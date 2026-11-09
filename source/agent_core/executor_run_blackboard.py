@@ -201,6 +201,7 @@ def record_finish_comparison(root: str | Path, loop, comparison: Mapping) -> dic
         "reason_code": str(comparison.get("reason_code") or "")[:160],
         "goal_kind": str(comparison.get("goal_kind") or "")[:160],
         "goal_evidence_reason": str(comparison.get("goal_evidence_reason") or "")[:160],
+        "coverage_basis": str(comparison.get("coverage_basis") or "NOT_VERIFIED")[:160],
         "evidence_refs": list(comparison.get("evidence_refs") or []),
         "mismatches": list(comparison.get("mismatches") or [])[:20],
         "tool_results": list(comparison.get("tool_results") or []),

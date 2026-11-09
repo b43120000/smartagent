@@ -66,13 +66,15 @@ def _fail(reason: str, refs: list[str] | None = None, *,
     }
 
 
-def _readback(loop, root: str | Path) -> tuple[list[dict], list[str], dict | None, str]:
+def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list[dict], list[str], dict | None, str]:
     """Replay all current-request actions, not model-selected evidence alone."""
     board = read_executor_run(
         root, task_id=loop.task_id, request_id=loop.run_id,
         task_epoch=loop.task_epoch,
     )
-    if not isinstance(board, Mapping) or not isinstance(board.get("terminal"), Mapping):
+    if not isinstance(board, Mapping) or (
+        not allow_open and not isinstance(board.get("terminal"), Mapping)
+    ):
         return [], [], None, "BLACKBOARD_READBACK_MISSING"
     ledger = getattr(loop, "action_result_ledger", None)
     actions = getattr(loop, "_canonical_action_proposals", None)
@@ -128,7 +130,7 @@ def _readback(loop, root: str | Path) -> tuple[list[dict], list[str], dict | Non
         history.append({"action": action, "receipt": receipt, "evidence_ref": ref})
     if set(actions) != {row["action_id"] for row in results} or set(ledger) != set(actions):
         return [], [], None, "ACTION_COVERAGE_INCOMPLETE"
-    if list(board["terminal"].get("tool_evidence_refs", [])) != refs:
+    if not allow_open and list(board["terminal"].get("tool_evidence_refs", [])) != refs:
         return [], [], None, "BLACKBOARD_EVIDENCE_SET_MISMATCH"
     return history, refs, {"board": board, "results": results}, ""
 
@@ -235,10 +237,132 @@ def _goal_proof(goal: str, history: list[dict]) -> tuple[str, str] | None:
     return None
 
 
+def _recognized_but_unsatisfied(goal: str, history: list[dict]) -> bool:
+    """Do not let model-declared checks override a recognized unmet goal."""
+    from .tri_one_runtime_terminal import _conditional_directory_target, _simple_mkdir_target
+    if len(history) != 1:
+        return False
+    action = history[0]["action"]
+    path = action.get("path") or (
+        (action.get("paths") or [None])[0]
+        if isinstance(action.get("paths"), list) else None
+    )
+    if not _path(path):
+        return False
+    normalized = goal.replace("：", ":")
+    if _single_fact_query_contract(normalized, str(path))[0]:
+        return True
+    if _simple_mkdir_target(normalized, str(path)):
+        return True
+    if _conditional_directory_target(normalized, str(path)):
+        return True
+    residue = normalized.casefold().replace(str(path).casefold(), " ")
+    return bool(re.fullmatch(
+        r"\s*(?:請|請你|幫我|請幫我)?\s*(?:確認|確保|驗證|保證)\s*"
+        r"(?:這個|該|目標)?\s*(?:資料夾|目錄|路徑)\s*"
+        r"(不存在|存在)\s*[。.!！]?\s*", residue
+    ))
+
+
+def _evaluate_model_goal_checks(history: list[dict], refs: list[str],
+                                claimed: dict, checks: object) -> tuple[bool, str, list[dict]]:
+    """Model supplies task-specific postconditions, Runtime checks actual typed data.
+
+    This is evidence verification of model-generated criteria; it is not an
+    independent semantic proof that every clause of arbitrary prose was covered.
+    """
+    if not isinstance(checks, list) or not (1 <= len(checks) <= _MAX_CLAIMS):
+        return False, "MODEL_GOAL_CHECKS_REQUIRED", []
+    index = {row["evidence_ref"]: row["receipt"] for row in history}
+    mismatches = []
+    observed_criteria = set()
+    used_refs = set()
+    for n, check in enumerate(checks):
+        if not isinstance(check, dict) or set(check) != {
+            "criterion", "evidence_ref", "field", "operator", "expected",
+        }:
+            return False, "MODEL_GOAL_CHECK_SCHEMA_INVALID", []
+        criterion, ref = check["criterion"], check["evidence_ref"]
+        field, op, expected = check["field"], check["operator"], check["expected"]
+        if (not isinstance(criterion, str) or not (1 <= len(criterion) <= 240)
+                or criterion in observed_criteria or ref not in index
+                or not isinstance(field, str) or not field.startswith("data.")
+                or not _FIELD.fullmatch(field) or op not in {"eq", "ne", "ge", "le"}
+                or type(expected) not in (str, int, float, bool, type(None))
+                or field not in claimed[ref]):
+            return False, "MODEL_GOAL_CHECK_SCHEMA_INVALID", []
+        observed_criteria.add(criterion)
+        used_refs.add(ref)
+        exists, value = _lookup(index[ref], field)
+        if not exists or type(value) is not type(expected):
+            valid = False
+        elif op == "eq":
+            valid = value == expected
+        elif op == "ne":
+            valid = value != expected
+        elif type(value) in (int, float):
+            valid = value >= expected if op == "ge" else value <= expected
+        else:
+            return False, "MODEL_GOAL_CHECK_OPERATOR_TYPE_INVALID", []
+        if not valid:
+            mismatches.append({
+                "evidence_ref": ref, "field": field, "criterion": criterion,
+                "operator": op, "expected": _shown(expected),
+                "actual": _shown(value) if exists else "[MISSING]",
+            })
+    if mismatches:
+        return False, "GOAL_CHECK_RUNTIME_MISMATCH", mismatches
+    return True, "MODEL_DECLARED_GOAL_CHECKS_CONFIRMED", []
+
+
+def finish_runtime_field_catalog(loop, *, max_records: int = 64) -> list[dict]:
+    """Build dynamic field names from actual receipts; no per-tool Finish template.
+
+    Values are not copied into this catalogue. ToolResult already contains the
+    bounded values the model observed. For older actions, it may ask for readback.
+    """
+    ledger = getattr(loop, "action_result_ledger", {}) or {}
+    if not isinstance(ledger, Mapping):
+        return []
+    catalog = []
+    for row in sorted(
+        (v for v in ledger.values() if isinstance(v, Mapping)),
+        key=lambda v: int(v.get("produced_round") or 0),
+    )[:max_records]:
+        raw = row.get("result")
+        receipt = decode_result(raw) if isinstance(raw, str) else None
+        if not isinstance(receipt, Mapping):
+            continue
+        fields = []
+        def walk(value, prefix, depth):
+            if len(fields) >= 48 or depth > 4:
+                return
+            if isinstance(value, Mapping):
+                for key, item in value.items():
+                    if (not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_]\w*", key)
+                            or re.search(r"password|secret|token|api.?key", key, re.I)):
+                        continue
+                    walk(item, f"{prefix}.{key}" if prefix else key, depth + 1)
+            elif isinstance(value, list):
+                for i, item in enumerate(value[:6]):
+                    walk(item, f"{prefix}.{i}", depth + 1)
+            elif type(value) in (str, int, float, bool, type(None)):
+                fields.append(prefix)
+        walk(receipt, "", 0)
+        catalog.append({
+            "evidence_ref": row.get("evidence_ref"),
+            "tool": row.get("tool"),
+            "status": receipt.get("status"),
+            "available_scalar_fields": fields,
+        })
+    return catalog
+
+
 def compare_runtime_finish(loop, root: str | Path, goal: str,
-                           expected_runtime: object) -> dict:
-    """Return only PASS/FAIL, with diagnostic reasons and independent tool facts."""
-    history, refs, context, error = _readback(loop, root)
+                           expected_runtime: object, goal_checks: object = None,
+                           *, allow_open: bool = False) -> dict:
+    """Binary verdict. Dynamic model fields, Runtime facts and goal validation."""
+    history, refs, context, error = _readback(loop, root, allow_open=allow_open)
     if error:
         return _fail(error)
     if context["board"].get("request_sha256") != hashlib.sha256(
@@ -260,35 +384,12 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
                 or "status" not in fields):
             return _fail("EXPECTED_RUNTIME_FIELDS_INVALID", refs, tool_results=results)
         if any(not isinstance(key, str) or not _FIELD.fullmatch(key)
-               or isinstance(value, (list, dict)) for key, value in fields.items()):
+               or type(value) not in (str, int, float, bool, type(None))
+               for key, value in fields.items()):
             return _fail("EXPECTED_RUNTIME_FIELD_TYPE_INVALID", refs, tool_results=results)
         claimed[ref] = fields
     if set(claimed) != set(refs):
         return _fail("EXPECTED_RUNTIME_EVIDENCE_SET_MISMATCH", refs, tool_results=results)
-    # The model must claim the decisive observed fields, not only a convenient
-    # success flag. Tool-specific evidence remains raw and authoritative.
-    required = {
-        "inspect_directory": {
-            "status", "data.observed_exists", "data.observed_is_directory",
-            "data.observation_status",
-        },
-        "create_directory": {
-            "status", "data.observed_exists", "data.observed_is_directory",
-            "data.observation_status",
-        },
-        "observe_fact": {"status", "data.observation_status"},
-        "run_command": {"status", "data.exit_code", "data.process_state"},
-    }
-    for item in history:
-        fields = claimed[item["evidence_ref"]]
-        missing = required.get(item["action"]["tool"], {"status"}) - set(fields)
-        if missing:
-            return _fail("EXPECTED_RUNTIME_FIELDS_INCOMPLETE", refs,
-                         mismatches=[{
-                             "evidence_ref": item["evidence_ref"],
-                             "field": key, "expected": "[REQUIRED]",
-                             "actual": "[NOT_DECLARED]",
-                         } for key in sorted(missing)], tool_results=results)
     mismatches = []
     for item in history:
         ref, actual = item["evidence_ref"], item["receipt"]
@@ -306,16 +407,38 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if any(item["receipt"]["status"] in {"UNKNOWN", "RUNNING", "PARTIAL"}
            or item["receipt"]["executed"] is not True for item in history):
         return _fail("RUNTIME_EXECUTION_NOT_CONFIRMED", refs, tool_results=results)
-    goal_proof = _goal_proof(goal, history)
-    if goal_proof is None:
-        return _fail("GOAL_COVERAGE_NOT_PROVEN", refs, tool_results=results)
-    kind, reason = goal_proof
+    proof = _goal_proof(goal, history)
+    if proof is None and _recognized_but_unsatisfied(goal, history):
+        return _fail("KNOWN_GOAL_POSTCONDITION_NOT_SATISFIED", refs, tool_results=results)
+    # Even an independent goal proof requires the model to reference a
+    # task-relevant fact, not merely compare the generic Tool status.
+    if not any(
+        field.startswith("data.") for fields in claimed.values() for field in fields
+    ):
+        return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs, tool_results=results)
+    if goal_checks is not None:
+        ok, reason, deviations = _evaluate_model_goal_checks(
+            history, refs, claimed, goal_checks,
+        )
+        if not ok:
+            return _fail(reason, refs, mismatches=deviations, tool_results=results)
+    elif proof is None:
+        return _fail("MODEL_GOAL_CHECKS_REQUIRED", refs, tool_results=results)
+    if proof is not None:
+        kind, reason = proof
+        basis = "RUNTIME_INDEPENDENT_GOAL_PROOF"
+    else:
+        # The model proposed the Goal criteria; Runtime verified the evidence
+        # values but cannot independently certify arbitrary natural language.
+        kind, reason = "MODEL_GENERATED_GOAL_CHECKS", "MODEL_DECLARED_GOAL_CHECKS_CONFIRMED"
+        basis = "MODEL_DECLARED_RUNTIME_EVIDENCE_MATCH"
     return {
         "verdict": "PASS", "reason_code": "MODEL_RUNTIME_AND_GOAL_MATCH",
         "goal_kind": kind, "goal_evidence_reason": reason,
+        "coverage_basis": basis,
         "evidence_refs": refs, "mismatches": [],
         "tool_results": results,
     }
 
 
-__all__ = ["compare_runtime_finish"]
+__all__ = ["compare_runtime_finish", "finish_runtime_field_catalog"]

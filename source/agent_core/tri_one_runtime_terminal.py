@@ -775,6 +775,7 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
                     or receipt.get("verification_status") != expected
                     or evidence_verdict != expected
                     or comparison.get("reason_code") != stored.get("reason_code")
+                    or receipt.get("goal_coverage_basis") != stored.get("coverage_basis")
                     or comparison.get("mismatches") != stored.get("mismatches")
                     or comparison.get("tool_results") != stored.get("tool_results")
                     or refs != stored.get("evidence_refs")

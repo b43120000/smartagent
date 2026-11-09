@@ -407,6 +407,7 @@ def make_task_result(
         result["goal_acceptance"] = {
             "verdict": result["final_verdict"],
             "reason_code": comparison.get("reason_code"),
+            "coverage_basis": receipt.get("goal_coverage_basis"),
             "mismatches": list(comparison.get("mismatches") or []),
             "tool_results": list(comparison.get("tool_results") or []),
         }
@@ -454,10 +455,11 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     if "goal_acceptance" in result:
         goal_acceptance = result["goal_acceptance"]
         if (not isinstance(goal_acceptance, Mapping)
-                or set(goal_acceptance) != {"verdict", "reason_code", "mismatches", "tool_results"}
+                or set(goal_acceptance) != {"verdict", "reason_code", "coverage_basis", "mismatches", "tool_results"}
                 or goal_acceptance.get("verdict") != expected_final
                 or expected_final not in {"PASS", "FAIL"}
                 or not isinstance(goal_acceptance.get("reason_code"), str)
+                or not isinstance(goal_acceptance.get("coverage_basis"), str)
                 or not isinstance(goal_acceptance.get("mismatches"), list)
                 or not isinstance(goal_acceptance.get("tool_results"), list)):
             raise TaskResultContractError("invalid_goal_acceptance")
