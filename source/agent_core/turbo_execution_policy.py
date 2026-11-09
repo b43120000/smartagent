@@ -50,16 +50,20 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
         result["policy_revision"] = int(policy.get("revision", 0) or 0)
         workspace = Path(loop.workspace).expanduser().resolve()
         cwd = Path(action.get("working_directory") or workspace).expanduser().resolve()
-        roots = [Path(root).expanduser().resolve()
+        # Preserve original components until reparse validation. Resolving
+        # registry entries first could hide a replaced in-workspace junction.
+        roots = [Path(root).expanduser().absolute()
                  for root in settings.get("turbo_roots") or ()]
         accepted_root = None
         for root in roots:
-            if (is_valid_turbo_root(
+            if not is_valid_turbo_root(
                     root, workspace, settings["writable_workspaces"],
                     settings["read_only_roots"],
-                    policy.get("denied_write_roots") or ())
-                    and (cwd == root or root in cwd.parents)):
-                accepted_root = root
+                    policy.get("denied_write_roots") or ()):
+                continue
+            resolved_root = root.resolve()
+            if cwd == resolved_root or resolved_root in cwd.parents:
+                accepted_root = resolved_root
                 break
         if accepted_root is None:
             result["reason_code"] = "TURBO_OUTSIDE_ACTIVE_ROOT"
