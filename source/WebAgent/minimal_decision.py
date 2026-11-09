@@ -25,6 +25,7 @@ class MinimalDecision:
     tool: str = ""
     arguments: dict | None = None
     message: str = ""
+    expected_runtime: list[dict] | None = None
 
 
 def _unique_keys(pairs):
@@ -132,12 +133,20 @@ def _to_decision(data: dict, meta: dict) -> MinimalDecision:
             meta["normalization"] = "POKECLAW_TYPE_ALIAS"
         return MinimalDecision("tool_call", tool=name.strip(), arguments=args)
     if kind in {"finish", "final"}:
-        if not set(data).issubset({"type", "summary", "answer", "text"}):
+        if not set(data).issubset({"type", "summary", "answer", "text", "expected_runtime"}):
             raise MinimalDecisionError("decision_fields_invalid", meta)
         value = _field(data, ("summary", "answer", "text"), meta)
         if not isinstance(value, str) or not value.strip() or len(value) > 3000:
             raise MinimalDecisionError("decision_message_invalid", meta)
-        return MinimalDecision("finish", message=value.strip())
+        expectations = data.get("expected_runtime")
+        if expectations is not None and (
+            not isinstance(expectations, list) or len(expectations) > 64
+            or any(not isinstance(row, dict) for row in expectations)
+        ):
+            raise MinimalDecisionError("finish_expected_runtime_invalid", meta)
+        return MinimalDecision(
+            "finish", message=value.strip(), expected_runtime=expectations,
+        )
     if kind == "blocked":
         if set(data) != {"type", "reason"}:
             raise MinimalDecisionError("decision_fields_invalid", meta)

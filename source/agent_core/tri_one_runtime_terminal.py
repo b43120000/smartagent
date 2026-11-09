@@ -763,6 +763,24 @@ def terminal_verdict_from_loop(loop, *, minimal: bool = True) -> TerminalVerdict
             if not (answer_only or evidence_backed):
                 return TerminalVerdict("PAUSED", "UNKNOWN", {},
                                        "SUCCESS_WITHOUT_ACCEPTED_GOAL_PROOF")
+        if receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1":
+            expected = "PASS" if outcome == "SUCCESS" else "FAIL" if outcome == "FAILED" else ""
+            comparison = receipt.get("comparison")
+            board = getattr(loop, "executor_blackboard_terminal", {})
+            stored = ((board.get("terminal") or {}).get("finish_comparison")
+                      if isinstance(board, Mapping) else None)
+            if (not expected or state != "COMPLETED" or not isinstance(comparison, Mapping)
+                    or not isinstance(stored, Mapping)
+                    or receipt.get("final_verdict") != expected
+                    or receipt.get("verification_status") != expected
+                    or evidence_verdict != expected
+                    or comparison.get("reason_code") != stored.get("reason_code")
+                    or comparison.get("mismatches") != stored.get("mismatches")
+                    or comparison.get("tool_results") != stored.get("tool_results")
+                    or refs != stored.get("evidence_refs")
+                    or stored.get("verdict") != expected):
+                return TerminalVerdict("PAUSED", "UNKNOWN", {},
+                                       "FINISH_COMPARATOR_RECEIPT_INVALID")
         if state == "COMPLETED" and outcome in {"SUCCESS", "PARTIAL", "FAILED", "UNKNOWN"}:
             return TerminalVerdict(state, outcome, receipt, "ACCEPTED_TERMINAL")
         if state == "INTERRUPTED":

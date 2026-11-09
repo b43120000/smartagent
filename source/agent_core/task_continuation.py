@@ -31,7 +31,7 @@ def terminal_heading(state, outcome=''):
     if state == 'COMPLETED':
         value = normalize_task_outcome(outcome)
         return {'SUCCESS': '🟢 已完成', 'FAILED': '🔴 已結束（驗收失敗）',
-                'PARTIAL': '🟠 部分完成／結果未確認', 'UNKNOWN': '🟠 部分完成／結果未確認'}[value]
+                'PARTIAL': '🔴 驗收未通過', 'UNKNOWN': '🔴 驗收未通過'}[value]
     if state == 'PAUSED':
         return '🟠 任務已暫停（尚未完成）'
     return '🔴 執行失敗' if state == 'FAILED' else '🟠 任務中斷'
@@ -566,7 +566,9 @@ def format_terminal_acceptance(terminal_acceptance, *, task_id, request_id):
     decision = str(receipt.get('decision', '') or '').upper()
     terminal_outcome = str(receipt.get('task_outcome', '') or '').upper()
     if not ((decision == 'COMPLETE' and terminal_outcome in {'SUCCESS', 'FAILED', 'PARTIAL'})
-            or (decision == 'INTERRUPT' and terminal_outcome in {'FAILED', 'UNKNOWN'})):
+            or (decision == 'INTERRUPT' and terminal_outcome in {'FAILED', 'UNKNOWN'})
+            or (decision == 'RUNTIME_FINISH_COMPARATOR_V1'
+                and terminal_outcome in {'SUCCESS', 'FAILED'})):
         return ''
     verification = str(receipt.get('verification_status', '') or '').upper()
     if verification not in {'PASS', 'FAIL', 'UNKNOWN', 'UNVERIFIED', 'SPEC_INVALID'}:
@@ -575,7 +577,9 @@ def format_terminal_acceptance(terminal_acceptance, *, task_id, request_id):
             + f'\nRuntime Decision / Outcome：{decision} / {terminal_outcome}'
             + f'\nRuntime Verification：{verification}'
             + f'\nReceipt ID：{receipt["receipt_id"]}'
-            + f'\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}')
+            + f'\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}'
+            + (f'\nComparator Cause：{str((receipt.get("comparison") or {}).get("reason_code") or "")}'
+               if decision == 'RUNTIME_FINISH_COMPARATOR_V1' else ''))
 
 
 _REVISION_MARKER_OPEN = "[SMARTAGENT_REVISION_SUGGESTION_V1]"
@@ -648,7 +652,8 @@ def render_task_reply(*, original_request, base, conclusion, task_id, request_id
             f'\n\n結果／中斷原因：\n{conclusion}'
             + (f'\n\n{advisory}' if advisory else '')
             + f'\n\n狀態：{state}'
-            + (f'\n驗收結果：{outcome}' if outcome else '')
+            + (f'\n驗收結果：{"PASS" if normalize_task_outcome(outcome) == "SUCCESS" else "FAIL"}'
+               if state in {'COMPLETED', 'FAILED', 'INTERRUPTED'} else '')
             + f'\n任務結果：{terminal_heading(state, outcome)}'
             + format_terminal_acceptance(terminal_acceptance, task_id=task_id, request_id=request_id)
             + f'\ntask_id: {task_id}\nrequest_id: {request_id}'

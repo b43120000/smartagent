@@ -183,6 +183,41 @@ def finish_executor_run(root: str | Path, loop, *,
     return readback
 
 
+def record_finish_comparison(root: str | Path, loop, comparison: Mapping) -> dict:
+    """Persist Runtime's own comparison after model Finish and verify readback."""
+    value = read_executor_run(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    if (value is None or not isinstance(value.get("terminal"), dict)
+            or value["terminal"].get("kind") != "MODEL_REPORTED_COMPLETE_UNVERIFIED"
+            or "finish_comparison" in value["terminal"]):
+        raise ValueError("executor_finish_comparison_terminal_invalid")
+    verdict = comparison.get("verdict")
+    if verdict not in {"PASS", "FAIL"}:
+        raise ValueError("executor_finish_comparison_verdict_invalid")
+    record = {
+        "verdict": verdict,
+        "reason_code": str(comparison.get("reason_code") or "")[:160],
+        "goal_kind": str(comparison.get("goal_kind") or "")[:160],
+        "goal_evidence_reason": str(comparison.get("goal_evidence_reason") or "")[:160],
+        "evidence_refs": list(comparison.get("evidence_refs") or []),
+        "mismatches": list(comparison.get("mismatches") or [])[:20],
+        "tool_results": list(comparison.get("tool_results") or []),
+    }
+    value["terminal"]["finish_comparison"] = record
+    value["terminal"]["goal_verified"] = verdict == "PASS"
+    value["terminal"]["outcome"] = verdict
+    _atomic(_path(root, loop.task_id), value)
+    checked = read_executor_run(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    if checked is None or checked.get("terminal") != value["terminal"]:
+        raise ValueError("executor_finish_comparison_readback_failed")
+    return checked
+
+
 def projection(value: Mapping) -> dict:
     """Only actual receipt state, never a parent/Goal Driver verdict."""
     return {
@@ -195,11 +230,11 @@ def projection(value: Mapping) -> dict:
         "parent_consumption_state": value["parent_consumption_state"],
         "event_count": len(value["events"]),
         "tool_evidence_refs": list((value.get("terminal") or {}).get("tool_evidence_refs") or []),
-        "goal_verified": False,
+        "goal_verified": bool((value.get("terminal") or {}).get("goal_verified", False)),
     }
 
 
 __all__ = [
     "begin_executor_run", "append_executor_event", "finish_executor_run",
-    "read_executor_run", "projection", "_safe_arguments",
+    "read_executor_run", "record_finish_comparison", "projection", "_safe_arguments",
 ]

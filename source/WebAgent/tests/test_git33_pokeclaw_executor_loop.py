@@ -134,11 +134,11 @@ def test_one_generic_agent_loop_completes_check_create_verify_finish_and_blackbo
     assert "Prerequisite：DISABLED" in answer
     assert "HOF-" in answer
     assert "MIN-EV-" in answer
-    assert loop.terminal_outcome == "UNKNOWN"
-    assert loop.terminal_acceptance["completion_kind"] == "EXECUTOR_MODEL_REPORTED_FINISH"
-    assert loop.terminal_acceptance["evidence_verdict"] == "UNVERIFIED"
+    assert loop.terminal_outcome == "FAILED"  # old finish omitted expected_runtime
+    assert loop.terminal_acceptance["completion_kind"] == "EVIDENCE_BACKED"
+    assert loop.terminal_acceptance["evidence_verdict"] == "FAIL"
     assert terminal_verdict_from_loop(loop).state == "COMPLETED"
-    assert terminal_verdict_from_loop(loop).outcome == "UNKNOWN"
+    assert terminal_verdict_from_loop(loop).outcome == "FAILED"
     board = read_executor_run(
         tmp_path, task_id=loop.task_id, request_id=loop.run_id,
         task_epoch=loop.task_epoch,

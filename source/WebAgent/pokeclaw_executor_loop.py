@@ -14,10 +14,11 @@ from collections.abc import Mapping
 
 from agent_core.executor_run_blackboard import (
     _safe_arguments, begin_executor_run, append_executor_event,
-    finish_executor_run, projection,
+    finish_executor_run, record_finish_comparison, projection,
 )
 from agent_core.task_progress import set_runtime_state
 from agent_core.tool_result_contract import decode_result
+from agent_core.runtime_finish_comparator import compare_runtime_finish
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
@@ -76,7 +77,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "You are the planning/decision brain. The local Runtime owns execution.\n"
         "Respond with exactly ONE JSON object per round:\n"
         'Tool call: {"type":"tool_call","name":"observe_fact","arguments":{"path":"C:\\\\example"}}\n'
-        'Finish: {"type":"finish","summary":"what you actually observed or did"}\n'
+        'Finish: {"type":"finish","summary":"observations","expected_runtime":[{"evidence_ref":"MIN-EV-from-last-result","fields":{"status":"SUCCEEDED","data.observed_exists":true}}]}\n'
         'Blocked: {"type":"blocked","reason":"specific tool/error blocker"}\n'
         "No Markdown fences, no invented observations, no claimed success without results.\n"
         "Observe first; decide from actual ToolResult. If missing, a permitted "
@@ -92,7 +93,11 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "There is no fixed task-specific sequence gate. "
         "Shared Blackboard records each round automatically; never ask a tool "
         "to write its own evidence record. At Finish include the actual status "
-        "of every requested step, not invented parent results.\n"
+        "of every requested step, not invented parent results. At Finish include "
+        "one expected_runtime entry for EACH actual ToolResult evidence_ref, "
+        "using full Runtime status and dotted typed data fields. Never omit failed "
+        "tools or invent evidence. Runtime compares claims AND independently "
+        "checks original Goal coverage; model cannot grant PASS.\n"
         f"Workspace: {tools.workspace_root}\n"
         "Available tools: " + json.dumps(
             catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -105,20 +110,29 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
     )
 
 
-def _terminal_receipt(loop, summary: str, board: Mapping) -> dict:
-    """Model reported completion; not fabricated Task Goal Verification."""
+def _terminal_receipt(loop, summary: str, board: Mapping,
+                      comparison: Mapping) -> dict:
+    """Runtime-owned terminal: PASS or FAIL, never model-authorized acceptance."""
     from agent_core.tri_one_runtime_terminal import TERMINAL_SCHEMA
+    verdict = comparison["verdict"]
     payload = {
         "schema": TERMINAL_SCHEMA, "admission_status": "ACCEPTED",
-        "decision": "POKECLAW_EXECUTOR_MODEL_FINISH_V1",
-        "completion_kind": "EXECUTOR_MODEL_REPORTED_FINISH",
+        "decision": "RUNTIME_FINISH_COMPARATOR_V1",
+        "completion_kind": "EVIDENCE_BACKED",
         "request_id": loop.run_id, "task_id": loop.task_id,
         "task_epoch": loop.task_epoch, "round": loop.turn_id,
-        "task_outcome": "UNKNOWN", "runtime_state": "COMPLETED",
-        "evidence_refs": list(board["terminal"]["tool_evidence_refs"]),
-        "evidence_verdict": "UNVERIFIED",
-        "verification_status": "MODEL_REPORTED_COMPLETE_UNVERIFIED",
-        "goal_evidence_reason": "POKECLAW_FINISH_NOT_INDEPENDENT_GOAL_PROOF",
+        "task_outcome": "SUCCESS" if verdict == "PASS" else "FAILED",
+        "runtime_state": "COMPLETED",
+        "evidence_refs": list(comparison["evidence_refs"]),
+        "evidence_verdict": verdict, "verification_status": verdict,
+        "final_verdict": verdict,
+        "goal_evidence_reason": comparison["goal_evidence_reason"],
+        "matched_condition_id": comparison["goal_kind"],
+        "comparison": {
+            "reason_code": comparison["reason_code"],
+            "mismatches": list(comparison["mismatches"]),
+            "tool_results": list(comparison["tool_results"]),
+        },
         "handoff_id": board["handoff_id"],
         "blackboard_event_count": len(board["events"]),
         "summary_sha256": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
@@ -128,26 +142,32 @@ def _terminal_receipt(loop, summary: str, board: Mapping) -> dict:
 
 
 def _finish(loop, root: Path, request: str, *, kind: str,
-            summary: str, complete: bool) -> str:
+            summary: str, complete: bool, expected_runtime=None) -> str:
     board = finish_executor_run(
         root, loop, terminal_kind=kind, summary=summary,
         reported_outcome="UNKNOWN",
     )
+    comparison = None
+    if complete:
+        comparison = compare_runtime_finish(loop, root, request, expected_runtime)
+        board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
     loop.executor_result = {
         "schema": "SMARTAGENT_POKECLAW_EXECUTOR_RESULT_V1",
         "outcome": kind, "executor_state": board["executor_state"],
-        "terminal_status": kind, "goal_verified": False,
+        "terminal_status": kind,
+        "goal_verified": bool(comparison and comparison["verdict"] == "PASS"),
         "handoff_id": board["handoff_id"],
         "tool_evidence_refs": list(board["terminal"]["tool_evidence_refs"]),
     }
-    loop.terminal_outcome = "UNKNOWN"
     if complete:
-        loop.terminal_acceptance = _terminal_receipt(loop, summary, board)
+        loop.terminal_acceptance = _terminal_receipt(loop, summary, board, comparison)
+        loop.terminal_outcome = loop.terminal_acceptance["task_outcome"]
         loop.protocol_state = "COMPLETED"
         set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
     else:
         loop.terminal_acceptance = {}
+        loop.terminal_outcome = "UNKNOWN"
         loop.protocol_state = "BLOCKED"
         set_runtime_state(
             loop.task_id, "PAUSED", reason=kind, root=loop.progress_root,
@@ -157,11 +177,20 @@ def _finish(loop, root: Path, request: str, *, kind: str,
             "pokeclaw_executor_terminal", task_id=loop.task_id,
             request_id=loop.run_id, terminal_kind=kind,
             handoff_id=board["handoff_id"],
-            model_reported_only=True, goal_verified=False,
+            model_reported_only=True,
+            goal_verified=bool(comparison and comparison["verdict"] == "PASS"),
             event_count=len(board["events"]),
         )
     p = projection(board)
-    # These are observed persisted records, not inferred parent progress.
+    terminal_line = (
+        f"Runtime 最終驗收：{comparison['verdict']}（{comparison['reason_code']}）"
+        if comparison else "尚未進入 Runtime 最終驗收。"
+    )
+    mismatch_lines = ""
+    if comparison and comparison["mismatches"]:
+        mismatch_lines = "\n不一致欄位：" + json.dumps(
+            comparison["mismatches"], ensure_ascii=False, separators=(",", ":"),
+        )[:3000]
     trailer = (
         "\n\nExecutor Blackboard（已寫入並回讀）：\n"
         f"Executor：{p['executor_state']}\n"
@@ -171,7 +200,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         f"Tool Evidence：{', '.join(p['tool_evidence_refs']) or '無'}\n"
         f"Parent Dispatch：{p['parent_dispatch_state']}\n"
         f"Parent Consumption：{p['parent_consumption_state']}\n"
-        "整體目標：模型回報完成，尚無獨立 Goal 驗收（非 VERIFIED）。"
+        f"整體目標：{terminal_line}{mismatch_lines}"
     )
     return str(summary) + trailer
 
@@ -234,10 +263,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     decision.message.encode("utf-8")
                 ).hexdigest(),
                 "prior_tool_observation_count": len(recent),
+                "expected_runtime_sha256": _digest(decision.expected_runtime),
             })
             return _finish(
                 loop, root, request, kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
                 summary=decision.message, complete=True,
+                expected_runtime=decision.expected_runtime,
             )
         if decision.kind == "blocked":
             append_executor_event(root, loop, {

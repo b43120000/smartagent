@@ -379,6 +379,9 @@ def make_task_result(
         "completion_kind": kind,
         "task_state": state,
         "outcome": outcome,
+        "final_verdict": (
+            "PASS" if outcome == "SUCCESS" else "FAIL"
+        ) if state in {"COMPLETED", "FAILED", "INTERRUPTED"} else None,
         "terminal_acceptance": {
             "status": "ACCEPTED" if accepted else "MISSING",
             "receipt_id": receipt.get("receipt_id") if accepted else None,
@@ -399,6 +402,14 @@ def make_task_result(
     }
     if kind == "ANSWER_ONLY":
         result["terminal_acceptance"]["admission_reason"] = "ANSWER_ONLY_RESPONSE_ADMITTED"
+    if accepted and receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1":
+        comparison = receipt.get("comparison") or {}
+        result["goal_acceptance"] = {
+            "verdict": result["final_verdict"],
+            "reason_code": comparison.get("reason_code"),
+            "mismatches": list(comparison.get("mismatches") or []),
+            "tool_results": list(comparison.get("tool_results") or []),
+        }
     return validate_task_result(result)
 
 
@@ -416,7 +427,7 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
         "terminal_acceptance", "operational_action_count",
         "operational_action_count_basis", "evidence_refs", "answer_text",
         "artifacts", "delivery", "result_id", "created_at",
-        "plan_id", "source_plan_id",
+        "plan_id", "source_plan_id", "final_verdict", "goal_acceptance",
     }
     if set(result) - allowed_result_fields:
         raise TaskResultContractError("unexpected_task_result_field")
@@ -434,6 +445,22 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     kind = str(result.get("completion_kind") or "").strip().upper()
     if state not in STATES or outcome not in OUTCOMES or kind not in KINDS:
         raise TaskResultContractError("invalid_state_outcome_or_kind")
+    final_verdict = result.get("final_verdict")
+    expected_final = (
+        "PASS" if outcome == "SUCCESS" else "FAIL"
+    ) if state in {"COMPLETED", "FAILED", "INTERRUPTED"} else None
+    if final_verdict is not None and final_verdict != expected_final:
+        raise TaskResultContractError("final_verdict_outcome_mismatch")
+    if "goal_acceptance" in result:
+        goal_acceptance = result["goal_acceptance"]
+        if (not isinstance(goal_acceptance, Mapping)
+                or set(goal_acceptance) != {"verdict", "reason_code", "mismatches", "tool_results"}
+                or goal_acceptance.get("verdict") != expected_final
+                or expected_final not in {"PASS", "FAIL"}
+                or not isinstance(goal_acceptance.get("reason_code"), str)
+                or not isinstance(goal_acceptance.get("mismatches"), list)
+                or not isinstance(goal_acceptance.get("tool_results"), list)):
+            raise TaskResultContractError("invalid_goal_acceptance")
     count = result.get("operational_action_count")
     if type(count) is not int or count < 0:
         raise TaskResultContractError("invalid_operational_action_count")
