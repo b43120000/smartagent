@@ -270,6 +270,93 @@ $timeline = New-Object 'System.Collections.Generic.List[object]'
 $checkpointNames = New-Object 'System.Collections.Generic.HashSet[string]'
 $sourceInfo = New-Object 'System.Collections.Generic.List[object]'
 $warnings = New-Object 'System.Collections.Generic.List[string]'
+$executorRejections = @()
+$executorBoardStatus = 'NOT_FOUND'
+$executorExpectedRejections = -1
+$executorObservedRejections = 0
+$executorTaskEpoch = ''
+$executorBoardPath = Join-Path $root ('localdata\runtime\executor_run_blackboard\' + $task + '.json')
+if ($task -and [IO.File]::Exists($executorBoardPath)) {
+    $executorBoardStatus = 'INVALID'
+    try {
+        if ((Get-Item -LiteralPath $executorBoardPath).Length -gt 4194304) {
+            $warnings.Add('EXECUTOR_BLACKBOARD_TOO_LARGE')
+        } else {
+            $executorBoard = Read-Json $executorBoardPath
+            $identityMatched = (
+                $null -ne $executorBoard -and
+                [string]$executorBoard.schema -ceq 'SMARTAGENT_EXECUTOR_RUN_BLACKBOARD_V1' -and
+                [string]$executorBoard.task_id -ceq $task -and
+                $request -and [string]$executorBoard.request_id -ceq $request -and
+                -not [string]::IsNullOrWhiteSpace([string]$executorBoard.task_epoch)
+            )
+            if ($identityMatched -and $null -ne $ledger -and
+                $null -ne $ledger.PSObject.Properties['task_epoch'] -and $ledger.task_epoch) {
+                $identityMatched = [string]$executorBoard.task_epoch -ceq [string]$ledger.task_epoch
+            }
+            if ($identityMatched) {
+                $executorBoardStatus = 'MATCHED'
+                $executorTaskEpoch = Safe-Code $executorBoard.task_epoch
+                foreach ($ev in @($executorBoard.events)) {
+                    if ($null -eq $ev -or [string]$ev.kind -cne 'TOOL_RESULT' -or
+                        [string]$ev.runtimeEvidence.status -cne 'REJECTED') { continue }
+                    $executorObservedRejections++
+                    $diag = $ev.admission_diagnostic
+                    $fields = @()
+                    foreach ($issue in @($diag.field_issues) | Select-Object -First 16) {
+                        if ($null -eq $issue) { continue }
+                        $expected = [string]$issue.expected_type
+                        $actual = [string]$issue.actual_type
+                        $fields += [ordered]@{
+                            field=(Safe-Code $issue.field)
+                            reason=(Safe-Code $issue.reason)
+                            expected_type=$(if ($expected -match '^[A-Za-z0-9_ |.\[\]]{1,64}$') { $expected } else { '[REDACTED_TYPE]' })
+                            actual_type=$(if ($actual -match '^[A-Za-z0-9_ |.\[\]]{1,64}$') { $actual } else { '[REDACTED_TYPE]' })
+                        }
+                    }
+                    $executorRejections += [ordered]@{
+                        source='executor_blackboard'
+                        event='executor_action_admission_rejected'
+                        round=$(if ($null -ne $ev.round) { [int]$ev.round } else { 0 })
+                        tool=(Safe-Code $ev.toolName)
+                        reason_code=(Safe-Code $ev.runtimeEvidence.reason_code)
+                        repair_mode=(Safe-Code $diag.repair_class)
+                        admission_stage=(Safe-Code $diag.stage)
+                        admission_repair_attempt=$(if ($null -ne $ev.admission_repair_attempt) { [int]$ev.admission_repair_attempt } else { 0 })
+                        proposal_sha256=(Safe-Code $ev.arguments_sha256)
+                        field_issues=@($fields)
+                        executed=$false
+                        authorization_granted=$false
+                        raw_command_included=$false
+                    }
+                }
+                if ($null -ne $executorBoard.terminal) {
+                    $executorExpectedRejections = [int]$executorBoard.terminal.admission_rejection_count
+                }
+            } else {
+                $warnings.Add('EXECUTOR_BLACKBOARD_IDENTITY_OR_SCHEMA_MISMATCH')
+            }
+        }
+    } catch {
+        $executorBoardStatus = 'INVALID'
+        $executorRejections = @()
+        $warnings.Add('EXECUTOR_BLACKBOARD_READ_ERROR')
+    }
+}
+$executorAdmissionSummary = [ordered]@{
+    schema='SMARTAGENT_EXECUTOR_ADMISSION_RCA_V1'
+    status=$executorBoardStatus
+    task_id=(Safe-Code $task)
+    request_id=(Safe-Code $request)
+    task_epoch=$executorTaskEpoch
+    terminal_rejection_count=$executorExpectedRejections
+    observed_rejection_count=$executorObservedRejections
+    exported_rejection_count=@($executorRejections).Count
+    identity_matched=($executorBoardStatus -eq 'MATCHED')
+    raw_command_included=$false
+    raw_result_included=$false
+}
+Write-Json (Join-Path $stage 'executor_admission_summary.json') $executorAdmissionSummary
 
 try {
     foreach ($source in $sources) {
@@ -956,6 +1043,9 @@ try {
             authorization_granted=$false
         }
     })
+    # Combine timeline and executor-only Blackboard admission rejections.
+    # Neither source can authorize execution or fabricate ActionResult evidence.
+    $admissionRejections = @($admissionRejections) + @($executorRejections)
     Write-Json (Join-Path $stage 'action_admission_rejections.json') @($admissionRejections)
     # A denied v10 tool has no ToolResult. Preserve Scope denials without
     # interpreting an unexecuted action as a filesystem observation.
@@ -1176,7 +1266,20 @@ try {
     })
     Write-Json (Join-Path $stage 'action_causal_trace_summary.json') @($actionTrace)
     $coverageIssues = New-Object 'System.Collections.Generic.List[string]'
-    if ($timeline.Count -eq 0) {
+    if ($executorBoardStatus -eq 'INVALID') {
+        $coverageIssues.Add('EXECUTOR_BLACKBOARD_UNVERIFIED')
+    }
+    if ($executorBoardStatus -eq 'MATCHED' -and (
+        $executorExpectedRejections -lt 0 -or
+        $executorObservedRejections -ne $executorExpectedRejections -or
+        @($executorRejections).Count -ne $executorObservedRejections -or
+        @($admissionRejections | Where-Object {
+            $_.source -eq 'executor_blackboard'
+        }).Count -ne $executorObservedRejections
+    )) {
+        $coverageIssues.Add('EXECUTOR_ADMISSION_REJECTION_COVERAGE_INCOMPLETE')
+    }
+    if ($timeline.Count -eq 0 -and $executorBoardStatus -ne 'MATCHED') {
         $coverageIssues.Add('NO_MATCHING_RUNTIME_EVENTS')
     }
     $missingStages = @($transitions | Where-Object {
@@ -1248,6 +1351,10 @@ try {
         }).Count
         missing_failure_action_ids=@($missingIDs | Select-Object -First 24)
         admission_rejection_count=$admissionRejections.Count
+        executor_blackboard_status=$executorBoardStatus
+        executor_terminal_rejection_count=$executorExpectedRejections
+        executor_admission_rejection_count=$executorObservedRejections
+        executor_admission_rejection_exported_count=@($executorRejections).Count
         minimal_action_proposed_count=$minimalProposedCount
         minimal_admission_rejection_count=$minimalRejectCount
         minimal_admission_rejection_represented_count=$representedMinimalRejectCount

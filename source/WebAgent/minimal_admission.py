@@ -140,18 +140,82 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
     }
     valid, diag = validate_tool_envelope(action)
     if not valid:
-        return None, str((diag or {}).get("reason") or "schema_invalid")
+        # Preserve the typed contract failure; never echo raw model arguments
+        # (commands may contain credentials). This receipt is NOT permission.
+        fault = dict(diag or {})
+        issues = []
+        for item in list(fault.get("field_issues") or [])[:16]:
+            if not isinstance(item, dict):
+                continue
+            field = str(item.get("field") or "")[:80]
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9.]{0,79}", field):
+                continue
+            issues.append({
+                "field": field,
+                "reason": str(item.get("reason") or "")[:40],
+                "expected_type": str(item.get("expected") or "")[:64],
+                "actual_type": str(item.get("actual") or "MISSING")[:40],
+            })
+        code = str(fault.get("reason") or "schema_invalid")[:120]
+        repairable = code in {
+            "wrong_field_type", "missing_required_field",
+        }
+        diagnostic = {
+            "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
+            "stage": "SCHEMA_VALIDATION",
+            "tool": decision.tool,
+            "reason_code": code,
+            "repair_class": "MODEL_SCHEMA_REPAIR" if repairable else "MODEL_ACTION_REASSESSMENT",
+            "field_issues": issues,
+            "executed": False,
+            "authorization_granted": False,
+        }
+        try:
+            tool_context._last_minimal_admission_diagnostic = diagnostic
+        except (AttributeError, TypeError):
+            pass
+        return None, code
     if decision.tool == "run_command":
         operation = str(action.get("operation", "")).upper()
         read_proven = command_is_proven_observation(action)
         if operation in {"INSPECT", "GIT_INSPECT", "VERIFY"} and not read_proven:
+            try:
+                tool_context._last_minimal_admission_diagnostic = {
+                    "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
+                    "stage": "COMMAND_CLASSIFICATION", "tool": decision.tool,
+                    "reason_code": "command_not_proven_read_only",
+                    "repair_class": "MODEL_ACTION_REASSESSMENT",
+                    "field_issues": [], "executed": False,
+                    "authorization_granted": False,
+                }
+            except (AttributeError, TypeError):
+                pass
             return None, "command_not_proven_read_only"
         if not read_proven:
+            code = ""
             if not str(action.get("success_criteria", "")).strip():
-                return None, "mutation_success_criteria_required"
+                code = "mutation_success_criteria_required"
             verification = action.get("verify")
-            if not isinstance(verification, (list, dict)) or not verification:
-                return None, "mutation_verification_required"
+            if not code and (not isinstance(verification, (list, dict)) or not verification):
+                code = "mutation_verification_required"
+            if code:
+                missing = "success_criteria" if code.startswith("mutation_success") else "verify"
+                try:
+                    tool_context._last_minimal_admission_diagnostic = {
+                        "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
+                        "stage": "POSTCONDITION_CONTRACT", "tool": decision.tool,
+                        "reason_code": code, "repair_class": "MODEL_SCHEMA_REPAIR",
+                        "field_issues": [{
+                            "field": missing, "reason": "missing_or_empty",
+                            "expected_type": "str" if missing == "success_criteria"
+                                else "list | dict",
+                            "actual_type": "MISSING_OR_EMPTY",
+                        }],
+                        "executed": False, "authorization_granted": False,
+                    }
+                except (AttributeError, TypeError):
+                    pass
+                return None, code
     if decision.tool == "delete_path":
         request = str(tool_context.current_request_text or "")
         target = str(action.get("path", "") or "")
@@ -173,6 +237,9 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
         setattr(tool_context, "_last_minimal_admission_diagnostic", {
             "schema": "SMARTAGENT_EXECUTOR_SCOPE_ADMISSION_V1",
             "tool": decision.tool,
+            "stage": "SCOPE_PREFLIGHT",
+            "repair_class": "AUTHORITY_OR_SCOPE_REASSESSMENT",
+            "field_issues": [],
             "admitted": bool(scope.get("allowed")),
             "scope_reason_code": str(
                 diagnostic.get("reason_code") or "SCOPE_REJECTION_MISSING_CAUSE"

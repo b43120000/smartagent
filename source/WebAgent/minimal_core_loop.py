@@ -70,14 +70,43 @@ def tool_catalog(context) -> list[dict]:
             "upload_file", "upload_files", "project_sync"}]
     if not transfer.get("browser_download", False):
         names = [name for name in names if name != "download_artifact"]
-    return [{
-        "name": name,
-        "description": _ATOMIC_TOOL_HINTS.get(name, "Only use when required; normal admission applies."),
-        "required": [k for k in TOOL_ENVELOPE_SCHEMAS[name]["required"]
-                     if k != "action_id"],
-        "optional": [k for k in TOOL_ENVELOPE_SCHEMAS[name]["optional"]
-                     if k != "action_id"],
-    } for name in names]
+    def schema_type(spec):
+        types = spec if isinstance(spec, tuple) else (spec,)
+        return " | ".join(item.__name__ for item in types)
+
+    result = []
+    for name in names:
+        schema = TOOL_ENVELOPE_SCHEMAS[name]
+        entry = {
+            "name": name,
+            "description": _ATOMIC_TOOL_HINTS.get(
+                name, "Only use when required; normal admission applies."
+            ),
+            "required": [k for k in schema["required"] if k != "action_id"],
+            "optional": [k for k in schema["optional"] if k != "action_id"],
+            "required_types": {
+                k: schema_type(t) for k, t in schema["required"].items()
+                if k != "action_id"
+            },
+            "optional_types": {
+                k: schema_type(t) for k, t in schema["optional"].items()
+                if k != "action_id"
+            },
+        }
+        if name == "run_command":
+            entry["verify_contract"] = {
+                "type": "list[object] | object",
+                "allowed_actions": ["run_command", "file_exists", "file_contains"],
+                "sample": {"action": "file_exists", "path": "<authorized literal path>", "expect": True},
+                "warning": (
+                    "verify is not a text string. For side effects use "
+                    "success_criteria:string and verify:list[object] or object. "
+                    "Each command must independently pass Admission, scope, "
+                    "permission, and postcondition verification."
+                ),
+            }
+        result.append(entry)
+    return result
 
 
 def recent_results(history: list[dict]) -> list[dict]:
