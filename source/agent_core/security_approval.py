@@ -102,6 +102,11 @@ class SecurityApprovalLedger:
                 rejected_at=now if not approve else 0.0,
                 actor=str(actor or "human"),
             )
+            # Pre-resume consent is collected *before* the child task starts.
+            # A bounded one-hour execution window avoids re-prompting halfway
+            # through a legitimate long task, without creating permanent ACL.
+            if approve and record.get("approval_kind") == "RESUME_UNKNOWN_COMMAND":
+                record["expires_at"] = now + 3600.0
             self._save(state); return dict(record)
 
     def get(self, approval_id: str) -> dict | None:

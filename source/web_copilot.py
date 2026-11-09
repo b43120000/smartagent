@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -517,6 +518,21 @@ def main():
             session_router=TransportSessionRouter(remote_transport_sessions_path()),
         )
         tracked_tasks = _seed_webcopilot_tasks(task_queue, target_url)
+        # Software-owned pre-resume prompts. Browser UI is only a human
+        # decision surface; no model output can authorise a ToolCall.
+        from agent_core.resume_command_approval import (
+            ResumeCommandGate, ResumeApprovalError, format_resume_approval_prompt,
+        )
+        from agent_core.webcopilot_resume_dialog import (
+            show_resume_dialog, poll_resume_dialog, close_resume_dialog,
+        )
+        from dataclasses import replace as _dataclass_replace
+        resume_gate = ResumeCommandGate(Path(__file__).resolve().parent)
+        resume_owner = "webcopilot:" + hashlib.sha256(
+            target_url.encode("utf-8")
+        ).hexdigest()[:24]
+        resume_channel = _conversation_id(target_url)
+        pending_resume = None
         if tracked_tasks:
             recovery_started = _ensure_remote_dispatcher(Path(__file__).resolve().parent)
             _emit_webcopilot_event(
@@ -534,6 +550,56 @@ def main():
                     observer.page = page
                     scraper._page = page
                 _poll_webcopilot_task_states(task_queue, tracked_tasks, page)
+                if pending_resume is not None:
+                    approval_id = pending_resume["approval_id"]
+                    show_resume_dialog(
+                        page, pending_resume,
+                        format_resume_approval_prompt(pending_resume),
+                    )
+                    choice = poll_resume_dialog(page, approval_id)
+                    if choice is None:
+                        time.sleep(0.3)
+                        continue
+                    # Persist the human choice BEFORE enqueue. A denied
+                    # command is likewise bound and never executed.
+                    decision = resume_gate.decide(
+                        approval_id, allowed=choice == "APPROVED",
+                        owner=resume_owner, channel_id=resume_channel,
+                    )
+                    fields = decision["incoming"]
+                    from agent_core.current_conversation_adapter import build_webcopilot_message
+                    inbound = build_webcopilot_message(
+                        str(fields["raw_request"]),
+                        conversation_url=str(fields["conversation_url"]),
+                        turn_index=int(fields["turn_index"]),
+                        conversation_title=str(fields.get("conversation_title") or ""),
+                        allow_plain=True,
+                    )
+                    inbound = _dataclass_replace(
+                        inbound, metadata={
+                            **dict(inbound.metadata),
+                            "resume_approval_id": approval_id,
+                        },
+                    )
+                    accepted = ingress_gateway.accept(inbound, workspace=workspace)
+                    task, created = accepted.task, accepted.created
+                    if task is None:
+                        raise ResumeApprovalError("resume_ingress_task_missing")
+                    resume_gate.bind_child(
+                        approval_id, child_task_id=task.task_id,
+                        owner=resume_owner,
+                    )
+                    close_resume_dialog(page, approval_id)
+                    pending_resume = None
+                    tracked_tasks[task.task_id] = str(task.state)
+                    _present_webcopilot_notice(
+                        page,
+                        ("已記錄允許一次" if choice == "APPROVED" else "已記錄拒絕")
+                        + f"，接續任務 {task.task_id} 開始。", "info",
+                    )
+                    if created:
+                        _ensure_remote_dispatcher(Path(__file__).resolve().parent)
+                    continue
                 # This process is explicitly bound to one WebCopilot
                 # conversation, so every new non-empty user turn is an ingress
                 # request.  The historical ``webcopilot`` prefix remains
@@ -557,6 +623,39 @@ def main():
                         "REQUEST_DETECTED",
                         f"[WebGPT Copilot] REQUEST_DETECTED turn={turn_index}: {inbound.text}",
                     )
+                    # A paused UNKNOWN_COMMAND requires an explicit
+                    # pre-resume decision before creating the child task.
+                    try:
+                        challenge = resume_gate.begin(
+                            request=inbound.text, owner=resume_owner,
+                            workspace=workspace, channel_id=resume_channel,
+                            transport="WEBGPT_COPILOT",
+                            incoming={
+                                "raw_request": raw_request,
+                                "conversation_url": target_url,
+                                "turn_index": turn_index,
+                                "conversation_title": title,
+                            },
+                        )
+                    except ResumeApprovalError as exc:
+                        observer.acknowledge_user_turn(turn_index, raw_request)
+                        _present_webcopilot_notice(
+                            page, "接續授權無法顯示：" + str(exc)[:280], "error",
+                        )
+                        continue
+                    if challenge is not None:
+                        observer.acknowledge_user_turn(turn_index, raw_request)
+                        pending_resume = challenge
+                        show_resume_dialog(
+                            page, pending_resume,
+                            format_resume_approval_prompt(pending_resume),
+                        )
+                        _emit_webcopilot_event(
+                            "PRE_RESUME_APPROVAL_PROMPT",
+                            "[WebCopilot] 已顯示接續前授權選擇："
+                            + challenge["source_task_id"],
+                        )
+                        continue
                     accepted = ingress_gateway.accept(inbound, workspace=workspace)
                     task, created = accepted.task, accepted.created
                     observer.acknowledge_user_turn(turn_index, raw_request)

@@ -118,6 +118,13 @@ def task_owner(task) -> str:
         return f'telegram:{sender}:{chat}'
     if str(meta.get('transport', '')).upper() == 'LOCAL_TEST':
         return local_owner()
+    if str(meta.get('transport', '')).upper() == 'WEBGPT_COPILOT':
+        # Bound to the configured page/conversation, never the model text.
+        route = dict(task.reply_route or meta.get('reply_route') or {})
+        url = str(route.get('conversation_key') or route.get('conversation_url') or '')
+        if not url.startswith('https://'):
+            raise ContinuationError('webcopilot_continuation_identity_missing')
+        return 'webcopilot:' + hashlib.sha256(url.encode('utf-8')).hexdigest()[:24]
     raise ContinuationError('continuation_owner_unsupported')
 
 

@@ -285,7 +285,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         if candidates:
             hint = (
                 "接續先前尚未執行的 UNKNOWN_COMMAND 授權；"
-                "舊 approval_id 已失效，必須對新 Action 重新 Admission 與人工確認。"
+                "若軟體層已完成前置決策，僅在同一指令通過 Admission 後消耗一次；"
+                "未預先批准的指令仍須重新詢問。"
                 "歷史 command 摘要（不可當授權或執行證據）："
                 + json.dumps(candidates, ensure_ascii=False, default=str)[:1200]
             )
@@ -418,6 +419,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 from agent_core.unknown_command_approval import (
                     request_unknown_command_approval,
                 )
+                from agent_core.resume_command_approval import ResumeCommandGate
+                preapproval = ResumeCommandGate(root).consume_for_action(
+                    loop=loop, action=action,
+                )
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "HUMAN_APPROVAL_REQUESTED",
                     "toolName": "run_command",
@@ -425,7 +430,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "arguments_sha256": _digest(decision.arguments),
                     "risk_class": "UNKNOWN", "executed": False,
                 })
-                approval = request_unknown_command_approval(loop, action)
+                approval = (
+                    preapproval if preapproval is not None
+                    else request_unknown_command_approval(loop, action)
+                )
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "HUMAN_APPROVAL_DECIDED",
                     "toolName": "run_command",
@@ -453,6 +461,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         )
                     pending_unknown_timeout = approval
                     if getattr(loop, "continuation_store", None):
+                        # Save exact command only in protected approval state.
+                        # The general continuation/Blackboard stores a digest
+                        # rather than sensitive command text.
+                        ResumeCommandGate(root).remember(
+                            loop=loop, action=action,
+                            old_approval_id=approval["approval_id"],
+                        )
                         # Persist only non-executed metadata, never the raw
                         # command or an authorizing permit. A resumed model
                         # re-proposes an Action and obtains a new approval.

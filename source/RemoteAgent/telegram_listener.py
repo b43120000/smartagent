@@ -121,6 +121,7 @@ class TelegramIngressListener:
             control_handler=control_handler,
             accepted_handler=deliver_accepted,
             task_admission_guard=task_admission_guard,
+            install_root=self.root,
         )
 
     @property

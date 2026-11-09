@@ -341,6 +341,7 @@ class TelegramReceiver:
         control_handler=None,
         accepted_handler=None,
         task_admission_guard=None,
+        install_root: str | Path | None = None,
     ):
         config.validate()
         self.config = config
@@ -352,6 +353,8 @@ class TelegramReceiver:
         self.control_handler = control_handler
         self.accepted_handler = accepted_handler
         self.task_admission_guard = task_admission_guard
+        # Must match the WebAgent worker's root, not the task workspace.
+        self.install_root = Path(install_root or Path(__file__).resolve().parents[1]).resolve()
         # Serializes one normalized Telegram update through durable enqueue
         # against a workspace binding hot-swap.  HostSupervisor acquires this
         # before the task-store lock, matching this receiver's lock order.
@@ -392,6 +395,139 @@ class TelegramReceiver:
             return self.client.send_message(
                 chat_id, text, reply_to_message_id=reply_to_message_id
             )
+
+    def _resume_approval_gate(self):
+        from agent_core.resume_command_approval import ResumeCommandGate
+        return ResumeCommandGate(self.install_root)
+
+    def _resume_owner(self, message: NormalizedInboundMessage) -> str:
+        chat = str((message.reply_context or {}).get("chat_id") or "")
+        return "telegram:" + str(message.sender_id) + ":" + chat
+
+    def _offer_pre_resume_decision(self, message: NormalizedInboundMessage,
+                                    *, update_id: int) -> bool:
+        """Only software is allowed to decide whether to show this prompt."""
+        from agent_core.resume_command_approval import (
+            ResumeApprovalError, format_resume_approval_prompt,
+        )
+        from RemoteAgent.remote_feature_catalog import security_approval_inline_keyboard
+        from agent_core.task_continuation import parse_continuation
+        try:
+            request = parse_continuation(message.text)
+            if not request or request.get("mode") != "RESUME":
+                return False
+            channel_id = str(message.reply_context.get("chat_id") or "")
+            original = {
+                "transport": message.transport, "endpoint": message.endpoint,
+                "conversation_key": message.conversation_key,
+                "sender_id": message.sender_id,
+                "source_message_id": message.source_message_id,
+                "text": message.text, "received_at": message.received_at,
+                "idempotency_key": message.idempotency_key,
+                "reply_context": dict(message.reply_context),
+                "metadata": dict(message.metadata),
+            }
+            prompt = self._resume_approval_gate().begin(
+                request=message.text,
+                owner=self._resume_owner(message),
+                workspace=self.config.workspace,
+                channel_id=channel_id, transport="TELEGRAM", incoming=original,
+            )
+            if prompt is None:
+                return False
+            self._send_message(
+                int(channel_id), format_resume_approval_prompt(prompt),
+                reply_to_message_id=int(message.reply_context.get("message_id") or 0) or None,
+                reply_markup=security_approval_inline_keyboard(
+                    prompt["approval_id"], approval_kind="RESUME_UNKNOWN_COMMAND",
+                ),
+            )
+            self._log("CONNECT", stage="PRE_RESUME_APPROVAL_PROMPT",
+                      source_task_id=prompt["source_task_id"],
+                      approval_id=prompt["approval_id"], update_id=update_id)
+            return True
+        except (ResumeApprovalError, ValueError) as exc:
+            self._send_message(
+                int(message.reply_context["chat_id"]),
+                "🔴 無法預先顯示接續授權：" + str(exc)[:400]
+                + "\n不會自動授權或下發該指令。",
+                reply_to_message_id=int(message.reply_context["message_id"]),
+            )
+            self._log("ERROR", stage="PRE_RESUME_APPROVAL_BLOCKED",
+                      reason=str(exc)[:150], update_id=update_id)
+            return True
+
+    def _process_pre_resume_choice(self, message: NormalizedInboundMessage,
+                                    *, update_id: int) -> bool:
+        """Consume an already authenticated Telegram callback/choice."""
+        match = re.fullmatch(
+            r"(security_approve_once|security_reject_once)\s+(APR-[A-F0-9]{20})",
+            str(message.text or ""), re.I,
+        )
+        if not match:
+            return False
+        approval_id = match.group(2).upper()
+        gate = self._resume_approval_gate()
+        challenge = gate.public(approval_id)
+        if not challenge or challenge.get("transport") != "TELEGRAM":
+            return False  # Existing non-resume security action.
+        from agent_core.resume_command_approval import ResumeApprovalError
+        try:
+            outcome = gate.decide(
+                approval_id, allowed=match.group(1).lower() == "security_approve_once",
+                owner=self._resume_owner(message),
+                channel_id=str(message.reply_context["chat_id"]),
+            )
+            fields = outcome["incoming"]
+            original = NormalizedInboundMessage(
+                transport=str(fields["transport"]),
+                endpoint=str(fields["endpoint"]),
+                conversation_key=str(fields["conversation_key"]),
+                sender_id=str(fields["sender_id"]),
+                source_message_id=str(fields["source_message_id"]),
+                text=str(fields["text"]),
+                received_at=float(fields["received_at"]),
+                idempotency_key=str(fields["idempotency_key"]),
+                reply_context=dict(fields["reply_context"]),
+                metadata={**dict(fields.get("metadata") or {}),
+                          "resume_approval_id": approval_id},
+            )
+            # Task admission is checked again at click time. Approval is not a
+            # replacement for Software Guard or execution authorization.
+            if self.task_admission_guard is not None:
+                check = self.task_admission_guard(original)
+                granted = bool(check[0]) if isinstance(check, tuple) else bool(check)
+                if not granted:
+                    raise ResumeApprovalError("resume_task_admission_denied")
+            accepted = self.ingress.accept(original, workspace=self.config.workspace)
+            task = accepted.task
+            if task is None:
+                raise ResumeApprovalError("resume_ingress_task_missing")
+            gate.bind_child(approval_id, child_task_id=task.task_id,
+                            owner=self._resume_owner(message))
+            self._send_message(
+                int(message.reply_context["chat_id"]),
+                ("✅ 已記錄允許一次" if outcome["state"] == "APPROVED" else "⛔ 已記錄拒絕")
+                + f"，開始接續任務 {task.task_id}。\n"
+                "後續仍會重新檢查 Command Admission；不會執行超出授權範圍的操作。",
+                reply_to_message_id=int(message.reply_context["message_id"]),
+            )
+            if bool(getattr(accepted, "created", True)) and self.accepted_handler:
+                self.accepted_handler(task)
+            self._log("CONNECT", stage="PRE_RESUME_DECISION_ENQUEUED",
+                      approval_id=approval_id, source_task_id=outcome["source_task_id"],
+                      task_id=task.task_id, decision=outcome["state"],
+                      update_id=update_id)
+        except (ResumeApprovalError, ValueError, KeyError) as exc:
+            self._send_message(
+                int(message.reply_context["chat_id"]),
+                "🔴 接續授權無法啟動：" + str(exc)[:500]
+                + "\n原命令未執行；可重新送出接續工作指令。",
+                reply_to_message_id=int(message.reply_context["message_id"]),
+            )
+            self._log("ERROR", stage="PRE_RESUME_DECISION_REJECTED",
+                      approval_id=approval_id, reason=str(exc)[:120], update_id=update_id)
+        return True
 
     def discard_pending_updates_for_clean_start(self) -> int:
         """Advance the Telegram cursor past the pre-start backlog.
@@ -724,6 +860,8 @@ class TelegramReceiver:
                         update_id=update_id,
                         error=f"{type(exc).__name__}: {exc}",
                     )
+                if self._process_pre_resume_choice(callback_message, update_id=update_id):
+                    continue
                 control_key = canonical_remote_control(callback_message.text)
                 control_stages = {
                     MANAGER_COMMAND.casefold(): "CONTROL_BINDING_MANAGER",
@@ -779,6 +917,9 @@ class TelegramReceiver:
                 self.offset_store.commit(update_id)
                 continue
             control_key=canonical_remote_control(message.text)
+            if self._process_pre_resume_choice(message, update_id=update_id):
+                self.offset_store.commit(update_id)
+                continue
             if control_key == FEATURE_QUERY_COMMAND.casefold():
                 self.offset_store.commit(update_id)
                 self._dispatch_local_response_async(
@@ -861,6 +1002,12 @@ class TelegramReceiver:
                         update_id=update_id, error=reason,
                     )
                     continue
+            # Pre-resume confirmation is software-owned and takes precedence
+            # over Agent ingestion. Neither transport nor model may enqueue
+            # the resumed task before the human decision is recorded.
+            if self._offer_pre_resume_decision(message, update_id=update_id):
+                self.offset_store.commit(update_id)
+                continue
             if RemoteSkillManager.looks_like_invocation(message.text):
                 try:
                     from agent_core.remote_binding import active, load

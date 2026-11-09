@@ -216,6 +216,17 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     from agent_core.task_continuation import TaskContinuationStore, task_owner, render_task_reply
     continuation_store = TaskContinuationStore(root)
     continuation_store.register_task(task)
+    # The software/transport layer collected this explicit decision before
+    # dispatch. Bind it to the child task before any model or tool executes.
+    # This is not permission to skip Admission or replay an old tool.
+    ingress = dict((task.metadata or {}).get("ingress_metadata") or {})
+    resume_approval_id = str(ingress.get("resume_approval_id") or "")
+    if resume_approval_id:
+        from agent_core.resume_command_approval import ResumeCommandGate
+        ResumeCommandGate(root).bind_child(
+            resume_approval_id, child_task_id=task.task_id,
+            owner=task_owner(task),
+        )
     protocol_version = int((task.metadata or {}).get("protocol_version", 9) or 0)
     protocol_family = str((task.metadata or {}).get("protocol_family", "SMARTAGENT_V9"))
     if protocol_version not in {8, 9}:
