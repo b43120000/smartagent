@@ -961,6 +961,33 @@ class TelegramReceiver:
                         update_id=update_id,
                     )
                 continue
+            # Explicit Turbo configuration is a software-owned human control.
+            # Process in the authenticated Telegram ingress before any Planner,
+            # WebGPT DOM submission or Agent task creation.
+            from agent_core.turbo_settings_command import (
+                parse_turbo_control, apply_turbo_control, turbo_control_reply,
+            )
+            if parse_turbo_control(message.text) is not None:
+                self.offset_store.commit(update_id)
+                try:
+                    if message.attachments:
+                        raise ValueError("turbo_control_attachments_not_allowed")
+                    outcome = apply_turbo_control(
+                        message.text, workspace=self.config.workspace,
+                    )
+                    reply = turbo_control_reply(outcome)
+                    self._log("CONNECT", stage="CONTROL_TURBO_MODE",
+                              update_id=update_id,
+                              revision=outcome["revision"])
+                except (ValueError, OSError, RuntimeError) as exc:
+                    reply = "🔴 Turbo Mode 設定拒絕：" + str(exc)[:400]
+                    self._log("ERROR", stage="CONTROL_TURBO_MODE_REJECTED",
+                              update_id=update_id, error=str(exc)[:300])
+                self._send_message(
+                    int(message.reply_context["chat_id"]), reply,
+                    reply_to_message_id=int(message.reply_context["message_id"]),
+                )
+                continue
             if is_direct_cmd_request(message.text):
                 # Authenticated Telegram software control, same as other
                 # buttons and direct controls. The general Agent-task preflight
