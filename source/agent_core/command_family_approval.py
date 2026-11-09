@@ -61,7 +61,7 @@ def _inside(path: str, workspace: str) -> bool:
 
 
 def _path_token(token: str, preceding: str, workspace: str) -> bool:
-    if not token or any(ch in token for ch in "*?{}$%") or token.lower().endswith(_SCRIPT_SUFFIX):
+    if not token or "://" in token or any(ch in token for ch in "*?{}$%") or token.lower().endswith(_SCRIPT_SUFFIX):
         return False
     explicit = bool(re.match(r"(?i)^[a-z]:[\\/]|^\\\\|^/|^\.[\\/]|^\.\.[\\/]", token))
     relative = ("\\" in token or "/" in token) and not token.startswith("-")
@@ -101,9 +101,20 @@ def command_family_signature(action: Mapping, workspace: str) -> str | None:
         "<WORKSPACE_PATH>" if i and _path_token(t, tokens[i - 1], workspace) else t
         for i, t in enumerate(tokens)
     ]
-    return _sha(json.dumps({"schema": SCHEMA, "operation": operation,
-                            "argv_template": normalized},
-                           sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+    # A relative script/program resolves differently in a different cwd. Never
+    # generalize that situation, even when the text of the script is identical.
+    relative_program = (tokens[0].lower().endswith(_SCRIPT_SUFFIX)
+                        and not PureWindowsPath(tokens[0]).is_absolute()
+                        and not Path(tokens[0]).is_absolute())
+    relative_script = (executable in {"python", "python.exe", "py", "py.exe", "node", "node.exe"}
+                       and len(tokens) > 1 and tokens[1].lower().endswith(_SCRIPT_SUFFIX)
+                       and not PureWindowsPath(tokens[1]).is_absolute()
+                       and not Path(tokens[1]).is_absolute())
+    payload = {"schema": SCHEMA, "operation": operation, "argv_template": normalized}
+    if relative_program or relative_script:
+        payload["bound_cwd"] = str(Path(cwd).resolve())
+    return _sha(json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":")))
 
 
 class TaskCommandFamilyGrants:
