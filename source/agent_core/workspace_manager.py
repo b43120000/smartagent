@@ -132,6 +132,8 @@ def _binding_snapshot() -> dict:
         "security_status": access["security_status"],
         "writable_workspaces": list(access["writable_workspaces"]),
         "read_only_roots": list(access["read_only_roots"]),
+        "turbo_roots": list(access.get("turbo_roots") or ()),
+        "policy_revision": int((access.get("policy") or {}).get("revision", 0) or 0),
         "local": load_startup_preferences(),
         "remote": remote,
         "gar_webgpt2_url": load_gar_webgpt2(),
@@ -1170,6 +1172,9 @@ def _interactive() -> int:
             print(f"  - {value}")
     else:
         print("  (none - configure Security first)")
+    print("Turbo Mode roots:")
+    for value in snapshot.get("turbo_roots") or ():
+        print(f"  - {value}")
     print("Read-only roots:")
     if snapshot["read_only_roots"]:
         for value in snapshot["read_only_roots"]:
