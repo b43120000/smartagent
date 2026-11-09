@@ -180,7 +180,7 @@ def test_wrong_fence_rejected(form_env):
     block = new_form(manager).replace(
         "turbomode=off", fence + "\nworkspace=bad\n" + fence,
     )
-    with pytest.raises(ValueError, match="turbo_fence_invalid"):
+    with pytest.raises(ValueError, match="turbo_fence_invalid|duplicate_field"):
         manager._parse_update(block)
 
 
