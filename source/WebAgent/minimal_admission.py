@@ -257,6 +257,7 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
                 scope.get("directory_preconditions") or {}
             ),
             "executed": False,
+            "authorization_granted": False,
             "grants_authorization": False,
         })
     except (AttributeError, TypeError):
