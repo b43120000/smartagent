@@ -69,6 +69,8 @@ def command_is_proven_observation(action):
         r'Get-Location',
         r'(?:Write-Output\s+)?\(Get-Location\)\.Path',
         rf'(?:Test-Path|Get-Item|Get-Content)\s+-LiteralPath\s+{literal}(?:\s+-Raw)?',
+        # A single SHA256 read, no pipe, redirect, expression, or side effects.
+        rf'Get-FileHash\s+-LiteralPath\s+{literal}\s+-Algorithm\s+SHA256',
         r'Get-Process\s+-Id\s+[0-9]+',
         r'\$PSVersionTable\.PSVersion',
         rf'Write-Output\s+{literal}',

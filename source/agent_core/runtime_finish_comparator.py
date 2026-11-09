@@ -110,8 +110,6 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
         return [], [], {"board": board, "results": []}, ""
     if len(events) > _MAX_CLAIMS:
         return [], [], None, "EVIDENCE_MISSING_OR_EXCESSIVE"
-    if any(row.get("runtimeEvidence", {}).get("status") == "REJECTED" for row in events):
-        return [], [], None, "ADMISSION_REJECTED_NOT_GOAL_PROOF"
     results, refs, history = [], [], []
     for row in events:
         event = row.get("runtimeEvidence") or {}
@@ -465,11 +463,25 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if mismatches:
         return _fail("MODEL_RUNTIME_MISMATCH", refs,
                      mismatches=mismatches, tool_results=results)
+    # Historical REJECTED/FAILED operations remain in the claimed evidence
+    # set (never omitted or rewritten), but cannot veto later independent
+    # successful evidence for the original goal. Uncertain execution is still
+    # fail-closed and cannot be silently treated as a previous rejection.
     if any(item["receipt"]["status"] in {"UNKNOWN", "RUNNING", "PARTIAL"}
-           or item["receipt"]["executed"] is not True for item in history):
+           for item in history):
         return _fail("RUNTIME_EXECUTION_NOT_CONFIRMED", refs, tool_results=results)
-    proof = _goal_proof(goal, history)
-    if proof is None and _recognized_but_unsatisfied(goal, history):
+    valid_goal_history = [
+        item for item in history
+        if item["receipt"]["status"] == "SUCCEEDED"
+        and item["receipt"]["executed"] is True
+    ]
+    if not valid_goal_history:
+        return _fail("NO_SUCCEEDED_GOAL_EVIDENCE", refs, tool_results=results)
+    if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED"}
+           for item in history):
+        return _fail("RUNTIME_RESULT_STATUS_UNSUPPORTED", refs, tool_results=results)
+    proof = _goal_proof(goal, valid_goal_history)
+    if proof is None and _recognized_but_unsatisfied(goal, valid_goal_history):
         return _fail("KNOWN_GOAL_POSTCONDITION_NOT_SATISFIED", refs, tool_results=results)
     # Even an independent goal proof requires the model to reference a
     # task-relevant fact, not merely compare the generic Tool status.
@@ -478,6 +490,14 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     ):
         return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs, tool_results=results)
     if goal_checks is not None:
+        # A rejected/failed tool may be faithfully reported, but may not
+        # satisfy the model-declared *positive* completion goal.
+        good_refs = {item["evidence_ref"] for item in valid_goal_history}
+        if not any(isinstance(check, dict)
+                   and check.get("evidence_ref") in good_refs
+                   for check in goal_checks if isinstance(goal_checks, list)):
+            return _fail("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", refs,
+                         tool_results=results)
         ok, reason, deviations = _evaluate_model_goal_checks(
             history, refs, claimed, goal_checks,
         )

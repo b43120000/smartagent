@@ -496,6 +496,16 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                         }
                         if str(manifest.get("approval_kind", "")).upper() == "EXECUTION"
                         else {
+                            "approval_kind": "UNKNOWN_COMMAND",
+                            "approval_id": record["approval_id"],
+                            "target": manifest.get("target", ""),
+                            "command": manifest.get("command", ""),
+                            "cwd": manifest.get("cwd", ""),
+                            "command_sha256": manifest.get("command_sha256", ""),
+                            "manifest_digest": manifest["manifest_digest"],
+                            "timeout_sec": 600,
+                        } if str(manifest.get("approval_kind", "")).upper() == "UNKNOWN_COMMAND"
+                        else {
                             "approval_kind": "DELETE",
                             "approval_id": record["approval_id"],
                             "target": manifest["target"],

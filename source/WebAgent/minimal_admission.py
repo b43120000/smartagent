@@ -7,6 +7,7 @@ import uuid
 from agent_core.smartagent_protocol import validate_tool_envelope
 from agent_core.tool_capabilities import get_allowed_tools
 from agent_core.action_dependencies import command_is_proven_observation
+from agent_core.command_risk import classify_command
 from agent_core.tool_contract_metadata import enum_issue
 
 
@@ -121,6 +122,7 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
     """Schema, authority and classification are checked before side effects."""
     try:
         setattr(tool_context, "_last_minimal_admission_diagnostic", {})
+        setattr(tool_context, "_last_command_risk_class", "")
     except (AttributeError, TypeError):
         pass
     if decision.kind != "tool_call":
@@ -185,7 +187,13 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
     if decision.tool == "run_command":
         operation = str(action.get("operation", "")).upper()
         read_proven = command_is_proven_observation(action)
-        if operation in {"INSPECT", "GIT_INSPECT", "VERIFY"} and not read_proven:
+        risk = classify_command(action)
+        try:
+            tool_context._last_command_risk_class = risk
+        except (AttributeError, TypeError):
+            pass
+        if (operation in {"INSPECT", "GIT_INSPECT", "VERIFY"}
+                and not read_proven and risk != "UNKNOWN"):
             try:
                 tool_context._last_minimal_admission_diagnostic = {
                     "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",

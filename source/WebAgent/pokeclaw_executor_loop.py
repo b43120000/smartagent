@@ -274,7 +274,23 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     consecutive_admission_rejections = 0
     max_consecutive_admission_rejections = 10
     hint = ""
+    source = getattr(loop, "continuation_source", None) or {}
+    if isinstance(source, Mapping) and source:
+        # Trusted continuation context is *not* authority; only new human
+        # approval can authorize an expired UNKNOWN_COMMAND proposal.
+        candidates = [
+            row for row in (source.get("pending_actions") or [])[:5]
+            if isinstance(row, Mapping) and row.get("approval_required")
+        ]
+        if candidates:
+            hint = (
+                "接續先前尚未執行的 UNKNOWN_COMMAND 授權；"
+                "舊 approval_id 已失效，必須對新 Action 重新 Admission 與人工確認。"
+                "歷史 command 摘要（不可當授權或執行證據）："
+                + json.dumps(candidates, ensure_ascii=False, default=str)[:1200]
+            )
     seen_mutations = set()
+    pending_unknown_timeout = None
     max_rounds = min(int(loop.max_turns), 30)
     for turn in range(1, max_rounds + 1):
         loop._check_cancelled()
@@ -312,6 +328,16 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             hint = "上一輪 JSON 格式無效：" + exc.code
             continue
         invalids = 0
+        if decision.kind == "finish" and pending_unknown_timeout:
+            # An unexecuted approval-gated action cannot be hidden by a
+            # model Finish or mistaken for positive goal evidence.
+            return _finish(
+                loop, root, request, kind="BLOCKED",
+                summary="FAIL：UNKNOWN_COMMAND_APPROVAL_TIMEOUT；尚缺執行證據。"
+                        "可接續任務並重新授權，不會重播原指令。"
+                        " approval_id=" + pending_unknown_timeout["approval_id"],
+                complete=False,
+            )
         if decision.kind == "finish":
             # Only an incomplete Finish contract is repairable. Never re-run
             # an Action, and never let a semantic/evidence mismatch be rewritten
@@ -377,6 +403,78 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         repeated = repeated + 1 if signature == last_fingerprint else 0
         last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
+        if action and decision.tool == "run_command":
+            from agent_core.command_risk import classify_command
+            risk_class = classify_command(action)
+            if risk_class == "UNKNOWN":
+                if pending_unknown_timeout:
+                    return _finish(
+                        loop, root, request, kind="BLOCKED",
+                        summary="FAIL：UNKNOWN_COMMAND_APPROVAL_TIMEOUT；替代指令"
+                                "仍無法在既有權限下安全下發。接續任務需重新授權，"
+                                "不會自動執行過期指令。",
+                        complete=False,
+                    )
+                from agent_core.unknown_command_approval import (
+                    request_unknown_command_approval,
+                )
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "HUMAN_APPROVAL_REQUESTED",
+                    "toolName": "run_command",
+                    "action_id": action["action_id"],
+                    "arguments_sha256": _digest(decision.arguments),
+                    "risk_class": "UNKNOWN", "executed": False,
+                })
+                approval = request_unknown_command_approval(loop, action)
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "HUMAN_APPROVAL_DECIDED",
+                    "toolName": "run_command",
+                    "action_id": action["action_id"],
+                    "state": approval["state"],
+                    "reason_code": approval["reason"],
+                    "approval_id": approval["approval_id"],
+                    "command_sha256": approval["command_sha256"],
+                    "executed": False, "evidence_ref": "",
+                })
+                if approval["state"] != "APPROVED":
+                    recent.append({
+                        "round": turn, "tool": "run_command",
+                        "admission_verdict": "HUMAN_APPROVAL_" + approval["state"],
+                        "approval_id": approval["approval_id"],
+                        "risk_class": "UNKNOWN",
+                        "executed": False,
+                    })
+                    if approval["state"] == "DENIED":
+                        return _finish(
+                            loop, root, request, kind="BLOCKED",
+                            summary="FAIL：使用者拒絕這條未知命令："
+                                    + approval["reason"] + "。接續任務須重新授權。",
+                            complete=False,
+                        )
+                    pending_unknown_timeout = approval
+                    if getattr(loop, "continuation_store", None):
+                        # Persist only non-executed metadata, never the raw
+                        # command or an authorizing permit. A resumed model
+                        # re-proposes an Action and obtains a new approval.
+                        loop.continuation_store.pending_batch(loop.task_id, [{
+                            "tool": "run_command",
+                            "action_id": action["action_id"],
+                            "approval_required": True,
+                            "approval_kind": "UNKNOWN_COMMAND",
+                            "approval_id": approval["approval_id"],
+                            "command_sha256": approval["command_sha256"],
+                            "operation": str(action.get("operation") or ""),
+                            "executed": False,
+                        }])
+                    hint = (
+                        "未知風險命令尚未執行，使用者授權逾時或不可用（"
+                        + approval["reason"]
+                        + "）；這份 Approval 無法重用。"
+                        "可另選一個已明確授權、並通過安全檢查的替代工具或命令。"
+                        "若無法取得相同完成條件的證據，回傳 blocked；"
+                        "可在新接續任務重新發起一次性授權。"
+                    )
+                    continue
         if action and action_is_mutating(action):
             fingerprint = _digest({
                 key: value for key, value in action.items() if key != "action_id"
@@ -388,6 +486,14 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 # An admitted action may have a side effect even when the
                 # executor or transport fails after the side effect.
                 seen_mutations.add(fingerprint)
+        if action is None and pending_unknown_timeout:
+            return _finish(
+                loop, root, request, kind="BLOCKED",
+                summary="FAIL：UNKNOWN_COMMAND_APPROVAL_TIMEOUT；替代 Action"
+                        " 也未通過 Admission：" + str(rejected)
+                        + "。接續任務可重新發起精確命令授權。",
+                complete=False,
+            )
         if action is None:
             diagnosis = dict(getattr(
                 loop.tools, "_last_minimal_admission_diagnostic", {},
@@ -508,6 +614,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         }
         runtime_status = str(receipt.get("status") or "UNKNOWN")
         runtime_reason = str(receipt.get("reason") or "UNCLASSIFIED_TOOL_RESULT")
+        after_approval_timeout = bool(pending_unknown_timeout)
         digest = hashlib.sha256(str(raw_result).encode("utf-8")).hexdigest()
         evidence_ref = "MIN-EV-" + hashlib.sha256(
             (action["action_id"] + "\0" + digest).encode("utf-8")
@@ -571,6 +678,19 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         )
         if getattr(loop, "continuation_store", None):
             loop.continuation_store.snapshot(loop)
+        if after_approval_timeout:
+            if runtime_status == "SUCCEEDED" and receipt.get("executed") is True:
+                pending_unknown_timeout = None
+                if getattr(loop, "continuation_store", None):
+                    loop.continuation_store.pending_batch(loop.task_id, [])
+            elif runtime_status not in {"UNKNOWN", "RUNNING", "PARTIAL"}:
+                return _finish(
+                    loop, root, request, kind="BLOCKED",
+                    summary="FAIL：UNKNOWN_COMMAND_APPROVAL_TIMEOUT；"
+                            "替代 Action 執行或驗證失敗：" + runtime_reason
+                            + "。接續任務可重新發起精確命令授權。",
+                    complete=False,
+                )
         if runtime_status in {"UNKNOWN", "RUNNING", "PARTIAL"} and mutating:
             return _finish(
                 loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
