@@ -6,8 +6,6 @@ import os
 import time
 from pathlib import Path
 
-from .path_security import reject_reparse_components, is_within
-from .process_file_lock import exclusive_process_lock
 
 from .windows_security import acl_mode, default_profile_path, load_security_profile
 
@@ -208,6 +206,7 @@ def is_valid_turbo_root(path: str | Path, workspace: str | Path,
                         writable_roots, read_only_roots=(),
                         denied_write_roots=()) -> bool:
     """Turbo is an opt-in within an *existing* writable workspace, never ACL."""
+    from .path_security import reject_reparse_components, is_within
     try:
         # Check original path components BEFORE resolving symlinks/junctions.
         # Otherwise an in-root symlink can disappear from a canonicalized path.
@@ -243,6 +242,7 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
     The exact writable workspace is supplied by the authenticated caller.
     Do not infer it from arbitrary user text or from a model's action.
     """
+    from .process_file_lock import exclusive_process_lock
     policy_path = workspace_access_policy_path()
     lock = policy_path.with_name("workspace_access_policy.lock")
     with exclusive_process_lock(lock, label="turbo-workspace-policy"):
