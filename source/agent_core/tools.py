@@ -1341,9 +1341,20 @@ def resolve_command_working_directory(
         raise PathSecurityError('path_independent_command_cwd_outside_bound_workspace:' + str(cwd))
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
+    # A proven single literal file read may use the already-bound workspace
+    # as its CWD. The literal target is still validated against Read Scope
+    # AND the original request below, so this never widens path authorization.
+    literal_read_from_bound_cwd = (
+        proven_read and cwd == context.workspace_root
+        and bool(re.search(
+            r"(?:-LiteralPath\s+)('(?:[^'\r\n]|'')*')",
+            str(command or ""), re.I,
+        ))
+    )
     if requested and not any(is_within(cwd, root) for root in requested):
         if cwd != context.workspace_root or not (
-            _bounded_path_independent_wait(command)
+            literal_read_from_bound_cwd
+            or _bounded_path_independent_wait(command)
             or str(command or '').strip().casefold()
             in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}
             or (remote_probe_bound and cwd == context.workspace_root)

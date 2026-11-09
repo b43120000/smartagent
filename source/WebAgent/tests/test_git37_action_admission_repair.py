@@ -143,8 +143,11 @@ def test_read_only_label_is_not_a_permission_or_git_command_rewrite(
     action, reason = admit_minimal_action(proposed({
         "command": other, "operation": "GIT_INSPECT",
     }), loop.tools)
-    assert action is None and reason == "command_not_proven_read_only"
-    assert loop.tools._last_minimal_admission_diagnostic["stage"] == "COMMAND_CLASSIFICATION"
+    # Git39: a command whose read-only status is UNKNOWN requires the
+    # stronger mutation contract *before* per-action human approval.
+    assert action is None and reason == "mutation_success_criteria_required"
+    assert loop.tools._last_minimal_admission_diagnostic["stage"] == "POSTCONDITION_CONTRACT"
+    assert loop.tools._last_command_risk_class == "UNKNOWN"
 
 
 def test_scope_rejection_remains_independent_of_valid_schema(tmp_path, monkeypatch):

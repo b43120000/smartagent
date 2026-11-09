@@ -272,3 +272,28 @@ def test_only_rejections_cannot_claim_pass(tmp_path, monkeypatch):
     board = read_executor_run(tmp_path, task_id=loop.task_id)
     assert board["terminal"]["finish_comparison"]["verdict"] == "FAIL"
     assert board["terminal"]["finish_comparison"]["reason_code"] == "NO_SUCCEEDED_GOAL_EVIDENCE"
+
+
+def test_strict_hash_literal_read_from_bound_cwd_stays_request_scoped(tmp_path):
+    from types import SimpleNamespace
+    from agent_core.security_context import SecurityContext
+    from agent_core.tools import resolve_command_working_directory
+    allowed = tmp_path / "case_a"
+    allowed.mkdir()
+    data = allowed / "data.csv"
+    data.write_bytes(b"a,b\n1,2\n")
+    outside = tmp_path / "other.csv"
+    outside.write_bytes(b"secret\n")
+    context = SecurityContext.for_workspace(tmp_path)
+    agent = SimpleNamespace(_authorized_local_paths=[str(allowed)])
+    command = f"Get-FileHash -LiteralPath '{data}' -Algorithm SHA256"
+    got = resolve_command_working_directory(
+        None, context, agent, command=command, operation="INSPECT"
+    )
+    assert got == tmp_path.resolve()
+    with pytest.raises(Exception):
+        resolve_command_working_directory(
+            None, context, agent,
+            command=f"Get-FileHash -LiteralPath '{outside}' -Algorithm SHA256",
+            operation="INSPECT",
+        )
