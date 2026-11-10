@@ -561,6 +561,36 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         repeated = repeated + 1 if signature == last_fingerprint else 0
         last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
+        # Git46 mandatory OS gate: never dispatch a requested Turbo task via
+        # the ordinary Git45 executor, even if software preflight admitted it.
+        # The backend is deliberately unavailable until Windows identity,
+        # DACL, AppContainer, child-process and negative OS probes are proven.
+        from agent_core.turbo_sandbox import (
+            resolve_turbo_state, sandbox_evidence, require_turbo_backend,
+        )
+        turbo_state = resolve_turbo_state(loop.workspace)
+        if turbo_state["turbo_requested"] == "ON":
+            try:
+                require_turbo_backend(turbo_state)
+            except RuntimeError as exc:
+                receipt = sandbox_evidence(
+                    turbo_state,
+                    action_id=str((action or {}).get("action_id") or ""),
+                    requested_operation=str((action or decision.arguments or {}).get("operation") or decision.tool),
+                )
+                append_executor_event(root, loop, {
+                    **receipt, "round": turn, "kind": "TURBO_SANDBOX_BLOCKED",
+                    "toolName": decision.tool,
+                    "arguments_sha256": _digest(decision.arguments),
+                    "admission_status": "ADMITTED" if action else "REJECTED",
+                    "admission_reason_code": str(rejected or "")[:128],
+                })
+                return _finish(
+                    loop, root, request, kind="BLOCKED",
+                    summary="FAIL：TURBO_SANDBOX_BLOCKED：" + str(exc)[:120]
+                    + "；未執行任何 Turbo Action，且禁止退回普通 Executor。",
+                    complete=False,
+                )
         unknown_approval = None
         risk_class = ""
         turbo = None
