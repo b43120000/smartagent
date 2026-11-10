@@ -121,7 +121,7 @@ def write_file_in_broker(path, content, *, security_context, action_id="") -> st
         script = (
             "$v=[Text.Encoding]::UTF8.GetString(" +
             "[Convert]::FromBase64String('" + value + "')); " +
-            "$e=New-Object Text.UTF8Encoding($false); " +
+            "$e=[Text.UTF8Encoding]::new($false); " +
             "[IO.File]::WriteAllText('" + literal + "',$v,$e);"
         )
         if len(script) > 8192:
