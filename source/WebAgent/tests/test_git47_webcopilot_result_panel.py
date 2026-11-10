@@ -119,3 +119,28 @@ def test_no_fallback_to_forged_payload():
     result["outcome"] = "FAIL"  # Contract invalid.
     checked = validated_tri_one_result(dict(vars(task)), EventStore(result), _URL)
     assert checked is None
+
+
+def test_structured_tri_one_finish_is_presented_as_natural_language():
+    task = {
+        "task_id": "TASK-STRUCTURED", "state": "COMPLETED",
+        "result_ledger": {"final": {
+            "response": '{"type":"finish","summary":"已完成可重複量測並整理驗證結果","expected_runtime":[],"goal_checks":[]}'
+        }},
+    }
+    view = build_webcopilot_result_view(task)
+    assert view["summary"] == "已完成可重複量測並整理驗證結果"
+    assert "expected_runtime" not in view["summary"]
+    assert view["verified"] is False
+
+
+def test_structured_rejected_reason_does_not_upgrade_to_os_denial():
+    task = {
+        "task_id": "TASK-REJECTED", "state": "FAILED",
+        "result_ledger": {"final": {
+            "response": '{"status":"REJECTED","reason_code":"SCOPE_REJECTED"}'
+        }},
+    }
+    view = build_webcopilot_result_view(task)
+    assert view["summary"] == "工具執行遭拒絕；原因代碼：SCOPE_REJECTED"
+    assert view["verified"] is False
