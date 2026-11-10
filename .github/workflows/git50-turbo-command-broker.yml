@@ -90,3 +90,7 @@ jobs:
       - name: Git50 Broker routing and canonical OS Evidence
         run: python -B -m pytest source/WebAgent/tests/test_git50_turbo_broker_dispatch.py source/WebAgent/tests/test_git50_turbo_planning_hints.py source/WebAgent/tests/test_git50_turbo_runtime_provenance.py source/WebAgent/tests/test_git49_turbo_broker_admission.py source/WebAgent/tests/test_git49_turbo_broker_scope.py source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
       - run: python -B source/WebAgent/tests/validate_acl_off_software_guard.py
+      - name: ACL OFF Workspace Manager regression
+        run: python -B source/WebAgent/tests/validate_acl_off_workspace_manager.py
+      - name: Shared WebCopilot and Tri-One terminal regression
+        run: python -B -m pytest source/WebAgent/tests/test_git47_webcopilot_result_panel.py source/WebAgent/tests/test_tri_one_egress_v10.py source/WebAgent/tests/test_tri_one_runtime_terminal.py source/WebAgent/tests/test_other_webcopilot_startup.py -q
