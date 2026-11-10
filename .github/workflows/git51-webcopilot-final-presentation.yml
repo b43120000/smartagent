@@ -1,0 +1,29 @@
+name: Git51 WebCopilot Minimal Final Presentation
+
+on:
+  push:
+    branches:
+      - git51/webcopilot-final-natural-render-20261110
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  webdirect-final-presentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test requirements
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile modified controller and tests
+        run: python -m compileall -q source/WebAgent/controller.py source/WebAgent/tests/test_git51_minimal_final_presentation.py
+      - name: Minimal Core final presentation regressions
+        run: python -B -m pytest source/WebAgent/tests/test_git51_minimal_final_presentation.py source/WebAgent/tests/test_tri_one_egress_v10.py -q
