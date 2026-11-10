@@ -178,3 +178,24 @@ PowerShell work in disposable CI.
 Native Windows AppContainer file boundary = disposable fixture CI PASS.
 Git for Windows = NOT VERIFIED (NUL OS denied).
 Production Turbo Full-Access = BLOCKED / NOT IMPLEMENTED.
+
+### Confirmed later test results
+
+The later Windows CI run `42778811440` confirmed
+`python_dulwich_local_git_clone` **PASS**: a Git-format repository was
+seeded entirely inside the disposable fixture, cloned inside AppContainer by
+Python 3.13 plus read/execute-only Dulwich, and verified by file contents.
+This is a real local Git-compatible clone, not a simulation. Native Git for
+Windows remains unverified due kernel-denied NUL device.
+
+Run `42778925043` at source SHA `03906770b2977b4b1cb5b490f1442f5570fbaaa6`
+completed all three Git47 CI jobs with `success`.
+Its Windows job also published `git47-windows-os-sandbox-fixture-evidence`
+as a sanitized typed JSON artifact.
+
+Strictly separate:
+- Disposable OS file boundary PASS; Python and Dulwich local clone PASS.
+- Native Windows Git.exe capability FAIL/UNVERIFIED; GitHub HTTPS clone NOT RUN.
+- Production Broker/ACL revocation/lease and live WebCopilot DOM NOT RUN.
+- Production Turbo Effective is still OFF; this test must never promote READY.
+
