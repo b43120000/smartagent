@@ -431,6 +431,12 @@ if ($callerSid -notmatch '^S-1-' -and $previousModeState -and [string]$previousM
 if ($callerSid -notmatch '^S-1-') { $callerSid = [string]$identity.User.Value }
 
 if ($Mode -eq 'on') {
+    # Re-provisioning ACL ON while an AppContainer SID still has inherited
+    # grants is unsafe. Require the transactional revoker first.
+    $activeTurboJournal = Join-Path $SecurityRoot 'turbo_os_activation.json'
+    if (Test-Path -LiteralPath $activeTurboJournal -PathType Leaf) {
+        throw 'GIT50_TURBO_BROKER_REVOKE_REQUIRED_BEFORE_ACL_ON_RECONFIGURE'
+    }
     $defaultExecutorPython = Assert-OnEnvironmentReady
     $accessPolicy = Get-WorkspaceAccessPolicy
     if ($profileFileExists -and -not $profileStructurallyValid) {
@@ -542,6 +548,21 @@ if ($Mode -eq 'on') {
 # Publish an intentionally invalid intermediate mode before any OFF preflight.
 # A stale mode=off can therefore never survive a failed repair attempt.
 Write-ModeState 'transitioning_off' $executorSid $callerSid
+
+# Git50: revoke the AppContainer SID/low-IL subtree BEFORE publishing ACL OFF.
+# On failure leave the intentionally invalid transitioning_off mode in place.
+# This does not delete user data under the Turbo workspace.
+$turboOsJournal = Join-Path $SecurityRoot 'turbo_os_activation.json'
+if (Test-Path -LiteralPath $turboOsJournal -PathType Leaf) {
+    $turboRevoker = Join-Path $PSScriptRoot 'turbo_os_activation.ps1'
+    if (-not (Test-Path -LiteralPath $turboRevoker -PathType Leaf)) {
+        throw 'GIT50_TURBO_REVOKER_MISSING_ACL_OFF_BLOCKED'
+    }
+    & $turboRevoker -Action Revoke -ProjectRoot $ProjectRoot
+    if (Test-Path -LiteralPath $turboOsJournal -PathType Leaf) {
+        throw 'GIT50_TURBO_OS_REVOCATION_NOT_CONFIRMED_ACL_OFF_BLOCKED'
+    }
+}
 
 $identities = @($callerSid)
 if ($identity.User.Value -ne $callerSid) { $identities += [string]$identity.User.Value }
