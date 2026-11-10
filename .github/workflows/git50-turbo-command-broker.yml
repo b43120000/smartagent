@@ -88,5 +88,5 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install --disable-pip-version-check pytest playwright
       - name: Git50 Broker routing and canonical OS Evidence
-        run: python -B -m pytest source/WebAgent/tests/test_git50_turbo_broker_dispatch.py source/WebAgent/tests/test_git50_turbo_runtime_provenance.py source/WebAgent/tests/test_git49_turbo_broker_admission.py source/WebAgent/tests/test_git49_turbo_broker_scope.py source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
+        run: python -B -m pytest source/WebAgent/tests/test_git50_turbo_broker_dispatch.py source/WebAgent/tests/test_git50_turbo_planning_hints.py source/WebAgent/tests/test_git50_turbo_runtime_provenance.py source/WebAgent/tests/test_git49_turbo_broker_admission.py source/WebAgent/tests/test_git49_turbo_broker_scope.py source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
       - run: python -B source/WebAgent/tests/validate_acl_off_software_guard.py
