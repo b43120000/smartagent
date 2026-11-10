@@ -450,18 +450,28 @@ raise SystemExit(93)
         if ($LASTEXITCODE -ne 0) { throw 'GIT47_LOCAL_GIT_SEED_COMMIT_FAILED' }
         $dulwichScript = Join-Path $turbo 'git47_dulwich_clone.py'
         $dulwichCode = @'
-from dulwich import porcelain
 from pathlib import Path
 import sys
-porcelain.clone(sys.argv[1], sys.argv[2], checkout=True)
-if Path(sys.argv[2], "README.txt").read_text() != "GIT47_LOCAL_SEED":
-    raise SystemExit(52)
-Path("dulwich_clone_verified.txt").write_text("GIT47_CLONE_PASS")
+try:
+    from dulwich import porcelain
+    porcelain.clone(sys.argv[1], sys.argv[2], checkout=True)
+    if Path(sys.argv[2], "README.txt").read_text() != "GIT47_LOCAL_SEED":
+        raise RuntimeError("CLONE_POSTCONDITION_MISMATCH")
+    Path("dulwich_clone_verified.txt").write_text("GIT47_CLONE_PASS")
+except Exception as exc:
+    Path("dulwich_failure_class.txt").write_text(type(exc).__name__ + ":" + str(exc)[:120])
+    raise SystemExit(51)
 '@
         [IO.File]::WriteAllText($dulwichScript, $dulwichCode)
         $dulwichDest = Join-Path $turbo 'git47_dulwich_clone_target'
         $dulwichArgs = '-I "' + $dulwichScript + '" "' + $seedRepo + '" "' + $dulwichDest + '"'
         Test-DisposableToolCompatibility 'python_dulwich_local_git_clone' $pyExecutable $dulwichArgs 'dulwich_clone_verified.txt'
+        $dulwichFailure = Join-Path $turbo 'dulwich_failure_class.txt'
+        if (Test-Path -LiteralPath $dulwichFailure -PathType Leaf) {
+            $failureClass = [IO.File]::ReadAllText($dulwichFailure)
+            $failureClass = $failureClass -replace '[A-Za-z]:[\\/][^\\s''"]+', '<redacted>'
+            Write-Host ('GIT47_DULWICH_FAILURE_CLASS:' + $failureClass)
+        }
     } else {
         Write-Host 'GIT47_TOOL_NOT_VERIFIED:python:executable_missing'
     }
