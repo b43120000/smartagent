@@ -18,6 +18,65 @@ def _bounded(value: object, limit: int = 3200) -> str:
     return cleaned[:limit] + ("…" if len(cleaned) > limit else "")
 
 
+def _natural_summary(raw: object, limit: int = 3600) -> str:
+    """Unwrap common Tri-One JSON envelopes into readable prose, not JSON.
+
+    This is display-only. No field here affects Runtime status, evidence
+    acceptance, permissions or result delivery. Unrecognized structures
+    remain plainly marked as an unformatted result rather than invented text.
+    """
+    import json
+
+    if not isinstance(raw, str):
+        return ""
+    value = raw.strip()
+    if not value:
+        return ""
+    if value[:1] not in "{[":
+        return _bounded(value, limit)
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return _bounded(value, limit)
+
+    def extract(row: object) -> str:
+        if isinstance(row, str):
+            return _bounded(row, limit)
+        if not isinstance(row, Mapping):
+            return ""
+        for field in ("summary", "answer_text", "answer", "response",
+                      "message", "final_response"):
+            text = row.get(field)
+            if isinstance(text, str) and text.strip():
+                return _bounded(text, limit)
+            if isinstance(text, Mapping):
+                nested = extract(text)
+                if nested:
+                    return nested
+        return ""
+
+    if isinstance(parsed, Mapping):
+        simple = extract(parsed)
+        if simple:
+            return simple
+        state = str(parsed.get("status") or parsed.get("state") or "").upper()
+        reason = str(parsed.get("reason_code") or parsed.get("reason") or "")
+        if state in {"SUCCEEDED", "FAILED", "REJECTED", "BLOCKED", "PAUSED"}:
+            labels = {
+                "SUCCEEDED": "工具回報執行成功",
+                "FAILED": "工具回報執行失敗",
+                "REJECTED": "工具執行遭拒絕",
+                "BLOCKED": "工具執行已封鎖",
+                "PAUSED": "工具執行已暫停",
+            }
+            if reason and len(reason) <= 120 and all(
+                char.isalnum() or char in "_- " for char in reason
+            ):
+                return labels[state] + "；原因代碼：" + reason
+            return labels[state]
+    return "三一接口已產生結構化結果，但沒有可直接呈現的自然語言摘要；請查看 Runtime Evidence。"
+
+
 def validated_tri_one_result(task: Mapping[str, Any], event_store,
                              conversation_url: str) -> dict | None:
     """Find a canonical, same-task, same-conversation result in durable egress.
@@ -96,7 +155,7 @@ def build_webcopilot_result_view(task: Mapping[str, Any],
             state == "COMPLETED" and outcome == "SUCCESS"
             and accepted and completion_kind in {"EVIDENCE_BACKED", "ANSWER_ONLY"}
         )
-        summary = _bounded(canonical.get("answer_text"), 3600)
+        summary = _natural_summary(canonical.get("answer_text"), 3600)
         refs = [
             _bounded(ref, 128)
             for ref in (canonical.get("evidence_refs") or [])[:12]
@@ -105,9 +164,9 @@ def build_webcopilot_result_view(task: Mapping[str, Any],
     else:
         # Legacy fields can explain what the worker *reported*, not prove PASS.
         # Don't echo whole task/error dicts, commands, environment or stack traces.
-        summary = _bounded(final.get("response"), 2400)
+        summary = _natural_summary(final.get("response"), 2400)
         if not summary:
-            summary = _bounded(final.get("summary"), 2400)
+            summary = _natural_summary(final.get("summary"), 2400)
 
     if verified:
         title, severity = "任務已完成", "success"
