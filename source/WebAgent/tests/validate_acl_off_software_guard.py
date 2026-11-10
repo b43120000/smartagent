@@ -47,6 +47,19 @@ def main() -> int:
         try:
             assert windows_security.restricted_executor_required(profile) is False
 
+            # Git49 Broker admission now requires a well-formed shared Workspace
+            # access policy even in Software Guard mode. Make the isolated
+            # installation fixture realistic rather than skipping the gate.
+            from agent_core import workspace_access
+            previous_local_profile = workspace_access._local_security_profile_path
+            workspace_access._local_security_profile_path = lambda: profile
+            try:
+                workspace_access.save_workspace_access_policy([install_root], [])
+                assert workspace_access.access_snapshot()["policy"]["turbo_requested"] is False
+            except BaseException:
+                workspace_access._local_security_profile_path = previous_local_profile
+                raise
+
             original_resolve = __import__(
                 "agent_core.security_preflight", fromlist=["resolve_workspace"]
             ).resolve_workspace
@@ -79,6 +92,8 @@ def main() -> int:
             assert rejected.get("security_rejected") is True, rejected
             assert "diskpart_forbidden" in rejected.get("error", ""), rejected
         finally:
+            if "previous_local_profile" in locals():
+                workspace_access._local_security_profile_path = previous_local_profile
             if previous is None:
                 os.environ.pop("SMARTAGENT_RESTRICTED_EXECUTOR_REQUIRED", None)
             else:
