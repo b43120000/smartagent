@@ -113,3 +113,68 @@ For disposable Windows native testing only, run
 Windows PowerShell with `-FixtureParent` set to a disposable temporary
 directory. Do not point it at real projects. This never enables
 production Turbo.
+
+
+## Git47 extended regression evidence and architecture decision (2026-11-10)
+
+Windows GitHub Actions run `42778342146` finished SUCCESS on all three
+jobs (Windows WebCopilot/Git46 contracts, Ubuntu WebCopilot/Git46 contracts,
+Windows disposable AppContainer fixture). Additional strict Windows fixture
+cases verified:
+
+- Other-volume *disposable* read/write denials: actual Win32 error 5.
+- CMD absolute-path out-of-root read: OS-denied stderr and no success path.
+- Windows PowerShell absolute-path read/write: UnauthorizedAccessException,
+  observed inside AppContainer; no external sentinel mutation.
+- Python 3.13 copied to a read/execute-only dependency subtree: start PASS,
+  file `open()` out-of-root PermissionError PASS, subprocess out-of-root
+  PermissionError PASS, in-root overwrite PASS, in-root recursive delete PASS,
+  and outside absolute-path write blocked without modifying a sibling sentinel.
+- Native child process token inheritance, root-object delete denial,
+  cross-project hardlink and Junction probes, and non-inheritance of a host
+  secret environment variable PASS.
+
+The native `NUL` device probe returned OS Win32 error **5**, not successful
+access. Git for Windows 2.56 (using the new `ucrt64` layout) exits **128**
+because it tries to open `/dev/null` for read and write. This is an
+AppContainer device/object namespace boundary, *not* a root NTFS DACL issue.
+It must **not** be fixed by granting wider file ACLs or disabling AppContainer.
+
+The pure-Python Git-format implementation **Dulwich** was added as a
+controlled alternative test in the same disposable fixture; this is not
+identical to arbitrary native `git.exe` execution. Test output is
+`NOT_VERIFIED` unless actual clone/postcondition PASS is recorded. No
+GitHub network clone, TLS, remote Git feature compatibility or network
+capability has been attested.
+
+The CI writes
+`SMARTAGENT_GIT47_WINDOWS_DISPOSABLE_SANDBOX_EVIDENCE_V1` as
+`git47_sandbox_ci_evidence.json`, retaining a per-probe action ID,
+scope verdict, Win32 result, OS-denied boolean and evidence reference.
+It does not contain raw commands, source secrets, or test fixture paths.
+The GitHub workflow publishes this as a test-only artifact when available.
+An artifact with `file_boundary_verdict=PASS` **does not mean**
+`production_turbo_effective=ON`.
+
+`ACLstatus.bat status` is now a read-only shared resolver display, and
+`ACLstatus.bat on/off` displays the requested/effective reason after
+a successful transition. A missing Python interpreter reports an unavailable
+status instead of guessing enabled mode.
+
+### Important remaining production guarantees
+
+The production `turbo_sandbox.resolve_turbo_state()` remains
+`sandbox_status=NOT_READY`, `turbo_effective=OFF`: there is **no
+authenticated production AppContainer Broker** and therefore no safe path
+from Planner actions to a real Turbo process yet. There is no validated
+process lease bound to workspace policy revision, or ACL-OFF job
+revocation; no production root provisioning/attestation or removal
+workflow; no network policy for GitHub clones; no C++ compiler/IPC
+attestation; no OS proof of all reparse/hardlink/open-handle races.
+AppContainer cannot be marked fully usable merely because Python and
+PowerShell work in disposable CI.
+
+**Release verdict:** WebCopilot result UI = UNIT/CI PASS, Live NOT RUN.
+Native Windows AppContainer file boundary = disposable fixture CI PASS.
+Git for Windows = NOT VERIFIED (NUL OS denied).
+Production Turbo Full-Access = BLOCKED / NOT IMPLEMENTED.
