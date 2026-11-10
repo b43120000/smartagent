@@ -70,6 +70,8 @@ class RemoteBindingManager:
         workspaces = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["writable_workspaces"], 1)) or "  （尚未設定）"
         read_only = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["read_only_roots"], 1)) or "  （尚未設定）"
         turbo = turbo_mode_for_workspace(binding["workspace"])
+        from .turbo_sandbox import resolve_turbo_state
+        sandbox_state = resolve_turbo_state(binding["workspace"])
         return "\n".join((
             "目前允許讀寫的 Workspaces：", workspaces, "",
             "目前唯讀路徑：", read_only, "",
@@ -83,6 +85,8 @@ class RemoteBindingManager:
             f"skill_path={binding['skill_path']}",
             UPDATE_CLOSE,
             "",
+            "ACL: " + sandbox_state["acl_mode"] + " | Requested: " + sandbox_state["turbo_requested"] + " | Effective: " + sandbox_state["turbo_effective"],
+            "Sandbox: " + sandbox_state["sandbox_status"] + " | Reason: " + sandbox_state["reason_code"],
             "有效時間：10 分鐘。更新期間若有任務執行中，設定不會被切換。",
         ))
 
@@ -180,6 +184,8 @@ class RemoteBindingManager:
                 candidate["_turbo_prepared"] = turbo_prepared
             runtime_apply(candidate)
         actual_turbo = turbo_mode_for_workspace(candidate["workspace"])
+        from .turbo_sandbox import resolve_turbo_state
+        sandbox_state = resolve_turbo_state(candidate["workspace"])
         if turbo_prepared is not None and actual_turbo.casefold() != turbo_prepared["mode"].casefold():
             raise RuntimeError("remote_binding_turbo_postcondition_failed")
         return "\n".join((
@@ -187,7 +193,12 @@ class RemoteBindingManager:
             "",
             f"WebGPT URL：{candidate['gpt_url']}",
             f"Workspace：{candidate['workspace']}",
-            f"Turbo Mode：{actual_turbo}",
+            f"Turbo Mode Requested Path：{actual_turbo}",
+            f"ACL Mode：{sandbox_state['acl_mode']}",
+            f"Turbo Requested：{sandbox_state['turbo_requested']}",
+            f"Turbo Effective：{sandbox_state['turbo_effective']}",
+            f"Sandbox Status：{sandbox_state['sandbox_status']}",
+            f"Reason Code：{sandbox_state['reason_code']}",
             f"Skill Path：{candidate['skill_path']}",
             "",
             "Telegram listener 持續在線；OS 安全預檢已同步更新，下一個遠端任務會使用新設定。",
