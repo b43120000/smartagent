@@ -59,6 +59,38 @@ function Invoke-Probe([string]$Op, [string]$Target,
     Write-Host "PASS $Label : actual Win32 CreateFileW error=$ExpectedError"
 }
 
+function Test-DisposableToolCompatibility(
+    [string]$ToolName, [string]$Executable,
+    [string]$Arguments, [string]$ExpectedOutput
+) {
+    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+        Write-Host ("GIT47_TOOL_NOT_VERIFIED:" + $ToolName + ":executable_missing")
+        return
+    }
+    try {
+        # This is capability discovery only; an observed application launch
+        # never upgrades the production Turbo sandbox effective state.
+        $raw = [SmartAgentGit47AppContainerProbe]::Launch(
+            $moniker, $Executable, $Arguments, $turbo, [uint32]30000)
+        $result = $raw | ConvertFrom-Json
+        if (-not $result.sandbox_identity_verified) {
+            throw 'child_token_not_verified'
+        }
+        if ([int]$result.exit_code -ne 0) {
+            throw ("nonzero_exit_" + [string]$result.exit_code)
+        }
+        if ($ExpectedOutput) {
+            $path = Join-Path $turbo $ExpectedOutput
+            if (-not (Test-Path -LiteralPath $path)) {
+                throw 'postcondition_missing'
+            }
+        }
+        Write-Host ("PASS GIT47_TOOL_APPCONTAINER_LAUNCH:" + $ToolName)
+    } catch {
+        Write-Host ("GIT47_TOOL_NOT_VERIFIED:" + $ToolName + ":" + $_.Exception.GetType().Name + ":" + $_.Exception.Message.Substring(0, [Math]::Min(110, $_.Exception.Message.Length)))
+    }
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $fixture,$turbo,$sibling | Out-Null
     $parentFile = Join-Path $fixture 'parent_secret.txt'
@@ -167,6 +199,27 @@ try {
         if (Test-Path -LiteralPath $junction) {
             & cmd.exe /d /c ('rmdir "' + $junction + '"') | Out-Null
         }
+    }
+
+    # Windows desktop application compatibility discovery: no claim of
+    # unrestricted/full Turbo, even if the application loads successfully.
+    $cmdExe = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+    Test-DisposableToolCompatibility 'cmd' $cmdExe '/d /c echo GIT47_CMD_OK>cmd_probe.txt' 'cmd_probe.txt'
+
+    $powershellExe = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    Test-DisposableToolCompatibility 'powershell' $powershellExe '-NoProfile -NonInteractive -Command "[IO.File]::WriteAllText(''ps_probe.txt'',''GIT47_PS_OK'')"' 'ps_probe.txt'
+
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($python) {
+        Test-DisposableToolCompatibility 'python' ([string]$python.Source) '-I -c "from pathlib import Path;Path(''python_probe.txt'').write_text(''GIT47_PY_OK'')"' 'python_probe.txt'
+    } else {
+        Write-Host 'GIT47_TOOL_NOT_VERIFIED:python:executable_missing'
+    }
+    $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($git) {
+        Test-DisposableToolCompatibility 'git' ([string]$git.Source) 'init git_probe' 'git_probe'
+    } else {
+        Write-Host 'GIT47_TOOL_NOT_VERIFIED:git:executable_missing'
     }
 
     Write-Host 'GIT47_DISPOSABLE_WIN32_APPCONTAINER_FILE_BOUNDARY_PASS'
