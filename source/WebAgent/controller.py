@@ -152,8 +152,13 @@ def minimal_final_presentation_valid(response: str, *, task_id: str, request_id:
     expected = ("PASS" if state == "COMPLETED" and outcome == "SUCCESS"
                 else "FAIL" if state in {"COMPLETED", "FAILED", "INTERRUPTED"}
                 else "尚未驗證")
-    return bool(state in compact and expected in compact
-                and (not task_id or "task_id:" + task_id in compact)
+    state_field = compact.split("狀態：", 1)[1].split("使用者原始需求：", 1)[0]
+    acceptance_field = compact.split("驗收結果：", 1)[1].split("任務結果：", 1)[0]
+    if state not in state_field or expected not in acceptance_field:
+        return False
+    if (expected == "PASS" and "FAIL" in acceptance_field) or (expected != "PASS" and "PASS" in acceptance_field):
+        return False
+    return bool((not task_id or "task_id:" + task_id in compact)
                 and (not request_id or "request_id:" + request_id in compact))
 
 def render_final_ack(
