@@ -67,7 +67,7 @@ def validated_tri_one_result(task: Mapping[str, Any], event_store,
         if (checked["task_id"] != task_id
                 or checked["request_id"] != request_id
                 or checked["task_epoch"] != epoch
-                or checked.get("source_interface") != "WEBGPT_COPILOT"):
+                or checked.get("source_interface") != "WEB_COPILOT"):
             continue
         return checked
     return None
