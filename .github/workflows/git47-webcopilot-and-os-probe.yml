@@ -60,6 +60,16 @@ jobs:
             (Resolve-Path 'install_smart_agent/turbo_appcontainer_disposable_probe.ps1').Path,
             [ref]$tokens, [ref]$errors)
           if (@($errors).Count -ne 0) { $errors | Format-List | Out-String | Write-Host; throw "Invalid PowerShell" }
+      - name: Git47 ACLstatus shared-state reporter syntax and launcher
+        shell: powershell
+        run: |
+          $tokens = $null; $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install_smart_agent/turbo_shared_status.ps1').Path,
+            [ref]$tokens, [ref]$errors)
+          if (@($errors).Count -ne 0) { throw 'GIT47_TURBO_STATUS_POWERSHELL_PARSE_FAILED' }
+          & .\\ACLstatus.bat --launcher-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'GIT47_ACLSTATUS_LAUNCHER_SELF_TEST_FAILED' }
       - name: Direct Windows File API OS Sandbox probe
         shell: powershell
         run: |
