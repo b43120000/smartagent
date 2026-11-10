@@ -193,8 +193,14 @@ public static class SmartAgentGit47AppContainerProbe
             }
             finally { Marshal.FreeHGlobal(isContainer); }
 
-            int sizeRequired = IntPtr.Size;
-            IntPtr data = Marshal.AllocHGlobal(IntPtr.Size);
+            int sizeRequired;
+            // TokenAppContainerSid returns a variable-size structure: the
+            // SID follows the pointer, so IntPtr.Size alone is insufficient.
+            GetTokenInformation(token, TokenAppContainerSid,
+                IntPtr.Zero, 0, out sizeRequired);
+            if (sizeRequired < IntPtr.Size || sizeRequired > 65536)
+                throw new InvalidOperationException("TokenAppContainerSid_length_invalid");
+            IntPtr data = Marshal.AllocHGlobal(sizeRequired);
             try
             {
                 int written;
