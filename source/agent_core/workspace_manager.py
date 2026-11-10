@@ -133,6 +133,12 @@ def _binding_snapshot() -> dict:
         "writable_workspaces": list(access["writable_workspaces"]),
         "read_only_roots": list(access["read_only_roots"]),
         "turbo_roots": list(access.get("turbo_roots") or ()),
+        "turbo_sandbox": __import__(
+            "agent_core.turbo_sandbox", fromlist=["resolve_turbo_state"]
+        ).resolve_turbo_state(
+            (remote.get("workspace") if isinstance(remote, dict) else None)
+            or next(iter(access.get("writable_workspaces") or ()), None)
+        ),
         "policy_revision": int((access.get("policy") or {}).get("revision", 0) or 0),
         "local": load_startup_preferences(),
         "remote": remote,
@@ -528,6 +534,12 @@ def _security_menu() -> int:
         print("Read-only roots:")
         for i, value in enumerate(read_only, 1):
             print(f"  R{i}. {value}")
+        from .turbo_sandbox import resolve_turbo_state
+        state = resolve_turbo_state(next(iter(writable), None))
+        print("Turbo requested=" + state["turbo_requested"]
+              + " effective=" + state["turbo_effective"]
+              + " sandbox=" + state["sandbox_status"]
+              + " reason=" + state["reason_code"])
         print("Turbo mode roots (strict writable Workspace descendants):")
         for i, value in enumerate(turbo, 1):
             print(f"  T{i}. {value}")
@@ -564,6 +576,9 @@ def _security_menu() -> int:
                 print("[!] Invalid Turbo index.")
         elif choice == "7":
             try:
+                # Do not partially mutate workspaces before discovering ACL OFF.
+                if turbo and acl_mode() != "on":
+                    raise ValueError("TURBO_REQUIRES_ACL_ON")
                 return_code = (
                     _apply_software_only_access(writable, read_only, profile)
                     if software_only
@@ -1166,6 +1181,10 @@ def _interactive() -> int:
     snapshot = _binding_snapshot()
     print("\nSmartAgent Workspace Manager")
     print(f"Security: {snapshot['security_status']}")
+    state = snapshot["turbo_sandbox"]
+    print("ACL=" + state["acl_mode"] + " requested=" + state["turbo_requested"]
+          + " effective=" + state["turbo_effective"] + " sandbox=" + state["sandbox_status"])
+    print("Turbo reason=" + state["reason_code"])
     print("\nWritable workspaces:")
     if snapshot["writable_workspaces"]:
         for value in snapshot["writable_workspaces"]:
