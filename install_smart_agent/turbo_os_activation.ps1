@@ -150,6 +150,21 @@ try {
         }
         try { [SmartAgentGit47AppContainerProbe]::DeleteProfile([string]$Journal.moniker) }
         catch { throw 'GIT50_REVOKE_APPCONTAINER_PROFILE_FAILED' }
+        if ($Journal.PSObject.Properties.Name -contains 'negative_sentinel_path') {
+            $sentinel = [IO.Path]::GetFullPath([string]$Journal.negative_sentinel_path)
+            $expectedParent = [IO.Path]::GetDirectoryName($root)
+            if ([IO.Path]::GetDirectoryName($sentinel) -ne $expectedParent -or
+                -not [IO.Path]::GetFileName($sentinel).StartsWith('.git50-os-denial-')) {
+                throw 'GIT50_REVOKE_SENTINEL_PATH_UNVERIFIED'
+            }
+            # Never delete a file whose original marker was changed by
+            # an independent user process.
+            if (Test-Path -LiteralPath $sentinel -PathType Leaf) {
+                if ([IO.File]::ReadAllText($sentinel) -ceq 'OUTSIDE_SENTINEL') {
+                    Remove-Item -LiteralPath $sentinel -Force -ErrorAction Stop
+                }
+            }
+        }
         Remove-Item -LiteralPath $journalPath -Force -ErrorAction Stop
     }
 
@@ -243,6 +258,7 @@ try {
         moniker=$moniker
         package_sid=$sidText
         traverse_parents=$traverse
+        negative_sentinel_path=(Join-Path $parent ('.git50-os-denial-' + [Guid]::NewGuid().ToString('N')))
         created_at=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         authorization_granted=$false
     }
@@ -292,7 +308,7 @@ try {
         }
         Remove-Item -LiteralPath $inside -Force
 
-        $outside = Join-Path $parent ('.git50-os-denial-' + [Guid]::NewGuid().ToString('N'))
+        $outside = [string]$record.negative_sentinel_path
         try {
             [IO.File]::WriteAllText($outside,'OUTSIDE_SENTINEL')
             $outsideLiteral = $outside.Replace("'","''")
@@ -305,7 +321,11 @@ catch [System.UnauthorizedAccessException] { exit 0 }
                 throw 'GIT50_EXTERNAL_SENTINEL_CORRUPTED'
             }
         } finally {
-            Remove-Item -LiteralPath $outside -Force -ErrorAction SilentlyContinue
+            # Keep the sentinel until Revoke: every future command must
+            # independently prove that the AppContainer cannot read it.
+            if ($record.status -ne 'ACTIVATING') {
+                Remove-Item -LiteralPath $outside -Force -ErrorAction SilentlyContinue
+            }
         }
         $record.status='ACTIVE_PROVISIONED'
         Write-Journal $record
