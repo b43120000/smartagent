@@ -61,6 +61,23 @@ try {
     }
     Write-Host 'GIT50_NEW_ROOT_APP_CONTAINER_ACTIVATION_PASS'
 
+    # The runtime-facing broker must execute the untrusted command ONLY
+    # inside the AppContainer and return real output + kernel exit status.
+    $brokerCommand=[Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes("'GIT50_BROKER_EXECUTION_OUTPUT'"))
+    $brokerJson=& ([string]$journal.broker_entry) -ProjectRoot $project -Workspace $workspace -WorkingDirectory $root -ExpectedRevision 77 -TaskId 'TASK-GIT50' -ActionId 'ACT-GIT50' -CommandBase64 $brokerCommand -TimeoutSeconds 30
+    $brokerReceipt=($brokerJson | Out-String | ConvertFrom-Json -ErrorAction Stop)
+    $brokerOutput=[Text.Encoding]::UTF8.GetString(
+        [Convert]::FromBase64String([string]$brokerReceipt.stdout_base64)).Trim()
+    if ($brokerReceipt.sandbox_identity_verified -ne $true -or
+        $brokerReceipt.kernel_outside_read_denied -ne $true -or
+        $brokerReceipt.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        [int]$brokerReceipt.command_exit_code -ne 0 -or
+        $brokerOutput -cne 'GIT50_BROKER_EXECUTION_OUTPUT') {
+        throw 'GIT50_BROKER_EXECUTION_NOT_PROVEN'
+    }
+    Write-Host 'GIT50_PROTECTED_OS_BROKER_COMMAND_AND_CAPTURE_PASS'
+
     # Mode can transition during task cancellation. Revocation MUST still
     # work if the mode is already transitioning_off (not currently 'on').
     $mode.mode='transitioning_off'
