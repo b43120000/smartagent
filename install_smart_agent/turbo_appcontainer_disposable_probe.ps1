@@ -328,7 +328,7 @@ try {
         $siteDir = Join-Path $localPython 'Lib\\site-packages'
         New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
         foreach ($moduleName in @('dulwich','urllib3','certifi','idna','charset_normalizer')) {
-            $query = "import importlib,pathlib; x=importlib.import_module('$moduleName'); print(pathlib.Path(x.__file__).parent)"
+            $query = "import importlib.util,pathlib; x=importlib.util.find_spec('$moduleName'); print(pathlib.Path(x.origin).parent if x and x.origin else '')"
             $location = & ([string]$python.Source) -c $query 2>$null |
                 Select-Object -First 1
             if ($LASTEXITCODE -eq 0 -and $location -and
