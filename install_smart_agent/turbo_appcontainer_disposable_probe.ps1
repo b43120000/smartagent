@@ -320,6 +320,14 @@ raise SystemExit(93)
             Split-Path -Parent $gitOriginalDir
         } else { $gitOriginalDir }
         $gitMingw = Join-Path $gitRoot 'mingw64'
+        $gitExecPath = (& ([string]$git.Source) --exec-path 2>$null | Select-Object -First 1)
+        $exeCandidates = @(Get-ChildItem -LiteralPath $gitRoot -Recurse -Filter git.exe -File -ErrorAction SilentlyContinue | Select-Object -First 12)
+        $relativeCandidates = @($exeCandidates | ForEach-Object {
+            $_.FullName.Substring($gitRoot.Length).TrimStart('\\','/')
+        })
+        Write-Host ('GIT47_GIT_LAYOUT:git_root=' + $gitRoot +
+                    ';exec_path=' + [string]$gitExecPath +
+                    ';executables=' + ($relativeCandidates -join ','))
         $candidates = @(
             (Join-Path $gitMingw 'bin'),
             (Join-Path $gitRoot 'bin'),
