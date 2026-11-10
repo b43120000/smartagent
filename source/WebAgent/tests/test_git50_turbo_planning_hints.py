@@ -32,7 +32,7 @@ def test_broker_enrollment_hint_is_not_runtime_authorization(tmp_path, monkeypat
     assert hint["runtime_admission_still_required"] is True
     assert hint["per_action_os_attestation_required"] is True
     assert hint["native_broker_tools"] == [
-        "run_command", "create_directory", "write_file"
+        "run_command", "create_directory", "write_file", "delete_path"
     ]
     assert hint["configured_roots"] == [str(root)]
 
