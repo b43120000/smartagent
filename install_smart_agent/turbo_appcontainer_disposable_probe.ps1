@@ -250,6 +250,12 @@ try {
     $captured = $capturedRaw | ConvertFrom-Json -ErrorAction Stop
     $capturedText = [Text.Encoding]::UTF8.GetString(
         [Convert]::FromBase64String([string]$captured.stdout_base64)).Trim()
+    Write-Host ('GIT50_CAPTURE_DIAGNOSTIC:exit=' + [string]$captured.exit_code +
+                ';out_bytes=' + [string]$captured.stdout_bytes +
+                ';err_bytes=' + [string]$captured.stderr_bytes +
+                ';stdout_match=' + [string]($capturedText -ceq 'GIT50_CAPTURED_FROM_APP_CONTAINER') +
+                ';error_class=' + [Text.Encoding]::UTF8.GetString(
+                    [Convert]::FromBase64String([string]$captured.stderr_base64)).Split(':')[0])
     if ($captured.sandbox_identity_verified -ne $true -or
         $captured.os_process_started -ne $true -or
         [int]$captured.exit_code -ne 0 -or
