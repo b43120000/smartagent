@@ -123,6 +123,10 @@ def sandbox_evidence(state: dict, *, action_id: str = "",
 
 def require_turbo_backend(state: dict) -> None:
     """Never reuse the Git45 ordinary command executor as a Turbo fallback."""
+    # A corrupt or unreadable policy MUST block even if the last known
+    # requested flag was OFF. Otherwise policy errors become a fail-open path.
+    if state.get("sandbox_status") == "FAILED":
+        raise RuntimeError(str(state.get("reason_code") or "SANDBOX_ATTESTATION_FAILED"))
     if state.get("turbo_requested") != "ON":
         return
     # There is no independently implemented and validated OS broker yet.
