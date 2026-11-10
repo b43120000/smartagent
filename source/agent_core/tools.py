@@ -1474,7 +1474,11 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             bound_workspace = Path.cwd()
         broker = assess(bound_workspace, tool=tool,
                         action_id=str(tool_call.get("action_id", "") or ""))
-        if broker["decision"] == "BLOCKED":
+        if (broker["decision"] == "BLOCKED" or
+                (broker["decision"] == "BROKER_REQUIRED" and tool != "run_command")):
+            # Git50 currently delegates run_command to the OS broker.
+            # Other mutators cannot run as the privileged controller while
+            # their native, task-scoped adapter is not yet implemented.
             from .tool_result_contract import encode_result
             return encode_result(
                 'REJECTED', 'TURBO_OS_BROKER_BLOCKED', tool=tool,
