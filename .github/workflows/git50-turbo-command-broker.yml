@@ -1,0 +1,65 @@
+name: Git50 AppContainer Command Broker P2
+
+on:
+  push:
+    branches:
+      - git50/turbo-appcontainer-command-broker-20261110
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-broker-command:
+    name: Windows actual AppContainer PowerShell command execution
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install optional Python Git implementation
+        run: python -m pip install --disable-pip-version-check "dulwich>=0.25,<2"
+      - name: Parse disposable OS test script
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install_smart_agent/turbo_appcontainer_disposable_probe.ps1').Path,
+            [ref]$tokens, [ref]$errors)
+          if (@($errors).Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Host
+            throw 'GIT50_POWERSHELL_PARSE_FAILED'
+          }
+      - name: Windows AppContainer native command and OS denial tests
+        shell: powershell
+        run: |
+          .\install_smart_agent\turbo_appcontainer_disposable_probe.ps1 -FixtureParent $env:RUNNER_TEMP
+      - name: Upload Windows kernel evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git50-win32-appcontainer-command-evidence
+          path: ${{ runner.temp }}/git47_sandbox_ci_evidence.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  runtime-backcompat:
+    name: Git49 admission and ACL ON/OFF regressions
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --disable-pip-version-check pytest playwright
+      - run: python -B -m pytest source/WebAgent/tests/test_git49_turbo_broker_admission.py source/WebAgent/tests/test_git49_turbo_broker_scope.py source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
+      - run: python -B source/WebAgent/tests/validate_acl_off_software_guard.py
