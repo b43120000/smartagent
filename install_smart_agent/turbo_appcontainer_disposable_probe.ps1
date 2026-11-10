@@ -319,6 +319,7 @@ try {
         $pyCode = @'
 import pathlib
 import subprocess
+import shutil
 import sys
 
 def child():
@@ -338,6 +339,28 @@ def child():
             return 0
     return 91
 
+if sys.argv[1] == "overwrite":
+    target = pathlib.Path(sys.argv[2])
+    target.write_text("GIT47_OVERWRITE_PASS")
+    if target.read_text() != "GIT47_OVERWRITE_PASS":
+        raise SystemExit(94)
+    pathlib.Path("python_overwrite_ok.txt").write_text("PASS")
+    raise SystemExit(0)
+if sys.argv[1] == "remove_tree":
+    target = pathlib.Path(sys.argv[2])
+    shutil.rmtree(target)
+    if target.exists():
+        raise SystemExit(95)
+    pathlib.Path("python_recursive_delete_ok.txt").write_text("PASS")
+    raise SystemExit(0)
+if sys.argv[1] == "write_outside":
+    try:
+        pathlib.Path(sys.argv[2]).write_text("ESCAPED_SCOPE")
+    except PermissionError as exc:
+        if getattr(exc, "winerror", None) == 5 or getattr(exc, "errno", None) == 13:
+            pathlib.Path("python_outside_write_denied_ok.txt").write_text("OS_ACCESS_DENIED")
+            raise SystemExit(0)
+    raise SystemExit(96)
 if sys.argv[1] == "child":
     raise SystemExit(child())
 if sys.argv[1] == "parent":
@@ -355,6 +378,27 @@ raise SystemExit(93)
         Test-DisposableToolCompatibility 'python_fixture_open_outside_os_denied' $pyExecutable $pyArgs 'python_child_denied_ok.txt' $true
         $pyArgs = '-I "' + $pyProbe + '" parent "' + $siblingFile + '"'
         Test-DisposableToolCompatibility 'python_fixture_subprocess_os_denied' $pyExecutable $pyArgs 'python_spawn_denied_ok.txt' $true
+        $overwrite = Join-Path $turbo 'python_overwrite_target.txt'
+        [IO.File]::WriteAllText($overwrite, 'BEFORE_OVERWRITE')
+        $pyArgs = '-I "' + $pyProbe + '" overwrite "' + $overwrite + '"'
+        Test-DisposableToolCompatibility 'python_in_root_overwrite' $pyExecutable $pyArgs 'python_overwrite_ok.txt' $true
+        if ([IO.File]::ReadAllText($overwrite) -cne 'GIT47_OVERWRITE_PASS') {
+            throw 'GIT47_PYTHON_OVERWRITE_POSTCONDITION_FAILED'
+        }
+
+        $nested = Join-Path $turbo 'recursive_delete_fixture'
+        $nestedChild = Join-Path $nested 'nested'
+        New-Item -ItemType Directory -Force -Path $nestedChild | Out-Null
+        [IO.File]::WriteAllText((Join-Path $nestedChild 'child.txt'), 'DELETE_ME')
+        $pyArgs = '-I "' + $pyProbe + '" remove_tree "' + $nested + '"'
+        Test-DisposableToolCompatibility 'python_in_root_recursive_delete' $pyExecutable $pyArgs 'python_recursive_delete_ok.txt' $true
+        if (Test-Path -LiteralPath $nested) { throw 'GIT47_PYTHON_TREE_DELETE_POSTCONDITION_FAILED' }
+
+        $pyArgs = '-I "' + $pyProbe + '" write_outside "' + $siblingFile + '"'
+        Test-DisposableToolCompatibility 'python_outside_write_os_denied' $pyExecutable $pyArgs 'python_outside_write_denied_ok.txt' $true
+        if ([IO.File]::ReadAllText($siblingFile) -cne 'DISPOSABLE-SIBLING-SENTINEL') {
+            throw 'GIT47_PYTHON_EXTERNAL_SENTINEL_CORRUPTED'
+        }
 
         $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $git) { throw 'GIT47_DISPOSABLE_GIT_SEED_TOOL_MISSING' }
