@@ -52,6 +52,10 @@ jobs:
             (Resolve-Path 'install_smart_agent/acl_status.ps1'),
             [ref]$null, [ref]$null)
           Write-Host 'PowerShell source parsed; OS sandbox unverified.'
+      - name: Windows OS API discovery (not isolation attestation)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\\install_smart_agent\\git46_sandbox_api_discovery.ps1 -WorkspaceRoot $env:TEMP
       - name: Security scope notice
         run: echo "Contract checks are not Windows OS Sandbox PASS. No broker or OS isolation attestation exists."
 
