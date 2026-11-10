@@ -320,6 +320,10 @@ raise SystemExit(93)
             Split-Path -Parent $gitOriginalDir
         } else { $gitOriginalDir }
         $gitMingw = Join-Path $gitRoot 'mingw64'
+        $gitUcrt = Join-Path $gitRoot 'ucrt64'
+        $gitVariant = if (Test-Path -LiteralPath (Join-Path $gitUcrt 'bin\\git.exe') -PathType Leaf) {
+            $gitUcrt
+        } else { $gitMingw }
         $gitExecPath = (& ([string]$git.Source) --exec-path 2>$null | Select-Object -First 1)
         $exeCandidates = @(Get-ChildItem -LiteralPath $gitRoot -Recurse -Filter git.exe -File -ErrorAction SilentlyContinue | Select-Object -First 12)
         $relativeCandidates = @($exeCandidates | ForEach-Object {
@@ -329,6 +333,7 @@ raise SystemExit(93)
                     ';exec_path=' + [string]$gitExecPath +
                     ';executables=' + ($relativeCandidates -join ','))
         $candidates = @(
+            (Join-Path $gitUcrt 'bin'),
             (Join-Path $gitMingw 'bin'),
             (Join-Path $gitRoot 'bin'),
             $gitOriginalDir
@@ -350,12 +355,12 @@ raise SystemExit(93)
                 Copy-Item -LiteralPath $dll.FullName -Destination $gitBin -Force
             }
             # Git templates and helpers are read/execute dependencies only.
-            $libexec = Join-Path $gitMingw 'libexec\\git-core'
+            $libexec = Join-Path $gitVariant 'libexec\\git-core'
             if (Test-Path -LiteralPath $libexec -PathType Container) {
                 New-Item -ItemType Directory -Force -Path (Join-Path $gitDeps 'libexec') | Out-Null
                 Copy-Item -LiteralPath $libexec -Destination (Join-Path $gitDeps 'libexec\\git-core') -Recurse -Force
             }
-            $template = Join-Path $gitMingw 'share\\git-core'
+            $template = Join-Path $gitVariant 'share\\git-core'
             if (Test-Path -LiteralPath $template -PathType Container) {
                 New-Item -ItemType Directory -Force -Path (Join-Path $gitDeps 'share') | Out-Null
                 Copy-Item -LiteralPath $template -Destination (Join-Path $gitDeps 'share\\git-core') -Recurse -Force
