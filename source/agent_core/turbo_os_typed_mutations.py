@@ -186,4 +186,85 @@ def write_file_in_broker(path, content, *, security_context, action_id="") -> st
         )
 
 
-__all__ = ["create_directory_in_broker", "write_file_in_broker"]
+def delete_path_in_broker(path, *, recursive=False, security_context,
+                          action_id="") -> str:
+    """Delete one regular file or one EMPTY directory under the native SID.
+
+    Recursive tree deletion remains blocked: it requires a separate
+    race-resistant, reparse-aware native implementation and is not equivalent
+    to passing a checked pathname to Directory.Delete(recursive=True).
+    """
+    tool = "delete_path"
+    if recursive:
+        return encode_result(
+            "REJECTED", "TURBO_RECURSIVE_DELETE_OS_ADAPTER_NOT_ATTESTED",
+            tool=tool, executed=False, requested_path=path,
+            data={"terminal_eligible": False},
+        )
+    try:
+        from .safe_file_operations import SafeFileOperationError, build_delete_manifest
+        target, root = _checked_target(security_context, path)
+        manifest = build_delete_manifest(
+            security_context, str(target), recursive=False
+        )
+        if target.is_dir() and next(target.iterdir(), None) is not None:
+            raise TurboBrokerScopeError("TURBO_DELETE_NONEMPTY_DIRECTORY_REJECTED")
+        literal = str(target).replace("'", "''")
+        script = (
+            "if ([IO.File]::Exists('" + literal + "')) " +
+            "{ [IO.File]::Delete('" + literal + "') } " +
+            "elseif ([IO.Directory]::Exists('" + literal + "')) " +
+            "{ [IO.Directory]::Delete('" + literal + "',$false) } " +
+            "else { exit 72 };"
+        )
+        result = execute_turbo_command(
+            script, cwd=root, timeout=30, max_stream_bytes=65536,
+            task_id=security_context.task_id, action_id=action_id,
+        )
+        proof = result["sandbox_evidence"]
+        if result["exit_code"] != 0 or target.exists() or target.is_symlink():
+            return encode_result(
+                "UNKNOWN", "TURBO_DELETE_OS_POSTCONDITION_UNVERIFIED",
+                tool=tool, executed=result["process_started"],
+                requested_path=path, resolved_path=str(target),
+                data={"sandbox_evidence": proof,
+                      "possible_partial_execution": True,
+                      "terminal_eligible": False},
+            )
+        return encode_result(
+            "SUCCEEDED", "DELETED", tool=tool, executed=True,
+            requested_path=path, resolved_path=str(target),
+            data={
+                "schema": "DELETE_RESULT_V1", "status": "DELETED",
+                "target": str(target),
+                "manifest_digest": manifest["manifest_digest"],
+                "entry_count": manifest["entry_count"],
+                "total_bytes": manifest["total_bytes"],
+                "sandbox_evidence": proof,
+                "terminal_eligible": True,
+                "no_parent_directories_deleted": True,
+            },
+        )
+    except (PathSecurityError, TurboBrokerScopeError, TurboOSBrokerUnavailable,
+            SafeFileOperationError, OSError, ValueError, TypeError) as exc:
+        uncertain = isinstance(exc, TurboOSBrokerUnavailable) and any(
+            word in str(exc) for word in
+            ("TIMEOUT", "INVALID_NATIVE_RECEIPT", "NATIVE_DATA_INVALID")
+        )
+        return encode_result(
+            "UNKNOWN" if uncertain else "REJECTED",
+            "TURBO_TYPED_BROKER_OUTCOME_UNCERTAIN" if uncertain
+                else "TURBO_TYPED_DELETE_REJECTED",
+            tool=tool, executed=False, requested_path=path,
+            data={"error_class": type(exc).__name__,
+                  "possible_partial_execution": uncertain,
+                  "terminal_eligible": False},
+            detail=str(exc)[:250],
+        )
+
+
+__all__ = [
+    "create_directory_in_broker",
+    "write_file_in_broker",
+    "delete_path_in_broker",
+]
