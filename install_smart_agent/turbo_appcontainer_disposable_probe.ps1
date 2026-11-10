@@ -217,36 +217,14 @@ try {
 
     $python = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($python) {
-        # The installed host Python is an optional R/X dependency, not an
-        # arbitrary outside-user-project authorization. Copy a portable
-        # runtime under THIS disposable fixture and give the AppContainer
-        # package SID read/execute only, never external write.
+        # Copy only into a disposable read/execute dependency fixture; never
+        # alter ACLs on an installed Python or unrelated user workspace.
         $dependencyRoot = Join-Path $fixture 'trusted_tool_dependencies'
         $localPython = Join-Path $dependencyRoot 'python'
         New-Item -ItemType Directory -Force -Path $localPython | Out-Null
         $originalPythonRoot = Split-Path -Parent ([string]$python.Source)
         foreach ($item in @(Get-ChildItem -LiteralPath $originalPythonRoot -File -ErrorAction Stop)) {
-            if ($item.Name -match '^(?:python[^\\/]*\\.(?:exe|dll)|vcruntime[^\\/]*\\.dll)    $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($git) {
-        Test-DisposableToolCompatibility 'git' ([string]$git.Source) 'init git_probe' 'git_probe'
-    } else {
-        Write-Host 'GIT47_TOOL_NOT_VERIFIED:git:executable_missing'
-    }
-
-    Write-Host 'GIT47_DISPOSABLE_WIN32_APPCONTAINER_FILE_BOUNDARY_PASS'
-    Write-Host 'NOTE: Disposable fixture only. Production broker, tool compatibility, unsafe IPC, reparse races and revocation are not fully attested.'
-}
-finally {
-    # Cleanup is performed by the normal fixture owner, never from the sandbox.
-    if ($profileCreated) {
-        try { [SmartAgentGit47AppContainerProbe]::DeleteProfile($moniker) }
-        catch { Write-Warning "Temporary AppContainer profile cleanup failed: $($_.Exception.Message)" }
-    }
-    if (Test-Path -LiteralPath $fixture) {
-        Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-) {
+            if ($item.Name -match '^(python.*\.(exe|dll)|vcruntime.*\.dll)$') {
                 Copy-Item -LiteralPath $item.FullName -Destination $localPython -Force
             }
         }
@@ -259,8 +237,6 @@ finally {
         $depAcl = Get-Acl -LiteralPath $dependencyRoot
         $depAcl.SetAccessRuleProtection($true, $false)
         Add-Grant $depAcl $packageSid ([Security.AccessControl.FileSystemRights]::ReadAndExecute) $both $none
-        # Dependency filesystem scope: executable/read-only only. No
-        # package SID mutation grant here, and no external project ACL edit.
         Set-Acl -LiteralPath $dependencyRoot -AclObject $depAcl -ErrorAction Stop
         Test-DisposableToolCompatibility 'python' ([string]$python.Source) '-I -c "from pathlib import Path;Path(''python_probe.txt'').write_text(''GIT47_PY_OK'')"' 'python_probe.txt'
         Test-DisposableToolCompatibility 'python_fixture_rx_dependency' (Join-Path $localPython 'python.exe') '-I -c "from pathlib import Path;Path(''python_fixture_ok.txt'').write_text(''GIT47_PY_OK'')"' 'python_fixture_ok.txt'
