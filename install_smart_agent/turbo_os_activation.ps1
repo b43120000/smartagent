@@ -327,6 +327,29 @@ catch [System.UnauthorizedAccessException] { exit 0 }
                 Remove-Item -LiteralPath $outside -Force -ErrorAction SilentlyContinue
             }
         }
+        # Copy into an admin-controlled code root. Runtime must never
+        # execute a mutable broker script from the user workspace.
+        $brokerCode = Join-Path $securityRoot 'turbo_broker_code'
+        if (-not (Test-Path -LiteralPath $brokerCode -PathType Container)) {
+            New-Item -ItemType Directory -Path $brokerCode -ErrorAction Stop | Out-Null
+        }
+        Assert-Not-Reparse $brokerCode
+        foreach ($file in @('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')) {
+            $source = Join-Path $PSScriptRoot $file
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+                throw 'GIT50_BROKER_SOURCE_MISSING'
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $brokerCode $file) -Force -ErrorAction Stop
+        }
+        & icacls.exe $brokerCode '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'GIT50_BROKER_CODE_PROTECTION_FAILED' }
+        foreach ($file in @('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')) {
+            $protectedFile = Join-Path $brokerCode $file
+            & icacls.exe $protectedFile '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'GIT50_BROKER_FILE_PROTECTION_FAILED' }
+        }
+        $record.broker_entry=(Join-Path $brokerCode 'turbo_os_execute.ps1')
+        $record.broker_source_sha256=[string](Get-FileHash -LiteralPath $record.broker_entry -Algorithm SHA256).Hash
         $record.status='ACTIVE_PROVISIONED'
         Write-Journal $record
         Write-Output 'GIT50_APP_CONTAINER_ROOT_OS_PROVISIONED'
