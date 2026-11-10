@@ -62,7 +62,8 @@ function Invoke-Probe([string]$Op, [string]$Target,
 
 function Test-DisposableToolCompatibility(
     [string]$ToolName, [string]$Executable,
-    [string]$Arguments, [string]$ExpectedOutput
+    [string]$Arguments, [string]$ExpectedOutput,
+    [bool]$Required = $false
 ) {
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
         Write-Host ("GIT47_TOOL_NOT_VERIFIED:" + $ToolName + ":executable_missing")
@@ -98,6 +99,9 @@ function Test-DisposableToolCompatibility(
             $inner = $inner.InnerException
         }
         Write-Host ("GIT47_TOOL_NOT_VERIFIED:" + $ToolName + ":" + $errorText + ":" + $_.Exception.Message.Substring(0, [Math]::Min(100, $_.Exception.Message.Length)))
+        if ($Required) {
+            throw ("GIT47_REQUIRED_APP_CONTAINER_TOOL_FAILED:" + $ToolName + ":" + $errorText)
+        }
     }
 }
 
@@ -257,10 +261,10 @@ try {
     # Windows desktop application compatibility discovery: no claim of
     # unrestricted/full Turbo, even if the application loads successfully.
     $cmdExe = Join-Path $env:SystemRoot 'System32\\cmd.exe'
-    Test-DisposableToolCompatibility 'cmd' $cmdExe '/d /c echo GIT47_CMD_OK>cmd_probe.txt' 'cmd_probe.txt'
+    Test-DisposableToolCompatibility 'cmd' $cmdExe '/d /c echo GIT47_CMD_OK>cmd_probe.txt' 'cmd_probe.txt' $true
 
     $powershellExe = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-    Test-DisposableToolCompatibility 'powershell' $powershellExe '-NoProfile -NonInteractive -Command "[IO.File]::WriteAllText(''ps_probe.txt'',''GIT47_PS_OK'')"' 'ps_probe.txt'
+    Test-DisposableToolCompatibility 'powershell' $powershellExe '-NoProfile -NonInteractive -Command "[IO.File]::WriteAllText(''ps_probe.txt'',''GIT47_PS_OK'')"' 'ps_probe.txt' $true
 
     $python = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($python) {
@@ -307,7 +311,7 @@ try {
         Add-Grant $depAcl $packageSid ([Security.AccessControl.FileSystemRights]::ReadAndExecute) $both $none
         Set-Acl -LiteralPath $dependencyRoot -AclObject $depAcl -ErrorAction Stop
         Test-DisposableToolCompatibility 'python' ([string]$python.Source) '-I -c "from pathlib import Path;Path(''python_probe.txt'').write_text(''GIT47_PY_OK'')"' 'python_probe.txt'
-        Test-DisposableToolCompatibility 'python_fixture_rx_dependency' (Join-Path $localPython 'python.exe') '-I -c "from pathlib import Path;Path(''python_fixture_ok.txt'').write_text(''GIT47_PY_OK'')"' 'python_fixture_ok.txt'
+        Test-DisposableToolCompatibility 'python_fixture_rx_dependency' (Join-Path $localPython 'python.exe') '-I -c "from pathlib import Path;Path(''python_fixture_ok.txt'').write_text(''GIT47_PY_OK'')"' 'python_fixture_ok.txt' $true
         # Python's own open() must encounter a kernel-enforced permission
         # error, not a Python wrapper/Software Guard rejection. The script
         # writes its success marker only after PermissionError with WinError 5.
@@ -348,9 +352,9 @@ raise SystemExit(93)
         [IO.File]::WriteAllText($pyProbe, $pyCode)
         $pyExecutable = Join-Path $localPython 'python.exe'
         $pyArgs = '-I "' + $pyProbe + '" child "' + $siblingFile + '"'
-        Test-DisposableToolCompatibility 'python_fixture_open_outside_os_denied' $pyExecutable $pyArgs 'python_child_denied_ok.txt'
+        Test-DisposableToolCompatibility 'python_fixture_open_outside_os_denied' $pyExecutable $pyArgs 'python_child_denied_ok.txt' $true
         $pyArgs = '-I "' + $pyProbe + '" parent "' + $siblingFile + '"'
-        Test-DisposableToolCompatibility 'python_fixture_subprocess_os_denied' $pyExecutable $pyArgs 'python_spawn_denied_ok.txt'
+        Test-DisposableToolCompatibility 'python_fixture_subprocess_os_denied' $pyExecutable $pyArgs 'python_spawn_denied_ok.txt' $true
 
         $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $git) { throw 'GIT47_DISPOSABLE_GIT_SEED_TOOL_MISSING' }
