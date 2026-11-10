@@ -65,11 +65,11 @@ def turbo_control_reply(result: dict) -> str:
            if result.get("path") else "")
         + "Policy revision: " + str(result.get("revision", "")) + "\n"
         + "Shared registry: " + str(len(roots)) + " configured roots\n"
-        + "ACL Mode: " + actual["acl_mode"] + "\\n"
-        + "Requested Turbo: " + actual["turbo_requested"] + "\\n"
-        + "Effective Turbo: " + actual["turbo_effective"] + "\\n"
-        + "Sandbox: " + actual["sandbox_status"] + "\\n"
-        + "Reason Code: " + actual["reason_code"] + "\\n"
+        + "ACL Mode: " + actual["acl_mode"] + "\n"
+        + "Requested Turbo: " + actual["turbo_requested"] + "\n"
+        + "Effective Turbo: " + actual["turbo_effective"] + "\n"
+        + "Sandbox: " + actual["sandbox_status"] + "\n"
+        + "Reason Code: " + actual["reason_code"] + "\n"
         + "Turbo Action requires a verified Windows OS sandbox; no ordinary executor fallback."
     )
 
