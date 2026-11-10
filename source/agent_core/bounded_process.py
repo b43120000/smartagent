@@ -71,16 +71,55 @@ def run_bounded_process(
     # so neither direct host subprocess nor a stale service can be a fallback.
     from .turbo_broker_admission import assess
     broker = assess(cwd, tool="run_command")
-    if broker["decision"] == "BLOCKED":
+    def reject_broker(reason: str) -> dict:
         return {
             "exit_code": None, "stdout": "", "stderr": "",
             "stdout_bytes": 0, "stderr_bytes": 0,
             "stdout_truncated": False, "stderr_truncated": False,
             "stdout_ref": "", "stderr_ref": "", "timed_out": False,
-            "error": "TURBO_OS_BROKER_BLOCKED:" + broker["reason_code"],
+            "error": "TURBO_OS_BROKER_BLOCKED:" + reason,
             "security_rejected": True, "process_started": False,
             "sandbox_evidence": broker["evidence"],
         }
+
+    if broker["decision"] == "BLOCKED":
+        return reject_broker(str(broker["reason_code"]))
+    if broker["decision"] == "BROKER_REQUIRED":
+        # ONLY the already-admitted single PowerShell command adapter can
+        # cross the boundary. Reject all other host process launch forms:
+        # arbitrary shell=True, direct Python/Git binaries, elevated scripts,
+        # and wrapper-free subprocess calls. Within the AppContainer,
+        # PowerShell itself can launch tools that the OS token permits.
+        is_powershell_adapter = (
+            not shell and isinstance(command, (tuple, list))
+            and len(command) == 4
+            and str(command[0]).casefold() in {"powershell", "powershell.exe"}
+            and str(command[1]).casefold() == "-noprofile"
+            and str(command[2]).casefold() == "-command"
+            and security_command is not None
+        )
+        if not is_powershell_adapter:
+            return reject_broker("TURBO_BROKER_UNSUPPORTED_LAUNCH_FORM")
+        # Authorization/approval has already been checked above, but no
+        # privileged host process receives the user's script. This helper
+        # launches only an admin-protected native broker and independently
+        # validates a Windows AppContainer process-token receipt per action.
+        from .turbo_os_broker_client import (
+            TurboOSBrokerUnavailable, execute_turbo_command,
+        )
+        metadata = dict(telemetry or {})
+        try:
+            return execute_turbo_command(
+                security_text, cwd=cwd, timeout=int(timeout),
+                max_stream_bytes=max_stream_bytes,
+                task_id=str(metadata.get("task_id") or ""),
+                action_id=str(metadata.get("action_id") or ""),
+            )
+        except (TurboOSBrokerUnavailable, OSError, ValueError) as exc:
+            # No host/restricted-executor fallback on invalid or timed-out
+            # broker output. On an uncertain timeout, never claim process
+            # execution or a successful result.
+            return reject_broker(str(exc))
     from .windows_security import restricted_executor_required
     restricted_required = restricted_executor_required()
     if restricted_required and os.environ.get("SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE") != "1":
