@@ -102,6 +102,7 @@ def _policy_from_profile(profile: dict) -> dict:
             _normalized_roots(profile.get("denied_write_roots") or ())
         ),
         "turbo_roots": [],
+        "turbo_requested": False,
     }
 
 
@@ -129,6 +130,8 @@ def load_workspace_access_policy(*, profile: dict | None = None) -> dict:
                 _normalized_roots(value.get("denied_write_roots") or ())
             ),
             "turbo_roots": list(_normalized_roots(value.get("turbo_roots") or ())),
+            # Git45 roots do not silently migrate to an enabled Git46 sandbox.
+            "turbo_requested": value.get("turbo_requested") is True,
         }
     return _policy_from_profile(profile if profile is not None else _load_local_profile())
 
@@ -157,6 +160,8 @@ def save_workspace_access_policy(
         "read_only_roots": list(read_only),
         "denied_write_roots": list(denied),
         "turbo_roots": list(turbo),
+        # Changing workspace authority revokes any previous Turbo request.
+        "turbo_requested": False,
     }
     path = workspace_access_policy_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,6 +203,7 @@ def access_snapshot() -> dict:
         "writable_workspaces": writable,
         "read_only_roots": read_only,
         "turbo_roots": tuple(policy.get("turbo_roots") or ()),
+        "turbo_requested": policy.get("turbo_requested") is True,
     }
 
 
@@ -258,6 +264,13 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
         denied = current["denied_write_roots"]
         parent = str(Path(workspace).expanduser().resolve()) if workspace else ""
         requested = list(_normalized_roots(turbo_roots))
+        if requested:
+            try:
+                mode = acl_mode()
+            except (OSError, ValueError, RuntimeError):
+                mode = "unknown"
+            if mode != "on":
+                raise ValueError("TURBO_REQUIRES_ACL_ON")
         for item in requested:
             parents = [parent] if parent else writable
             if not any(is_valid_turbo_root(item, root, writable, read_only, denied)
@@ -265,6 +278,8 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
                 raise ValueError("turbo_root_not_strict_writable_workspace_child:" + item)
         payload = dict(current)
         payload["turbo_roots"] = requested
+        # ON is only a requested preference, NEVER an OS execution grant.
+        payload["turbo_requested"] = bool(requested)
         payload["revision"] = int(current.get("revision", 0) or 0) + 1
         payload["updated_at"] = int(time.time())
         policy_path.parent.mkdir(parents=True, exist_ok=True)
