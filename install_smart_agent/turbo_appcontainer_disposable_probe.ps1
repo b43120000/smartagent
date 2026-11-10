@@ -306,10 +306,26 @@ raise SystemExit(93)
         # The cmd\git.exe launcher often forwards to mingw64\bin\git.exe,
         # which is not an AppContainer-authorized external dependency. Copy
         # a self-contained minimal Git executable/DLL subtree instead.
-        $gitRoot = Split-Path -Parent (Split-Path -Parent ([string]$git.Source))
+        $gitOriginalDir = Split-Path -Parent ([string]$git.Source)
+        $gitDirLeaf = Split-Path -Leaf $gitOriginalDir
+        $gitRoot = if ($gitDirLeaf -in @('bin','cmd')) {
+            Split-Path -Parent $gitOriginalDir
+        } else { $gitOriginalDir }
         $gitMingw = Join-Path $gitRoot 'mingw64'
-        $sourceBin = Join-Path $gitMingw 'bin'
-        if (Test-Path -LiteralPath (Join-Path $sourceBin 'git.exe') -PathType Leaf) {
+        $candidates = @(
+            (Join-Path $gitMingw 'bin'),
+            (Join-Path $gitRoot 'bin'),
+            $gitOriginalDir
+        )
+        $sourceBin = @($candidates | Where-Object {
+            Test-Path -LiteralPath (Join-Path $_ 'git.exe') -PathType Leaf
+        } | Select-Object -First 1)
+        $sourceBin = if ($sourceBin.Count) { [string]$sourceBin[0] } else { '' }
+        Write-Host ("GIT47_GIT_DISCOVERY:source_dir_leaf=" + $gitDirLeaf +
+          ";bin_folder_leaf=" + (Split-Path -Leaf $sourceBin) +
+          ";mingw_bin_present=" +
+          (Test-Path -LiteralPath (Join-Path $gitMingw 'bin\\git.exe') -PathType Leaf))
+        if ($sourceBin -and (Test-Path -LiteralPath (Join-Path $sourceBin 'git.exe') -PathType Leaf)) {
             $gitDeps = Join-Path $dependencyRoot 'git'
             $gitBin = Join-Path $gitDeps 'bin'
             New-Item -ItemType Directory -Force -Path $gitBin | Out-Null
