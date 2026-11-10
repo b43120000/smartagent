@@ -19,6 +19,8 @@ $sibling = Join-Path $fixture 'sibling'
 $moniker = 'SmartAgentGit47Test_' + [Guid]::NewGuid().ToString('N')
 $profileCreated = $false
 $crossVolumeFixture = ''
+$script:osBoundaryEvidence = @()
+$script:toolCompatibilityEvidence = @()
 
 function Add-Grant(
     [Security.AccessControl.DirectorySecurity]$Acl,
@@ -57,6 +59,18 @@ function Invoke-Probe([string]$Op, [string]$Target,
         throw "GIT47_DENIED_PROCESS_EXIT_MISMATCH:$Label"
     }
     Remove-Item -LiteralPath $receipt -Force
+    $script:osBoundaryEvidence += [ordered]@{
+        schema='SMARTAGENT_GIT47_OS_TEST_RECEIPT_V1'
+        action_id=('GIT47-' + $Label)
+        requested_operation=$Op
+        scope_verdict=$(if ($ExpectedError -eq 5) { 'TURBO_SCOPE_DENIED' } else { 'TURBO_SCOPE_ALLOWED' })
+        os_execution_result=$(if ($ExpectedError -eq 5) { 'OS_ACCESS_DENIED' } else { 'OS_EXECUTION_SUCCEEDED' })
+        win32_error_code=$ExpectedError
+        os_access_denied=($ExpectedError -eq 5)
+        sandbox_identity_verified=$true
+        evidence_ref=('GIT47-OS-' + $Label)
+        executed=$true
+    }
     Write-Host "PASS $Label : actual Win32 CreateFileW error=$ExpectedError"
 }
 
@@ -87,6 +101,10 @@ function Test-DisposableToolCompatibility(
                 throw 'postcondition_missing'
             }
         }
+        $script:toolCompatibilityEvidence += [ordered]@{
+            tool=$ToolName; status='PASS'; sandbox_identity_verified=$true
+            os_execution_result='OS_EXECUTION_SUCCEEDED'
+        }
         Write-Host ("PASS GIT47_TOOL_APPCONTAINER_LAUNCH:" + $ToolName)
     } catch {
         $errorText = $_.Exception.GetType().Name
@@ -97,6 +115,10 @@ function Test-DisposableToolCompatibility(
                 break
             }
             $inner = $inner.InnerException
+        }
+        $script:toolCompatibilityEvidence += [ordered]@{
+            tool=$ToolName; status='NOT_VERIFIED'; sandbox_identity_verified=$false
+            os_execution_result='OS_EXECUTION_FAILED'; reason_code=$errorText
         }
         Write-Host ("GIT47_TOOL_NOT_VERIFIED:" + $ToolName + ":" + $errorText + ":" + $_.Exception.Message.Substring(0, [Math]::Min(100, $_.Exception.Message.Length)))
         if ($Required) {
@@ -558,6 +580,24 @@ except Exception as exc:
         Write-Host 'GIT47_TOOL_NOT_VERIFIED:git:executable_missing'
     }
 
+    $ciEvidence = [ordered]@{
+        schema='SMARTAGENT_GIT47_WINDOWS_DISPOSABLE_SANDBOX_EVIDENCE_V1'
+        sandbox_backend='WIN32_APPCONTAINER_DISPOSABLE_FIXTURE'
+        sandbox_status='TEST_ONLY'
+        production_turbo_effective='OFF'
+        full_access_attested=$false
+        file_boundary_verdict='PASS'
+        os_boundary_tests=@($script:osBoundaryEvidence)
+        tool_compatibility=@($script:toolCompatibilityEvidence)
+        git_for_windows_compatibility='NOT_VERIFIED_NUL_DEVICE_ACCESS_DENIED'
+        network_capability='NOT_ATTESTED'
+        runtime_broker='NOT_IMPLEMENTED'
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $base 'git47_sandbox_ci_evidence.json'),
+        ($ciEvidence | ConvertTo-Json -Depth 12),
+        (New-Object Text.UTF8Encoding($false))
+    )
     Write-Host 'GIT47_DISPOSABLE_WIN32_APPCONTAINER_FILE_BOUNDARY_PASS'
     Write-Host 'NOTE: Disposable fixture only. Production broker, tool compatibility, unsafe IPC, reparse races and revocation are not fully attested.'
 }
