@@ -130,5 +130,21 @@ def require_turbo_backend(state: dict) -> None:
     raise RuntimeError(str(state.get("reason_code") or "SANDBOX_UNAVAILABLE"))
 
 
+def main(argv=None) -> int:
+    """Shared read-only status endpoint for Windows CLI and UI diagnostics."""
+    import argparse
+    import json
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--workspace", default="")
+    args = parser.parse_args(argv)
+    state = resolve_turbo_state(args.workspace or None)
+    print(json.dumps(state, ensure_ascii=False, sort_keys=True))
+    return 0 if state["turbo_requested"] == "OFF" else 2
+
+
 __all__ = ["SCHEMA", "resolve_turbo_state", "sandbox_evidence",
            "require_turbo_backend"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
