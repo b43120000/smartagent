@@ -121,6 +121,31 @@ try {
     Invoke-Probe 'read' $siblingFile 5 'sibling_read_os_access_denied'
     Invoke-Probe 'write' (Join-Path $sibling 'sibling_write.txt') 5 'sibling_write_os_access_denied'
 
+    $insideDelete = Join-Path $turbo 'delete_inside.txt'
+    [IO.File]::WriteAllText($insideDelete, 'DISPOSABLE-DELETE-ME')
+    Invoke-Probe 'delete_file' $insideDelete 0 'inside_delete_file'
+    if (Test-Path -LiteralPath $insideDelete) {
+        throw 'GIT47_INSIDE_DELETE_POSTCONDITION_FAILED'
+    }
+
+    # Separate empty disposable root with identical non-delete root ACE. The
+    # probe executable runs from turbo, and cannot delete the extra root.
+    $protectedRoot = Join-Path $fixture 'empty_protected_root'
+    New-Item -ItemType Directory -Path $protectedRoot | Out-Null
+    Set-Acl -LiteralPath $protectedRoot -AclObject $acl -ErrorAction Stop
+    & icacls.exe $protectedRoot '/setintegritylevel' '(OI)(CI)L' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'GIT47_EMPTY_ROOT_IL_SETUP_FAILED' }
+    Invoke-Probe 'delete_dir' $protectedRoot 5 'empty_turbo_root_delete_denied'
+    if (-not (Test-Path -LiteralPath $protectedRoot)) {
+        throw 'GIT47_PROTECTED_ROOT_MISSING_AFTER_DENIAL'
+    }
+
+    # NTFS hardlinks preserve the referenced file's own security descriptor.
+    # A link in the allowed root must not make a protected sibling readable.
+    $hardlink = Join-Path $turbo 'outside_hardlink.txt'
+    New-Item -ItemType HardLink -Path $hardlink -Target $siblingFile -ErrorAction Stop | Out-Null
+    Invoke-Probe 'read' $hardlink 5 'hardlink_outside_read_os_access_denied'
+
     Write-Host 'GIT47_DISPOSABLE_WIN32_APPCONTAINER_FILE_BOUNDARY_PASS'
     Write-Host 'NOTE: This does NOT attest Python/Git/PowerShell, child inheritance, hardlinks, reparse points, root delete, reboot or production lease revocation.'
 }
