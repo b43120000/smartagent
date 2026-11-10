@@ -273,6 +273,7 @@ $warnings = New-Object 'System.Collections.Generic.List[string]'
 $executorRejections = @()
 $executorFinishEvents = @()
 $executorTurboDecisions = @()
+$executorSandboxEvents = @()
 $executorTerminalKind = ''
 $executorBoardStatus = 'NOT_FOUND'
 $executorExpectedRejections = -1
@@ -375,6 +376,38 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         raw_model_response_included=$false
                     }
                 }
+                # Git46 OS Sandbox evidence: no raw command, environment,
+                # token, user data path or full process output is exported.
+                foreach ($ev in @($executorBoard.events)) {
+                    if ($null -eq $ev -or [string]$ev.kind -cne 'TURBO_SANDBOX_BLOCKED') { continue }
+                    $executorSandboxEvents += [ordered]@{
+                        schema='SMARTAGENT_TURBO_SANDBOX_RCA_V1'
+                        event_id=(Safe-Code $ev.event_id)
+                        action_id=(Safe-Code $ev.action_id)
+                        sandbox_mode=(Safe-Code $ev.sandbox_mode)
+                        sandbox_backend=(Safe-Code $ev.sandbox_backend)
+                        sandbox_identity_verified=[bool]$ev.sandbox_identity_verified
+                        sandbox_status=(Safe-Code $ev.sandbox_status)
+                        turbo_requested=(Safe-Code $ev.turbo_requested)
+                        turbo_effective=(Safe-Code $ev.turbo_effective)
+                        acl_mode=(Safe-Code $ev.acl_mode)
+                        acl_attestation=(Safe-Code $ev.acl_attestation)
+                        process_isolation_attestation=(Safe-Code $ev.process_isolation_attestation)
+                        child_process_policy=(Safe-Code $ev.child_process_policy)
+                        workspace_root_sha256=(Hash-Text ([string]$ev.workspace_root))
+                        turbo_root_sha256=(Hash-Text ([string]$ev.turbo_root))
+                        policy_revision=$(if ($null -ne $ev.policy_revision) { [int]$ev.policy_revision } else { 0 })
+                        requested_operation=(Safe-Code $ev.requested_operation)
+                        scope_verdict=(Safe-Code $ev.scope_verdict)
+                        os_execution_result=(Safe-Code $ev.os_execution_result)
+                        os_access_denied=[bool]$ev.os_access_denied
+                        failure_reason_code=(Safe-Code $ev.failure_reason_code)
+                        executed=$false
+                        authorization_granted=$false
+                        raw_command_included=$false
+                        secrets_included=$false
+                    }
+                }
                 foreach ($ev in @($executorBoard.events)) {
                     if ($null -eq $ev -or [string]$ev.kind -cne 'TURBO_DECISION') { continue }
                     $executorTurboDecisions += [ordered]@{
@@ -435,6 +468,7 @@ $executorAdmissionSummary = [ordered]@{
 Write-Json (Join-Path $stage 'executor_admission_summary.json') $executorAdmissionSummary
 Write-Json (Join-Path $stage 'executor_finish_diagnostics.json') @($executorFinishEvents)
 Write-Json (Join-Path $stage 'executor_turbo_decisions.json') @($executorTurboDecisions)
+Write-Json (Join-Path $stage 'executor_sandbox_evidence.json') @($executorSandboxEvents)
 
 try {
     foreach ($source in $sources) {
