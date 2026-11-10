@@ -76,18 +76,39 @@ def main() -> int:
     assert evidence["task_id"] == "TASK-GIT50-RUNTIME", evidence
     print("GIT50_PYTHON_RUNTIME_NATIVE_BROKER_INTEGRATION_PASS", flush=True)
 
-    # The typed file write adapter is still intentionally unimplemented.
-    # Its rejection must be decisive, not a privileged Python fallback.
-    blocked_target = root / "typed_write_must_not_run.txt"
-    blocked = execute_tool(
-        {"tool": "write_file", "path": str(blocked_target),
-         "content": "UNSAFE", "action_id": "ACT-GIT50-TYPED"},
-        SimpleNamespace(workspace=str(workspace)),
+    # Git50 P4: regular typed Runtime directory and bounded UTF-8 file
+    # mutations must reach the same real native AppContainer token, not host.
+    agent = SimpleNamespace(workspace_root=workspace, workspace=str(workspace))
+    typed_dir = root / "typed_created_directory"
+    made = execute_tool(
+        {"tool": "create_directory", "path": str(typed_dir),
+         "action_id": "ACT-GIT50-MKDIR"}, agent,
     )
-    assert not blocked_target.exists(), blocked
-    assert "TURBO_OS_BROKER_BLOCKED" in blocked, blocked
-    assert "NOT_EXECUTED" in blocked, blocked
-    print("GIT50_UNADAPTED_TYPED_MUTATOR_FAIL_CLOSED_PASS", flush=True)
+    assert typed_dir.is_dir(), made
+    assert "DIRECTORY_CREATED" in made, made
+    assert "WIN32_APPCONTAINER" in made, made
+    print("GIT50_TYPED_DIRECTORY_NATIVE_BROKER_PASS", flush=True)
+
+    typed_target = typed_dir / "typed_write_via_os_broker.txt"
+    written = execute_tool(
+        {"tool": "write_file", "path": str(typed_target),
+         "content": "GIT50_TYPED_OS_BROKER", "action_id": "ACT-GIT50-TYPED"},
+        agent,
+    )
+    assert typed_target.read_text(encoding="utf-8") == "GIT50_TYPED_OS_BROKER", written
+    assert "FILE_WRITTEN_VERIFIED" in written, written
+    assert "WIN32_APPCONTAINER" in written, written
+    print("GIT50_TYPED_WRITE_NATIVE_BROKER_PASS", flush=True)
+
+    # Recursive deletion remains explicitly unadapted; even after a
+    # successful native write, it cannot fall back to host Python.
+    unadapted = execute_tool(
+        {"tool": "delete_path", "path": str(typed_target),
+         "recursive": False, "action_id": "ACT-GIT50-DELETE"}, agent,
+    )
+    assert typed_target.exists(), unadapted
+    assert "TURBO_OS_BROKER_BLOCKED" in unadapted, unadapted
+    print("GIT50_UNADAPTED_DELETE_FAIL_CLOSED_PASS", flush=True)
 
     # Direct subprocess injection cannot cross the one-shot broker boundary.
     unsupported = run_bounded_process(
