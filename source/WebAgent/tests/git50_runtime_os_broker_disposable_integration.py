@@ -100,6 +100,26 @@ def main() -> int:
     assert "WIN32_APPCONTAINER" in written, written
     print("GIT50_TYPED_WRITE_NATIVE_BROKER_PASS", flush=True)
 
+    # Even when the ordinary Workspace write scope includes its sibling,
+    # the OS Turbo authorization must be limited to the *nested* Turbo root.
+    outside_file = workspace / "typed_os_broker_outside_must_not_write.txt"
+    outside_write = execute_tool(
+        {"tool": "write_file", "path": str(outside_file),
+         "content": "SHOULD_NOT_EXIST", "action_id": "ACT-GIT50-OUTSIDE"},
+        agent,
+    )
+    assert not outside_file.exists(), outside_write
+    assert "TURBO_TYPED_WRITE_REJECTED" in outside_write, outside_write
+    outside_dir = workspace / "typed_os_broker_outside_must_not_mkdir"
+    outside_mkdir = execute_tool(
+        {"tool": "create_directory", "path": str(outside_dir),
+         "action_id": "ACT-GIT50-OUTSIDE-MKDIR"},
+        agent,
+    )
+    assert not outside_dir.exists(), outside_mkdir
+    assert "TURBO_TYPED_CREATE_REJECTED" in outside_mkdir, outside_mkdir
+    print("GIT50_TYPED_OPERATIONS_OUTSIDE_ROOT_DENIED_PASS", flush=True)
+
     # Recursive deletion remains explicitly unadapted; even after a
     # successful native write, it cannot fall back to host Python.
     unadapted = execute_tool(
