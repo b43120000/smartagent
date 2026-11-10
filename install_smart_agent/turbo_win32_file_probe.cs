@@ -29,9 +29,17 @@ public static class SmartAgentGit47Win32FileProbe
     {
         if (args.Length != 3 || (args[0] != "read" && args[0] != "write"
                 && args[0] != "delete_file" && args[0] != "delete_dir"
-                && args[0] != "spawn_read"))
+                && args[0] != "spawn_read" && args[0] != "check_env_absent"))
             return 78;
         string operation = args[0], target = args[1], receipt = args[2];
+        if (operation == "check_env_absent")
+        {
+            string inherited = Environment.GetEnvironmentVariable(target);
+            try { File.WriteAllText(receipt, "WIN32_ERROR=" +
+                (string.IsNullOrEmpty(inherited) ? 0 : 5)); }
+            catch { return 77; }
+            return string.IsNullOrEmpty(inherited) ? 0 : 10;
+        }
         if (operation == "spawn_read")
         {
             // This runs under the *already attested* AppContainer token.
