@@ -139,6 +139,23 @@ def build_final_render_prompt(
     )
 
 
+def minimal_final_presentation_valid(response: str, *, task_id: str, request_id: str, state: str, outcome: str) -> bool:
+    """Presentation-only contract: never an execution or terminal verdict."""
+    rendered = str(response or "").strip()
+    if not rendered or rendered.startswith("{") or "```" in rendered:
+        return False
+    compact = "".join(rendered.replace("**", "").split())
+    forbidden = ('"type":"finish"', '"type":"tool_call"', '"type":"blocked"')
+    required = ("狀態：", "使用者原始需求：", "Base：", "驗收結果：", "任務結果：", "調整需求：")
+    if any(v in compact for v in forbidden) or any(v not in compact for v in required):
+        return False
+    expected = ("PASS" if state == "COMPLETED" and outcome == "SUCCESS"
+                else "FAIL" if state in {"COMPLETED", "FAILED", "INTERRUPTED"}
+                else "尚未驗證")
+    return bool(state in compact and expected in compact
+                and (not task_id or "task_id:" + task_id in compact)
+                and (not request_id or "request_id:" + request_id in compact))
+
 def render_final_ack(
     client: WebAgentBrowserClient,
     final_content: str,
