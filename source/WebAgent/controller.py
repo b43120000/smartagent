@@ -658,8 +658,78 @@ def main(argv: list[str] | None = None) -> int:
                         **task_result_fields,
                     )
                 if core_minimal:
-                    print("[WebAgent] Minimal Core 使用 Runtime 統一結案狀態，"
-                          "不追加 ChatGPT ACK 回合。", flush=True)
+                    # This is the only new model round: render the already
+                    # admitted Runtime verdict, without rerunning Planner/tools.
+                    if not bootstrap_active:
+                        prompt = build_final_render_prompt(
+                            final_content, request_id=loop.run_id,
+                            round_count=loop.turn_id,
+                            ack_id=loop.pending_web_ack_id,
+                            original_request=loop.task_request,
+                            base_evaluation=str(
+                                getattr(loop.progress_ledger, "base_evaluation", "") or ""
+                            ),
+                            task_id=loop.task_id, state=terminal.state,
+                            outcome=terminal.outcome,
+                            terminal_acceptance=terminal.receipt,
+                            source_task_id=(loop.continuation_source or {}).get("task_id", ""),
+                            minimal_core=True,
+                        )
+                        try:
+                            presentation = client.ask(
+                                prompt, stage="Minimal Core 最終自然語言呈現",
+                                protocol_expected=None,
+                            )
+                            valid_presentation = minimal_final_presentation_valid(
+                                presentation, task_id=loop.task_id,
+                                request_id=loop.run_id, state=terminal.state,
+                                outcome=terminal.outcome,
+                            )
+                            if not valid_presentation:
+                                runtime_log.emit(
+                                    "final_presentation_repair_started",
+                                    request_id=loop.run_id, task_id=loop.task_id,
+                                )
+                                # Format-only second attempt, not a task retry.
+                                presentation = client.ask(
+                                    "[WEBAGENT_MINIMAL_FINAL_FORMAT_REPAIR]\n"
+                                    "前次未輸出完整自然語言格式，以下只允許呈現。"
+                                    "請依照可信 Runtime payload 分段作答，"
+                                    "不得輸出 JSON，也不得調用工具。\n"
+                                    + prompt,
+                                    stage="Minimal Core 最終呈現格式修復",
+                                    protocol_expected=None,
+                                )
+                                valid_presentation = minimal_final_presentation_valid(
+                                    presentation, task_id=loop.task_id,
+                                    request_id=loop.run_id, state=terminal.state,
+                                    outcome=terminal.outcome,
+                                )
+                            if valid_presentation:
+                                runtime_log.emit(
+                                    "final_presentation_delivered",
+                                    request_id=loop.run_id, task_id=loop.task_id,
+                                    response_chars=len(presentation),
+                                )
+                                print("[WebAgent] Minimal Core 自然語言結果已回填 ChatGPT。",
+                                      flush=True)
+                            else:
+                                runtime_log.emit(
+                                    "final_presentation_unverified",
+                                    request_id=loop.run_id, task_id=loop.task_id,
+                                    reason="final_response_format_invalid",
+                                )
+                                print("[WebAgent][WARN] 最終自然語言格式未通過檢查。"
+                                      "Runtime 結案狀態不變。", flush=True)
+                        except Exception as presentation_error:
+                            # UI delivery errors cannot negate a verified task.
+                            runtime_log.emit(
+                                "final_presentation_failed",
+                                request_id=loop.run_id, task_id=loop.task_id,
+                                reason=type(presentation_error).__name__,
+                            )
+                            print("[WebAgent][WARN] 自然語言呈現失敗；"
+                                  "Runtime 任務結果保持原判定。", flush=True)
                     runtime_log.emit(
                         "request_completed" if terminal.is_complete else "request_paused",
                         request_id=loop.run_id, task_id=loop.task_id,
