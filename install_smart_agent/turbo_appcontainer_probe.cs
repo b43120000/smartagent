@@ -372,6 +372,40 @@ public static class SmartAgentGit47AppContainerProbe
             if (sid != IntPtr.Zero) FreeSid(sid);
         }
     }
+    /// <summary>
+    /// Execute a complete PowerShell script under the attested AppContainer
+    /// token. Script text is carried only in the child's encoded command line,
+    /// never executed by the host PowerShell interpreter. The host receives
+    /// only the kernel process receipt. Stdout/stderr capture requires a
+    /// separately scoped transport; callers must not treat a workspace file
+    /// as trusted attestation.
+    /// </summary>
+    public static string LaunchPowerShell(string moniker, string script,
+                                         string cwd, uint timeoutMilliseconds)
+    {
+        if (string.IsNullOrWhiteSpace(script) || script.Length > 16384
+            || script.IndexOf('\0') >= 0)
+            throw new ArgumentException("appcontainer_script_invalid");
+        string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        string executable = System.IO.Path.Combine(windows,
+            "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        if (!System.IO.File.Exists(executable))
+            throw new InvalidOperationException("appcontainer_powershell_unavailable");
+        // No -ExecutionPolicy Bypass, no inherited controller environment,
+        // no privileged handles; Launch verifies the OS token before resume.
+        string body =
+            "$ErrorActionPreference='Stop'; " +
+            "$global:LASTEXITCODE=$null; " +
+            "try { & {\n" + script + "\n}; " +
+            "$code=if($null -ne $global:LASTEXITCODE){[int]$global:LASTEXITCODE}" +
+            "elseif($?){0}else{1}; exit $code } " +
+            "catch { [Console]::Error.WriteLine($_.Exception.GetType().Name); exit 1 }";
+        string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(body));
+        return Launch(moniker, executable,
+            "-NoProfile -NonInteractive -EncodedCommand " + encoded,
+            cwd, timeoutMilliseconds);
+    }
+
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool TerminateProcess(IntPtr process, uint exitCode);
 }
