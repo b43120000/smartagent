@@ -28,9 +28,9 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check pytest playwright
       - name: Syntax and imports
-        run: python -B -m compileall -q source/agent_core/turbo_broker_admission.py source/agent_core/tools.py source/agent_core/bounded_process.py
-      - name: Git49 broker admission
-        run: python -B -m pytest source/WebAgent/tests/test_git49_turbo_broker_admission.py -q
+        run: python -B -m compileall -q source/agent_core/turbo_broker_admission.py source/agent_core/turbo_broker_scope.py source/agent_core/tools.py source/agent_core/bounded_process.py
+      - name: Git49 broker admission and request-scope binding
+        run: python -B -m pytest source/WebAgent/tests/test_git49_turbo_broker_admission.py source/WebAgent/tests/test_git49_turbo_broker_scope.py -q
       - name: Git48 ACL OFF behavior
         run: python -B -m pytest source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
       - name: Existing ACL OFF software guard
