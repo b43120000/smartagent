@@ -69,7 +69,7 @@ _SCRIPT = r"""
   badge.textContent = view.verified === true ? '已驗收' : '尚未驗收';
   body.appendChild(badge);
 
-  // Render explanatory paragraphs and simple bullets; never use innerHTML.
+  // Render explanatory paragraphs and simple bullets; textContent only.
   const summary = String(view.summary || '').slice(0, 3601);
   let list = null;
   for (const line of summary.split(/\n/)) {
