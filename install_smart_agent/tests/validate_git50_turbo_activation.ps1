@@ -78,6 +78,26 @@ try {
     }
     Write-Host 'GIT50_PROTECTED_OS_BROKER_COMMAND_AND_CAPTURE_PASS'
 
+    # Git50 P3 integration uses the real SmartAgent run_bounded_process,
+    # not a direct test-only native launcher call. Python monkeypatches
+    # only where the disposable fixture lives; the actual kernel token
+    # and independent OS denial remain mandatory inside the protected broker.
+    $pythonTest = Join-Path $PSScriptRoot '..\..\source\WebAgent\tests\git50_runtime_os_broker_disposable_integration.py'
+    if (-not (Test-Path -LiteralPath $pythonTest -PathType Leaf)) {
+        throw 'GIT50_PYTHON_RUNTIME_BROKER_TEST_MISSING'
+    }
+    $oldPythonPath = $env:PYTHONPATH
+    try {
+        $env:PYTHONPATH = [IO.Path]::GetFullPath(
+            (Join-Path $PSScriptRoot '..\..\source'))
+        & python -B $pythonTest --project-root $project --workspace $workspace --turbo-root $root
+        if ($LASTEXITCODE -ne 0) {
+            throw 'GIT50_PYTHON_RUNTIME_BROKER_INTEGRATION_FAILED'
+        }
+    } finally {
+        $env:PYTHONPATH = $oldPythonPath
+    }
+
     # Mode can transition during task cancellation. Revocation MUST still
     # work if the mode is already transitioning_off (not currently 'on').
     $mode.mode='transitioning_off'
