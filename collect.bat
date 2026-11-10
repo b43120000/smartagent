@@ -383,6 +383,7 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                     $executorSandboxEvents += [ordered]@{
                         schema='SMARTAGENT_TURBO_SANDBOX_RCA_V1'
                         event_id=(Safe-Code $ev.event_id)
+                        evidence_ref=(Safe-Code $ev.evidence_ref)
                         action_id=(Safe-Code $ev.action_id)
                         sandbox_mode=(Safe-Code $ev.sandbox_mode)
                         sandbox_backend=(Safe-Code $ev.sandbox_backend)
@@ -463,6 +464,7 @@ $executorAdmissionSummary = [ordered]@{
     terminal_kind=$executorTerminalKind
     finish_diagnostic_event_count=@($executorFinishEvents).Count
     turbo_decision_event_count=@($executorTurboDecisions).Count
+    turbo_sandbox_blocked_count=@($executorSandboxEvents).Count
     turbo_auto_confirm_count=@($executorTurboDecisions | Where-Object { $_.auto_confirm }).Count
 }
 Write-Json (Join-Path $stage 'executor_admission_summary.json') $executorAdmissionSummary
