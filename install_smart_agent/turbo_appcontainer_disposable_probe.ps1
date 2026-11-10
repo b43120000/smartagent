@@ -274,8 +274,16 @@ import sys
 def child():
     try:
         pathlib.Path(sys.argv[2]).read_bytes()
-    except PermissionError as exc:
-        if getattr(exc, "winerror", None) == 5:
+    except OSError as exc:
+        # Python may translate Win32 5 into POSIX errno=EACCES.
+        winerror = getattr(exc, "winerror", None)
+        errnum = getattr(exc, "errno", None)
+        pathlib.Path("python_denial_diagnostic.txt").write_text(
+            type(exc).__name__ + ";winerror=" + str(winerror) +
+            ";errno=" + str(errnum))
+        if isinstance(exc, PermissionError) and (
+            winerror == 5 or errnum == 13
+        ):
             pathlib.Path("python_child_denied_ok.txt").write_text("OS_ACCESS_DENIED")
             return 0
     return 91
