@@ -265,6 +265,44 @@ try {
 
     $powershellExe = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
     Test-DisposableToolCompatibility 'powershell' $powershellExe '-NoProfile -NonInteractive -Command "[IO.File]::WriteAllText(''ps_probe.txt'',''GIT47_PS_OK'')"' 'ps_probe.txt' $true
+    $powershellProbe = Join-Path $turbo 'powershell_os_denial.ps1'
+    $powershellScript = @'
+param([string]$Target, [string]$Access)
+try {
+    if ($Access -eq 'read') { [IO.File]::ReadAllText($Target) | Out-Null }
+    elseif ($Access -eq 'write') { [IO.File]::WriteAllText($Target, 'SCOPE_ESCAPE') }
+    else { exit 97 }
+    exit 98
+} catch [System.UnauthorizedAccessException] {
+    [IO.File]::WriteAllText((Join-Path (Get-Location) ('ps_' + $Access + '_denied_ok.txt')), 'OS_ACCESS_DENIED')
+    exit 0
+}
+'@
+    [IO.File]::WriteAllText($powershellProbe, $powershellScript)
+    foreach ($operation in @('read', 'write')) {
+        $args = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+            $powershellProbe + '" "' + $siblingFile + '" ' + $operation
+        Test-DisposableToolCompatibility ('powershell_outside_' + $operation + '_os_denied') $powershellExe $args ('ps_' + $operation + '_denied_ok.txt') $true
+    }
+    if ([IO.File]::ReadAllText($siblingFile) -cne 'DISPOSABLE-SIBLING-SENTINEL') {
+        throw 'GIT47_POWERSHELL_EXTERNAL_SENTINEL_CORRUPTED'
+    }
+
+    $cmdProbe = Join-Path $turbo 'cmd_os_denial.cmd'
+    $cmdStdout = Join-Path $turbo 'cmd_denial_stdout.txt'
+    $cmdStderr = Join-Path $turbo 'cmd_denial_stderr.txt'
+    $cmdMarker = Join-Path $turbo 'cmd_denied_ok.txt'
+    $cmdCode = '@echo off' + "`r`n" +
+        'type "' + $siblingFile + '" 1>"' + $cmdStdout + '" 2>"' + $cmdStderr + '"' + "`r`n" +
+        'if not errorlevel 1 exit /b 99' + "`r`n" +
+        'echo OS_DENIED>"' + $cmdMarker + '"' + "`r`n" +
+        'exit /b 0' + "`r`n"
+    [IO.File]::WriteAllText($cmdProbe, $cmdCode)
+    Test-DisposableToolCompatibility 'cmd_absolute_outside_read_denied' $cmdExe ('/d /c "' + $cmdProbe + '"') 'cmd_denied_ok.txt' $true
+    if (-not (Test-Path -LiteralPath $cmdStderr -PathType Leaf) -or
+        ([IO.File]::ReadAllText($cmdStderr) -notmatch '(?i)access is denied')) {
+        throw 'GIT47_CMD_OUTSIDE_OS_DENIAL_NOT_CONFIRMED'
+    }
 
     $python = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($python) {
