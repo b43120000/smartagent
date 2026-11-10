@@ -256,6 +256,11 @@ try {
                 ';stdout_match=' + [string]($capturedText -ceq 'GIT50_CAPTURED_FROM_APP_CONTAINER') +
                 ';error_class=' + [Text.Encoding]::UTF8.GetString(
                     [Convert]::FromBase64String([string]$captured.stderr_base64)).Split(':')[0])
+    $errorDiagnostic=[Text.Encoding]::UTF8.GetString(
+        [Convert]::FromBase64String([string]$captured.stderr_base64))
+    $errorDiagnostic=$errorDiagnostic -replace '[A-Za-z]:[\\/][^\\r\\n ]+','<path>'
+    Write-Host ('GIT50_CAPTURE_ERROR_DIAGNOSTIC:' +
+                $errorDiagnostic.Substring(0,[Math]::Min($errorDiagnostic.Length,220)))
     if ($captured.sandbox_identity_verified -ne $true -or
         $captured.os_process_started -ne $true -or
         [int]$captured.exit_code -ne 0 -or
