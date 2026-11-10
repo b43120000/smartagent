@@ -244,6 +244,21 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
     }
     if action.get("tool") != "run_command":
         return result
+    # Git46: a nominated Turbo root is never evidence of an OS sandbox.
+    # Git45's secondary confirmation must not bypass a missing kernel boundary.
+    from .turbo_sandbox import resolve_turbo_state
+    sandbox = resolve_turbo_state(getattr(loop, "workspace", None))
+    result["policy_revision"] = sandbox["policy_revision"]
+    result["turbo_root"] = sandbox["turbo_root"]
+    result["reason_code"] = (
+        sandbox["reason_code"] if sandbox["turbo_requested"] == "ON"
+        else "TURBO_DISABLED"
+    )
+    result["sandbox_status"] = sandbox["sandbox_status"]
+    result["turbo_effective"] = sandbox["turbo_effective"]
+    return result
+    # Legacy confirmation recognizers are intentionally unreachable until
+    # replacement by a verified OS-broker execution route.
     try:
         settings = access_snapshot()
         policy = settings["policy"]
@@ -351,6 +366,8 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
     the *current* policy and scope on EVERY action. It grants no permissions.
     """
     try:
+        from .turbo_sandbox import resolve_turbo_state
+        gate = resolve_turbo_state(workspace)
         access = access_snapshot()
         policy = access["policy"]
         roots = [
@@ -364,7 +381,11 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
         ]
         return {
             "schema": "SMARTAGENT_TURBO_PLANNER_HINT_V1",
-            "status": "ON" if roots else "OFF_OR_OUT_OF_SCOPE",
+            "status": "ON" if gate["turbo_effective"] == "ON" else "OFF_OR_BLOCKED",
+            "turbo_requested": gate["turbo_requested"],
+            "turbo_effective": gate["turbo_effective"],
+            "sandbox_status": gate["sandbox_status"],
+            "reason_code": gate["reason_code"],
             "configured_roots": roots[:8],
             "policy_revision": int(policy.get("revision", 0) or 0),
             "safe_action_examples": [
@@ -372,7 +393,7 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
                 "git -C <scoped-repo> archive --format=tar --output=<new-scoped-tar> <requested-commit> [subdir]",
                 "tar -tf <scoped-tar>",
                 "tar -xf <verified-safe-scoped-tar> -C <existing-empty-turbo-directory>",
-            ] if roots else [],
+            ] if gate["turbo_effective"] == "ON" else [],
             "avoid": "compound pipelines, destructive Git, unknown scripts, overwrite",
             "runtime_admission_still_required": True,
             "authorization_granted": False,
