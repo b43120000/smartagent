@@ -251,6 +251,13 @@ try {
         }
         $depAcl = Get-Acl -LiteralPath $dependencyRoot
         $depAcl.SetAccessRuleProtection($true, $false)
+        # Preserve normal fixture owner, SYSTEM and Administrators access;
+        # package SID receives only Read/Execute, inherited by all files.
+        foreach ($fullSid in @($userSid,
+            (New-Object Security.Principal.SecurityIdentifier('S-1-5-18')),
+            (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))) {
+            Add-Grant $depAcl $fullSid ([Security.AccessControl.FileSystemRights]::FullControl) $both $none
+        }
         Add-Grant $depAcl $packageSid ([Security.AccessControl.FileSystemRights]::ReadAndExecute) $both $none
         Set-Acl -LiteralPath $dependencyRoot -AclObject $depAcl -ErrorAction Stop
         Test-DisposableToolCompatibility 'python' ([string]$python.Source) '-I -c "from pathlib import Path;Path(''python_probe.txt'').write_text(''GIT47_PY_OK'')"' 'python_probe.txt'
