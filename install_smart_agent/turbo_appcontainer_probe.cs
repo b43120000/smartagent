@@ -456,7 +456,8 @@ public static class SmartAgentGit47AppContainerProbe
                 string wrapped =
                     "$ErrorActionPreference='Stop'; " +
                     "$global:LASTEXITCODE=$null; " +
-                    "try{ $text=(& {\n" + script + "\n} 2>&1 | Out-String -Width 4096); " +
+                    "try{ $items=@(& {\n" + script + "\n} 2>&1); " +
+                    "$text=[string]::Join([Environment]::NewLine,[string[]]$items); " +
                     "$rc=if($null -ne $global:LASTEXITCODE){[int]$global:LASTEXITCODE}" +
                     "elseif($?){0}else{1}; " + putOut + " exit $rc } " +
                     "catch{ $errText=$_.Exception.GetType().Name+':'+$_.Exception.Message; " +
