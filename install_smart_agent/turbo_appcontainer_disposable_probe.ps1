@@ -262,6 +262,41 @@ try {
         Set-Acl -LiteralPath $dependencyRoot -AclObject $depAcl -ErrorAction Stop
         Test-DisposableToolCompatibility 'python' ([string]$python.Source) '-I -c "from pathlib import Path;Path(''python_probe.txt'').write_text(''GIT47_PY_OK'')"' 'python_probe.txt'
         Test-DisposableToolCompatibility 'python_fixture_rx_dependency' (Join-Path $localPython 'python.exe') '-I -c "from pathlib import Path;Path(''python_fixture_ok.txt'').write_text(''GIT47_PY_OK'')"' 'python_fixture_ok.txt'
+        # Python's own open() must encounter a kernel-enforced permission
+        # error, not a Python wrapper/Software Guard rejection. The script
+        # writes its success marker only after PermissionError with WinError 5.
+        $pyProbe = Join-Path $turbo 'python_negative_probe.py'
+        $pyCode = @'
+import pathlib
+import subprocess
+import sys
+
+def child():
+    try:
+        pathlib.Path(sys.argv[2]).read_bytes()
+    except PermissionError as exc:
+        if getattr(exc, "winerror", None) == 5:
+            pathlib.Path("python_child_denied_ok.txt").write_text("OS_ACCESS_DENIED")
+            return 0
+    return 91
+
+if sys.argv[1] == "child":
+    raise SystemExit(child())
+if sys.argv[1] == "parent":
+    result = subprocess.run([sys.executable, "-I", __file__, "child", sys.argv[2]],
+                            check=False)
+    if result.returncode != 0:
+        raise SystemExit(92)
+    pathlib.Path("python_spawn_denied_ok.txt").write_text("CHILD_OS_ACCESS_DENIED")
+    raise SystemExit(0)
+raise SystemExit(93)
+'@
+        [IO.File]::WriteAllText($pyProbe, $pyCode)
+        $pyExecutable = Join-Path $localPython 'python.exe'
+        $pyArgs = '-I "' + $pyProbe + '" child "' + $siblingFile + '"'
+        Test-DisposableToolCompatibility 'python_fixture_open_outside_os_denied' $pyExecutable $pyArgs 'python_child_denied_ok.txt'
+        $pyArgs = '-I "' + $pyProbe + '" parent "' + $siblingFile + '"'
+        Test-DisposableToolCompatibility 'python_fixture_subprocess_os_denied' $pyExecutable $pyArgs 'python_spawn_denied_ok.txt'
     } else {
         Write-Host 'GIT47_TOOL_NOT_VERIFIED:python:executable_missing'
     }
