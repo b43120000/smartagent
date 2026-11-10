@@ -63,6 +63,11 @@ def _security_self_test(profile:dict)->dict:
  return {'passed':not reasons,'reasons':reasons,'checked_at':time.time(),'mode':mode}
 
 def _run(req:dict,profile:dict)->dict:
+ # Defense in depth for direct queue clients, including Telegram workers.
+ from .turbo_sandbox import resolve_turbo_state, require_turbo_backend
+ sandbox=resolve_turbo_state(req.get('cwd') or None)
+ if sandbox['turbo_requested']=='ON':
+  require_turbo_backend(sandbox)
  supplied=str(req.get('request_digest',''));unsigned={key:value for key,value in req.items() if key!='request_digest'}
  if supplied!=sha256_digest(unsigned):raise RuntimeError('restricted_executor_request_digest_mismatch')
  noninteractive=req.get('noninteractive',False)
