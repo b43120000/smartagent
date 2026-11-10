@@ -87,7 +87,16 @@ function Test-DisposableToolCompatibility(
         }
         Write-Host ("PASS GIT47_TOOL_APPCONTAINER_LAUNCH:" + $ToolName)
     } catch {
-        Write-Host ("GIT47_TOOL_NOT_VERIFIED:" + $ToolName + ":" + $_.Exception.GetType().Name + ":" + $_.Exception.Message.Substring(0, [Math]::Min(110, $_.Exception.Message.Length)))
+        $errorText = $_.Exception.GetType().Name
+        $inner = $_.Exception.InnerException
+        while ($inner) {
+            if ($inner -is [System.ComponentModel.Win32Exception]) {
+                $errorText = $errorText + ":win32_error=" + [string]$inner.NativeErrorCode
+                break
+            }
+            $inner = $inner.InnerException
+        }
+        Write-Host ("GIT47_TOOL_NOT_VERIFIED:" + $ToolName + ":" + $errorText + ":" + $_.Exception.Message.Substring(0, [Math]::Min(100, $_.Exception.Message.Length)))
     }
 }
 
@@ -107,6 +116,12 @@ try {
     }
     $packageSid = New-Object Security.Principal.SecurityIdentifier($packageSidText)
     $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+
+    # Explicit parent Traverse without ListDirectory, read contents, or
+    # write. Required to reach the *separate* RX dependency subtree.
+    $fixtureAcl = Get-Acl -LiteralPath $fixture
+    Add-Grant $fixtureAcl $packageSid ([Security.AccessControl.FileSystemRights]::Traverse) ([Security.AccessControl.InheritanceFlags]::None) ([Security.AccessControl.PropagationFlags]::None)
+    Set-Acl -LiteralPath $fixture -AclObject $fixtureAcl -ErrorAction Stop
 
     # All DACL mutations are limited to this newly created temporary root.
     # No parent / sibling / user's real project is changed.
