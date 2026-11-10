@@ -138,6 +138,11 @@ def append_executor_event(root: str | Path, loop, event: dict) -> dict:
         "task_id": loop.task_id, "task_epoch": loop.task_epoch,
         "sequence": number, "event": row,
     })[:24].upper()
+    if (row.get("schema") == "SMARTAGENT_TURBO_SANDBOX_EVIDENCE_V1"
+            and not row.get("evidence_ref")):
+        # A rejection receipt references the actual persisted blackboard event;
+        # it does NOT invent an OS execution/evidence reference.
+        row["evidence_ref"] = row["event_id"]
     value["events"].append(row)
     _atomic(_path(root, loop.task_id), value)
     return row
