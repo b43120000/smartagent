@@ -1119,6 +1119,34 @@ def run_minimal_core(loop, request: str) -> str:
             return "Executor 偵測到重複動作且沒有新證據，已安全封鎖。"
         last_action_digest = fingerprint
 
+        # Git46: Goal-driven/minimal-core uses the SAME fail-closed Turbo
+        # authority as PokeClaw. Software admission alone never grants OS IO.
+        from agent_core.turbo_sandbox import (
+            resolve_turbo_state, sandbox_evidence, require_turbo_backend,
+        )
+        turbo_state = resolve_turbo_state(loop.workspace)
+        if turbo_state["turbo_requested"] == "ON":
+            try:
+                require_turbo_backend(turbo_state)
+            except RuntimeError as exc:
+                receipt = sandbox_evidence(
+                    turbo_state, action_id=action["action_id"],
+                    requested_operation=str(action.get("operation") or action["tool"]),
+                )
+                journal.append("turbo_sandbox_blocked", round=round_id,
+                               tool=action["tool"], **receipt)
+                loop._emit("turbo_sandbox_blocked", request_id=loop.run_id,
+                           task_id=loop.task_id, task_epoch=loop.task_epoch,
+                           round=round_id, reason_code=str(exc)[:120],
+                           action_id=action["action_id"], executed=False,
+                           authorization_granted=False)
+                loop.protocol_state = "BLOCKED"
+                result = blocked_result("BLOCKED", "TURBO_SANDBOX_BLOCKED", round_id)
+                publish_executor_result(result)
+                set_runtime_state(loop.task_id, "PAUSED",
+                                  reason="TURBO_SANDBOX_BLOCKED", root=loop.progress_root)
+                return "Turbo OS Sandbox 未通過驗證，已阻止工具下發；不使用普通 Executor 降級執行。"
+
         # Write an execution-intent receipt BEFORE any side effect.
         journal.append("action_prepared", round=round_id, tool=action["tool"],
                        action_id=action["action_id"], fingerprint=fingerprint,
