@@ -34,9 +34,7 @@ def validated_tri_one_result(task: Mapping[str, Any], event_store,
     if not (task_id and request_id and epoch and conversation_url):
         return None
     try:
-        events = event_store.ready() + event_store.delivering()
-        # A delivered event is not in ready() / delivering(), but its payload
-        # remains persisted. A locked snapshot covers all delivery states.
+        # Delivered events remain persisted; include all delivery states.
         with event_store._lock, event_store.process_lock():
             event_store.load()
             events = list(event_store.events.values())
