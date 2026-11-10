@@ -240,6 +240,15 @@ public static class SmartAgentGit47AppContainerProbe
         values["HOME"] = cwd;
         values["APPDATA"] = cwd;
         values["LOCALAPPDATA"] = cwd;
+        // Synthesized non-secret identity: never pass the host account's
+        // username/email/credentials into an untrusted AppContainer child.
+        values["USERNAME"] = "SmartAgentSandbox";
+        values["USER"] = "SmartAgentSandbox";
+        values["LOGNAME"] = "SmartAgentSandbox";
+        values["GIT_AUTHOR_NAME"] = "SmartAgent Sandbox";
+        values["GIT_AUTHOR_EMAIL"] = "sandbox@example.invalid";
+        values["GIT_COMMITTER_NAME"] = "SmartAgent Sandbox";
+        values["GIT_COMMITTER_EMAIL"] = "sandbox@example.invalid";
         values["GIT_CONFIG_NOSYSTEM"] = "1";
         values["GIT_TERMINAL_PROMPT"] = "0";
         values["GCM_INTERACTIVE"] = "Never";
