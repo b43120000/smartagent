@@ -532,6 +532,7 @@ def tool_run_command(
     security_context: SecurityContext | None = None,
     approval_manifest: dict | None = None,
     working_directory: str | Path | None = None,
+    action_id: str = "",
 ) -> str:
     """Run an action and the Web Planner's explicit post-action verification plan.
 
@@ -572,10 +573,21 @@ def tool_run_command(
                 'working_directory':str(cwd),
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
+                'sandbox_evidence':main.get('sandbox_evidence', {}),
                 'process_state':'RUNNING' if running else 'EXITED' if executed else 'NOT_STARTED', 'pid':main.get('pid')})
     telemetry = None
-    if security_context and security_context.interface_name == "remote":
-        telemetry = {"root": security_context.workspace_root, "task_id": security_context.task_id, "request_id": security_context.request_id}
+    if security_context:
+        # Propagate the real Action and Task identities to the native OS
+        # Broker across WebCopilot, Telegram and other Tri-One entrances.
+        telemetry = {
+            "task_id": str(security_context.task_id or ""),
+            "action_id": str(action_id or ""),
+        }
+        if security_context.interface_name == "remote":
+            telemetry.update({
+                "root": security_context.workspace_root,
+                "request_id": security_context.request_id,
+            })
     main = _run_powershell_capture(
         command, timeout, capture_root,
         cwd=cwd,
@@ -604,6 +616,12 @@ def tool_run_command(
             )
     if main.get("error"):
         lines.append("error: " + main["error"])
+    if main.get("sandbox_evidence"):
+        # OS evidence must be visible in the Tool Result/Blackboard, not
+        # only inside the Python process result. This is Runtime-produced
+        # evidence, distinct from arbitrary text in command stdout.
+        lines.append("[TURBO_OS_SANDBOX_EVIDENCE] " +
+                     json.dumps(main["sandbox_evidence"], ensure_ascii=False, default=str))
 
     if expected_failure is not None:
         spec_valid = isinstance(expected_failure, dict) and bool(expected_failure)
@@ -1826,6 +1844,7 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             expected_verification=tool_call.get('expected_verification'),
             security_context=security_context, approval_manifest=approval_manifest,
             working_directory=tool_call.get('working_directory'),
+            action_id=str(tool_call.get('action_id', '') or ''),
         )
         if agent:
             if "VERIFICATION_STATUS: PASS" in result:
