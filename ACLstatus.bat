@@ -10,12 +10,13 @@ title SmartAgent ACL Mode
 
 if /i "%~1"=="on" goto valid_mode
 if /i "%~1"=="off" goto valid_mode
-echo Usage: ACLstatus.bat on^|off
+if /i "%~1"=="status" goto status_only
+echo Usage: ACLstatus.bat on^|off^|status
 exit /b 2
 
 :valid_mode
 if not "%~2"=="" (
-    echo Usage: ACLstatus.bat on^|off
+    echo Usage: ACLstatus.bat on^|off^|status
     exit /b 2
 )
 set "SMARTAGENT_ACL_MODE=%~1"
@@ -31,4 +32,18 @@ if not "%ACL_EXIT%"=="0" (
     echo [SmartAgent] ACL mode change failed or was cancelled. Exit=%ACL_EXIT%
     exit /b %ACL_EXIT%
 )
-exit /b 0
+goto status_print
+
+:status_only
+if not "%~2"=="" (
+ echo Usage: ACLstatus.bat on^|off^|status
+ exit /b 2
+)
+
+:status_print
+if not exist "%~dp0install_smart_agent\\turbo_shared_status.ps1" (
+ echo [SmartAgent] Turbo status unavailable: status reporter missing.
+ exit /b 2
+)
+"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\\turbo_shared_status.ps1" -ProjectRoot "%~dp0."
+exit /b %ERRORLEVEL%
