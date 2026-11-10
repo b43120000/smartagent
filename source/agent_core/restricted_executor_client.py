@@ -12,7 +12,7 @@ class RestrictedExecutorUnavailable(RuntimeError):pass
 def execute_restricted(command,*,cwd=None,timeout=30,shell=False,max_stream_bytes=5*1024*1024,approval_manifest=None,security_command=None,noninteractive=False)->dict:
  from .turbo_sandbox import resolve_turbo_state, require_turbo_backend
  sandbox=resolve_turbo_state(cwd)
- if sandbox['turbo_requested']=='ON':
+ if sandbox['turbo_requested']=='ON' or sandbox['sandbox_status']=='FAILED':
   try:require_turbo_backend(sandbox)
   except RuntimeError as exc:raise RestrictedExecutorUnavailable('TURBO_SANDBOX_BLOCKED:'+str(exc)) from exc
  profile=load_security_profile();endpoint=Path(profile['executor_endpoint']).resolve();requests=endpoint/'requests';results=endpoint/'results'
