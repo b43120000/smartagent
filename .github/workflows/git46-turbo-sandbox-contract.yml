@@ -37,6 +37,12 @@ jobs:
           source/agent_core/restricted_executor_service.py
           source/agent_core/restricted_executor_client.py
           source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/minimal_core_loop.py
+          source/agent_core/workspace_manager.py
+          source/agent_core/remote_binding_manager.py
+          source/agent_core/workspace_turbo_binding.py
+          source/agent_core/turbo_settings_command.py
+          source/agent_core/executor_run_blackboard.py
       - name: Git46 fail-closed unit contracts
         run: python -B -m pytest source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
       - name: Pre-existing non-Turbo Finish regressions
@@ -48,10 +54,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $null = [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'install_smart_agent/acl_status.ps1'),
-            [ref]$null, [ref]$null)
-          Write-Host 'PowerShell source parsed; OS sandbox unverified.'
+          foreach ($file in @('install_smart_agent/acl_status.ps1',
+                                'install_smart_agent/git46_sandbox_api_discovery.ps1')) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file).Path, [ref]$tokens, [ref]$errors)
+            if (@($errors).Count -ne 0) { throw "PowerShell parser errors in $file" }
+          }
+          Write-Host 'PowerShell sources parsed; OS sandbox unverified.'
       - name: Windows OS API discovery (not isolation attestation)
         if: runner.os == 'Windows'
         shell: powershell
