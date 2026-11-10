@@ -11,6 +11,7 @@ from .turbo_sandbox import resolve_turbo_state, sandbox_evidence
 MUTATORS = frozenset({
     "run_command", "create_directory", "write_file",
     "begin_file_write", "write_file_chunk", "commit_file_write",
+    "abort_file_write",
     "delete_path", "apply_edit_plan", "execute_artifact_bundle",
     "execute_frozen_plan", "project_sync", "web_edit_file",
     "update_semantic_map", "update_semantic_map_file",
