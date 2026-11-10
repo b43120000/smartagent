@@ -295,7 +295,9 @@ try {
         'echo OS_DENIED>"' + $cmdMarker + '"' + "`r`n" +
         'exit /b 0' + "`r`n"
     [IO.File]::WriteAllText($cmdProbe, $cmdCode)
-    Test-DisposableToolCompatibility 'cmd_absolute_outside_read_denied' $cmdExe ('/d /c "' + $cmdProbe + '"') 'cmd_denied_ok.txt' $true
+    # Batch script lives in the already attested working directory;
+    # explicit .cmd avoids shell-quoted absolute-path reparsing.
+    Test-DisposableToolCompatibility 'cmd_absolute_outside_read_denied' $cmdExe '/d /c cmd_os_denial.cmd' 'cmd_denied_ok.txt' $true
     if (-not (Test-Path -LiteralPath $cmdStderr -PathType Leaf) -or
         ([IO.File]::ReadAllText($cmdStderr) -notmatch '(?i)access is denied')) {
         throw 'GIT47_CMD_OUTSIDE_OS_DENIAL_NOT_CONFIRMED'
