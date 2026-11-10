@@ -265,6 +265,20 @@ try {
                 Copy-Item -LiteralPath $sourceDir -Destination (Join-Path $localPython $dirname) -Recurse -Force
             }
         }
+        # Optional Git-compatible Python implementation is installed only on
+        # CI host and copied to the disposable RX dependency subtree.
+        $siteDir = Join-Path $localPython 'Lib\\site-packages'
+        New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
+        foreach ($moduleName in @('dulwich','urllib3','certifi','idna','charset_normalizer')) {
+            $query = "import importlib,pathlib; x=importlib.import_module('$moduleName'); print(pathlib.Path(x.__file__).parent)"
+            $location = & ([string]$python.Source) -c $query 2>$null |
+                Select-Object -First 1
+            if ($LASTEXITCODE -eq 0 -and $location -and
+                (Test-Path -LiteralPath ([string]$location) -PathType Container)) {
+                Copy-Item -LiteralPath ([string]$location) -Destination (Join-Path $siteDir $moduleName) -Recurse -Force
+                Write-Host ('GIT47_PYTHON_PACKAGE_RX_DEPENDENCY_COPIED:' + $moduleName)
+            }
+        }
         $depAcl = Get-Acl -LiteralPath $dependencyRoot
         $depAcl.SetAccessRuleProtection($true, $false)
         # Preserve normal fixture owner, SYSTEM and Administrators access;
@@ -321,6 +335,30 @@ raise SystemExit(93)
         Test-DisposableToolCompatibility 'python_fixture_open_outside_os_denied' $pyExecutable $pyArgs 'python_child_denied_ok.txt'
         $pyArgs = '-I "' + $pyProbe + '" parent "' + $siblingFile + '"'
         Test-DisposableToolCompatibility 'python_fixture_subprocess_os_denied' $pyExecutable $pyArgs 'python_spawn_denied_ok.txt'
+
+        $seedRepo = Join-Path $turbo 'local_git_seed'
+        New-Item -ItemType Directory -Path $seedRepo | Out-Null
+        [IO.File]::WriteAllText((Join-Path $seedRepo 'README.txt'), 'GIT47_LOCAL_SEED')
+        & ([string]$git.Source) -C $seedRepo init -q 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'GIT47_LOCAL_GIT_SEED_INIT_FAILED' }
+        & ([string]$git.Source) -C $seedRepo add README.txt 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'GIT47_LOCAL_GIT_SEED_ADD_FAILED' }
+        & ([string]$git.Source) -C $seedRepo -c 'user.name=Git47Fixture' -c 'user.email=fixture@example.invalid' commit -q -m seed 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'GIT47_LOCAL_GIT_SEED_COMMIT_FAILED' }
+        $dulwichScript = Join-Path $turbo 'git47_dulwich_clone.py'
+        $dulwichCode = @'
+from dulwich import porcelain
+from pathlib import Path
+import sys
+porcelain.clone(sys.argv[1], sys.argv[2], checkout=True)
+if Path(sys.argv[2], "README.txt").read_text() != "GIT47_LOCAL_SEED":
+    raise SystemExit(52)
+Path("dulwich_clone_verified.txt").write_text("GIT47_CLONE_PASS")
+'@
+        [IO.File]::WriteAllText($dulwichScript, $dulwichCode)
+        $dulwichDest = Join-Path $turbo 'git47_dulwich_clone_target'
+        $dulwichArgs = '-I "' + $dulwichScript + '" "' + $seedRepo + '" "' + $dulwichDest + '"'
+        Test-DisposableToolCompatibility 'python_dulwich_local_git_clone' $pyExecutable $dulwichArgs 'dulwich_clone_verified.txt'
     } else {
         Write-Host 'GIT47_TOOL_NOT_VERIFIED:python:executable_missing'
     }
