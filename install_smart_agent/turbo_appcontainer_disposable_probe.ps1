@@ -352,7 +352,22 @@ raise SystemExit(93)
                 New-Item -ItemType Directory -Force -Path (Join-Path $gitDeps 'share') | Out-Null
                 Copy-Item -LiteralPath $template -Destination (Join-Path $gitDeps 'share\\git-core') -Recurse -Force
             }
-            Test-DisposableToolCompatibility 'git_fixture_rx_dependency' (Join-Path $gitBin 'git.exe') 'init git_fixture_probe' 'git_fixture_probe'
+            $gitNative = Join-Path $gitBin 'git.exe'
+            Test-DisposableToolCompatibility 'git_fixture_version' $gitNative '--version' ''
+            Test-DisposableToolCompatibility 'git_fixture_rx_dependency' $gitNative 'init git_fixture_probe' 'git_fixture_probe'
+            # Capture Git's actual Windows stderr inside this disposable Root;
+            # emit only recognized failure class, never complete command data.
+            $debugArg = '/d /c ""' + $gitNative + '" init git_cmd_probe 1>git_debug.txt 2>&1"'
+            Test-DisposableToolCompatibility 'git_fixture_cmd_child' $cmdExe $debugArg 'git_cmd_probe'
+            $gitDebug = Join-Path $turbo 'git_debug.txt'
+            if (Test-Path -LiteralPath $gitDebug -PathType Leaf) {
+                $text = [IO.File]::ReadAllText($gitDebug)
+                if ($text -match '(?im)^(fatal|error):\\s*([^\\r\\n]{1,120})') {
+                    $reason = [string]$matches[2]
+                    $reason = $reason -replace '[A-Z]:[^\\s]+', '<redacted-path>'
+                    Write-Host ('GIT47_GIT_FAILURE_CLASS:' + $reason)
+                }
+            }
         } else {
             Write-Host 'GIT47_TOOL_NOT_VERIFIED:git_fixture_rx_dependency:mingw_git_executable_missing'
         }
