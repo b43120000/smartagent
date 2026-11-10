@@ -241,6 +241,33 @@ try {
         throw 'GIT50_OS_SANDBOX_EXTERNAL_WRITE_NOT_DENIED'
     }
     Write-Host 'GIT50_OS_SANDBOX_COMMAND_OUTSIDE_DENIAL_PASS'
+    # Git50 captured command output: native exit status is kernel-backed,
+    # while output bytes are explicitly NOT authority. Host file handles stay
+    # pinned so a sandbox-created junction cannot redirect their final read.
+    $capturedRaw = [SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
+        $moniker, "'GIT50_CAPTURED_FROM_APP_CONTAINER'",
+        $turbo, [uint32]30000, [int]1048576)
+    $captured = $capturedRaw | ConvertFrom-Json -ErrorAction Stop
+    $capturedText = [Text.Encoding]::UTF8.GetString(
+        [Convert]::FromBase64String([string]$captured.stdout_base64)).Trim()
+    if ($captured.sandbox_identity_verified -ne $true -or
+        $captured.os_process_started -ne $true -or
+        [int]$captured.exit_code -ne 0 -or
+        $capturedText -cne 'GIT50_CAPTURED_FROM_APP_CONTAINER' -or
+        $captured.output_is_authoritative -ne $false) {
+        throw 'GIT50_APP_CONTAINER_CAPTURED_OUTPUT_FAILED'
+    }
+    Write-Host 'GIT50_OS_SANDBOX_PINNED_OUTPUT_CAPTURE_PASS'
+
+    # A failing native command must retain its nonzero exit status.
+    $nonzero = [SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
+        $moniker, "throw 'GIT50_THROW_TEST'",
+        $turbo, [uint32]30000, [int]1048576) | ConvertFrom-Json
+    if ([int]$nonzero.exit_code -eq 0 -or
+        -not [string]$nonzero.stderr_base64) {
+        throw 'GIT50_APP_CONTAINER_NONZERO_STATUS_LOST'
+    }
+    Write-Host 'GIT50_OS_SANDBOX_COMMAND_FAILURE_REPORTED_PASS'
     Invoke-Probe 'read' $parentFile 5 'parent_read_os_access_denied'
     Invoke-Probe 'write' (Join-Path $fixture 'out_of_root_write.txt') 5 'parent_write_os_access_denied'
     Invoke-Probe 'read' $siblingFile 5 'sibling_read_os_access_denied'
