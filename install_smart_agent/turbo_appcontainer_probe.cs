@@ -406,6 +406,104 @@ public static class SmartAgentGit47AppContainerProbe
             cwd, timeoutMilliseconds);
     }
 
+    /// <summary>
+    /// Capture process output through GUID-named files pinned by host handles.
+    /// This is OUTPUT DATA, not an authorization/evidence receipt. Do not
+    /// trust its text as proof of OS isolation; only the Launch token and job
+    /// assertions, and independent kernel-denial probes, provide evidence.
+    /// Host opens fresh files with no FILE_SHARE_DELETE, so sandbox code
+    /// cannot redirect a later trusted read via rename/junction replacement.
+    /// </summary>
+    public static string LaunchPowerShellCaptured(
+        string moniker, string script, string cwd,
+        uint timeoutMilliseconds, int maximumBytes)
+    {
+        if (maximumBytes < 1 || maximumBytes > 2 * 1024 * 1024)
+            throw new ArgumentException("capture_limit_invalid");
+        if (string.IsNullOrWhiteSpace(cwd) || !System.IO.Directory.Exists(cwd))
+            throw new ArgumentException("capture_root_unavailable");
+        string root = System.IO.Path.GetFullPath(cwd);
+        string nonce = Guid.NewGuid().ToString("N");
+        string stdoutPath = System.IO.Path.Combine(root, ".smartagent-" + nonce + ".stdout");
+        string stderrPath = System.IO.Path.Combine(root, ".smartagent-" + nonce + ".stderr");
+        try
+        {
+            using (var stdout = new System.IO.FileStream(stdoutPath,
+                       System.IO.FileMode.CreateNew, System.IO.FileAccess.ReadWrite,
+                       System.IO.FileShare.ReadWrite))
+            using (var stderr = new System.IO.FileStream(stderrPath,
+                       System.IO.FileMode.CreateNew, System.IO.FileAccess.ReadWrite,
+                       System.IO.FileShare.ReadWrite))
+            {
+                // The child can write to these two pre-opened, pinned files,
+                // but cannot replace their paths while the parent holds them.
+                string quoteOut = stdoutPath.Replace("'", "''");
+                string quoteErr = stderrPath.Replace("'", "''");
+                string putOut =
+                    "$raw=[Text.Encoding]::UTF8.GetBytes([string]$text); " +
+                    "$f=[IO.File]::Open('" + quoteOut +
+                    "',[IO.FileMode]::Open,[IO.FileAccess]::Write," +
+                    "[IO.FileShare]::ReadWrite); try{$f.Write($raw,0,$raw.Length);" +
+                    "$f.Flush()}finally{$f.Dispose()};";
+                string putErr =
+                    "$raw=[Text.Encoding]::UTF8.GetBytes([string]$errText); " +
+                    "$f=[IO.File]::Open('" + quoteErr +
+                    "',[IO.FileMode]::Open,[IO.FileAccess]::Write," +
+                    "[IO.FileShare]::ReadWrite); try{$f.Write($raw,0,$raw.Length);" +
+                    "$f.Flush()}finally{$f.Dispose()};";
+                // No host execution: LaunchPowerShell encodes this script
+                // and starts system PowerShell only under the AppContainer SID.
+                string wrapped =
+                    "$ErrorActionPreference='Stop'; " +
+                    "$global:LASTEXITCODE=$null; " +
+                    "try{ $text=(& {\n" + script + "\n} 2>&1 | Out-String -Width 4096); " +
+                    "$rc=if($null -ne $global:LASTEXITCODE){[int]$global:LASTEXITCODE}" +
+                    "elseif($?){0}else{1}; " + putOut + " exit $rc } " +
+                    "catch{ $errText=$_.Exception.GetType().Name+':'+$_.Exception.Message; " +
+                    putErr + " exit 1 }";
+                string raw = LaunchPowerShell(moniker, wrapped, root,
+                                              timeoutMilliseconds);
+                byte[] outBytes = ReadPinned(stdout, maximumBytes);
+                byte[] errBytes = ReadPinned(stderr, maximumBytes);
+                bool stdoutTruncated = stdout.Length > maximumBytes;
+                bool stderrTruncated = stderr.Length > maximumBytes;
+                return raw.Substring(0, raw.Length - 1)
+                    + ",\"stdout_base64\":\"" + Convert.ToBase64String(outBytes)
+                    + "\",\"stderr_base64\":\"" + Convert.ToBase64String(errBytes)
+                    + "\",\"stdout_bytes\":" + stdout.Length
+                    + ",\"stderr_bytes\":" + stderr.Length
+                    + ",\"stdout_truncated\":" + (stdoutTruncated ? "true" : "false")
+                    + ",\"stderr_truncated\":" + (stderrTruncated ? "true" : "false")
+                    + ",\"output_is_authoritative\":false}";
+            }
+        }
+        finally
+        {
+            // Fail closed: failure to clean a protected capture artifact
+            // never silently executes the task on the host as a fallback.
+            try { System.IO.File.Delete(stdoutPath); } catch {}
+            try { System.IO.File.Delete(stderrPath); } catch {}
+        }
+    }
+
+    static byte[] ReadPinned(System.IO.FileStream stream, int limit)
+    {
+        stream.Flush();
+        stream.Position = 0;
+        byte[] output = new byte[(int)Math.Min(stream.Length, (long)limit)];
+        int position = 0;
+        while (position < output.Length)
+        {
+            int read = stream.Read(output, position, output.Length - position);
+            if (read <= 0) break;
+            position += read;
+        }
+        if (position == output.Length) return output;
+        byte[] actual = new byte[position];
+        Array.Copy(output, actual, position);
+        return actual;
+    }
+
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool TerminateProcess(IntPtr process, uint exitCode);
 }
