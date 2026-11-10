@@ -1,0 +1,63 @@
+name: Git49 Turbo OS Broker Admission and Windows AppContainer Evidence
+
+on:
+  push:
+    branches:
+      - git49/turbo-os-broker-foundation-20261110
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-broker-gate:
+    name: Runtime broker gate and Git48 regression
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Syntax and imports
+        run: python -B -m compileall -q source/agent_core/turbo_broker_admission.py source/agent_core/tools.py source/agent_core/bounded_process.py
+      - name: Git49 broker admission
+        run: python -B -m pytest source/WebAgent/tests/test_git49_turbo_broker_admission.py -q
+      - name: Git48 ACL OFF behavior
+        run: python -B -m pytest source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
+      - name: Existing ACL OFF software guard
+        run: python -B source/WebAgent/tests/validate_acl_off_software_guard.py
+      - name: WebCopilot and Tri-One regression
+        run: python -B -m pytest source/WebAgent/tests/test_git47_webcopilot_result_panel.py source/WebAgent/tests/test_tri_one_egress_v10.py -q
+
+  windows-os-disposable-evidence:
+    name: Win32 AppContainer actual OS boundary - test fixture only
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install optional Git-compatible Python client
+        run: python -m pip install --disable-pip-version-check "dulwich>=0.25,<2"
+      - name: Real kernel token file and child-process boundary checks
+        shell: powershell
+        run: |
+          .\install_smart_agent\turbo_appcontainer_disposable_probe.ps1 -FixtureParent $env:RUNNER_TEMP
+      - name: Publish non-production OS evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git49-disposable-windows-os-evidence
+          path: ${{ runner.temp }}/git47_sandbox_ci_evidence.json
+          retention-days: 14
+          if-no-files-found: warn
