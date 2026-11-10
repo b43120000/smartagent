@@ -59,6 +59,32 @@ function Write-ModeState([string]$Value, [string]$ExecutorSid, [string]$Controll
     Invoke-Icacls $modeAcl
 }
 
+function Clear-TurboPolicyOnAclOff {
+    # ACL OFF revokes Turbo roots and intent. ACL ON never restores this state.
+    if (-not (Test-Path -LiteralPath $AccessPolicyPath -PathType Leaf)) { return }
+    $policy = Get-Content -LiteralPath $AccessPolicyPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json -ErrorAction Stop
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1') {
+        throw 'TURBO_POLICY_INVALID_DURING_ACL_OFF'
+    }
+    $policy.turbo_roots = @()
+    if (-not $policy.PSObject.Properties['turbo_requested']) {
+        $policy | Add-Member -NotePropertyName 'turbo_requested' -NotePropertyValue $false
+    } else {
+        $policy.turbo_requested = $false
+    }
+    $policy.revision = [long]$policy.revision + 1
+    $policy.updated_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $temp = "$AccessPolicyPath.git46-acl-off.tmp"
+    try {
+        [IO.File]::WriteAllText($temp, ($policy | ConvertTo-Json -Depth 16),
+            (New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temp -Destination $AccessPolicyPath -Force -ErrorAction Stop
+    } finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Assert-SafeInstallRoot([string]$Path) {
     $normalized = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     $pathRoot = [IO.Path]::GetPathRoot($normalized).TrimEnd('\')
@@ -559,6 +585,7 @@ foreach ($path in $mutationRoots) {
 # This prevents acl_mode.json from claiming software-only mode while stale ACLs
 # still block atomic workspace policy updates.
 Assert-AclOffPostcondition $callerSid (@($ProjectRoot) + $mutationRoots)
+Clear-TurboPolicyOnAclOff
 Write-ModeState 'off' $executorSid $callerSid
 # OFF is a real software-only runtime mode.  Keep the protected task stopped;
 # runtime command/path admission remains active in the controller process.
