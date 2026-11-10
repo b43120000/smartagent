@@ -1125,7 +1125,8 @@ def run_minimal_core(loop, request: str) -> str:
             resolve_turbo_state, sandbox_evidence, require_turbo_backend,
         )
         turbo_state = resolve_turbo_state(loop.workspace)
-        if turbo_state["turbo_requested"] == "ON":
+        if (turbo_state["turbo_requested"] == "ON"
+                or turbo_state["sandbox_status"] == "FAILED"):
             try:
                 require_turbo_backend(turbo_state)
             except RuntimeError as exc:
