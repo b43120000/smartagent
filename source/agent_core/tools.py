@@ -1499,7 +1499,8 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                         action_id=str(tool_call.get("action_id", "") or ""))
         if (broker["decision"] == "BLOCKED" or
                 (broker["decision"] == "BROKER_REQUIRED" and
-                 tool not in {"run_command", "create_directory", "write_file"})):
+                 tool not in {"run_command", "create_directory", "write_file",
+                              "delete_path"})):
             # No native adapter for other typed mutations. They cannot be
             # routed to the unrestricted host Python implementation.
             from .tool_result_contract import encode_result
@@ -2358,6 +2359,26 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             execute_action=lambda action: execute_tool(action, agent=agent, models=models),
         )
     elif tool == "delete_path":
+        from .turbo_broker_admission import assess
+        native = assess(security_context.workspace_root, tool=tool)
+        if native["decision"] == "BROKER_REQUIRED":
+            from .turbo_os_typed_mutations import delete_path_in_broker
+            return delete_path_in_broker(
+                tool_call.get("path", ""),
+                recursive=bool(tool_call.get("recursive", False)),
+                security_context=security_context,
+                action_id=str(tool_call.get("action_id", "") or ""),
+            )
+        if (native["decision"] != "NORMAL" or
+                tool_call.get("_runtime_native_broker_required") is True):
+            from .tool_result_contract import encode_result
+            return encode_result(
+                "REJECTED", "TURBO_OS_BROKER_BLOCKED",
+                tool=tool, executed=False,
+                requested_path=tool_call.get("path", ""),
+                data={"sandbox_evidence": native["evidence"],
+                      "terminal_eligible": False},
+            )
         from .tool_result_contract import encode_result, rejection_reason
         def delete_result(status, reason, executed=False, data=None, detail=''):
             return encode_result(status, reason, executed=executed,
