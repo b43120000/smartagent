@@ -31,7 +31,7 @@ def turbo_mode_for_workspace(workspace: str | Path) -> str:
         for path in policy.get("turbo_roots") or ()
         if _under(path, workspace)
     ]
-    return roots[0] if roots else "off"
+    return roots[0] if roots and policy.get("turbo_requested") is True else "off"
 
 
 def prepare_turbo_mode_update(mode: str | None, workspace: str | Path) -> dict | None:
