@@ -120,6 +120,8 @@ try {
     Invoke-Probe 'write' (Join-Path $fixture 'out_of_root_write.txt') 5 'parent_write_os_access_denied'
     Invoke-Probe 'read' $siblingFile 5 'sibling_read_os_access_denied'
     Invoke-Probe 'write' (Join-Path $sibling 'sibling_write.txt') 5 'sibling_write_os_access_denied'
+    Invoke-Probe 'spawn_read' $siblingFile 5 'child_process_outside_read_os_access_denied'
+    Invoke-Probe 'spawn_read' (Join-Path $turbo 'inside.txt') 0 'child_process_inside_read'
 
     $insideDelete = Join-Path $turbo 'delete_inside.txt'
     [IO.File]::WriteAllText($insideDelete, 'DISPOSABLE-DELETE-ME')
