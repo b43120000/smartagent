@@ -153,7 +153,9 @@ try {
         Remove-Item -LiteralPath $journalPath -Force -ErrorAction Stop
     }
 
-    Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
+    if (-not ('SmartAgentGit47AppContainerProbe' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
+    }
     if ($Action -eq 'Revoke') {
         if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
             Write-Output 'GIT50_TURBO_ROOT_NOT_ACTIVE'
