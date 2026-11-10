@@ -265,24 +265,21 @@ try {
 
     $powershellExe = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
     Test-DisposableToolCompatibility 'powershell' $powershellExe '-NoProfile -NonInteractive -Command "[IO.File]::WriteAllText(''ps_probe.txt'',''GIT47_PS_OK'')"' 'ps_probe.txt' $true
-    $powershellProbe = Join-Path $turbo 'powershell_os_denial.ps1'
-    $powershellScript = @'
-param([string]$Target, [string]$Access)
-try {
-    if ($Access -eq 'read') { [IO.File]::ReadAllText($Target) | Out-Null }
-    elseif ($Access -eq 'write') { [IO.File]::WriteAllText($Target, 'SCOPE_ESCAPE') }
-    else { exit 97 }
-    exit 98
-} catch [System.UnauthorizedAccessException] {
-    [IO.File]::WriteAllText((Join-Path (Get-Location) ('ps_' + $Access + '_denied_ok.txt')), 'OS_ACCESS_DENIED')
-    exit 0
-}
-'@
-    [IO.File]::WriteAllText($powershellProbe, $powershellScript)
+    # Avoid host PowerShell script-file lookup inconsistencies by passing a
+    # static UTF-16LE EncodedCommand. This is still actual PowerShell running
+    # under the AppContainer process token, not a host-side software guard.
+    $psTargetLiteral = $siblingFile.Replace("'", "''")
     foreach ($operation in @('read', 'write')) {
-        $args = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-            $powershellProbe + '" "' + $siblingFile + '" ' + $operation
-        Test-DisposableToolCompatibility ('powershell_outside_' + $operation + '_os_denied') $powershellExe $args ('ps_' + $operation + '_denied_ok.txt') $true
+        $marker = 'ps_' + $operation + '_denied_ok.txt'
+        $operationScript = if ($operation -eq 'read') {
+            "[IO.File]::ReadAllText('$psTargetLiteral') | Out-Null"
+        } else {
+            "[IO.File]::WriteAllText('$psTargetLiteral','SCOPE_ESCAPE')"
+        }
+        $sourceScript = "try { $operationScript; exit 98 } catch [System.UnauthorizedAccessException] { [IO.File]::WriteAllText('$marker','OS_ACCESS_DENIED'); exit 0 }"
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($sourceScript))
+        $psArgs = '-NoProfile -NonInteractive -EncodedCommand ' + $encoded
+        Test-DisposableToolCompatibility ('powershell_outside_' + $operation + '_os_denied') $powershellExe $psArgs $marker $true
     }
     if ([IO.File]::ReadAllText($siblingFile) -cne 'DISPOSABLE-SIBLING-SENTINEL') {
         throw 'GIT47_POWERSHELL_EXTERNAL_SENTINEL_CORRUPTED'
