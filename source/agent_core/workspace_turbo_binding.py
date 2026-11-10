@@ -48,6 +48,14 @@ def prepare_turbo_mode_update(mode: str | None, workspace: str | Path) -> dict |
         raise ValueError("turbomode_value_required")
     disabled = raw.casefold() == "off"
     if not disabled:
+        # Preflight before any Workspace/Telegram binding mutation.
+        from .windows_security import acl_mode
+        try:
+            current_acl = acl_mode()
+        except (OSError, ValueError, RuntimeError):
+            current_acl = "unknown"
+        if current_acl != "on":
+            raise ValueError("TURBO_REQUIRES_ACL_ON")
         target = Path(raw).expanduser()
         if not target.is_absolute():
             raise ValueError("turbo_absolute_path_required")
