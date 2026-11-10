@@ -120,15 +120,30 @@ def main() -> int:
     assert "TURBO_TYPED_CREATE_REJECTED" in outside_mkdir, outside_mkdir
     print("GIT50_TYPED_OPERATIONS_OUTSIDE_ROOT_DENIED_PASS", flush=True)
 
-    # Recursive deletion remains explicitly unadapted; even after a
-    # successful native write, it cannot fall back to host Python.
-    unadapted = execute_tool(
-        {"tool": "delete_path", "path": str(typed_target),
-         "recursive": False, "action_id": "ACT-GIT50-DELETE"}, agent,
+    # Recursive deletion is unimplemented and must never call a host
+    # shutil.rmtree. A single file and an EMPTY directory may be removed
+    # only by the native AppContainer process.
+    recursive = execute_tool(
+        {"tool": "delete_path", "path": str(typed_dir),
+         "recursive": True, "action_id": "ACT-GIT50-RECURSIVE"}, agent,
     )
-    assert typed_target.exists(), unadapted
-    assert "TURBO_OS_BROKER_BLOCKED" in unadapted, unadapted
-    print("GIT50_UNADAPTED_DELETE_FAIL_CLOSED_PASS", flush=True)
+    assert typed_target.exists(), recursive
+    assert "TURBO_RECURSIVE_DELETE_OS_ADAPTER_NOT_ATTESTED" in recursive, recursive
+    print("GIT50_RECURSIVE_DELETE_FAIL_CLOSED_PASS", flush=True)
+
+    deleted_file = execute_tool(
+        {"tool": "delete_path", "path": str(typed_target),
+         "recursive": False, "action_id": "ACT-GIT50-DELETE-FILE"}, agent,
+    )
+    assert not typed_target.exists(), deleted_file
+    assert "DELETED" in deleted_file and "WIN32_APPCONTAINER" in deleted_file, deleted_file
+    deleted_empty_dir = execute_tool(
+        {"tool": "delete_path", "path": str(typed_dir),
+         "recursive": False, "action_id": "ACT-GIT50-DELETE-DIR"}, agent,
+    )
+    assert not typed_dir.exists(), deleted_empty_dir
+    assert "DELETED" in deleted_empty_dir and "WIN32_APPCONTAINER" in deleted_empty_dir, deleted_empty_dir
+    print("GIT50_TYPED_FILE_AND_EMPTY_DIRECTORY_OS_DELETE_PASS", flush=True)
 
     # Direct subprocess injection cannot cross the one-shot broker boundary.
     unsupported = run_bounded_process(
