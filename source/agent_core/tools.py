@@ -1465,6 +1465,24 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
     p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
     tool = str(tool_call.get('tool', ''))
+    # Git49: all typed mutators share the same OS broker admission as shell
+    # commands. Never let controller-side Python perform Turbo writes.
+    from .turbo_broker_admission import assess, needs_broker
+    if needs_broker(tool):
+        bound_workspace = getattr(agent, "workspace", None) if agent else None
+        if bound_workspace is None:
+            bound_workspace = Path.cwd()
+        broker = assess(bound_workspace, tool=tool,
+                        action_id=str(tool_call.get("action_id", "") or ""))
+        if broker["decision"] == "BLOCKED":
+            from .tool_result_contract import encode_result
+            return encode_result(
+                'REJECTED', 'TURBO_OS_BROKER_BLOCKED', tool=tool,
+                executed=False, detail=broker["reason_code"],
+                data={"sandbox_evidence": broker["evidence"],
+                      "os_execution_result": "NOT_EXECUTED",
+                      "terminal_eligible": False},
+            )
     if tool == "observe_fact":
         # This read-only tool observes a filesystem fact inside the existing
         # authorization boundary. It never guesses absence from access errors.
