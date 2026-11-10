@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from agent_core import tools
 from agent_core.tool_result_contract import decode_result
+from agent_core.security_context import SecurityContext
 
 
 def test_native_broker_evidence_attached_to_blackboard_result(tmp_path, monkeypatch):
@@ -40,6 +41,8 @@ def test_native_broker_evidence_attached_to_blackboard_result(tmp_path, monkeypa
         "Get-Date", "INSPECT", verify=[],
         working_directory=tmp_path,
         action_id="ACT-EVIDENCE-50",
+        security_context=SecurityContext.for_workspace(
+            tmp_path, task_id="TASK-EVIDENCE-50"),
     )
     parsed = decode_result(result)
     assert parsed is not None
@@ -50,8 +53,11 @@ def test_native_broker_evidence_attached_to_blackboard_result(tmp_path, monkeypa
     assert "[TURBO_OS_SANDBOX_EVIDENCE]" in result
     assert "OS_STDOUT" in result
     assert data["exit_code"] == 0
-    # No fake task identity is invented when no SecurityContext exists.
-    assert passed_telemetry == [None]
+    # The native client receives provenance from the Runtime context, not
+    # model-supplied stdout or guessed task identifiers.
+    assert passed_telemetry == [{
+        "task_id": "TASK-EVIDENCE-50", "action_id": "ACT-EVIDENCE-50",
+    }]
 
 
 def test_rejected_broker_never_counts_as_executed(tmp_path, monkeypatch):
@@ -69,7 +75,8 @@ def test_rejected_broker_never_counts_as_executed(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tools, "_run_powershell_capture", rejected)
     result = tools.tool_run_command(
-        "Get-Date", "INSPECT", verify=[], working_directory=tmp_path
+        "Get-Date", "INSPECT", verify=[], working_directory=tmp_path,
+        security_context=SecurityContext.for_workspace(tmp_path),
     )
     parsed = decode_result(result)
     assert parsed is not None
