@@ -368,6 +368,9 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
     try:
         from .turbo_sandbox import resolve_turbo_state
         gate = resolve_turbo_state(workspace)
+        from .turbo_broker_admission import assess
+        broker_admission = assess(workspace, tool="run_command")
+        broker_enrolled = broker_admission["decision"] == "BROKER_REQUIRED"
         access = access_snapshot()
         policy = access["policy"]
         roots = [
@@ -383,6 +386,7 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
             "schema": "SMARTAGENT_TURBO_PLANNER_HINT_V1",
             "status": (
                 "BLOCKED" if gate["sandbox_status"] == "FAILED"
+                else "BROKER_ENROLLED" if broker_enrolled
                 else "ON" if gate["turbo_effective"] == "ON"
                 else "OFF" if gate["acl_mode"] == "off" or gate["turbo_requested"] == "OFF"
                 else "BLOCKED"
@@ -390,7 +394,15 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
             "turbo_requested": gate["turbo_requested"],
             "turbo_effective": gate["turbo_effective"],
             "sandbox_status": gate["sandbox_status"],
-            "reason_code": gate["reason_code"],
+            "reason_code": (
+                "TURBO_OS_BROKER_PER_ACTION_ATTESTATION_REQUIRED"
+                if broker_enrolled else gate["reason_code"]
+            ),
+            "native_broker_tools": (
+                ["run_command", "create_directory", "write_file"]
+                if broker_enrolled else []
+            ),
+            "per_action_os_attestation_required": broker_enrolled,
             "configured_roots": roots[:8],
             "policy_revision": int(policy.get("revision", 0) or 0),
             "safe_action_examples": [
@@ -398,8 +410,16 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
                 "git -C <scoped-repo> archive --format=tar --output=<new-scoped-tar> <requested-commit> [subdir]",
                 "tar -tf <scoped-tar>",
                 "tar -xf <verified-safe-scoped-tar> -C <existing-empty-turbo-directory>",
-            ] if gate["turbo_effective"] == "ON" else [],
-            "avoid": "compound pipelines, destructive Git, unknown scripts, overwrite",
+            ] if gate["turbo_effective"] == "ON" else [
+                "Run approved PowerShell commands from the enrolled Turbo Root (OS broker reattests per action)",
+                "create_directory: one new child directory of the Turbo Root",
+                "write_file: bounded UTF-8 content under the Turbo Root",
+            ] if broker_enrolled else [],
+            "avoid": (
+                "recursive typed delete, chunked writes, and host process fallback"
+                if broker_enrolled else
+                "compound pipelines, destructive Git, unknown scripts, overwrite"
+            ),
             "runtime_admission_still_required": True,
             "authorization_granted": False,
         }
