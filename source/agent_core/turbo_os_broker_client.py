@@ -118,7 +118,11 @@ def active_broker_available(workspace: str | Path | None) -> bool:
     try:
         _load_activation(workspace)
         return True
-    except (OSError, ValueError, TurboOSBrokerUnavailable):
+    except (OSError, ValueError, RuntimeError, TypeError, KeyError):
+        # Missing security_profile.json, an inaccessible policy, or an
+        # incomplete installation must be ordinary NOT_READY rather than
+        # an exception escaping through central admission. Never fall back
+        # to executing with the host identity.
         return False
 
 
