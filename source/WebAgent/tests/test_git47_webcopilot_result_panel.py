@@ -42,9 +42,14 @@ def test_verified_terminal_readable_without_changing_task_result():
         task, event, {"summary": "已建立並確認資料夾"}
     )
     original = dict(result)
+    from agent_core.conversation_identity import same_conversation
+    from agent_core.tri_one_task_result import validate_task_result
+    assert same_conversation(_URL, _URL), "conversation URL not normalized"
+    assert validate_task_result(result)["source_interface"] == "WEBGPT_COPILOT"
     actual = validated_tri_one_result(
         dict(vars(task)), EventStore(result), _URL,
     )
+    assert actual is not None, "canonical result not matched despite same event identity"
     view = build_webcopilot_result_view(dict(vars(task)), actual)
     assert view["verified"] is True
     assert view["title"] == "任務已完成"
