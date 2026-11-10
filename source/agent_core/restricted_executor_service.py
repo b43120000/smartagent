@@ -49,7 +49,8 @@ def _probe_traverse(root:Path)->tuple[bool,str]:
  return _probe_write(root,expect_allowed=False)
 
 def _security_self_test(profile:dict)->dict:
- mode=acl_mode().casefold()
+ mode=acl_mode(allow_on_transition=True)
+ if mode=='transitioning_on':mode='on'
  if mode=='off':return {'passed':True,'reasons':[],'checked_at':time.time(),'mode':mode}
  checks=[]
  for root in authorized_workspace_roots(profile):checks.append(_probe_write(root,expect_allowed=True))
@@ -118,6 +119,9 @@ def serve(*,once=False,poll=.2):
  while True:
   if time.time()-float(self_test.get('checked_at',0) or 0)>30:self_test=_security_self_test(profile)
   write_json_atomic(endpoint/'service_state.json',{'schema':'RESTRICTED_EXECUTOR_SERVICE_STATE_V1','pid':os.getpid(),'user':getpass.getuser(),'is_admin':False,'heartbeat_at':time.time(),'profile_digest':sha256_digest(profile),'self_test':self_test})
+  if acl_mode(allow_on_transition=True)=='transitioning_on':
+   if once:return 0
+   time.sleep(poll);continue
   found=False
   for path in sorted(requests.glob('EXEC-*.json')):
    found=True

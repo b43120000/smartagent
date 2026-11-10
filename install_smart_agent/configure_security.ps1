@@ -17,7 +17,25 @@ param(
     [switch]$Apply
 )
 $ErrorActionPreference = "Stop"
+
+# All callers operate on the same machine-wide task, account and authorization.
+# ACLstatus holds the same reentrant mutex when it invokes this script.
+$machineMutex = $null
+$machineMutexHeld = $false
+try {
+    if ($Apply) {
+        $machineMutex = New-Object Threading.Mutex($false, 'Global\SmartAgentAclMode_Machine_V1')
+        try { $machineMutexHeld = $machineMutex.WaitOne(0) }
+        catch [Threading.AbandonedMutexException] { $machineMutexHeld = $true }
+        if (-not $machineMutexHeld) { throw 'acl_mode_transition_already_in_progress' }
+        $offMarker = Join-Path ([string]$env:ProgramData) 'SmartAgent\acl_revocation_pending.json'
+        if (Test-Path -LiteralPath $offMarker) {
+            throw 'ACL_ON_REVOCATION_PENDING:run ACLstatus.bat off'
+        }
+    }
+
 $script:aclTransactionCommitted = $false
+$script:aclTransactionStarted = $false
 $pendingAclJournalPath = ""
 $policyPath = Join-Path $PSScriptRoot 'security_acl_policy.ps1'
 . $policyPath
@@ -445,6 +463,19 @@ if ($null -ne $existingExecutor -and $null -eq $existingTask -and -not $initialR
 }
 if (-not $Apply) { Write-Host "Preview only. Re-run with -Apply after reviewing these exact paths."; exit 0 }
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw "-Apply requires an elevated PowerShell window" }
+$machineAuthorizationRoot = Join-Path ([string]$env:ProgramData) 'SmartAgent'
+$pendingAclJournalPath = Join-Path $machineAuthorizationRoot 'pending_acl_transaction.json'
+if (Test-Path -LiteralPath $pendingAclJournalPath -PathType Leaf) {
+    $pendingAcl = Get-Content -LiteralPath $pendingAclJournalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($pendingAcl.schema -ne 'SMARTAGENT_PENDING_ACL_TRANSACTION_V1' -or
+        -not $pendingAcl.PSObject.Properties['install_root'] -or
+        [string]$pendingAcl.install_root -ine $projectRoot.TrimEnd('\') -or
+        -not $existingExecutor -or [string]$pendingAcl.executor_sid -ne [string]$existingExecutor.SID -or
+        [string]$pendingAcl.executor_user -ne $executorAccountName) {
+        throw 'pending_acl_transaction_owner_unverified; run ACLstatus.bat off before retrying'
+    }
+}
+
 if ($null -ne $existingExecutor -and $null -eq $existingTask -and -not $initialRecovery -and -not $RepairExecutorCredential) {
     if ($NonInteractive) {
         throw "executor_account_task_state_inconsistent:orphaned_account_requires_explicit_repair"
@@ -556,9 +587,17 @@ if ($needsBatchLogonGrant) {
 Write-Host "[security] enforcing executor password policy"
 & net.exe user $executorAccountName /passwordreq:yes | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Unable to require a password for $executorAccountName (exit=$LASTEXITCODE)" }
+$pythonExecutableDir = Split-Path $ExecutorPython -Parent
+$pythonRoots = @($pythonExecutableDir)
+$possibleVenvRoot = Split-Path $pythonExecutableDir -Parent
+if (Test-Path -LiteralPath (Join-Path $possibleVenvRoot "pyvenv.cfg")) {
+    $pythonRoots += $possibleVenvRoot
+}
+try {
+    $basePrefix = (& $ExecutorPython -c "import sys;print(sys.base_prefix)").Trim()
+    if ($basePrefix) { $pythonRoots += [IO.Path]::GetFullPath($basePrefix) }
+} catch { throw "Unable to resolve executor Python runtime: $ExecutorPython" }
 Write-Host "[security] preparing ACL transaction journal"
-$machineAuthorizationRoot = Join-Path ([string]$env:ProgramData) 'SmartAgent'
-$pendingAclJournalPath = Join-Path $machineAuthorizationRoot 'pending_acl_transaction.json'
 New-Item -ItemType Directory -Force -Path $machineAuthorizationRoot | Out-Null
 Invoke-Icacls @($machineAuthorizationRoot,'/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
 Write-Host "[security] machine authorization root ACL ready"
@@ -567,6 +606,10 @@ if (Test-Path -LiteralPath $pendingAclJournalPath -PathType Leaf) {
         Write-Host "[security] recovering interrupted ACL transaction"
         $staleJournal = Get-Content -LiteralPath $pendingAclJournalPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($staleJournal.schema -ne 'SMARTAGENT_PENDING_ACL_TRANSACTION_V1') { throw 'schema' }
+        if ($staleJournal.PSObject.Properties['install_root'] -and
+            [string]$staleJournal.install_root -ine $projectRoot) {
+            throw 'pending_acl_transaction_belongs_to_different_installation'
+        }
         $staleSid = [Security.Principal.SecurityIdentifier]::new([string]$staleJournal.executor_sid)
         foreach ($snapshot in @($staleJournal.acl_snapshots)) {
             if (-not (Test-Path -LiteralPath ([string]$snapshot.path) -PathType Container)) { continue }
@@ -595,18 +638,23 @@ foreach ($path in @($workspaceTraverseRoots) + @($retiredTraverseRoots) | Select
 }
 $pendingAclJournal = [ordered]@{
     schema = 'SMARTAGENT_PENDING_ACL_TRANSACTION_V1'
+    install_root = $projectRoot.TrimEnd('\')
     executor_user = $executorAccountName
     executor_sid = [string]$executorAccount.SID
     executor_identity = $executorIdentity
     workspace_traverse_roots = @($workspaceTraverseRoots)
+    managed_acl_roots = @($authorizedWriteRoots) + @($ReadOnlyRoots) + @($DeniedWriteRoots) +
+        @($drive,$runtime,$endpoint,$securityRoot,$controllerState,$codeRoot,$skillsRoot,$executorProfilePath) +
+        @($pythonRoots)
     acl_snapshots = @($aclSnapshots)
     created_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 }
 [IO.File]::WriteAllText($pendingAclJournalPath, ($pendingAclJournal | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+$script:aclTransactionStarted = $true
 Invoke-Icacls @($pendingAclJournalPath,'/inheritance:r','/grant:r','*S-1-5-18:F','*S-1-5-32-544:F')
 trap {
     $originalError = $_
-    if (-not $script:aclTransactionCommitted -and
+    if ($script:aclTransactionStarted -and -not $script:aclTransactionCommitted -and
         -not [string]::IsNullOrWhiteSpace([string]$pendingAclJournalPath) -and
         (Test-Path -LiteralPath $pendingAclJournalPath -PathType Leaf)) {
         try {
@@ -684,16 +732,6 @@ if ($skillsSource -and (Test-Path -LiteralPath $skillsSource)) {
     $skillEntries | Copy-Item -Destination $skillsRoot -Recurse -Force
 }
 Invoke-Icacls @($skillsRoot,'/inheritance:r','/grant:r',"${currentName}:(OI)(CI)F",'*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F',"${executorIdentity}:(OI)(CI)RX")
-$pythonExecutableDir = Split-Path $ExecutorPython -Parent
-$pythonRoots = @($pythonExecutableDir)
-$possibleVenvRoot = Split-Path $pythonExecutableDir -Parent
-if (Test-Path -LiteralPath (Join-Path $possibleVenvRoot "pyvenv.cfg")) {
-    $pythonRoots += $possibleVenvRoot
-}
-try {
-    $basePrefix = (& $ExecutorPython -c "import sys;print(sys.base_prefix)").Trim()
-    if ($basePrefix) { $pythonRoots += [IO.Path]::GetFullPath($basePrefix) }
-} catch { throw "Unable to resolve executor Python runtime: $ExecutorPython" }
 foreach ($pythonRoot in ($pythonRoots | Select-Object -Unique)) {
     Invoke-Icacls @($pythonRoot,'/grant:r',"${executorIdentity}:(OI)(CI)RX")
 }
@@ -738,7 +776,7 @@ foreach ($writeRoot in $authorizedWriteRoots) {
         $trustedExecutables += [ordered]@{path=$full;sha256=$hash;kind='ANDROID_BUILD_TOOL'}
     }
 }
-$profile = [ordered]@{schema="SMARTAGENT_WINDOWS_SECURITY_V2";executor_user=$executorAccountName;executor_sid=[string]$executorAccount.SID;authorized_workspace_roots=@($authorizedWriteRoots);workspace_container=$workspace;workspace_traverse_roots=@($workspaceTraverseRoots);skill_roots=@($skillsRoot);runtime_root=$runtime;executor_endpoint=$endpoint;controller_state_root=$controllerState;executor_python=$ExecutorPython;executor_code_root=$codeRoot;executor_task_name=$taskName;read_only_roots=@($effectiveReadOnlyRoots | Select-Object -Unique);denied_write_roots=@($effectiveDeniedRoots | Select-Object -Unique);root_create_denied=@($rootCreateDenied);trusted_executables=@($trustedExecutables);created_at=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}
+$profile = [ordered]@{schema="SMARTAGENT_WINDOWS_SECURITY_V2";executor_user=$executorAccountName;executor_sid=[string]$executorAccount.SID;authorized_workspace_roots=@($authorizedWriteRoots);workspace_container=$workspace;workspace_traverse_roots=@($workspaceTraverseRoots);skill_roots=@($skillsRoot);runtime_root=$runtime;executor_endpoint=$endpoint;controller_state_root=$controllerState;executor_python=$ExecutorPython;python_acl_roots=@($pythonRoots);executor_code_root=$codeRoot;executor_task_name=$taskName;read_only_roots=@($effectiveReadOnlyRoots | Select-Object -Unique);denied_write_roots=@($effectiveDeniedRoots | Select-Object -Unique);root_create_denied=@($rootCreateDenied);trusted_executables=@($trustedExecutables);created_at=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()}
 $profileJson = $profile | ConvertTo-Json
 $profileTemp = "$ProfilePath.tmp"
 [IO.File]::WriteAllText($profileTemp, $profileJson, (New-Object Text.UTF8Encoding($false)))
@@ -898,3 +936,8 @@ if (-not $SkipAclModeRestore) {
 }
 Write-Host "Configured, started, and attested restricted executor."
 Remove-Item -LiteralPath $installMarker -Force -ErrorAction SilentlyContinue
+
+} finally {
+    if ($machineMutexHeld) { $machineMutex.ReleaseMutex() }
+    if ($machineMutex) { $machineMutex.Dispose() }
+}

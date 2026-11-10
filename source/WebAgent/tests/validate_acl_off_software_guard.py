@@ -6,11 +6,13 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from agent_core.bounded_process import run_bounded_process
 from agent_core.command_security import CommandSecurityError, require_command_allowed
 from agent_core.security_preflight import preflight
-from agent_core import windows_security
+from agent_core import restricted_executor_service, windows_security
 
 
 def _write_mode(profile: Path, install_root: Path, mode: str) -> None:
@@ -26,6 +28,34 @@ def _write_mode(profile: Path, install_root: Path, mode: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _verify_candidate_service(install_root: Path) -> None:
+    endpoint = install_root / "queue"
+    requests = endpoint / "requests"
+    requests.mkdir(parents=True)
+    request = requests / "EXEC-fixture.json"
+    request.write_text("{}", encoding="utf-8")
+    profile = {"executor_user": "fixture", "executor_endpoint": str(endpoint)}
+    service = restricted_executor_service
+    with (
+        patch.object(service, "load_security_profile", return_value=profile),
+        patch.object(service, "is_admin", return_value=False),
+        patch.object(service.getpass, "getuser", return_value="fixture"),
+        patch.object(service, "ensure_current_process_kill_job", return_value=SimpleNamespace(active=True)),
+        patch.object(service, "acl_mode", return_value="transitioning_on"),
+        patch.object(service, "authorized_workspace_roots", return_value=(install_root,)),
+        patch.object(service, "workspace_traverse_roots", return_value=()),
+        patch.object(service, "_probe_write", return_value=(True, "")) as probe,
+        patch.object(service, "_probe_file_write", return_value=(True, "")),
+        patch.object(service, "_run") as run,
+    ):
+        assert service.serve(once=True) == 0
+        probe.assert_called_once_with(install_root, expect_allowed=True)
+        run.assert_not_called()
+    state = json.loads((endpoint / "service_state.json").read_text(encoding="utf-8"))
+    assert state["self_test"]["mode"] == "on" and state["self_test"]["passed"], state
+    assert request.is_file(), "The candidate executor consumed a request before ACL ON"
 
 
 def main() -> int:
@@ -46,6 +76,18 @@ def main() -> int:
         os.environ["SMARTAGENT_SECURITY_PROFILE"] = str(profile)
         try:
             assert windows_security.restricted_executor_required(profile) is False
+
+            _write_mode(profile, install_root, "transitioning_on")
+            assert windows_security.restricted_executor_required(profile) is True
+            assert windows_security.acl_mode(profile, allow_on_transition=True) == "transitioning_on"
+            try:
+                windows_security.acl_mode(profile)
+            except RuntimeError as exc:
+                assert str(exc) == "acl_mode_invalid", exc
+            else:
+                raise AssertionError("staged ACL mode exposed as a ready mode")
+            _write_mode(profile, install_root, "off")
+
 
             # Git49 Broker admission now requires a well-formed shared Workspace
             # access policy even in Software Guard mode. Make the isolated
