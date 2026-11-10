@@ -268,6 +268,35 @@ try {
     $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($git) {
         Test-DisposableToolCompatibility 'git' ([string]$git.Source) 'init git_probe' 'git_probe'
+        # The cmd\git.exe launcher often forwards to mingw64\bin\git.exe,
+        # which is not an AppContainer-authorized external dependency. Copy
+        # a self-contained minimal Git executable/DLL subtree instead.
+        $gitRoot = Split-Path -Parent (Split-Path -Parent ([string]$git.Source))
+        $gitMingw = Join-Path $gitRoot 'mingw64'
+        $sourceBin = Join-Path $gitMingw 'bin'
+        if (Test-Path -LiteralPath (Join-Path $sourceBin 'git.exe') -PathType Leaf) {
+            $gitDeps = Join-Path $dependencyRoot 'git'
+            $gitBin = Join-Path $gitDeps 'bin'
+            New-Item -ItemType Directory -Force -Path $gitBin | Out-Null
+            Copy-Item -LiteralPath (Join-Path $sourceBin 'git.exe') -Destination $gitBin -Force
+            foreach ($dll in Get-ChildItem -LiteralPath $sourceBin -Filter '*.dll' -File) {
+                Copy-Item -LiteralPath $dll.FullName -Destination $gitBin -Force
+            }
+            # Git templates and helpers are read/execute dependencies only.
+            $libexec = Join-Path $gitMingw 'libexec\\git-core'
+            if (Test-Path -LiteralPath $libexec -PathType Container) {
+                New-Item -ItemType Directory -Force -Path (Join-Path $gitDeps 'libexec') | Out-Null
+                Copy-Item -LiteralPath $libexec -Destination (Join-Path $gitDeps 'libexec\\git-core') -Recurse -Force
+            }
+            $template = Join-Path $gitMingw 'share\\git-core'
+            if (Test-Path -LiteralPath $template -PathType Container) {
+                New-Item -ItemType Directory -Force -Path (Join-Path $gitDeps 'share') | Out-Null
+                Copy-Item -LiteralPath $template -Destination (Join-Path $gitDeps 'share\\git-core') -Recurse -Force
+            }
+            Test-DisposableToolCompatibility 'git_fixture_rx_dependency' (Join-Path $gitBin 'git.exe') 'init git_fixture_probe' 'git_fixture_probe'
+        } else {
+            Write-Host 'GIT47_TOOL_NOT_VERIFIED:git_fixture_rx_dependency:mingw_git_executable_missing'
+        }
     } else {
         Write-Host 'GIT47_TOOL_NOT_VERIFIED:git:executable_missing'
     }
