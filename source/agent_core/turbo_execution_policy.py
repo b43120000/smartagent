@@ -399,7 +399,7 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
                 if broker_enrolled else gate["reason_code"]
             ),
             "native_broker_tools": (
-                ["run_command", "create_directory", "write_file"]
+                ["run_command", "create_directory", "write_file", "delete_path"]
                 if broker_enrolled else []
             ),
             "per_action_os_attestation_required": broker_enrolled,
@@ -414,6 +414,7 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
                 "Run approved PowerShell commands from the enrolled Turbo Root (OS broker reattests per action)",
                 "create_directory: one new child directory of the Turbo Root",
                 "write_file: bounded UTF-8 content under the Turbo Root",
+                "delete_path: one regular file or empty directory only; recursive remains blocked",
             ] if broker_enrolled else [],
             "avoid": (
                 "recursive typed delete, chunked writes, and host process fallback"
