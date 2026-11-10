@@ -148,13 +148,19 @@ try {
 
     # Junction escape to an ungranted sibling is still decided by Windows ACL.
     $junction = Join-Path $turbo 'outside_junction'
+    $junctionCreated = $false
     try {
         New-Item -ItemType Junction -Path $junction -Target $sibling -ErrorAction Stop | Out-Null
-        Invoke-Probe 'read' (Join-Path $junction 'sibling_secret.txt') 5 'junction_outside_read_os_access_denied'
+        $junctionCreated = $true
     } catch {
-        # Record unavailability rather than mistaking a software-created
-        # junction refusal for an OS-level ACCESS_DENIED PASS.
-        Write-Host ('GIT47_JUNCTION_CHECK_NOT_VERIFIED:' + $_.Exception.GetType().Name)
+        # Only an unavailable fixture primitive can be skipped. Actual OS
+        # escape-probe failure MUST propagate and fail the Windows CI job.
+        Write-Host ('GIT47_JUNCTION_FIXTURE_UNAVAILABLE:' + $_.Exception.GetType().Name)
+    }
+    try {
+        if ($junctionCreated) {
+            Invoke-Probe 'read' (Join-Path $junction 'sibling_secret.txt') 5 'junction_outside_read_os_access_denied'
+        }
     } finally {
         if (Test-Path -LiteralPath $junction) {
             & cmd.exe /d /c ('rmdir "' + $junction + '"') | Out-Null
