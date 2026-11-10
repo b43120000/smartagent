@@ -12,6 +12,7 @@ public static class SmartAgentGit47AppContainerProbe
     const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     const uint CREATE_SUSPENDED = 0x00000004;
     const uint CREATE_NO_WINDOW = 0x08000000;
+    const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     const int PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009;
     const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     const int JobObjectExtendedLimitInformation = 9;
@@ -218,6 +219,39 @@ public static class SmartAgentGit47AppContainerProbe
         finally { CloseHandle(token); }
     }
 
+    // The broker must not leak controller environment secrets to arbitrary
+    // in-sandbox code. CreateProcess receives a fresh allowlisted block.
+    static IntPtr CleanEnvironment(string cwd, string executable)
+    {
+        string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        if (string.IsNullOrWhiteSpace(windows)
+            || !System.IO.Path.IsPathRooted(windows))
+            throw new InvalidOperationException("SystemRoot_unavailable");
+        string exeDir = System.IO.Path.GetDirectoryName(executable);
+        var values = new System.Collections.Generic.SortedDictionary<string, string>(
+            StringComparer.OrdinalIgnoreCase);
+        values["SystemRoot"] = windows;
+        values["WINDIR"] = windows;
+        values["SystemDrive"] = System.IO.Path.GetPathRoot(windows);
+        values["ComSpec"] = System.IO.Path.Combine(windows, "System32", "cmd.exe");
+        values["TEMP"] = cwd;
+        values["TMP"] = cwd;
+        values["USERPROFILE"] = cwd;
+        values["HOME"] = cwd;
+        values["APPDATA"] = cwd;
+        values["LOCALAPPDATA"] = cwd;
+        values["GIT_CONFIG_NOSYSTEM"] = "1";
+        values["GIT_TERMINAL_PROMPT"] = "0";
+        values["GCM_INTERACTIVE"] = "Never";
+        values["PATH"] = System.IO.Path.Combine(windows, "System32") + ";"
+                       + windows + ";" + exeDir;
+        StringBuilder env = new StringBuilder();
+        foreach (var row in values)
+            env.Append(row.Key).Append("=").Append(row.Value).Append((char)0);
+        env.Append((char)0);
+        return Marshal.StringToHGlobalUni(env.ToString());
+    }
+
     /// <summary>Runs ONE explicit executable under the derived package SID.
     /// Returns a structured process receipt; kernel containment still requires
     /// independent ACL and negative-file-access attestation.</summary>
@@ -232,7 +266,7 @@ public static class SmartAgentGit47AppContainerProbe
             || timeoutMilliseconds == 0 || timeoutMilliseconds > 300000)
             throw new ArgumentException("launch_preflight_invalid");
         string sidString = DeriveSid(moniker);
-        IntPtr sid = IntPtr.Zero, attributeList = IntPtr.Zero;
+        IntPtr sid = IntPtr.Zero, attributeList = IntPtr.Zero, environment = IntPtr.Zero;
         IntPtr job = IntPtr.Zero;
         PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
         bool started = false;
@@ -266,10 +300,12 @@ public static class SmartAgentGit47AppContainerProbe
             si.lpAttributeList = attributeList;
             StringBuilder command = new StringBuilder(
                 "\"" + executable.Replace("\"", "") + "\" " + (arguments ?? ""));
+            environment = CleanEnvironment(cwd, executable);
             if (!CreateProcessW(executable, command,
                 IntPtr.Zero, IntPtr.Zero, false,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                IntPtr.Zero, cwd, ref si, out pi))
+                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW
+                    | CREATE_UNICODE_ENVIRONMENT,
+                environment, cwd, ref si, out pi))
                 throw Last("CreateProcessW(AppContainer)");
             started = true;
 
@@ -323,6 +359,7 @@ public static class SmartAgentGit47AppContainerProbe
             if (job != IntPtr.Zero) CloseHandle(job);
             if (listInitialized) DeleteProcThreadAttributeList(attributeList);
             if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);
+            if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
             if (sid != IntPtr.Zero) FreeSid(sid);
         }
     }
