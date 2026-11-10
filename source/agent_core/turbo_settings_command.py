@@ -70,7 +70,9 @@ def turbo_control_reply(result: dict) -> str:
         + "Effective Turbo: " + actual["turbo_effective"] + "\n"
         + "Sandbox: " + actual["sandbox_status"] + "\n"
         + "Reason Code: " + actual["reason_code"] + "\n"
-        + "Turbo Action requires a verified Windows OS sandbox; no ordinary executor fallback."
+        + ("ACL OFF: Turbo is inactive; ordinary software-guard authorization applies."
+           if actual["acl_mode"] == "off" else
+           "Turbo Action requires a verified Windows OS sandbox; no ordinary executor fallback.")
     )
 
 

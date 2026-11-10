@@ -12,9 +12,10 @@ class RestrictedExecutorUnavailable(RuntimeError):pass
 def execute_restricted(command,*,cwd=None,timeout=30,shell=False,max_stream_bytes=5*1024*1024,approval_manifest=None,security_command=None,noninteractive=False)->dict:
  from .turbo_sandbox import resolve_turbo_state, require_turbo_backend
  sandbox=resolve_turbo_state(cwd)
- if sandbox['turbo_requested']=='ON' or sandbox['sandbox_status']=='FAILED':
-  try:require_turbo_backend(sandbox)
-  except RuntimeError as exc:raise RestrictedExecutorUnavailable('TURBO_SANDBOX_BLOCKED:'+str(exc)) from exc
+ # Always verify the canonical ACL/Turbo gate; a stale ON is inactive under
+ # explicit ACL OFF, while unreadable policy and ACL ON+Turbo ON still block.
+ try:require_turbo_backend(sandbox)
+ except RuntimeError as exc:raise RestrictedExecutorUnavailable('TURBO_SANDBOX_BLOCKED:'+str(exc)) from exc
  profile=load_security_profile();endpoint=Path(profile['executor_endpoint']).resolve();requests=endpoint/'requests';results=endpoint/'results'
  if not endpoint.is_dir():raise RestrictedExecutorUnavailable(f'restricted_executor_endpoint_unavailable:{endpoint}')
  request_id='EXEC-'+uuid.uuid4().hex.upper();payload={'schema':'RESTRICTED_EXECUTOR_REQUEST_V1','request_id':request_id,'command':command,'cwd':str(Path(cwd).resolve()) if cwd else '','timeout':int(timeout),'shell':bool(shell),'max_stream_bytes':int(max_stream_bytes),'created_at':time.time(),'approval_manifest':dict(approval_manifest or {}),'security_command':str(security_command or ''),'noninteractive':bool(noninteractive)};payload['request_digest']=sha256_digest(payload)

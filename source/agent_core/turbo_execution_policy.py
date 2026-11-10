@@ -381,7 +381,12 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
         ]
         return {
             "schema": "SMARTAGENT_TURBO_PLANNER_HINT_V1",
-            "status": "ON" if gate["turbo_effective"] == "ON" else "OFF_OR_BLOCKED",
+            "status": (
+                "BLOCKED" if gate["sandbox_status"] == "FAILED"
+                else "ON" if gate["turbo_effective"] == "ON"
+                else "OFF" if gate["acl_mode"] == "off" or gate["turbo_requested"] == "OFF"
+                else "BLOCKED"
+            ),
             "turbo_requested": gate["turbo_requested"],
             "turbo_effective": gate["turbo_effective"],
             "sandbox_status": gate["sandbox_status"],

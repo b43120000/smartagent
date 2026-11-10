@@ -42,7 +42,7 @@ def gate(tmp_path, monkeypatch):
 @pytest.mark.parametrize("mode,requested", [
     ("off", False), ("off", True), ("on", False), ("on", True),
 ])
-def test_all_acl_turbo_combinations_fail_closed(gate, mode, requested):
+def test_acl_off_overrides_stale_turbo_request_without_bypassing_acl_on(gate, mode, requested):
     workspace, root, _, policy, acl = gate
     policy["turbo_requested"] = requested
     acl["value"] = mode
@@ -52,12 +52,19 @@ def test_all_acl_turbo_combinations_fail_closed(gate, mode, requested):
     assert result["turbo_effective"] == "OFF"
     assert result["sandbox_attestation_passed"] is False
     assert result["authorization_granted"] is False
-    if requested and mode == "off":
-        assert result["reason_code"] == "TURBO_REQUIRES_ACL_ON"
-    elif requested and mode == "on":
+    if mode == "off":
+        assert result["status"] == "TURBO_DISABLED"
+        assert result["reason_code"] == (
+            "TURBO_SUPPRESSED_ACL_OFF" if requested else "TURBO_DISABLED"
+        )
+        turbo_sandbox.require_turbo_backend(result)
+    elif requested:
         assert result["reason_code"] == "SANDBOX_UNAVAILABLE"
+        with pytest.raises(RuntimeError, match="SANDBOX_UNAVAILABLE"):
+            turbo_sandbox.require_turbo_backend(result)
     else:
         assert result["reason_code"] == "TURBO_DISABLED"
+        turbo_sandbox.require_turbo_backend(result)
 
 
 def test_spoofed_ready_in_policy_never_becomes_effective(gate):
@@ -183,3 +190,135 @@ def test_restricted_client_fails_before_queue_write(gate, monkeypatch):
                         lambda: (_ for _ in ()).throw(AssertionError("must not load")))
     with pytest.raises(client.RestrictedExecutorUnavailable, match="TURBO_SANDBOX_BLOCKED"):
         client.execute_restricted(["git", "status"], cwd=str(workspace))
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_acl_mode_unknown_is_never_treated_as_off(gate, requested):
+    workspace, _, _, policy, acl = gate
+    policy["turbo_requested"] = requested
+    acl["value"] = "unknown"
+    state = turbo_sandbox.resolve_turbo_state(workspace)
+    assert state["sandbox_status"] == "FAILED"
+    assert state["reason_code"] == "ACL_MODE_UNVERIFIED"
+    with pytest.raises(RuntimeError, match="ACL_MODE_UNVERIFIED"):
+        turbo_sandbox.require_turbo_backend(state)
+
+
+def test_acl_off_corrupt_policy_is_not_ignored(gate, monkeypatch):
+    workspace, _, _, policy, acl = gate
+    acl["value"] = "off"
+    policy["turbo_requested"] = True
+    monkeypatch.setattr(turbo_sandbox, "access_snapshot",
+                        lambda: (_ for _ in ()).throw(ValueError("bad-policy")))
+    state = turbo_sandbox.resolve_turbo_state(workspace)
+    assert state["sandbox_status"] == "FAILED"
+    with pytest.raises(RuntimeError, match="SANDBOX_ATTESTATION_FAILED"):
+        turbo_sandbox.require_turbo_backend(state)
+
+
+def test_acl_off_stale_on_cli_and_planner_show_inactive(gate, monkeypatch, capsys):
+    workspace, _, _, policy, acl = gate
+    acl["value"] = "off"
+    policy["turbo_requested"] = True
+    assert turbo_sandbox.main(["--workspace", str(workspace)]) == 0
+    import json
+    reported = json.loads(capsys.readouterr().out)
+    assert reported["turbo_requested"] == "ON"  # persisted preference
+    assert reported["turbo_effective"] == "OFF"  # actual execution route
+    assert reported["reason_code"] == "TURBO_SUPPRESSED_ACL_OFF"
+    monkeypatch.setattr(turbo_execution_policy, "access_snapshot",
+                        turbo_sandbox.access_snapshot)
+    hint = turbo_execution_policy.turbo_planning_snapshot(workspace)
+    assert hint["status"] == "OFF"
+    assert hint["turbo_effective"] == "OFF"
+    assert hint["safe_action_examples"] == []
+    decision = turbo_execution_policy.evaluate_turbo_confirmation(
+        SimpleNamespace(workspace=str(workspace)), {
+            "tool": "run_command", "operation": "GIT_INSPECT",
+            "working_directory": str(workspace), "command": "git status",
+        })
+    assert decision["auto_confirm"] is False
+    assert decision["reason_code"] == "TURBO_SUPPRESSED_ACL_OFF"
+
+
+def test_acl_off_stale_on_regular_command_really_executes(gate, tmp_path, monkeypatch):
+    """Use the real ACL mode reader and ordinary software executor, not a fake PASS."""
+    import json
+    import sys
+    from agent_core.bounded_process import run_bounded_process
+    from agent_core.windows_security import restricted_executor_required
+
+    workspace, _, _, policy, acl = gate
+    acl["value"] = "off"
+    policy["turbo_requested"] = True
+    install = tmp_path / "fake_install"
+    profile = install / "localdata" / "secure" / "windows_security" / "security_profile.json"
+    profile.parent.mkdir(parents=True)
+    profile.write_text("{}", encoding="utf-8")
+    profile.with_name("acl_mode.json").write_text(json.dumps({
+        "schema": "SMARTAGENT_ACL_MODE_V1",
+        "mode": "off",
+        "install_root": str(install.resolve()),
+    }), encoding="utf-8")
+    monkeypatch.setenv("SMARTAGENT_SECURITY_PROFILE", str(profile))
+    monkeypatch.setenv("SMARTAGENT_RESTRICTED_EXECUTOR_REQUIRED", "1")
+    assert restricted_executor_required() is False
+    state = turbo_sandbox.resolve_turbo_state(workspace)
+    turbo_sandbox.require_turbo_backend(state)
+    result = run_bounded_process(
+        [sys.executable, "-c", "print('ACL_OFF_TURBO_OFF_PASS')"],
+        cwd=workspace, capture_root=workspace, timeout=10,
+    )
+    assert result["exit_code"] == 0, result
+    assert result["process_started"] is True
+    assert "ACL_OFF_TURBO_OFF_PASS" in result["stdout"], result
+
+
+def test_acl_off_stale_on_client_queue_not_turbo_blocked(gate, tmp_path, monkeypatch):
+    """A stale ON cannot incorrectly veto a legacy client; no real service starts."""
+    import json
+    from agent_core import restricted_executor_client as client
+    workspace, _, _, policy, acl = gate
+    acl["value"] = "off"
+    policy["turbo_requested"] = True
+    endpoint = tmp_path / "restricted_endpoint"
+    endpoint.mkdir()
+    monkeypatch.setattr(client, "load_security_profile",
+                        lambda: {"executor_endpoint": str(endpoint)})
+    real_write = client.write_json_atomic
+
+    def queue_with_fake_result(path, payload):
+        real_write(path, payload)
+        destination = endpoint / "results"
+        destination.mkdir(exist_ok=True)
+        (destination / path.name).write_text(json.dumps({
+            "result": {"exit_code": 0, "stdout": "QUEUE_PROCESSED"}
+        }), encoding="utf-8")
+
+    monkeypatch.setattr(client, "write_json_atomic", queue_with_fake_result)
+    answer = client.execute_restricted("git status", cwd=workspace, timeout=1)
+    assert answer["exit_code"] == 0
+    assert answer["stdout"] == "QUEUE_PROCESSED"
+    assert len(list((endpoint / "requests").glob("*.json"))) == 1
+
+
+def test_acl_off_stale_on_service_reaches_standard_digest_gate(gate):
+    """Service defense-in-depth must not mistake an inactive preference for Turbo."""
+    from agent_core.restricted_executor_service import _run
+    workspace, _, _, policy, acl = gate
+    acl["value"] = "off"
+    policy["turbo_requested"] = True
+    with pytest.raises(RuntimeError, match="restricted_executor_request_digest_mismatch"):
+        _run({"cwd": str(workspace), "request_digest": "invalid"}, {})
+
+
+def test_acl_off_inconsistent_state_still_rejected():
+    state = {
+        "sandbox_status": "NOT_READY",
+        "acl_mode": "off",
+        "turbo_requested": "ON",
+        "turbo_effective": "ON",
+        "authorization_granted": True,
+    }
+    with pytest.raises(RuntimeError, match="ACL_OFF_TURBO_STATE_INCONSISTENT"):
+        turbo_sandbox.require_turbo_backend(state)

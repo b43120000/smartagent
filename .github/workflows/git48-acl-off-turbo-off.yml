@@ -1,0 +1,44 @@
+name: Git48 ACL OFF Forces Turbo OFF
+
+on:
+  push:
+    branches:
+      - git48/acl-off-forces-turbo-off-20261110
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acl-off-turbo-off:
+    name: ACL OFF Turbo OFF - matrix and real software subprocess
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Syntax check
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/turbo_sandbox.py
+          source/agent_core/turbo_execution_policy.py
+          source/agent_core/restricted_executor_client.py
+          source/agent_core/restricted_executor_service.py
+          source/agent_core/turbo_settings_command.py
+      - name: ACL OFF Turbo OFF contract and actual software executor
+        run: python -B -m pytest source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
+      - name: Existing ACL OFF software guard
+        run: python -B source/WebAgent/tests/validate_acl_off_software_guard.py
+      - name: Git47 WebCopilot regression
+        run: python -B -m pytest source/WebAgent/tests/test_git47_webcopilot_result_panel.py -q
+      - name: Git47 Tri-One egress
+        run: python -B -m pytest source/WebAgent/tests/test_tri_one_egress_v10.py -q

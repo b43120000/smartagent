@@ -58,11 +58,25 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
         state["turbo_requested"] = "ON" if requested else "OFF"
         mode = acl_mode()
         state["acl_mode"] = mode
-        if not requested:
-            state["reason_code"] = "TURBO_DISABLED"
+        if mode not in {"on", "off"}:
+            # An unknown ACL mode must never be treated as an explicit OFF.
+            state["sandbox_status"] = "FAILED"
+            state["status"] = "SANDBOX_ATTESTATION_FAILED"
+            state["reason_code"] = "ACL_MODE_UNVERIFIED"
             return state
-        if mode != "on":
-            state["reason_code"] = "TURBO_REQUIRES_ACL_ON"
+        if mode == "off":
+            # Git48: explicit ACL OFF always routes through the ordinary
+            # software-guard execution path, including after a stale ON
+            # preference survives a crash or concurrent policy update.
+            # Keep requested=ON for diagnostics, but never enable Turbo.
+            state["status"] = "TURBO_DISABLED"
+            state["reason_code"] = (
+                "TURBO_SUPPRESSED_ACL_OFF" if requested else "TURBO_DISABLED"
+            )
+            return state
+        if not requested:
+            state["status"] = "TURBO_DISABLED"
+            state["reason_code"] = "TURBO_DISABLED"
             return state
         configured = list(access.get("turbo_roots") or ())
         if not configured or workspace is None:
@@ -127,6 +141,13 @@ def require_turbo_backend(state: dict) -> None:
     # requested flag was OFF. Otherwise policy errors become a fail-open path.
     if state.get("sandbox_status") == "FAILED":
         raise RuntimeError(str(state.get("reason_code") or "SANDBOX_ATTESTATION_FAILED"))
+    # A validated ACL OFF is a global *disable*, not a Turbo fallback.
+    # The ordinary executor still enforces its software guards and approvals.
+    if state.get("acl_mode") == "off":
+        if (state.get("turbo_effective") != "OFF"
+                or state.get("authorization_granted") is not False):
+            raise RuntimeError("ACL_OFF_TURBO_STATE_INCONSISTENT")
+        return
     if state.get("turbo_requested") != "ON":
         return
     # There is no independently implemented and validated OS broker yet.
@@ -157,7 +178,9 @@ def main(argv=None) -> int:
             workspace = None
     state = resolve_turbo_state(workspace)
     print(json.dumps(state, ensure_ascii=False, sort_keys=True))
-    return 0 if state["turbo_requested"] == "OFF" else 2
+    return 0 if (state["sandbox_status"] != "FAILED" and
+                 (state["acl_mode"] == "off" or
+                  state["turbo_requested"] == "OFF")) else 2
 
 
 __all__ = ["SCHEMA", "resolve_turbo_state", "sandbox_evidence",
