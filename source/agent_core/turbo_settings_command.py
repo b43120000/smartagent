@@ -48,13 +48,15 @@ def apply_turbo_control(user_text: str, *, workspace: str | Path) -> dict | None
     if not target.is_absolute():
         raise ValueError("turbo_absolute_path_required")
     updated = set_turbo_root(target, workspace=parent, enabled=True)
-    return {"status": "ENABLED", "workspace": str(parent),
+    return {"status": "REQUESTED", "workspace": str(parent),
             "path": str(target.resolve()), "revision": updated["revision"],
             "turbo_roots": updated["turbo_roots"]}
 
 
 def turbo_control_reply(result: dict) -> str:
     state = str(result.get("status") or "UNKNOWN")
+    from .turbo_sandbox import resolve_turbo_state
+    actual = resolve_turbo_state(result.get("workspace"))
     roots = result.get("turbo_roots") or []
     return (
         "⚡ Turbo Mode " + state + "\n"
@@ -63,7 +65,12 @@ def turbo_control_reply(result: dict) -> str:
            if result.get("path") else "")
         + "Policy revision: " + str(result.get("revision", "")) + "\n"
         + "Shared registry: " + str(len(roots)) + " configured roots\n"
-        + "Only pre-authorized in-scope operations may bypass repeated UNKNOWN confirmation."
+        + "ACL Mode: " + actual["acl_mode"] + "\\n"
+        + "Requested Turbo: " + actual["turbo_requested"] + "\\n"
+        + "Effective Turbo: " + actual["turbo_effective"] + "\\n"
+        + "Sandbox: " + actual["sandbox_status"] + "\\n"
+        + "Reason Code: " + actual["reason_code"] + "\\n"
+        + "Turbo Action requires a verified Windows OS sandbox; no ordinary executor fallback."
     )
 
 
