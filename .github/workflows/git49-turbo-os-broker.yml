@@ -36,7 +36,9 @@ jobs:
       - name: Existing ACL OFF software guard
         run: python -B source/WebAgent/tests/validate_acl_off_software_guard.py
       - name: WebCopilot and Tri-One regression
-        run: python -B -m pytest source/WebAgent/tests/test_git47_webcopilot_result_panel.py source/WebAgent/tests/test_tri_one_egress_v10.py -q
+        run: python -B -m pytest source/WebAgent/tests/test_git47_webcopilot_result_panel.py source/WebAgent/tests/test_tri_one_egress_v10.py source/WebAgent/tests/test_tri_one_runtime_terminal.py source/WebAgent/tests/test_other_webcopilot_startup.py -q
+      - name: ACL OFF Workspace Manager regression
+        run: python -B source/WebAgent/tests/validate_acl_off_workspace_manager.py
 
   windows-os-disposable-evidence:
     name: Win32 AppContainer actual OS boundary - test fixture only
