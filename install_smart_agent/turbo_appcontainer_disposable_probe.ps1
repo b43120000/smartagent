@@ -375,6 +375,9 @@ raise SystemExit(93)
             $gitDebug = Join-Path $turbo 'git_debug.txt'
             if (Test-Path -LiteralPath $gitDebug -PathType Leaf) {
                 $text = [IO.File]::ReadAllText($gitDebug)
+                $preview = $text.Substring(0, [Math]::Min($text.Length, 180))
+                $preview = $preview -replace '[A-Za-z]:[\\/][^\\s''"]+', '<redacted-path>'
+                Write-Host ('GIT47_GIT_STDERR_CLASS:' + ($preview -replace '[\\r\\n]+',' '))
                 if ($text -match '(?im)^(fatal|error):\\s*([^\\r\\n]{1,120})') {
                     $reason = [string]$matches[2]
                     $reason = $reason -replace '[A-Z]:[^\\s]+', '<redacted-path>'
