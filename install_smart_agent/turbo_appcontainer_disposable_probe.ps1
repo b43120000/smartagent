@@ -76,7 +76,7 @@ function Test-DisposableToolCompatibility(
         if (-not $result.sandbox_identity_verified) {
             throw 'child_token_not_verified'
         }
-        if ([int]$result.exit_code -ne 0) {
+        if ([uint32]$result.exit_code -ne [uint32]0) {
             throw ("nonzero_exit_" + [string]$result.exit_code)
         }
         if ($ExpectedOutput) {
@@ -154,6 +154,12 @@ try {
     Invoke-Probe 'write' (Join-Path $sibling 'sibling_write.txt') 5 'sibling_write_os_access_denied'
     Invoke-Probe 'spawn_read' $siblingFile 5 'child_process_outside_read_os_access_denied'
     Invoke-Probe 'spawn_read' (Join-Path $turbo 'inside.txt') 0 'child_process_inside_read'
+    $env:GIT47_TEST_SECRET_NEVER_INHERIT = 'SECRET_FROM_UNRESTRICTED_HOST'
+    try {
+        Invoke-Probe 'check_env_absent' 'GIT47_TEST_SECRET_NEVER_INHERIT' 0 'sanitized_child_environment_no_host_secret'
+    } finally {
+        Remove-Item Env:GIT47_TEST_SECRET_NEVER_INHERIT -ErrorAction SilentlyContinue
+    }
 
     $insideDelete = Join-Path $turbo 'delete_inside.txt'
     [IO.File]::WriteAllText($insideDelete, 'DISPOSABLE-DELETE-ME')
@@ -223,7 +229,7 @@ try {
     }
 
     Write-Host 'GIT47_DISPOSABLE_WIN32_APPCONTAINER_FILE_BOUNDARY_PASS'
-    Write-Host 'NOTE: This does NOT attest Python/Git/PowerShell, child inheritance, hardlinks, reparse points, root delete, reboot or production lease revocation.'
+    Write-Host 'NOTE: Disposable fixture only. Production broker, tool compatibility, unsafe IPC, reparse races and revocation are not fully attested.'
 }
 finally {
     # Cleanup is performed by the normal fixture owner, never from the sandbox.
