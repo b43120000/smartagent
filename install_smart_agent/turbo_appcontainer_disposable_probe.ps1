@@ -336,6 +336,8 @@ raise SystemExit(93)
         $pyArgs = '-I "' + $pyProbe + '" parent "' + $siblingFile + '"'
         Test-DisposableToolCompatibility 'python_fixture_subprocess_os_denied' $pyExecutable $pyArgs 'python_spawn_denied_ok.txt'
 
+        $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $git) { throw 'GIT47_DISPOSABLE_GIT_SEED_TOOL_MISSING' }
         $seedRepo = Join-Path $turbo 'local_git_seed'
         New-Item -ItemType Directory -Path $seedRepo | Out-Null
         [IO.File]::WriteAllText((Join-Path $seedRepo 'README.txt'), 'GIT47_LOCAL_SEED')
