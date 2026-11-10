@@ -2,6 +2,8 @@
 // Reports Win32 GetLastError from direct CreateFileW, not software preflight.
 using System;
 using System.IO;
+using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 public static class SmartAgentGit47Win32FileProbe
@@ -26,9 +28,31 @@ public static class SmartAgentGit47Win32FileProbe
     public static int Main(string[] args)
     {
         if (args.Length != 3 || (args[0] != "read" && args[0] != "write"
-                && args[0] != "delete_file" && args[0] != "delete_dir"))
+                && args[0] != "delete_file" && args[0] != "delete_dir"
+                && args[0] != "spawn_read"))
             return 78;
         string operation = args[0], target = args[1], receipt = args[2];
+        if (operation == "spawn_read")
+        {
+            // This runs under the *already attested* AppContainer token.
+            // A child is expected to inherit that token, not the host one.
+            var info = new ProcessStartInfo(
+                Assembly.GetExecutingAssembly().Location,
+                "read \"" + target.Replace("\"", "") + "\" \"" +
+                receipt.Replace("\"", "") + "\"");
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            using (Process child = Process.Start(info))
+            {
+                if (child == null) return 76;
+                if (!child.WaitForExit(15000))
+                {
+                    child.Kill();
+                    return 75;
+                }
+                return child.ExitCode;
+            }
+        }
         int osError = 0;
         if (operation == "delete_file")
         {
