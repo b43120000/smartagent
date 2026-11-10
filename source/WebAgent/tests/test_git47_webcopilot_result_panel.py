@@ -45,7 +45,7 @@ def test_verified_terminal_readable_without_changing_task_result():
     from agent_core.conversation_identity import same_conversation
     from agent_core.tri_one_task_result import validate_task_result
     assert same_conversation(_URL, _URL), "conversation URL not normalized"
-    assert validate_task_result(result)["source_interface"] == "WEBGPT_COPILOT"
+    assert validate_task_result(result)["source_interface"] == "WEB_COPILOT"
     actual = validated_tri_one_result(
         dict(vars(task)), EventStore(result), _URL,
     )
