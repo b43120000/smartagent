@@ -401,3 +401,8 @@ finally {
         Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+# Optional tool probes can leave LASTEXITCODE nonzero. All required OS
+# assertions above throw on failure; do not confuse tool compatibility with
+# the strict native boundary fixture verdict.
+exit 0
