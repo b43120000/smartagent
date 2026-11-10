@@ -34,8 +34,14 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
         decision = "BLOCKED"
     elif state["acl_mode"] == "off" or state["turbo_requested"] == "OFF":
         decision = "NORMAL"
+    elif state["acl_mode"] == "on" and state["turbo_requested"] == "ON":
+        # Presence of protected enrollment only permits attempting the
+        # native OS broker. It is NOT a permission grant: every action must
+        # independently attest its Windows process token, Job Object, OS
+        # negative access and active policy revision before execution.
+        from .turbo_os_broker_client import active_broker_available
+        decision = "BROKER_REQUIRED" if active_broker_available(workspace) else "BLOCKED"
     else:
-        # ACL ON + requested Turbo ON: production broker/lease not attested.
         decision = "BLOCKED"
     return {
         "decision": decision,
