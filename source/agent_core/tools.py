@@ -1478,7 +1478,9 @@ def _ledger_read_result(tool, reader, workspace, **fields):
 def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str:
     """Common P0 result boundary; original transcripts/business data remain intact."""
     from .smartagent_protocol import normalize_tool_numeric_fields
-    tool_call = normalize_tool_numeric_fields(tool_call)
+    tool_call = dict(normalize_tool_numeric_fields(tool_call))
+    # Never accept a Planner-supplied internal Broker decision marker.
+    tool_call.pop("_runtime_native_broker_required", None)
     from .tool_result_contract import decode_result, attach_runtime_result
     from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
     p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
@@ -1487,16 +1489,19 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     # commands. Never let controller-side Python perform Turbo writes.
     from .turbo_broker_admission import assess, needs_broker
     if needs_broker(tool):
-        bound_workspace = getattr(agent, "workspace", None) if agent else None
+        bound_workspace = (
+            getattr(agent, "workspace_root", None)
+            or getattr(agent, "workspace", None)
+        ) if agent else None
         if bound_workspace is None:
             bound_workspace = Path.cwd()
         broker = assess(bound_workspace, tool=tool,
                         action_id=str(tool_call.get("action_id", "") or ""))
         if (broker["decision"] == "BLOCKED" or
-                (broker["decision"] == "BROKER_REQUIRED" and tool != "run_command")):
-            # Git50 currently delegates run_command to the OS broker.
-            # Other mutators cannot run as the privileged controller while
-            # their native, task-scoped adapter is not yet implemented.
+                (broker["decision"] == "BROKER_REQUIRED" and
+                 tool not in {"run_command", "create_directory", "write_file"})):
+            # No native adapter for other typed mutations. They cannot be
+            # routed to the unrestricted host Python implementation.
             from .tool_result_contract import encode_result
             return encode_result(
                 'REJECTED', 'TURBO_OS_BROKER_BLOCKED', tool=tool,
@@ -1505,6 +1510,10 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                       "os_execution_result": "NOT_EXECUTED",
                       "terminal_eligible": False},
             )
+        if broker["decision"] == "BROKER_REQUIRED":
+            # A mode switch between admission and final dispatch must not
+            # turn an admitted Turbo request into a host-side mutation.
+            tool_call["_runtime_native_broker_required"] = True
     if tool == "observe_fact":
         # This read-only tool observes a filesystem fact inside the existing
         # authorization boundary. It never guesses absence from access errors.
@@ -1762,6 +1771,22 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
                 },
             )
         target = Path(scope["resolved_paths"][0])
+        from .turbo_broker_admission import assess
+        native = assess(security_context.workspace_root, tool=tool)
+        if native["decision"] == "BROKER_REQUIRED":
+            from .turbo_os_typed_mutations import create_directory_in_broker
+            return create_directory_in_broker(
+                str(target), security_context=security_context,
+                action_id=str(tool_call.get("action_id", "") or ""),
+            )
+        if (native["decision"] != "NORMAL" or
+                tool_call.get("_runtime_native_broker_required") is True):
+            return encode_result(
+                "REJECTED", "TURBO_OS_BROKER_BLOCKED", tool=tool,
+                executed=False, requested_path=str(target),
+                data={"sandbox_evidence": native["evidence"],
+                      "terminal_eligible": False},
+            )
         # One exact directory only; no recursive parent creation.
         try:
             target.mkdir(parents=False, exist_ok=False)
@@ -1937,6 +1962,24 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         except OSError as exc:
             return encode_result('FAILED', 'READ_IO_ERROR', executed=True, requested_path=path, detail=str(exc), tool=tool)
     elif tool == "write_file":
+        from .turbo_broker_admission import assess
+        native = assess(security_context.workspace_root, tool=tool)
+        if native["decision"] == "BROKER_REQUIRED":
+            from .turbo_os_typed_mutations import write_file_in_broker
+            return write_file_in_broker(
+                tool_call.get("path", ""), tool_call.get("content", ""),
+                security_context=security_context,
+                action_id=str(tool_call.get("action_id", "") or ""),
+            )
+        if (native["decision"] != "NORMAL" or
+                tool_call.get("_runtime_native_broker_required") is True):
+            from .tool_result_contract import encode_result
+            return encode_result(
+                "REJECTED", "TURBO_OS_BROKER_BLOCKED", tool=tool,
+                executed=False, requested_path=tool_call.get("path", ""),
+                data={"sandbox_evidence": native["evidence"],
+                      "terminal_eligible": False},
+            )
         from .tool_result_contract import adapt_legacy_result
         result = tool_write_file(
             tool_call.get("path", ""), tool_call.get("content", ""),
