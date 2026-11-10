@@ -85,6 +85,8 @@ public static class SmartAgentGit47AppContainerProbe
         IntPtr capabilities, uint capabilityCount, out IntPtr sid);
     [DllImport("advapi32.dll")]
     static extern IntPtr FreeSid(IntPtr sid);
+    [DllImport("userenv.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
+    static extern uint DeleteAppContainerProfile(string name);
     [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     static extern bool ConvertSidToStringSidW(IntPtr sid, out IntPtr stringSid);
     [DllImport("kernel32.dll")]
@@ -158,6 +160,12 @@ public static class SmartAgentGit47AppContainerProbe
             throw new InvalidOperationException("appcontainer_create_profile_hresult:" + hr.ToString("X8"));
         if (sid != IntPtr.Zero) FreeSid(sid);
         return DeriveSid(name);
+    }
+    public static void DeleteProfile(string name)
+    {
+        uint hr = DeleteAppContainerProfile(name);
+        if (hr != 0)
+            throw new InvalidOperationException("appcontainer_delete_profile_hresult:" + hr.ToString("X8"));
     }
     public static string DeriveSid(string name)
     {
