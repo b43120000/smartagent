@@ -323,7 +323,7 @@ raise SystemExit(93)
         $gitExecPath = (& ([string]$git.Source) --exec-path 2>$null | Select-Object -First 1)
         $exeCandidates = @(Get-ChildItem -LiteralPath $gitRoot -Recurse -Filter git.exe -File -ErrorAction SilentlyContinue | Select-Object -First 12)
         $relativeCandidates = @($exeCandidates | ForEach-Object {
-            $_.FullName.Substring($gitRoot.Length).TrimStart('\\','/')
+            $_.FullName.Substring($gitRoot.Length).TrimStart([char]92,[char]47)
         })
         Write-Host ('GIT47_GIT_LAYOUT:git_root=' + $gitRoot +
                     ';exec_path=' + [string]$gitExecPath +
