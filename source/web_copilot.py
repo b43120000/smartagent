@@ -18,6 +18,7 @@ from agent_core.paths import (
     dispatcher_state_path,
     remote_tasks_path,
     remote_transport_sessions_path,
+    remote_events_path,
 )
 
 
@@ -322,8 +323,13 @@ def _seed_webcopilot_tasks(task_queue, conversation_url: str) -> dict[str, str]:
     return tracked
 
 
-def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page) -> None:
-    """Mirror durable task transitions to the visible WebCopilot console."""
+def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page,
+                                 *, event_store=None, conversation_url: str = "") -> None:
+    """Present authoritative Tri-One result without modifying its raw record."""
+    from agent_core.webcopilot_result_view import (
+        build_webcopilot_result_view, validated_tri_one_result,
+    )
+    from agent_core.webcopilot_result_panel import show_webcopilot_result
     if not tracked:
         return
     with task_queue.store.process_lock():
@@ -340,8 +346,10 @@ def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page) -> N
         "FAILED": "TASK_FAILED",
         "INTERRUPTED": "TASK_INTERRUPTED",
         "CANCELLED": "TASK_CANCELLED",
+        "PAUSED": "TASK_PAUSED",
     }
     terminal = {"COMPLETED", "FAILED", "INTERRUPTED", "CANCELLED"}
+    presentable = terminal | {"PAUSED"}
     for task_id, task in snapshots.items():
         if task is None:
             _emit_webcopilot_event(
@@ -349,27 +357,61 @@ def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page) -> N
             )
             tracked.pop(task_id, None)
             continue
-        state = str(task.get("state", "") or "")
-        if tracked.get(task_id) == state:
+        state = str(task.get("state", "") or "").upper()
+        canonical = (
+            validated_tri_one_result(task, event_store, conversation_url)
+            if state in presentable and event_store is not None and conversation_url
+            else None
+        )
+        # A TaskState transition can precede the durable Tri-One event. Keep
+        # polling a pending result until it appears, even when state is stable.
+        result_marker = (
+            str(canonical.get("result_id") or "canonical")
+            if canonical else "no-canonical-result"
+        )
+        transition_key = state + "|" + (
+            result_marker if state in presentable else "-"
+        )
+        if tracked.get(task_id) == transition_key:
+            if state in terminal and canonical is None:
+                completed_at = float(task.get("completed_at") or 0)
+                if completed_at and time.time() - completed_at > 300:
+                    tracked.pop(task_id, None)
             continue
-        tracked[task_id] = state
+        tracked[task_id] = transition_key
         event = event_for_state.get(state, "TASK_STATUS")
-        detail = ""
-        if state == "COMPLETED":
-            detail = _compact_task_value((task.get("result_ledger") or {}).get("final"))
-        elif state in {"FAILED", "INTERRUPTED", "CANCELLED"}:
-            detail = _compact_task_value(task.get("error"))
-        message = f"[WebGPT Copilot] {event} task_id={task_id}"
-        if detail:
-            message += f" detail={detail}"
+        view = build_webcopilot_result_view(task, canonical)
+        message = (
+            f"[WebGPT Copilot] {event} task_id={task_id} "
+            f"tri_one_source={view['source']} verified={view['verified']}"
+        )
         _emit_webcopilot_event(event, message, task_id)
         if state == "RUNNING":
-            _present_webcopilot_notice(page, f"Agent1 worker started [{task_id}]", "info")
-        elif state == "COMPLETED":
-            _present_webcopilot_notice(page, f"Task completed [{task_id}]", "done")
-        elif state in terminal:
-            _present_webcopilot_notice(page, f"Task {state.lower()} [{task_id}]: {detail}", "error")
-        if state in terminal:
+            _present_webcopilot_notice(
+                page, f"Agent1 worker started [{task_id}]", "info",
+            )
+        elif state in presentable:
+            shown = show_webcopilot_result(page, view)
+            _emit_webcopilot_event(
+                "TASK_RESULT_VIEW",
+                f"[WebGPT Copilot] result view task_id={task_id} "
+                f"rendered={shown} source={view['source']} "
+                f"verified={view['verified']}",
+                task_id,
+            )
+            if not shown:
+                # Keep the existing notice as a fallback if the host page was
+                # replaced or the result panel could not be injected.
+                _present_webcopilot_notice(
+                    page, view["title"] + " [" + task_id + "]: "
+                    + view["summary"][:280],
+                    "done" if view["verified"] else "error",
+                )
+        if state in terminal and canonical is not None:
+            tracked.pop(task_id, None)
+        elif state in terminal and float(task.get("completed_at") or 0) and (
+            time.time() - float(task["completed_at"]) > 300
+        ):
             tracked.pop(task_id, None)
 
 
@@ -510,9 +552,11 @@ def main():
         baseline_count = observer.baseline()
         print(f"[WebGPT Copilot] Startup cursor: {baseline_count} user turns.", flush=True)
         from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+        from agent_core.remote_events import RemoteEventStore
         from agent_core.agent_gateway import AgentIngressGateway
         from agent_core.transport_sessions import TransportSessionRouter
         task_queue = RemoteTaskQueue(TaskStateStore(remote_tasks_path()))
+        result_events = RemoteEventStore(remote_events_path())
         ingress_gateway = AgentIngressGateway(
             task_queue=task_queue,
             session_router=TransportSessionRouter(remote_transport_sessions_path()),
@@ -549,7 +593,10 @@ def main():
                     page = canonical_page
                     observer.page = page
                     scraper._page = page
-                _poll_webcopilot_task_states(task_queue, tracked_tasks, page)
+                _poll_webcopilot_task_states(
+                    task_queue, tracked_tasks, page, event_store=result_events,
+                    conversation_url=target_url,
+                )
                 if pending_resume is not None:
                     approval_id = pending_resume["approval_id"]
                     if time.time() >= float(pending_resume["expires_at"]):
