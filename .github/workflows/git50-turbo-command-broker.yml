@@ -45,6 +45,32 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  native-root-activation:
+    name: Windows AppContainer new-root provisioning and ACL revocation
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native PowerShell parse gates
+        shell: powershell
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_os_activation.ps1',
+            'install_smart_agent/tests/validate_git50_turbo_activation.ps1'
+          )) {
+            $tokens=$null; $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -ne 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('GIT50_POWERSHELL_PARSE_FAILED:' + $path)
+            }
+          }
+      - name: Provision AppContainer new Turbo root and revoke before ACL OFF
+        shell: powershell
+        run: |
+          .\\install_smart_agent\\tests\\validate_git50_turbo_activation.ps1 -FixtureParent $env:RUNNER_TEMP
+
   runtime-backcompat:
     name: Git49 admission and ACL ON/OFF regressions
     runs-on: ${{ matrix.os }}
