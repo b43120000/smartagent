@@ -146,6 +146,21 @@ try {
     New-Item -ItemType HardLink -Path $hardlink -Target $siblingFile -ErrorAction Stop | Out-Null
     Invoke-Probe 'read' $hardlink 5 'hardlink_outside_read_os_access_denied'
 
+    # Junction escape to an ungranted sibling is still decided by Windows ACL.
+    $junction = Join-Path $turbo 'outside_junction'
+    try {
+        New-Item -ItemType Junction -Path $junction -Target $sibling -ErrorAction Stop | Out-Null
+        Invoke-Probe 'read' (Join-Path $junction 'sibling_secret.txt') 5 'junction_outside_read_os_access_denied'
+    } catch {
+        # Record unavailability rather than mistaking a software-created
+        # junction refusal for an OS-level ACCESS_DENIED PASS.
+        Write-Host ('GIT47_JUNCTION_CHECK_NOT_VERIFIED:' + $_.Exception.GetType().Name)
+    } finally {
+        if (Test-Path -LiteralPath $junction) {
+            & cmd.exe /d /c ('rmdir "' + $junction + '"') | Out-Null
+        }
+    }
+
     Write-Host 'GIT47_DISPOSABLE_WIN32_APPCONTAINER_FILE_BOUNDARY_PASS'
     Write-Host 'NOTE: This does NOT attest Python/Git/PowerShell, child inheritance, hardlinks, reparse points, root delete, reboot or production lease revocation.'
 }
