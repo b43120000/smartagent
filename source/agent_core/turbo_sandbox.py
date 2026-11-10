@@ -141,7 +141,21 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", default="")
     args = parser.parse_args(argv)
-    state = resolve_turbo_state(args.workspace or None)
+    workspace = args.workspace or None
+    if not workspace:
+        try:
+            from .remote_binding import active
+            live = active() or {}
+            workspace = str(live.get("workspace") or "").strip() or None
+        except (ImportError, RuntimeError, ValueError, OSError):
+            workspace = None
+    if not workspace:
+        try:
+            snapshot = access_snapshot()
+            workspace = next(iter(snapshot.get("writable_workspaces") or ()), None)
+        except (OSError, RuntimeError, ValueError):
+            workspace = None
+    state = resolve_turbo_state(workspace)
     print(json.dumps(state, ensure_ascii=False, sort_keys=True))
     return 0 if state["turbo_requested"] == "OFF" else 2
 
