@@ -1,0 +1,65 @@
+name: Git47 WebCopilot Result and Disposable AppContainer Probe
+
+on:
+  push:
+    branches:
+      - git47/webcopilot-readable-result-and-turbo-os-20261110
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  webcopilot-regression:
+    name: WebCopilot Tri-One view and Git46 gates
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Syntax check
+        run: >-
+          python -B -m compileall -q
+          source/web_copilot.py
+          source/agent_core/webcopilot_result_view.py
+          source/agent_core/webcopilot_result_panel.py
+          source/agent_core/turbo_sandbox.py
+      - name: Git47 WebCopilot view tests
+        run: python -B -m pytest source/WebAgent/tests/test_git47_webcopilot_result_panel.py -q
+      - name: Tri-One egress validation
+        run: python -B -m pytest source/WebAgent/tests/test_tri_one_egress_v10.py -q
+      - name: Git46 fail closed contract regression
+        run: python -B -m pytest source/WebAgent/tests/test_git46_turbo_sandbox_contract.py -q
+      - name: WebCopilot startup regression
+        run: python -B -m pytest source/WebAgent/tests/test_other_webcopilot_startup.py -q
+
+  windows-disposable-os-probe:
+    name: Disposable AppContainer Win32 OS Boundary - NOT Full Turbo
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static PowerShell syntax
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install_smart_agent/turbo_appcontainer_disposable_probe.ps1').Path,
+            [ref]$tokens, [ref]$errors)
+          if (@($errors).Count -ne 0) { $errors | Format-List | Out-String | Write-Host; throw "Invalid PowerShell" }
+      - name: Direct Windows File API OS Sandbox probe
+        shell: powershell
+        run: |
+          .\install_smart_agent\turbo_appcontainer_disposable_probe.ps1 -FixtureParent $env:RUNNER_TEMP
+      - name: Scope notice
+        run: echo "PASS here only attests the disposable direct Win32 file boundary; it does not enable production Turbo or prove all user-required features."
