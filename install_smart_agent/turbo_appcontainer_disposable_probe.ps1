@@ -18,6 +18,7 @@ $turbo = Join-Path $fixture 'turbo'
 $sibling = Join-Path $fixture 'sibling'
 $moniker = 'SmartAgentGit47Test_' + [Guid]::NewGuid().ToString('N')
 $profileCreated = $false
+$crossVolumeFixture = ''
 
 function Add-Grant(
     [Security.AccessControl.DirectorySecurity]$Acl,
@@ -183,6 +184,21 @@ try {
     Invoke-Probe 'write' (Join-Path $fixture 'out_of_root_write.txt') 5 'parent_write_os_access_denied'
     Invoke-Probe 'read' $siblingFile 5 'sibling_read_os_access_denied'
     Invoke-Probe 'write' (Join-Path $sibling 'sibling_write.txt') 5 'sibling_write_os_access_denied'
+
+    # A second disposable sentinel on a *different* volume validates actual
+    # kernel denial without modifying existing user files or other projects.
+    $otherTemp = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Temp' } else { '' }
+    if ($otherTemp -and (Test-Path -LiteralPath $otherTemp -PathType Container) -and
+        ([IO.Path]::GetPathRoot($otherTemp) -ine [IO.Path]::GetPathRoot($fixture))) {
+        $crossVolumeFixture = Join-Path $otherTemp ('Git47-OtherVolume-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $crossVolumeFixture | Out-Null
+        $externalSentinel = Join-Path $crossVolumeFixture 'external_private_data.txt'
+        [IO.File]::WriteAllText($externalSentinel, 'DISPOSABLE_OTHER_VOLUME_SENTINEL')
+        Invoke-Probe 'read' $externalSentinel 5 'other_volume_read_os_access_denied'
+        Invoke-Probe 'write' (Join-Path $crossVolumeFixture 'external_write.txt') 5 'other_volume_write_os_access_denied'
+    } else {
+        Write-Host 'GIT47_OTHER_VOLUME_NOT_VERIFIED:separate_disposable_volume_unavailable'
+    }
     Invoke-Probe 'spawn_read' $siblingFile 5 'child_process_outside_read_os_access_denied'
     Invoke-Probe 'spawn_read' (Join-Path $turbo 'inside.txt') 0 'child_process_inside_read'
     $env:GIT47_TEST_SECRET_NEVER_INHERIT = 'SECRET_FROM_UNRESTRICTED_HOST'
@@ -458,6 +474,9 @@ finally {
     }
     if (Test-Path -LiteralPath $fixture) {
         Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($crossVolumeFixture -and (Test-Path -LiteralPath $crossVolumeFixture)) {
+        Remove-Item -LiteralPath $crossVolumeFixture -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
