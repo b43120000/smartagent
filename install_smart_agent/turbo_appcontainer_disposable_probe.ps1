@@ -162,6 +162,22 @@ try {
     $inside = Join-Path $turbo 'inside.txt'
     [IO.File]::WriteAllText($inside, 'DISPOSABLE-INSIDE-SENTINEL')
     Invoke-Probe 'read' $inside 0 'inside_read'
+    # Git for Windows may require the OS NUL pseudo-device. Diagnose its
+    # AppContainer kernel access before considering any *explicit* exception.
+    # Never modify global device ACLs just to make Git launch.
+    foreach ($device in @('NUL', '\\\\.\\NUL')) {
+        $receipt = Join-Path $turbo ('.git47-device-' + [Guid]::NewGuid().ToString('N') + '.txt')
+        $arguments = 'read "' + $device + '" "' + $receipt + '"'
+        $null = [SmartAgentGit47AppContainerProbe]::Launch(
+            $moniker, $probe, $arguments, $turbo, [uint32]15000)
+        if (Test-Path -LiteralPath $receipt -PathType Leaf) {
+            $code = [IO.File]::ReadAllText($receipt).Trim()
+            Write-Host ('GIT47_OS_NUL_DEVICE_ACCESS:' + $device + ':' + $code)
+            Remove-Item -LiteralPath $receipt -Force
+        } else {
+            Write-Host ('GIT47_OS_NUL_DEVICE_UNAVAILABLE:' + $device)
+        }
+    }
     Invoke-Probe 'write' (Join-Path $turbo 'created_inside.txt') 0 'inside_write'
     Invoke-Probe 'read' $parentFile 5 'parent_read_os_access_denied'
     Invoke-Probe 'write' (Join-Path $fixture 'out_of_root_write.txt') 5 'parent_write_os_access_denied'
