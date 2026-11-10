@@ -67,6 +67,20 @@ def run_bounded_process(
             "security_rejected": True,
             "process_started": False,
         }
+    # Git49 OS Broker admission. This runs before selecting any executor,
+    # so neither direct host subprocess nor a stale service can be a fallback.
+    from .turbo_broker_admission import assess
+    broker = assess(cwd, tool="run_command")
+    if broker["decision"] == "BLOCKED":
+        return {
+            "exit_code": None, "stdout": "", "stderr": "",
+            "stdout_bytes": 0, "stderr_bytes": 0,
+            "stdout_truncated": False, "stderr_truncated": False,
+            "stdout_ref": "", "stderr_ref": "", "timed_out": False,
+            "error": "TURBO_OS_BROKER_BLOCKED:" + broker["reason_code"],
+            "security_rejected": True, "process_started": False,
+            "sandbox_evidence": broker["evidence"],
+        }
     from .windows_security import restricted_executor_required
     restricted_required = restricted_executor_required()
     if restricted_required and os.environ.get("SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE") != "1":
