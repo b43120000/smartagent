@@ -206,6 +206,41 @@ try {
         }
     }
     Invoke-Probe 'write' (Join-Path $turbo 'created_inside.txt') 0 'inside_write'
+    # Git50: execute an actual script via the OS-attested AppContainer,
+    # rather than interpreting the command in the host/CI PowerShell.
+    $commandScript = "[IO.File]::WriteAllText('git50_sandbox_command.txt','OS_ISOLATED');"
+    $commandReceipt = [SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+        $moniker, $commandScript, $turbo, [uint32]30000) | ConvertFrom-Json
+    if (-not $commandReceipt.sandbox_identity_verified -or
+        $commandReceipt.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+        $commandReceipt.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        [int]$commandReceipt.exit_code -ne 0 -or
+        [IO.File]::ReadAllText((Join-Path $turbo 'git50_sandbox_command.txt')) -cne 'OS_ISOLATED') {
+        throw 'GIT50_OS_SANDBOX_COMMAND_LAUNCH_FAILED'
+    }
+    Write-Host 'GIT50_OS_SANDBOX_COMMAND_EXECUTION_PASS'
+    # The child script attempts a real external file write; only the OS
+    # kernel may reject it. There is no parent-side path preflight substitute.
+    $externalWriteTarget = Join-Path $sibling 'git50_illegal_write.txt'
+    $externalLiteral = $externalWriteTarget.Replace("'", "''")
+    $denialScript = @"
+try {
+    [IO.File]::WriteAllText('$externalLiteral','ESCAPE')
+    exit 91
+} catch [System.UnauthorizedAccessException] {
+    [IO.File]::WriteAllText('git50_kernel_denied.txt','OS_DENIED')
+    exit 0
+}
+"@
+    $denialReceipt = [SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+        $moniker, $denialScript, $turbo, [uint32]30000) | ConvertFrom-Json
+    if (-not $denialReceipt.sandbox_identity_verified -or
+        [int]$denialReceipt.exit_code -ne 0 -or
+        (Test-Path -LiteralPath $externalWriteTarget -PathType Leaf) -or
+        [IO.File]::ReadAllText((Join-Path $turbo 'git50_kernel_denied.txt')) -cne 'OS_DENIED') {
+        throw 'GIT50_OS_SANDBOX_EXTERNAL_WRITE_NOT_DENIED'
+    }
+    Write-Host 'GIT50_OS_SANDBOX_COMMAND_OUTSIDE_DENIAL_PASS'
     Invoke-Probe 'read' $parentFile 5 'parent_read_os_access_denied'
     Invoke-Probe 'write' (Join-Path $fixture 'out_of_root_write.txt') 5 'parent_write_os_access_denied'
     Invoke-Probe 'read' $siblingFile 5 'sibling_read_os_access_denied'
