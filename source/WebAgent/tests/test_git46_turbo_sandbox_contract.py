@@ -244,7 +244,6 @@ def test_acl_off_stale_on_cli_and_planner_show_inactive(gate, monkeypatch, capsy
 def test_acl_off_stale_on_regular_command_really_executes(gate, tmp_path, monkeypatch):
     """Use the real ACL mode reader and ordinary software executor, not a fake PASS."""
     import json
-    import sys
     from agent_core.bounded_process import run_bounded_process
     from agent_core.windows_security import restricted_executor_required
 
@@ -265,8 +264,10 @@ def test_acl_off_stale_on_regular_command_really_executes(gate, tmp_path, monkey
     assert restricted_executor_required() is False
     state = turbo_sandbox.resolve_turbo_state(workspace)
     turbo_sandbox.require_turbo_backend(state)
+    # Use PATH-resolved python: a literal external absolute executable
+    # remains subject to command_security approval even when ACL is OFF.
     result = run_bounded_process(
-        [sys.executable, "-c", "print('ACL_OFF_TURBO_OFF_PASS')"],
+        ["python", "-c", "print('ACL_OFF_TURBO_OFF_PASS')"],
         cwd=workspace, capture_root=workspace, timeout=10,
     )
     assert result["exit_code"] == 0, result
