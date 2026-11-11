@@ -79,13 +79,19 @@ try {
             [string]$errorRecord.InvocationInfo.PositionMessage
         } else { '' }
         $stack=[string]$errorRecord.ScriptStackTrace
+        $scriptLine=0
+        $scriptName=''
+        if ($errorRecord.InvocationInfo) {
+            $scriptLine=[int]$errorRecord.InvocationInfo.ScriptLineNumber
+            $scriptName=[string]$errorRecord.InvocationInfo.ScriptName
+        }
         $failure=[ordered]@{
             schema='SMARTAGENT_ACL_ON_CAPTURED_ERROR_V1'
             project_root=$root
             error_message=$message
             classified_failure_stage=$failureStage
-            original_script_line=if ($errorRecord.InvocationInfo) { [int]$errorRecord.InvocationInfo.ScriptLineNumber } else { 0 }
-            original_script_name=if ($errorRecord.InvocationInfo) { [string]$errorRecord.InvocationInfo.ScriptName } else { '' }
+            original_script_line=$scriptLine
+            original_script_name=$scriptName
             invocation=$at
             script_stack_trace=$stack
             captured_at=(Get-Date).ToUniversalTime().ToString('o')
