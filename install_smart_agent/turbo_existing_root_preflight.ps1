@@ -148,7 +148,7 @@ while ($pending.Count -gt 0) {
     }
 }
 # Detect concurrent addition/deletion during enumeration before any mutation.
-foreach ($item in @($nodes)) {
+foreach ($item in $nodes.ToArray()) {
     if (-not (Test-Path -LiteralPath $item.path)) {
         throw ('TURBO_B_PREFLIGHT_TREE_CHANGED:'+$item.path)
     }
