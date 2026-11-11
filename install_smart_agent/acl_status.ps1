@@ -865,6 +865,9 @@ if ($Mode -eq 'on') {
             } else {
                 @($profile.authorized_workspace_roots | ForEach-Object { [string]$_ })
             }
+            # PowerShell unwraps singleton arrays returned by if-expressions.
+            # Rewrap before indexing so D:\workspace never becomes just 'D'.
+            $writeRoots = @($writeRoots)
             $workspace = [string]$writeRoots[0]
             $additionalWriteRoots = @($writeRoots | Where-Object {
                 -not ([IO.Path]::GetFullPath($_).Equals([IO.Path]::GetFullPath($workspace), [StringComparison]::OrdinalIgnoreCase))
