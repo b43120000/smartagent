@@ -84,6 +84,22 @@ try {
     [IO.File]::WriteAllText($policyPath,($policy | ConvertTo-Json -Depth 10))
     Write-Host 'TURBO_B_ADMIN_PROTECTED_SNAPSHOT_AND_POLICY_BINDING_PASS'
 
+    # An attacker-controlled preexisting backup folder must not be trusted
+    # merely because /grant:r was used for SYSTEM and Administrators.
+    & icacls.exe $backupDir /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+    Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_PERMISSIVE_BACKUP_ACE_CREATION_FAILED'
+    $permissionRejected=$false
+    try {
+        & $snapshotScript -ProjectRoot $project -Workspace $workspace -TurboRoot $root | Out-Null
+    } catch {
+        $permissionRejected=([string]$_.Exception.Message -match 'TURBO_B_SNAPSHOT_UNTRUSTED_PREEXISTING_ALLOW_ACE')
+    } finally {
+        & icacls.exe $backupDir '/remove:g' '*S-1-5-32-545' | Out-Null
+        Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_PERMISSIVE_BACKUP_ACE_CLEANUP_FAILED'
+    }
+    Assert $permissionRejected 'TURBO_B_BACKUP_DIR_WITH_EXTRA_WRITE_ACE_WAS_ACCEPTED'
+    Write-Host 'TURBO_B_PREEXISTING_BACKUP_DIR_ACL_FAIL_CLOSED_PASS'
+
     # Real NTFS hardlink on a disposable copy: refuse escape aliases.
     $alias=Join-Path $workspace 'external_hardlink.py'
     & fsutil.exe hardlink create $alias $file | Out-Null
