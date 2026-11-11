@@ -131,7 +131,10 @@ $mutations=0
 # This rehearsal is intentionally short-lived and ALWAYS restores the original
 # security descriptor before returning, including an injected failure.
 try {
-    foreach ($entry in @($doc.entries | Sort-Object path)) {
+    # Apply children first: modifying a parent DACL can propagate the
+    # auto-inherited ACL flag to descendants before their snapshot recheck.
+    # The reverse rollback order then restores parents before children.
+    foreach ($entry in @($doc.entries | Sort-Object {([string]$_.path).Length} -Descending)) {
         $p=[string]$entry.path
         if (-not ((Same $p $root) -or (Within $p $root))) {
             throw 'TURBO_B_TRANSACTION_OUTSIDE_ENTRY'
