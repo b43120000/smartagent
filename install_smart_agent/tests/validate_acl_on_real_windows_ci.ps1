@@ -108,6 +108,47 @@ try {
     $verification.heartbeat_age_sec=$heartbeatAge
     $onPassed=$true
     Write-Host 'CI_REAL_ACL_ON_ATTESTATION_PASS'
+
+    # Reproduce Edit Workspace Apply AFTER ACL ON: same password-backed
+    # Executor, an added Turbo root strictly beneath the writable workspace.
+    # This must reuse the stored task credential without Set-ScheduledTask.
+    Step 'WORKSPACE_REAPPLY_EXISTING_PASSWORD_TASK'
+    $turboRoot=Join-Path $workspace 'SmartAgent_GoalDriven_IT_GH_v1'
+    New-Item -ItemType Directory -Force -Path $turboRoot | Out-Null
+    $policy.turbo_roots=@($turboRoot)
+    $policy.revision=2
+    [IO.File]::WriteAllText($policyPath,($policy | ConvertTo-Json -Depth 8),
+        (New-Object Text.UTF8Encoding($false)))
+    $taskBefore=Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    $beforeUser=[string]$taskBefore.Principal.UserId
+    $beforeLogon=[string]$taskBefore.Principal.LogonType
+    $beforeRunLevel=[string]$taskBefore.Principal.RunLevel
+    $beforePasswordSet=(Get-LocalUser -Name ([string]$profile.executor_user) -ErrorAction Stop).PasswordLastSet
+    $configure=Join-Path $root 'install_smart_agent\configure_security.ps1'
+    & $configure -WorkspaceContainer $workspace -AdditionalWriteRoots @() `
+        -RuntimeRoot ([string]$profile.runtime_root) -DeniedWriteRoots @($denied) `
+        -ReadOnlyRoots @($readonly) -SkillRoot ([string]$profile.skill_roots[0]) `
+        -ExecutorUser ([string]$profile.executor_user) -ProfilePath (Join-Path $sec 'security_profile.json') `
+        -ExecutorPython $py -ControllerSid ([string]$identity.User.Value) `
+        -SkipAclModeRestore -NonInteractive -Apply
+    Step 'WORKSPACE_REAPPLY_ATTESTATION'
+    $taskAfter=Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    Assert ([string]$taskAfter.Principal.UserId -eq $beforeUser) 'CI_REAPPLY_TASK_USER_CHANGED'
+    Assert ([string]$taskAfter.Principal.LogonType -eq $beforeLogon) 'CI_REAPPLY_TASK_LOGON_CHANGED'
+    Assert ([string]$taskAfter.Principal.RunLevel -eq $beforeRunLevel) 'CI_REAPPLY_TASK_RUNLEVEL_CHANGED'
+    Assert ([string]$taskAfter.State -eq 'Running') 'CI_REAPPLY_EXECUTOR_NOT_RUNNING'
+    $afterPasswordSet=(Get-LocalUser -Name ([string]$profile.executor_user) -ErrorAction Stop).PasswordLastSet
+    Assert ($afterPasswordSet -eq $beforePasswordSet) 'CI_REAPPLY_EXECUTOR_PASSWORD_ROTATED'
+    Assert ((Get-Mode) -eq 'on') 'CI_REAPPLY_ACL_MODE_CHANGED'
+    $reapplyProfile=Get-Content -LiteralPath (Join-Path $sec 'security_profile.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $reapplyState=Get-Content -LiteralPath ([IO.Path]::Combine([string]$reapplyProfile.executor_endpoint,'service_state.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert ($reapplyState.self_test.passed -eq $true -and $reapplyState.self_test.mode -eq 'on') 'CI_REAPPLY_SELFTEST_FAILED'
+    Assert ($reapplyState.is_admin -eq $false) 'CI_REAPPLY_EXECUTOR_ADMIN'
+    $verification.workspace_reapply_passed=$true
+    $verification.workspace_reapply_executor_user_unchanged=$true
+    $verification.workspace_reapply_password_unchanged=$true
+    $verification.workspace_reapply_turbo_root=$turboRoot
+    Write-Host 'CI_WORKSPACE_REAPPLY_PRESERVED_TASK_CREDENTIAL_PASS'
 } catch {
     $failure=[string]$_.Exception.Message
     Write-Host ('[ACL_ON_CI_ERROR] stage='+$stage+' error='+$failure) -ForegroundColor Red
