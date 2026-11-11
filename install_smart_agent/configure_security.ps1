@@ -818,9 +818,35 @@ if ($initialInstall) {
     if ((Get-ScheduledTask -TaskName $taskName).State -eq 'Running') {
         throw "Unable to stop existing restricted executor task"
     }
-    # Preserve the stored task credential while refreshing the executable and
-    # protected-code working directory after an update or security re-seal.
-    Set-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings | Out-Null
+    # Existing Executor tasks use TASK_LOGON_PASSWORD. Set-ScheduledTask without
+    # a password can ask Task Scheduler to validate a password that Windows
+    # deliberately does not expose; observed error: 0x8007052e. The existing
+    # executable/arguments/working directory and principal SID were validated
+    # above. Ordinary ACL/Workspace updates do not change the task definition.
+    #
+    # Fail closed on task policy drift rather than silently rewriting an
+    # existing password-backed task or resetting the Executor credential.
+    $currentTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    $currentPrincipal = $currentTask.Principal
+    if ([string]$currentPrincipal.LogonType -ne 'Password' -or
+        [string]$currentPrincipal.RunLevel -ne 'Limited') {
+        throw ('executor_task_security_policy_mismatch:logon_type=' +
+            [string]$currentPrincipal.LogonType + ',run_level=' +
+            [string]$currentPrincipal.RunLevel + '; use explicit ACL OFF/ON recovery')
+    }
+    $currentTriggers = @($currentTask.Triggers)
+    if ($currentTriggers.Count -ne 1 -or
+        [string]$currentTriggers[0].CimClass.CimClassName -ne 'MSFT_TaskBootTrigger' -or
+        -not $currentTriggers[0].Enabled) {
+        throw 'executor_task_trigger_mismatch:expected_one_enabled_boot_trigger; use explicit ACL OFF/ON recovery'
+    }
+    if ([int]$currentTask.Settings.RestartCount -ne 999 -or
+        [string]$currentTask.Settings.RestartInterval -ne 'PT1M' -or
+        [string]$currentTask.Settings.ExecutionTimeLimit -notin @('PT0S','P0D')) {
+        throw 'executor_task_settings_mismatch:restart_or_execution_limit; use explicit ACL OFF/ON recovery'
+    }
+    Write-Host '[security] reusing verified existing Executor task (stored credential preserved, no Set-ScheduledTask)'
+
 }
 $statePath = Join-Path $endpoint 'service_state.json'
 Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
