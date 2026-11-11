@@ -294,6 +294,9 @@ function Get-WorkspaceAccessPolicy {
     if ($writable.Count -lt 1) { throw 'acl_workspace_access_policy_has_no_writable_workspace' }
     return [pscustomobject]@{
         turbo_requested = ($policy.turbo_requested -eq $true)
+        turbo_roots = @($policy.turbo_roots | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_)
+        } | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Select-Object -Unique)
         writable_workspaces = @($writable | Select-Object -Unique)
         read_only_roots = @($policy.read_only_roots | ForEach-Object {
             if (-not [string]::IsNullOrWhiteSpace([string]$_)) { [IO.Path]::GetFullPath([string]$_) }
@@ -855,6 +858,17 @@ if ($Mode -eq 'on') {
     if ($options) {
         $options.executor_user = Get-ProvisioningExecutorName $previousModeState
         $repairExecutor = [bool](Get-LocalUser -Name $options.executor_user -ErrorAction SilentlyContinue)
+    }
+    # Reject unsupported existing Turbo project trees BEFORE changing ACL
+    # state. Native AppContainer import/rollback is not implemented for them.
+    if ($accessPolicy -and $accessPolicy.turbo_requested -eq $true) {
+        $selectedTurbo = @($accessPolicy.turbo_roots)
+        if ($selectedTurbo.Count -ne 1) {
+            throw 'ACL_ON_TURBO_SINGLE_ROOT_REQUIRED_NO_SECURITY_CHANGES'
+        }
+        if (Test-Path -LiteralPath ([string]$selectedTurbo[0])) {
+            throw 'ACL_ON_TURBO_EXISTING_ROOT_IMPORT_UNSUPPORTED_NO_SECURITY_CHANGES'
+        }
     }
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     Write-ModeState 'transitioning_on' $executorSid $callerSid
