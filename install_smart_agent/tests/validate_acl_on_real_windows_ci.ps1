@@ -149,6 +149,29 @@ try {
     $verification.workspace_reapply_password_unchanged=$true
     $verification.workspace_reapply_turbo_root=$turboRoot
     Write-Host 'CI_WORKSPACE_REAPPLY_PRESERVED_TASK_CREDENTIAL_PASS'
+
+    # Real ACLstatus ON re-entry must auto-enroll the exact configured NEW
+    # Turbo Root. Never silently import the existing/populated project tree.
+    Step 'ACL_ON_AUTO_TURBO_NATIVE_ENROLLMENT'
+    $freshTurboRoot=Join-Path $workspace 'fresh_turbo_native_root'
+    Assert (-not (Test-Path -LiteralPath $freshTurboRoot)) 'CI_FRESH_TURBO_ROOT_ALREADY_EXISTS'
+    $policy.turbo_roots=@($freshTurboRoot)
+    $policy.turbo_requested=$true
+    $policy.revision=3
+    [IO.File]::WriteAllText($policyPath,($policy | ConvertTo-Json -Depth 8),
+        (New-Object Text.UTF8Encoding($false)))
+    & $aclScript -Mode on -ProjectRoot $root -ControllerSid ([string]$identity.User.Value)
+    Assert ((Get-Mode) -eq 'on') 'CI_AUTO_TURBO_ACL_ON_NOT_COMMITTED'
+    $turboJournal=Join-Path $sec 'turbo_os_activation.json'
+    Assert (Test-Path -LiteralPath $turboJournal -PathType Leaf) 'CI_AUTO_TURBO_JOURNAL_MISSING'
+    $nativeRecord=Get-Content -LiteralPath $turboJournal -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert ($nativeRecord.status -eq 'ACTIVE_PROVISIONED') 'CI_AUTO_TURBO_ROOT_NOT_PROVISIONED'
+    Assert ([int]$nativeRecord.policy_revision -eq 3) 'CI_AUTO_TURBO_POLICY_REVISION_MISMATCH'
+    Assert ((Test-Path -LiteralPath $freshTurboRoot -PathType Container)) 'CI_AUTO_TURBO_ROOT_NOT_CREATED'
+    Assert ([string]$nativeRecord.package_sid -match '^S-1-15-2-') 'CI_AUTO_TURBO_PACKAGE_SID_INVALID'
+    $verification.acl_on_turbo_auto_enrolled=$true
+    $verification.turbo_package_sid=[string]$nativeRecord.package_sid
+    Write-Host 'CI_ACL_ON_NATIVE_TURBO_AUTO_ENROLLED_PASS'
 } catch {
     $failure=[string]$_.Exception.Message
     Write-Host ('[ACL_ON_CI_ERROR] stage='+$stage+' error='+$failure) -ForegroundColor Red
