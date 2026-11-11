@@ -208,6 +208,7 @@ jobs:
         run: |
           foreach ($path in @(
             'install_smart_agent/turbo_broker_switch_checkpoint.ps1',
+            'install_smart_agent/turbo_p3d_switch_preconditions.ps1',
             'install_smart_agent/tests/validate_turbo_b_p3c_broker_switch_ci.ps1'
           )) {
             $tokens=$null
