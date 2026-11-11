@@ -131,9 +131,11 @@ while ($pending.Count -gt 0) {
     if ([string]::IsNullOrEmpty($sddl)) {
         throw ('TURBO_B_PREFLIGHT_EMPTY_SDDL:'+$path)
     }
+    $relativePath='.'
+    if (-not (Same $path $root)) { $relativePath=$path.Substring($root.Length+1) }
     [void]$nodes.Add([pscustomobject]@{
         path=$path
-        relative=if (Same $path $root) { '.' } else { $path.Substring($root.Length+1) }
+        relative=$relativePath
         directory=[bool]$isDir
         identity=$id
         sddl=$sddl
