@@ -97,7 +97,6 @@ try {
         Where-Object { $_ -is [System.Collections.Specialized.OrderedDictionary] })
     Assert ($pre.Count -eq 1 -and [int]$pre[0].count -eq 3) 'P3D2_TARGET_PRECHECK_FAILED'
     foreach($entry in @($pre[0].entries)) {$backup[[string]$entry.path]=[string]$entry.sddl}
-    $workspaceBaseline=Snapshot $workspace
     & $native -Action Revoke -ProjectRoot $project | Out-Null
     Assert (-not (Test-Path -LiteralPath $journal)) 'P3D2_OLD_JOURNAL_SURVIVED_REVOKE'
     # Old Broker revoke must not alter the PREEXISTING target metadata.
@@ -112,7 +111,9 @@ try {
     $package=[SmartAgentGit47AppContainerProbe]::CreateProfile($moniker)
     Assert ($package -match '^S-1-15-2-') 'P3D2_NEW_NATIVE_SID_INVALID'
     $sid=[Security.Principal.SecurityIdentifier]::new($package)
-    $baseline=Snapshot $workspace
+    # Preserve only the post-revocation ancestor ACL; restoring the
+    # pre-revocation ACL would resurrect the old package's traverse grant.
+    $workspaceBaseline=Snapshot $workspace
     $mutated=New-Object System.Collections.Generic.List[string]
     # Explicit traverse ACE for the workspace. Persist snapshot before change.
     $workspaceAcl=Get-Acl -LiteralPath $workspace -ErrorAction Stop
