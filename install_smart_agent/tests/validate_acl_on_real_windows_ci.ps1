@@ -174,6 +174,7 @@ try {
     Write-Host 'CI_ACL_ON_NATIVE_TURBO_AUTO_ENROLLED_PASS'
 } catch {
     $failure=[string]$_.Exception.Message
+    $onPassed=$false
     Write-Host ('[ACL_ON_CI_ERROR] stage='+$stage+' error='+$failure) -ForegroundColor Red
     Write-Host ($_ | Out-String)
     if (Test-Path -LiteralPath $diagScript -PathType Leaf) {
@@ -222,5 +223,5 @@ try {
         (New-Object Text.UTF8Encoding($false)))
     Write-Host ('[ACL_CI_EVIDENCE] '+$evidence)
 }
-if (-not ($onPassed -and $offPassed)) { throw ('CI_REAL_ACL_DEPLOYMENT_FAILED: '+$failure) }
+if ($failure -or -not ($onPassed -and $offPassed)) { throw ('CI_REAL_ACL_DEPLOYMENT_FAILED: '+$failure) }
 Write-Host 'CI_REAL_ACL_ON_TO_OFF_FULL_CYCLE_PASS'
