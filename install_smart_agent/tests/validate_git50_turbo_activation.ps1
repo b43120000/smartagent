@@ -11,6 +11,7 @@ $secure = Join-Path $project 'localdata\secure\windows_security'
 $workspace = Join-Path $fixture 'workspace'
 $root = Join-Path $workspace 'turbo_new'
 $activation = Join-Path $PSScriptRoot '..\turbo_os_activation.ps1'
+$autoActivation = Join-Path $PSScriptRoot '..\turbo_auto_activate.ps1'
 try {
     New-Item -ItemType Directory -Force -Path $secure,$workspace | Out-Null
     $mode=[ordered]@{
@@ -31,7 +32,8 @@ try {
         ($policy | ConvertTo-Json), [Text.Encoding]::UTF8)
     if (Test-Path -LiteralPath $root) { throw 'GIT50_FIXTURE_NEW_ROOT_EXISTS' }
 
-    & $activation -ProjectRoot $project -Action Activate -Workspace $workspace -TurboRoot $root
+    # Exercise the production ACL ON / Workspace Apply auto-enrollment entrypoint.
+    & $autoActivation -ProjectRoot $project -Action Apply
     $journalPath = Join-Path $secure 'turbo_os_activation.json'
     if (-not (Test-Path -LiteralPath $root -PathType Container) -or
         -not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
@@ -127,9 +129,9 @@ try {
     [IO.File]::WriteAllText((Join-Path $secure 'acl_mode.json'),
         ($mode | ConvertTo-Json), [Text.Encoding]::UTF8)
     $rejected=$false
-    try { & $activation -ProjectRoot $project -Action Activate -Workspace $workspace -TurboRoot $populated }
+    try { & $autoActivation -ProjectRoot $project -Action Apply }
     catch {
-        $rejected = $_.Exception.Message -match 'GIT50_ONLY_BRAND_NEW'
+        $rejected = $_.Exception.Message -match 'TURBO_AUTOSTART_EXISTING_ROOT_IMPORT_UNSUPPORTED'
     }
     if (-not $rejected -or
         [IO.File]::ReadAllText((Join-Path $populated 'do_not_touch.txt')) -cne 'ORIGINAL') {
