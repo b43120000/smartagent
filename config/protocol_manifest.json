@@ -35,7 +35,7 @@
     "install_smart_agent/build_portable_runtime.py": "bef3176f55a5e630600ec0a92798e0735e0fd20331599242dd98e28017ccc50b",
     "install_smart_agent/build_update_manifest.py": "bbc1546eedd75883279341dd9d8615fd81b8403aac97fe041f171ef8dfec5d9b",
     "install_smart_agent/complete_install.ps1": "14796e855b656e7713b7353cf3ae2cc9bab6f2922e1d07d1de54d084a15bd61a",
-    "install_smart_agent/configure_security.ps1": "e7aed8a6338db091f38f68486480304355ef7e8033438dcaeac072bad070e5f1",
+    "install_smart_agent/configure_security.ps1": "1d0478642e8c7cfccfaebff040efc76f02eb10010048a355b6924adf4cce3bdb",
     "install_smart_agent/deploy_public_layout.ps1": "d5907909c40561a06fd5d447cd9b2b69ebed66c5da0b096bc612860607644a98",
     "install_smart_agent/ensure_environment.ps1": "764c81cbb1c6609891fe6d1b83887c4bf2f8f7aca94699c5495888881f3ad879",
     "install_smart_agent/ensure_python.ps1": "b19f717d137d5933b7a93b38d805d753e96046b246917c0740536571353cb283",
