@@ -177,3 +177,66 @@ Protected read-only snapshot is not a backup of user-file contents. Production
 mutator with Startup/ACL OFF recovery are still absent. The old CI-only
 transaction rehearsal cannot safely be run against user data. Do not assert
 `Turbo Effective: ON` until full isolation and action routing pass.
+
+
+## Scheme B P3-C — old Native Broker review and verified revocation gate
+
+An already-enrolled Native AppContainer may refer to a DIFFERENT Turbo Root
+while the existing Case D candidate passed P3 verification. Candidate
+verification does not grant permission to change or revoke the old package.
+
+The production P3-C entry point is
+`install_smart_agent/turbo_broker_switch_checkpoint.ps1`. Assessment does
+NOT mutate Workspace files, existing ACLs, integrity labels, Turbo policy,
+or active AppContainer grants. It writes a non-authorizing protected review
+receipt to an admin/SYSTEM-only directory.
+
+After updating the Git51 checkout to this tested commit, use elevated
+Windows PowerShell to review the user's actual old Broker:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\smartagent\install_smart_agent\turbo_broker_switch_checkpoint.ps1" -Action Assess -ProjectRoot "C:\smartagent" -Workspace "E:\AIspace" -TargetTurboRoot "E:\AIspace\SmartAgent_GoalDriven_IT_GH_v1" -SnapshotId "6f6bf6f8f3034768a2f18c5381ddbe2f"
+```
+
+The script re-verifies the protected candidate snapshot and 68 current entry
+IDs and SDDLs; checks the old journal against the installation and workspace,
+matches the actual old Root Package SID ACE, checks scope and reparse
+components, and creates an admin/SYSTEM-only review receipt bound to the
+old package SID, journal hash and target snapshot. That receipt explicitly
+has `authorization_to_revoke=false` and `authorization_to_mutate=false`.
+
+Expected while a different old Broker is active:
+
+```text
+TURBO_B_P3_VERIFY_PASS entries=68
+TURBO_B_P3C_ASSESS_PASS
+P3C_REVIEW_ID=<new 32 hex ID>
+P3C_OLD_BROKER=ACTIVE_PROVISIONED
+P3C_OLD_ROOT=<recorded old root>
+P3C_PACKAGE_SID=<recorded old package SID>
+P3C_BROKER_JOURNAL_SHA256=<recorded hash>
+P3C_REVOKE_REQUIRED=YES
+P3C_REVOCATION_ACTION=NOT_AUTOMATIC
+P3C_EXISTING_ROOT_IMPORT=NOT_ENABLED
+P3C_FULL_ACCESS=NOT_ENABLED
+```
+
+`-Action VerifyRevoked -ReviewId <ID>` is a distinct post-revocation
+read-only verifier, NOT a revocation instruction. It verifies the protected
+review ID and grants, refuses a still-present journal, and rejects any
+remaining old SID ACE in the previous Root and traverse ancestors.
+
+CI uses only disposable Windows NTFS trees to perform an actual old native
+Broker activation, review, revocation, and independent post-revoke
+attestation; it proves retained user content, unchanged existing-target
+hash and SDDL, and still rejects unsafe existing populated Root import.
+It also rejects forged review IDs and review files with extra Users ACEs.
+
+**Not yet production switch:** current native Revoke uses recursive ACE
+removal and changes Low integrity back to Medium in the old provisioned
+Root. Such a transition must not be applied to arbitrary user data or
+custom labels without integrity backups and independently tested
+transactional recovery. Active process quiescence, crash-safe old-to-new
+switching and the full production Executor-to-Broker path are also not
+finished. Do NOT run the standalone native Revoke or delete the old
+activation journal just to clear this blocker.
