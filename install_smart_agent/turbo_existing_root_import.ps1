@@ -254,12 +254,34 @@ try {
       $p=[string]$entry.path
       if((Sddl $p) -cne [string]$entry.sddl){throw 'TURBO_D3_SNAPSHOT_STALE'}
       $acl=Get-Acl -LiteralPath $p
-      $flags=if([bool]$entry.directory){[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
-      $rule=[Security.AccessControl.FileSystemAccessRule]::new(
-           $sidObj,[Security.AccessControl.FileSystemRights]::Modify,$flags,
-           [Security.AccessControl.PropagationFlags]::None,
-           [Security.AccessControl.AccessControlType]::Allow)
-      [void]$acl.AddAccessRule($rule)
+      if(Same $p $script:root){
+          # Grant content access but NEVER DELETE on the authorization Root
+          # itself. InheritOnly grants Modify on descendants, not the Root.
+          $rootRights=[Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+              [Security.AccessControl.FileSystemRights]::WriteData -bor
+              [Security.AccessControl.FileSystemRights]::AppendData -bor
+              [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+              [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+              [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
+          $rootRule=[Security.AccessControl.FileSystemAccessRule]::new(
+              $sidObj,$rootRights,[Security.AccessControl.InheritanceFlags]::None,
+              [Security.AccessControl.PropagationFlags]::None,
+              [Security.AccessControl.AccessControlType]::Allow)
+          $childRule=[Security.AccessControl.FileSystemAccessRule]::new(
+              $sidObj,[Security.AccessControl.FileSystemRights]::Modify,
+              [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',
+              [Security.AccessControl.PropagationFlags]::InheritOnly,
+              [Security.AccessControl.AccessControlType]::Allow)
+          [void]$acl.AddAccessRule($rootRule)
+          [void]$acl.AddAccessRule($childRule)
+      }else{
+          $flags=if([bool]$entry.directory){[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
+          $rule=[Security.AccessControl.FileSystemAccessRule]::new(
+              $sidObj,[Security.AccessControl.FileSystemRights]::Modify,$flags,
+              [Security.AccessControl.PropagationFlags]::None,
+              [Security.AccessControl.AccessControlType]::Allow)
+          [void]$acl.AddAccessRule($rule)
+      }
       Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
       & icacls.exe $p '/setintegritylevel' $(if([bool]$entry.directory){'(OI)(CI)L'}else{'L'}) | Out-Null
       if($LASTEXITCODE -ne 0){throw 'TURBO_D3_LOW_IL_FAILED'}
