@@ -48,6 +48,18 @@ public static class SmartAgentTurboExistingSecurity {
                 throw new InvalidOperationException("TURBO_EXISTING_SE_SECURITY_PRIVILEGE_NOT_ASSIGNED");
         } finally {CloseHandle(token);}
     }
+    // Windows Set-Acl may add an unrequested D:AI automatic-inheritance bit.
+    // Only use this after a precise original SDDL comparison shows drift.
+    public static void RestoreOriginalDacl(string path,string originalSddl) {
+        IntPtr sd; uint bytes;
+        if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            originalSddl,1,out sd,out bytes))
+            throw new Win32Exception(Marshal.GetLastWin32Error(),"TURBO_EXISTING_DACL_PARSE");
+        try {
+            if(!SetFileSecurityW(path,4u,sd))
+                throw new Win32Exception(Marshal.GetLastWin32Error(),"TURBO_EXISTING_DACL_RESTORE");
+        } finally {LocalFree(sd);}
+    }
     public static void RestoreMandatoryLabel(string path, string originalSddl) {
         if (String.IsNullOrEmpty(path) || String.IsNullOrEmpty(originalSddl))
             throw new ArgumentException("TURBO_EXISTING_SDDL_ARGS");
