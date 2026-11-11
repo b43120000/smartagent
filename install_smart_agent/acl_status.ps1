@@ -1032,6 +1032,18 @@ if ($task) {
 # Revoke both the invoking installation's Turbo boundary and the verified
 # machine-wide executor owner's boundary before publishing OFF.
 foreach ($install in @($ProjectRoot, $revocation.root) | Select-Object -Unique) {
+    $turboSwitchJournal = Join-Path $install 'localdata\secure\windows_security\turbo_existing_root_switch.json'
+    Assert-RevocationPath $turboSwitchJournal
+    if (Test-Path -LiteralPath $turboSwitchJournal -PathType Leaf) {
+        $switchRecovery = Join-Path $PSScriptRoot 'turbo_existing_root_switch.ps1'
+        if (-not (Test-Path -LiteralPath $switchRecovery -PathType Leaf)) {
+            throw 'TURBO_D3_SWITCH_RECOVERY_MISSING_ACL_OFF_BLOCKED'
+        }
+        & $switchRecovery -Action Recover -ProjectRoot $install
+        if (Test-Path -LiteralPath $turboSwitchJournal -PathType Leaf) {
+            throw 'TURBO_D3_SWITCH_RECOVERY_INCOMPLETE_ACL_OFF_BLOCKED'
+        }
+    }
     $turboOsJournal = Join-Path $install 'localdata\secure\windows_security\turbo_os_activation.json'
     Assert-RevocationPath $turboOsJournal
     if (Test-Path -LiteralPath $turboOsJournal -PathType Leaf) {
