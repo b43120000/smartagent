@@ -5,6 +5,9 @@ on:
     branches:
       - git51/webcopilot-final-natural-render-20261110
   workflow_dispatch:
+  pull_request:
+    branches:
+      - git50/turbo-appcontainer-command-broker-20261110
 
 permissions:
   contents: read
