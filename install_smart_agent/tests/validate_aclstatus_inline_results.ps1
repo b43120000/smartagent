@@ -82,6 +82,17 @@ if ($case -eq 'ON_FALSE_SUCCESS') {
     [IO.File]::WriteAllText($corePath,$stub,(New-Object Text.UTF8Encoding($false)))
     $launcherResult=& cmd.exe /d /c ('"' + $launcher + '" --launcher-self-test')
     Assert ($LASTEXITCODE -eq 0) ('launcher selftest: '+($launcherResult|Out-String))
+    Assert (($launcherResult | Out-String).Contains('ACLSTATUS_LAUNCHER_PARSE_OK')) 'launcher did not generate GUID'
+    # Exercise the exact CMD invocation with an absolute script path containing spaces.
+    $withSpaces=Join-Path $fixture 'root with spaces'
+    $testScripts=Join-Path $withSpaces 'install_smart_agent'
+    New-Item -ItemType Directory -Path $testScripts -Force | Out-Null
+    Copy-Item -LiteralPath $launcher -Destination (Join-Path $withSpaces 'ACLstatus.bat') -ErrorAction Stop
+    Copy-Item -LiteralPath ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\acl_mode_launcher.ps1'))) -Destination (Join-Path $testScripts 'acl_mode_launcher.ps1') -ErrorAction Stop
+    $absoluteBat=Join-Path $withSpaces 'ACLstatus.bat'
+    $absoluteRun=& cmd.exe /d /s /c ('""'+$absoluteBat+'" --launcher-self-test"') 2>&1
+    Assert ($LASTEXITCODE -eq 0) ('absolute launcher with spaces exit: '+($absoluteRun|Out-String))
+    Assert (($absoluteRun | Out-String).Contains('ACLSTATUS_LAUNCHER_PARSE_OK')) ('absolute launcher with spaces output: '+($absoluteRun|Out-String))
     Verify 'on' 'ON_FAIL' 'FAIL' 1 'ON_EXECUTOR_TASK_REGISTRATION' 'transitioning_on'
     Verify 'off' 'OFF_FAIL' 'FAIL' 1 'OFF_CONTROLLER_WRITE_VERIFICATION' 'transitioning_off'
     Verify 'on' 'ON_PASS' 'PASS' 0 '' 'on'
