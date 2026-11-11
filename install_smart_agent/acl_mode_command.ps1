@@ -156,6 +156,8 @@ try {
     if ($transcriptStarted) {
         try { Stop-Transcript | Out-Null } catch { }
     }
+    $savedTranscriptPath = ''
+    if ($transcriptStarted) { $savedTranscriptPath = $TranscriptPath }
     $receipt=[ordered]@{
         schema='SMARTAGENT_ACL_OPERATION_RESULT_V1'
         mode=$Mode
@@ -167,7 +169,7 @@ try {
         source_location=$sourceLocation
         script_stack_trace=$stack
         observed_mode=$actualMode
-        transcript_path=if ($transcriptStarted) { $TranscriptPath } else { '' }
+        transcript_path=$savedTranscriptPath
         timestamp_utc=[DateTimeOffset]::UtcNow.ToString('o')
     }
     try {
