@@ -1,0 +1,55 @@
+name: Git52 ACL OFF read-only audit and Win32 fixture verification
+
+on:
+  push:
+    branches:
+      - git52/acl-off-audit-20261111
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-win32-audit:
+    name: Windows ACL OFF audit regression (disposable fixture)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse check scripts on Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          foreach ($name in @(
+            'install_smart_agent/verify_acl_off.ps1',
+            'install_smart_agent/tests/validate_git52_acl_off_audit.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $name).Path, [ref]$tokens, [ref]$errors)
+            if (@($errors).Count -ne 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw "GIT52_POWERSHELL_PARSE_FAILED:$name"
+            }
+          }
+      - name: Real Win32 ACL read and conservative terminal classification
+        shell: powershell
+        run: |
+          .\install_smart_agent\tests\validate_git52_acl_off_audit.ps1
+
+  existing-software-guard:
+    name: Existing ACL OFF software guard regressions
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Existing ACL OFF execution guard
+        run: python -B source/WebAgent/tests/validate_acl_off_software_guard.py
+      - name: Existing Workspace Manager ACL OFF behavior
+        run: python -B source/WebAgent/tests/validate_acl_off_workspace_manager.py
