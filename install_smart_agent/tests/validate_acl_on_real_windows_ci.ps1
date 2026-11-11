@@ -150,6 +150,24 @@ try {
     $verification.workspace_reapply_turbo_root=$turboRoot
     Write-Host 'CI_WORKSPACE_REAPPLY_PRESERVED_TASK_CREDENTIAL_PASS'
 
+    Step 'ACL_ON_EXISTING_TURBO_ROOT_PREFLIGHT_REJECTION'
+    $policy.turbo_roots=@($turboRoot)
+    $policy.turbo_requested=$true
+    $policy.revision=3
+    [IO.File]::WriteAllText($policyPath,($policy | ConvertTo-Json -Depth 8),
+        (New-Object Text.UTF8Encoding($false)))
+    $existingBlocked=$false
+    try {
+        & $aclScript -Mode on -ProjectRoot $root -ControllerSid ([string]$identity.User.Value)
+    } catch {
+        $existingBlocked=([string]$_.Exception.Message -match
+            'ACL_ON_TURBO_EXISTING_ROOT_IMPORT_UNSUPPORTED_NO_SECURITY_CHANGES')
+    }
+    Assert $existingBlocked 'CI_EXISTING_USER_TURBO_ROOT_NOT_BLOCKED'
+    Assert ((Get-Mode) -eq 'on') 'CI_EXISTING_ROOT_REJECTION_CHANGED_ACL_MODE'
+    Assert ([string](Get-ScheduledTask -TaskName $taskName -ErrorAction Stop).State -eq 'Running') 'CI_EXISTING_ROOT_REJECTION_STOPPED_EXECUTOR'
+    Write-Host 'CI_ACL_ON_EXISTING_ROOT_PREFLIGHT_FAIL_CLOSED_PASS'
+
     # Real ACLstatus ON re-entry must auto-enroll the exact configured NEW
     # Turbo Root. Never silently import the existing/populated project tree.
     Step 'ACL_ON_AUTO_TURBO_NATIVE_ENROLLMENT'
