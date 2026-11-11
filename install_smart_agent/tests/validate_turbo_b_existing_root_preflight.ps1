@@ -30,8 +30,8 @@ try {
     $hashBefore=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
     $rootSddlBefore=(Get-Acl -LiteralPath $root -Audit).Sddl
     $fileSddlBefore=(Get-Acl -LiteralPath $file -Audit).Sddl
-    $snapshot=Inventory
-    Assert ($snapshot.Count -eq 1) 'TURBO_B_NO_INVENTORY_OBJECT'
+    $snapshot=@(Inventory)
+    Assert ($snapshot.Count -eq 1) ('TURBO_B_NO_INVENTORY_OBJECT:actual='+$snapshot.Count)
     Assert ($snapshot[0].schema -eq 'SMARTAGENT_TURBO_EXISTING_ROOT_PREFLIGHT_V1') 'TURBO_B_BAD_SCHEMA'
     Assert ($snapshot[0].count -eq 3) ('TURBO_B_UNEXPECTED_ENTRY_COUNT:'+ $snapshot[0].count)
     Assert ($snapshot[0].import_allowed_for_mutation -eq $false) 'TURBO_B_PRECHECK_MUST_NOT_GRANT'
