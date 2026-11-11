@@ -6,7 +6,9 @@ param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [Parameter(Mandatory=$true)][string]$Workspace,
     [Parameter(Mandatory=$true)][string]$TurboRoot,
-    [int]$MaxEntries=5000
+    [int]$MaxEntries=5000,
+    [switch]$CandidateOnly,
+    [switch]$EmitReceipt
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -36,15 +38,36 @@ if ($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or
     throw 'TURBO_B_SNAPSHOT_ACL_ON_INSTALL_MISMATCH'
 }
 if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1' -or
-    $policy.turbo_requested -ne $true -or
     [int]$policy.revision -lt 1) {
     throw 'TURBO_B_SNAPSHOT_POLICY_NOT_REQUESTED'
 }
 $policyRoots=@($policy.turbo_roots)
 $writable=@($policy.writable_workspaces)
-if ($policyRoots.Count -ne 1 -or -not (Equal ([string]$policyRoots[0]) $root) -or
-    @($writable | Where-Object { Equal ([string]$_) $workspace }).Count -ne 1) {
+if (@($writable | Where-Object { Equal ([string]$_) $workspace }).Count -ne 1) {
     throw 'TURBO_B_SNAPSHOT_SCOPE_POLICY_MISMATCH'
+}
+if (-not $CandidateOnly -and
+    ($policy.turbo_requested -ne $true -or $policyRoots.Count -ne 1 -or
+     -not (Equal ([string]$policyRoots[0]) $root))) {
+    throw 'TURBO_B_SNAPSHOT_POLICY_NOT_REQUESTED'
+}
+if ($CandidateOnly) {
+    # A candidate snapshot grants NO mutation rights. The existing Root may
+    # not yet be selectable in Edit Workspace, which still fails closed.
+    # Keep all protected paths excluded even for a read-only prepare.
+    if (-not $root.StartsWith($workspace+'\',[StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw 'TURBO_B_CANDIDATE_ROOT_NOT_EXISTING_WORKSPACE_CHILD'
+    }
+    foreach($value in @($policy.read_only_roots)+@($policy.denied_write_roots)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $protected=Full ([string]$value)
+        if ((Equal $protected $root) -or
+            $protected.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or
+            $root.StartsWith($protected+'\',[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'TURBO_B_CANDIDATE_PROTECTED_ROOT_OVERLAP'
+        }
+    }
 }
 $preflight=Join-Path $PSScriptRoot 'turbo_existing_root_preflight.ps1'
 if (-not (Test-Path -LiteralPath $preflight -PathType Leaf)) {
@@ -99,6 +122,7 @@ $snapshot=[ordered]@{
     schema='SMARTAGENT_TURBO_EXISTING_ROOT_SNAPSHOT_V1'
     snapshot_id=$id
     status='PREPARED_READ_ONLY'
+    candidate_only=[bool]$CandidateOnly
     authorization_to_mutate=$false
     project_root=$project
     workspace_root=$workspace
@@ -123,3 +147,14 @@ if ($readback.schema -ne 'SMARTAGENT_TURBO_EXISTING_ROOT_SNAPSHOT_V1' -or
 Write-Host ('TURBO_B_PROTECTED_EXISTING_ROOT_SNAPSHOT_PASS entries='+$inventory.count)
 Write-Host ('TURBO_B_SNAPSHOT_PATH: '+$path)
 Write-Host 'TURBO_B_IMPORT_NOT_ENABLED; original filesystem content and security untouched.'
+if ($EmitReceipt) {
+    Write-Output ([pscustomobject]@{
+        schema='SMARTAGENT_TURBO_B_SNAPSHOT_RECEIPT_V1'
+        snapshot_id=$id
+        path=$path
+        entries_count=[int]$inventory.count
+        policy_revision=[int]$policy.revision
+        candidate_only=[bool]$CandidateOnly
+        authorization_to_mutate=$false
+    })
+}
