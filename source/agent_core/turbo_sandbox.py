@@ -177,6 +177,22 @@ def main(argv=None) -> int:
         except (OSError, RuntimeError, ValueError):
             workspace = None
     state = resolve_turbo_state(workspace)
+    # Advisory enrollment status only. This must never set global READY/ON:
+    # native Windows process/token + outside-root denial are re-attested on
+    # EVERY action. A protected journal alone is not a Full-Access grant.
+    state["broker_enrolled"] = False
+    if (workspace is not None and state["acl_mode"] == "on" and (
+            state["turbo_requested"] == "ON" and
+            state["scope_verdict"] == "TURBO_SCOPE_ALLOWED")):
+        try:
+            from .turbo_os_broker_client import active_broker_available
+            if active_broker_available(workspace):
+                state["broker_enrolled"] = True
+                state["status"] = "BROKER_ENROLLED"
+                state["reason_code"] = "TURBO_OS_BROKER_PER_ACTION_ATTESTATION_REQUIRED"
+                state["sandbox_backend"] = "WIN32_APPCONTAINER_ONESHOT"
+        except (OSError, RuntimeError, ValueError):
+            pass
     print(json.dumps(state, ensure_ascii=False, sort_keys=True))
     return 0 if (state["sandbox_status"] != "FAILED" and
                  (state["acl_mode"] == "off" or
