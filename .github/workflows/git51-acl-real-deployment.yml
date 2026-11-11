@@ -165,3 +165,32 @@ jobs:
       - name: CI-only AppContainer ACE, SDDL roundtrip and fault rollback
         run: |
           .\install_smart_agent\tests\validate_turbo_b_acl_transaction_ci.ps1
+
+  turbo-b-p3-real-prepare:
+    name: Turbo B P3 production candidate Prepare and Verify on disposable populated NTFS tree
+    runs-on: windows-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parse gate for production read-only prepare/verify
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_snapshot.ps1',
+            'install_smart_agent/turbo_existing_root_prepare.ps1',
+            'install_smart_agent/tests/validate_turbo_b_p3_prepare_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_P3_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Production candidate prepare and independent verify on preexisting NTFS tree
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_p3_prepare_ci.ps1
