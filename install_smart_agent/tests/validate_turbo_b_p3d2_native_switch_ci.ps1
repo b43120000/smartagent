@@ -37,8 +37,15 @@ function Restore([string]$p,[string]$sddl) {
     $acl=Get-Acl -LiteralPath $p -Audit -ErrorAction Stop
     $acl.SetSecurityDescriptorSddlForm($sddl)
     Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
-    # Set-Acl may add D:AI; reset the DACL control bits through Win32.
-    [TurboBCiFullRestore]::Restore($p,$sddl)
+    # Restore SACL/mandatory label explicitly: a DACL-only restore leaves
+    # a stale S:PAI and violates the original mandatory-integrity state.
+    [TurboBCiFullRestore]::RestoreSacl($p,$sddl)
+    # Do not reset D:AI unconditionally; Windows may discard an original
+    # auto-inherited DACL flag on an unnecessary SetFileSecurity DACL call.
+    $current=[string](Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl
+    if ($current -cne $sddl) {
+        Write-Host ('P3D2_CI_AFTER_SACL_RESTORE: '+$current)
+    }
 }
 if (-not ('TurboBCiFullRestore' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -53,13 +60,13 @@ public static class TurboBCiFullRestore {
  static extern bool SetFileSecurityW(string path,uint info,IntPtr sd);
  [DllImport("kernel32.dll",SetLastError=true)]
  static extern IntPtr LocalFree(IntPtr sd);
- public static void Restore(string path,string sddl) {
+ public static void RestoreSacl(string path,string sddl) {
      IntPtr sd;uint n;
      if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out sd,out n))
          throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_SDDL_PARSE_FAILED");
      try {
-       if(!SetFileSecurityW(path,4u,sd))
-         throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_DACL_RESTORE_FAILED");
+       if(!SetFileSecurityW(path,8u,sd))
+         throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_SACL_RESTORE_FAILED");
      } finally {LocalFree(sd);}
  }
 }
