@@ -11,9 +11,9 @@ $root=Join-Path $workspace 'existing'
 $pre=Join-Path $PSScriptRoot '..\turbo_existing_root_preflight.ps1'
 function Assert([bool]$Value,[string]$Message) { if (-not $Value) { throw $Message } }
 function Inventory {
-    return @(& $pre -ProjectRoot $project -Workspace $workspace -TurboRoot $root |
+    & $pre -ProjectRoot $project -Workspace $workspace -TurboRoot $root -IncludeSensitiveInventory |
         Where-Object { $_ -is [System.Collections.Specialized.OrderedDictionary] } |
-        Select-Object -Last 1)
+        Select-Object -Last 1
 }
 function Expected-Block([string]$Needle) {
     $blocked=$false
