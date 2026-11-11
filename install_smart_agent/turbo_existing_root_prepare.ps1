@@ -37,9 +37,9 @@ function Assert-ProtectedPath([string]$path,[string]$label) {
         throw ('TURBO_B_P3_PROTECTED_PATH_REPARSE:'+$label)
     }
 }
-function Check-AdminOnlyAcl([string]$path) {
+function Check-AdminOnlyAcl([string]$path,[bool]$mustBeProtected) {
     $acl=Get-Acl -LiteralPath $path -ErrorAction Stop
-    if (-not $acl.AreAccessRulesProtected) {
+    if ($mustBeProtected -and -not $acl.AreAccessRulesProtected) {
         throw 'TURBO_B_P3_SNAPSHOT_ACL_INHERITANCE_UNTRUSTED'
     }
     foreach($rule in @($acl.Access)) {
@@ -117,10 +117,11 @@ function Verify-Snapshot([string]$id) {
     if ($id -notmatch '^[0-9a-f]{32}$') { throw 'TURBO_B_P3_SNAPSHOT_ID_INVALID' }
     Assert-ProtectedPath $backupDir 'snapshot-directory'
     Assert-ProtectedPath $secure 'security-root'
-    Check-AdminOnlyAcl $backupDir
+    Check-AdminOnlyAcl $backupDir $true
     $snapshotFile=Join-Path $backupDir ('snapshot-'+$id+'.json')
     Assert-ProtectedPath $snapshotFile 'snapshot-file'
-    Check-AdminOnlyAcl $snapshotFile
+    # File may inherit exclusively from the independently verified protected dir.
+    Check-AdminOnlyAcl $snapshotFile $false
     $snapshot=Read-Json $snapshotFile
     if ($snapshot.schema -ne 'SMARTAGENT_TURBO_EXISTING_ROOT_SNAPSHOT_V1' -or
         $snapshot.snapshot_id -cne $id -or
