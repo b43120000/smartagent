@@ -194,3 +194,31 @@ jobs:
       - name: Production candidate prepare and independent verify on preexisting NTFS tree
         run: |
           .\install_smart_agent\tests\validate_turbo_b_p3_prepare_ci.ps1
+
+  turbo-b-p3c-broker-review:
+    name: P3-C broker review, kernel grant revocation, and existing-target preservation
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse P3-C review and real Windows test scripts
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_broker_switch_checkpoint.ps1',
+            'install_smart_agent/tests/validate_turbo_b_p3c_broker_switch_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_P3C_POWERSHELL_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Active old broker scope, native revoke, and fail-closed existing import
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_p3c_broker_switch_ci.ps1
