@@ -87,6 +87,9 @@ public static class TurboBCiFullRestore {
      string sddl,uint revision,out IntPtr sd,out uint bytes);
  [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
  static extern bool SetFileSecurityW(string path,uint info,IntPtr sd);
+ [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+ static extern UInt32 SetNamedSecurityInfoW(string objectName,int objectType,
+     UInt32 information,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
  [DllImport("kernel32.dll",SetLastError=true)]
  static extern IntPtr LocalFree(IntPtr sd);
  public static void RestoreSacl(string path,string sddl) {
@@ -98,6 +101,14 @@ public static class TurboBCiFullRestore {
        if(!SetFileSecurityW(path,8u,sd)) {
          int code=Marshal.GetLastWin32Error();
          throw new Win32Exception(code,"B_CI_SACL_RESTORE_FAILED_WIN32_"+code.ToString());
+       }
+       // The original SDDL had NO SACL_PRESENT flag (no S: section).
+       // Test SetNamedSecurityInfo with an explicit null SACL to remove the
+       // empty S: state left by SetFileSecurity. CI-only until exact proof.
+       if(sddl.IndexOf("S:",StringComparison.Ordinal)<0) {
+           UInt32 status=SetNamedSecurityInfoW(path,1,8u,IntPtr.Zero,IntPtr.Zero,
+                                               IntPtr.Zero,IntPtr.Zero);
+           if(status!=0) throw new Win32Exception((int)status,"B_CI_CLEAR_NULL_SACL_FAILED_"+status);
        }
      } finally {LocalFree(sd);}
  }
