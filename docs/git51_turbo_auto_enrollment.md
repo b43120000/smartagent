@@ -100,27 +100,27 @@ Do not relax `TURBO_AUTOSTART_EXISTING_ROOT_IMPORT_UNSUPPORTED`, set `Turbo Effe
 ## Scheme B P3 — Production candidate-only live check (no existing-root mutation)
 
 This is the **handoff checkpoint** after the administrator has already observed
-\`TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries=68\` on their real Windows NTFS
+`TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries=68` on their real Windows NTFS
 existing project. **No production AppContainer ACE, integrity-label change,
 existing-root import, policy switch, or Full-Access enablement is performed.**
 
 The new, narrowly scoped entry point is
-\`install_smart_agent/turbo_existing_root_prepare.ps1\`, invoked in a trusted
+`install_smart_agent/turbo_existing_root_prepare.ps1`, invoked in a trusted
 elevated Windows PowerShell terminal. It supports:
 
-- \`-Action Prepare\`: requires the matching installation ACL mode to be ON,
+- `-Action Prepare`: requires the matching installation ACL mode to be ON,
   verifies a registered writable Workspace and strictly nested, existing
   candidate Root; refuses overlap with Read-only/denied paths; runs the existing
   NTFS preflight including hardlink/reparse and full SDDL capture; writes an
-  immutable, admin/SYSTEM-only \`PREPARED_READ_ONLY\` candidate snapshot; and
+  immutable, admin/SYSTEM-only `PREPARED_READ_ONLY` candidate snapshot; and
   independently verifies it before returning PASS.
-- \`-Action Verify -SnapshotId <32 lowercase hexadecimal chars>\`: loads only
+- `-Action Verify -SnapshotId <32 lowercase hexadecimal chars>`: loads only
   a snapshot stored inside this installation's protected snapshot directory,
-  checks schema, install/workspace/root identity, \`candidate_only=true\`,
-  \`authorization_to_mutate=false\`, Policy Revision, file paths, entry count,
+  checks schema, install/workspace/root identity, `candidate_only=true`,
+  `authorization_to_mutate=false`, Policy Revision, file paths, entry count,
   stable file IDs, full SDDL and directory/file types. Changes to tree
   membership, security descriptors or policy revision require new preparation.
-- Status \`P3_BROKER_BLOCKER\` indicates whether a separately enrolled native
+- Status `P3_BROKER_BLOCKER` indicates whether a separately enrolled native
   AppContainer currently exists (possibly pointing to a *different* Root).
   This is an ADVISORY next-stage blocker: Prepare still succeeds because it
   never changes existing grants or records.
@@ -133,13 +133,13 @@ elevated Windows PowerShell terminal. It supports:
 First update the Git51 installation to the approved commit. Do not switch
 versions while an ACL operation is running; verify the local Git SHA separately.
 
-\`\`\`powershell
+```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\smartagent\install_smart_agent\turbo_existing_root_prepare.ps1" -Action Prepare -ProjectRoot "C:\smartagent" -Workspace "E:\AIspace" -TurboRoot "E:\AIspace\SmartAgent_GoalDriven_IT_GH_v1"
-\`\`\`
+```
 
 Expected on the real machine, if the 68 entries have not changed:
 
-\`\`\`text
+```text
 TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries=68
 TURBO_B_PROTECTED_EXISTING_ROOT_SNAPSHOT_PASS entries=68
 TURBO_B_P3_VERIFY_PASS entries=68
@@ -151,13 +151,13 @@ P3_IMPORT_MUTATION=DISABLED
 P3_FULL_ACCESS=NOT_ENABLED
 TURBO_B_P3_PREPARE_PASS
 P3_LIVE_CHECKPOINT=EXISTING_ROOT_SNAPSHOT_VERIFIED_NO_MUTATION
-\`\`\`
+```
 
 Verify independently (paste the emitted P3_SNAPSHOT_ID):
 
-\`\`\`powershell
+```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\smartagent\install_smart_agent\turbo_existing_root_prepare.ps1" -Action Verify -ProjectRoot "C:\smartagent" -Workspace "E:\AIspace" -TurboRoot "E:\AIspace\SmartAgent_GoalDriven_IT_GH_v1" -SnapshotId "<new 32-hex ID>"
-\`\`\`
+```
 
 If the live tree or ACL changed in between, Verify MUST fail closed. The
 snapshot deliberately stores **ACL/File-ID metadata**, not file-content hashes;
@@ -173,7 +173,7 @@ and SDDL, and a separately requested different Turbo Root.
 ### NOT YET SUPPORTED
 
 Protected read-only snapshot is not a backup of user-file contents. Production
-\`Existing Root Import\` and a fully transactional ACL/mandatory-integrity
+`Existing Root Import` and a fully transactional ACL/mandatory-integrity
 mutator with Startup/ACL OFF recovery are still absent. The old CI-only
 transaction rehearsal cannot safely be run against user data. Do not assert
-\`Turbo Effective: ON\` until full isolation and action routing pass.
+`Turbo Effective: ON` until full isolation and action routing pass.
