@@ -561,7 +561,7 @@ def _security_menu() -> int:
             except (ValueError, IndexError):
                 print("[!] Invalid index.")
         elif choice == "5":
-            path = str(Path(input("Turbo path (existing workspace subdirectory): ").strip().strip('"')).expanduser().resolve())
+            path = str(Path(input("Turbo path (new workspace child, not an existing project): ").strip().strip('"')).expanduser().resolve())
             denied = profile.get("denied_write_roots") or ()
             if not any(is_valid_turbo_root(path, root, writable, read_only, denied)
                        for root in writable):
@@ -579,6 +579,19 @@ def _security_menu() -> int:
                 # Do not partially mutate workspaces before discovering ACL OFF.
                 if turbo and acl_mode() != "on":
                     raise ValueError("TURBO_REQUIRES_ACL_ON")
+                if turbo and not software_only:
+                    if len(turbo) != 1:
+                        raise RuntimeError("turbo_native_single_root_required")
+                    active_journal = (
+                        AGENT_PROJECT_ROOT / "localdata" / "secure"
+                        / "windows_security" / "turbo_os_activation.json"
+                    )
+                    if Path(turbo[0]).exists() and not active_journal.is_file():
+                        raise RuntimeError(
+                            "TURBO_AUTOSTART_EXISTING_ROOT_IMPORT_UNSUPPORTED:"
+                            "existing files and ACLs are untouched; use a "
+                            "brand-new, nonexistent Turbo child root"
+                        )
                 return_code = (
                     _apply_software_only_access(writable, read_only, profile)
                     if software_only
