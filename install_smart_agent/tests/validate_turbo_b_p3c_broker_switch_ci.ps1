@@ -72,6 +72,43 @@ try {
     Assert ((Get-Acl -LiteralPath $existingFile -Audit).Sddl -ceq $targetSddl) 'TURBO_B_P3C_ASSESS_CHANGED_TARGET_ACL'
     Write-Host 'TURBO_B_P3C_OLD_BROKER_SCOPE_AND_BINDING_REVIEW_PASS'
 
+    # P3-D live checkpoint rehearsal: protected OLD-root SDDL/IL inventory
+    # bound to the non-authorizing old Broker review and target P3 snapshot.
+    $p3d=Join-Path $PSScriptRoot '..\turbo_p3d_switch_preconditions.ps1'
+    & $p3d -ProjectRoot $project -Workspace $workspace -TargetTurboRoot $target -SnapshotId $snapId -ReviewId $reviewId
+    $allSnapshots=@(Get-ChildItem -LiteralPath (Join-Path $secure 'turbo_existing_root_snapshots') -Filter 'snapshot-*.json' -File)
+    Assert ($allSnapshots.Count -eq 2) 'TURBO_B_P3D_OLD_ROOT_PROTECTED_SNAPSHOT_MISSING'
+    $oldSnapshots=@($allSnapshots | ForEach-Object {
+        Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+    } | Where-Object { $_.turbo_root -eq $oldRoot })
+    Assert ($oldSnapshots.Count -eq 1 -and $oldSnapshots[0].candidate_only -eq $true -and
+        $oldSnapshots[0].authorization_to_mutate -eq $false) 'TURBO_B_P3D_OLD_ROOT_SNAPSHOT_NOT_BOUND'
+    Assert ((Get-FileHash -LiteralPath $existingFile -Algorithm SHA256).Hash -eq $targetHash) 'TURBO_B_P3D_TARGET_MODIFIED_DURING_PRECONDITION'
+    Assert ((Get-Acl -LiteralPath $existingFile -Audit).Sddl -ceq $targetSddl) 'TURBO_B_P3D_TARGET_SDDL_CHANGED'
+    Assert ((Get-FileHash -LiteralPath $data -Algorithm SHA256).Hash -eq $oldHash) 'TURBO_B_P3D_OLD_ROOT_USER_FILE_CHANGED'
+    Write-Host 'TURBO_B_P3D_PROTECTED_OLD_ROOT_SDDL_SNAPSHOT_PASS'
+
+    # A broker journal changed after the P3-C review must fail closed.
+    $originalJournal=[IO.File]::ReadAllBytes($journal)
+    try {
+        $fake=Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-Json
+        $fake.created_at=[long]$fake.created_at+1
+        [IO.File]::WriteAllText($journal,($fake | ConvertTo-Json -Depth 12),
+            (New-Object Text.UTF8Encoding($false)))
+        $tamperedBlocked=$false
+        try {
+            & $p3d -ProjectRoot $project -Workspace $workspace -TargetTurboRoot $target -SnapshotId $snapId -ReviewId $reviewId | Out-Null
+        } catch {
+            $tamperedBlocked=$_.Exception.Message -match 'TURBO_B_P3D_BROKER_JOURNAL_CHANGED_REASSESS_REQUIRED'
+        }
+        Assert $tamperedBlocked 'TURBO_B_P3D_CHANGED_BROKER_JOURNAL_ACCEPTED'
+    } finally {
+        [IO.File]::WriteAllBytes($journal,$originalJournal)
+    }
+    Assert ((Get-FileHash -LiteralPath $journal -Algorithm SHA256).Hash -eq
+        [string]$receipt.original_journal_sha256) 'TURBO_B_P3D_TEST_JOURNAL_RESTORE_NOT_EXACT'
+    Write-Host 'TURBO_B_P3D_STALE_BROKER_JOURNAL_FAIL_CLOSED_PASS'
+
     $blocked=$false
     try { & $review -Action VerifyRevoked -ProjectRoot $project -Workspace $workspace -TargetTurboRoot $target -SnapshotId $snapId -ReviewId $reviewId | Out-Null }
     catch { $blocked=$_.Exception.Message -match 'TURBO_B_P3C_REVOCATION_JOURNAL_STILL_PRESENT' }
