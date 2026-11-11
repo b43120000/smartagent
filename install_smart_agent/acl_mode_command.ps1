@@ -19,7 +19,7 @@ function Assert-LogLocationSafe([string]$Path) {
     # Elevated mode must not follow a user-controlled junction to a protected
     # destination. The final receipt uses CREATE_NEW and never overwrites.
     $full=[IO.Path]::GetFullPath($Path)
-    $parent=New-Object IO.DirectoryInfo (Split-Path -Parent $full)
+    $parent=[IO.DirectoryInfo]::new((Split-Path -Parent $full))
     if (-not $parent.Exists) { throw 'ACL_STATUS_LOG_PARENT_MISSING' }
     while ($parent) {
         if (($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -196,7 +196,7 @@ try {
         $utf8=New-Object Text.UTF8Encoding($false)
         $bytes=$utf8.GetBytes(($receipt | ConvertTo-Json -Depth 8))
         # CREATE_NEW is atomic and refuses a pre-created symlink/receipt.
-        $stream=New-Object IO.FileStream(
+        $stream=[IO.FileStream]::new(
             [IO.Path]::GetFullPath($ReceiptPath),
             [IO.FileMode]::CreateNew,
             [IO.FileAccess]::Write,
