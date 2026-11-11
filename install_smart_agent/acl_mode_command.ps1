@@ -15,6 +15,19 @@ function Normalize-Root([string]$Value) {
     try { return [IO.Path]::GetFullPath($Value).TrimEnd('\') }
     catch { return '' }
 }
+function Assert-LogLocationSafe([string]$Path) {
+    # Elevated mode must not follow a user-controlled junction to a protected
+    # destination. The final receipt uses CREATE_NEW and never overwrites.
+    $full=[IO.Path]::GetFullPath($Path)
+    $parent=New-Object IO.DirectoryInfo (Split-Path -Parent $full)
+    if (-not $parent.Exists) { throw 'ACL_STATUS_LOG_PARENT_MISSING' }
+    while ($parent) {
+        if (($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw ('ACL_STATUS_LOG_PATH_REPARSE_POINT_FORBIDDEN: '+$parent.FullName)
+        }
+        $parent=$parent.Parent
+    }
+}
 function Read-PersistedMode([string]$Root) {
     try {
         $path=Join-Path $Root 'localdata\secure\windows_security\acl_mode.json'
@@ -121,9 +134,11 @@ try {
     if (-not (Test-Path -LiteralPath $core -PathType Leaf)) {
         throw ('ACL_CORE_SCRIPT_MISSING: '+$core)
     }
+    Assert-LogLocationSafe $ReceiptPath
     if ($TranscriptPath) {
         try {
-            Start-Transcript -LiteralPath $TranscriptPath -ErrorAction Stop | Out-Null
+            Assert-LogLocationSafe $TranscriptPath
+            Start-Transcript -LiteralPath $TranscriptPath -NoClobber -ErrorAction Stop | Out-Null
             $transcriptStarted=$true
         } catch {
             $transcriptError=$_.Exception.Message
@@ -177,11 +192,18 @@ try {
         if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
             throw 'ACL_STATUS_RECEIPT_DIRECTORY_MISSING'
         }
-        [IO.File]::WriteAllText(
+        Assert-LogLocationSafe $ReceiptPath
+        $utf8=New-Object Text.UTF8Encoding($false)
+        $bytes=$utf8.GetBytes(($receipt | ConvertTo-Json -Depth 8))
+        # CREATE_NEW is atomic and refuses a pre-created symlink/receipt.
+        $stream=New-Object IO.FileStream(
             [IO.Path]::GetFullPath($ReceiptPath),
-            ($receipt | ConvertTo-Json -Depth 8),
-            (New-Object Text.UTF8Encoding($false))
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write,
+            [IO.FileShare]::None
         )
+        try { $stream.Write($bytes,0,$bytes.Length) }
+        finally { $stream.Dispose() }
     } catch {
         Write-Host ('[SmartAgent ACL] ERROR: Unable to write terminal receipt: '+$_.Exception.Message) -ForegroundColor Red
         $result='FAIL'
