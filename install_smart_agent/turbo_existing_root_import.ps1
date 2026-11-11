@@ -116,7 +116,28 @@ function Revoke-Tree([object]$j) {
     }
  }
  [SmartAgentGit47AppContainerProbe]::DeleteProfile([string]$j.moniker)
- if(Test-Path -LiteralPath $script:activation){Remove-Item -LiteralPath $script:activation -Force -ErrorAction Stop}
+ if($j.PSObject.Properties.Name -contains 'negative_sentinel_path' -and
+    -not [string]::IsNullOrWhiteSpace([string]$j.negative_sentinel_path)){
+    $sentinel=Full ([string]$j.negative_sentinel_path)
+    if(-not (Same ([IO.Path]::GetDirectoryName($sentinel)) ([IO.Path]::GetDirectoryName($script:root))) -or
+       -not [IO.Path]::GetFileName($sentinel).StartsWith('.git50-os-denial-')){
+       throw 'TURBO_D3_SENTINEL_SCOPE_INVALID'
+    }
+    if(Test-Path -LiteralPath $sentinel -PathType Leaf){
+       if([IO.File]::ReadAllText($sentinel) -ceq 'OUTSIDE_SENTINEL'){
+          Remove-Item -LiteralPath $sentinel -Force -ErrorAction Stop
+       }
+    }
+ }
+ if(Test-Path -LiteralPath $script:activation){
+    $active=Load $script:activation
+    if($active.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+       $active.existing_root_import -ne $true -or
+       [string]$active.package_sid -cne [string]$j.package_sid){
+       throw 'TURBO_D3_FOREIGN_ACTIVATION_JOURNAL'
+    }
+    Remove-Item -LiteralPath $script:activation -Force -ErrorAction Stop
+ }
  Remove-Item -LiteralPath $script:journal -Force -ErrorAction Stop
  Write-Host 'TURBO_D3_REVOKE_EXACT_SDDL_PASS'
 }
@@ -202,6 +223,7 @@ try {
     install_root=$script:project;workspace_root=$ws;turbo_root=$script:root
     snapshot_id=$SnapshotId;moniker=$moniker;package_sid=$sid
     policy_revision=[int]$policy.revision;ancestors=@($ancestors)
+    negative_sentinel_path=(Join-Path ([IO.Path]::GetDirectoryName($script:root)) ('.git50-os-denial-'+[Guid]::NewGuid().ToString('N')))
  }
  Save-Atomic $script:journal $j $false
  try {
@@ -233,10 +255,74 @@ try {
       [void]$acl.AddAccessRule($rule)
       Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
    }
+   $sentinel=[string]$j.negative_sentinel_path
+   [IO.File]::WriteAllText($sentinel,'OUTSIDE_SENTINEL')
+   $probe=Join-Path $script:root ('.turbo-d3-attest-'+[Guid]::NewGuid().ToString('N'))
+   $inside=$probe.Replace("'","''")
+   $outside=$sentinel.Replace("'","''")
+   try{
+      $code=@"
+try {
+    [IO.File]::WriteAllText('$inside','INSIDE_APP_CONTAINER')
+    try {[void][IO.File]::ReadAllText('$outside');exit 52}
+    catch [System.UnauthorizedAccessException] {exit 0}
+} catch {exit 53}
+"@
+      $receipt=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+          $moniker,$code,$script:root,[uint32]30000) | ConvertFrom-Json -ErrorAction Stop
+      if($receipt.sandbox_identity_verified -ne $true -or
+         $receipt.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+         $receipt.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+         [int]$receipt.exit_code -ne 0 -or
+         [IO.File]::ReadAllText($probe) -cne 'INSIDE_APP_CONTAINER'){
+         throw 'TURBO_D3_NATIVE_APPCONTAINER_ATTESTATION_FAILED'
+      }
+   } finally {
+      if(Test-Path -LiteralPath $probe -PathType Leaf){
+         Remove-Item -LiteralPath $probe -Force -ErrorAction Stop
+      }
+   }
+   $brokerCode=Join-Path $sec 'turbo_broker_code'
+   if(-not (Test-Path -LiteralPath $brokerCode -PathType Container)){
+      New-Item -ItemType Directory -Path $brokerCode -ErrorAction Stop | Out-Null
+   }
+   if((Get-Item -LiteralPath $brokerCode -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){
+      throw 'TURBO_D3_BROKER_CODE_REPARSE'
+   }
+   foreach($file in @('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')){
+      Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $brokerCode $file) -Force -ErrorAction Stop
+   }
+   & icacls.exe $brokerCode '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+   if($LASTEXITCODE -ne 0){throw 'TURBO_D3_BROKER_CODE_ACL_FAILED'}
+   foreach($file in @('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')){
+      $p=Join-Path $brokerCode $file
+      & icacls.exe $p '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
+      if($LASTEXITCODE -ne 0){throw 'TURBO_D3_BROKER_FILE_ACL_FAILED'}
+   }
+   $brokerEntry=Join-Path $brokerCode 'turbo_os_execute.ps1'
+   $active=[ordered]@{
+      schema='SMARTAGENT_TURBO_OS_ACTIVATION_V1'
+      status='ACTIVE_PROVISIONED'
+      install_root=$script:project
+      workspace_root=$ws
+      turbo_root=$script:root
+      policy_revision=[int]$policy.revision
+      moniker=$moniker
+      package_sid=$sid
+      traverse_parents=@($ancestors | ForEach-Object {[string]$_.path})
+      negative_sentinel_path=$sentinel
+      created_at=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      authorization_granted=$false
+      existing_root_import=$true
+      existing_import_snapshot_id=$SnapshotId
+      broker_entry=$brokerEntry
+      broker_source_sha256=(Get-FileHash -LiteralPath $brokerEntry -Algorithm SHA256).Hash
+   }
+   Save-Atomic $script:activation $active $true
    $j.status='ACTIVE'
    Save-Atomic $script:journal $j $false
-   Write-Host 'TURBO_D3_EXISTING_ROOT_PERMISSIONS_STAGED'
-   Write-Host 'TURBO_D3_EXECUTION_BROKER_NOT_YET_ACTIVATED'
+   Write-Host 'TURBO_D3_EXISTING_ROOT_NATIVE_BROKER_ATTESTED_PASS'
+   Write-Host 'TURBO_D3_PER_ACTION_BROKER_REQUIRED'
  } catch {
    $err=$_
    try{Revoke-Tree $j}catch{Write-Warning ('TURBO_D3_ROLLBACK_FAILED:'+ $_.Exception.Message)}
