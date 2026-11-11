@@ -82,7 +82,7 @@ $acl=Get-Acl -LiteralPath $backupDir -ErrorAction Stop
 foreach ($rule in @($acl.Access)) {
     if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) {
         try {
-            $sid=([Security.Principal.NTAccount]$rule.IdentityReference).Translate(
+            $sid=$rule.IdentityReference.Translate(
                 [Security.Principal.SecurityIdentifier]).Value
         } catch {
             throw 'TURBO_B_SNAPSHOT_UNRESOLVABLE_ACL_PRINCIPAL'
