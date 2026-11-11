@@ -80,3 +80,18 @@ grant is applied to existing files; no full-access status is asserted.
 
 Do not copy these scripts into the workspace or assume their presence alone
 grants elevated or AppContainer permissions.
+
+## Scheme B P2 — Tested NTFS ACL transaction and cross-process recovery
+
+The newest experiment, `install_smart_agent/turbo_existing_root_transaction_rehearsal.ps1`, is **strictly CI-only**. It requires the GitHub Runner environment, a unique disposable fixture directory beneath `RUNNER_TEMP`, a fixture marker, an elevated Windows identity, and a protected earlier snapshot. No ordinary operator or SmartAgent runtime workflow may invoke it for a real Workspace.
+
+Windows integration validation in `install_smart_agent/tests/validate_turbo_b_acl_transaction_ci.ps1` proves:
+
+1. An existing 3-node NTFS tree is re-enumerated and compared to its immutable earlier full SDDL and volume/file IDs before any ACE is added. Each node is granted a test AppContainer SID, **child-first**, then restored **parent-first**. No original data bytes or final SDDL change.
+2. An injected failure after the first Set-Acl is caught; the pre-mutation journal and in-memory rollback restore the original DACL, owner/group and observed security descriptor.
+3. A separate PowerShell process forcibly exits after the first Set-Acl. The parent reads a flushed journal written before that mutation, starts a new process-level recovery action and verifies exact SDDL restoration and no leftover package ACE. A stale revision is independently rejected before changing the tree.
+4. Windows PowerShell 5.1 Set-Acl alone can introduce the inherited-control flag `D:AI`; the CI-only native `SetFileSecurityW` DACL restore path is verified to recover the original observed control flags.
+
+The journal is a **recovery rehearsal**, not a finished permanent production transaction mechanism. In particular, there is not yet an OS-enforced workspace writer freeze, race-proof per-handle change tracking, validated integrity-label mutation/restoration across existing files, or a production crash/startup recovery coordinator. Child process isolation and complete Tool/Executor routing remain separate milestones.
+
+Do not relax `TURBO_AUTOSTART_EXISTING_ROOT_IMPORT_UNSUPPORTED`, set `Turbo Effective: ON`, or run the CI transaction script against a real user directory because of these results. It will intentionally refuse.
