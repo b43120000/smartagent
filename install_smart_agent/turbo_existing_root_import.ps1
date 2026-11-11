@@ -6,10 +6,18 @@ param(
  [Parameter(Mandatory=$true)][ValidateSet('Activate','Revoke','Recover','Status')][string]$Action,
  [Parameter(Mandatory=$true)][string]$ProjectRoot,
  [string]$Workspace='', [string]$TurboRoot='', [string]$SnapshotId='',
- [ValidateRange(1,100000)][int]$MaxEntries=5000
+ [ValidateRange(1,100000)][int]$MaxEntries=5000,
+ [switch]$ExperimentalCiOnly
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
+# Work in progress: no production activation path or recovery service is
+# advertised until CI proves all postconditions and deliberate crash recovery.
+if ($Action -eq 'Activate' -and
+    (-not $ExperimentalCiOnly -or $env:GITHUB_ACTIONS -cne 'true' -or
+     $env:RUNNER_OS -cne 'Windows' -or -not $env:RUNNER_TEMP)) {
+    throw 'TURBO_D3_PRODUCTION_ACTIVATION_NOT_YET_AUTHORIZED'
+}
 function Full([string]$p){return [IO.Path]::GetFullPath($p).TrimEnd('\')}
 function Same([string]$a,[string]$b){return (Full $a).Equals((Full $b),[StringComparison]::OrdinalIgnoreCase)}
 function Under([string]$a,[string]$b){return (Full $a).StartsWith((Full $b)+'\',[StringComparison]::OrdinalIgnoreCase)}
