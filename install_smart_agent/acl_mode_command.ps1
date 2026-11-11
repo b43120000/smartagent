@@ -37,7 +37,7 @@ function Classify-Failure([string]$Mode,[string]$Message,[string]$Stack) {
             'attestation failed|executor attestation' { return 'ON_EXECUTOR_ATTESTATION' }
             'machine_authorization|Machine Authorization' { return 'ON_MACHINE_AUTHORIZATION' }
             'icacls failed|ACL.*overlap|Refusing to replace custom|Security root|profile' { return 'ON_NTFS_ACL_OR_SECURITY_PROFILE' }
-            'mode_transition_failed|ON_RETURNED_WITHOUT' { return 'ON_FINAL_COMMIT' }
+            'mode_transition_failed|ON_RETURNED_WITHOUT|ACL_ON_POSTCONDITION_MODE_MISMATCH' { return 'ON_FINAL_COMMIT' }
             default { return 'ON_PROVISIONING_OR_POSTCONDITION' }
         }
     }
