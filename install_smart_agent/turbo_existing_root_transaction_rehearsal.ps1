@@ -155,7 +155,11 @@ try {
             $acl=Get-Acl -LiteralPath $p -Audit -ErrorAction Stop
             $acl.SetSecurityDescriptorSddlForm([string]$entry.sddl)
             Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
-            if ((Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl -cne [string]$entry.sddl) {
+            $after=(Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl
+            if ($after -cne [string]$entry.sddl) {
+                # ONLY CI disposable fixture is allowed to reach this point.
+                Write-Host ('TURBO_B_CI_SDDL_BEFORE: '+[string]$entry.sddl)
+                Write-Host ('TURBO_B_CI_SDDL_AFTER: '+$after)
                 throw 'TURBO_B_TRANSACTION_RESTORE_SDDL_MISMATCH'
             }
         } catch {
