@@ -1178,7 +1178,22 @@ def _feature_flags_menu() -> int:
 
 
 def _interactive() -> int:
-    snapshot = _binding_snapshot()
+    try:
+        snapshot = _binding_snapshot()
+    except RuntimeError as exc:
+        if str(exc) != "acl_mode_invalid":
+            raise
+        profile = AGENT_PROJECT_ROOT / "localdata" / "secure" / "windows_security" / "security_profile.json"
+        try:
+            mode = acl_mode(profile, allow_on_transition=True)
+        except RuntimeError:
+            raise exc from None
+        if mode != "transitioning_on":
+            raise
+        message = "ACL 啟用尚未完成。請等 ACLstatus.bat ON 結束。若啟用失敗，先執行 ACLstatus.bat OFF，再開啟工作區設定。"
+        _write_apply_log("ACL_ON_TRANSITION_BLOCKED_WORKSPACE_MENU")
+        print(message)
+        return 2
     print("\nSmartAgent Workspace Manager")
     print(f"Security: {snapshot['security_status']}")
     state = snapshot["turbo_sandbox"]

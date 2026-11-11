@@ -103,6 +103,7 @@ if ([string]::IsNullOrWhiteSpace($executorAccountName) -or $executorAccountName 
 }
 $executorProfilePath = Join-Path ([Environment]::GetFolderPath('UserProfile') | Split-Path) $executorAccountName
 $taskName = "SmartAgent Restricted Executor"
+$executorArguments = '-I -c "import os,sys,runpy; sys.path.insert(0,os.getcwd()); runpy.run_module(''agent_core.restricted_executor_service'',run_name=''__main__'')"'
 $protectedSkillsRoot = [IO.DirectoryInfo]::new((Join-Path $securityRoot 'skills')).FullName.TrimEnd('\')
 $normalizedSkillsRoot = [IO.DirectoryInfo]::new($skillsRoot).FullName.TrimEnd('\')
 if (-not ($normalizedSkillsRoot -ieq $protectedSkillsRoot) -and
@@ -568,7 +569,7 @@ if ($initialInstall) {
     }
     if ($taskActions.Count -ne 1 -or
         -not ([IO.Path]::GetFullPath([string]$taskActions[0].Execute)).Equals($ExecutorPython,[StringComparison]::OrdinalIgnoreCase) -or
-        [string]$taskActions[0].Arguments -ne '-m agent_core.restricted_executor_service' -or
+        [string]$taskActions[0].Arguments -cnotin @('-m agent_core.restricted_executor_service', $executorArguments) -or
         -not ([IO.Path]::GetFullPath([string]$taskActions[0].WorkingDirectory)).Equals($codeRoot,[StringComparison]::OrdinalIgnoreCase) -or
         -not $taskPrincipalSid.Equals($existingExecutor.SID)) {
         throw "executor_task_definition_mismatch; run explicit credential repair"
@@ -790,7 +791,7 @@ Remove-Item -LiteralPath $pendingAclJournalPath -Force -ErrorAction SilentlyCont
 # The controller profile is administrator-owned, but the interactive manager
 # must be able to read its authorized roots. Keep ordinary users read-only.
 Invoke-Icacls @($ProfilePath,'/inheritance:r','/grant:r',"${currentName}:F",'*S-1-5-18:F','*S-1-5-32-544:F','*S-1-5-32-545:R',"${executorIdentity}:R")
-$action = New-ScheduledTaskAction -Execute $ExecutorPython -Argument "-m agent_core.restricted_executor_service" -WorkingDirectory $codeRoot
+$action = New-ScheduledTaskAction -Execute $ExecutorPython -Argument $executorArguments -WorkingDirectory $codeRoot
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 999 `
@@ -850,7 +851,8 @@ $previousPythonPath = [string]$env:PYTHONPATH
 $env:PYTHONPATH = $codeRoot
 Push-Location $codeRoot
 try {
-    & $ExecutorPython -m agent_core.windows_security --workspace $workspace
+    $attestation = 'import os,sys,runpy; sys.path.insert(0,os.getcwd()); runpy.run_module(''agent_core.windows_security'',run_name=''__main__'')'
+    & $ExecutorPython -I -c $attestation --workspace $workspace --profile $ProfilePath
     if ($LASTEXITCODE -ne 0) { throw "Restricted executor attestation failed" }
 } finally {
     Pop-Location

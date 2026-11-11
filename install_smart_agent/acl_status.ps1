@@ -353,9 +353,10 @@ function Get-ExecutorTaskBinding($Task) {
     $actions = @($Task.Actions)
     $python = if ($actions.Count -eq 1) { [string]$actions[0].Execute } else { '' }
     $suffix = '\.venv\Scripts\python.exe'
+    $executorArguments = '-I -c "import os,sys,runpy; sys.path.insert(0,os.getcwd()); runpy.run_module(''agent_core.restricted_executor_service'',run_name=''__main__'')"'
     if (-not [IO.Path]::IsPathRooted($python) -or
         -not $python.EndsWith($suffix, [StringComparison]::OrdinalIgnoreCase) -or
-        [string]$actions[0].Arguments -cne '-m agent_core.restricted_executor_service' -or
+        [string]$actions[0].Arguments -cnotin @('-m agent_core.restricted_executor_service', $executorArguments) -or
         [string]$Task.Principal.LogonType -ne 'Password' -or
         [string]$Task.Principal.RunLevel -notin @('Limited','LeastPrivilege')) {
         throw 'acl_executor_task_ownership_unverified'
