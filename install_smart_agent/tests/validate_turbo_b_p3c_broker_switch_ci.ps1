@@ -28,8 +28,6 @@ try {
     New-Item -ItemType Directory -Path (Split-Path -Parent $existingFile) -Force | Out-Null
     [IO.File]::WriteAllText($existingFile,'P3C_UNTOUCHED_TARGET')
     $targetHash=(Get-FileHash -LiteralPath $existingFile -Algorithm SHA256).Hash
-    $targetSddl=(Get-Acl -LiteralPath $existingFile -Audit).Sddl
-    $targetRootSddl=(Get-Acl -LiteralPath $target -Audit).Sddl
     $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
     $policy=[ordered]@{
         schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1'
@@ -46,6 +44,10 @@ try {
     Assert (Test-Path -LiteralPath $journal -PathType Leaf) 'TURBO_B_P3C_OLD_ROOT_ACTIVATION_MISSING'
     $oldRecord=Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-Json
     Assert ($oldRecord.status -eq 'ACTIVE_PROVISIONED') 'TURBO_B_P3C_OLD_ROOT_NOT_ACTIVE'
+    # Baseline AFTER old broker activation. Parent DACL provisioning can
+    # cause inherited control bits on existing sibling trees.
+    $targetSddl=(Get-Acl -LiteralPath $existingFile -Audit).Sddl
+    $targetRootSddl=(Get-Acl -LiteralPath $target -Audit).Sddl
     $oldSid=[string]$oldRecord.package_sid
     $data=Join-Path $oldRoot 'do_not_delete_user_data.txt'
     [IO.File]::WriteAllText($data,'P3C_PRESERVE_OLD_USER_OUTPUT')
