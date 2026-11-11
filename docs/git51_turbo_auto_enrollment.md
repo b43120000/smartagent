@@ -35,3 +35,48 @@ Once ACL ON is committed and an explicit Turbo root exists in the shared policy,
 Windows CI `git51-acl-real-deployment.yml` checks ACL ON/OFF and native fresh-root auto enrollment. `validate_git50_turbo_activation.ps1` also verifies actual native command execution, kernel-denied out-of-root access, revocation, and rejection of a populated existing root.
 
 Do NOT set `turbo_effective=ON` or bypass `SANDBOX_UNAVAILABLE` as a substitute for these postconditions.
+
+## Existing Root Scheme B — NTFS preflight and protected snapshot (phase 1)
+
+This phase is **not a production existing-root import**. No AppContainer
+grant is applied to existing files; no full-access status is asserted.
+
+- `install_smart_agent/turbo_existing_root_preflight.ps1` is read-only,
+  enumerates the bounded NTFS tree, records stable volume/file IDs, detects
+  hardlinks and reparse components, and checks whether owner, group, DACL and
+  SACL/mandatory label information can be captured.
+- Ordinary preflight output suppresses sensitive SDDL. An explicitly privileged
+  caller can opt into `-IncludeSensitiveInventory` for an in-memory snapshot.
+- `install_smart_agent/turbo_existing_root_snapshot.ps1` requires an elevated
+  administrator and an installation-bound ACL ON mode plus a matching Turbo
+  policy. It writes a **CreateNew** immutable JSON snapshot into the
+  admin/SYSTEM-only `localdata/secure/windows_security/turbo_existing_root_snapshots`.
+  Snapshot status is `PREPARED_READ_ONLY`, and
+  `authorization_to_mutate=false`. Original user data and ACLs are untouched.
+- CI validates the snapshot matches original per-file SDDL and file hashes,
+  rejection on policy mismatch, no follow of junctions/hardlinks, and no
+  unauthorized grant.
+- Native OS CI separately verifies that a low-privilege AppContainer may
+  **read** an explicitly RX-authorized disposable sibling file but the OS
+  **denies writing it**; a different sibling with no RX grant is unreadable.
+  This is a scoped fixture, **not a production claim that all external paths
+  are readable**.
+
+### Required before existing root Full-Access becomes safe
+
+1. Privileged transaction executor: a durable per-entry mutation journal,
+   exclusive workspace operation freeze, file-ID/SDDL revalidation, stop on
+   tree changes, deterministic crash recovery and PowerShell error propagation.
+2. Native AppContainer ACE/integrity deployment on the existing root's
+   individual protected/legacy entries, followed by real kernel
+   inside/outside probes. Carefully handle DACL inheritance boundaries.
+3. Revocation based on exact managed ACE/label changes and immutable snapshot,
+   without deleting user-created files or replacing unrelated ACL updates.
+4. Restricted production Executor action-to-Broker routing for all permitted
+   commands/child processes; no host-identity fallback, re-attestation
+   per operation, supported recursive operations and negative breakout tests.
+5. Only when ALL of those tests pass should a truthful `Turbo Effective: ON`
+   and `Full-Access: ENABLED` be reported. Otherwise stay fail-closed.
+
+Do not copy these scripts into the workspace or assume their presence alone
+grants elevated or AppContainer permissions.
