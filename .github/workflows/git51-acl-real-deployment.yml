@@ -1,0 +1,62 @@
+name: Git51 ACL real Windows ON / OFF deployment
+
+on:
+  push:
+    branches:
+      - git51/webcopilot-final-natural-render-20261110
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-acl-on-off:
+    name: Deploy restricted Executor, attest OS ACL ON, then revoke OFF
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check elevated disposable runner
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') {
+            throw 'NOT_GITHUB_WINDOWS_RUNNER'
+          }
+          $p=[Security.Principal.WindowsPrincipal]::new(
+            [Security.Principal.WindowsIdentity]::GetCurrent())
+          if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'WINDOWS_RUNNER_NOT_ELEVATED'
+          }
+      - name: Build isolated Python environment
+        run: |
+          python -m venv .venv
+          $py = Join-Path $env:GITHUB_WORKSPACE '.venv\Scripts\python.exe'
+          & $py -I -B -c "import sys;print(sys.version)"
+          if ($LASTEXITCODE -ne 0) { throw 'VENV_NOT_READY' }
+      - name: Parse real Windows integration script
+        run: |
+          $script='install_smart_agent/tests/validate_acl_on_real_windows_ci.ps1'
+          $tokens=$null
+          $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $script).Path, [ref]$tokens, [ref]$errors)
+          if (@($errors).Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Host
+            throw 'REAL_ACL_DEPLOYMENT_POWERSHELL_PARSE_FAILED'
+          }
+      - name: Actual ACL ON deployment, non-admin Executor self-test and ACL OFF revocation
+        run: |
+          .\install_smart_agent\tests\validate_acl_on_real_windows_ci.ps1
+      - name: Upload Windows deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git51-real-windows-acl-on-off-evidence
+          path: ${{ runner.temp }}/acl_on_ci_evidence.json
+          retention-days: 14
+          if-no-files-found: warn
