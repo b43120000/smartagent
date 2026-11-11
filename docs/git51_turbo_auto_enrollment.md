@@ -303,3 +303,37 @@ quiescence, atomic old-to-new cutover, per-entry old/new exact label rollback,
 and production Executor action routing. Native production Full-Access remains
 disabled. No manual Revoke, Policy edit, directory delete or native ACL change
 should be performed based solely on this checkpoint.
+
+## P3-D2 native old-to-populated Root CI rehearsal — not a production switch
+
+The CI-only `install_smart_agent/tests/validate_turbo_b_p3d2_native_switch_ci.ps1`
+now verifies a genuine Windows kernel AppContainer handoff in a disposable
+`RUNNER_TEMP` workspace (not the live Case D files):
+
+- Fresh old Broker is activated and then genuinely revoked. The pre-existing
+  target remains unchanged by that revocation.
+- Native AppContainer Profile for the new, pre-existing populated Root
+  is created; its existing entries are granted the package's DACL Modify
+  ACE and Low mandatory integrity level, and the actual AppContainer token
+  writes a new file inside that populated Root.
+- The exact same native process fails to write a sibling file outside Root;
+  independent host reads prove the sibling file still has original content.
+- The one-shot AppContainer process ends and the disposable created file is
+  removed. The test requires the preexisting target's full SDDL to be
+  restored EXACTLY for every original item, preserving original data hashes.
+- The native restore route uses `LABEL_SECURITY_INFORMATION` (0x10) for the
+  mandatory label, with SeSecurityPrivilege explicitly enabled in the
+  disposable Windows CI process. Ordinary full-SACL restoration was shown
+  to manufacture `S:PAI` and fail the exact-SDDL check.
+
+The CI-only script refuses ordinary local execution unless both
+`GITHUB_ACTIONS=true` and `RUNNER_OS=Windows`, and all writes are scoped to
+a unique disposable directory beneath `RUNNER_TEMP`. It is **not** a
+recoverable production transaction and MUST NOT be reused for user data.
+
+**Remaining before production:** durable journal/recovery for both new-root
+DACL and mandatory label modifications; safely managing new files created
+during service life; verified in-flight process quiescence; atomic or
+fail-closed old-to-new switch state; and dispatch of every accepted mutation
+through the OS-attested production Broker. Existing Root Auto Import remains
+explicitly DISABLED until all these gates are independently verified.
