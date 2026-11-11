@@ -5,7 +5,7 @@
     ".github/workflows/git26-prerequisite-evidence-gated-transition.yml": "207c169c6e1694e089994be3b10d8254f394207d2d60a697941854b31f1ea028",
     ".github/workflows/git27-failure-causal-coverage.yml": "0f557e8fd225748c9e5cf5d05d3a5df3d0cf354e2af999a753b14d8fe115e186",
     ".github/workflows/runtime-fact-ledger-p0-p3-regression.yml": "8f79b9acf3d283486c18e65a951b23298a407f6a6d4818b6b825514626f1aec6",
-    "ACLstatus.bat": "a129b5c1633515cb01e127feba730e012598aaa5886f51889ba9df52d755fd91",
+    "ACLstatus.bat": "8a60052510232ac2e09b006a3aee77f928190f0d7995e2b9551e65cb26de6409",
     "adapterUI/1.writeSendBox.bat": "d9f16aa27c6610aa6b311188db45ce16cca6bd475b4253aa6e653a929cb05498",
     "adapterUI/10.conversationLoopIT.bat": "ae315a51435f99a30da1fcd3ecbeac6145b841c9810b35ff28f6b69d065ada5c",
     "adapterUI/11.attachmentEntry.bat": "5c9fdb1cc048172fa92bb7965d83ced17d9586b5aa75d6466de7a4f8bf796ecb",
