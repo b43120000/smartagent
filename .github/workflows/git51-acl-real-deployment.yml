@@ -122,6 +122,7 @@ jobs:
         run: |
           foreach ($path in @(
             'install_smart_agent/turbo_existing_root_preflight.ps1',
+            'install_smart_agent/turbo_existing_root_snapshot.ps1',
             'install_smart_agent/tests/validate_turbo_b_existing_root_preflight.ps1'
           )) {
             $tokens=$null
