@@ -101,3 +101,6 @@ if ($case -eq 'ON_FALSE_SUCCESS') {
         Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction Stop
     }
 }
+
+# Expected negative cases must not leak LASTEXITCODE=1 to the CI shell.
+exit 0
