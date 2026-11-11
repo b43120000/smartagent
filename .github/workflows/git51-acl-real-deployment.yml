@@ -76,3 +76,35 @@ jobs:
           path: ${{ runner.temp }}/acl_on_ci_evidence.json
           retention-days: 14
           if-no-files-found: warn
+
+  scoped-native-turbo-auto:
+    name: Native AppContainer auto-enrollment, protected execution and rollback
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Parse native auto-activation and revocation scripts
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_auto_activate.ps1',
+            'install_smart_agent/turbo_os_activation.ps1',
+            'install_smart_agent/tests/validate_git50_turbo_activation.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_AUTO_POWERSHELL_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Native fresh-root auto enrollment, kernel outside denial, typed operations and OFF revocation
+        run: |
+          .\install_smart_agent\tests\validate_git50_turbo_activation.ps1 -FixtureParent $env:RUNNER_TEMP
