@@ -7,7 +7,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Workspace,
     [Parameter(Mandatory=$true)][string]$TurboRoot,
     [int]$MaxEntries = 5000,
-    [int]$MaxDepth = 32
+    [int]$MaxDepth = 32,
+    [switch]$IncludeSensitiveInventory
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -171,5 +172,17 @@ $inventory=[ordered]@{
 # Full SDDL contains sensitive ACL/identity information. Do NOT print it.
 Write-Host ('TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries='+$rootEntries.Count)
 Write-Host 'TURBO_B_IMPORT_NOT_YET_AUTHORIZED: read-only inventory complete.'
-# PS object for a future privileged, protected transactional importer.
-Write-Output $inventory
+# Do not disclose owner/SACL/SDDL fields through normal interactive output.
+# A future protected transaction importer may explicitly opt into this
+# sensitive in-memory object and must write only to an admin-only journal.
+if ($IncludeSensitiveInventory) {
+    Write-Output $inventory
+} else {
+    Write-Output ([pscustomobject]@{
+        schema='SMARTAGENT_TURBO_EXISTING_ROOT_PREFLIGHT_V1'
+        import_allowed_for_mutation=$false
+        advisory_only=$true
+        count=$rootEntries.Count
+        security_descriptors_emitted=$false
+    })
+}
