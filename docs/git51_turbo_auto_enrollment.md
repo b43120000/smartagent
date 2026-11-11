@@ -95,3 +95,85 @@ Windows integration validation in `install_smart_agent/tests/validate_turbo_b_ac
 The journal is a **recovery rehearsal**, not a finished permanent production transaction mechanism. In particular, there is not yet an OS-enforced workspace writer freeze, race-proof per-handle change tracking, validated integrity-label mutation/restoration across existing files, or a production crash/startup recovery coordinator. Child process isolation and complete Tool/Executor routing remain separate milestones.
 
 Do not relax `TURBO_AUTOSTART_EXISTING_ROOT_IMPORT_UNSUPPORTED`, set `Turbo Effective: ON`, or run the CI transaction script against a real user directory because of these results. It will intentionally refuse.
+
+
+## Scheme B P3 — Production candidate-only live check (no existing-root mutation)
+
+This is the **handoff checkpoint** after the administrator has already observed
+\`TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries=68\` on their real Windows NTFS
+existing project. **No production AppContainer ACE, integrity-label change,
+existing-root import, policy switch, or Full-Access enablement is performed.**
+
+The new, narrowly scoped entry point is
+\`install_smart_agent/turbo_existing_root_prepare.ps1\`, invoked in a trusted
+elevated Windows PowerShell terminal. It supports:
+
+- \`-Action Prepare\`: requires the matching installation ACL mode to be ON,
+  verifies a registered writable Workspace and strictly nested, existing
+  candidate Root; refuses overlap with Read-only/denied paths; runs the existing
+  NTFS preflight including hardlink/reparse and full SDDL capture; writes an
+  immutable, admin/SYSTEM-only \`PREPARED_READ_ONLY\` candidate snapshot; and
+  independently verifies it before returning PASS.
+- \`-Action Verify -SnapshotId <32 lowercase hexadecimal chars>\`: loads only
+  a snapshot stored inside this installation's protected snapshot directory,
+  checks schema, install/workspace/root identity, \`candidate_only=true\`,
+  \`authorization_to_mutate=false\`, Policy Revision, file paths, entry count,
+  stable file IDs, full SDDL and directory/file types. Changes to tree
+  membership, security descriptors or policy revision require new preparation.
+- Status \`P3_BROKER_BLOCKER\` indicates whether a separately enrolled native
+  AppContainer currently exists (possibly pointing to a *different* Root).
+  This is an ADVISORY next-stage blocker: Prepare still succeeds because it
+  never changes existing grants or records.
+- A separate production root that is not yet requested by Edit Workspace MAY
+  be snapshotted as a **candidate**, without editing the active Turbo policy.
+  The normal Edit Workspace existing-root refusal remains in force.
+
+### Operator check (PowerShell, elevated)
+
+First update the Git51 installation to the approved commit. Do not switch
+versions while an ACL operation is running; verify the local Git SHA separately.
+
+\`\`\`powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\smartagent\install_smart_agent\turbo_existing_root_prepare.ps1" -Action Prepare -ProjectRoot "C:\smartagent" -Workspace "E:\AIspace" -TurboRoot "E:\AIspace\SmartAgent_GoalDriven_IT_GH_v1"
+\`\`\`
+
+Expected on the real machine, if the 68 entries have not changed:
+
+\`\`\`text
+TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries=68
+TURBO_B_PROTECTED_EXISTING_ROOT_SNAPSHOT_PASS entries=68
+TURBO_B_P3_VERIFY_PASS entries=68
+P3_SNAPSHOT_ID=<new 32-hex ID>
+P3_SNAPSHOT_SHA256=<64-hex SHA256>
+P3_POLICY_REVISION=<live revision>
+P3_BROKER_BLOCKER=NONE|OTHER_TURBO_ROOT_ACTIVE_REQUIRES_VERIFIED_REVOCATION|...
+P3_IMPORT_MUTATION=DISABLED
+P3_FULL_ACCESS=NOT_ENABLED
+TURBO_B_P3_PREPARE_PASS
+P3_LIVE_CHECKPOINT=EXISTING_ROOT_SNAPSHOT_VERIFIED_NO_MUTATION
+\`\`\`
+
+Verify independently (paste the emitted P3_SNAPSHOT_ID):
+
+\`\`\`powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\smartagent\install_smart_agent\turbo_existing_root_prepare.ps1" -Action Verify -ProjectRoot "C:\smartagent" -Workspace "E:\AIspace" -TurboRoot "E:\AIspace\SmartAgent_GoalDriven_IT_GH_v1" -SnapshotId "<new 32-hex ID>"
+\`\`\`
+
+If the live tree or ACL changed in between, Verify MUST fail closed. The
+snapshot deliberately stores **ACL/File-ID metadata**, not file-content hashes;
+this check does not detect content-only file changes. If the preparer sees a
+previous AppContainer enrollment on another root, do **not** delete the
+journal, existing directory or AppContainer profile manually.
+
+Windows CI uses a populated disposable NTFS tree to test successful Prepare
+while Turbo requested is OFF, independent Verify, new-file invalidation,
+policy-revision invalidation, root-overlap refusal, unchanged SHA256 file data
+and SDDL, and a separately requested different Turbo Root.
+
+### NOT YET SUPPORTED
+
+Protected read-only snapshot is not a backup of user-file contents. Production
+\`Existing Root Import\` and a fully transactional ACL/mandatory-integrity
+mutator with Startup/ACL OFF recovery are still absent. The old CI-only
+transaction rehearsal cannot safely be run against user data. Do not assert
+\`Turbo Effective: ON\` until full isolation and action routing pass.
