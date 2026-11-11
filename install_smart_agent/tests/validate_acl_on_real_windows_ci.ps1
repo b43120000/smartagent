@@ -99,7 +99,9 @@ try {
     Assert ($state.is_admin -eq $false) 'CI_RESTRICTED_EXECUTOR_IS_ADMIN'
     Assert ([string]$state.user -ieq [string]$profile.executor_user) 'CI_EXECUTOR_IDENTITY_MISMATCH'
     $heartbeatAge=[math]::Round([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$state.heartbeat_at,2)
-    Assert ($heartbeatAge -ge 0 -and $heartbeatAge -lt 15) 'CI_EXECUTOR_HEARTBEAT_STALE'
+    # ToUnixTimeSeconds rounds down while Python time.time() has fractions:
+    # a freshly published heartbeat may appear up to ~1 second in the future.
+    Assert ($heartbeatAge -ge -2 -and $heartbeatAge -lt 15) 'CI_EXECUTOR_HEARTBEAT_STALE'
     $verification.self_test_passed=$true
     $verification.self_test_mode='on'
     $verification.executor_non_admin=$true
