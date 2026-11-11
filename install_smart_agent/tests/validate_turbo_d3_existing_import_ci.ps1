@@ -62,8 +62,12 @@ try {
     # A newly created user file must remain after revocation.
     $new=Join-Path $sub 'user_new.txt'
     [IO.File]::WriteAllText($new,'KEEP_ME_AFTER_REVOKE')
-    & $action -Action Revoke -ProjectRoot $project
+    # The same native OS lifecycle used by ACLstatus.bat OFF must delegate
+    # to the imported-root exact-SDDL/IL revoker, NOT its legacy M-level reset.
+    $native=Join-Path $PSScriptRoot '..\turbo_os_activation.ps1'
+    & $native -Action Revoke -ProjectRoot $project
     Check (-not (Test-Path -LiteralPath $journal)) 'TURBO_D3_REVOKE_JOURNAL_REMAINS'
+    Check (-not (Test-Path -LiteralPath (Join-Path $secure 'turbo_os_activation.json'))) 'TURBO_D3_ACTIVATION_JOURNAL_REMAINS'
     Check (Test-Path -LiteralPath $new -PathType Leaf) 'TURBO_D3_NEW_USER_FILE_DELETED'
     Check ([IO.File]::ReadAllText($new) -ceq 'KEEP_ME_AFTER_REVOKE') 'TURBO_D3_NEW_USER_FILE_CORRUPTED'
     foreach($path in @($ws,$root,$sub,$file)){
