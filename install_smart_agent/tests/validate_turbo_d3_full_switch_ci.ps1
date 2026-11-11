@@ -64,8 +64,16 @@ try{
    Check ($pending.status -eq 'NEW_ACTIVATING') 'TURBO_D3_SWITCH_CI_CRASH_WRONG_STAGE'
    $active=Get-Content -LiteralPath $activePath -Raw -Encoding UTF8 | ConvertFrom-Json
    $cmd=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("Write-Output 'MUST_NOT_EXECUTE'"))
-   & powershell.exe -NoProfile -NonInteractive -File ([string]$active.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $target -ExpectedRevision 44 -TaskId 'CRASH-TEST' -ActionId 'BLOCKED-ACTION' -CommandBase64 $cmd -TimeoutSeconds 10 -MaxOutputBytes 1024 2>&1 | Out-Null
-   Check ($LASTEXITCODE -ne 0) 'TURBO_D3_SWITCH_CI_PENDING_ALLOWED_NATIVE_EXECUTION'
+   # A *rejected* native child writes stderr by design. Capture it as
+   # diagnostic data rather than allowing PowerShell 5.1 ErrorAction Stop
+   # to interpret the stderr stream as a fatal test-harness exception.
+   $savedPreference=$ErrorActionPreference
+   try {
+      $ErrorActionPreference='Continue'
+      $denied=(& powershell.exe -NoProfile -NonInteractive -File ([string]$active.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $target -ExpectedRevision 44 -TaskId 'CRASH-TEST' -ActionId 'BLOCKED-ACTION' -CommandBase64 $cmd -TimeoutSeconds 10 -MaxOutputBytes 1024 2>&1) -join ''
+      $blockedExit=$LASTEXITCODE
+   } finally {$ErrorActionPreference=$savedPreference}
+   Check ($blockedExit -ne 0 -and $denied -match 'GIT50_BROKER_SWITCH_INCOMPLETE_NO_NATIVE_ACTION') 'TURBO_D3_SWITCH_CI_PENDING_ALLOWED_NATIVE_EXECUTION'
    $global:LASTEXITCODE=0
    Write-Host 'TURBO_D3_SWITCH_CI_CRASH_PENDING_DENIES_BROKER_PASS'
    & $switch -Action Recover -ProjectRoot $project
