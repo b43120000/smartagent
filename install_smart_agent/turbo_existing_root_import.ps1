@@ -82,6 +82,12 @@ function Revoke-Tree([object]$j) {
    }
  }
  # Restore recorded originals parent-first, children last.
+ foreach($ancestor in @($j.ancestors | Sort-Object {([string]$_.path).Length})){
+   $p=Full ([string]$ancestor.path)
+   if(-not ((Same $p $ws) -or (Under $p $ws))){throw 'TURBO_D3_ANCESTOR_ESCAPE'}
+   if([SmartAgentTurboBFileId]::Check($p,$true) -cne [string]$ancestor.identity){throw 'TURBO_D3_ANCESTOR_CHANGED'}
+   Restore-Exact $p ([string]$ancestor.sddl)
+ }
  foreach($entry in @($snap.entries | Sort-Object {([string]$_.path).Length})){
    $p=Full ([string]$entry.path)
    if(-not (Test-Path -LiteralPath $p)){continue} # intentionally deleted
@@ -89,12 +95,6 @@ function Revoke-Tree([object]$j) {
    if([bool]$current.PSIsContainer -ne [bool]$entry.directory){continue}
    if([SmartAgentTurboBFileId]::Check($p,[bool]$entry.directory) -cne [string]$entry.identity){continue}
    Restore-Exact $p ([string]$entry.sddl)
- }
- foreach($ancestor in @($j.ancestors | Sort-Object {([string]$_.path).Length})){
-   $p=Full ([string]$ancestor.path)
-   if(-not ((Same $p $ws) -or (Under $p $ws))){throw 'TURBO_D3_ANCESTOR_ESCAPE'}
-   if([SmartAgentTurboBFileId]::Check($p,$true) -cne [string]$ancestor.identity){throw 'TURBO_D3_ANCESTOR_CHANGED'}
-   Restore-Exact $p ([string]$ancestor.sddl)
  }
  # A successful rollback must not leave this Package SID on any item.
  $after=@(& (Join-Path $PSScriptRoot 'turbo_existing_root_preflight.ps1') -ProjectRoot $script:project -Workspace $ws -TurboRoot $script:root -IncludeSensitiveInventory -MaxEntries $MaxEntries |
@@ -195,18 +195,6 @@ try {
  Save-Atomic $script:journal $j $false
  try {
    $sidObj=[Security.Principal.SecurityIdentifier]::new($sid)
-   foreach($item in $ancestors){
-      $p=[string]$item.path
-      if((Sddl $p) -cne [string]$item.sddl){throw 'TURBO_D3_PARENT_CHANGED'}
-      $acl=Get-Acl -LiteralPath $p
-      $rule=[Security.AccessControl.FileSystemAccessRule]::new(
-         $sidObj,[Security.AccessControl.FileSystemRights]::Traverse,
-         [Security.AccessControl.InheritanceFlags]::None,
-         [Security.AccessControl.PropagationFlags]::None,
-         [Security.AccessControl.AccessControlType]::Allow)
-      [void]$acl.AddAccessRule($rule)
-      Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
-   }
    foreach($entry in @($snap.entries | Sort-Object {([string]$_.path).Length} -Descending)){
       Check-Identity $entry
       $p=[string]$entry.path
@@ -221,6 +209,18 @@ try {
       Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
       & icacls.exe $p '/setintegritylevel' $(if([bool]$entry.directory){'(OI)(CI)L'}else{'L'}) | Out-Null
       if($LASTEXITCODE -ne 0){throw 'TURBO_D3_LOW_IL_FAILED'}
+   }
+   foreach($item in $ancestors){
+      $p=[string]$item.path
+      if((Sddl $p) -cne [string]$item.sddl){throw 'TURBO_D3_PARENT_CHANGED'}
+      $acl=Get-Acl -LiteralPath $p
+      $rule=[Security.AccessControl.FileSystemAccessRule]::new(
+         $sidObj,[Security.AccessControl.FileSystemRights]::Traverse,
+         [Security.AccessControl.InheritanceFlags]::None,
+         [Security.AccessControl.PropagationFlags]::None,
+         [Security.AccessControl.AccessControlType]::Allow)
+      [void]$acl.AddAccessRule($rule)
+      Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
    }
    $j.status='ACTIVE'
    Save-Atomic $script:journal $j $false
