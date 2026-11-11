@@ -1,0 +1,39 @@
+name: ACL ON Failure Location Diagnostics (6b5629 base)
+
+on:
+  push:
+    branches:
+      - git51/webcopilot-final-natural-render-20261110
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-fixture-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Windows PowerShell 5.1 syntax gates
+        shell: powershell
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/diagnose_acl_on.ps1',
+            'install_smart_agent/run_acl_on_with_diagnostics.ps1',
+            'install_smart_agent/tests/validate_acl_on_diagnosis.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors
+            )
+            if (@($errors).Count -ne 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('ACL_ON_DIAG_POWERSHELL_PARSE_FAILED:' + $path)
+            }
+          }
+      - name: Verify stage classification without executing real ACL ON
+        shell: powershell
+        run: |
+          .\install_smart_agent\tests\validate_acl_on_diagnosis.ps1
