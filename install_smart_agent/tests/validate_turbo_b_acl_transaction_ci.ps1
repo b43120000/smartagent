@@ -76,6 +76,8 @@ try {
     # immediately; the parent must use a durable flushed journal to recover.
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $transaction -ProjectRoot $project -Workspace $workspace -TurboRoot $root -SnapshotPath $backup -AppContainerSid $sid -InjectCrashAfter 1
     Assert ($LASTEXITCODE -eq 87) ('TURBO_B_CI_CRASH_EXIT_NOT_OBSERVED:'+ $LASTEXITCODE)
+    # An INTENTIONAL child failure must not become the job's final exit code.
+    $global:LASTEXITCODE=0
     $saved=Get-Content -LiteralPath $backup -Raw -Encoding UTF8 | ConvertFrom-Json
     $journal=Join-Path $backupDir ('transaction-'+[string]$saved.snapshot_id+'.json')
     Assert (Test-Path -LiteralPath $journal -PathType Leaf) 'TURBO_B_CI_CRASH_JOURNAL_NOT_PERSISTED'
