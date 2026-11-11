@@ -223,3 +223,27 @@ jobs:
       - name: Active old broker scope, native revoke, and fail-closed existing import
         run: |
           .\install_smart_agent\tests\validate_turbo_b_p3c_broker_switch_ci.ps1
+
+  turbo-b-p3d2-native-switch-rehearsal:
+    name: P3-D2 native old-to-populated Root switch and exact SDDL/IL restore
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse P3-D2 native switch rehearsal
+        run: |
+          $tokens=$null
+          $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install_smart_agent/tests/validate_turbo_b_p3d2_native_switch_ci.ps1').Path,
+            [ref]$tokens,[ref]$errors)
+          if (@($errors).Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Host
+            throw 'TURBO_B_P3D2_POWERSHELL_PARSE_FAILED'
+          }
+      - name: Native AppContainer populated-existing-root access and full security rollback
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_p3d2_native_switch_ci.ps1
