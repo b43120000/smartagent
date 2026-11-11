@@ -89,10 +89,17 @@ if ($case -eq 'ON_FALSE_SUCCESS') {
     New-Item -ItemType Directory -Path $testScripts -Force | Out-Null
     Copy-Item -LiteralPath $launcher -Destination (Join-Path $withSpaces 'ACLstatus.bat') -ErrorAction Stop
     Copy-Item -LiteralPath ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\acl_mode_launcher.ps1'))) -Destination (Join-Path $testScripts 'acl_mode_launcher.ps1') -ErrorAction Stop
-    $absoluteBat=Join-Path $withSpaces 'ACLstatus.bat'
-    $absoluteRun=& cmd.exe /d /s /c ('""'+$absoluteBat+'" --launcher-self-test"') 2>&1
-    Assert ($LASTEXITCODE -eq 0) ('absolute launcher with spaces exit: '+($absoluteRun|Out-String))
-    Assert (($absoluteRun | Out-String).Contains('ACLSTATUS_LAUNCHER_PARSE_OK')) ('absolute launcher with spaces output: '+($absoluteRun|Out-String))
+    # Absolute invocation matching the reported C:\smartagent\ACLstatus.bat off.
+    $absoluteRun=& cmd.exe /d /c ($launcher + ' --launcher-self-test') 2>&1
+    Assert ($LASTEXITCODE -eq 0) ('absolute launcher exit: '+($absoluteRun|Out-String))
+    Assert (($absoluteRun | Out-String).Contains('ACLSTATUS_LAUNCHER_PARSE_OK')) 'absolute launcher has no GUID'
+    # CMD location with spaces; avoid nested, synthetic cmd /s quotation.
+    Push-Location -LiteralPath $withSpaces
+    try {
+        $spacesRun=& cmd.exe /d /c 'ACLstatus.bat --launcher-self-test' 2>&1
+        Assert ($LASTEXITCODE -eq 0) ('spaced-path launcher exit: '+($spacesRun|Out-String))
+        Assert (($spacesRun | Out-String).Contains('ACLSTATUS_LAUNCHER_PARSE_OK')) 'spaced-path launcher has no GUID'
+    } finally { Pop-Location }
     Verify 'on' 'ON_FAIL' 'FAIL' 1 'ON_EXECUTOR_TASK_REGISTRATION' 'transitioning_on'
     Verify 'off' 'OFF_FAIL' 'FAIL' 1 'OFF_CONTROLLER_WRITE_VERIFICATION' 'transitioning_off'
     Verify 'on' 'ON_PASS' 'PASS' 0 '' 'on'
