@@ -53,7 +53,13 @@ function Restore-Exact([string]$p,[string]$s) {
  $acl.SetSecurityDescriptorSddlForm($s,[Security.AccessControl.AccessControlSections]::Access)
  Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
  [SmartAgentTurboExistingSecurity]::RestoreMandatoryLabel($p,$s)
- if((Sddl $p) -cne $s){throw ('TURBO_D3_EXACT_SDDL_RESTORE_FAILED:'+$p)}
+ if((Sddl $p) -cne $s){
+  if($env:GITHUB_ACTIONS -ceq 'true'){
+    Write-Host ('TURBO_D3_CI_SDDL_EXPECTED='+$s)
+    Write-Host ('TURBO_D3_CI_SDDL_ACTUAL='+(Sddl $p))
+  }
+  throw ('TURBO_D3_EXACT_SDDL_RESTORE_FAILED:'+$p)
+ }
 }
 function Revoke-Tree([object]$j) {
  $script:root=Full ([string]$j.turbo_root)
