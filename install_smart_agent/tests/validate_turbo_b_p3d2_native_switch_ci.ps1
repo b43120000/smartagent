@@ -65,8 +65,10 @@ public static class TurboBCiFullRestore {
      if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out sd,out n))
          throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_SDDL_PARSE_FAILED");
      try {
-       if(!SetFileSecurityW(path,8u,sd))
-         throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_SACL_RESTORE_FAILED");
+       if(!SetFileSecurityW(path,8u,sd)) {
+         int code=Marshal.GetLastWin32Error();
+         throw new Win32Exception(code,"B_CI_SACL_RESTORE_FAILED_WIN32_"+code.ToString());
+       }
      } finally {LocalFree(sd);}
  }
 }
