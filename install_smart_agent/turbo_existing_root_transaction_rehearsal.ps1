@@ -9,7 +9,9 @@ param(
     [Parameter(Mandatory=$true)][string]$TurboRoot,
     [Parameter(Mandatory=$true)][string]$SnapshotPath,
     [Parameter(Mandatory=$true)][string]$AppContainerSid,
-    [ValidateRange(0,100000)][int]$InjectFailureAfter = 0
+    [ValidateSet('RoundTrip','Recover')][string]$Action = 'RoundTrip',
+    [ValidateRange(0,100000)][int]$InjectFailureAfter = 0,
+    [ValidateRange(0,100000)][int]$InjectCrashAfter = 0
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -67,7 +69,8 @@ if ($doc.schema -ne 'SMARTAGENT_TURBO_EXISTING_ROOT_SNAPSHOT_V1' -or
 $policy=Get-Content -LiteralPath (Join-Path $security 'workspace_access_policy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $mode=Get-Content -LiteralPath (Join-Path $security 'acl_mode.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($mode.mode -ne 'on' -or -not (Same $mode.install_root $project) -or
-    $policy.turbo_requested -ne $true -or [int]$policy.revision -ne [int]$doc.policy_revision -or
+    ($Action -eq 'RoundTrip' -and
+      ($policy.turbo_requested -ne $true -or [int]$policy.revision -ne [int]$doc.policy_revision)) -or
     @($policy.turbo_roots).Count -ne 1 -or -not (Same $policy.turbo_roots[0] $root)) {
     throw 'TURBO_B_TRANSACTION_POLICY_STALE'
 }
@@ -89,7 +92,7 @@ foreach ($entry in @($doc.entries)) {
     $path=[string]$entry.path
     if (-not $live.ContainsKey($path) -or
         [string]$live[$path].identity -cne [string]$entry.identity -or
-        [string]$live[$path].sddl -cne [string]$entry.sddl -or
+        ($Action -eq 'RoundTrip' -and [string]$live[$path].sddl -cne [string]$entry.sddl) -or
         [bool]$live[$path].directory -ne [bool]$entry.directory) {
         throw ('TURBO_B_TRANSACTION_SNAPSHOT_CHANGED:'+$path)
     }
@@ -125,6 +128,71 @@ public static class TurboBCiNativeRestore {
 '@ -ErrorAction Stop
 }
 $sid=[Security.Principal.SecurityIdentifier]::new($AppContainerSid)
+$journal=Join-Path $expectedSnapshotDir ('transaction-'+[string]$doc.snapshot_id+'.json')
+function Write-CiJournal([string]$status,[object[]]$paths) {
+    $record=[ordered]@{
+        schema='SMARTAGENT_TURBO_B_CI_TRANSACTION_V1'
+        status=$status
+        snapshot_id=[string]$doc.snapshot_id
+        snapshot_path=$snapshot
+        project_root=$project
+        turbo_root=$root
+        package_sid=$AppContainerSid
+        pending_paths=@($paths)
+    }
+    $bytes=[Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Depth 8))
+    $temp=$journal+'.tmp'
+    $stream=[IO.FileStream]::new($temp,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try { $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true) }
+    finally { $stream.Dispose() }
+    Move-Item -LiteralPath $temp -Destination $journal -Force -ErrorAction Stop
+}
+if ($Action -eq 'Recover') {
+    if (-not (Test-Path -LiteralPath $journal -PathType Leaf)) {
+        throw 'TURBO_B_CI_RECOVERY_JOURNAL_MISSING'
+    }
+    $receipt=Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($receipt.schema -ne 'SMARTAGENT_TURBO_B_CI_TRANSACTION_V1' -or
+        $receipt.status -ne 'APPLYING' -or
+        $receipt.snapshot_id -cne [string]$doc.snapshot_id -or
+        -not (Same $receipt.snapshot_path $snapshot) -or
+        -not (Same $receipt.project_root $project) -or
+        -not (Same $receipt.turbo_root $root) -or
+        $receipt.package_sid -cne $AppContainerSid) {
+        throw 'TURBO_B_CI_RECOVERY_JOURNAL_UNTRUSTED'
+    }
+    $recoverList=@($receipt.pending_paths)
+    foreach ($path in ($recoverList | Select-Object -Unique)) {
+        if (-not $original.ContainsKey([string]$path)) {
+            throw 'TURBO_B_CI_RECOVERY_PATH_NOT_SNAPSHOTTED'
+        }
+    }
+    # Restore parent first and children last. Abort if a file was replaced.
+    foreach ($path in @($recoverList | Sort-Object {([string]$_).Length})) {
+        $entry=$original[[string]$path]
+        $p=[string]$entry.path
+        $item=Get-Item -LiteralPath $p -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'TURBO_B_CI_RECOVERY_REPARSE'
+        }
+        $id=[SmartAgentTurboBFileId]::Check($p,[bool]$entry.directory)
+        if ($id -cne [string]$entry.identity) {
+            throw 'TURBO_B_CI_RECOVERY_FILE_REPLACED'
+        }
+        [TurboBCiNativeRestore]::RestoreDacl($p,[string]$entry.sddl)
+        if ((Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl -cne [string]$entry.sddl) {
+            throw 'TURBO_B_CI_RECOVERY_EXACT_SDDL_MISMATCH'
+        }
+    }
+    # On successful recovery remove only this CI fixture's recorded journal.
+    Remove-Item -LiteralPath $journal -Force -ErrorAction Stop
+    Write-Host ('TURBO_B_CI_CROSS_PROCESS_RECOVERY_PASS entries='+$recoverList.Count)
+    return
+}
+if (Test-Path -LiteralPath $journal) {
+    throw 'TURBO_B_CI_PENDING_TRANSACTION_REQUIRES_RECOVERY'
+}
+Write-CiJournal 'APPLYING' @()
 $modified=New-Object System.Collections.Generic.List[object]
 $failure=$null
 $mutations=0
@@ -159,8 +227,14 @@ try {
         # Add BEFORE Set-Acl: a failed/interrupted application must be in the
         # recovery set. No mutable manifest is trusted for production yet.
         [void]$modified.Add($entry)
+        # Journal is flushed to disk BEFORE each mutation so the next process
+        # can undo a change if the issuing process exits without finally.
+        Write-CiJournal 'APPLYING' @($modified.ToArray() | ForEach-Object { [string]$_.path })
         Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
         $mutations++
+        if ($InjectCrashAfter -gt 0 -and $mutations -ge $InjectCrashAfter) {
+            [Environment]::Exit(87)
+        }
         if ($InjectFailureAfter -gt 0 -and $mutations -ge $InjectFailureAfter) {
             throw 'TURBO_B_TRANSACTION_INJECTED_FAILURE'
         }
@@ -206,6 +280,7 @@ try {
     if ($restoreErrors.Count -gt 0) {
         throw ('TURBO_B_TRANSACTION_RESTORE_FAILED:' + ($restoreErrors -join ';'))
     }
+    Remove-Item -LiteralPath $journal -Force -ErrorAction Stop
 }
 if ($failure) {
     if ($failure -eq 'TURBO_B_TRANSACTION_INJECTED_FAILURE') {
