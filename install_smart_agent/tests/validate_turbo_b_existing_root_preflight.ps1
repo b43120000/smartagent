@@ -50,7 +50,11 @@ try {
     & cmd.exe /d /c ('mklink /J "'+$junction+'" "'+$workspace+'"') | Out-Null
     Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_JUNCTION_CREATE_FAILED'
     Expected-Block 'TURBO_B_PREFLIGHT_REPARSE_ENTRY'
-    Remove-Item -LiteralPath $junction -Force
+    # Windows PowerShell 5.1 Remove-Item can throw NullReferenceException for
+    # junctions. cmd rmdir removes the reparse ENTRY, not its target.
+    & cmd.exe /d /c ('rmdir "'+$junction+'"') | Out-Null
+    Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_JUNCTION_REMOVE_FAILED'
+    Assert (Test-Path -LiteralPath $workspace -PathType Container) 'TURBO_B_JUNCTION_TARGET_MODIFIED'
     Write-Host 'TURBO_B_REPARSE_AND_HARDLINK_FAIL_CLOSED_PASS'
 } finally {
     if (Test-Path -LiteralPath $base) {
