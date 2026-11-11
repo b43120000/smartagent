@@ -176,6 +176,10 @@ try {
                 Restore $path $backup[$path]
                 $actual=Snapshot $path
                 if ($actual -cne $backup[$path]) {
+                    # Disposable CI fixture only: print exact descriptor delta
+                    # to diagnose mandatory-label / inherited DACL flags.
+                    Write-Host ('P3D2_CI_EXPECTED_SDDL: '+$backup[$path])
+                    Write-Host ('P3D2_CI_ACTUAL_SDDL: '+$actual)
                     throw ('P3D2_TARGET_EXACT_SDDL_ROLLBACK_FAILED:'+ $path)
                 }
             } catch { [void]$restorationFailures.Add($path+':'+$_.Exception.Message) }
