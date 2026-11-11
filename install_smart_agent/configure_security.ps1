@@ -828,24 +828,42 @@ $serviceStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 & schtasks.exe /Run /TN $taskName | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Unable to start restricted executor task (exit=$LASTEXITCODE)" }
 $ready = $false
-$deadline = (Get-Date).AddSeconds(20)
+$lastServiceObservation = 'state_not_published'
+$lastObservedSelfTestReasons = ''
+$nextReadinessLog = (Get-Date)
+# The first restricted-token launch and JobObject setup can outlive 20s.
+# A transient failed self-test is also recomputed by the service every 30s.
+$deadline = (Get-Date).AddSeconds(75)
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
-    if (Test-Path -LiteralPath $statePath) {
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
         try {
-            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-            if ($state.self_test.passed -eq $true -and
-                [double]$state.heartbeat_at -ge $serviceStartedAt -and
-                ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$state.heartbeat_at) -lt 10) {
+            $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            $heartbeatAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$state.heartbeat_at
+            $heartbeatFresh = [double]$state.heartbeat_at -ge $serviceStartedAt -and
+                $heartbeatAge -lt 10
+            $passed = $state.self_test.passed -eq $true
+            $lastObservedSelfTestReasons = (@($state.self_test.reasons) -join ',')
+            $lastServiceObservation = ('passed={0}, mode={1}, fresh={2}, age={3:N1}s, reasons={4}' -f
+                $passed, [string]$state.self_test.mode, $heartbeatFresh, $heartbeatAge,
+                $lastObservedSelfTestReasons)
+            if ($passed -and $heartbeatFresh -and $state.self_test.mode -eq 'on') {
                 $ready = $true
+                Write-Host ('[security] executor ready: ' + $lastServiceObservation)
                 break
             }
-        } catch { }
+        } catch {
+            $lastServiceObservation = 'service_state_read_error:' + $_.Exception.Message
+        }
+    }
+    if ((Get-Date) -ge $nextReadinessLog) {
+        Write-Host ('[security] waiting for executor readiness: ' + $lastServiceObservation)
+        $nextReadinessLog = (Get-Date).AddSeconds(5)
     }
 }
 if (-not $ready) {
     $task = Get-ScheduledTaskInfo -TaskName $taskName
-    throw "Restricted executor did not become ready (last_task_result=$($task.LastTaskResult))"
+    throw "Restricted executor did not become ready (last_task_result=$($task.LastTaskResult); $lastServiceObservation)"
 }
 $previousPythonPath = [string]$env:PYTHONPATH
 $env:PYTHONPATH = $codeRoot
