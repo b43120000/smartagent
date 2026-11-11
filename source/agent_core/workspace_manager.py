@@ -588,6 +588,36 @@ def _security_menu() -> int:
                     save_turbo_roots(turbo)
                     if set(map(_path_key, load_workspace_access_policy()["turbo_roots"])) != set(map(_path_key, turbo)):
                         raise RuntimeError("turbo_root_apply_postcondition_failed")
+                    if turbo:
+                        # Existing-root import is intentionally unsupported:
+                        # never silently widen the DACL of a populated project.
+                        # The native activator must attest its newly enrolled
+                        # scoped root; a requested preference alone is not ON.
+                        auto = AGENT_PROJECT_ROOT / "install_smart_agent" / "turbo_auto_activate.ps1"
+                        if not auto.is_file():
+                            raise RuntimeError("turbo_native_autostart_script_missing")
+                        native = subprocess.run(
+                            ["powershell", "-NoProfile", "-NonInteractive",
+                             "-ExecutionPolicy", "Bypass", "-File", str(auto),
+                             "-ProjectRoot", str(AGENT_PROJECT_ROOT), "-Action", "Apply"],
+                            cwd=str(AGENT_PROJECT_ROOT), check=False,
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace",
+                        )
+                        if native.stdout:
+                            print(native.stdout, end="")
+                        if native.stderr:
+                            print(native.stderr, end="", file=sys.stderr)
+                        _write_apply_log(
+                            f"TURBO_NATIVE_ACTIVATION_EXIT code={native.returncode}"
+                            f"\nSTDOUT:\n{native.stdout}\nSTDERR:\n{native.stderr}"
+                        )
+                        if native.returncode != 0:
+                            raise RuntimeError(
+                                "turbo_os_activation_failed:"
+                                "the ACL/Executor Apply succeeded but Turbo broker "
+                                "was NOT activated; see native error above"
+                            )
                 print(f"\nAPPLY_EXIT_CODE={return_code}")
                 _write_apply_log(f"APPLY_MENU_RESULT code={return_code}")
                 return return_code
