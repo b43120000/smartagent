@@ -69,6 +69,25 @@ Check-File (Join-Path $root '.venv\Scripts\python.exe') 'executor_python'
 Check-File (Join-Path $root 'config\protocol_manifest.json') 'protocol_manifest'
 Check-File (Join-Path $root 'install_smart_agent\configure_security.ps1') 'security_provisioner'
 Check-File (Join-Path $root 'source\agent_core\windows_security.py') 'security_attestation_module'
+if (-not $Fixture -and
+    (Test-Path -LiteralPath (Join-Path $root '.venv\Scripts\python.exe') -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $root 'config\protocol_manifest.json') -PathType Leaf)) {
+    # Match ACLstatus.ps1's source-hash preflight without changing any files.
+    $python = Join-Path $root '.venv\Scripts\python.exe'
+    $code = "import sys; sys.path.insert(0,sys.argv[1]); from agent_core.protocol_manifest import validate_protocol_manifest; r=validate_protocol_manifest(sys.argv[2]); h=r['hash_mismatches']; sys.exit('manifest_mismatch:'+','.join(h) if h else 0)"
+    try {
+        $manifestOutput = & $python -I -B -c $code (Join-Path $root 'source') $root 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Record 'PRECHECK' 'manifest_integrity' 'PASS' 'Protocol manifest hashes match local core files'
+        } else {
+            Record 'PRECHECK' 'manifest_integrity' 'FAIL' ('ACL_ON_PROTOCOL_MANIFEST_UNVERIFIED: ' + ($manifestOutput | Out-String).Trim())
+        }
+    } catch {
+        Record 'PRECHECK' 'manifest_integrity' 'FAIL' ('Protocol manifest validation failed: ' + $_.Exception.Message)
+    }
+} elseif ($Fixture) {
+    Record 'PRECHECK' 'manifest_integrity' 'UNKNOWN' 'Fixture does not execute local Python interpreter'
+}
 $mode = Read-Json $modeFile 'ACL_MODE_COMMIT' 'mode_json'
 if ($null -eq $mode) {
     Record 'ACL_MODE_COMMIT' 'mode' 'FAIL' 'ACL mode record missing or unreadable'
@@ -127,8 +146,10 @@ if ($Fixture) {
                 Record 'EXECUTOR_TASK' 'task' 'FAIL' 'Task executable is not bound to this installation (may belong to another installation)'
             } elseif ([string]$task.Principal.RunLevel -notin @('Limited','LeastPrivilege')) {
                 Record 'EXECUTOR_TASK' 'task' 'FAIL' 'Task does not have a limited run level'
+            } elseif ([string]$task.State -ne 'Running') {
+                Record 'EXECUTOR_TASK' 'task' 'FAIL' ('Scheduled Executor is not running now: state=' + [string]$task.State)
             } else {
-                Record 'EXECUTOR_TASK' 'task' 'PASS' ('Registered, state=' + [string]$task.State)
+                Record 'EXECUTOR_TASK' 'task' 'PASS' 'Scheduled Executor is running now'
             }
         }
     } catch {
