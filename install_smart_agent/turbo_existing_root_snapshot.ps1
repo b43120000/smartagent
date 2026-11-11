@@ -76,6 +76,22 @@ if (-not (Test-Path -LiteralPath $backupDir -PathType Container)) {
 }
 & icacls.exe $backupDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'TURBO_B_SNAPSHOT_PROTECTION_FAILED' }
+# /grant:r does not erase other pre-existing explicit Allow ACEs. Verify
+# the ENTIRE resulting DACL rather than assuming the directory is private.
+$acl=Get-Acl -LiteralPath $backupDir -ErrorAction Stop
+foreach ($rule in @($acl.Access)) {
+    if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) {
+        try {
+            $sid=([Security.Principal.NTAccount]$rule.IdentityReference).Translate(
+                [Security.Principal.SecurityIdentifier]).Value
+        } catch {
+            throw 'TURBO_B_SNAPSHOT_UNRESOLVABLE_ACL_PRINCIPAL'
+        }
+        if ($sid -notin @('S-1-5-18','S-1-5-32-544')) {
+            throw ('TURBO_B_SNAPSHOT_UNTRUSTED_PREEXISTING_ALLOW_ACE:'+ $sid)
+        }
+    }
+}
 # Never overwrite: the first mutation plan must cite one immutable snapshot ID.
 $id=[Guid]::NewGuid().ToString('N')
 $path=Join-Path $backupDir ('snapshot-'+$id+'.json')
