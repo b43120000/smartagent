@@ -137,3 +137,31 @@ jobs:
       - name: Existing root NTFS SDDL preservation, reparse and hardlink gates
         run: |
           .\install_smart_agent\tests\validate_turbo_b_existing_root_preflight.ps1
+
+  turbo-b-transaction-rehearsal:
+    name: Turbo B disposable NTFS ACL change and exact rollback
+    runs-on: windows-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parse gate for transaction and tests
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_transaction_rehearsal.ps1',
+            'install_smart_agent/tests/validate_turbo_b_acl_transaction_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_TRANSACTION_PARSER_FAILED:'+$path)
+            }
+          }
+      - name: CI-only AppContainer ACE, SDDL roundtrip and fault rollback
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_acl_transaction_ci.ps1
