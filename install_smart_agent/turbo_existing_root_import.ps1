@@ -53,6 +53,11 @@ function Restore-Exact([string]$p,[string]$s) {
  $acl.SetSecurityDescriptorSddlForm($s,[Security.AccessControl.AccessControlSections]::Access)
  Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
  [SmartAgentTurboExistingSecurity]::RestoreMandatoryLabel($p,$s)
+ # Set-Acl sometimes marks a previously non-auto-inherited DACL as D:AI.
+ # Restore the exact original descriptor only if a strict comparison fails.
+ if((Sddl $p) -cne $s) {
+    [SmartAgentTurboExistingSecurity]::RestoreOriginalDacl($p,$s)
+ }
  if((Sddl $p) -cne $s){
   if($env:GITHUB_ACTIONS -ceq 'true'){
     Write-Host ('TURBO_D3_CI_SDDL_EXPECTED='+$s)
