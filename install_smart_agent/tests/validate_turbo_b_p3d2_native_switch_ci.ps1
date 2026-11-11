@@ -53,6 +53,35 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class TurboBCiFullRestore {
+ [StructLayout(LayoutKind.Sequential)]
+ struct LUID { public UInt32 LowPart; public Int32 HighPart; }
+ [StructLayout(LayoutKind.Sequential)]
+ struct TOKEN_PRIVILEGES {public UInt32 PrivilegeCount;public LUID Luid;public UInt32 Attributes;}
+ [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr h);
+ [DllImport("advapi32.dll",SetLastError=true)]
+ static extern bool OpenProcessToken(IntPtr process,UInt32 access,out IntPtr token);
+ [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+ static extern bool LookupPrivilegeValueW(string system,string name,out LUID luid);
+ [DllImport("advapi32.dll",SetLastError=true)]
+ static extern bool AdjustTokenPrivileges(IntPtr token,bool disableAll,
+      ref TOKEN_PRIVILEGES privileges,UInt32 bufferLength,IntPtr previous,IntPtr returned);
+ static void EnableSecurityPrivilege() {
+   IntPtr token;
+   if(!OpenProcessToken(GetCurrentProcess(),0x20u|0x8u,out token))
+       throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_OPEN_TOKEN_FAILED");
+   try {
+     LUID luid;
+     if(!LookupPrivilegeValueW(null,"SeSecurityPrivilege",out luid))
+       throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_PRIVILEGE_LOOKUP_FAILED");
+     TOKEN_PRIVILEGES tp=new TOKEN_PRIVILEGES();
+     tp.PrivilegeCount=1u;tp.Luid=luid;tp.Attributes=2u;
+     if(!AdjustTokenPrivileges(token,false,ref tp,0u,IntPtr.Zero,IntPtr.Zero))
+       throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_PRIVILEGE_ENABLE_FAILED");
+     int result=Marshal.GetLastWin32Error();
+     if(result==1300) throw new InvalidOperationException("B_CI_SE_SECURITY_PRIVILEGE_NOT_ASSIGNED");
+   } finally {CloseHandle(token);}
+ }
  [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
  static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
      string sddl,uint revision,out IntPtr sd,out uint bytes);
@@ -61,6 +90,7 @@ public static class TurboBCiFullRestore {
  [DllImport("kernel32.dll",SetLastError=true)]
  static extern IntPtr LocalFree(IntPtr sd);
  public static void RestoreSacl(string path,string sddl) {
+     EnableSecurityPrivilege();
      IntPtr sd;uint n;
      if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out sd,out n))
          throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_SDDL_PARSE_FAILED");
