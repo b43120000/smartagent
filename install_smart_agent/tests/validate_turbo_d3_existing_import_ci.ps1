@@ -46,7 +46,7 @@ try {
     try {
         & $action -Action Activate -ProjectRoot $project -Workspace $ws -TurboRoot $root -SnapshotId $sid | Out-Null
     } catch {
-        $rejected=$_.Exception.Message -match 'TURBO_D3_PRODUCTION_ACTIVATION_NOT_YET_AUTHORIZED'
+        $rejected=$_.Exception.Message -match 'TURBO_D3_PRODUCTION_ACTIVATION_REQUIRES_VERIFIED_SWITCH'
     }
     Check $rejected 'TURBO_D3_UNCONTROLLED_PRODUCTION_ACTIVATION_ACCEPTED'
     Check (-not (Test-Path -LiteralPath $journal)) 'TURBO_D3_GUARD_CREATED_JOURNAL'
