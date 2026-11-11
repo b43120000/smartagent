@@ -7,16 +7,23 @@ param(
  [Parameter(Mandatory=$true)][string]$ProjectRoot,
  [string]$Workspace='', [string]$TurboRoot='', [string]$SnapshotId='',
  [ValidateRange(1,100000)][int]$MaxEntries=5000,
- [switch]$ExperimentalCiOnly
+ [switch]$ExperimentalCiOnly,
+ [string]$SwitchReceiptId=''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 # Work in progress: no production activation path or recovery service is
 # advertised until CI proves all postconditions and deliberate crash recovery.
-if ($Action -eq 'Activate' -and
-    (-not $ExperimentalCiOnly -or $env:GITHUB_ACTIONS -cne 'true' -or
-     $env:RUNNER_OS -cne 'Windows' -or -not $env:RUNNER_TEMP)) {
-    throw 'TURBO_D3_PRODUCTION_ACTIVATION_NOT_YET_AUTHORIZED'
+if ($Action -eq 'Activate') {
+    $ciAuthorized=$ExperimentalCiOnly -and $env:GITHUB_ACTIONS -ceq 'true' -and
+        $env:RUNNER_OS -ceq 'Windows' -and $env:RUNNER_TEMP
+    $switchAuthorized=$SwitchReceiptId -cmatch '^[0-9a-f]{32}$'
+    if (-not $ciAuthorized -and -not $switchAuthorized) {
+        throw 'TURBO_D3_PRODUCTION_ACTIVATION_REQUIRES_VERIFIED_SWITCH'
+    }
+    if ($ExperimentalCiOnly -and -not $ciAuthorized) {
+        throw 'TURBO_D3_EXPERIMENTAL_CI_GATE_FAILED'
+    }
 }
 function Full([string]$p){return [IO.Path]::GetFullPath($p).TrimEnd('\')}
 function Same([string]$a,[string]$b){return (Full $a).Equals((Full $b),[StringComparison]::OrdinalIgnoreCase)}
@@ -199,6 +206,20 @@ try {
  if(-not (Under $script:root $ws) -or (Under $ws $script:project) -or (Under $script:project $ws)){throw 'TURBO_D3_SCOPE_INVALID'}
  $mode=Load (Join-Path $sec 'acl_mode.json')
  $policy=Load (Join-Path $sec 'workspace_access_policy.json')
+ if ($SwitchReceiptId) {
+    $switchFile=Join-Path $sec 'turbo_existing_root_switch.json'
+    $receipt=Load $switchFile
+    if ($receipt.schema -ne 'SMARTAGENT_TURBO_EXISTING_SWITCH_V1' -or
+        $receipt.status -ne 'NEW_ACTIVATING' -or
+        $receipt.switch_id -cne $SwitchReceiptId -or
+        $receipt.new_snapshot_id -cne $SnapshotId -or
+        -not (Same $receipt.install_root $script:project) -or
+        -not (Same $receipt.workspace_root $ws) -or
+        -not (Same $receipt.target_turbo_root $script:root) -or
+        [int]$receipt.new_policy_revision -ne [int]$policy.revision) {
+        throw 'TURBO_D3_UNTRUSTED_SWITCH_AUTHORIZATION'
+    }
+ }
  if($mode.mode -ne 'on' -or -not (Same $mode.install_root $script:project) -or
     $policy.turbo_requested -ne $true -or @($policy.turbo_roots).Count -ne 1 -or
     -not (Same $policy.turbo_roots[0] $script:root) -or
