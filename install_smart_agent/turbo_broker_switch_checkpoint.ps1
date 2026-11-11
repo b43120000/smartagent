@@ -7,8 +7,7 @@ param(
     [Parameter(Mandatory=$true)][string]$TargetTurboRoot,
     [Parameter(Mandatory=$true)][string]$SnapshotId,
     [ValidateSet('Assess','VerifyRevoked')][string]$Action='Assess',
-    [string]$PreviousTurboRoot='',
-    [string]$PreviousPackageSid='',
+    [string]$ReviewId='',
     [ValidateRange(1,100000)][int]$MaxEntries=5000
 )
 Set-StrictMode -Version Latest
@@ -28,6 +27,22 @@ function Read-Json([string]$path) {
         throw ('TURBO_B_P3C_REQUIRED_STATE_MISSING:'+$path)
     }
     return (Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop)
+}
+function Check-ReviewDirectory([string]$path) {
+    No-Reparse $path
+    $acl=Get-Acl -LiteralPath $path -ErrorAction Stop
+    if (-not $acl.AreAccessRulesProtected) {
+        throw 'TURBO_B_P3C_REVIEW_DIR_INHERITED_ACL'
+    }
+    foreach($ace in @($acl.Access)) {
+        if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) {
+            $sid=$ace.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]).Value
+            if ($sid -notin @('S-1-5-18','S-1-5-32-544')) {
+                throw 'TURBO_B_P3C_REVIEW_DIR_UNSAFE_ALLOW_ACE'
+            }
+        }
+    }
 }
 function No-Reparse([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -81,6 +96,7 @@ if (-not (Under $target $workspace) -or
 }
 $secure=Join-Path $project 'localdata\secure\windows_security'
 $journal=Join-Path $secure 'turbo_os_activation.json'
+$reviewDir=Join-Path $secure 'turbo_broker_switch_reviews'
 $prepare=Join-Path $PSScriptRoot 'turbo_existing_root_prepare.ps1'
 if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) {
     throw 'TURBO_B_P3C_PREPARE_VERIFIER_MISSING'
@@ -88,13 +104,29 @@ if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) {
 & $prepare -Action Verify -ProjectRoot $project -Workspace $workspace -TurboRoot $target -SnapshotId $SnapshotId -MaxEntries $MaxEntries
 if (-not $?) { throw 'TURBO_B_P3C_TARGET_VERIFY_FAILED' }
 if ($Action -eq 'VerifyRevoked') {
-    if (-not $PreviousTurboRoot -or -not $PreviousPackageSid) {
-        throw 'TURBO_B_P3C_PREVIOUS_BINDING_REQUIRED'
+    if ($ReviewId -notmatch '^[0-9a-f]{32}$') {
+        throw 'TURBO_B_P3C_REVIEW_ID_REQUIRED'
     }
-    if ($PreviousPackageSid -notmatch '^S-1-15-2-(?:[0-9]+-){2,}[0-9]+$') {
+    Check-ReviewDirectory $reviewDir
+    $reviewPath=Join-Path $reviewDir ('review-'+$ReviewId+'.json')
+    No-Reparse $reviewPath
+    $review=Read-Json $reviewPath
+    if ($review.schema -ne 'SMARTAGENT_TURBO_BROKER_SWITCH_REVIEW_V1' -or
+        $review.status -ne 'ASSESSMENT_ONLY' -or
+        $review.authorization_to_revoke -ne $false -or
+        $review.authorization_to_mutate -ne $false -or
+        $review.review_id -cne $ReviewId -or
+        $review.snapshot_id -cne $SnapshotId -or
+        -not (Same $review.install_root $project) -or
+        -not (Same $review.workspace_root $workspace) -or
+        -not (Same $review.target_turbo_root $target)) {
+        throw 'TURBO_B_P3C_REVIEW_BINDING_INVALID'
+    }
+    $sid=[string]$review.previous_package_sid
+    if ($sid -notmatch '^S-1-15-2-(?:[0-9]+-){2,}[0-9]+$') {
         throw 'TURBO_B_P3C_PREVIOUS_PACKAGE_SID_INVALID'
     }
-    $old=Full $PreviousTurboRoot
+    $old=Full ([string]$review.previous_turbo_root)
     if (-not (Under $old $workspace) -or (Same $old $target) -or
         (Under $old $target) -or (Under $target $old)) {
         throw 'TURBO_B_P3C_PREVIOUS_SCOPE_INVALID'
@@ -102,15 +134,26 @@ if ($Action -eq 'VerifyRevoked') {
     if (Test-Path -LiteralPath $journal) {
         throw 'TURBO_B_P3C_REVOCATION_JOURNAL_STILL_PRESENT'
     }
-    $count=Check-NoPackageGrants $old $PreviousPackageSid
+    $count=Check-NoPackageGrants $old $sid
+    $ancestor=[IO.Path]::GetDirectoryName($old)
+    while ($ancestor -and
+        ((Same $ancestor $workspace) -or (Under $ancestor $workspace))) {
+        No-Reparse $ancestor
+        if (SidPresent $ancestor $sid) {
+            throw ('TURBO_B_P3C_PARENT_PACKAGE_ACE_STILL_PRESENT:'+$ancestor)
+        }
+        if (Same $ancestor $workspace) { break }
+        $ancestor=[IO.Path]::GetDirectoryName($ancestor)
+    }
     Write-Host ('TURBO_B_P3C_VERIFIED_OLD_PACKAGE_ACE_REMOVED entries='+$count)
     Write-Host 'TURBO_B_P3C_REVOCATION_VERIFIED_JOURNAL_ABSENT'
+    Write-Host ('P3C_REVIEW_ID='+$ReviewId)
     Write-Host 'P3C_EXISTING_ROOT_IMPORT=NOT_ENABLED'
     Write-Host 'P3C_FULL_ACCESS=NOT_ENABLED'
     return
 }
-if ($PreviousTurboRoot -or $PreviousPackageSid) {
-    throw 'TURBO_B_P3C_PREVIOUS_BINDING_ONLY_FOR_VERIFY'
+if ($ReviewId) {
+    throw 'TURBO_B_P3C_REVIEW_ID_ONLY_FOR_VERIFY_REVOKED'
 }
 if (-not (Test-Path -LiteralPath $journal -PathType Leaf)) {
     Write-Host 'TURBO_B_P3C_ASSESS_PASS'
@@ -154,7 +197,50 @@ foreach($parent in @($record.traverse_parents)) {
     No-Reparse $p
 }
 $journalSha=(Get-FileHash -LiteralPath $journal -Algorithm SHA256).Hash
+foreach($p in @($project,(Join-Path $project 'localdata'),(Join-Path $project 'localdata\secure'),$secure)) {
+    No-Reparse $p
+}
+if (-not (Test-Path -LiteralPath $reviewDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $reviewDir -ErrorAction Stop | Out-Null
+}
+No-Reparse $reviewDir
+& icacls.exe $reviewDir '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'TURBO_B_P3C_REVIEW_DIR_PROTECTION_FAILED' }
+Check-ReviewDirectory $reviewDir
+$id=[Guid]::NewGuid().ToString('N')
+$reviewPath=Join-Path $reviewDir ('review-'+$id+'.json')
+$receipt=[ordered]@{
+    schema='SMARTAGENT_TURBO_BROKER_SWITCH_REVIEW_V1'
+    status='ASSESSMENT_ONLY'
+    authorization_to_revoke=$false
+    authorization_to_mutate=$false
+    review_id=$id
+    snapshot_id=$SnapshotId
+    install_root=$project
+    workspace_root=$workspace
+    target_turbo_root=$target
+    previous_turbo_root=$old
+    previous_package_sid=$sid
+    original_journal_sha256=$journalSha
+    created_at=[DateTimeOffset]::UtcNow.ToString('o')
+}
+$data=[Text.Encoding]::UTF8.GetBytes(($receipt | ConvertTo-Json -Depth 8))
+$stream=[IO.FileStream]::new($reviewPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+try {$stream.Write($data,0,$data.Length);$stream.Flush($true)}
+finally {$stream.Dispose()}
+# Do not expose this receipt if its DACL does not inherit exclusively from a
+# verified admin-only directory.
+$reviewAcl=Get-Acl -LiteralPath $reviewPath -ErrorAction Stop
+foreach($ace in @($reviewAcl.Access)) {
+    if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) {
+        $aceSid=$ace.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($aceSid -notin @('S-1-5-18','S-1-5-32-544')) {
+            throw 'TURBO_B_P3C_REVIEW_FILE_UNSAFE_ALLOW_ACE'
+        }
+    }
+}
 Write-Host 'TURBO_B_P3C_ASSESS_PASS'
+Write-Host ('P3C_REVIEW_ID='+$id)
 Write-Host 'P3C_OLD_BROKER=ACTIVE_PROVISIONED'
 Write-Host ('P3C_OLD_ROOT='+$old)
 Write-Host ('P3C_PACKAGE_SID='+$sid)
