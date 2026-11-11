@@ -177,6 +177,23 @@ try {
             return
         }
         $record = Load-Json $journalPath
+        if ($record.PSObject.Properties.Name -contains 'existing_root_import' -and
+            $record.existing_root_import -eq $true) {
+            # Existing populated roots have immutable per-file SDDL/IL
+            # snapshots and MUST use the P3-D3 exact restoration lifecycle.
+            # The older native root revoker resets arbitrary files to Medium
+            # and may irreversibly destroy original integrity labels.
+            $recovery=Join-Path $PSScriptRoot 'turbo_existing_root_import.ps1'
+            if (-not (Test-Path -LiteralPath $recovery -PathType Leaf)) {
+                throw 'TURBO_D3_REVOKER_UNAVAILABLE_FAIL_CLOSED'
+            }
+            & $recovery -Action Revoke -ProjectRoot $ProjectRoot
+            if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+                throw 'TURBO_D3_REVOKE_ACTIVATION_STILL_PRESENT'
+            }
+            Write-Output 'TURBO_D3_EXISTING_ROOT_REVOKED_AND_RESTORED'
+            return
+        }
         Revoke-Recorded-Root $record
         Write-Output 'GIT50_TURBO_ROOT_REVOKED'
         return
