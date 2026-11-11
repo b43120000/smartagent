@@ -108,3 +108,31 @@ jobs:
       - name: Native fresh-root auto enrollment, kernel outside denial, typed operations and OFF revocation
         run: |
           .\install_smart_agent\tests\validate_git50_turbo_activation.ps1 -FixtureParent $env:RUNNER_TEMP
+
+  turbo-b-preflight-windows:
+    name: Turbo B existing-project security inventory and safety tests
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parser gate for existing tree safety inventory
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_preflight.ps1',
+            'install_smart_agent/tests/validate_turbo_b_existing_root_preflight.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_PARSER_FAILED:'+$path)
+            }
+          }
+      - name: Existing root NTFS SDDL preservation, reparse and hardlink gates
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_existing_root_preflight.ps1
