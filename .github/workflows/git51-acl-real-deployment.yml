@@ -275,3 +275,31 @@ jobs:
       - name: Guarded existing-root permission staging and precise recovery
         run: |
           .\install_smart_agent\tests\validate_turbo_d3_existing_import_ci.ps1
+
+  turbo-d3-native-old-to-existing-switch:
+    name: P3-D3 old-to-existing Root native switch and live broker action
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parse gate for controlled switch
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_switch.ps1',
+            'install_smart_agent/tests/validate_turbo_d3_full_switch_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path).Path,
+              [ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_D3_SWITCH_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Switch old native Broker to populated Root and run real action
+        run: |
+          .\install_smart_agent\tests\validate_turbo_d3_full_switch_ci.ps1
