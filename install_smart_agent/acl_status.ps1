@@ -293,6 +293,7 @@ function Get-WorkspaceAccessPolicy {
     })
     if ($writable.Count -lt 1) { throw 'acl_workspace_access_policy_has_no_writable_workspace' }
     return [pscustomobject]@{
+        turbo_requested = ($policy.turbo_requested -eq $true)
         writable_workspaces = @($writable | Select-Object -Unique)
         read_only_roots = @($policy.read_only_roots | ForEach-Object {
             if (-not [string]::IsNullOrWhiteSpace([string]$_)) { [IO.Path]::GetFullPath([string]$_) }
