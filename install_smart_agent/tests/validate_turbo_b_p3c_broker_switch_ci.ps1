@@ -87,6 +87,23 @@ try {
     & $review -Action VerifyRevoked -ProjectRoot $project -Workspace $workspace -TargetTurboRoot $target -SnapshotId $snapId -ReviewId $reviewId
     Write-Host 'TURBO_B_P3C_VERIFIED_REVOCATION_PRESERVES_BOTH_ROOTS_PASS'
 
+    # Review receipts must be admin-only at verification time; an injected
+    # local Users ACE must invalidate the receipt before claiming revocation.
+    $receiptPath=$receipts[0].FullName
+    & icacls.exe $receiptPath '/grant' '*S-1-5-32-545:M' | Out-Null
+    Assert ($LASTEXITCODE -eq 0) 'TURBO_B_P3C_USER_ACE_INJECTION_FAILED'
+    $badReviewBlocked=$false
+    try {
+        & $review -Action VerifyRevoked -ProjectRoot $project -Workspace $workspace -TargetTurboRoot $target -SnapshotId $snapId -ReviewId $reviewId | Out-Null
+    } catch {
+        $badReviewBlocked=$_.Exception.Message -match 'TURBO_B_P3C_REVIEW_FILE_UNSAFE_ALLOW_ACE'
+    } finally {
+        & icacls.exe $receiptPath '/remove:g' '*S-1-5-32-545' | Out-Null
+        Assert ($LASTEXITCODE -eq 0) 'TURBO_B_P3C_USER_ACE_CLEANUP_FAILED'
+    }
+    Assert $badReviewBlocked 'TURBO_B_P3C_UNTRUSTED_REVIEW_FILE_ACCEPTED'
+    Write-Host 'TURBO_B_P3C_REVIEW_FILE_ACL_TAMPER_FAIL_CLOSED_PASS'
+
     $blocked=$false
     try { & $review -Action VerifyRevoked -ProjectRoot $project -Workspace $workspace -TargetTurboRoot $target -SnapshotId $snapId -ReviewId 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' | Out-Null }
     catch { $blocked=$true }
