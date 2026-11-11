@@ -240,3 +240,66 @@ transactional recovery. Active process quiescence, crash-safe old-to-new
 switching and the full production Executor-to-Broker path are also not
 finished. Do NOT run the standalone native Revoke or delete the old
 activation journal just to clear this blocker.
+
+
+## Scheme B P3-D checkpoint — protect OLD root metadata before any switch
+
+The latest live P3-C user assessment reported a real active old native Broker
+bound to `E:\AIspace\SmartAgent_Turbo_Test`, review ID
+`059d3e109e604c9488f9e162ed9d0cdd`, and the target snapshot ID
+`6f6bf6f8f3034768a2f18c5381ddbe2f` with Policy Revision 19.
+Those identifiers are scoped to that live installation and must not be
+substituted with disposable CI IDs.
+
+A new narrowly scoped production checkpoint is
+`install_smart_agent/turbo_p3d_switch_preconditions.ps1`.
+It requires an elevated Windows administrator; validates the protected P3-C
+review receipt, active old Broker journal, exact bound old Root/Package SID,
+previous journal SHA256, valid target P3 snapshot with current full SDDL and
+File IDs, old Root Package SID ACE and traversal scope. Then it uses the
+existing protected snapshot writer to record the **currently observed**
+old Root full security descriptors and NTFS identities for later review.
+Neither workspace's permissions, files, Policy nor the active Broker journal
+are modified. It does create a new admin/SYSTEM-only snapshot metadata file.
+
+To perform the live handoff check after updating the confirmed Git51 commit,
+in elevated Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\smartagent\install_smart_agent\turbo_p3d_switch_preconditions.ps1" -ProjectRoot "C:\smartagent" -Workspace "E:\AIspace" -TargetTurboRoot "E:\AIspace\SmartAgent_GoalDriven_IT_GH_v1" -SnapshotId "6f6bf6f8f3034768a2f18c5381ddbe2f" -ReviewId "059d3e109e604c9488f9e162ed9d0cdd"
+```
+
+Expected (old item count is NOT fixed):
+
+```text
+TURBO_B_P3_VERIFY_PASS entries=68
+TURBO_B_P3D_SWITCH_PRECONDITION_PASS
+P3D_REVIEW_ID=059d3e109e604c9488f9e162ed9d0cdd
+P3D_TARGET_SNAPSHOT_ID=6f6bf6f8f3034768a2f18c5381ddbe2f
+P3D_OLD_ROOT=E:\AIspace\SmartAgent_Turbo_Test
+P3D_OLD_ROOT_SNAPSHOT_ID=<new 32-hex snapshot ID>
+P3D_OLD_ROOT_ENTRIES=<observed old tree count>
+P3D_OLD_ROOT_SNAPSHOT_SHA256=<actual hash>
+P3D_PROCESS_QUIESCENCE=NOT_ATTESTED
+P3D_ATOMIC_SWITCH=NOT_IMPLEMENTED
+P3D_REVOCATION=NOT_EXECUTED
+P3D_EXISTING_ROOT_IMPORT=DISABLED
+P3D_FULL_ACCESS=NOT_ENABLED
+```
+
+Failures (such as `TURBO_B_P3D_BROKER_JOURNAL_CHANGED_REASSESS_REQUIRED`)
+must stop the workflow; do not change the journal to force a PASS. If any
+target File ID, SDDL or Policy Revision changed, repeat the safe P3 Prepare
+and P3-C Assess rather than reusing stale IDs.
+
+GitHub Windows integration testing verifies an existing old Root's protected
+inventory can be captured with its original data preserved; an intentional
+change in the active Broker journal is rejected without mutating either Root.
+
+**Remaining:** this snapshot describes the old Root's *current* post-activation
+security. It is NOT proof of its original pre-activation integrity labels and
+is NOT a verified restore plan. The project still lacks production process
+quiescence, atomic old-to-new cutover, per-entry old/new exact label rollback,
+and production Executor action routing. Native production Full-Access remains
+disabled. No manual Revoke, Policy edit, directory delete or native ACL change
+should be performed based solely on this checkpoint.
