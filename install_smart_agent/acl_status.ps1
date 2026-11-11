@@ -956,6 +956,20 @@ if ($Mode -eq 'on') {
         throw $failure
     }
     Write-Host 'ACL mode is ON. SmartAgent filesystem restrictions are active.' -ForegroundColor Green
+    # Native enrollment only after the restricted Executor/ACL ON committed.
+    # Existing populated user trees are not silently re-ACL'd or imported.
+    $finalTurboPolicy = Get-WorkspaceAccessPolicy
+    if ($finalTurboPolicy -and $finalTurboPolicy.turbo_requested -eq $true) {
+        $turboAuto = Join-Path $PSScriptRoot 'turbo_auto_activate.ps1'
+        if (-not (Test-Path -LiteralPath $turboAuto -PathType Leaf)) {
+            throw 'ACL_ON_TURBO_AUTOSTART_SCRIPT_MISSING:ACL_ON_COMMITTED_TURBO_NOT_READY'
+        }
+        Write-Host '[SmartAgent ACL] Enrolling configured scoped Turbo Root...' -ForegroundColor Cyan
+        & $turboAuto -ProjectRoot $ProjectRoot -Action Apply
+        if (-not $?) {
+            throw 'ACL_ON_TURBO_AUTOSTART_FAILED:ACL_ON_COMMITTED_TURBO_NOT_READY'
+        }
+    }
     return
 }
 
