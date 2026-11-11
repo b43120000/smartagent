@@ -1,6 +1,6 @@
 # P3-D3 disposable Windows old-Broker -> populated Root end-to-end test.
 [CmdletBinding()]
-param()
+param([switch]$CrashTest)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_OS -cne 'Windows' -or -not $env:RUNNER_TEMP){throw 'TURBO_D3_SWITCH_CI_ONLY'}
@@ -48,6 +48,37 @@ try{
  Check $wrong 'TURBO_D3_SWITCH_CI_WRONG_CONFIRMATION_ACCEPTED'
  Check (Test-Path -LiteralPath $activePath) 'TURBO_D3_SWITCH_CI_PRECHECK_REVOKED_OLD'
  Write-Host 'TURBO_D3_SWITCH_CI_NEGATIVE_SCOPE_GATE_PASS'
+ if($CrashTest){
+   # Run an isolated child PowerShell so abrupt exit cannot terminate CI.
+   $child=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$switch,
+     '-Action','Switch','-ProjectRoot',$project,'-Workspace',$ws,
+     '-TargetTurboRoot',$target,'-SnapshotId',[string]$snapshot.snapshot_id,
+     '-ReviewId',[string]$review.review_id,'-ConfirmTarget',$target,
+     '-TestCrashAfterNewActivation')
+   & powershell.exe @child | Out-Null
+   Check ($LASTEXITCODE -eq 87) ('TURBO_D3_SWITCH_CI_CRASH_EXIT_WRONG:'+ $LASTEXITCODE)
+   $global:LASTEXITCODE=0
+   Check (Test-Path -LiteralPath $switchPath -PathType Leaf) 'TURBO_D3_SWITCH_CI_CRASH_JOURNAL_NOT_PERSISTED'
+   Check (Test-Path -LiteralPath $activePath -PathType Leaf) 'TURBO_D3_SWITCH_CI_CRASH_NEW_BROKER_NOT_PROVISIONED'
+   $pending=Get-Content -LiteralPath $switchPath -Raw -Encoding UTF8 | ConvertFrom-Json
+   Check ($pending.status -eq 'NEW_ACTIVATING') 'TURBO_D3_SWITCH_CI_CRASH_WRONG_STAGE'
+   $active=Get-Content -LiteralPath $activePath -Raw -Encoding UTF8 | ConvertFrom-Json
+   $cmd=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("Write-Output 'MUST_NOT_EXECUTE'"))
+   & powershell.exe -NoProfile -NonInteractive -File ([string]$active.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $target -ExpectedRevision 44 -TaskId 'CRASH-TEST' -ActionId 'BLOCKED-ACTION' -CommandBase64 $cmd -TimeoutSeconds 10 -MaxOutputBytes 1024 2>&1 | Out-Null
+   Check ($LASTEXITCODE -ne 0) 'TURBO_D3_SWITCH_CI_PENDING_ALLOWED_NATIVE_EXECUTION'
+   $global:LASTEXITCODE=0
+   Write-Host 'TURBO_D3_SWITCH_CI_CRASH_PENDING_DENIES_BROKER_PASS'
+   & $switch -Action Recover -ProjectRoot $project
+   Check (-not (Test-Path -LiteralPath $switchPath)) 'TURBO_D3_SWITCH_CI_RECOVER_JOURNAL_REMAINS'
+   Check (-not (Test-Path -LiteralPath $activePath)) 'TURBO_D3_SWITCH_CI_RECOVER_ACTIVATION_REMAINS'
+   Check (-not (Test-Path -LiteralPath $importPath)) 'TURBO_D3_SWITCH_CI_RECOVER_IMPORT_REMAINS'
+   $p=Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+   Check ($p.turbo_requested -eq $false) 'TURBO_D3_SWITCH_CI_RECOVER_POLICY_STILL_ON'
+   Check ((Get-FileHash -LiteralPath $inputFile -Algorithm SHA256).Hash -eq $inputHash) 'TURBO_D3_SWITCH_CI_RECOVER_ORIGINAL_DATA_CHANGED'
+   Check ((Get-FileHash -LiteralPath $oldData -Algorithm SHA256).Hash -eq $oldHash) 'TURBO_D3_SWITCH_CI_RECOVER_OLD_DATA_CHANGED'
+   Write-Host 'TURBO_D3_SWITCH_CI_HARD_CRASH_CROSS_PROCESS_RECOVERY_SAFE_OFF_PASS'
+   return
+ }
  & $switch -Action Switch @args -ConfirmTarget $target
  Check (-not (Test-Path -LiteralPath $switchPath)) 'TURBO_D3_SWITCH_CI_PENDING_TRANSACTION'
  $a=Get-Content -LiteralPath $activePath -Raw -Encoding UTF8 | ConvertFrom-Json
