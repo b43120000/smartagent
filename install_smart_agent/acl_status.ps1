@@ -692,20 +692,26 @@ function Get-ProvisioningExecutorName($PreviousMode) {
 
 function Wait-ExecutorReady([string]$ExpectedMode, [string]$Endpoint, [double]$StartedAt) {
     $statePath = Join-Path $Endpoint 'service_state.json'
-    $deadline = (Get-Date).AddSeconds(35)
+    $lastObservation = 'service_state_missing'
+    $deadline = (Get-Date).AddSeconds(75)
     while ((Get-Date) -lt $deadline) {
         if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             try {
-                $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+                $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
                 $selfTest = $state.self_test
-                $fresh = [double]$state.heartbeat_at -ge $StartedAt -and
-                    ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$state.heartbeat_at) -lt 10
+                $heartbeatAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$state.heartbeat_at
+                $fresh = [double]$state.heartbeat_at -ge $StartedAt -and $heartbeatAge -lt 10
+                $lastObservation = ('passed={0}, mode={1}, fresh={2}, heartbeat_age={3:N1}s, reasons={4}' -f
+                    $selfTest.passed, $selfTest.mode, $fresh, $heartbeatAge,
+                    (@($selfTest.reasons) -join ','))
                 if ($fresh -and $selfTest.passed -eq $true -and $selfTest.mode -eq $ExpectedMode) { return }
-            } catch { }
+            } catch {
+                $lastObservation = 'service_state_read_error:' + $_.Exception.Message
+            }
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "restricted_executor_mode_transition_failed:$ExpectedMode"
+    throw "restricted_executor_mode_transition_failed:${ExpectedMode}:$lastObservation"
 }
 
 $transitionMutex = New-Object Threading.Mutex($false, 'Global\SmartAgentAclMode_Machine_V1')
