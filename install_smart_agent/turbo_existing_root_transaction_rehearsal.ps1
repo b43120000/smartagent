@@ -95,6 +95,35 @@ foreach ($entry in @($doc.entries)) {
     }
     $original[$path]=$entry
 }
+# Win32 DACL restore fallback for Windows PowerShell Set-Acl: Set-Acl may
+# set SE_DACL_AUTO_INHERITED (SDDL D:AI) even when it did not exist before.
+# Exercise the raw Win32 API against disposable data; NEVER use on real roots
+# until exact SDDL equality and crash recovery have been proven independently.
+if (-not ('TurboBCiNativeRestore' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class TurboBCiNativeRestore {
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        string text, uint revision, out IntPtr sd, out uint bytes);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern bool SetFileSecurityW(string path, uint securityInformation, IntPtr sd);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern IntPtr LocalFree(IntPtr ptr);
+    public static void RestoreDacl(string path,string sddl) {
+        IntPtr p;uint n;
+        if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out p,out n))
+            throw new Win32Exception(Marshal.GetLastWin32Error(),"TURBO_B_WIN32_PARSE_SDDL");
+        try {
+            if(!SetFileSecurityW(path,4u,p))
+                throw new Win32Exception(Marshal.GetLastWin32Error(),"TURBO_B_WIN32_SET_DACL");
+        } finally { LocalFree(p); }
+    }
+}
+'@ -ErrorAction Stop
+}
 $sid=[Security.Principal.SecurityIdentifier]::new($AppContainerSid)
 $modified=New-Object System.Collections.Generic.List[object]
 $failure=$null
@@ -156,6 +185,11 @@ try {
             $acl.SetSecurityDescriptorSddlForm([string]$entry.sddl)
             Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
             $after=(Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl
+            if ($after -cne [string]$entry.sddl) {
+                Write-Host 'TURBO_B_CI_TEST_RAW_DACL_RESTORE'
+                [TurboBCiNativeRestore]::RestoreDacl($p,[string]$entry.sddl)
+                $after=(Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl
+            }
             if ($after -cne [string]$entry.sddl) {
                 # ONLY CI disposable fixture is allowed to reach this point.
                 Write-Host ('TURBO_B_CI_SDDL_BEFORE: '+[string]$entry.sddl)
