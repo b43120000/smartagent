@@ -71,7 +71,11 @@ function Force-Safe-Off {
  $policy.revision=[int]$policy.revision+1
  Write-Policy $policy
  $record.status='RECOVERED_SAFE_OFF'
- $record.safe_off_revision=[int]$policy.revision
+ if($record.PSObject.Properties.Name -contains 'safe_off_revision'){
+    $record.safe_off_revision=[int]$policy.revision
+ }else{
+    $record | Add-Member -NotePropertyName 'safe_off_revision' -NotePropertyValue ([int]$policy.revision)
+ }
  Save-Switch $record
  $history=Join-Path $script:secure ('turbo_switch_history-'+[string]$record.switch_id+'.json')
  Move-Item -LiteralPath $script:switchPath -Destination $history -ErrorAction Stop
