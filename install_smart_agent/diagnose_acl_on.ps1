@@ -207,12 +207,14 @@ foreach ($stage in $stages) {
     }
 }
 $verdict = if ($failed.Count -gt 0) { 'FAILED_OR_INCOMPLETE' } else { 'NOT_PROVEN' }
+$modeValue = 'unknown'
+if ($mode) { $modeValue = [string]$mode.mode }
 # A snapshot never proves that old ACLs are correct or that no pending action
 # was running; never output a "full ACL ON PASS" from this read-only audit.
 $report = [ordered]@{
     schema='SMARTAGENT_ACL_ON_DIAGNOSIS_V1'
     project_root=$root
-    acl_mode=if ($mode) { [string]$mode.mode } else { 'unknown' }
+    acl_mode=$modeValue
     verdict=$verdict
     earliest_unmet_postcondition=$firstStage
     exact_failure_cause_proven=$false
