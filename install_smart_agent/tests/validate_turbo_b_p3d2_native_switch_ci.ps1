@@ -24,6 +24,11 @@ $preflight=Join-Path $PSScriptRoot '..\turbo_existing_root_preflight.ps1'
 $csharp=Join-Path $PSScriptRoot '..\turbo_appcontainer_probe.cs'
 $package=''
 $moniker=''
+$newFile=''
+$testFile=''
+$workspaceBaseline=''
+$originalHash=''
+$restorationFailures=New-Object System.Collections.Generic.List[string]
 $targetFiles=@()
 $backup=@{}
 $journal=Join-Path $sec 'turbo_os_activation.json'
@@ -165,7 +170,6 @@ try {
     if ($backup.Count -gt 0 -and (Test-Path -LiteralPath $target -PathType Container)) {
         # The original Full SDDL/mandatory label restore is the required
         # gate. Failure must FAIL the CI job, never claim success.
-        $restorationFailures=New-Object System.Collections.Generic.List[string]
         foreach($path in @($backup.Keys | Sort-Object Length)) {
             try {
                 Restore $path $backup[$path]
