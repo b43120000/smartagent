@@ -303,3 +303,16 @@ jobs:
       - name: Switch old native Broker to populated Root and run real action
         run: |
           .\install_smart_agent\tests\validate_turbo_d3_full_switch_ci.ps1
+
+  turbo-d3-native-switch-crash-recovery:
+    name: P3-D3 hard process crash, pending denial and safe-off recovery
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Abrupt termination after import and cross-process recovery
+        run: |
+          .\install_smart_agent\tests\validate_turbo_d3_full_switch_ci.ps1 -CrashTest
