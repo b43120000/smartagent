@@ -18,6 +18,20 @@ if (-not (Test-Path -LiteralPath $aclScript -PathType Leaf) -or
     -not (Test-Path -LiteralPath $diagnosisScript -PathType Leaf)) {
     throw 'ACL_ON_DIAGNOSTIC_SCRIPTS_MISSING'
 }
+function Get-FailureStage([string]$Message) {
+    switch -Regex ($Message) {
+        'ACL_ON_ENVIRONMENT_NOT_READY|ACL_ON_PROTOCOL_MANIFEST_UNVERIFIED|acl_workspace_access_policy' { return 'PRECHECK_ENVIRONMENT' }
+        'ACL_ON_REVOCATION_PENDING|ACL_ON_PREVIOUS_|ACL_ON_SECURITY_STATE_|ACL_ON_UNBOUND_|GIT50_TURBO_BROKER' { return 'PRECHECK_AUTHORIZATION' }
+        'icacls failed|Refusing to replace custom executor ACE|reparse_point_forbidden' { return 'NTFS_ACL_APPLY_OR_PREFLIGHT' }
+        'Restricted executor did not become ready|Unable to start restricted executor task' { return 'EXECUTOR_STARTUP' }
+        'Restricted executor attestation failed' { return 'EXECUTOR_ATTESTATION' }
+        'machine_authorization_state|machine_authorization|executor_task_binding_mismatch' { return 'MACHINE_AUTHORIZATION_OR_TASK_BINDING' }
+        'restricted_executor_mode_transition_failed' { return 'FINAL_EXECUTOR_READY' }
+        'ACL_ON_RETURNED_WITHOUT_ON_COMMIT' { return 'ACL_MODE_COMMIT' }
+        'ACL_ON_SECURITY_PROVISIONING_FAILED' { return 'SECURITY_PROVISIONING' }
+        default { return 'UNCLASSIFIED_READ_CAPTURED_EXCEPTION' }
+    }
+}
 Write-Host 'This command WILL attempt ACL ON and modify Windows permissions / restricted executor state.' -ForegroundColor Yellow
 Write-Host ('Install root: ' + $root)
 Write-Host 'For analysis without any state changes, run check_acl_on.bat instead.'
@@ -60,6 +74,7 @@ try {
         $originalFailed=$true
         $errorRecord=$_
         $message=[string]$errorRecord.Exception.Message
+        $failureStage=Get-FailureStage $message
         $at=if ($errorRecord.InvocationInfo) {
             [string]$errorRecord.InvocationInfo.PositionMessage
         } else { '' }
@@ -68,6 +83,9 @@ try {
             schema='SMARTAGENT_ACL_ON_CAPTURED_ERROR_V1'
             project_root=$root
             error_message=$message
+            classified_failure_stage=$failureStage
+            original_script_line=if ($errorRecord.InvocationInfo) { [int]$errorRecord.InvocationInfo.ScriptLineNumber } else { 0 }
+            original_script_name=if ($errorRecord.InvocationInfo) { [string]$errorRecord.InvocationInfo.ScriptName } else { '' }
             invocation=$at
             script_stack_trace=$stack
             captured_at=(Get-Date).ToUniversalTime().ToString('o')
@@ -78,6 +96,7 @@ try {
             (New-Object Text.UTF8Encoding($false)))
         Write-Host '[ACL_ON_DIAG] ORIGINAL ACL ON ERROR:' -ForegroundColor Red
         Write-Host $message
+        Write-Host ('[ACL_ON_DIAG] Captured error stage hint: ' + $failureStage)
         Write-Host $at
         Write-Host $stack
         Write-Host ('[ACL_ON_DIAG] Exact error receipt: ' + $failureFile)
