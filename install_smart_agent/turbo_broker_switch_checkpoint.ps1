@@ -44,6 +44,21 @@ function Check-ReviewDirectory([string]$path) {
         }
     }
 }
+function Check-ReviewFile([string]$path) {
+    No-Reparse $path
+    $acl=Get-Acl -LiteralPath $path -ErrorAction Stop
+    foreach($ace in @($acl.Access)) {
+        if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) {
+            try {
+                $sid=$ace.IdentityReference.Translate(
+                    [Security.Principal.SecurityIdentifier]).Value
+            } catch {throw 'TURBO_B_P3C_REVIEW_FILE_UNRESOLVABLE_ACL'}
+            if ($sid -notin @('S-1-5-18','S-1-5-32-544')) {
+                throw 'TURBO_B_P3C_REVIEW_FILE_UNSAFE_ALLOW_ACE'
+            }
+        }
+    }
+}
 function No-Reparse([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw ('TURBO_B_P3C_PATH_MISSING:'+$path)
@@ -109,7 +124,7 @@ if ($Action -eq 'VerifyRevoked') {
     }
     Check-ReviewDirectory $reviewDir
     $reviewPath=Join-Path $reviewDir ('review-'+$ReviewId+'.json')
-    No-Reparse $reviewPath
+    Check-ReviewFile $reviewPath
     $review=Read-Json $reviewPath
     if ($review.schema -ne 'SMARTAGENT_TURBO_BROKER_SWITCH_REVIEW_V1' -or
         $review.status -ne 'ASSESSMENT_ONLY' -or
@@ -230,15 +245,7 @@ try {$stream.Write($data,0,$data.Length);$stream.Flush($true)}
 finally {$stream.Dispose()}
 # Do not expose this receipt if its DACL does not inherit exclusively from a
 # verified admin-only directory.
-$reviewAcl=Get-Acl -LiteralPath $reviewPath -ErrorAction Stop
-foreach($ace in @($reviewAcl.Access)) {
-    if ($ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) {
-        $aceSid=$ace.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-        if ($aceSid -notin @('S-1-5-18','S-1-5-32-544')) {
-            throw 'TURBO_B_P3C_REVIEW_FILE_UNSAFE_ALLOW_ACE'
-        }
-    }
-}
+Check-ReviewFile $reviewPath
 Write-Host 'TURBO_B_P3C_ASSESS_PASS'
 Write-Host ('P3C_REVIEW_ID='+$id)
 Write-Host 'P3C_OLD_BROKER=ACTIVE_PROVISIONED'
