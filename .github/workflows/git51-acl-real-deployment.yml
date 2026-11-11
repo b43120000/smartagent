@@ -52,6 +52,19 @@ jobs:
             $errors | Format-List | Out-String | Write-Host
             throw 'REAL_ACL_DEPLOYMENT_POWERSHELL_PARSE_FAILED'
           }
+          foreach ($file in @('install_smart_agent/acl_mode_command.ps1',
+                               'install_smart_agent/tests/validate_aclstatus_inline_results.ps1')) {
+            $tokens=$null; $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('ACL_STATUS_INLINE_POWERSHELL_PARSE_FAILED:'+$file)
+            }
+          }
+      - name: ACLstatus same-window ON and OFF result contract regressions
+        run: |
+          .\install_smart_agent\tests\validate_aclstatus_inline_results.ps1
       - name: Actual ACL ON deployment, non-admin Executor self-test and ACL OFF revocation
         run: |
           .\install_smart_agent\tests\validate_acl_on_real_windows_ci.ps1
