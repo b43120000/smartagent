@@ -80,7 +80,12 @@ function Clear-TurboPolicyOnAclOff {
         $policy.turbo_requested = $false
     }
     $policy.revision = [long]$policy.revision + 1
-    $policy.updated_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $newPolicyUpdatedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($policy.PSObject.Properties['updated_at']) {
+        $policy.updated_at = $newPolicyUpdatedAt
+    } else {
+        $policy | Add-Member -NotePropertyName 'updated_at' -NotePropertyValue $newPolicyUpdatedAt
+    }
     $temp = "$AccessPolicyPath.git46-acl-off.tmp"
     try {
         [IO.File]::WriteAllText($temp, ($policy | ConvertTo-Json -Depth 16),
@@ -908,7 +913,7 @@ if ($Mode -eq 'on') {
                 -ControllerSid $callerSid `
                 -ProfilePath $ProfilePath `
                 -ExecutorPython $defaultExecutorPython `
-                -RepairExecutorCredential:$repairExecutor -SkipAclModeRestore -Apply
+                -RepairExecutorCredential:$repairExecutor -SkipAclModeRestore -NonInteractive -Apply
         }
         if ($LASTEXITCODE -ne 0) { throw "ACL_ON_SECURITY_PROVISIONING_FAILED:exit=$LASTEXITCODE" }
         if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) {
