@@ -8,10 +8,15 @@ param(
  [Parameter(Mandatory=$true)][string]$ProjectRoot,
  [string]$Workspace='', [string]$TargetTurboRoot='', [string]$SnapshotId='',
  [string]$ReviewId='', [string]$ConfirmTarget='',
- [ValidateRange(1,100000)][int]$MaxEntries=5000
+ [ValidateRange(1,100000)][int]$MaxEntries=5000,
+ [switch]$TestCrashAfterNewActivation
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
+if($TestCrashAfterNewActivation -and ($env:GITHUB_ACTIONS -cne 'true' -or
+   $env:RUNNER_OS -cne 'Windows' -or -not $env:RUNNER_TEMP)){
+   throw 'TURBO_SWITCH_TEST_CRASH_FORBIDDEN_IN_PRODUCTION'
+}
 function Full([string]$p){if([string]::IsNullOrWhiteSpace($p)){throw 'TURBO_SWITCH_EMPTY_PATH'};return [IO.Path]::GetFullPath($p).TrimEnd('\')}
 function Same([string]$a,[string]$b){return (Full $a).Equals((Full $b),[StringComparison]::OrdinalIgnoreCase)}
 function Under([string]$a,[string]$b){return (Full $a).StartsWith((Full $b)+'\',[StringComparison]::OrdinalIgnoreCase)}
@@ -212,6 +217,11 @@ try{
        [int]$active.policy_revision -ne [int]$policy.revision){
        throw 'TURBO_SWITCH_NEW_NATIVE_ENROLLMENT_NOT_ATTESTED'
     }
+    # Test only: simulate hard process termination AFTER the new native
+    # enrollment has committed but BEFORE the switch journal is removed.
+    # A pending switch must deny every native action until a separate
+    # operator process completes verified Recovery (or ACL OFF triggers it).
+    if($TestCrashAfterNewActivation){[Environment]::Exit(87)}
     $record.status='COMPLETE'
     Save-Switch $record
     $history=Join-Path $script:secure ('turbo_switch_history-'+$switchId+'.json')
