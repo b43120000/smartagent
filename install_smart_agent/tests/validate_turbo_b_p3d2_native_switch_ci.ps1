@@ -34,12 +34,12 @@ $backup=@{}
 $journal=Join-Path $sec 'turbo_os_activation.json'
 function Snapshot([string]$p) {return [string](Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl}
 function Restore([string]$p,[string]$sddl) {
-    $acl=Get-Acl -LiteralPath $p -Audit -ErrorAction Stop
-    $acl.SetSecurityDescriptorSddlForm($sddl)
+    # Change ONLY DACL here; the snapshot's SACL will be restored by the
+    # native LABEL_SECURITY_INFORMATION path to avoid manufacturing S:PAI.
+    $acl=Get-Acl -LiteralPath $p -ErrorAction Stop
+    $acl.SetSecurityDescriptorSddlForm($sddl,[Security.AccessControl.AccessControlSections]::Access)
     Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
-    # Restore SACL/mandatory label explicitly: a DACL-only restore leaves
-    # a stale S:PAI and violates the original mandatory-integrity state.
-    [TurboBCiFullRestore]::RestoreSacl($p,$sddl)
+    [TurboBCiFullRestore]::RestoreLabel($p,$sddl)
     # Do not reset D:AI unconditionally; Windows may discard an original
     # auto-inherited DACL flag on an unnecessary SetFileSecurity DACL call.
     $current=[string](Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl
@@ -92,23 +92,17 @@ public static class TurboBCiFullRestore {
      UInt32 information,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
  [DllImport("kernel32.dll",SetLastError=true)]
  static extern IntPtr LocalFree(IntPtr sd);
- public static void RestoreSacl(string path,string sddl) {
+ public static void RestoreLabel(string path,string sddl) {
      EnableSecurityPrivilege();
      IntPtr sd;uint n;
      if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,1,out sd,out n))
          throw new Win32Exception(Marshal.GetLastWin32Error(),"B_CI_SDDL_PARSE_FAILED");
      try {
-       if(!SetFileSecurityW(path,8u,sd)) {
+       // LABEL_SECURITY_INFORMATION changes the Mandatory Integrity ACE
+       // without replacing the whole audit SACL or manufacturing S:PAI.
+       if(!SetFileSecurityW(path,16u,sd)) {
          int code=Marshal.GetLastWin32Error();
-         throw new Win32Exception(code,"B_CI_SACL_RESTORE_FAILED_WIN32_"+code.ToString());
-       }
-       // The original SDDL had NO SACL_PRESENT flag (no S: section).
-       // Test SetNamedSecurityInfo with an explicit null SACL to remove the
-       // empty S: state left by SetFileSecurity. CI-only until exact proof.
-       if(sddl.IndexOf("S:",StringComparison.Ordinal)<0) {
-           UInt32 status=SetNamedSecurityInfoW(path,1,8u,IntPtr.Zero,IntPtr.Zero,
-                                               IntPtr.Zero,IntPtr.Zero);
-           if(status!=0) throw new Win32Exception((int)status,"B_CI_CLEAR_NULL_SACL_FAILED_"+status);
+         throw new Win32Exception(code,"B_CI_LABEL_RESTORE_FAILED_WIN32_"+code.ToString());
        }
      } finally {LocalFree(sd);}
  }
