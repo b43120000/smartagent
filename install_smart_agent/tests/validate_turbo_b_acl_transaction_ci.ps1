@@ -72,6 +72,24 @@ try {
     Check-Tree $backup $sid $file $digest
     Write-Host 'TURBO_B_CI_INJECTED_FAILURE_EXACT_SDDL_RESTORE_PASS'
 
+    # Simulate a HARD process crash after the first Set-Acl. The child exits
+    # immediately; the parent must use a durable flushed journal to recover.
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $transaction -ProjectRoot $project -Workspace $workspace -TurboRoot $root -SnapshotPath $backup -AppContainerSid $sid -InjectCrashAfter 1
+    Assert ($LASTEXITCODE -eq 87) ('TURBO_B_CI_CRASH_EXIT_NOT_OBSERVED:'+ $LASTEXITCODE)
+    $saved=Get-Content -LiteralPath $backup -Raw -Encoding UTF8 | ConvertFrom-Json
+    $journal=Join-Path $backupDir ('transaction-'+[string]$saved.snapshot_id+'.json')
+    Assert (Test-Path -LiteralPath $journal -PathType Leaf) 'TURBO_B_CI_CRASH_JOURNAL_NOT_PERSISTED'
+    $receipt=Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert ($receipt.status -eq 'APPLYING' -and @($receipt.pending_paths).Count -ge 1) 'TURBO_B_CI_CRASH_PREMUTATION_RECORD_MISSING'
+    $changed=@($saved.entries | Where-Object {
+        (Get-Acl -LiteralPath ([string]$_.path) -Audit).Sddl -match [Regex]::Escape($sid)
+    })
+    Assert ($changed.Count -ge 1) 'TURBO_B_CI_HARD_CRASH_LEFT_NO_MUTATION_TO_RECOVER'
+    & $transaction -Action Recover -ProjectRoot $project -Workspace $workspace -TurboRoot $root -SnapshotPath $backup -AppContainerSid $sid
+    Assert (-not (Test-Path -LiteralPath $journal)) 'TURBO_B_CI_CRASH_JOURNAL_NOT_CLEARED_AFTER_VERIFIED_ROLLBACK'
+    Check-Tree $backup $sid $file $digest
+    Write-Host 'TURBO_B_CI_HARD_PROCESS_EXIT_AND_DURABLE_RECOVERY_PASS'
+
     # A stale policy revision must block before even a single Set-Acl.
     $policy.revision=55
     [IO.File]::WriteAllText($policyPath,($policy | ConvertTo-Json -Depth 12))
