@@ -63,6 +63,43 @@ try {
     }
     Write-Host 'GIT50_NEW_ROOT_APP_CONTAINER_ACTIVATION_PASS'
 
+    # Scheme B's desired policy: outside the Turbo Root, ONLY an
+    # explicitly read-authorized path may be read. Even there the kernel
+    # must reject writes. All changes are to this disposable CI sentinel;
+    # no persistent grant to a real user directory is created.
+    $outsideReadOnly=Join-Path $workspace ('turbo-ro-only-'+[Guid]::NewGuid().ToString('N')+'.txt')
+    [IO.File]::WriteAllText($outsideReadOnly,'READ_ONLY_ORIGINAL')
+    try {
+        $sidObject=[Security.Principal.SecurityIdentifier]::new($sid)
+        $outsideAcl=Get-Acl -LiteralPath $outsideReadOnly
+        $outsideRule=[Security.AccessControl.FileSystemAccessRule]::new(
+            $sidObject,[Security.AccessControl.FileSystemRights]::Read,
+            [Security.AccessControl.InheritanceFlags]::None,
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow)
+        [void]$outsideAcl.AddAccessRule($outsideRule)
+        Set-Acl -LiteralPath $outsideReadOnly -AclObject $outsideAcl -ErrorAction Stop
+        $literal=$outsideReadOnly.Replace("'","''")
+        $readOnlyProof=@"
+try {
+    if ([IO.File]::ReadAllText('$literal') -cne 'READ_ONLY_ORIGINAL') { exit 97 }
+    try { [IO.File]::WriteAllText('$literal','ILLEGAL_WRITE'); exit 98 }
+    catch [System.UnauthorizedAccessException] { exit 0 }
+} catch { exit 99 }
+"@
+        $proof=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+            [string]$journal.moniker,$readOnlyProof,$root,[uint32]30000) | ConvertFrom-Json
+        if ($proof.sandbox_identity_verified -ne $true -or
+            $proof.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+            [int]$proof.exit_code -ne 0 -or
+            [IO.File]::ReadAllText($outsideReadOnly) -cne 'READ_ONLY_ORIGINAL') {
+            throw ('TURBO_B_NATIVE_OUTSIDE_READONLY_KERNEL_DENIAL_FAILED:exit='+$proof.exit_code)
+        }
+        Write-Host 'TURBO_B_NATIVE_EXPLICIT_READONLY_OUTSIDE_WRITE_DENIED_PASS'
+    } finally {
+        Remove-Item -LiteralPath $outsideReadOnly -Force -ErrorAction SilentlyContinue
+    }
+
     # The runtime-facing broker must execute the untrusted command ONLY
     # inside the AppContainer and return real output + kernel exit status.
     $brokerCommand=[Convert]::ToBase64String(
