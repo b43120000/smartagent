@@ -407,3 +407,16 @@ jobs:
           source/WebAgent/tests/test_git49_turbo_broker_admission.py
           source/WebAgent/tests/test_git51_non_command_acl_parity.py
           -q
+      - name: Parse read-only CMD binding diagnostic wrapper
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens=$null
+          $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+             (Resolve-Path 'install_smart_agent/turbo_task_binding_status.ps1').Path,
+             [ref]$tokens,[ref]$errors)
+          if (@($errors).Count -gt 0) {
+             $errors | Format-List | Out-String | Write-Host
+             throw 'TURBO_TASK_BINDING_STATUS_PARSE_FAILED'
+          }
