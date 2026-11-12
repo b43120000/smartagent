@@ -276,6 +276,11 @@ $executorTurboDecisions = @()
 $executorSandboxEvents = @()
 $executorNativeConfirmationBlocks = @()
 $executorNativeReplans = @()
+$executorCommandRows = @()
+$executorCommandCaptureStatus = 'NOT_APPLICABLE'
+$executorCommandCapturedCount = 0
+$executorCommandLegacyMissingCount = 0
+$executorCommandResultCapturedCount = 0
 $executorTerminalKind = ''
 $executorBoardStatus = 'NOT_FOUND'
 $executorExpectedRejections = -1
@@ -489,6 +494,143 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         raw_path_included=$false
                     }
                 }
+                # Git52 command RCA: an Executor tool proposal is persisted
+                # by Runtime as sanitized source/dispatch text, never invented
+                # by the Collector. Correlate by Planner round: one proposal
+                # per round, with optional subsequent ToolResult for that round.
+                # Old tasks without command_rca remain LEGACY_NOT_CAPTURED.
+                $commandByRound = @{}
+                foreach ($ev in @($executorBoard.events)) {
+                    if ($null -eq $ev -or [string]$ev.toolName -cne 'run_command') { continue }
+                    if ([string]$ev.kind -cnotin @(
+                        'TURBO_DECISION','ADMISSION_REJECTED','ACTION_ADMITTED',
+                        'TOOL_RESULT','TURBO_NATIVE_CONFIRMATION_BLOCKED'
+                    )) { continue }
+                    $roundNum = if ($null -ne $ev.round) { [int]$ev.round } else { 0 }
+                    $key = [string]$roundNum
+                    if (-not $commandByRound.ContainsKey($key)) {
+                        $commandByRound[$key] = [ordered]@{
+                            schema='SMARTAGENT_EXECUTOR_COMMAND_RCA_V1'
+                            round=$roundNum
+                            task_id=(Safe-Code $task)
+                            request_id=(Safe-Code $request)
+                            action_id=''
+                            evidence_ref=''
+                            original_command_redacted=''
+                            dispatched_command_redacted=''
+                            original_command_sha256=''
+                            dispatched_command_sha256=''
+                            command_capture_status='LEGACY_NOT_CAPTURED'
+                            command_truncated=$false
+                            command_redaction_count=0
+                            dispatch_known=$false
+                            dispatch_matches_original=$null
+                            operation=''
+                            risk_class=''
+                            turbo_decision=''
+                            precheck_reason_code=''
+                            admission_status='NOT_RECORDED'
+                            runtime_status='NO_TOOL_RESULT'
+                            runtime_reason_code=''
+                            executed=$false
+                            command_exit_code=$null
+                            verification_status=''
+                            stdout_excerpt_redacted=''
+                            stderr_excerpt_redacted=''
+                            error_excerpt_redacted=''
+                            stdout_excerpt_truncated=$false
+                            stderr_excerpt_truncated=$false
+                            output_redaction_count=0
+                            network_failure_hint='UNCLASSIFIED'
+                            sandbox_evidence=[ordered]@{}
+                            result_capture_status='NO_TOOL_RESULT'
+                            raw_command_included=$false
+                            raw_tool_output_included=$false
+                            sanitization_best_effort=$true
+                        }
+                    }
+                    $row = $commandByRound[$key]
+                    if ($ev.action_id) { $row['action_id'] = (Safe-Code $ev.action_id) }
+                    $commandInfo = $ev.command_rca
+                    if ($null -ne $commandInfo -and
+                        [string]$commandInfo.schema -ceq 'SMARTAGENT_EXECUTOR_COMMAND_RCA_V1') {
+                        $row['command_capture_status'] = (Safe-Code $commandInfo.command_capture_status)
+                        $row['original_command_redacted'] = [string]$commandInfo.original_command_redacted
+                        $row['original_command_sha256'] = (Safe-Code $commandInfo.original_command_sha256)
+                        $row['command_truncated'] = [bool]$commandInfo.command_truncated
+                        $row['command_redaction_count'] = [int]$commandInfo.command_redaction_count
+                        $row['operation'] = (Safe-Code $commandInfo.operation)
+                        if ([bool]$commandInfo.dispatch_known) {
+                            $row['dispatch_known'] = $true
+                            $row['dispatch_matches_original'] = [bool]$commandInfo.dispatch_matches_original
+                            $row['dispatched_command_redacted'] = [string]$commandInfo.dispatched_command_redacted
+                            $row['dispatched_command_sha256'] = (Safe-Code $commandInfo.dispatched_command_sha256)
+                        }
+                    }
+                    switch -CaseSensitive ([string]$ev.kind) {
+                        'TURBO_DECISION' {
+                            $row['risk_class'] = (Safe-Code $ev.risk_class)
+                            $row['turbo_decision'] = (Safe-Code $ev.decision)
+                            $row['admission_status'] = (Safe-Code $ev.admission_status)
+                        }
+                        'ADMISSION_REJECTED' {
+                            $row['admission_status'] = 'REJECTED'
+                            $row['runtime_reason_code'] = (Safe-Code $ev.runtimeEvidence.reason_code)
+                        }
+                        'ACTION_ADMITTED' {
+                            $row['admission_status'] = 'ADMITTED'
+                            $row['risk_class'] = (Safe-Code $ev.command_risk_class)
+                        }
+                        'TURBO_NATIVE_CONFIRMATION_BLOCKED' {
+                            $row['precheck_reason_code'] = (Safe-Code $ev.reason_code)
+                            $row['runtime_status'] = 'NATIVE_PRECHECK_BLOCKED'
+                        }
+                        'TOOL_RESULT' {
+                            $row['evidence_ref'] = (Safe-Code $ev.runtimeEvidence.evidence_ref)
+                            $row['runtime_status'] = (Safe-Code $ev.runtimeEvidence.status)
+                            $row['executed'] = [bool]$ev.runtimeEvidence.executed
+                            $details = $ev.command_execution_rca
+                            if ($null -ne $details -and
+                                [string]$details.schema -ceq 'SMARTAGENT_EXECUTOR_COMMAND_RCA_V1') {
+                                $row['result_capture_status'] = (Safe-Code $details.result_capture_status)
+                                $row['runtime_reason_code'] = (Safe-Code $details.runtime_reason_code)
+                                $row['command_exit_code'] = $details.command_exit_code
+                                $row['verification_status'] = (Safe-Code $details.verification_status)
+                                $row['stdout_excerpt_redacted'] = [string]$details.stdout_excerpt_redacted
+                                $row['stderr_excerpt_redacted'] = [string]$details.stderr_excerpt_redacted
+                                $row['error_excerpt_redacted'] = [string]$details.error_excerpt_redacted
+                                $row['stdout_excerpt_truncated'] = [bool]$details.stdout_excerpt_truncated
+                                $row['stderr_excerpt_truncated'] = [bool]$details.stderr_excerpt_truncated
+                                $row['output_redaction_count'] = [int]$details.output_redaction_count
+                                $row['network_failure_hint'] = (Safe-Code $details.network_failure_hint)
+                                if ($null -ne $details.sandbox_evidence) {
+                                    $row['sandbox_evidence'] = $details.sandbox_evidence
+                                }
+                            } else {
+                                $row['result_capture_status'] = 'LEGACY_RESULT_NOT_CAPTURED'
+                            }
+                        }
+                    }
+                }
+                $executorCommandRows = @($commandByRound.Values | Sort-Object -Property round)
+                $executorCommandCapturedCount = @($executorCommandRows | Where-Object {
+                    $_.command_capture_status -eq 'CAPTURED'
+                }).Count
+                $executorCommandLegacyMissingCount = @($executorCommandRows | Where-Object {
+                    $_.command_capture_status -ne 'CAPTURED'
+                }).Count
+                $executorCommandResultCapturedCount = @($executorCommandRows | Where-Object {
+                    $_.result_capture_status -eq 'COMMAND_RESULT_EXCERPT' -or
+                    $_.result_capture_status -eq 'STRUCTURED_RECEIPT_ONLY'
+                }).Count
+                $executorCommandCaptureStatus = if ($executorCommandRows.Count -eq 0) {
+                    'NOT_APPLICABLE'
+                } elseif ($executorCommandCapturedCount -eq $executorCommandRows.Count) {
+                    'CAPTURED'
+                } elseif ($executorCommandCapturedCount -eq 0) {
+                    'LEGACY_NOT_CAPTURED'
+                } else { 'PARTIAL' }
+
                 if ($null -ne $executorBoard.terminal) {
                     $executorExpectedRejections = [int]$executorBoard.terminal.admission_rejection_count
                     $executorTerminalKind = Safe-Code $executorBoard.terminal.kind
@@ -521,6 +663,9 @@ $executorAdmissionSummary = [ordered]@{
     turbo_sandbox_blocked_count=@($executorSandboxEvents).Count
     turbo_native_confirmation_block_count=@($executorNativeConfirmationBlocks).Count
     turbo_native_replan_requested_count=@($executorNativeReplans).Count
+    run_command_capture_status=$executorCommandCaptureStatus
+    run_command_round_count=@($executorCommandRows).Count
+    run_command_captured_count=$executorCommandCapturedCount
     turbo_native_security_code_count=@($executorNativeConfirmationBlocks | Where-Object {
         $_.reason_code -eq 'TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED' -and
         $_.command_security_code -and
@@ -534,6 +679,41 @@ Write-Json (Join-Path $stage 'executor_turbo_decisions.json') @($executorTurboDe
 Write-Json (Join-Path $stage 'executor_sandbox_evidence.json') @($executorSandboxEvents)
 Write-Json (Join-Path $stage 'executor_native_confirmation_blocks.json') @($executorNativeConfirmationBlocks)
 Write-Json (Join-Path $stage 'executor_native_replans.json') @($executorNativeReplans)
+Write-Json (Join-Path $stage 'executor_run_commands.json') @($executorCommandRows)
+$commandLines = New-Object 'System.Collections.Generic.List[string]'
+$commandLines.Add('SmartAgent RCA: sanitized Planner commands and Runtime outcomes')
+$commandLines.Add('Review before sharing. Passwords and common credentials are masked (best effort).')
+foreach ($entry in @($executorCommandRows)) {
+    $commandLines.Add('---- Round ' + $entry.round + ' | Action ' + $entry.action_id + ' ----')
+    $commandLines.Add('original_command: ' + $entry.original_command_redacted)
+    $commandLines.Add('dispatched_command: ' + $entry.dispatched_command_redacted)
+    $commandLines.Add('command_sha256: ' + $entry.original_command_sha256)
+    $commandLines.Add('admission_status: ' + $entry.admission_status)
+    $commandLines.Add('risk_class: ' + $entry.risk_class)
+    $commandLines.Add('runtime_status: ' + $entry.runtime_status)
+    $commandLines.Add('evidence_ref: ' + $entry.evidence_ref)
+    $commandLines.Add('exit_code: ' + [string]$entry.command_exit_code)
+    $commandLines.Add('stderr: ' + $entry.stderr_excerpt_redacted)
+    $commandLines.Add('stdout: ' + $entry.stdout_excerpt_redacted)
+    $commandLines.Add('error: ' + $entry.error_excerpt_redacted)
+    $commandLines.Add('network_failure_hint: ' + $entry.network_failure_hint)
+    $commandLines.Add('capture_status: ' + $entry.command_capture_status + '; ' + $entry.result_capture_status)
+}
+[IO.File]::WriteAllLines((Join-Path $stage 'executor_run_commands.txt'),
+    [string[]]$commandLines.ToArray(), (New-Object Text.UTF8Encoding $false))
+Write-Json (Join-Path $stage 'executor_command_capture_summary.json') ([ordered]@{
+    schema='SMARTAGENT_EXECUTOR_COMMAND_CAPTURE_SUMMARY_V1'
+    task_id=(Safe-Code $task)
+    request_id=(Safe-Code $request)
+    capture_status=$executorCommandCaptureStatus
+    run_command_round_count=@($executorCommandRows).Count
+    command_captured_count=$executorCommandCapturedCount
+    legacy_command_missing_count=$executorCommandLegacyMissingCount
+    command_result_captured_count=$executorCommandResultCapturedCount
+    secrets_masking='BEST_EFFORT'
+    raw_command_included=$false
+    full_tool_output_included=$false
+})
 
 try {
     foreach ($source in $sources) {
@@ -1489,6 +1669,21 @@ try {
             }
         }
     }
+    # A new-style task carrying some command RCA records must be fully
+    # correlated. An older task with no persisted commands cannot be
+    # retroactively reconstructed by the Collector.
+    if ($executorCommandCaptureStatus -eq 'PARTIAL') {
+        $coverageIssues.Add('EXECUTOR_RUN_COMMAND_CAPTURE_PARTIAL')
+    }
+    if ($executorCommandCaptureStatus -eq 'CAPTURED') {
+        foreach ($entry in @($executorCommandRows)) {
+            if ($entry.runtime_status -notin @(
+                    'NO_TOOL_RESULT','NATIVE_PRECHECK_BLOCKED') -and
+                    $entry.result_capture_status -eq 'LEGACY_RESULT_NOT_CAPTURED') {
+                $coverageIssues.Add('EXECUTOR_COMMAND_RESULT_CAPTURE_MISSING')
+            }
+        }
+    }
     if ($timeline.Count -eq 0 -and $executorBoardStatus -ne 'MATCHED') {
         $coverageIssues.Add('NO_MATCHING_RUNTIME_EVENTS')
     }
@@ -1567,6 +1762,9 @@ try {
         executor_admission_rejection_exported_count=@($executorRejections).Count
         turbo_native_confirmation_block_count=@($executorNativeConfirmationBlocks).Count
         turbo_native_replan_requested_count=@($executorNativeReplans).Count
+        run_command_capture_status=$executorCommandCaptureStatus
+        run_command_round_count=@($executorCommandRows).Count
+        run_command_captured_count=$executorCommandCapturedCount
         turbo_native_security_code_count=@($executorNativeConfirmationBlocks | Where-Object {
             $_.command_security_code -and
             $_.command_security_code -ne '[REDACTED_NONCODE]'
@@ -1779,6 +1977,9 @@ try {
         telegram_delivery_confirmed=[bool]$telegramSummary.delivery_confirmed
         telegram_summary_present=[bool]$telegramSummary.summary_present
         telegram_summary_truncated=[bool]$telegramSummary.summary_truncated
+        command_capture_status=$executorCommandCaptureStatus
+        command_capture_round_count=@($executorCommandRows).Count
+        command_capture_redacted=$true
         collector_process_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
         log_sources=$sourceInfo.ToArray()
         source_sha256=$fingerprints
@@ -1799,11 +2000,14 @@ try {
         'Git45: Turbo decisions with risk class, reason code, policy revision and SHA256 root digests; no raw paths.',
         'Git52: native confirmation blocks, safe command-security classifier codes, detail hashes, and decision linkage.',
         'Git52 P1: bounded preexecution replans export rejected Action IDs/digests; no ToolResult or Host CMD fallback.',
+        'Git52 RCA: executor_run_commands.json/.txt exports bounded, redacted Planner and dispatched commands, exit codes, stderr/stdout excerpts, and OS evidence.',
+        'Command capture is runtime-persisted only in new tasks. Existing legacy task commands cannot be recovered from old Blackboard events.',
+        'Credential masking is best effort; review filenames, paths, URLs and text carefully before sharing.',
         'Git45: Finish status-only repair diagnostics retain typed REJECTED/FAILED differences; no raw model Finish.',
         'Git27: causal coverage status explicitly reports any missing field, source truncation or parse failure.',
         'Minimal Core v10: schema-only, request-scoped JSON parser diagnostics; no raw model response.',
         'Includes: bounded redacted Telegram worker terminal summary and delivery-state receipt when available.',
-        'Excluded: raw planner replies, prompts, full commands, tool outputs, browser DOM, Telegram inbound/raw payloads,',
+        'Excluded: unredacted planner replies, prompts, original raw commands, full unfiltered tool outputs, browser DOM, Telegram inbound/raw payloads,',
         'tokens, credentials, paths, environment variables, and unfiltered runtime logs.',
         'Note: collector_process_l4_enabled reflects this CLI process, not a previously started Worker.',
         'Scan: stream entire available JSONL source <=128MiB; fallback to last 25000 lines for larger files.',
