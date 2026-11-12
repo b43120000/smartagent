@@ -42,6 +42,14 @@ jobs:
           source/agent_core/turbo_os_broker_client.py
           source/WebAgent/tests/test_git52_native_network_toolchain.py
           source/WebAgent/pokeclaw_executor_loop.py
+          source/agent_core/task_workspace_resolver.py
+          source/agent_core/security_context.py
+          source/agent_core/semantic_path_resolution.py
+          source/RemoteAgent/telegram_transport.py
+          source/WebAgent/protocol_loop.py
+          source/agent_core/runtime_finish_status_repair.py
+          source/WebAgent/tests/test_git52_action_gated_ingress_scope.py
+          source/WebAgent/tests/test_git52_telegram_poison_request.py
           source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
           source/WebAgent/tests/test_git52_native_command_trust_replan.py
           source/WebAgent/tests/test_git52_executor_command_rca.py
@@ -55,6 +63,16 @@ jobs:
           source/WebAgent/tests/test_git52_native_network_toolchain.py
           source/WebAgent/tests/test_git52_executor_command_rca.py
           source/WebAgent/tests/test_git52_python_https_admission.py
+          source/WebAgent/tests/test_git52_action_gated_ingress_scope.py
+          source/WebAgent/tests/test_git52_telegram_poison_request.py
+      - name: Git52 ingress and Finish contract compatibility
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git34_runtime_finish_comparator.py
+          source/WebAgent/tests/test_git51_non_command_acl_parity.py
+      - name: Git52 explicit Workspace routing (Windows)
+        if: runner.os == 'Windows'
+        run: python -B source/WebAgent/tests/validate_request_first_workspace_routing.py
       - name: Validate collect.bat PowerShell 5.1 syntax
         if: runner.os == 'Windows'
         shell: powershell
