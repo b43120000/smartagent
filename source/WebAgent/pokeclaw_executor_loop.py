@@ -83,7 +83,8 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
             evidence_requirement=None, environment_inventory=None,
-            runtime_status_catalog=None, turbo_planning_context=None) -> str:
+            runtime_status_catalog=None, turbo_planning_context=None,
+            preexecution_rejections=None) -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
     return (
@@ -135,6 +136,13 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Runtime compares claims AND checks the original Goal; model "
         "cannot grant PASS merely by declaring it.\n"
         f"Task working directory (NOT authorization workspace): {tools.workspace_root}\n"
+        "Native preexecution denials are NOT executed ToolResults and cannot "
+        "prove filesystem facts or permission. If an explicit external script "
+        "or executable is untrusted, replan a DISTINCT, scope-compliant action. "
+        "Do not repeat the rejected command or use a host-executor fallback. "
+        "Native rejection history (nonexecuted): "
+        + json.dumps(preexecution_rejections or [], ensure_ascii=False,
+                     separators=(",", ":"))[-1500:] + "\\n"
         "When Turbo status is BROKER_ENROLLED with native_broker_tools, "
         "turbo_effective=OFF and sandbox_status=NOT_READY indicate that "
         "per-action OS attestation is pending, NOT that a tool call is forbidden. "
@@ -341,6 +349,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
     seen_mutations = set()
     pending_unknown_timeout = None
+    native_preexecution_rejections = []
+    native_denied_command_hashes = set()
+    max_native_precheck_replans = 3
     # The Executor-only path previously skipped Planner's environment context.
     # Build one bounded, observational inventory per task; never refresh
     # executables on every model turn or trust a historic record as authority.
@@ -431,6 +442,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 .finish_runtime_status_catalog(loop)
             ),
             turbo_planning_context=turbo_context,
+            preexecution_rejections=native_preexecution_rejections[-3:],
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()
@@ -636,6 +648,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             from agent_core.command_risk import classify_command
             from agent_core.turbo_execution_policy import (
                 evaluate_turbo_confirmation, evaluate_native_broker_confirmation,
+                native_precheck_replan_eligible,
             )
             if action:
                 risk_class = classify_command(action)
@@ -669,7 +682,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
             decision_reason = (
                 str(turbo.get("reason_code") or "TURBO_REASON_MISSING")
-                if risk_class == "UNKNOWN" or not action
+                if native_precheck_blocked or risk_class == "UNKNOWN" or not action
                 else "TURBO_SECOND_GATE_NOT_REQUIRED_" + risk_class
             )
             append_executor_event(root, loop, {
@@ -699,6 +712,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "command_security_approval_eligible": bool(
                     turbo.get("command_security_approval_eligible", False)
                 ),
+                "command_security_target_kind": str(
+                    turbo.get("command_security_target_kind") or ""
+                ),
                 "command_security_detail_sha256": str(
                     turbo.get("command_security_detail_sha256") or ""
                 ),
@@ -715,26 +731,90 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             })
         if action and decision.tool == "run_command":
             if native_precheck_blocked:
-                # In OS Turbo mode, an out-of-scope or hard-denied command
-                # must BLOCK before execution, never fall back to prompting
-                # for consent that cannot alter the kernel boundary.
+                # Never run or fake a ToolResult for a denied proposal.
                 reason = str(turbo.get("reason_code") or "TURBO_NATIVE_SCOPE_DENIED")
+                command_hash = hashlib.sha256(
+                    str(action.get("command") or "").encode("utf-8")
+                ).hexdigest()
+                recoverable = bool(
+                    broker_gate["decision"] == "BROKER_REQUIRED"
+                    and native_precheck_replan_eligible(turbo)
+                )
+                distinct = command_hash not in native_denied_command_hashes
+                budget_available = (
+                    len(native_preexecution_rejections) < max_native_precheck_replans
+                    and turn < max_rounds
+                )
+                replan = bool(recoverable and distinct and budget_available)
+                rejection = {
+                    "round": turn, "action_id": str(action["action_id"]),
+                    "reason_code": reason,
+                    "command_security_code": str(
+                        turbo.get("command_security_code") or ""
+                    ),
+                    "command_security_target_kind": str(
+                        turbo.get("command_security_target_kind") or ""
+                    ),
+                    "command_sha256": command_hash,
+                    "broker_decision": "BROKER_REQUIRED",
+                    "executed": False, "authorization_granted": False,
+                }
+                status = (
+                    "REPLAN_REQUESTED" if replan
+                    else "REPEATED_COMMAND" if recoverable and not distinct
+                    else "REPLAN_BUDGET_EXHAUSTED" if recoverable and not budget_available
+                    else "HARD_OR_POLICY_DENIAL"
+                )
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
                     "toolName": "run_command", "action_id": action["action_id"],
                     "risk_class": risk_class, "reason_code": reason,
-                    "command_sha256": hashlib.sha256(
-                        str(action.get("command") or "").encode("utf-8")
-                    ).hexdigest(),
+                    "command_sha256": command_hash,
                     "arguments_sha256": _digest(decision.arguments),
-                    "command_security_code": str(turbo.get("command_security_code") or ""),
+                    "command_security_code": rejection["command_security_code"],
                     "command_security_approval_eligible": bool(
                         turbo.get("command_security_approval_eligible", False)
                     ),
+                    "command_security_target_kind": rejection["command_security_target_kind"],
                     "command_security_detail_sha256": str(
                         turbo.get("command_security_detail_sha256") or ""
                     ),
                     "broker_decision": str(broker_gate.get("decision") or ""),
+                    "replan_eligible": replan,
+                    "replan_attempt": len(native_preexecution_rejections) + 1,
+                    "replan_limit": max_native_precheck_replans,
+                    "replan_status": status,
+                    "executed": False, "authorization_granted": False,
+                })
+                if replan:
+                    native_denied_command_hashes.add(command_hash)
+                    native_preexecution_rejections.append(rejection)
+                    append_executor_event(root, loop, {
+                        "round": turn, "kind": "TURBO_NATIVE_REPLAN_REQUESTED",
+                        "toolName": "run_command", "action_id": action["action_id"],
+                        "command_sha256": command_hash,
+                        "reason_code": reason,
+                        "command_security_code": rejection["command_security_code"],
+                        "replan_attempt": len(native_preexecution_rejections),
+                        "replan_limit": max_native_precheck_replans,
+                        "executed": False, "authorization_granted": False,
+                    })
+                    hint = (
+                        "Native PREEXECUTION REJECTION (not a ToolResult): "
+                        "command_security_code=" + rejection["command_security_code"]
+                        + "; target_kind=" + rejection["command_security_target_kind"]
+                        + "; action_id=" + rejection["action_id"]
+                        + "; executed=false; no permission granted. Do NOT "
+                        "repeat this command. Propose a different legal action "
+                        "and independently verify any mutations."
+                    )
+                    continue
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "TURBO_NATIVE_REPLAN_TERMINAL",
+                    "action_id": action["action_id"],
+                    "command_sha256": command_hash,
+                    "reason_code": reason,
+                    "replan_exhausted": bool(recoverable),
                     "executed": False, "authorization_granted": False,
                 })
                 return _finish(
@@ -742,7 +822,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     summary="FAIL：TURBO_NATIVE_CONFIRMATION_BLOCKED：" + reason[:120]
                     + ("；command_security_code=" + str(turbo["command_security_code"])[:80]
                        if turbo.get("command_security_code") else "")
-                    + "；沒有要求人工授權、沒有執行工具或退回 Host Executor。",
+                    + ("；REPLAN_EXHAUSTED_OR_REPEATED" if recoverable else "")
+                    + "；沒有要求人工授權、沒有執行被拒命令或退回 Host Executor。",
                     complete=False,
                 )
             if auto_confirm:

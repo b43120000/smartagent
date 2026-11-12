@@ -330,6 +330,20 @@ def evaluate_native_broker_confirmation(
     })
     return result
 
+def native_precheck_replan_eligible(decision: Mapping) -> bool:
+    """Only an untrusted external target may be replanned, never executed.
+
+    Explicit hard bans, uncertain policy, scope failures, and missing Broker
+    are terminal. The new proposal still must pass independent admission.
+    """
+    return (
+        decision.get("reason_code") == "TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED"
+        and decision.get("command_security_code") == "execution_target_outside_workspace"
+        and decision.get("command_security_approval_eligible") is True
+        and decision.get("auto_confirm") is False
+    )
+
+
 def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
     """Non-authorizing audit decision, called ONLY after regular admission."""
     result = {
