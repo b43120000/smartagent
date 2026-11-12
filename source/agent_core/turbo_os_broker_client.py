@@ -356,7 +356,9 @@ def execute_turbo_command(
     stderr_text = stderr.decode("utf-8", errors="replace")
     stdout_text = stdout.decode("utf-8", errors="replace")
     error_text = (stderr_text + "\n" + stdout_text)[:32768].casefold()
-    if "commandnotfoundexception" in error_text or "is not recognized" in error_text:
+    if "git52_native_executable_not_visible" in error_text:
+        error_class = "NATIVE_PINNED_EXECUTABLE_NOT_VISIBLE"
+    elif "commandnotfoundexception" in error_text or "is not recognized" in error_text:
         error_class = "NATIVE_EXECUTABLE_NOT_FOUND"
     elif any(word in error_text for word in ("access is denied", "unauthorizedaccessexception", "permissionerror")):
         error_class = "NATIVE_ACCESS_DENIED"

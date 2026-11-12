@@ -553,12 +553,36 @@ public static class SmartAgentGit47AppContainerProbe
                     "',[IO.FileMode]::Open,[IO.FileAccess]::Write," +
                     "[IO.FileShare]::ReadWrite); try{$f.Write($raw,0,$raw.Length);" +
                     "$f.Flush()}finally{$f.Dispose()};";
+                // The environment block already contains a pinned PATH, but
+                // PowerShell may still fail ordinary command discovery under
+                // the lowbox token. Resolve operator-hash-verified Git/Python
+                // as absolute aliases INSIDE the AppContainer child. The
+                // shell may not fall back to a host process or unpinned EXE.
+                string trustedAliases = "";
+                if (!string.IsNullOrWhiteSpace(trustedToolPath))
+                {
+                    foreach (string directory in trustedToolPath.Split(';'))
+                    {
+                        foreach (string tool in new string[] { "git", "python" })
+                        {
+                            string candidate = System.IO.Path.Combine(directory, tool + ".exe");
+                            if (!System.IO.File.Exists(candidate))
+                                continue;
+                            string safe = candidate.Replace("'", "''");
+                            trustedAliases +=
+                                "$p='" + safe + "'; " +
+                                "if(-not [IO.File]::Exists($p)){" +
+                                "throw 'GIT52_NATIVE_EXECUTABLE_NOT_VISIBLE_" + tool + "'}; " +
+                                "Set-Alias -Name " + tool + " -Value $p -Scope Local -ErrorAction Stop; ";
+                        }
+                    }
+                }
                 // No host execution: LaunchPowerShell encodes this script
                 // and starts system PowerShell only under the AppContainer SID.
                 string wrapped =
                     "$ErrorActionPreference='Stop'; " +
                     "$global:LASTEXITCODE=$null; " +
-                    "try{ $items=@(& {\n" + script + "\n} 2>&1); " +
+                    "try{ " + trustedAliases + "$items=@(& {\n" + script + "\n} 2>&1); " +
                     "$text=[string]::Join([Environment]::NewLine,[string[]]$items); " +
                     "$rc=if($null -ne $global:LASTEXITCODE){[int]$global:LASTEXITCODE}" +
                     "elseif($?){0}else{1}; " + putOut + " exit $rc } " +
