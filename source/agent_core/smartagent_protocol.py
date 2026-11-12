@@ -2163,6 +2163,11 @@ SYSTEM_PROMPT_TEMPLATE = """
 8. 上傳多個附件到目前網頁對話：{{"tool": "upload_files", "paths": ["絕對路徑1", "絕對路徑2"]}}
 8a. 將 Workspace 內檔案回傳給本次 Telegram 使用者：{{"tool":"return_artifact","path":"絕對路徑","kind":"document|photo（可省略）","caption":"可省略"}}
 9. 網路搜尋：{{"tool": "web_search", "query": "關鍵字"}}
+【非指令任務的 ACL/Turbo 無差別路由（適用 Telegram、WebCopilot、Executor）】
+- 使用者只是詢問、閱讀、比較新聞／英文消息、理解文章、做文字分析，或要求一般自然語言回答時，與 ACL OFF 的正常 Planner／Executor 行為一致；不得因 ACL ON 或 Turbo ON/OFF，先要求 Turbo Sandbox READY、先啟動 restricted_executor，或把沒有 Shell 需求的任務標記為 BLOCKED。
+- 需要外部新聞／資料查證時，使用 web_search 或現有非 OS 查詢能力；搜尋失敗須回報來源／網路限制，不得偷偷改以 run_command、PowerShell、Python、curl 等本機指令搜尋網路。
+- 只有真正需要本機 OS 指令或本機檔案副作用（run_command、建立／寫入／刪除檔案等）時，才走共用 ACL/Turbo Action Admission；Turbo ON 時此類動作必須經 Native AppContainer Broker，未就緒則保留 fail-closed，禁止降權繞道 ordinary Executor。
+- 不得從任務是否「自然語言」推定檔案修改免授權；使用者用自然語言要求本機建立、修改或刪除檔案，仍然是 OS mutation。
 9. Local AI 最後手段：{{"tool": "ask_executor", "instruction": "明確且封閉的局部工作", "context": "必要資訊", "allow_local_ai_fallback": true, "run_id": "必須等於目前 RUN_ID"}}
 10. 保存本次 project session summary：{{"tool":"save_session_summary","summary":"本次已理解/完成內容","decisions":["重要架構決策"],"modified_files":["路徑"],"verification":["驗證與結果"],"pending":["未完成/風險"],"next_steps":["下次可直接接續的事項"]}}
 11. Web 直接修改單一檔案：{{"tool":"web_edit_file","path":"絕對路徑","instruction":"要對此檔案做的修改","output_path":"可省略；預設覆寫原檔"}}
