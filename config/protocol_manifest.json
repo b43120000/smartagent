@@ -248,7 +248,7 @@
     "source/agent_core/web_ui/user_binding_diagnostic.py": "06087ed8510a1d51796cff244be5762faa042ad5909fde307d71c8d67589a55b",
     "source/agent_core/windows_process_job.py": "e78233d731fbfafa85d5ad493e117c75b160ef660548a5a0aa84bfc2d3b19037",
     "source/agent_core/windows_security.py": "ddfe6254a9b3fdd44b32738db61808c1b6827ac44d3e4c9da0e0142a565d59be",
-    "source/agent_core/workspace_access.py": "3af06e479f09689ef007f6f466b24b7a2225b4c0a5d3f0f5b9ea09309d86260a",
+    "source/agent_core/workspace_access.py": "5ff35a82c2634ce026a2921853c5554db8b4a18122024e6aed48e6270a5434cc",
     "source/agent_core/workspace_manager.py": "c82100f768b0071d2411dfb4b0cb1c1351006167e24c7432650a47818d7b2f60",
     "source/RemoteAgent/remote_feature_catalog.py": "6cf8f8d1399021808bab0924d35fec53670419373185e579e5aacab2f4baabe0",
     "source/RemoteAgent/remote_protocol.py": "38f0335979fc804619b0441a402401676c924f7b99418ba58a26f4089fd7ccab",
