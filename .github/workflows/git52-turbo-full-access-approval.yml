@@ -39,6 +39,8 @@ jobs:
           source/agent_core/python_https_probe.py
           source/agent_core/smartagent_protocol.py
           source/agent_core/action_dependencies.py
+          source/agent_core/turbo_os_broker_client.py
+          source/WebAgent/tests/test_git52_native_network_toolchain.py
           source/WebAgent/pokeclaw_executor_loop.py
           source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
           source/WebAgent/tests/test_git52_native_command_trust_replan.py
@@ -50,6 +52,7 @@ jobs:
           source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
           source/WebAgent/tests/test_git52_native_command_trust_replan.py
           source/WebAgent/tests/test_git52_collector_native_block_diagnostics.py
+          source/WebAgent/tests/test_git52_native_network_toolchain.py
           source/WebAgent/tests/test_git52_executor_command_rca.py
           source/WebAgent/tests/test_git52_python_https_admission.py
       - name: Validate collect.bat PowerShell 5.1 syntax
@@ -61,6 +64,17 @@ jobs:
           $index = $script.LastIndexOf($marker, [StringComparison]::Ordinal)
           if ($index -lt 0) { throw 'Git52 collector marker missing' }
           [ScriptBlock]::Create($script.Substring($index + $marker.Length)) | Out-Null
+      - name: Git52 Native AppContainer Win32 bindings and PowerShell parse
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Add-Type -Path 'install_smart_agent/turbo_appcontainer_probe.cs' -ErrorAction Stop
+          foreach ($path in @(
+            'install_smart_agent/turbo_os_execute.ps1',
+            'install_smart_agent/turbo_native_toolchain_prepare.ps1'
+          )) {
+            [ScriptBlock]::Create([IO.File]::ReadAllText($path)) | Out-Null
+          }
       - name: Git32 PowerShell and workspace regressions
         run: >-
           python -B -m pytest -q
