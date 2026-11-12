@@ -25,7 +25,10 @@ def test_collector_has_native_diagnostic_and_causal_coverage_contract():
     script = (_REPO / "collect.bat").read_text(encoding="utf-8")
     for required in (
         "executor_native_confirmation_blocks.json",
+        "executor_native_replans.json",
         "TURBO_NATIVE_CONFIRMATION_BLOCKED",
+        "TURBO_NATIVE_REPLAN_REQUESTED",
+        "TURBO_NATIVE_REPLAN_EVENT_MISSING",
         "TURBO_NATIVE_COMMAND_SECURITY_CLASSIFIER_MISSING",
         "TURBO_NATIVE_BLOCK_DECISION_LINK_MISSING",
         "command_security_code",
@@ -70,7 +73,11 @@ def test_real_collector_exports_native_block_and_flags_missing_code(
             {"kind": "TURBO_DECISION", "decision": "NATIVE_PRECHECK_BLOCKED",
              "auto_confirm": False, "admission_status": "ADMITTED",
              "policy_revision": 52, **common},
-            {"kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED", **common},
+            {"kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
+             "replan_status": "REPLAN_REQUESTED", "replan_eligible": True,
+             "replan_attempt": 1, "replan_limit": 3, **common},
+            {"kind": "TURBO_NATIVE_REPLAN_REQUESTED", **common,
+             "replan_attempt": 1, "replan_limit": 3},
         ],
         "terminal": {"kind": "BLOCKED", "admission_rejection_count": 0},
     }
@@ -86,6 +93,9 @@ def test_real_collector_exports_native_block_and_flags_missing_code(
     with zipfile.ZipFile(zips[0]) as zipfile_in:
         block = json.loads(zipfile_in.read(
             "executor_native_confirmation_blocks.json"
+        ).decode("utf-8-sig"))
+        replans = json.loads(zipfile_in.read(
+            "executor_native_replans.json"
         ).decode("utf-8-sig"))
         summary = json.loads(zipfile_in.read(
             "executor_admission_summary.json"
@@ -106,6 +116,10 @@ def test_real_collector_exports_native_block_and_flags_missing_code(
     assert block[0]["raw_command_included"] is False
     assert block[0]["executed"] is False
     assert summary["turbo_native_confirmation_block_count"] == 1
+    assert summary["turbo_native_replan_requested_count"] == 1
+    assert len(replans) == 1
+    assert replans[0]["action_id"] == _ACTION
+    assert replans[0]["executed"] is False
     assert coverage["status"] == expected_coverage
     if not has_classifier:
         assert "TURBO_NATIVE_COMMAND_SECURITY_CLASSIFIER_MISSING" in coverage["issues"]
