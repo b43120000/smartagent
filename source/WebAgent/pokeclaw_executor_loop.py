@@ -583,7 +583,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
-                        ("請先提交新的唯讀 tool_call，驗證後才可 Finish。"
+                        + ("請先提交新的唯讀 tool_call，驗證後才可 Finish。"
                          if postrun_gap and not finish_repair_only
                          else "請提交新的 finish（而非 tool_call）。")
                     )
