@@ -89,6 +89,9 @@ def command_is_proven_observation(action):
         r'cmd(?:\.exe)?\s+/c\s+(?:dir|ver)',
         r'git\s+diff\s+--(?:stat|name-only)',
     )
+    from .python_https_probe import is_bounded_python_https_probe
+    if action.get('operation') in {'INSPECT', 'VERIFY'} and is_bounded_python_https_probe(command):
+        return True
     from .action_resolution_trace import exact_remote_git_read_repository
     # A single fixed HEAD remote read is a safe *command classification*;
     # classification never bypasses separate network/credential/scope admission.

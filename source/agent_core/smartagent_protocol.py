@@ -677,6 +677,13 @@ def _validate_run_command_complexity(command: str, *, block_index: int | None = 
         )
 
     family, inline_code = _extract_inline_executor(command)
+    # Git52: exact AST-validated bounded HTTPS GET is a read-only observation,
+    # not a generic inline script exception. Command-security/ACL/Turbo checks
+    # still run after envelope validation.
+    if family == "python":
+        from .python_https_probe import is_bounded_python_https_probe
+        if is_bounded_python_https_probe(command):
+            return True, None
     score, signals = _command_complexity_signals(command, inline_code)
 
     # Known inline executors need multiple script-like signals.  For ordinary
