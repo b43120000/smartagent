@@ -380,3 +380,30 @@ jobs:
         run: python -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
       - name: Real disposable Windows CMD session and file deletion
         run: python -B source/WebAgent/tests/validate_telegram_visible_console_it.py
+
+  telegram-turbo-task-workspace-binding:
+    name: Telegram task Turbo registered workspace binding scope
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Python routing tests
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Exact policy parent and nested Turbo Root, never sibling
+        run: >-
+          python -B -m pytest
+          source/WebAgent/tests/test_git51_turbo_task_workspace_binding.py
+          source/WebAgent/tests/test_git50_turbo_planning_hints.py
+          source/WebAgent/tests/test_git49_turbo_broker_admission.py
+          source/WebAgent/tests/test_git51_non_command_acl_parity.py
+          -q
