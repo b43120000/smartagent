@@ -383,5 +383,6 @@ __all__ = [
     "save_workspace_access_policy",
     "software_only_mode_enabled",
     "workspace_access_policy_path",
-    "is_valid_turbo_root", "save_turbo_roots", "set_turbo_root",
+    "is_valid_turbo_root", "resolve_turbo_registered_workspace",
+    "save_turbo_roots", "set_turbo_root",
 ]
