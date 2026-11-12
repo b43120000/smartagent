@@ -17,6 +17,8 @@ class CommandAdmission:
     code: str = ""
     detail: str = ""
     approval_eligible: bool = False
+    # Safe classifier-only metadata. Never persist an executable's raw path.
+    target_kind: str = ""
 
 
 class CommandSecurityError(ValueError):
@@ -99,8 +101,16 @@ def _effective_directory(command: str, end: int, workspace: Path) -> Path:
     return current
 
 
-def _outside_execution_target(command: str, workspace: str | Path) -> Path | None:
+def _outside_execution_targets(command: str, workspace: str | Path) -> tuple[Path, ...]:
+    """Find every explicit external executable/script target in command order.
+
+    Checking only the first target allows a trusted invocation followed by an
+    untrusted one in the same compound command. Neither a hash nor a prior
+    accepted command may authorize a different target.
+    """
     root = Path(workspace).expanduser().resolve()
+    result: list[Path] = []
+    seen: set[str] = set()
     for match in _EXECUTABLE_PATH.finditer(command):
         prefix = command[max(0, match.start() - 240):match.start()]
         if not _INVOCATION_PREFIX.search(prefix):
@@ -112,8 +122,23 @@ def _outside_execution_target(command: str, workspace: str | Path) -> Path | Non
             candidate = current / candidate
         candidate = candidate.resolve()
         if not is_within(candidate, root):
-            return candidate
-    return None
+            key = str(candidate).casefold()
+            if key not in seen:
+                seen.add(key)
+                result.append(candidate)
+    return tuple(result)
+
+
+def _outside_execution_target(command: str, workspace: str | Path) -> Path | None:
+    """Legacy single-target helper retained for callers using this name."""
+    found = _outside_execution_targets(command, workspace)
+    return found[0] if found else None
+
+
+def _execution_target_kind(path: Path) -> str:
+    return ("SCRIPT" if path.suffix.casefold() in
+            {".ps1", ".py", ".pyw", ".js", ".mjs", ".vbs", ".wsf", ".hta"}
+            else "EXECUTABLE")
 
 
 def inspect_command(command: str, *, workspace: str | Path | None = None) -> CommandAdmission:
@@ -126,12 +151,13 @@ def inspect_command(command: str, *, workspace: str | Path | None = None) -> Com
         if pattern.search(value):
             return CommandAdmission(False, code, "use a typed, runtime-authorized operation")
     if workspace is not None:
-        outside = _outside_execution_target(value, workspace)
-        if outside is not None:
+        # All invoked external targets must be authorized independently.
+        # Retain the legacy ACL OFF/workspace behavior for ordinary commands.
+        accepted_code = ""
+        for outside in _outside_execution_targets(value, workspace):
             authorized_workspace = False
             try:
                 from .workspace_access import access_snapshot
-
                 authorized_workspace = any(
                     is_within(outside, root)
                     for root in access_snapshot().get("writable_workspaces", ())
@@ -139,7 +165,8 @@ def inspect_command(command: str, *, workspace: str | Path | None = None) -> Com
             except Exception:
                 authorized_workspace = False
             if authorized_workspace:
-                return CommandAdmission(True, "authorized_workspace_executable", str(outside))
+                accepted_code = "authorized_workspace_executable"
+                continue
             trusted = False
             try:
                 from .windows_security import (
@@ -157,16 +184,57 @@ def inspect_command(command: str, *, workspace: str | Path | None = None) -> Com
                 trusted = False
                 authorized_workspace = False
             if authorized_workspace:
-                return CommandAdmission(True, "authorized_workspace_executable", str(outside))
+                accepted_code = "authorized_workspace_executable"
+                continue
             if trusted:
-                return CommandAdmission(True, "trusted_external_executable", str(outside))
+                accepted_code = "trusted_external_executable"
+                continue
             return CommandAdmission(
-                False,
-                "execution_target_outside_workspace",
-                str(outside),
-                True,
+                False, "execution_target_outside_workspace", str(outside),
+                True, _execution_target_kind(outside),
             )
+        if accepted_code:
+            return CommandAdmission(True, accepted_code)
     return CommandAdmission(True)
+
+
+def inspect_native_command(command: str, *, workspace: str | Path) -> CommandAdmission:
+    """Native Turbo executable admission: explicit outside targets need a pin.
+
+    The existing generic Command Security hard bans run first. Unlike normal
+    ACL OFF/workspace authorization, a path outside the Turbo Root must be
+    explicitly pinned in operator-controlled security_profile.json and must
+    match its SHA256. This check never authorizes filesystem writes; every
+    actual command still runs through the separately attested OS broker.
+    Bare PATH commands are not attested by this function; Planner must never
+    interpret a software finding as an OS execution receipt.
+    """
+    first = inspect_command(command, workspace=workspace)
+    if not first.allowed:
+        return first
+    targets = _outside_execution_targets(command, workspace)
+    if not targets:
+        return first
+    try:
+        from .windows_security import (
+            load_security_profile, trusted_executable_records, is_trusted_executable,
+        )
+        profile = load_security_profile()
+        rows = trusted_executable_records(profile)
+        pinned = {str(Path(row["path"]).resolve()).casefold() for row in rows}
+        for target in targets:
+            if (str(target).casefold() not in pinned
+                    or not is_trusted_executable(target, profile)):
+                return CommandAdmission(
+                    False, "execution_target_outside_workspace",
+                    str(target), True, _execution_target_kind(target),
+                )
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+        return CommandAdmission(
+            False, "execution_target_trust_unverified",
+            "", False,
+        )
+    return CommandAdmission(True, "native_pinned_external_target")
 
 
 def _file_sha256(path: Path) -> str:
@@ -222,5 +290,6 @@ def require_command_allowed(command: str, *, workspace: str | Path | None = None
 
 __all__ = [
     "CommandAdmission", "CommandSecurityError", "build_command_approval_manifest",
-    "inspect_command", "require_command_allowed", "validate_command_approval_manifest",
+    "inspect_command", "inspect_native_command",
+    "require_command_allowed", "validate_command_approval_manifest",
 ]

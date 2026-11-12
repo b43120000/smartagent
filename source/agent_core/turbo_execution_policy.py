@@ -19,7 +19,7 @@ from collections.abc import Mapping
 
 from .workspace_access import access_snapshot, is_valid_turbo_root
 from .path_security import is_within, reject_reparse_components
-from .command_security import inspect_command
+from .command_security import inspect_command, inspect_native_command
 
 _SAFE_GIT = re.compile(
     r"(?i)^git(?:\.exe)?\s+(?:"
@@ -298,7 +298,7 @@ def evaluate_native_broker_confirmation(
     # Hard command-security bans and explicit outside-workspace executable
     # approvals are never bypassed by Full-Access UX. Unknown grammar is
     # *not* reclassified as safe/read-only.
-    command_admission = inspect_command(command, workspace=cwd)
+    command_admission = inspect_native_command(command, workspace=cwd)
     if not command_admission.allowed:
         # Preserve the specific, fixed-rule classifier code for Planner RCA.
         # CommandAdmission.detail can contain absolute executable paths and
@@ -307,6 +307,7 @@ def evaluate_native_broker_confirmation(
         result["reason_code"] = "TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED"
         result["command_security_code"] = str(command_admission.code or "UNSPECIFIED")
         result["command_security_approval_eligible"] = bool(command_admission.approval_eligible)
+        result["command_security_target_kind"] = str(command_admission.target_kind or "")
         result["command_security_detail_sha256"] = (
             hashlib.sha256(command_admission.detail.encode("utf-8")).hexdigest()
             if command_admission.detail else ""
@@ -456,6 +457,43 @@ def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
 
 
 
+
+def native_trusted_tool_snapshot() -> dict:
+    """Read-only, non-authorizing per-tool hints from operator-pinned SHA256.
+
+    "Present", "trusted" and "executed inside AppContainer" are distinct.
+    No candidate executable path or hashed secret is revealed to the Planner.
+    """
+    names = {"git": {"git.exe"}, "python": {"python.exe", "python3.exe"},
+             "pwsh": {"pwsh.exe"}, "tar": {"tar.exe"}}
+    status = {
+        name: {"operator_sha256_pin_present": False,
+               "trusted_executable_verified": False,
+               "native_execution_verified": False}
+        for name in names
+    }
+    try:
+        from .windows_security import (
+            load_security_profile, trusted_executable_records, is_trusted_executable,
+        )
+        profile = load_security_profile()
+        rows = trusted_executable_records(profile)
+        for record in rows[:128]:
+            path = Path(str(record["path"]))
+            for name, aliases in names.items():
+                if path.name.casefold() not in aliases:
+                    continue
+                status[name]["operator_sha256_pin_present"] = True
+                try:
+                    if is_trusted_executable(path, profile):
+                        status[name]["trusted_executable_verified"] = True
+                except (OSError, RuntimeError, ValueError):
+                    pass
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+        pass
+    return status
+
+
 def turbo_planning_snapshot(workspace: str | Path) -> dict:
     """Advisory only: show Planner the active, exact Turbo scope.
 
@@ -512,6 +550,10 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
                 ["run_command", "create_directory", "write_file", "delete_path"]
                 if broker_enrolled else []
             ),
+            "trusted_native_tool_hints": (
+                native_trusted_tool_snapshot() if broker_enrolled else {}
+            ),
+            "tool_hints_are_execution_authority": False,
             "per_action_os_attestation_required": broker_enrolled,
             "configured_roots": roots[:8],
             "authorization_workspace": str(authorization_workspace or ""),
