@@ -19,6 +19,9 @@ public static class SmartAgentGit47AppContainerProbe
     const uint TOKEN_QUERY = 0x0008;
     const int TokenIsAppContainer = 29;
     const int TokenAppContainerSid = 31;
+    const int TokenCapabilities = 30;
+    const uint SE_GROUP_ENABLED = 0x00000004;
+    const string INTERNET_CLIENT_SID = "S-1-15-3-1";
     const uint WAIT_OBJECT_0 = 0x00000000;
     const uint WAIT_TIMEOUT = 0x00000102;
 
@@ -51,6 +54,18 @@ public static class SmartAgentGit47AppContainerProbe
         public IntPtr Capabilities;
         public uint CapabilityCount;
         public uint Reserved;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct SID_AND_ATTRIBUTES
+    {
+        public IntPtr Sid;
+        public uint Attributes;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct TOKEN_GROUPS_LAYOUT
+    {
+        public uint GroupCount;
+        public SID_AND_ATTRIBUTES FirstGroup;
     }
     [StructLayout(LayoutKind.Sequential)]
     struct JOBOBJECT_BASIC_LIMIT_INFORMATION
@@ -90,6 +105,8 @@ public static class SmartAgentGit47AppContainerProbe
     static extern uint DeleteAppContainerProfile(string name);
     [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     static extern bool ConvertSidToStringSidW(IntPtr sid, out IntPtr stringSid);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern bool ConvertStringSidToSidW(string sid, out IntPtr result);
     [DllImport("kernel32.dll")]
     static extern IntPtr LocalFree(IntPtr memory);
 
@@ -215,13 +232,50 @@ public static class SmartAgentGit47AppContainerProbe
                     throw new InvalidOperationException("appcontainer_child_sid_mismatch");
             }
             finally { Marshal.FreeHGlobal(data); }
+            // The kernel token, not a JSON/C# declaration, must contain the
+            // actual internetClient capability enabled. Check before resume.
+            int capabilitySize;
+            GetTokenInformation(token, TokenCapabilities,
+                IntPtr.Zero, 0, out capabilitySize);
+            if (capabilitySize < 16 || capabilitySize > 65536)
+                throw new InvalidOperationException("TokenCapabilities_length_invalid");
+            IntPtr capabilities = Marshal.AllocHGlobal(capabilitySize);
+            try
+            {
+                int written;
+                if (!GetTokenInformation(token, TokenCapabilities,
+                    capabilities, capabilitySize, out written))
+                    throw Last("GetTokenInformation(TokenCapabilities)");
+                uint count = unchecked((uint)Marshal.ReadInt32(capabilities));
+                if (count == 0 || count > 64)
+                    throw new InvalidOperationException("TokenCapabilities_count_invalid");
+                int offset = (int)Marshal.OffsetOf(typeof(TOKEN_GROUPS_LAYOUT), "FirstGroup");
+                int step = Marshal.SizeOf(typeof(SID_AND_ATTRIBUTES));
+                bool internet = false;
+                for (uint i = 0; i < count; ++i)
+                {
+                    SID_AND_ATTRIBUTES item = (SID_AND_ATTRIBUTES)Marshal.PtrToStructure(
+                        IntPtr.Add(capabilities, offset + (int)i * step),
+                        typeof(SID_AND_ATTRIBUTES));
+                    string name = SidToString(item.Sid);
+                    if (string.Equals(name, INTERNET_CLIENT_SID, StringComparison.Ordinal))
+                        internet = (item.Attributes & SE_GROUP_ENABLED) != 0;
+                    // Never accidentally grant server or private-network
+                    // capability under this outbound-only policy.
+                    if (name == "S-1-15-3-2" || name == "S-1-15-3-3")
+                        throw new InvalidOperationException("TokenCapabilities_overprivileged");
+                }
+                if (!internet)
+                    throw new InvalidOperationException("TokenCapabilities_internetClient_missing");
+            }
+            finally { Marshal.FreeHGlobal(capabilities); }
         }
         finally { CloseHandle(token); }
     }
 
     // The broker must not leak controller environment secrets to arbitrary
     // in-sandbox code. CreateProcess receives a fresh allowlisted block.
-    static IntPtr CleanEnvironment(string cwd, string executable)
+    static IntPtr CleanEnvironment(string cwd, string executable, string safeToolPath)
     {
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         if (string.IsNullOrWhiteSpace(windows)
@@ -252,8 +306,23 @@ public static class SmartAgentGit47AppContainerProbe
         values["GIT_CONFIG_NOSYSTEM"] = "1";
         values["GIT_TERMINAL_PROMPT"] = "0";
         values["GCM_INTERACTIVE"] = "Never";
+        // Caller is the protected, operator-verified Broker. The value is
+        // assembled only from pinned tools after hash verification on EVERY
+        // command. Do not copy or append the host PATH.
+        string extras = "";
+        if (!string.IsNullOrWhiteSpace(safeToolPath))
+        {
+            foreach (string directory in safeToolPath.Split(';'))
+            {
+                if (!System.IO.Path.IsPathRooted(directory)
+                    || !System.IO.Directory.Exists(directory)
+                    || directory.IndexOfAny(new char[] {'"', '\r', '\n', '='}) >= 0)
+                    throw new InvalidOperationException("trusted_tool_path_invalid");
+            }
+            extras = ";" + safeToolPath;
+        }
         values["PATH"] = System.IO.Path.Combine(windows, "System32") + ";"
-                       + windows + ";" + exeDir;
+                       + windows + ";" + exeDir + extras;
         StringBuilder env = new StringBuilder();
         foreach (var row in values)
             env.Append(row.Key).Append("=").Append(row.Value).Append((char)0);
@@ -268,6 +337,13 @@ public static class SmartAgentGit47AppContainerProbe
                                 string arguments, string cwd,
                                 uint timeoutMilliseconds)
     {
+        return LaunchWithTrustedPath(moniker, executable, arguments, cwd,
+                                     timeoutMilliseconds, "");
+    }
+    public static string LaunchWithTrustedPath(string moniker, string executable,
+                                string arguments, string cwd,
+                                uint timeoutMilliseconds, string trustedToolPath)
+    {
         if (string.IsNullOrWhiteSpace(moniker)
             || string.IsNullOrWhiteSpace(executable)
             || !System.IO.Path.IsPathRooted(executable)
@@ -276,6 +352,7 @@ public static class SmartAgentGit47AppContainerProbe
             throw new ArgumentException("launch_preflight_invalid");
         string sidString = DeriveSid(moniker);
         IntPtr sid = IntPtr.Zero, attributeList = IntPtr.Zero, environment = IntPtr.Zero;
+        IntPtr internetSid = IntPtr.Zero, capArray = IntPtr.Zero;
         IntPtr job = IntPtr.Zero;
         PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
         bool started = false;
@@ -294,9 +371,17 @@ public static class SmartAgentGit47AppContainerProbe
             if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attrSize))
                 throw Last("InitializeProcThreadAttributeList");
             listInitialized = true;
+            if (!ConvertStringSidToSidW(INTERNET_CLIENT_SID, out internetSid)
+                || internetSid == IntPtr.Zero)
+                throw Last("ConvertStringSidToSidW(internetClient)");
+            SID_AND_ATTRIBUTES enabledInternet = new SID_AND_ATTRIBUTES {
+                Sid = internetSid, Attributes = SE_GROUP_ENABLED
+            };
+            capArray = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SID_AND_ATTRIBUTES)));
+            Marshal.StructureToPtr(enabledInternet, capArray, false);
             SECURITY_CAPABILITIES caps = new SECURITY_CAPABILITIES {
-                AppContainerSid = sid, Capabilities = IntPtr.Zero,
-                CapabilityCount = 0, Reserved = 0
+                AppContainerSid = sid, Capabilities = capArray,
+                CapabilityCount = 1, Reserved = 0
             };
             if (!UpdateProcThreadAttribute(attributeList, 0,
                 (IntPtr)PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
@@ -309,7 +394,7 @@ public static class SmartAgentGit47AppContainerProbe
             si.lpAttributeList = attributeList;
             StringBuilder command = new StringBuilder(
                 "\"" + executable.Replace("\"", "") + "\" " + (arguments ?? ""));
-            environment = CleanEnvironment(cwd, executable);
+            environment = CleanEnvironment(cwd, executable, trustedToolPath);
             if (!CreateProcessW(executable, command,
                 IntPtr.Zero, IntPtr.Zero, false,
                 EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW
@@ -346,6 +431,8 @@ public static class SmartAgentGit47AppContainerProbe
                 + "\"sandbox_backend\":\"WIN32_APPCONTAINER\","
                 + "\"sandbox_identity_verified\":true,"
                 + "\"child_process_policy\":\"JOB_KILL_ON_CLOSE\","
+                + "\"internet_client_token_verified\":true,"
+                + "\"internet_client_capability_sid\":\"S-1-15-3-1\","
                 + "\"os_process_started\":true,"
                 + "\"exit_code\":" + exitCode + ","
                 + "\"pid\":" + pi.dwProcessId + "}";
@@ -369,6 +456,8 @@ public static class SmartAgentGit47AppContainerProbe
             if (listInitialized) DeleteProcThreadAttributeList(attributeList);
             if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);
             if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
+            if (capArray != IntPtr.Zero) Marshal.FreeHGlobal(capArray);
+            if (internetSid != IntPtr.Zero) LocalFree(internetSid);
             if (sid != IntPtr.Zero) FreeSid(sid);
         }
     }
@@ -382,6 +471,12 @@ public static class SmartAgentGit47AppContainerProbe
     /// </summary>
     public static string LaunchPowerShell(string moniker, string script,
                                          string cwd, uint timeoutMilliseconds)
+    {
+        return LaunchPowerShell(moniker, script, cwd, timeoutMilliseconds, "");
+    }
+    public static string LaunchPowerShell(string moniker, string script,
+                                         string cwd, uint timeoutMilliseconds,
+                                         string trustedToolPath)
     {
         if (string.IsNullOrWhiteSpace(script) || script.Length > 16384
             || script.IndexOf('\0') >= 0)
@@ -401,9 +496,9 @@ public static class SmartAgentGit47AppContainerProbe
             "elseif($?){0}else{1}; exit $code } " +
             "catch { [Console]::Error.WriteLine($_.Exception.GetType().Name); exit 1 }";
         string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(body));
-        return Launch(moniker, executable,
+        return LaunchWithTrustedPath(moniker, executable,
             "-NoProfile -NonInteractive -EncodedCommand " + encoded,
-            cwd, timeoutMilliseconds);
+            cwd, timeoutMilliseconds, trustedToolPath);
     }
 
     /// <summary>
