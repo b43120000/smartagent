@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from .windows_security import acl_mode
-from .workspace_access import access_snapshot, is_valid_turbo_root
+from .workspace_access import (
+    access_snapshot, is_valid_turbo_root, resolve_turbo_registered_workspace,
+)
 
 SCHEMA = "SMARTAGENT_TURBO_SANDBOX_STATE_V1"
 BACKEND = "UNAVAILABLE_NO_OS_BROKER"
@@ -41,6 +43,9 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
         "sandbox_identity_verified": False,
         "turbo_root": "",
         "workspace_root": str(workspace or ""),
+        "task_workspace_root": str(workspace or ""),
+        "registered_workspace_roots": [],
+        "policy_turbo_roots": [],
         "policy_revision": 0,
         "acl_attestation": "NOT_VERIFIED",
         "process_isolation_attestation": "NOT_VERIFIED",
@@ -79,10 +84,24 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
             state["reason_code"] = "TURBO_DISABLED"
             return state
         configured = list(access.get("turbo_roots") or ())
+        state["policy_turbo_roots"] = [str(x) for x in configured][:16]
+        state["registered_workspace_roots"] = [
+            str(x) for x in access.get("writable_workspaces") or ()
+        ][:16]
         if not configured or workspace is None:
             state["reason_code"] = "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
             return state
-        parent = Path(workspace).expanduser().resolve()
+        # A Telegram task may be scoped to an existing Turbo Root or child
+        # rather than to the registered parent. Match only an EXACT registered
+        # parent or a strict child OF the configured Root. A sibling, outside
+        # project, broad ancestor or typo remains denied; never repair
+        # mismatches by silently changing security policy.
+        registered = resolve_turbo_registered_workspace(workspace, access)
+        if registered is None:
+            state["reason_code"] = "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
+            return state
+        parent = Path(registered).expanduser().resolve(strict=True)
+        state["workspace_root"] = str(parent)
         allowed = [
             Path(root).expanduser().resolve()
             for root in configured
@@ -118,7 +137,8 @@ def sandbox_evidence(state: dict, *, action_id: str = "",
         "policy_revision", "acl_attestation", "process_isolation_attestation",
         "child_process_policy", "scope_verdict", "sandbox_status",
         "sandbox_attestation_passed", "turbo_requested", "turbo_effective",
-        "acl_mode",
+        "acl_mode", "task_workspace_root", "registered_workspace_roots",
+        "policy_turbo_roots",
     )
     receipt = {key: state.get(key) for key in keys}
     receipt.update({
@@ -177,6 +197,22 @@ def main(argv=None) -> int:
         except (OSError, RuntimeError, ValueError):
             workspace = None
     state = resolve_turbo_state(workspace)
+    # Advisory enrollment status only. This must never set global READY/ON:
+    # native Windows process/token + outside-root denial are re-attested on
+    # EVERY action. A protected journal alone is not a Full-Access grant.
+    state["broker_enrolled"] = False
+    if (workspace is not None and state["acl_mode"] == "on" and (
+            state["turbo_requested"] == "ON" and
+            state["scope_verdict"] == "TURBO_SCOPE_ALLOWED")):
+        try:
+            from .turbo_os_broker_client import active_broker_available
+            if active_broker_available(workspace):
+                state["broker_enrolled"] = True
+                state["status"] = "BROKER_ENROLLED"
+                state["reason_code"] = "TURBO_OS_BROKER_PER_ACTION_ATTESTATION_REQUIRED"
+                state["sandbox_backend"] = "WIN32_APPCONTAINER_ONESHOT"
+        except (OSError, RuntimeError, ValueError):
+            pass
     print(json.dumps(state, ensure_ascii=False, sort_keys=True))
     return 0 if (state["sandbox_status"] != "FAILED" and
                  (state["acl_mode"] == "off" or

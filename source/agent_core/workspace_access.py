@@ -244,6 +244,66 @@ def is_valid_turbo_root(path: str | Path, workspace: str | Path,
         return False
 
 
+def resolve_turbo_registered_workspace(
+    task_workspace: str | Path | None, access: dict | None = None,
+) -> str | None:
+    """Find an EXACT policy-registered parent for a task inside Turbo scope.
+
+    A task bound to the registered workspace itself, to the enrolled Turbo
+    Root, or to a real child of that Root may share the same OS Broker.
+    Arbitrary sibling, ancestor, non-existent and reparse paths may NOT.
+    This is only scope matching: it never changes workspace policy, ACL,
+    activation journal or authorization. The native Broker verifies those.
+    """
+    if task_workspace is None or not str(task_workspace).strip():
+        return None
+    from .path_security import is_within, reject_reparse_components
+    try:
+        access = access if access is not None else access_snapshot()
+        requested = Path(task_workspace).expanduser().absolute()
+        if not requested.is_dir():
+            return None
+        candidate = requested.resolve(strict=True)
+        writable = tuple(access.get("writable_workspaces") or ())
+        roots = tuple(access.get("turbo_roots") or ())
+        policy = access.get("policy") or {}
+        matches = []
+        for registered in writable:
+            parent = Path(registered).expanduser().resolve(strict=True)
+            if candidate == parent:
+                # Even a symlink that resolves to the correct parent is not
+                # a valid active task binding. Its original spelling must
+                # match the exact registered parent without a reparse hop.
+                if requested != parent:
+                    continue
+                reject_reparse_components(requested, parent)
+                # A matching workspace is not enough without an actual
+                # valid Turbo Root assigned to that same registered parent.
+                if any(is_valid_turbo_root(root, parent, writable,
+                                           access.get("read_only_roots") or (),
+                                           policy.get("denied_write_roots") or ())
+                       for root in roots):
+                    matches.append(str(parent))
+                continue
+            for root in roots:
+                configured = Path(root).expanduser().absolute()
+                if (is_within(candidate, configured) and
+                    is_valid_turbo_root(configured, parent, writable,
+                                        access.get("read_only_roots") or (),
+                                        policy.get("denied_write_roots") or ())):
+                    # Inspect original spelling BEFORE resolution; a
+                    # symlinked task workspace must never gain Broker scope.
+                    reject_reparse_components(requested, configured)
+                    matches.append(str(parent))
+                    break
+        # No silent authority when more than one protected policy parent
+        # can be inferred. Do not guess from a broad E:\ or other ancestor.
+        normalized = tuple(dict.fromkeys(p.casefold() for p in matches))
+        return matches[0] if len(normalized) == 1 else None
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
 def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
                      expected_revision: int | None = None) -> dict:
     """Atomic shared policy; Telegram and Workspace Manager read same source.
@@ -331,5 +391,6 @@ __all__ = [
     "save_workspace_access_policy",
     "software_only_mode_enabled",
     "workspace_access_policy_path",
-    "is_valid_turbo_root", "save_turbo_roots", "set_turbo_root",
+    "is_valid_turbo_root", "resolve_turbo_registered_workspace",
+    "save_turbo_roots", "set_turbo_root",
 ]

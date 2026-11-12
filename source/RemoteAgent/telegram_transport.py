@@ -991,8 +991,10 @@ class TelegramReceiver:
             if is_direct_cmd_request(message.text):
                 # Authenticated Telegram software control, same as other
                 # buttons and direct controls. The general Agent-task preflight
-                # is not a prerequisite; bounded_process enforces its own
-                # ACL-mode and Software Guard command restrictions.
+                # is not a prerequisite. This authenticated human-control
+                # channel launches a host CMD under the Telegram Listener's
+                # Windows token regardless of ACL/Turbo settings. It can
+                # modify outside Turbo Root: never expose it to Planner tools.
                 # Never enqueue an Agent task or send content to WebGPT.
                 self.offset_store.commit(update_id)
                 if self.control_handler is None or message.attachments:

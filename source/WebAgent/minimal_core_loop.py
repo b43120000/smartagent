@@ -55,7 +55,8 @@ _ATOMIC_TOOL_HINTS = {
     "list_directory": "List existing directory; result may be truncated; no mutation.",
     "read_file": "Read an authorized text file; result may be truncated.",
     "write_file": "Write only in requested scope; check actual postcondition.",
-    "run_command": "PowerShell 5.1; canonical operation required; mutations require success_criteria and verify.",
+    "run_command": "PowerShell 5.1; only for genuine local OS commands; mutations require success_criteria and verify. Do not use for web research.",
+    "web_search": "Non-command web lookup for news, English sources and current information; no Turbo Sandbox or shell required.",
     "observe_fact": "Read a scoped filesystem fact, never grant write or global completion.",
 }
 
@@ -159,6 +160,14 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "all paths must be inside authorized scope. JSON Windows backslashes "
         "must be escaped. The Runtime will execute only admitted actions. "
         "Never invent observations or claim an unverified success. If a tool observation preview is truncated, do not claim to have seen the entire file or listing. "
+        "For text-only requests, news research, English-source comparison, "
+        "ordinary reasoning and read-only web lookup, behave exactly as "
+        "ACL OFF regardless of ACL ON and Turbo ON/OFF. Use web_search "
+        "when the user needs current external evidence; never use PowerShell, "
+        "Python, curl or run_command as a substitute for web lookup. "
+        "Do not demand Turbo Sandbox for an action with no OS effect. "
+        "Real local command/file mutation requests still require Native "
+        "Broker and all normal scope/security checks when Turbo ON. "
         "Windows shell for run_command is PowerShell 5.1 (cmd /c invokes CMD). "
         "For run_command provide command and operation. Use only the canonical "
         "operation values INSPECT, MUTATE, BUILD, TEST, VERIFY, GIT_INSPECT, "
@@ -1119,34 +1128,28 @@ def run_minimal_core(loop, request: str) -> str:
             return "Executor 偵測到重複動作且沒有新證據，已安全封鎖。"
         last_action_digest = fingerprint
 
-        # Git46: Goal-driven/minimal-core uses the SAME fail-closed Turbo
-        # authority as PokeClaw. Software admission alone never grants OS IO.
-        from agent_core.turbo_sandbox import (
-            resolve_turbo_state, sandbox_evidence, require_turbo_backend,
-        )
-        turbo_state = resolve_turbo_state(loop.workspace)
-        if (turbo_state["turbo_requested"] == "ON"
-                or turbo_state["sandbox_status"] == "FAILED"):
-            try:
-                require_turbo_backend(turbo_state)
-            except RuntimeError as exc:
-                receipt = sandbox_evidence(
-                    turbo_state, action_id=action["action_id"],
-                    requested_operation=str(action.get("operation") or action["tool"]),
-                )
-                journal.append("turbo_sandbox_blocked", round=round_id,
-                               tool=action["tool"], **receipt)
-                loop._emit("turbo_sandbox_blocked", request_id=loop.run_id,
-                           task_id=loop.task_id, task_epoch=loop.task_epoch,
-                           round=round_id, reason_code=str(exc)[:120],
-                           action_id=action["action_id"], executed=False,
-                           authorization_granted=False)
-                loop.protocol_state = "BLOCKED"
-                result = blocked_result("BLOCKED", "TURBO_SANDBOX_BLOCKED", round_id)
-                publish_executor_result(result)
-                set_runtime_state(loop.task_id, "PAUSED",
-                                  reason="TURBO_SANDBOX_BLOCKED", root=loop.progress_root)
-                return "Turbo OS Sandbox 未通過驗證，已阻止工具下發；不使用普通 Executor 降級執行。"
+        # Git51: select the safety gate from the Runtime-admitted Action,
+        # not from the global ACL/Turbo preference. Plain-language answers,
+        # web lookup and read-only tools do not require OS execution.
+        from agent_core.turbo_broker_admission import admit_action
+        broker_gate = admit_action(loop.workspace, action)
+        if broker_gate["decision"] == "BLOCKED":
+            receipt = dict(broker_gate["evidence"])
+            reason = str(broker_gate["reason_code"] or "SANDBOX_UNAVAILABLE")
+            journal.append("turbo_sandbox_blocked", round=round_id,
+                           tool=action["tool"], **receipt)
+            loop._emit("turbo_sandbox_blocked", request_id=loop.run_id,
+                       task_id=loop.task_id, task_epoch=loop.task_epoch,
+                       round=round_id, reason_code=reason[:120],
+                       action_id=action["action_id"], executed=False,
+                       authorization_granted=False)
+            loop.protocol_state = "BLOCKED"
+            result = blocked_result("BLOCKED", "TURBO_SANDBOX_BLOCKED", round_id)
+            publish_executor_result(result)
+            set_runtime_state(loop.task_id, "PAUSED",
+                              reason="TURBO_SANDBOX_BLOCKED", root=loop.progress_root)
+            return ("此 Action 涉及本機 OS 執行或檔案異動，但 Native "
+                    "Turbo Broker 尚未通過安全檢查；禁止退回普通 Executor。")
 
         # Write an execution-intent receipt BEFORE any side effect.
         journal.append("action_prepared", round=round_id, tool=action["tool"],

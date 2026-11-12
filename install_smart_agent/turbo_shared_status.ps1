@@ -28,6 +28,11 @@ try {
     Write-Host ('Sandbox Status: ' + $state.sandbox_status)
     Write-Host ('Reason Code: ' + $state.reason_code)
     Write-Host ('Policy Revision: ' + $state.policy_revision)
+    if ($state.broker_enrolled -eq $true) {
+        Write-Host 'Turbo OS Native Broker: ENROLLED (per-action attestation required)' -ForegroundColor Cyan
+    } elseif ($state.turbo_requested -eq 'ON') {
+        Write-Host 'Turbo OS Native Broker: NOT ENROLLED / NOT ATTESTED' -ForegroundColor Yellow
+    }
     if ($state.turbo_effective -ne 'ON') {
         Write-Host 'Turbo OS Full-Access: NOT ENABLED' -ForegroundColor Yellow
     }

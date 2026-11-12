@@ -37,6 +37,7 @@ if (-not [IO.Path]::GetFullPath($PSScriptRoot).Equals(
 $modePath = Join-Path $secure 'acl_mode.json'
 $policyPath = Join-Path $secure 'workspace_access_policy.json'
 $journalPath = Join-Path $secure 'turbo_os_activation.json'
+$pendingSwitchPath = Join-Path $secure 'turbo_existing_root_switch.json'
 foreach($item in @($modePath,$policyPath,$journalPath)) {
     if (-not (Test-Path -LiteralPath $item -PathType Leaf)) {
         throw 'GIT50_OS_BROKER_PROTECTED_STATE_MISSING'
@@ -47,6 +48,9 @@ function Load-State([string]$Path) {
             ConvertFrom-Json -ErrorAction Stop)
 }
 function Assert-Trusted-State {
+    if (Test-Path -LiteralPath $pendingSwitchPath) {
+        throw 'GIT50_BROKER_SWITCH_INCOMPLETE_NO_NATIVE_ACTION'
+    }
     $mode = Load-State $modePath
     $policy = Load-State $policyPath
     $activation = Load-State $journalPath

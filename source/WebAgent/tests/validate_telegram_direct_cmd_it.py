@@ -318,30 +318,30 @@ class TelegramDirectCmdIT(unittest.TestCase):
         self.assertIn("TIMED_OUT", reply["message"])
         self.assertEqual(len(reply["results"]), 1)
 
-    def test_bat_pause_with_nul_stdin_completes_without_input(self):
+    def test_bat_cooperative_pause_runs_in_manual_host_console(self):
         import os
         if os.name != "nt":
             self.skipTest("Windows cmd.exe required")
-        from agent_core.bounded_process import run_bounded_process
+        from RemoteAgent.telegram_console_cmd import run_visible_cmd_batch
         script = self.root / "tg_pause_test.bat"
         script.write_text(
-            "@echo off\necho BEFORE_PAUSE\npause\necho AFTER_PAUSE\n",
+            "@echo off\necho BEFORE_PAUSE\n"
+            "if not defined SMARTAGENT_NONINTERACTIVE pause\n"
+            "echo AFTER_PAUSE\n",
             encoding="ascii",
         )
-        exe = str(Path(os.environ.get("SystemRoot", r"C:\Windows"))
-                  / "System32" / "cmd.exe")
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False):
-            info = run_bounded_process(
-                [exe, "/d", "/s", "/c", "tg_pause_test.bat"],
-                cwd=self.root, timeout=8, shell=False,
-                security_command="tg_pause_test.bat",
-                noninteractive=True,
-            )
-        self.assertEqual(info.get("exit_code"), 0, info)
-        self.assertFalse(info.get("timed_out"), info)
-        self.assertIn("BEFORE_PAUSE", info.get("stdout", ""))
-        self.assertIn("AFTER_PAUSE", info.get("stdout", ""))
+        # Direct human CMD must not enter bounded_process/Restricted Executor.
+        # The disposable Windows console can suppress only a script's explicit
+        # cooperative pause guard. No user files beyond this fixture are touched.
+        result = run_visible_cmd_batch(
+            ["call tg_pause_test.bat"], cwd=self.root,
+            command_timeout_seconds=10, batch_timeout_seconds=20,
+            require_interactive=False,
+        )
+        self.assertTrue(result["completed"], result)
+        self.assertEqual(result["results"][0]["exit_code"], 0)
+        self.assertIn("BEFORE_PAUSE", result["results"][0]["stdout"])
+        self.assertIn("AFTER_PAUSE", result["results"][0]["stdout"])
 
     def test_real_windows_cmd_echo_smoke_no_side_effects(self):
         import subprocess
@@ -375,26 +375,27 @@ class TelegramDirectCmdIT(unittest.TestCase):
         self.assertEqual(sorted(self.root.iterdir()), [self.root / "offset.json"]
                          if (self.root / "offset.json").exists() else [])
 
-    def test_unknown_workspace_and_blocked_command(self):
+    def test_manual_cmd_not_blocked_by_workspace_or_delete_classification(self):
+        # Never actually perform deletion in this software-only unit test.
+        deleted = self.message.replace('"echo hello"', '"del /q dummy-file.txt"')
+        seen = []
+        def simulate(argv, **kwargs):
+            seen.append(argv[-1])
+            return {"process_started": True, "exit_code": 0,
+                    "stdout": "SIMULATED", "stderr": "", "timed_out": False}
         with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=True), \
+                   side_effect=AssertionError("human_cmd_not_restricted")), \
              patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": ()}):
-            with self.assertRaisesRegex(CmdControlError, "WORKSPACE_NOT_AUTHORIZED"):
-                execute_cmd_request(
-                    self.message, user_id=11, chat_id=22, policy=self.policy,
-                    runner=lambda *args, **kwargs: self.fail("must not execute"),
-                )
-        unsafe = self.message.replace('"echo hello"', '"diskpart"')
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=True), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": (str(self.root),)}):
-            with self.assertRaisesRegex(CmdControlError, "COMMAND_REJECTED"):
-                execute_cmd_request(
-                    unsafe, user_id=11, chat_id=22, policy=self.policy,
-                    runner=lambda *args, **kwargs: self.fail("must not execute"),
-                )
+                   side_effect=AssertionError("human_cmd_not_agent_workspace")), \
+             patch("agent_core.command_security.inspect_command",
+                   side_effect=AssertionError("human_cmd_not_agent_command_guard")):
+            reply = execute_cmd_request(
+                deleted, user_id=11, chat_id=22, policy=self.policy,
+                runner=simulate,
+            )
+        self.assertEqual(reply["status"], "SUCCESS")
+        self.assertEqual(seen[0], "del /q dummy-file.txt")
+        self.assertIn("Telegram 手動 Host CMD", reply["message"])
 
 
 if __name__ == "__main__":

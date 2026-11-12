@@ -1,49 +1,40 @@
 @echo off
-setlocal
-if /I "%~1"=="--launcher-self-test" (
- echo ACLSTATUS_LAUNCHER_PARSE_OK
- exit /b 0
-)
+setlocal EnableExtensions DisableDelayedExpansion
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 title SmartAgent ACL Mode
 
-if /i "%~1"=="on" goto valid_mode
-if /i "%~1"=="off" goto valid_mode
-if /i "%~1"=="status" goto status_only
+if /I "%~1"=="--launcher-self-test" goto launcher_self_test
+if /I "%~1"=="on" goto valid_mode
+if /I "%~1"=="off" goto valid_mode
+if /I "%~1"=="status" goto status_only
 echo Usage: ACLstatus.bat on^|off^|status
 exit /b 2
+
+:launcher_self_test
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\acl_mode_launcher.ps1" -SelfTest
+exit /b %ERRORLEVEL%
 
 :valid_mode
 if not "%~2"=="" (
     echo Usage: ACLstatus.bat on^|off^|status
     exit /b 2
 )
-set "SMARTAGENT_ACL_MODE=%~1"
-set "SMARTAGENT_ACL_SCRIPT=%~dp0install_smart_agent\acl_status.ps1"
-set "SMARTAGENT_ACL_ROOT=%~dp0."
-if not exist "%SMARTAGENT_ACL_SCRIPT%" (
-    echo [ERROR] ACL mode manager not found: %SMARTAGENT_ACL_SCRIPT%
+if not exist "%~dp0install_smart_agent\acl_mode_launcher.ps1" (
+    echo [SmartAgent ACL] RESULT: FAIL - internal launcher missing.
     exit /b 2
 )
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$env:SMARTAGENT_ACL_CALLER_SID=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $quote=[char]34; $scriptPath=$quote+$env:SMARTAGENT_ACL_SCRIPT+$quote; $rootPath=$quote+$env:SMARTAGENT_ACL_ROOT+$quote; $p=Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,'-Mode',$env:SMARTAGENT_ACL_MODE,'-ProjectRoot',$rootPath,'-ControllerSid',$env:SMARTAGENT_ACL_CALLER_SID) -WorkingDirectory $env:SMARTAGENT_ACL_ROOT -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
-set "ACL_EXIT=%ERRORLEVEL%"
-if not "%ACL_EXIT%"=="0" (
-    echo [SmartAgent] ACL mode change failed or was cancelled. Exit=%ACL_EXIT%
-    exit /b %ACL_EXIT%
-)
-goto status_print
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\acl_mode_launcher.ps1" -Mode "%~1" -ProjectRoot "%~dp0."
+exit /b %ERRORLEVEL%
 
 :status_only
 if not "%~2"=="" (
- echo Usage: ACLstatus.bat on^|off^|status
- exit /b 2
+    echo Usage: ACLstatus.bat on^|off^|status
+    exit /b 2
 )
-
-:status_print
-if not exist "%~dp0install_smart_agent\\turbo_shared_status.ps1" (
- echo [SmartAgent] Turbo status unavailable: status reporter missing.
- exit /b 2
+if not exist "%~dp0install_smart_agent\turbo_shared_status.ps1" (
+    echo [SmartAgent ACL] Shared status reporter missing.
+    exit /b 2
 )
-"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\\turbo_shared_status.ps1" -ProjectRoot "%~dp0."
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\turbo_shared_status.ps1" -ProjectRoot "%~dp0."
 exit /b %ERRORLEVEL%

@@ -368,6 +368,10 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
     try:
         from .turbo_sandbox import resolve_turbo_state
         gate = resolve_turbo_state(workspace)
+        # The exact active task binding is not always the policy parent.
+        # Match the task to the registered parent only when the task lies
+        # inside its Turbo Root; no broad-parent or sibling inference.
+        registered_workspace = gate.get("workspace_root") or workspace
         from .turbo_broker_admission import assess
         broker_admission = assess(workspace, tool="run_command")
         broker_enrolled = broker_admission["decision"] == "BROKER_REQUIRED"
@@ -377,7 +381,7 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
             str(Path(raw).expanduser().absolute())
             for raw in access.get("turbo_roots") or ()
             if is_valid_turbo_root(
-                raw, workspace, access["writable_workspaces"],
+                raw, registered_workspace, access["writable_workspaces"],
                 access["read_only_roots"],
                 policy.get("denied_write_roots") or (),
             )
@@ -404,6 +408,17 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
             ),
             "per_action_os_attestation_required": broker_enrolled,
             "configured_roots": roots[:8],
+            "policy_turbo_roots": list(gate.get("policy_turbo_roots") or [])[:8],
+            "registered_workspace_roots": list(gate.get("registered_workspace_roots") or [])[:8],
+            "task_workspace_root": str(gate.get("task_workspace_root") or workspace),
+            "broker_registered_workspace": (
+                str(registered_workspace) if roots else ""
+            ),
+            "binding_diagnostic": (
+                "TASK_WORKSPACE_OUTSIDE_CONFIGURED_TURBO_SCOPE"
+                if gate["reason_code"] == "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
+                else "POLICY_SCOPE_MATCHED"
+            ),
             "policy_revision": int(policy.get("revision", 0) or 0),
             "safe_action_examples": [
                 "git clone <user-requested-https-url> <new-destination-under-turbo-root>",
@@ -429,6 +444,7 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
             "schema": "SMARTAGENT_TURBO_PLANNER_HINT_V1",
             "status": "UNKNOWN_FAIL_CLOSED",
             "configured_roots": [],
+            "binding_diagnostic": "TURBO_SCOPE_INSPECTION_FAILED",
             "runtime_admission_still_required": True,
             "authorization_granted": False,
         }

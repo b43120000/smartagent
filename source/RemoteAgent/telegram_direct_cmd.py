@@ -1,4 +1,11 @@
-"""Telegram-authenticated software-only CMD controls."""
+"""Telegram-authenticated explicit-human Windows host CMD controls.
+
+This is a manual remote-admin channel, not a Planner/Agent executor.
+It runs under the Telegram listener's Windows security token and intentionally
+does NOT inherit Agent ACL/Turbo Root/Software Guard restrictions. Windows itself
+still enforces that token's NTFS permissions. Only a paired, authenticated
+PRIVATE Telegram sender can reach this handler through the receiver.
+"""
 from __future__ import annotations
 
 import os
@@ -76,6 +83,8 @@ def render_cmd_template(smartagent_root: str | Path) -> str:
         '"echo hello"\n'
         '"echo time"\n\n'
         "每行分別執行並回傳 Exit Code、stdout、stderr。"
+        "這是已配對使用者的 Windows Host CMD，不受 Agent Turbo Root 限制；"
+        "刪除等命令會以 Telegram Listener 的 Windows 帳號權限執行。"
     )
 
 
@@ -119,14 +128,14 @@ def execute_cmd_request(
     command_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     batch_timeout_seconds: int = DEFAULT_BATCH_TIMEOUT_SECONDS,
 ) -> dict:
-    """Sequential bounded cmd.exe invocation through the existing OS executor."""
+    """Run a human-authorized batch in one host CMD window, regardless of ACL/Turbo.
+
+    This is intentionally NOT the Agent's bounded_process/Restricted Executor
+    or Native AppContainer Broker. Never call it for Planner-generated tasks.
+    The receiver's existing private-chat pairing must already be verified.
+    """
     import time
     import uuid
-    from agent_core.command_security import inspect_command
-    from agent_core.path_security import is_within, reject_reparse_components
-    from agent_core.workspace_access import access_snapshot
-    from agent_core.windows_security import restricted_executor_required
-    from agent_core.bounded_process import run_bounded_process
 
     # The dispatcher constructs this transient policy only after the normal
     # Telegram private-chat identity / pairing authorization. No second
@@ -136,11 +145,9 @@ def execute_cmd_request(
     policy.assert_authorized(user_id, chat_id)
     if os.name != "nt":
         raise CmdControlError("TG_CMD_WINDOWS_REQUIRED")
-    # Match the installation's effective ACL mode. ACL ON is enforced by
-    # bounded_process via the OS Restricted Executor. ACL OFF uses the same
-    # bounded_process with the existing Software Guard command admission.
-    # A manually submitted Telegram command never changes ACL mode.
-    use_restricted_executor = restricted_executor_required()
+    # Do not inspect ACL/Turbo policy here: a MANUALLY typed, paired
+    # Telegram CMD is a privileged host-control request, not Agent work.
+    # Windows enforces real token privileges; this never changes ACL mode.
     command_timeout_seconds = _bounded_timeout(
         command_timeout_seconds, minimum=MIN_COMMAND_TIMEOUT_SECONDS,
         maximum=MAX_COMMAND_TIMEOUT_SECONDS,
@@ -149,53 +156,34 @@ def execute_cmd_request(
         batch_timeout_seconds, minimum=command_timeout_seconds,
         maximum=MAX_BATCH_TIMEOUT_SECONDS,
     )
+    # The requested existing absolute folder is CMD's initial CWD only.
+    # Explicit user commands may access any OS-authorized drive, path, or
+    # executable (including DEL/RMDIR and script execution). Agent write
+    # ceilings and Turbo roots do NOT apply to this manual host console.
     cwd, commands = parse_cmd_request(text)
-    roots = tuple(Path(p).resolve() for p in access_snapshot().get("writable_workspaces", ()))
-    root = next((p for p in roots if is_within(cwd, p)), None)
-    # The callback template defaults to the SmartAgent installation directory.
-    # Permit exactly that trusted host-owned cwd for the authenticated admin
-    # control; it is a working directory, not a new general Workspace grant.
-    # Arbitrary user-supplied cmd paths still require the workspace allowlist.
-    if root is None and trusted_install_root is not None:
-        installed = Path(trusted_install_root).expanduser().resolve()
-        if cwd == installed:
-            root = installed
-    if root is None:
-        raise CmdControlError("TG_CMD_WORKSPACE_NOT_AUTHORIZED")
-    reject_reparse_components(cwd, root)
 
-    # Verify the entire batch before the first process starts.
-    for command in commands:
-        admission = inspect_command(command, workspace=cwd)
-        if not admission.allowed:
-            raise CmdControlError("TG_CMD_COMMAND_REJECTED:" + admission.code)
-
-    executor = runner or run_bounded_process
+    # Test-injected runner retains the legacy result contract but is NEVER
+    # selected in production. The production path always creates the
+    # authenticated user's visible Windows CMD session.
+    executor = runner
     exe = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "cmd.exe")
     started = time.monotonic()
     tracking = "TG-CMD-" + uuid.uuid4().hex[:12].upper()
     lines = [
         f"CMD 執行結果 {tracking}",
         f"cmd path: {cwd}",
-        "執行模式：" + (
-            "ACL ON / Restricted Executor"
-            if use_restricted_executor else "ACL OFF / Software Guard"
-        ),
+        "執行模式：Telegram 手動 Host CMD（ACL ON/OFF、Turbo ON/OFF 均獨立）",
+        "執行身分：Telegram Listener 的 Windows Token；不在 Agent AppContainer 內。",
+        "權限範圍：Windows 帳號實際權限；允許使用者明確指定刪除等命令，Turbo Root 不限制此手動通道。",
         (f"逐筆同步等待；單筆上限 {command_timeout_seconds}s，"
          f"整批上限 {batch_timeout_seconds}s；"
          + ("STDIN=Windows Console（timeout 可正常執行）。"
             if runner is None else "STDIN=NUL（舊測試注入路徑）。")),
     ]
     if runner is None:
-        # Production: actually open a desktop CMD window and keep one shell
-        # session for the entire Telegram batch. The injected runner path is
-        # retained only for deterministic/legacy software-control tests.
-        #
-        # Never use an unrestricted desktop process when ACL ON requires the
-        # independently attested Restricted Executor. Explicitly fail closed
-        # rather than silently switching to ACL OFF or a hidden process.
-        if use_restricted_executor:
-            raise CmdControlError("TG_CMD_VISIBLE_CONSOLE_ACL_ON_UNAVAILABLE")
+        # Production: a paired human's explicit remote-admin command opens
+        # one desktop CMD with the listener's actual OS token in ALL ACL/Turbo
+        # combinations. Agent-supplied commands never enter this branch.
         from RemoteAgent.telegram_console_cmd import (
             TelegramConsoleError, run_visible_cmd_batch,
         )

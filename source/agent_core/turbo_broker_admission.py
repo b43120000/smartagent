@@ -16,6 +16,14 @@ MUTATORS = frozenset({
     "execute_frozen_plan", "project_sync", "web_edit_file",
     "update_semantic_map", "update_semantic_map_file",
     "download_artifact", "build_project_bundle", "build_project_delta",
+})
+# save_session_summary is Runtime-owned metadata at a fixed workspace path,
+# NOT a Planner-selected filesystem target or shell execution. It keeps the
+# same scoped application behavior for ACL OFF, ACL ON/Turbo OFF and
+# ACL ON/Turbo ON; normal workspace permissions still apply.
+NON_COMMAND_OPERATIONS = frozenset({
+    "web_search", "ask_executor", "read_file", "list_directory",
+    "inspect_directory", "find_file", "query_project", "observe_fact",
     "save_session_summary",
 })
 
@@ -29,6 +37,21 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
     follows normal Software Guard regardless of a stale persisted Turbo ON.
     Successful disposable AppContainer tests never authorize real work.
     """
+    # Advisory admission is occasionally called directly by planners.
+    # A no-command/non-mutation action must be identical to the ordinary
+    # execution path in ALL ACL/Turbo modes. Do not read or require a
+    # command sandbox for web research, observations or ordinary dialogue.
+    # The protected mutation list above is still enforced at dispatch.
+    if not needs_broker(tool):
+        return {
+            "decision": "NORMAL",
+            "reason_code": "NON_COMMAND_OPERATION",
+            "state": None,
+            "evidence": {"requested_operation": str(tool),
+                         "executed": False,
+                         "authorization_granted": False,
+                         "os_execution_result": "NOT_APPLICABLE"},
+        }
     state = resolve_turbo_state(workspace)
     evidence = sandbox_evidence(state, requested_operation=tool, action_id=action_id)
     if state["sandbox_status"] == "FAILED":
@@ -51,4 +74,26 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
         "evidence": evidence,
     }
 
-__all__ = ["MUTATORS", "needs_broker", "assess"]
+def admit_action(workspace, action: dict | None) -> dict:
+    """One dispatch policy shared by PokeClaw, Minimal Core and typed tools.
+
+    A no-command/observation action must not require native OS isolation.
+    Only Runtime-admitted mutating actions are candidates for Broker.
+    Returning BROKER_REQUIRED is not permission to execute as the host:
+    the typed dispatch re-attests the native Broker for every action.
+    """
+    if not action:
+        return {
+            "decision": "NOT_APPLICABLE",
+            "reason_code": "ACTION_NOT_ADMITTED",
+            "state": None, "evidence": {},
+        }
+    tool = str(action.get("tool") or "")
+    return assess(workspace, tool=tool,
+                  action_id=str(action.get("action_id") or ""))
+
+
+__all__ = [
+    "MUTATORS", "NON_COMMAND_OPERATIONS", "needs_broker", "assess",
+    "admit_action",
+]

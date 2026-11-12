@@ -97,6 +97,16 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Runtime never rewrites the command or grants authority. "
         "Incomplete outputs cannot prove missing content. "
         "Runtime security and precise path authorization always apply.\n"
+        "For natural-language questions, external news comparison, research, "
+        "summaries and reasoning with no machine action, behave exactly like "
+        "normal ACL OFF dialogue in ALL ACL/Turbo modes. If English news "
+        "verification needs current evidence, use web_search; never invent "
+        "sources, and never replace web_search with run_command, PowerShell, "
+        "Python, curl or a local shell. Non-command actions do NOT require "
+        "Turbo Sandbox or a native OS Broker. Native Broker is required only "
+        "when the admitted action actually runs an OS command or changes "
+        "user filesystem state; natural-language file-edit requests are "
+        "still real mutations.\n"
         "Goal Driver and Prerequisite decision engines are DISABLED. "
         "There is no fixed task-specific sequence gate. "
         "Shared Blackboard records each round automatically; never ask a tool "
@@ -561,37 +571,30 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         repeated = repeated + 1 if signature == last_fingerprint else 0
         last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
-        # Git46 mandatory OS gate: never dispatch a requested Turbo task via
-        # the ordinary Git45 executor, even if software preflight admitted it.
-        # The backend is deliberately unavailable until Windows identity,
-        # DACL, AppContainer, child-process and negative OS probes are proven.
-        from agent_core.turbo_sandbox import (
-            resolve_turbo_state, sandbox_evidence, require_turbo_backend,
-        )
-        turbo_state = resolve_turbo_state(loop.workspace)
-        if (turbo_state["turbo_requested"] == "ON"
-                or turbo_state["sandbox_status"] == "FAILED"):
-            try:
-                require_turbo_backend(turbo_state)
-            except RuntimeError as exc:
-                receipt = sandbox_evidence(
-                    turbo_state,
-                    action_id=str((action or {}).get("action_id") or ""),
-                    requested_operation=str((action or decision.arguments or {}).get("operation") or decision.tool),
-                )
-                append_executor_event(root, loop, {
-                    **receipt, "round": turn, "kind": "TURBO_SANDBOX_BLOCKED",
-                    "toolName": decision.tool,
-                    "arguments_sha256": _digest(decision.arguments),
-                    "admission_status": "ADMITTED" if action else "REJECTED",
-                    "admission_reason_code": str(rejected or "")[:128],
-                })
-                return _finish(
-                    loop, root, request, kind="BLOCKED",
-                    summary="FAIL：TURBO_SANDBOX_BLOCKED：" + str(exc)[:120]
-                    + "；未執行任何 Turbo Action，且禁止退回普通 Executor。",
-                    complete=False,
-                )
+        # Git51: admission is ACTION-scoped, never task/global-scoped.
+        # News, ordinary prose, web research and read-only observations must
+        # behave like ACL OFF even if Turbo is requested or unavailable.
+        # Only an actual admitted OS mutation/command requires a native
+        # AppContainer Broker. Its per-action OS proof remains mandatory.
+        from agent_core.turbo_broker_admission import admit_action
+        broker_gate = admit_action(loop.workspace, action)
+        if broker_gate["decision"] == "BLOCKED":
+            receipt = dict(broker_gate["evidence"])
+            reason = str(broker_gate["reason_code"] or "SANDBOX_UNAVAILABLE")
+            append_executor_event(root, loop, {
+                **receipt, "round": turn, "kind": "TURBO_SANDBOX_BLOCKED",
+                "toolName": decision.tool,
+                "arguments_sha256": _digest(decision.arguments),
+                "admission_status": "ADMITTED" if action else "REJECTED",
+                "admission_reason_code": str(rejected or "")[:128],
+                "action_requires_broker": True,
+            })
+            return _finish(
+                loop, root, request, kind="BLOCKED",
+                summary="FAIL：TURBO_SANDBOX_BLOCKED：" + reason[:120]
+                + "；此工具涉及本機 OS 執行或檔案異動；未執行動作且禁止退回普通 Executor。",
+                complete=False,
+            )
         unknown_approval = None
         risk_class = ""
         turbo = None

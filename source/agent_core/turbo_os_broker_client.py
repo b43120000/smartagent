@@ -65,6 +65,12 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ROOT_NOT_VERIFIED")
 
     journal_path = _activation_path()
+    # A protected old-to-new switch remains non-authoritative until its
+    # final durable commit. No Planner / Runtime action may enter the new
+    # Broker while the switch journal is present, including after a crash.
+    if journal_path.with_name("turbo_existing_root_switch.json").exists():
+        raise TurboOSBrokerUnavailable(
+            "TURBO_OS_BROKER_SWITCH_TRANSACTION_PENDING")
     try:
         if is_reparse_path(journal_path):
             raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_JOURNAL_REPARSE")
@@ -74,7 +80,10 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
     if not isinstance(activation, dict):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ACTIVATION_INVALID")
     project = _install_root()
-    workspace_path = Path(workspace).absolute()
+    # The task can be bound to the Turbo Root itself or a nested child.
+    # resolve_turbo_state already matched it to the exact policy-registered
+    # workspace parent, never to an arbitrary ancestor/sibling.
+    workspace_path = Path(state["workspace_root"]).absolute()
     if (
         activation.get("schema") != ACTIVATION_SCHEMA
         or activation.get("status") != "ACTIVE_PROVISIONED"

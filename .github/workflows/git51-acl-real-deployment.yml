@@ -1,0 +1,422 @@
+name: Git51 ACL real Windows ON / OFF deployment
+
+on:
+  push:
+    branches:
+      - git51/webcopilot-final-natural-render-20261110
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - git50/turbo-appcontainer-command-broker-20261110
+
+permissions:
+  contents: read
+
+jobs:
+  real-acl-on-off:
+    name: Deploy restricted Executor, attest OS ACL ON, then revoke OFF
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check elevated disposable runner
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') {
+            throw 'NOT_GITHUB_WINDOWS_RUNNER'
+          }
+          $p=[Security.Principal.WindowsPrincipal]::new(
+            [Security.Principal.WindowsIdentity]::GetCurrent())
+          if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'WINDOWS_RUNNER_NOT_ELEVATED'
+          }
+      - name: Build isolated Python environment
+        run: |
+          python -m venv .venv
+          $py = Join-Path $env:GITHUB_WORKSPACE '.venv\Scripts\python.exe'
+          & $py -I -B -c "import sys;print(sys.version)"
+          if ($LASTEXITCODE -ne 0) { throw 'VENV_NOT_READY' }
+      - name: Parse real Windows integration script
+        run: |
+          $script='install_smart_agent/tests/validate_acl_on_real_windows_ci.ps1'
+          $tokens=$null
+          $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $script).Path, [ref]$tokens, [ref]$errors)
+          if (@($errors).Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Host
+            throw 'REAL_ACL_DEPLOYMENT_POWERSHELL_PARSE_FAILED'
+          }
+          foreach ($file in @('install_smart_agent/acl_mode_command.ps1',
+                               'install_smart_agent/tests/validate_aclstatus_inline_results.ps1')) {
+            $tokens=$null; $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('ACL_STATUS_INLINE_POWERSHELL_PARSE_FAILED:'+$file)
+            }
+          }
+      - name: ACLstatus same-window ON and OFF result contract regressions
+        run: |
+          .\install_smart_agent\tests\validate_aclstatus_inline_results.ps1
+      - name: Actual ACL ON deployment, non-admin Executor self-test and ACL OFF revocation
+        run: |
+          .\install_smart_agent\tests\validate_acl_on_real_windows_ci.ps1
+      - name: Upload Windows deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git51-real-windows-acl-on-off-evidence
+          path: ${{ runner.temp }}/acl_on_ci_evidence.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  scoped-native-turbo-auto:
+    name: Native AppContainer auto-enrollment, protected execution and rollback
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Parse native auto-activation and revocation scripts
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_auto_activate.ps1',
+            'install_smart_agent/turbo_os_activation.ps1',
+            'install_smart_agent/tests/validate_git50_turbo_activation.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_AUTO_POWERSHELL_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Native fresh-root auto enrollment, kernel outside denial, typed operations and OFF revocation
+        run: |
+          .\install_smart_agent\tests\validate_git50_turbo_activation.ps1 -FixtureParent $env:RUNNER_TEMP
+
+  turbo-b-preflight-windows:
+    name: Turbo B existing-project security inventory and safety tests
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parser gate for existing tree safety inventory
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_preflight.ps1',
+            'install_smart_agent/turbo_existing_root_snapshot.ps1',
+            'install_smart_agent/tests/validate_turbo_b_existing_root_preflight.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_PARSER_FAILED:'+$path)
+            }
+          }
+      - name: Existing root NTFS SDDL preservation, reparse and hardlink gates
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_existing_root_preflight.ps1
+
+  turbo-b-transaction-rehearsal:
+    name: Turbo B disposable NTFS ACL change and exact rollback
+    runs-on: windows-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parse gate for transaction and tests
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_transaction_rehearsal.ps1',
+            'install_smart_agent/tests/validate_turbo_b_acl_transaction_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_TRANSACTION_PARSER_FAILED:'+$path)
+            }
+          }
+      - name: CI-only AppContainer ACE, SDDL roundtrip and fault rollback
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_acl_transaction_ci.ps1
+
+  turbo-b-p3-real-prepare:
+    name: Turbo B P3 production candidate Prepare and Verify on disposable populated NTFS tree
+    runs-on: windows-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parse gate for production read-only prepare/verify
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_snapshot.ps1',
+            'install_smart_agent/turbo_existing_root_prepare.ps1',
+            'install_smart_agent/tests/validate_turbo_b_p3_prepare_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_P3_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Production candidate prepare and independent verify on preexisting NTFS tree
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_p3_prepare_ci.ps1
+
+  turbo-b-p3c-broker-review:
+    name: P3-C broker review, kernel grant revocation, and existing-target preservation
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse P3-C review and real Windows test scripts
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_broker_switch_checkpoint.ps1',
+            'install_smart_agent/turbo_p3d_switch_preconditions.ps1',
+            'install_smart_agent/tests/validate_turbo_b_p3c_broker_switch_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_B_P3C_POWERSHELL_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Active old broker scope, native revoke, and fail-closed existing import
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_p3c_broker_switch_ci.ps1
+
+  turbo-b-p3d2-native-switch-rehearsal:
+    name: P3-D2 native old-to-populated Root switch and exact SDDL/IL restore
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse P3-D2 native switch rehearsal
+        run: |
+          $tokens=$null
+          $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install_smart_agent/tests/validate_turbo_b_p3d2_native_switch_ci.ps1').Path,
+            [ref]$tokens,[ref]$errors)
+          if (@($errors).Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Host
+            throw 'TURBO_B_P3D2_POWERSHELL_PARSE_FAILED'
+          }
+      - name: Native AppContainer populated-existing-root access and full security rollback
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_p3d2_native_switch_ci.ps1
+
+  turbo-d3-existing-import-staging:
+    name: P3-D3 guarded existing root journal staging and exact restore
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse native D3 staging and restore scripts
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_import.ps1',
+            'install_smart_agent/tests/validate_turbo_d3_existing_import_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path).Path,
+              [ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_D3_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Guarded existing-root permission staging and precise recovery
+        run: |
+          .\install_smart_agent\tests\validate_turbo_d3_existing_import_ci.ps1
+
+  turbo-d3-native-old-to-existing-switch:
+    name: P3-D3 old-to-existing Root native switch and live broker action
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 parse gate for controlled switch
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_switch.ps1',
+            'install_smart_agent/tests/validate_turbo_d3_full_switch_ci.ps1'
+          )) {
+            $tokens=$null
+            $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path).Path,
+              [ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('TURBO_D3_SWITCH_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Switch old native Broker to populated Root and run real action
+        run: |
+          .\install_smart_agent\tests\validate_turbo_d3_full_switch_ci.ps1
+
+  turbo-d3-native-switch-crash-recovery:
+    name: P3-D3 hard process crash, pending denial and safe-off recovery
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Abrupt termination after import and cross-process recovery
+        run: |
+          .\install_smart_agent\tests\validate_turbo_d3_full_switch_ci.ps1 -CrashTest
+
+  git51-non-command-acl-parity:
+    name: Non-command news and research parity across ACL Turbo modes
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install runtime routing test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile common admission and planner routing
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/turbo_broker_admission.py
+          source/agent_core/smartagent_protocol.py
+          source/agent_core/tools.py
+          source/WebAgent/tests/test_git51_non_command_acl_parity.py
+      - name: Ordinary web research with ACL on/off and Turbo on/off
+        run: >-
+          python -B -m pytest
+          source/WebAgent/tests/test_git51_non_command_acl_parity.py
+          source/WebAgent/tests/test_git49_turbo_broker_admission.py
+          source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
+          -q
+
+  telegram-manual-host-cmd:
+    name: Telegram paired human CMD in ACL and Turbo all four modes
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install runtime test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Parse Telegram CMD and authentication boundary
+        run: >-
+          python -B -m compileall -q
+          source/RemoteAgent/telegram_direct_cmd.py
+          source/RemoteAgent/telegram_console_cmd.py
+          source/RemoteAgent/telegram_transport.py
+          source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
+          source/WebAgent/tests/validate_telegram_visible_console_it.py
+      - name: Verify existing private-chat and pairing authorization
+        run: python -B source/WebAgent/tests/validate_telegram_cmd_shared_auth_it.py
+      - name: Verify direct CMD transport and command format
+        run: python -B source/WebAgent/tests/validate_telegram_direct_cmd_it.py
+      - name: Verify ACL ON/OFF and Turbo ON/OFF do not gate manual CMD
+        run: python -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
+      - name: Real disposable Windows CMD session and file deletion
+        run: python -B source/WebAgent/tests/validate_telegram_visible_console_it.py
+
+  telegram-turbo-task-workspace-binding:
+    name: Telegram task Turbo registered workspace binding scope
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Python routing tests
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Exact policy parent and nested Turbo Root, never sibling
+        run: >-
+          python -B -m pytest
+          source/WebAgent/tests/test_git51_turbo_task_workspace_binding.py
+          source/WebAgent/tests/test_git50_turbo_planning_hints.py
+          source/WebAgent/tests/test_git49_turbo_broker_admission.py
+          source/WebAgent/tests/test_git51_non_command_acl_parity.py
+          -q
+      - name: Parse read-only CMD binding diagnostic wrapper
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens=$null
+          $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+             (Resolve-Path 'install_smart_agent/turbo_task_binding_status.ps1').Path,
+             [ref]$tokens,[ref]$errors)
+          if (@($errors).Count -gt 0) {
+             $errors | Format-List | Out-String | Write-Host
+             throw 'TURBO_TASK_BINDING_STATUS_PARSE_FAILED'
+          }

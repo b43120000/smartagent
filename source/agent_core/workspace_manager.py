@@ -561,7 +561,7 @@ def _security_menu() -> int:
             except (ValueError, IndexError):
                 print("[!] Invalid index.")
         elif choice == "5":
-            path = str(Path(input("Turbo path (existing workspace subdirectory): ").strip().strip('"')).expanduser().resolve())
+            path = str(Path(input("Turbo path (new workspace child, not an existing project): ").strip().strip('"')).expanduser().resolve())
             denied = profile.get("denied_write_roots") or ()
             if not any(is_valid_turbo_root(path, root, writable, read_only, denied)
                        for root in writable):
@@ -579,6 +579,19 @@ def _security_menu() -> int:
                 # Do not partially mutate workspaces before discovering ACL OFF.
                 if turbo and acl_mode() != "on":
                     raise ValueError("TURBO_REQUIRES_ACL_ON")
+                if turbo and not software_only:
+                    if len(turbo) != 1:
+                        raise RuntimeError("turbo_native_single_root_required")
+                    active_journal = (
+                        AGENT_PROJECT_ROOT / "localdata" / "secure"
+                        / "windows_security" / "turbo_os_activation.json"
+                    )
+                    if Path(turbo[0]).exists() and not active_journal.is_file():
+                        raise RuntimeError(
+                            "TURBO_AUTOSTART_EXISTING_ROOT_IMPORT_UNSUPPORTED:"
+                            "existing files and ACLs are untouched; use a "
+                            "brand-new, nonexistent Turbo child root"
+                        )
                 return_code = (
                     _apply_software_only_access(writable, read_only, profile)
                     if software_only
@@ -588,6 +601,36 @@ def _security_menu() -> int:
                     save_turbo_roots(turbo)
                     if set(map(_path_key, load_workspace_access_policy()["turbo_roots"])) != set(map(_path_key, turbo)):
                         raise RuntimeError("turbo_root_apply_postcondition_failed")
+                    if turbo:
+                        # Existing-root import is intentionally unsupported:
+                        # never silently widen the DACL of a populated project.
+                        # The native activator must attest its newly enrolled
+                        # scoped root; a requested preference alone is not ON.
+                        auto = AGENT_PROJECT_ROOT / "install_smart_agent" / "turbo_auto_activate.ps1"
+                        if not auto.is_file():
+                            raise RuntimeError("turbo_native_autostart_script_missing")
+                        native = subprocess.run(
+                            ["powershell", "-NoProfile", "-NonInteractive",
+                             "-ExecutionPolicy", "Bypass", "-File", str(auto),
+                             "-ProjectRoot", str(AGENT_PROJECT_ROOT), "-Action", "Apply"],
+                            cwd=str(AGENT_PROJECT_ROOT), check=False,
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace",
+                        )
+                        if native.stdout:
+                            print(native.stdout, end="")
+                        if native.stderr:
+                            print(native.stderr, end="", file=sys.stderr)
+                        _write_apply_log(
+                            f"TURBO_NATIVE_ACTIVATION_EXIT code={native.returncode}"
+                            f"\nSTDOUT:\n{native.stdout}\nSTDERR:\n{native.stderr}"
+                        )
+                        if native.returncode != 0:
+                            raise RuntimeError(
+                                "turbo_os_activation_failed:"
+                                "the ACL/Executor Apply succeeded but Turbo broker "
+                                "was NOT activated; see native error above"
+                            )
                 print(f"\nAPPLY_EXIT_CODE={return_code}")
                 _write_apply_log(f"APPLY_MENU_RESULT code={return_code}")
                 return return_code
@@ -1178,7 +1221,22 @@ def _feature_flags_menu() -> int:
 
 
 def _interactive() -> int:
-    snapshot = _binding_snapshot()
+    try:
+        snapshot = _binding_snapshot()
+    except RuntimeError as exc:
+        if str(exc) != "acl_mode_invalid":
+            raise
+        profile = AGENT_PROJECT_ROOT / "localdata" / "secure" / "windows_security" / "security_profile.json"
+        try:
+            mode = acl_mode(profile, allow_on_transition=True)
+        except RuntimeError:
+            raise exc from None
+        if mode != "transitioning_on":
+            raise
+        message = "ACL 啟用尚未完成。請等 ACLstatus.bat ON 結束。若啟用失敗，先執行 ACLstatus.bat OFF，再開啟工作區設定。"
+        _write_apply_log("ACL_ON_TRANSITION_BLOCKED_WORKSPACE_MENU")
+        print(message)
+        return 2
     print("\nSmartAgent Workspace Manager")
     print(f"Security: {snapshot['security_status']}")
     state = snapshot["turbo_sandbox"]
