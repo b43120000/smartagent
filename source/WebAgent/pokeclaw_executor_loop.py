@@ -663,6 +663,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 action and risk_class == "UNKNOWN"
                 and turbo.get("auto_confirm") is True
             )
+            native_precheck_blocked = bool(
+                action and broker_gate["decision"] == "BROKER_REQUIRED"
+                and not turbo.get("auto_confirm")
+            )
             decision_reason = (
                 str(turbo.get("reason_code") or "TURBO_REASON_MISSING")
                 if risk_class == "UNKNOWN" or not action
@@ -684,12 +688,21 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "auto_confirm": auto_confirm,
                 "turbo_policy_qualified": bool(turbo.get("auto_confirm")),
                 "decision": (
-                    "AUTO_CONFIRM" if auto_confirm
+                    "NATIVE_PRECHECK_BLOCKED" if native_precheck_blocked
+                    else "AUTO_CONFIRM" if auto_confirm
                     else "NORMAL_ADMISSION" if action and risk_class != "UNKNOWN"
                     else "HUMAN_CONFIRMATION_REQUIRED" if action
                     else "ADMISSION_REJECTED"
                 ),
                 "reason_code": decision_reason,
+                "command_security_code": str(turbo.get("command_security_code") or ""),
+                "command_security_approval_eligible": bool(
+                    turbo.get("command_security_approval_eligible", False)
+                ),
+                "command_security_detail_sha256": str(
+                    turbo.get("command_security_detail_sha256") or ""
+                ),
+                "broker_decision": str(broker_gate.get("decision") or ""),
                 "workspace_root": str(loop.workspace),
                 "working_directory": str(
                     (action or decision.arguments or {}).get("working_directory")
@@ -701,8 +714,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "executed": False, "authorization_granted": False,
             })
         if action and decision.tool == "run_command":
-            if (broker_gate["decision"] == "BROKER_REQUIRED"
-                    and not turbo.get("auto_confirm")):
+            if native_precheck_blocked:
                 # In OS Turbo mode, an out-of-scope or hard-denied command
                 # must BLOCK before execution, never fall back to prompting
                 # for consent that cannot alter the kernel boundary.
@@ -711,11 +723,25 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "round": turn, "kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
                     "toolName": "run_command", "action_id": action["action_id"],
                     "risk_class": risk_class, "reason_code": reason,
+                    "command_sha256": hashlib.sha256(
+                        str(action.get("command") or "").encode("utf-8")
+                    ).hexdigest(),
+                    "arguments_sha256": _digest(decision.arguments),
+                    "command_security_code": str(turbo.get("command_security_code") or ""),
+                    "command_security_approval_eligible": bool(
+                        turbo.get("command_security_approval_eligible", False)
+                    ),
+                    "command_security_detail_sha256": str(
+                        turbo.get("command_security_detail_sha256") or ""
+                    ),
+                    "broker_decision": str(broker_gate.get("decision") or ""),
                     "executed": False, "authorization_granted": False,
                 })
                 return _finish(
                     loop, root, request, kind="BLOCKED",
                     summary="FAIL：TURBO_NATIVE_CONFIRMATION_BLOCKED：" + reason[:120]
+                    + ("；command_security_code=" + str(turbo["command_security_code"])[:80]
+                       if turbo.get("command_security_code") else "")
                     + "；沒有要求人工授權、沒有執行工具或退回 Host Executor。",
                     complete=False,
                 )

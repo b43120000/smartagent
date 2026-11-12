@@ -298,8 +298,19 @@ def evaluate_native_broker_confirmation(
     # Hard command-security bans and explicit outside-workspace executable
     # approvals are never bypassed by Full-Access UX. Unknown grammar is
     # *not* reclassified as safe/read-only.
-    if not inspect_command(command, workspace=cwd).allowed:
+    command_admission = inspect_command(command, workspace=cwd)
+    if not command_admission.allowed:
+        # Preserve the specific, fixed-rule classifier code for Planner RCA.
+        # CommandAdmission.detail can contain absolute executable paths and
+        # other user input: never write it verbatim into a persisted event.
+        import hashlib
         result["reason_code"] = "TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED"
+        result["command_security_code"] = str(command_admission.code or "UNSPECIFIED")
+        result["command_security_approval_eligible"] = bool(command_admission.approval_eligible)
+        result["command_security_detail_sha256"] = (
+            hashlib.sha256(command_admission.detail.encode("utf-8")).hexdigest()
+            if command_admission.detail else ""
+        )
         return result
     if len(command) > 8192:
         result["reason_code"] = "TURBO_NATIVE_BROKER_COMMAND_TOO_LARGE"

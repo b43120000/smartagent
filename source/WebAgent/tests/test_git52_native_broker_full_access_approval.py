@@ -223,3 +223,69 @@ def test_native_consent_never_auto_approves_invalid_policy_revision(configured, 
     )
     assert result["auto_confirm"] is False
     assert result["reason_code"] == "TURBO_NATIVE_BROKER_POLICY_REVISION_UNVERIFIED"
+
+
+
+def test_native_hard_deny_preserves_safe_classifier(configured):
+    import hashlib
+    workspace, turbo, loop = configured
+    action = {"tool": "run_command", "command": "diskpart",
+              "working_directory": str(turbo)}
+    decision = evaluate_native_broker_confirmation(loop, action, _gate(workspace, turbo))
+    assert decision["auto_confirm"] is False
+    assert decision["reason_code"] == "TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED"
+    assert decision["command_security_code"] == "diskpart_forbidden"
+    assert decision["command_security_approval_eligible"] is False
+    assert decision["command_security_detail_sha256"] == hashlib.sha256(
+        b"use a typed, runtime-authorized operation"
+    ).hexdigest()
+    assert "command" not in decision
+    assert "detail" not in decision
+    assert decision["authorization_granted"] is False
+
+
+def test_executor_native_precheck_records_rejection_cause(tmp_path, monkeypatch):
+    turbo = tmp_path / "turbo"
+    turbo.mkdir()
+    request = "Native broker hard-denied command precheck"
+    action = {
+        "type": "tool_call", "name": "run_command",
+        "arguments": {
+            "command": "diskpart",
+            "operation": "GENERAL",
+            "working_directory": str(turbo),
+            "success_criteria": "will be denied",
+            "verify": [{"action": "file_exists",
+                        "path": str(turbo / "never.txt"),
+                        "expect": True}],
+        },
+    }
+    loop, _ = _loop(tmp_path, monkeypatch, [json.dumps(action)], request=request)
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.admit_action",
+        lambda workspace, proposed: _gate(tmp_path, turbo)
+        if proposed and proposed.get("tool") == "run_command"
+        else {"decision": "NOT_APPLICABLE", "state": None, "evidence": {}},
+    )
+    def no_human(*args, **kwargs):
+        raise AssertionError("hard security denial must never request human consent")
+    monkeypatch.setattr(
+        "agent_core.unknown_command_approval.request_unknown_command_approval", no_human
+    )
+    run_minimal_core(loop, request)
+    board = read_executor_run(tmp_path, task_id=loop.task_id)
+    assert not loop.executed
+    decisions = [e for e in board["events"] if e["kind"] == "TURBO_DECISION"]
+    blocks = [e for e in board["events"]
+              if e["kind"] == "TURBO_NATIVE_CONFIRMATION_BLOCKED"]
+    assert len(decisions) == len(blocks) == 1
+    assert decisions[0]["decision"] == "NATIVE_PRECHECK_BLOCKED"
+    assert decisions[0]["command_security_code"] == "diskpart_forbidden"
+    assert decisions[0]["reason_code"] == "TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED"
+    assert blocks[0]["command_security_code"] == "diskpart_forbidden"
+    assert blocks[0]["command_security_approval_eligible"] is False
+    assert len(blocks[0]["command_sha256"]) == 64
+    assert blocks[0]["broker_decision"] == "BROKER_REQUIRED"
+    assert blocks[0]["executed"] is False
+    assert blocks[0]["authorization_granted"] is False
+    assert not [e for e in board["events"] if e["kind"] == "HUMAN_APPROVAL_REQUESTED"]

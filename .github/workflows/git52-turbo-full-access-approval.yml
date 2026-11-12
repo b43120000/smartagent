@@ -36,7 +36,19 @@ jobs:
           source/WebAgent/pokeclaw_executor_loop.py
           source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
       - name: Git52 scoped Native Broker no-popup regressions
-        run: python -B -m pytest -q source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
+          source/WebAgent/tests/test_git52_collector_native_block_diagnostics.py
+      - name: Validate collect.bat PowerShell 5.1 syntax
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $script = [IO.File]::ReadAllText('collect.bat')
+          $marker = '# POWERSHELL_BEGIN'
+          $index = $script.LastIndexOf($marker, [StringComparison]::Ordinal)
+          if ($index -lt 0) { throw 'Git52 collector marker missing' }
+          [ScriptBlock]::Create($script.Substring($index + $marker.Length)) | Out-Null
       - name: Git32 PowerShell and workspace regressions
         run: >-
           python -B -m pytest -q

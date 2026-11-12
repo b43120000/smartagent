@@ -274,6 +274,7 @@ $executorRejections = @()
 $executorFinishEvents = @()
 $executorTurboDecisions = @()
 $executorSandboxEvents = @()
+$executorNativeConfirmationBlocks = @()
 $executorTerminalKind = ''
 $executorBoardStatus = 'NOT_FOUND'
 $executorExpectedRejections = -1
@@ -409,6 +410,31 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         secrets_included=$false
                     }
                 }
+                # Git52: a Native confirmation block is a terminal gate,
+                # different from missing/unavailable OS Sandbox enrollment.
+                # Export only typed codes and digests, never command text.
+                foreach ($ev in @($executorBoard.events)) {
+                    if ($null -eq $ev -or [string]$ev.kind -cne 'TURBO_NATIVE_CONFIRMATION_BLOCKED') { continue }
+                    $executorNativeConfirmationBlocks += [ordered]@{
+                        schema='SMARTAGENT_TURBO_NATIVE_CONFIRMATION_BLOCK_RCA_V1'
+                        round=$(if ($null -ne $ev.round) { [int]$ev.round } else { 0 })
+                        action_id=(Safe-Code $ev.action_id)
+                        tool=(Safe-Code $ev.toolName)
+                        risk_class=(Safe-Code $ev.risk_class)
+                        reason_code=(Safe-Code $ev.reason_code)
+                        command_sha256=(Safe-Code $ev.command_sha256)
+                        arguments_sha256=(Safe-Code $ev.arguments_sha256)
+                        command_security_code=(Safe-Code $ev.command_security_code)
+                        command_security_approval_eligible=[bool]$ev.command_security_approval_eligible
+                        command_security_detail_sha256=(Safe-Code $ev.command_security_detail_sha256)
+                        broker_decision=(Safe-Code $ev.broker_decision)
+                        executed=[bool]$ev.executed
+                        authorization_granted=[bool]$ev.authorization_granted
+                        raw_command_included=$false
+                        raw_path_included=$false
+                        secrets_included=$false
+                    }
+                }
                 foreach ($ev in @($executorBoard.events)) {
                     if ($null -eq $ev -or [string]$ev.kind -cne 'TURBO_DECISION') { continue }
                     $executorTurboDecisions += [ordered]@{
@@ -423,6 +449,10 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         decision=(Safe-Code $ev.decision)
                         reason_code=(Safe-Code $ev.reason_code)
                         admission_reason_code=(Safe-Code $ev.admission_reason_code)
+                        command_security_code=(Safe-Code $ev.command_security_code)
+                        command_security_approval_eligible=[bool]$ev.command_security_approval_eligible
+                        command_security_detail_sha256=(Safe-Code $ev.command_security_detail_sha256)
+                        broker_decision=(Safe-Code $ev.broker_decision)
                         auto_confirm=[bool]$ev.auto_confirm
                         turbo_policy_qualified=[bool]$ev.turbo_policy_qualified
                         policy_revision=$(if ($null -ne $ev.policy_revision) { [int]$ev.policy_revision } else { 0 })
@@ -465,12 +495,19 @@ $executorAdmissionSummary = [ordered]@{
     finish_diagnostic_event_count=@($executorFinishEvents).Count
     turbo_decision_event_count=@($executorTurboDecisions).Count
     turbo_sandbox_blocked_count=@($executorSandboxEvents).Count
+    turbo_native_confirmation_block_count=@($executorNativeConfirmationBlocks).Count
+    turbo_native_security_code_count=@($executorNativeConfirmationBlocks | Where-Object {
+        $_.reason_code -eq 'TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED' -and
+        $_.command_security_code -and
+        $_.command_security_code -ne '[REDACTED_NONCODE]'
+    }).Count
     turbo_auto_confirm_count=@($executorTurboDecisions | Where-Object { $_.auto_confirm }).Count
 }
 Write-Json (Join-Path $stage 'executor_admission_summary.json') $executorAdmissionSummary
 Write-Json (Join-Path $stage 'executor_finish_diagnostics.json') @($executorFinishEvents)
 Write-Json (Join-Path $stage 'executor_turbo_decisions.json') @($executorTurboDecisions)
 Write-Json (Join-Path $stage 'executor_sandbox_evidence.json') @($executorSandboxEvents)
+Write-Json (Join-Path $stage 'executor_native_confirmation_blocks.json') @($executorNativeConfirmationBlocks)
 
 try {
     foreach ($source in $sources) {
@@ -1393,6 +1430,32 @@ try {
     )) {
         $coverageIssues.Add('EXECUTOR_ADMISSION_REJECTION_COVERAGE_INCOMPLETE')
     }
+    # Git52: completeness means a concrete native security-denial code and a
+    # corresponding decision were exported. An available-log scan alone
+    # must never be reported as causal completeness when these are missing.
+    if ($executorBoardStatus -eq 'MATCHED') {
+        $nativeBlockEvents = @($executorBoard.events | Where-Object {
+            $null -ne $_ -and [string]$_.kind -ceq 'TURBO_NATIVE_CONFIRMATION_BLOCKED'
+        })
+        if ($nativeBlockEvents.Count -ne @($executorNativeConfirmationBlocks).Count) {
+            $coverageIssues.Add('TURBO_NATIVE_CONFIRMATION_BLOCK_EXPORT_INCOMPLETE')
+        }
+        foreach ($nativeBlock in @($executorNativeConfirmationBlocks)) {
+            if ($nativeBlock.reason_code -eq 'TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED' -and
+                (-not $nativeBlock.command_security_code -or
+                 $nativeBlock.command_security_code -eq '[REDACTED_NONCODE]')) {
+                $coverageIssues.Add('TURBO_NATIVE_COMMAND_SECURITY_CLASSIFIER_MISSING')
+            }
+            if (-not $nativeBlock.action_id -or
+                $nativeBlock.action_id -eq '[REDACTED_NONCODE]' -or
+                -not @($executorTurboDecisions | Where-Object {
+                    $_.action_id -ceq $nativeBlock.action_id -and
+                    $_.decision -eq 'NATIVE_PRECHECK_BLOCKED'
+                }).Count) {
+                $coverageIssues.Add('TURBO_NATIVE_BLOCK_DECISION_LINK_MISSING')
+            }
+        }
+    }
     if ($timeline.Count -eq 0 -and $executorBoardStatus -ne 'MATCHED') {
         $coverageIssues.Add('NO_MATCHING_RUNTIME_EVENTS')
     }
@@ -1469,6 +1532,11 @@ try {
         executor_terminal_rejection_count=$executorExpectedRejections
         executor_admission_rejection_count=$executorObservedRejections
         executor_admission_rejection_exported_count=@($executorRejections).Count
+        turbo_native_confirmation_block_count=@($executorNativeConfirmationBlocks).Count
+        turbo_native_security_code_count=@($executorNativeConfirmationBlocks | Where-Object {
+            $_.command_security_code -and
+            $_.command_security_code -ne '[REDACTED_NONCODE]'
+        }).Count
         minimal_action_proposed_count=$minimalProposedCount
         minimal_admission_rejection_count=$minimalRejectCount
         minimal_admission_rejection_represented_count=$representedMinimalRejectCount
@@ -1695,6 +1763,7 @@ try {
         'task progress state, correlated GAR checkpoint and hashed-scope PR-A DAG edges, installed HEAD and SHA256 fingerprints.',
         'Git27: typed Prerequisite, Failure Causality, Contract, Action Admission and Action Trace summaries.',
         'Git45: Turbo decisions with risk class, reason code, policy revision and SHA256 root digests; no raw paths.',
+        'Git52: native confirmation blocks, safe command-security classifier codes, detail hashes, and decision linkage.',
         'Git45: Finish status-only repair diagnostics retain typed REJECTED/FAILED differences; no raw model Finish.',
         'Git27: causal coverage status explicitly reports any missing field, source truncation or parse failure.',
         'Minimal Core v10: schema-only, request-scoped JSON parser diagnostics; no raw model response.',
