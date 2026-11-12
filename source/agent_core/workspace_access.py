@@ -260,10 +260,10 @@ def resolve_turbo_registered_workspace(
     from .path_security import is_within, reject_reparse_components
     try:
         access = access if access is not None else access_snapshot()
-        candidate = Path(task_workspace).expanduser().absolute()
-        if not candidate.is_dir():
+        requested = Path(task_workspace).expanduser().absolute()
+        if not requested.is_dir():
             return None
-        candidate = candidate.resolve(strict=True)
+        candidate = requested.resolve(strict=True)
         writable = tuple(access.get("writable_workspaces") or ())
         roots = tuple(access.get("turbo_roots") or ())
         policy = access.get("policy") or {}
@@ -285,7 +285,9 @@ def resolve_turbo_registered_workspace(
                     is_valid_turbo_root(configured, parent, writable,
                                         access.get("read_only_roots") or (),
                                         policy.get("denied_write_roots") or ())):
-                    reject_reparse_components(candidate, configured)
+                    # Inspect original spelling BEFORE resolution; a
+                    # symlinked task workspace must never gain Broker scope.
+                    reject_reparse_components(requested, configured)
                     matches.append(str(parent))
                     break
         # No silent authority when more than one protected policy parent
