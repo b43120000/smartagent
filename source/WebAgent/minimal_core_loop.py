@@ -55,7 +55,8 @@ _ATOMIC_TOOL_HINTS = {
     "list_directory": "List existing directory; result may be truncated; no mutation.",
     "read_file": "Read an authorized text file; result may be truncated.",
     "write_file": "Write only in requested scope; check actual postcondition.",
-    "run_command": "PowerShell 5.1; canonical operation required; mutations require success_criteria and verify.",
+    "run_command": "PowerShell 5.1; only for genuine local OS commands; mutations require success_criteria and verify. Do not use for web research.",
+    "web_search": "Non-command web lookup for news, English sources and current information; no Turbo Sandbox or shell required.",
     "observe_fact": "Read a scoped filesystem fact, never grant write or global completion.",
 }
 
@@ -159,6 +160,14 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "all paths must be inside authorized scope. JSON Windows backslashes "
         "must be escaped. The Runtime will execute only admitted actions. "
         "Never invent observations or claim an unverified success. If a tool observation preview is truncated, do not claim to have seen the entire file or listing. "
+        "For text-only requests, news research, English-source comparison, "
+        "ordinary reasoning and read-only web lookup, behave exactly as "
+        "ACL OFF regardless of ACL ON and Turbo ON/OFF. Use web_search "
+        "when the user needs current external evidence; never use PowerShell, "
+        "Python, curl or run_command as a substitute for web lookup. "
+        "Do not demand Turbo Sandbox for an action with no OS effect. "
+        "Real local command/file mutation requests still require Native "
+        "Broker and all normal scope/security checks when Turbo ON. "
         "Windows shell for run_command is PowerShell 5.1 (cmd /c invokes CMD). "
         "For run_command provide command and operation. Use only the canonical "
         "operation values INSPECT, MUTATE, BUILD, TEST, VERIFY, GIT_INSPECT, "
