@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from .windows_security import acl_mode
-from .workspace_access import access_snapshot, is_valid_turbo_root
+from .workspace_access import (
+    access_snapshot, is_valid_turbo_root, resolve_turbo_registered_workspace,
+)
 
 SCHEMA = "SMARTAGENT_TURBO_SANDBOX_STATE_V1"
 BACKEND = "UNAVAILABLE_NO_OS_BROKER"
@@ -41,6 +43,9 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
         "sandbox_identity_verified": False,
         "turbo_root": "",
         "workspace_root": str(workspace or ""),
+        "task_workspace_root": str(workspace or ""),
+        "registered_workspace_roots": [],
+        "policy_turbo_roots": [],
         "policy_revision": 0,
         "acl_attestation": "NOT_VERIFIED",
         "process_isolation_attestation": "NOT_VERIFIED",
@@ -79,10 +84,24 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
             state["reason_code"] = "TURBO_DISABLED"
             return state
         configured = list(access.get("turbo_roots") or ())
+        state["policy_turbo_roots"] = [str(x) for x in configured][:16]
+        state["registered_workspace_roots"] = [
+            str(x) for x in access.get("writable_workspaces") or ()
+        ][:16]
         if not configured or workspace is None:
             state["reason_code"] = "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
             return state
-        parent = Path(workspace).expanduser().resolve()
+        # A Telegram task may be scoped to an existing Turbo Root or child
+        # rather than to the registered parent. Match only an EXACT registered
+        # parent or a strict child OF the configured Root. A sibling, outside
+        # project, broad ancestor or typo remains denied; never repair
+        # mismatches by silently changing security policy.
+        registered = resolve_turbo_registered_workspace(workspace, access)
+        if registered is None:
+            state["reason_code"] = "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
+            return state
+        parent = Path(registered).expanduser().resolve(strict=True)
+        state["workspace_root"] = str(parent)
         allowed = [
             Path(root).expanduser().resolve()
             for root in configured
@@ -118,7 +137,8 @@ def sandbox_evidence(state: dict, *, action_id: str = "",
         "policy_revision", "acl_attestation", "process_isolation_attestation",
         "child_process_policy", "scope_verdict", "sandbox_status",
         "sandbox_attestation_passed", "turbo_requested", "turbo_effective",
-        "acl_mode",
+        "acl_mode", "task_workspace_root", "registered_workspace_roots",
+        "policy_turbo_roots",
     )
     receipt = {key: state.get(key) for key in keys}
     receipt.update({
