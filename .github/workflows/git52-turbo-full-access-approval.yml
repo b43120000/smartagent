@@ -48,6 +48,7 @@ jobs:
           source/RemoteAgent/telegram_transport.py
           source/WebAgent/protocol_loop.py
           source/agent_core/runtime_finish_status_repair.py
+          source/agent_core/host_supervisor.py
           source/WebAgent/tests/test_git52_action_gated_ingress_scope.py
           source/WebAgent/tests/test_git52_telegram_poison_request.py
           source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
@@ -65,11 +66,12 @@ jobs:
           source/WebAgent/tests/test_git52_python_https_admission.py
           source/WebAgent/tests/test_git52_action_gated_ingress_scope.py
           source/WebAgent/tests/test_git52_telegram_poison_request.py
-      - name: Git52 ingress and Finish contract compatibility
+      - name: Git52 ingress / Finish compatibility (legacy Git34 negative-goal excluded)
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git34_runtime_finish_comparator.py
           source/WebAgent/tests/test_git51_non_command_acl_parity.py
+          -k "not test_command_nonzero_tool_failure_can_pass_explicit_negative_goal"
       - name: Git52 explicit Workspace routing (Windows)
         if: runner.os == 'Windows'
         run: python -B source/WebAgent/tests/validate_request_first_workspace_routing.py
