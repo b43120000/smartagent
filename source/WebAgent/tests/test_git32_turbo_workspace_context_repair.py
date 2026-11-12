@@ -50,10 +50,16 @@ def test_unique_protected_authorization_parent_for_task_and_cwd(tmp_path, monkey
     assert workspace_access.resolve_turbo_authorization_workspace(
         outside, snapshot=access,
     ) is None
-    access["writable_workspaces"] = (str(ws), str(turbo))
+    nested = ws / "nested"
+    nested_root = nested / "turbo"
+    nested_project = nested_root / "project"
+    nested_project.mkdir(parents=True)
+    access["writable_workspaces"] = (str(ws), str(nested))
+    access["turbo_roots"] = (str(nested_root),)
+    access["policy"]["turbo_roots"] = [str(nested_root)]
     assert workspace_access.resolve_turbo_authorization_workspace(
-        project, snapshot=access,
-    ) is None  # Nested writable parents are ambiguous: fail closed.
+        nested_project, snapshot=access,
+    ) is None  # Two valid policy parents: fail closed rather than guess.
 
 
 def test_planner_enrollment_for_child_workspace_is_advisory_only(tmp_path, monkeypatch):
