@@ -349,3 +349,34 @@ jobs:
           source/WebAgent/tests/test_git49_turbo_broker_admission.py
           source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
           -q
+
+  telegram-manual-host-cmd:
+    name: Telegram paired human CMD in ACL and Turbo all four modes
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install runtime test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Parse Telegram CMD and authentication boundary
+        run: >-
+          python -B -m compileall -q
+          source/RemoteAgent/telegram_direct_cmd.py
+          source/RemoteAgent/telegram_console_cmd.py
+          source/RemoteAgent/telegram_transport.py
+          source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
+          source/WebAgent/tests/validate_telegram_visible_console_it.py
+      - name: Verify existing private-chat and pairing authorization
+        run: python -B source/WebAgent/tests/validate_telegram_cmd_shared_auth_it.py
+      - name: Verify direct CMD transport and command format
+        run: python -B source/WebAgent/tests/validate_telegram_direct_cmd_it.py
+      - name: Verify ACL ON/OFF and Turbo ON/OFF do not gate manual CMD
+        run: python -B source/WebAgent/tests/validate_telegram_cmd_acl_modes_it.py
+      - name: Real disposable Windows CMD session and file deletion
+        run: python -B source/WebAgent/tests/validate_telegram_visible_console_it.py
