@@ -120,3 +120,28 @@ def test_broker_workspace_binding_rejects_symlinked_task_root(tree):
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable without Windows developer/admin rights")
     assert workspace_access.resolve_turbo_registered_workspace(link, access) is None
+
+def test_cli_binding_diagnostics_does_not_unseal_secrets_or_grant_authority(
+    tree, monkeypatch,
+):
+    from agent_core import turbo_binding_diagnostics
+    _, registered, root, child, _, access = tree
+    monkeypatch.setattr(turbo_binding_diagnostics, "access_snapshot", lambda: access)
+    monkeypatch.setattr(
+        turbo_binding_diagnostics,
+        "active_broker_available",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        turbo_binding_diagnostics, "_configured_workspace",
+        lambda *_args: str(registered),
+    )
+    info = turbo_binding_diagnostics.snapshot(str(child))
+    assert info["schema"] == "SMARTAGENT_TURBO_TASK_BINDING_DIAGNOSTIC_V1"
+    assert info["binding_status"] == "SCOPE_MATCHED"
+    assert info["registered_broker_workspace"] == str(registered)
+    assert info["policy_turbo_roots"] == [str(root)]
+    assert info["actual_running_task_workspace"] == "NOT_OBSERVED_BY_THIS_CLI"
+    assert info["untrusted_command_authorized"] is False
+    assert info["policy_or_acl_changed"] is False
+    assert "bot_token" not in str(info).lower()
