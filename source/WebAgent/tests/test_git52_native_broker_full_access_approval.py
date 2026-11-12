@@ -247,11 +247,14 @@ def test_native_hard_deny_preserves_safe_classifier(configured):
 def test_executor_native_precheck_records_rejection_cause(tmp_path, monkeypatch):
     turbo = tmp_path / "turbo"
     turbo.mkdir()
-    request = "Native broker hard-denied command precheck"
+    request = "Native broker precheck records classified rejection"
     action = {
         "type": "tool_call", "name": "run_command",
         "arguments": {
-            "command": "diskpart",
+            # The action must pass schema/scope admission to test the
+            # subsequent native precheck. Actual "diskpart" is rejected
+            # earlier by the generic Action Validator.
+            "command": _WRITE,
             "operation": "GENERAL",
             "working_directory": str(turbo),
             "success_criteria": "will be denied",
@@ -267,8 +270,18 @@ def test_executor_native_precheck_records_rejection_cause(tmp_path, monkeypatch)
         if proposed and proposed.get("tool") == "run_command"
         else {"decision": "NOT_APPLICABLE", "state": None, "evidence": {}},
     )
+    # The classifier itself is covered by test_native_hard_deny_preserves_safe_classifier.
+    # Here we isolate and test the Executor->Blackboard diagnostic transport.
+    from agent_core.command_security import CommandAdmission
+    monkeypatch.setattr(
+        "agent_core.turbo_execution_policy.inspect_command",
+        lambda command, *, workspace=None: CommandAdmission(
+            False, "diskpart_forbidden",
+            "use a typed, runtime-authorized operation", False,
+        ),
+    )
     def no_human(*args, **kwargs):
-        raise AssertionError("hard security denial must never request human consent")
+        raise AssertionError("native security denial must never request human consent")
     monkeypatch.setattr(
         "agent_core.unknown_command_approval.request_unknown_command_approval", no_human
     )

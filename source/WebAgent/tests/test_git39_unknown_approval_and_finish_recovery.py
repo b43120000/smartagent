@@ -144,8 +144,11 @@ def test_executor_unknown_command_approval_then_dispatch(tmp_path, monkeypatch):
     assert [e["kind"] for e in board["events"] if e["kind"].startswith("HUMAN_APPROVAL")] == [
         "HUMAN_APPROVAL_REQUESTED", "HUMAN_APPROVAL_DECIDED"
     ]
-    assert board["events"][1]["kind"] == "HUMAN_APPROVAL_DECIDED"
-    assert board["events"][1]["state"] == "APPROVED"
+    # Git52 adds TURBO_DECISION before human-approval events. Their ordinal
+    # position is no longer fixed; the kind and decision sequence are.
+    decided = [e for e in board["events"] if e["kind"] == "HUMAN_APPROVAL_DECIDED"]
+    assert len(decided) == 1
+    assert decided[0]["state"] == "APPROVED"
     assert len([e for e in board["events"] if e["kind"] == "TOOL_RESULT"]) == 1
     assert not _denials(board)
 
