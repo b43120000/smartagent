@@ -300,6 +300,9 @@ def _finish(loop, root: Path, request: str, *, kind: str,
 
 def run_pokeclaw_executor(loop, request: str) -> str:
     """Execute arbitrary registered tools; Blackboard is the only recorder."""
+    from agent_core.executor_command_rca import (
+        capture_command_rca, capture_command_result_rca,
+    )
     root = Path(loop.progress_root or loop.workspace)
     if root.name.casefold() == "source" and (root.parent / "collect.bat").is_file():
         root = root.parent
@@ -695,6 +698,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     str((decision.arguments or {}).get("command") or "")
                     .encode("utf-8")
                 ).hexdigest(),
+                "command_rca": capture_command_rca(
+                    decision.arguments, action,
+                ),
                 "risk_class": risk_class,
                 "admission_status": "ADMITTED" if action else "REJECTED_BEFORE_EXECUTION",
                 "admission_reason_code": str(rejected or "")[:128],
@@ -996,6 +1002,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "toolName": decision.tool,
                 "arguments": _safe_arguments(decision.arguments),
                 "arguments_sha256": _digest(decision.arguments),
+                **({"command_rca": capture_command_rca(
+                    decision.arguments,
+                )} if decision.tool == "run_command" else {}),
                 "admission_diagnostic": diagnostic,
                 "admission_repair_attempt": repairs_for_same_issue,
                 "admission_rejection_streak": consecutive_admission_rejections,
@@ -1049,6 +1058,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "toolName": action["tool"], "action_id": action["action_id"],
             "arguments": _safe_arguments(decision.arguments),
             "arguments_sha256": _digest(decision.arguments),
+            **({"command_rca": capture_command_rca(
+                decision.arguments, action,
+            )} if action["tool"] == "run_command" else {}),
             "mutating": mutating,
             "turbo_decision": (
                 "NOT_APPLICABLE_TYPED_ACTION" if action["tool"] != "run_command"
@@ -1101,6 +1113,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "round": turn, "kind": "TOOL_RESULT",
             "toolName": action["tool"], "action_id": action["action_id"],
             "toolResult": tool_result,
+            **({"command_execution_rca": capture_command_result_rca(
+                raw_result, receipt,
+            )} if action["tool"] == "run_command" else {}),
             "runtimeEvidence": {
                 "status": runtime_status, "reason_code": runtime_reason[:160],
                 "executed": receipt.get("executed") is True,
