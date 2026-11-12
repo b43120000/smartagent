@@ -33,6 +33,55 @@ class TurboOSBrokerUnavailable(RuntimeError):
     pass
 
 
+# Classify *known* native broker stderr without exposing a full PowerShell
+# exception, command text, paths or potentially sensitive process output.
+_NATIVE_BROKER_REASON = re.compile(r"\bGIT50_[A-Z0-9_]{3,120}\b")
+_NATIVE_OS_OPERATIONS = (
+    ("CreateProcessW(AppContainer)", "WIN32_CREATEPROCESS_APP_CONTAINER"),
+    ("InitializeProcThreadAttributeList", "WIN32_ATTRIBUTE_LIST"),
+    ("UpdateProcThreadAttribute", "WIN32_SECURITY_CAPABILITIES_ATTRIBUTE"),
+    ("AssignProcessToJobObject", "WIN32_ASSIGN_JOB"),
+    ("CreateJobObjectW", "WIN32_CREATE_JOB"),
+    ("SetInformationJobObject", "WIN32_SET_JOB_LIMIT"),
+    ("OpenProcessToken", "WIN32_OPEN_PROCESS_TOKEN"),
+    ("GetTokenInformation", "WIN32_VERIFY_CHILD_TOKEN"),
+    ("ResumeThread", "WIN32_RESUME_THREAD"),
+    ("WaitForSingleObject", "WIN32_WAIT_FOR_CHILD"),
+    ("GetExitCodeProcess", "WIN32_GET_EXIT_CODE"),
+    ("appcontainer_sid_derivation_failed", "WIN32_DERIVE_APP_CONTAINER_SID"),
+    ("child_token_is_not_appcontainer", "WIN32_CHILD_NOT_APP_CONTAINER"),
+    ("appcontainer_child_sid_mismatch", "WIN32_CHILD_SID_MISMATCH"),
+    ("appcontainer_execution_timeout", "NATIVE_CHILD_EXECUTION_TIMEOUT"),
+)
+
+
+def _native_broker_rejection_reason(stderr: str) -> str:
+    """Return bounded non-secret classification, never raw broker stderr.
+
+    An error code never asserts that any AppContainer child started, passed
+    OS attestation or wrote to an authorized filesystem path.
+    """
+    base = "TURBO_OS_BROKER_NATIVE_EXECUTOR_REJECTED"
+    if not isinstance(stderr, str):
+        return base
+    output = stderr[:16384]
+    marker = _NATIVE_BROKER_REASON.search(output)
+    if marker:
+        return base + ":" + marker.group(0)
+    for phrase, category in _NATIVE_OS_OPERATIONS:
+        if phrase.casefold() in output.casefold():
+            return base + ":" + category
+    for phrase, category in (
+        ("ParserError", "POWERSHELL_PARSER_ERROR"),
+        ("ParameterBindingException", "POWERSHELL_PARAMETER_BINDING"),
+        ("NamedParameterNotFound", "POWERSHELL_PARAMETER_BINDING"),
+        ("Add-Type", "POWERSHELL_NATIVE_TYPE_COMPILATION"),
+    ):
+        if phrase.casefold() in output.casefold():
+            return base + ":" + category
+    return base
+
+
 def _install_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -229,7 +278,9 @@ def execute_turbo_command(
             "TURBO_OS_BROKER_HOST_LAUNCH_UNAVAILABLE"
         ) from exc
     if completed.returncode != 0:
-        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_NATIVE_EXECUTOR_REJECTED")
+        raise TurboOSBrokerUnavailable(
+            _native_broker_rejection_reason(completed.stderr)
+        )
     try:
         receipt = json.loads(completed.stdout.strip().lstrip("\ufeff"))
     except (ValueError, TypeError) as exc:
