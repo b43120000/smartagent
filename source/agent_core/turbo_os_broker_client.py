@@ -320,6 +320,8 @@ def execute_turbo_command(
         and receipt.get("sandbox_backend") == "WIN32_APPCONTAINER"
         and receipt.get("sandbox_identity_verified") is True
         and receipt.get("kernel_outside_read_denied") is True
+        and receipt.get("internet_client_token_verified") is True
+        and receipt.get("internet_client_capability_sid") == "S-1-15-3-1"
         and receipt.get("child_process_policy") == "JOB_KILL_ON_CLOSE"
         and receipt.get("process_started") is True
         and receipt.get("executed") is True
@@ -337,11 +339,44 @@ def execute_turbo_command(
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_NATIVE_DATA_INVALID") from exc
     if len(stdout) > limit or len(stderr) > limit:
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_STREAM_CAP_VIOLATED")
+    tools = receipt.get("native_trusted_tools")
+    if (
+        receipt.get("native_toolchain_status") not in {"PINNED", "NOT_ENROLLED"}
+        or type(receipt.get("native_trusted_tool_count")) is not int
+        or receipt["native_trusted_tool_count"] not in (0, 1, 2)
+        or not isinstance(tools, list)
+        or len(tools) != receipt["native_trusted_tool_count"]
+        or len(set(tools)) != len(tools)
+        or any(name not in ("git", "python") for name in tools)
+    ):
+        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_TOOLCHAIN_RECEIPT_INVALID")
+    # Process exit 1 is distinct from not starting, DNS/TLS failures, and
+    # from native command-policy denials. Keep native output and typed hint.
+    stderr_text = stderr.decode("utf-8", errors="replace")
+    stdout_text = stdout.decode("utf-8", errors="replace")
+    error_text = (stderr_text + "\n" + stdout_text)[:32768].casefold()
+    if "commandnotfoundexception" in error_text or "is not recognized" in error_text:
+        error_class = "NATIVE_EXECUTABLE_NOT_FOUND"
+    elif any(word in error_text for word in ("access is denied", "unauthorizedaccessexception", "permissionerror")):
+        error_class = "NATIVE_ACCESS_DENIED"
+    elif "could not resolve host" in error_text or "nameresolutionfailure" in error_text:
+        error_class = "NATIVE_DNS_FAILURE"
+    elif "ssl" in error_text or "certificate verify" in error_text or "tls" in error_text:
+        error_class = "NATIVE_TLS_FAILURE"
+    elif "connect" in error_text or "network" in error_text:
+        error_class = "NATIVE_NETWORK_FAILURE"
+    else:
+        error_class = "NATIVE_EXIT_NONZERO" if exit_code else "NONE"
     evidence = {
         "schema": "SMARTAGENT_TURBO_OS_ACTION_ATTESTATION_V1",
         "sandbox_backend": "WIN32_APPCONTAINER",
         "sandbox_identity_verified": True,
         "kernel_outside_read_denied": True,
+        "internet_client_token_verified": True,
+        "internet_client_capability_sid": "S-1-15-3-1",
+        "native_toolchain_status": receipt["native_toolchain_status"],
+        "native_trusted_tools": tools,
+        "native_error_class": error_class,
         "child_process_policy": "JOB_KILL_ON_CLOSE",
         "policy_revision": state["policy_revision"],
         "task_id": request_task,
@@ -355,8 +390,8 @@ def execute_turbo_command(
     }
     return {
         "exit_code": exit_code,
-        "stdout": stdout.decode("utf-8", errors="replace"),
-        "stderr": stderr.decode("utf-8", errors="replace"),
+        "stdout": stdout_text,
+        "stderr": stderr_text,
         "stdout_bytes": int(receipt["stdout_bytes"]),
         "stderr_bytes": int(receipt["stderr_bytes"]),
         "stdout_truncated": bool(receipt["stdout_truncated"]),
