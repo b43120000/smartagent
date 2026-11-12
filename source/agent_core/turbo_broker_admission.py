@@ -74,4 +74,29 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
         "evidence": evidence,
     }
 
-__all__ = ["MUTATORS", "NON_COMMAND_OPERATIONS", "needs_broker", "assess"]
+def admit_action(workspace, action: dict | None) -> dict:
+    """One dispatch policy shared by PokeClaw, Minimal Core and typed tools.
+
+    A no-command/observation action must not require native OS isolation.
+    Only Runtime-admitted mutating actions are candidates for Broker.
+    Returning BROKER_REQUIRED is not permission to execute as the host:
+    the typed dispatch re-attests the native Broker for every action.
+    """
+    if not action:
+        return {
+            "decision": "NOT_APPLICABLE",
+            "reason_code": "ACTION_NOT_ADMITTED",
+            "state": None, "evidence": {},
+        }
+    tool = str(action.get("tool") or "")
+    if not needs_broker(tool):
+        return assess(workspace, tool=tool,
+                      action_id=str(action.get("action_id") or ""))
+    return assess(workspace, tool=tool,
+                  action_id=str(action.get("action_id") or ""))
+
+
+__all__ = [
+    "MUTATORS", "NON_COMMAND_OPERATIONS", "needs_broker", "assess",
+    "admit_action",
+]
