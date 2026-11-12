@@ -171,3 +171,31 @@ def test_native_pinned_tool_resolution_keeps_host_fallback_forbidden():
     assert "Set-Alias -Name " in launcher
     assert "LaunchPowerShell(moniker, wrapped, root" in launcher
     assert 'Environment.GetEnvironmentVariable("PATH")' not in launcher
+
+
+def test_goal_check_unverified_requests_new_independent_action():
+    from agent_core.runtime_finish_status_repair import (
+        diagnose_missing_postrun_evidence,
+    )
+    result = diagnose_missing_postrun_evidence({
+        "reason_code": "GOAL_CHECK_RUNTIME_MISMATCH",
+        "mismatches": [{
+            "criterion": "confirm test file absent",
+            "evidence_ref": "MIN-EV-ROUND14",
+            "field": "data.verification_status",
+            "operator": "eq", "expected": "PASS",
+            "actual": "UNVERIFIED",
+        }],
+    })
+    assert result["repair_class"] == "ACTION_POSTRUN_VERIFICATION_REQUIRED"
+    assert result["new_tool_result_required"] is True
+    assert result["repair_only"] is False
+    assert result["evidence_unmodified"] is True
+    assert diagnose_missing_postrun_evidence({
+        "reason_code": "GOAL_CHECK_RUNTIME_MISMATCH",
+        "mismatches": [{
+            "evidence_ref": "MIN-EV-ROUND14",
+            "field": "data.verification_status",
+            "expected": "FAIL", "actual": "UNVERIFIED",
+        }],
+    }) is None
