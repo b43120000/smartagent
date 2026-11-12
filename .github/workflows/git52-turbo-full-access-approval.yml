@@ -32,13 +32,17 @@ jobs:
       - name: Compile Git52 modules
         run: >-
           python -B -m compileall -q
+          source/agent_core/command_security.py
+          source/agent_core/windows_security.py
           source/agent_core/turbo_execution_policy.py
           source/WebAgent/pokeclaw_executor_loop.py
           source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
+          source/WebAgent/tests/test_git52_native_command_trust_replan.py
       - name: Git52 scoped Native Broker no-popup regressions
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
+          source/WebAgent/tests/test_git52_native_command_trust_replan.py
           source/WebAgent/tests/test_git52_collector_native_block_diagnostics.py
       - name: Validate collect.bat PowerShell 5.1 syntax
         if: runner.os == 'Windows'

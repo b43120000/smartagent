@@ -274,7 +274,7 @@ def test_executor_native_precheck_records_rejection_cause(tmp_path, monkeypatch)
     # Here we isolate and test the Executor->Blackboard diagnostic transport.
     from agent_core.command_security import CommandAdmission
     monkeypatch.setattr(
-        "agent_core.turbo_execution_policy.inspect_command",
+        "agent_core.turbo_execution_policy.inspect_native_command",
         lambda command, *, workspace=None: CommandAdmission(
             False, "diskpart_forbidden",
             "use a typed, runtime-authorized operation", False,
@@ -302,3 +302,110 @@ def test_executor_native_precheck_records_rejection_cause(tmp_path, monkeypatch)
     assert blocks[0]["executed"] is False
     assert blocks[0]["authorization_granted"] is False
     assert not [e for e in board["events"] if e["kind"] == "HUMAN_APPROVAL_REQUESTED"]
+
+
+
+def _native_rejection_probe(tmp_path, monkeypatch, replies, *,
+                            request="Native rejection replan fixture"):
+    """Isolate real Executor replan logic; never launch an OS command."""
+    turbo = tmp_path / "turbo"
+    turbo.mkdir()
+    loop, _ = _loop(tmp_path, monkeypatch, replies, request=request)
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.admit_action",
+        lambda workspace, proposed: _gate(tmp_path, turbo)
+        if proposed and proposed.get("tool") == "run_command"
+        else {"decision": "NOT_APPLICABLE", "state": None, "evidence": {}},
+    )
+    from agent_core.command_security import CommandAdmission
+    def command_classifier(command, *, workspace):
+        if command == "python ../outside/verify.py":
+            return CommandAdmission(
+                False, "execution_target_outside_workspace",
+                "../outside/verify.py", True, "SCRIPT",
+            )
+        return CommandAdmission(True)
+    monkeypatch.setattr(
+        "agent_core.turbo_execution_policy.inspect_native_command",
+        command_classifier,
+    )
+    def no_prompt(*args, **kwargs):
+        raise AssertionError("Native rejection must not request human consent")
+    monkeypatch.setattr(
+        "agent_core.unknown_command_approval.request_unknown_command_approval",
+        no_prompt,
+    )
+    return loop, turbo
+
+
+def _native_tool(command, turbo):
+    return json.dumps({
+        "type": "tool_call", "name": "run_command",
+        "arguments": {
+            "command": command, "operation": "GENERAL",
+            "working_directory": str(turbo),
+            "success_criteria": "Independent file inspection after action",
+            "verify": [{"action": "file_exists",
+                        "path": str(turbo / "verification.txt"),
+                        "expect": True}],
+        },
+    })
+
+
+def test_native_precheck_replans_distinct_command_then_dispatches(tmp_path, monkeypatch):
+    turbo = tmp_path / "turbo"
+    bad = _native_tool("python ../outside/verify.py", turbo)
+    good = _native_tool(_WRITE, turbo)
+    loop, _ = _native_rejection_probe(
+        tmp_path, monkeypatch,
+        [bad, good, '{"type":"blocked","reason":"No further action"}'],
+    )
+    run_minimal_core(loop, "Native rejection replan fixture")
+    board = read_executor_run(tmp_path, task_id=loop.task_id)
+    blocks = [e for e in board["events"]
+              if e["kind"] == "TURBO_NATIVE_CONFIRMATION_BLOCKED"]
+    replans = [e for e in board["events"]
+               if e["kind"] == "TURBO_NATIVE_REPLAN_REQUESTED"]
+    assert len(blocks) == len(replans) == 1
+    assert blocks[0]["replan_status"] == "REPLAN_REQUESTED"
+    assert blocks[0]["replan_eligible"] is True
+    assert blocks[0]["command_security_target_kind"] == "SCRIPT"
+    assert blocks[0]["executed"] is False
+    assert replans[0]["action_id"] == blocks[0]["action_id"]
+    assert len(loop.executed) == 1
+    assert loop.executed[0]["command"] == _WRITE
+    assert not [e for e in board["events"] if e["kind"] == "HUMAN_APPROVAL_REQUESTED"]
+    assert any("execution_target_outside_workspace" in prompt for prompt in loop.prompts[1:])
+
+
+def test_native_precheck_repeat_rejected_without_reexecution(tmp_path, monkeypatch):
+    turbo = tmp_path / "turbo"
+    denied = _native_tool("python ../outside/verify.py", turbo)
+    loop, _ = _native_rejection_probe(tmp_path, monkeypatch, [denied, denied])
+    run_minimal_core(loop, "Native rejection replan fixture")
+    board = read_executor_run(tmp_path, task_id=loop.task_id)
+    blocks = [e for e in board["events"]
+              if e["kind"] == "TURBO_NATIVE_CONFIRMATION_BLOCKED"]
+    assert len(blocks) == 2
+    assert blocks[0]["replan_status"] == "REPLAN_REQUESTED"
+    assert blocks[1]["replan_status"] == "REPEATED_COMMAND"
+    assert not loop.executed
+    assert board["executor_state"] == "BLOCKED"
+    assert not [e for e in board["events"] if e["kind"] == "HUMAN_APPROVAL_REQUESTED"]
+
+
+def test_native_hard_denial_is_never_replan_eligible(configured):
+    from agent_core.turbo_execution_policy import native_precheck_replan_eligible
+    workspace, turbo, loop = configured
+    hard = evaluate_native_broker_confirmation(
+        loop, {"tool": "run_command", "command": "diskpart",
+               "working_directory": str(turbo)}, _gate(workspace, turbo),
+    )
+    assert hard["command_security_code"] == "diskpart_forbidden"
+    assert not native_precheck_replan_eligible(hard)
+    assert not native_precheck_replan_eligible({
+        "reason_code": "TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED",
+        "command_security_code": "execution_target_outside_workspace",
+        "command_security_approval_eligible": False,
+        "auto_confirm": False,
+    })
