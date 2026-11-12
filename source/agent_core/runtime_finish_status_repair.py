@@ -60,6 +60,40 @@ def diagnose_finish_status_mismatch(comparison: Mapping) -> dict | None:
     }
 
 
+def diagnose_missing_postrun_evidence(comparison: Mapping) -> dict | None:
+    """An unverified Goal Check requires an ACTUAL new verification Action.
+
+    Never relabel UNVERIFIED as PASS, invent ToolResult data, or retry the
+    original mutation. Only a fresh, scoped, read-only Action can establish
+    a missing final postcondition, and existing failed receipts stay immutable.
+    """
+    if (not isinstance(comparison, Mapping)
+            or comparison.get("reason_code") != "GOAL_CHECK_RUNTIME_MISMATCH"):
+        return None
+    rows = comparison.get("mismatches")
+    if not isinstance(rows, list) or not (1 <= len(rows) <= 16):
+        return None
+    if any(
+        not isinstance(row, Mapping)
+        or row.get("field") != "data.verification_status"
+        or row.get("expected") != "PASS"
+        or row.get("actual") != "UNVERIFIED"
+        or not isinstance(row.get("evidence_ref"), str)
+        for row in rows
+    ):
+        return None
+    return {
+        "schema": "SMARTAGENT_MISSING_POSTRUN_EVIDENCE_V1",
+        "reason_code": "GOAL_VERIFICATION_REQUIRES_NEW_TOOL_EVIDENCE",
+        "repair_class": "ACTION_POSTRUN_VERIFICATION_REQUIRED",
+        "verification_gap_refs": [r["evidence_ref"] for r in rows],
+        "new_tool_result_required": True,
+        "repair_only": False,
+        "evidence_unmodified": True,
+        "authorization_granted": False,
+    }
+
+
 def finish_runtime_status_catalog(loop, *, max_records: int = 64) -> list[dict]:
     """All recorded ToolResult statuses, not merely last six model-visible rows."""
     from .tool_result_contract import decode_result
@@ -91,5 +125,6 @@ def finish_runtime_status_catalog(loop, *, max_records: int = 64) -> list[dict]:
 
 
 __all__ = [
-    "diagnose_finish_status_mismatch", "finish_runtime_status_catalog",
+    "diagnose_finish_status_mismatch", "diagnose_missing_postrun_evidence",
+    "finish_runtime_status_catalog",
 ]

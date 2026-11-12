@@ -507,6 +507,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
                 from agent_core.runtime_finish_status_repair import diagnose_finish_status_mismatch
                 status_repair_diagnostic = diagnose_finish_status_mismatch(preview)
+                from agent_core.runtime_finish_status_repair import diagnose_missing_postrun_evidence
+                postrun_gap = diagnose_missing_postrun_evidence(preview)
                 repairable = {
                     "MODEL_FINISH_GOAL_FACT_NOT_DECLARED",
                     "MODEL_GOAL_CHECKS_REQUIRED",
@@ -518,6 +520,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 }
                 if status_repair_diagnostic is not None:
                     repairable.add("MODEL_RUNTIME_MISMATCH")
+                if postrun_gap is not None:
+                    repairable.add("GOAL_CHECK_RUNTIME_MISMATCH")
                 # Preserve Git34–35 behavior: after two repairs, missing
                 # declarations still reach a formal comparator FAIL. The
                 # Git42-specific schema error remains distinctly reportable.
@@ -525,7 +529,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         and not (finish_repairs >= max_finish_repairs
                                  and preview["reason_code"] != "MODEL_GOAL_CHECK_SCHEMA_INVALID")):
                     last_finish_reason = str(preview["reason_code"])
-                    last_finish_diagnostic = status_repair_diagnostic or preview.get("finish_diagnostic")
+                    last_finish_diagnostic = (
+                        status_repair_diagnostic or postrun_gap
+                        or preview.get("finish_diagnostic")
+                    )
                     if (finish_repairs >= max_finish_repairs
                             or turn >= max_rounds + finish_grace_rounds):
                         append_executor_event(root, loop, {
@@ -564,14 +571,21 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         separators=(",", ":"),
                     )[:1800]
                     hint = (
-                        "Finish Schema 不完整；reason_code=" + last_finish_reason
+                        ("實際驗證缺失：必須提出一筆新的、可授權的唯讀 ToolCall，"
+                         "重新觀察最後狀態並取得新的 Runtime Evidence；"
+                         "不得重播原修改或宣稱原 UNVERIFIED 為 PASS。"
+                         if postrun_gap and not finish_repair_only
+                         else "Finish Schema 不完整；")
+                        + "reason_code=" + last_finish_reason
                         + "；欄位級診斷=" + diagnostic
                         + "。FINISH_STATUS_REPAIR 必須依 Runtime 實值修正 status 或 data.verification_status；"
                         "UNVERIFIED 不等於 PASS；不得補造後置驗證或改寫 Evidence。"
                         "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
-                        "請提交新的 finish（而非 tool_call）。"
+                        ("請先提交新的唯讀 tool_call，驗證後才可 Finish。"
+                         if postrun_gap and not finish_repair_only
+                         else "請提交新的 finish（而非 tool_call）。")
                     )
                     continue
             append_executor_event(root, loop, {
