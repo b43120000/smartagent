@@ -283,18 +283,15 @@ class HostSupervisor:
             return False
 
     def _remote_task_security_admission(self, _message=None) -> tuple[bool, str]:
-        """Keep software controls live while rejecting unsafe task creation."""
-        if not bool(getattr(self, "security_mutation_disabled", False)):
-            return True, ""
-        report = getattr(self, "security_preflight_report", None) or {}
-        attestation = report.get("attestation", {}) if isinstance(report, dict) else {}
-        reasons = (
-            report.get("reasons") or attestation.get("reasons")
-            if isinstance(report, dict) and isinstance(attestation, dict)
-            else None
-        )
-        detail = ", ".join(str(item) for item in (reasons or []))
-        return False, detail or "security_preflight_failed"
+        """Ingress never authorizes a filesystem operation or an OS process.
+
+        Authenticate the Telegram sender in TelegramUpdateAdapter; let
+        AgentIngressGateway durably queue prose. A failed restricted-executor
+        preflight must reject actual OS Actions at Runtime admission, not
+        suppress ordinary dialogue and block future Telegram updates.
+        This never changes security_mutation_disabled or grants a root.
+        """
+        return True, "INGRESS_ONLY_ACTION_GATED_SECURITY"
 
     def ensure_telegram_listener_alive(self) -> bool:
         """Keep ingress alive independently from the browser/runtime worker."""
