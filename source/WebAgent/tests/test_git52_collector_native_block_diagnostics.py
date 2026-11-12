@@ -95,9 +95,13 @@ def test_real_collector_exports_native_block_and_flags_missing_code(
         ).decode("utf-8-sig"))
     assert len(block) == 1
     assert block[0]["action_id"] == _ACTION
-    assert block[0]["command_security_code"] == code or (
-        not has_classifier and block[0]["command_security_code"] is None
-    )
+    if has_classifier:
+        assert block[0]["command_security_code"] == code
+    else:
+        # Safe-Code redacts blank/invalid classifier values.
+        assert block[0]["command_security_code"] in (
+            "", None, "[REDACTED_NONCODE]",
+        )
     assert block[0]["broker_decision"] == "BROKER_REQUIRED"
     assert block[0]["raw_command_included"] is False
     assert block[0]["executed"] is False
