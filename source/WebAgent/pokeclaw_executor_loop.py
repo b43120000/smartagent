@@ -58,6 +58,17 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
             details = "; " + json.dumps(
                 process, ensure_ascii=False, separators=(",", ":"),
             )[:600]
+        # Runtime-owned rejection causes must reach Planner, not disappear
+        # behind the generic COMMAND_REJECTED envelope.
+        diagnostic = {
+            key: str(payload[key])[:400 if key == "command_error" else 64]
+            for key in ("command_rejection_stage", "command_error")
+            if payload.get(key)
+        }
+        if diagnostic:
+            details += "; " + json.dumps(
+                diagnostic, ensure_ascii=False, separators=(",", ":"),
+            )[:520]
     return {
         "isSuccess": False, "data": None,
         "error": (
@@ -976,6 +987,18 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     )
                     if isinstance(result_data, Mapping) and key in result_data
                 },
+                # Persist bounded, Runtime-origin diagnostics for RCA.
+                # Never record full command text or unbounded exceptions.
+                "command_rejection_stage": (
+                    str(result_data.get("command_rejection_stage") or "")[:64]
+                    if isinstance(result_data, Mapping)
+                    and runtime_status == "REJECTED" else ""
+                ),
+                "command_error": (
+                    str(result_data.get("command_error") or "")[:400]
+                    if isinstance(result_data, Mapping)
+                    and runtime_status == "REJECTED" else ""
+                ),
             },
         })
         # Publish only real successful executable version probes; an install
