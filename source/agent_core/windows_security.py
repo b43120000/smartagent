@@ -290,6 +290,36 @@ def is_trusted_executable(path: str | Path, profile: dict | None = None) -> bool
     return hmac.compare_digest(digest, expected)
 
 
+def is_sha256_pinned_executable(
+    path: str | Path, profile: dict | None = None,
+) -> bool:
+    """Strict operator SHA256 pin for Native Turbo, independent of ACL OFF.
+
+    Unlike the ordinary ACL-OFF is_trusted_executable compatibility shortcut,
+    this requires an exact operator-pinned path and matching file digest even
+    if the host's ACL flag changes between admission and broker dispatch.
+    """
+    try:
+        candidate = Path(path).expanduser().resolve(strict=True)
+        if not candidate.is_file():
+            return False
+        active = profile if isinstance(profile, dict) else load_security_profile()
+        key = os.path.normcase(str(candidate)).casefold()
+        expected = next((
+            row["sha256"] for row in trusted_executable_records(active)
+            if os.path.normcase(str(Path(row["path"]).resolve())).casefold() == key
+        ), "")
+        if not expected:
+            return False
+        digest = hashlib.sha256()
+        with candidate.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return hmac.compare_digest(digest.hexdigest(), expected)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return False
+
+
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)

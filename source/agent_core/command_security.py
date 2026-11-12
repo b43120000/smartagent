@@ -217,14 +217,11 @@ def inspect_native_command(command: str, *, workspace: str | Path) -> CommandAdm
         return first
     try:
         from .windows_security import (
-            load_security_profile, trusted_executable_records, is_trusted_executable,
+            load_security_profile, is_sha256_pinned_executable,
         )
         profile = load_security_profile()
-        rows = trusted_executable_records(profile)
-        pinned = {str(Path(row["path"]).resolve()).casefold() for row in rows}
         for target in targets:
-            if (str(target).casefold() not in pinned
-                    or not is_trusted_executable(target, profile)):
+            if not is_sha256_pinned_executable(target, profile):
                 return CommandAdmission(
                     False, "execution_target_outside_workspace",
                     str(target), True, _execution_target_kind(target),

@@ -488,7 +488,7 @@ def native_trusted_tool_snapshot() -> dict:
     }
     try:
         from .windows_security import (
-            load_security_profile, trusted_executable_records, is_trusted_executable,
+            load_security_profile, trusted_executable_records, is_sha256_pinned_executable,
         )
         profile = load_security_profile()
         rows = trusted_executable_records(profile)
@@ -499,7 +499,7 @@ def native_trusted_tool_snapshot() -> dict:
                     continue
                 status[name]["operator_sha256_pin_present"] = True
                 try:
-                    if is_trusted_executable(path, profile):
+                    if is_sha256_pinned_executable(path, profile):
                         status[name]["trusted_executable_verified"] = True
                 except (OSError, RuntimeError, ValueError):
                     pass
