@@ -316,3 +316,36 @@ jobs:
       - name: Abrupt termination after import and cross-process recovery
         run: |
           .\install_smart_agent\tests\validate_turbo_d3_full_switch_ci.ps1 -CrashTest
+
+  git51-non-command-acl-parity:
+    name: Non-command news and research parity across ACL Turbo modes
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install runtime routing test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile common admission and planner routing
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/turbo_broker_admission.py
+          source/agent_core/smartagent_protocol.py
+          source/agent_core/tools.py
+          source/WebAgent/tests/test_git51_non_command_acl_parity.py
+      - name: Ordinary web research with ACL on/off and Turbo on/off
+        run: >-
+          python -B -m pytest
+          source/WebAgent/tests/test_git51_non_command_acl_parity.py
+          source/WebAgent/tests/test_git49_turbo_broker_admission.py
+          source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
+          -q
