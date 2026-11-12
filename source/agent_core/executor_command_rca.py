@@ -153,6 +153,9 @@ def capture_command_result_rca(raw_result: object, receipt: object) -> dict:
         "kernel_outside_read_denied", "child_process_policy",
         "os_execution_result", "policy_revision",
         "turbo_effective_for_action", "executed",
+        "internet_client_token_verified", "internet_client_capability_sid",
+        "native_toolchain_status", "native_trusted_tools",
+        "native_error_class",
     )
     return {
         "schema": SCHEMA,
