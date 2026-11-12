@@ -207,8 +207,17 @@ try {
     # kernel denial probe, NOT a text/Planner/JSON assertion.
     $outsideLiteral=$state.sentinel.Replace("'","''")
     $proof=@"
-try { [void][IO.File]::ReadAllText('$outsideLiteral'); exit 91 }
-catch [System.UnauthorizedAccessException] {
+$readDenied=$false
+try { [void][IO.File]::ReadAllText('$outsideLiteral') }
+catch [System.UnauthorizedAccessException] { $readDenied=$true }
+if (-not $readDenied) { exit 91 }
+# Open the existing outside sentinel for WRITE access, but NEVER write data.
+# A successful handle is a kernel escape even if no bytes were modified.
+try {
+    $outsideHandle=[IO.File]::Open('$outsideLiteral',[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    $outsideHandle.Dispose()
+    exit 92
+} catch [System.UnauthorizedAccessException] {
     [IO.File]::WriteAllText('git50_scope_proof.tmp','OS_DENIED')
     exit 0
 }
@@ -261,6 +270,7 @@ catch [System.UnauthorizedAccessException] {
         sandbox_identity_verified=$true
         child_process_policy='JOB_KILL_ON_CLOSE'
         kernel_outside_read_denied=$true
+        kernel_outside_write_denied=$true
         internet_client_token_verified=$true
         internet_client_capability_sid='S-1-15-3-1'
         native_toolchain_status=$(if($toolchain.trusted_count -gt 0){'PINNED'}else{'NOT_ENROLLED'})
