@@ -271,6 +271,12 @@ def resolve_turbo_registered_workspace(
         for registered in writable:
             parent = Path(registered).expanduser().resolve(strict=True)
             if candidate == parent:
+                # Even a symlink that resolves to the correct parent is not
+                # a valid active task binding. Its original spelling must
+                # match the exact registered parent without a reparse hop.
+                if requested != parent:
+                    continue
+                reject_reparse_components(requested, parent)
                 # A matching workspace is not enough without an actual
                 # valid Turbo Root assigned to that same registered parent.
                 if any(is_valid_turbo_root(root, parent, writable,
