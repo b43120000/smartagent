@@ -72,6 +72,9 @@ def _native_broker_rejection_reason(stderr: str) -> str:
         if phrase.casefold() in output.casefold():
             return base + ":" + category
     for phrase, category in (
+        ("PSSecurityException", "POWERSHELL_SCRIPT_POLICY_BLOCKED"),
+        ("running scripts is disabled on this system", "POWERSHELL_SCRIPT_POLICY_BLOCKED"),
+        ("因為這個系統上已停用指令碼執行", "POWERSHELL_SCRIPT_POLICY_BLOCKED"),
         ("ParserError", "POWERSHELL_PARSER_ERROR"),
         ("ParameterBindingException", "POWERSHELL_PARAMETER_BINDING"),
         ("NamedParameterNotFound", "POWERSHELL_PARAMETER_BINDING"),
@@ -80,6 +83,20 @@ def _native_broker_rejection_reason(stderr: str) -> str:
         if phrase.casefold() in output.casefold():
             return base + ":" + category
     return base
+
+
+def _broker_process_env() -> dict[str, str]:
+    """Remove inherited module search contamination only for Broker child.
+
+    Starting Windows PowerShell without PSModulePath lets it reconstruct its
+    native module search paths. No persistent system/user policy is changed.
+    The native AppContainer child is separately given a restricted environment.
+    """
+    env = dict(os.environ)
+    for key in list(env):
+        if key.casefold() == "psmodulepath":
+            del env[key]
+    return env
 
 
 def _install_root() -> Path:
@@ -249,8 +266,17 @@ def execute_turbo_command(
     request_task = _id(task_id, "TASK-")
     request_action = _id(action_id, "ACT-")
 
+    # The protected broker entry has already passed policy/revision,
+    # non-reparse-path and SHA256 verification in _load_activation().
+    # Windows defaults to Restricted when every execution-policy scope is
+    # Undefined; allow *this process* to load that verified local broker.
+    # RemoteSigned, not Bypass, preserves machine/group policy precedence.
+    powershell = Path(os.environ.get("SystemRoot") or r"C:\Windows") / (
+        "System32/WindowsPowerShell/v1.0/powershell.exe"
+    )
     args = [
-        "powershell", "-NoProfile", "-NonInteractive", "-File",
+        str(powershell), "-NoProfile", "-NonInteractive",
+        "-ExecutionPolicy", "RemoteSigned", "-File",
         str(broker),
         "-ProjectRoot", str(_install_root()),
         "-Workspace", str(workspace),
@@ -267,7 +293,7 @@ def execute_turbo_command(
             args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, timeout=timeout + 75,
             check=False, text=True, encoding="utf-8", errors="replace",
-            shell=False,
+            shell=False, env=_broker_process_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise TurboOSBrokerUnavailable(
