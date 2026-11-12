@@ -318,30 +318,30 @@ class TelegramDirectCmdIT(unittest.TestCase):
         self.assertIn("TIMED_OUT", reply["message"])
         self.assertEqual(len(reply["results"]), 1)
 
-    def test_bat_pause_with_nul_stdin_completes_without_input(self):
+    def test_bat_cooperative_pause_runs_in_manual_host_console(self):
         import os
         if os.name != "nt":
             self.skipTest("Windows cmd.exe required")
-        from agent_core.bounded_process import run_bounded_process
+        from RemoteAgent.telegram_console_cmd import run_visible_cmd_batch
         script = self.root / "tg_pause_test.bat"
         script.write_text(
-            "@echo off\necho BEFORE_PAUSE\npause\necho AFTER_PAUSE\n",
+            "@echo off\necho BEFORE_PAUSE\n"
+            "if not defined SMARTAGENT_NONINTERACTIVE pause\n"
+            "echo AFTER_PAUSE\n",
             encoding="ascii",
         )
-        exe = str(Path(os.environ.get("SystemRoot", r"C:\Windows"))
-                  / "System32" / "cmd.exe")
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False):
-            info = run_bounded_process(
-                [exe, "/d", "/s", "/c", "tg_pause_test.bat"],
-                cwd=self.root, timeout=8, shell=False,
-                security_command="tg_pause_test.bat",
-                noninteractive=True,
-            )
-        self.assertEqual(info.get("exit_code"), 0, info)
-        self.assertFalse(info.get("timed_out"), info)
-        self.assertIn("BEFORE_PAUSE", info.get("stdout", ""))
-        self.assertIn("AFTER_PAUSE", info.get("stdout", ""))
+        # Direct human CMD must not enter bounded_process/Restricted Executor.
+        # The disposable Windows console can suppress only a script's explicit
+        # cooperative pause guard. No user files beyond this fixture are touched.
+        result = run_visible_cmd_batch(
+            ["call tg_pause_test.bat"], cwd=self.root,
+            command_timeout_seconds=10, batch_timeout_seconds=20,
+            require_interactive=False,
+        )
+        self.assertTrue(result["completed"], result)
+        self.assertEqual(result["results"][0]["exit_code"], 0)
+        self.assertIn("BEFORE_PAUSE", result["results"][0]["stdout"])
+        self.assertIn("AFTER_PAUSE", result["results"][0]["stdout"])
 
     def test_real_windows_cmd_echo_smoke_no_side_effects(self):
         import subprocess
