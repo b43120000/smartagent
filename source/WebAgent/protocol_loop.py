@@ -267,7 +267,10 @@ def resolve_authorized_paths(
             text, lexical,
             allow_readonly_narrowing=readonly_narrowing_allowed(text, lexical),
         )
-        return require_resolved_paths(snapshot)
+        # Request text is a path HINT, not authorization. A diagnostic
+        # ambiguity must not kill a text-only Planner turn before Action
+        # Admission can evaluate a concrete tool target.
+        return list(snapshot.get("paths") or []) if snapshot.get("status") != "AMBIGUOUS" else []
     if text.count(_SAVED_PLAN_OPEN) != 1 or text.count(_SAVED_PLAN_CLOSE) != 1:
         raise ValueError("saved_plan_authorization_source_invalid")
     if text.count(_ORIGINAL_REQUEST_OPEN) != 1 or text.count(_ORIGINAL_REQUEST_CLOSE) != 1:
@@ -6788,7 +6791,11 @@ class WebAgentProtocolLoop:
                 ledger_path=str(path_ledger),
                 grants_authorization=False,
             )
-            authorized = require_resolved_paths(self._spr_path_resolution)
+            # Keep candidates for Planner context; don't reject a message
+            # just because a log/prose path has ambiguous lexical boundaries.
+            authorized = (list(self._spr_path_resolution.get("paths") or [])
+                          if self._spr_path_resolution.get("status") != "AMBIGUOUS"
+                          else [])
         else:
             authorized = resolve_authorized_paths(
                 request,
@@ -6809,7 +6816,11 @@ class WebAgentProtocolLoop:
             explicit_path_count=len(self.authorized_paths),
             request_paths_grant_write=False,
         )
-        self.tools.begin_run(self.run_id, request, authorized)
+        # Only signed continuation/ledger scope can reach the legacy
+        # request-bound action hints. Raw prose paths are non-authorizing
+        # context and cannot become filesystem Read Roots or action ceilings.
+        self.tools.begin_run(self.run_id, request,
+                             list(trusted_authorized_paths or []))
         # Bind the immutable original deployment destination before the first
         # Tool Action. A read-only observation is never a write authorization
         # and does not assert that the deployment has succeeded.

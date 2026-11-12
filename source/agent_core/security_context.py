@@ -136,11 +136,13 @@ class SecurityContext:
             raise PathSecurityError("security_workspace_missing")
 
         configured_writes, configured_reads = _configured_access_roots()
-        request_reads = tuple(getattr(agent, "_authorized_local_paths", ()) or ())
+        # An untrusted task prompt or Planner path hint NEVER grants read
+        # permission. The only data-read authority comes from Edit Workspace.
+        # Internal broker toolchain RX enrollment is separate from this scope.
         return cls.for_workspace(
             workspace,
             write_roots=configured_writes,
-            read_roots=tuple(dict.fromkeys((*configured_reads, *request_reads))),
+            read_roots=configured_reads,
             request_id=str(getattr(agent, "current_request_id", "") or ""),
             task_id=str(getattr(agent, "current_task_id", "") or ""),
             interface_name=str(getattr(agent, "interface_name", "local") or "local"),
