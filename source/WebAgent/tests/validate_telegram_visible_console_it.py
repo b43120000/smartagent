@@ -144,7 +144,7 @@ class TelegramVisibleConsoleIT(unittest.TestCase):
         self.assertEqual(len(rows["results"]), 1, rows)
         self.assertTrue(rows["results"][0]["timed_out"])
 
-    def test_desktop_precondition_and_acl_on_fail_closed(self):
+    def test_desktop_precondition_and_acl_on_host_console(self):
         with patch("RemoteAgent.telegram_console_cmd._interactive_desktop_session",
                    return_value=False):
             with self.assertRaisesRegex(TelegramConsoleError,
@@ -154,18 +154,25 @@ class TelegramVisibleConsoleIT(unittest.TestCase):
                     command_timeout_seconds=10,
                     batch_timeout_seconds=15,
                 )
+        batch = {
+            "console_started": True, "console_exit_code": 0,
+            "completed": True, "reason": "",
+            "results": [{"line": 1, "exit_code": 0, "status": "SUCCESS",
+                         "stdout": "hello", "stderr": "", "timed_out": False}],
+        }
         with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=True), \
+                   side_effect=AssertionError("NO_RESTRICTED_EXECUTOR")), \
              patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": (str(self.root),)}), \
-             patch("RemoteAgent.telegram_console_cmd.run_visible_cmd_batch") as launched:
-            with self.assertRaisesRegex(CmdControlError,
-                                        "TG_CMD_VISIBLE_CONSOLE_ACL_ON_UNAVAILABLE"):
-                execute_cmd_request(
-                    self.msg("echo hello"),
-                    user_id=11, chat_id=22, policy=self.policy,
-                )
-            launched.assert_not_called()
+                   side_effect=AssertionError("NO_AGENT_WORKSPACE_GUARD")), \
+             patch("RemoteAgent.telegram_console_cmd.run_visible_cmd_batch",
+                   return_value=batch) as launched:
+            result = execute_cmd_request(
+                self.msg("echo hello"), user_id=11, chat_id=22,
+                policy=self.policy,
+            )
+            self.assertEqual(result["status"], "SUCCESS")
+            self.assertIn("Telegram 手動 Host CMD", result["message"])
+            launched.assert_called_once()
 
     def test_production_direct_cmd_uses_one_visible_batch_not_runner(self):
         fake = {
@@ -194,6 +201,24 @@ class TelegramVisibleConsoleIT(unittest.TestCase):
             self.assertEqual(launched.call_count, 1)
             self.assertEqual(launched.call_args.args[0],
                              ("echo one", "echo two"))
+
+    def test_real_host_console_explicit_delete_within_disposable_fixture(self):
+        # Actual Windows OS execution test; never touches user data.
+        project = self.root / "throwaway-child"
+        project.mkdir()
+        target = project / "test-delete.txt"
+        target.write_text("SAFE_TO_DELETE", encoding="utf-8")
+        rows = run_visible_cmd_batch(
+            [f'del /q "{target}"',
+             f'if exist "{target}" exit /b 71',
+             f'rmdir /s /q "{project}"'],
+            cwd=self.root, command_timeout_seconds=15,
+            batch_timeout_seconds=50, require_interactive=False,
+        )
+        self.assertTrue(rows["completed"], rows)
+        self.assertEqual([r["exit_code"] for r in rows["results"]], [0, 0, 0])
+        self.assertFalse(target.exists())
+        self.assertFalse(project.exists())
 
     def test_environment_prefers_system_git_without_modifying_machine(self):
         with tempfile.TemporaryDirectory(prefix="git-os-") as git_temp:
