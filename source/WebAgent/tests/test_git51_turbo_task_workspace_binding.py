@@ -145,3 +145,22 @@ def test_cli_binding_diagnostics_does_not_unseal_secrets_or_grant_authority(
     assert info["untrusted_command_authorized"] is False
     assert info["policy_or_acl_changed"] is False
     assert "bot_token" not in str(info).lower()
+
+def test_symlink_alias_into_turbo_root_not_a_valid_workspace(tree):
+    top, registered, root, child, _, access = tree
+    alias = top / "alias_to_turbo"
+    try:
+        alias.symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable without Windows developer/admin rights")
+    assert workspace_access.resolve_turbo_registered_workspace(alias, access) is None
+
+
+def test_symlink_alias_to_registered_parent_is_not_a_valid_binding(tree):
+    top, registered, _, _, _, access = tree
+    alias = top / "alias_to_workspace"
+    try:
+        alias.symlink_to(registered, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable without Windows developer/admin rights")
+    assert workspace_access.resolve_turbo_registered_workspace(alias, access) is None
