@@ -217,14 +217,17 @@ class TelegramOffsetStore:
 
     def commit(self, update_id: int) -> int:
         with self._lock:
-            self.next_offset = max(self.next_offset, int(update_id) + 1)
+            proposed = max(self.next_offset, int(update_id) + 1)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temp = self.path.with_name(self.path.name + f".{os.getpid()}.tmp")
             temp.write_text(
-                json.dumps({"version": 1, "next_offset": self.next_offset}, ensure_ascii=False, indent=2),
+                json.dumps({"version": 1, "next_offset": proposed}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             temp.replace(self.path)
+            # Memory cursor advances ONLY after the durable replace succeeds.
+            # A transient disk error must not skip a Telegram update in-process.
+            self.next_offset = proposed
             return self.next_offset
 
 
