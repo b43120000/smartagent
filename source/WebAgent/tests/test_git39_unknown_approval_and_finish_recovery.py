@@ -19,6 +19,31 @@ from agent_core.unknown_command_approval import (
 from WebAgent.minimal_core_loop import run_minimal_core
 from WebAgent.tests.test_git33_pokeclaw_executor_loop import _loop
 
+@pytest.fixture(autouse=True)
+def _git39_legacy_acl_off_contract(monkeypatch):
+    """Legacy UNKNOWN approval tests must not inherit host ACL/OS state.
+
+    Only these isolated test calls get the synthetic ACL OFF snapshot. The
+    real admission path and Native Broker remain unchanged in production.
+    """
+    def disabled(workspace=None):
+        return {
+            "acl_mode": "off", "turbo_requested": "OFF",
+            "sandbox_status": "NOT_READY", "turbo_effective": "OFF",
+            "scope_verdict": "TURBO_SCOPE_DENIED",
+            "reason_code": "TURBO_DISABLED", "policy_revision": 1,
+            "turbo_root": "", "workspace_root": str(workspace or ""),
+            "authorization_granted": False,
+        }
+
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.resolve_turbo_state", disabled,
+    )
+    monkeypatch.setattr(
+        "agent_core.turbo_sandbox.resolve_turbo_state", disabled,
+    )
+
+
 
 def _tool(command, operation, *, criteria=True):
     args = {"command": command, "operation": operation}
