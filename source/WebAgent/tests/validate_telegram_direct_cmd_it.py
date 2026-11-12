@@ -375,26 +375,27 @@ class TelegramDirectCmdIT(unittest.TestCase):
         self.assertEqual(sorted(self.root.iterdir()), [self.root / "offset.json"]
                          if (self.root / "offset.json").exists() else [])
 
-    def test_unknown_workspace_and_blocked_command(self):
+    def test_manual_cmd_not_blocked_by_workspace_or_delete_classification(self):
+        # Never actually perform deletion in this software-only unit test.
+        deleted = self.message.replace('"echo hello"', '"del /q dummy-file.txt"')
+        seen = []
+        def simulate(argv, **kwargs):
+            seen.append(argv[-1])
+            return {"process_started": True, "exit_code": 0,
+                    "stdout": "SIMULATED", "stderr": "", "timed_out": False}
         with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=True), \
+                   side_effect=AssertionError("human_cmd_not_restricted")), \
              patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": ()}):
-            with self.assertRaisesRegex(CmdControlError, "WORKSPACE_NOT_AUTHORIZED"):
-                execute_cmd_request(
-                    self.message, user_id=11, chat_id=22, policy=self.policy,
-                    runner=lambda *args, **kwargs: self.fail("must not execute"),
-                )
-        unsafe = self.message.replace('"echo hello"', '"diskpart"')
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=True), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": (str(self.root),)}):
-            with self.assertRaisesRegex(CmdControlError, "COMMAND_REJECTED"):
-                execute_cmd_request(
-                    unsafe, user_id=11, chat_id=22, policy=self.policy,
-                    runner=lambda *args, **kwargs: self.fail("must not execute"),
-                )
+                   side_effect=AssertionError("human_cmd_not_agent_workspace")), \
+             patch("agent_core.command_security.inspect_command",
+                   side_effect=AssertionError("human_cmd_not_agent_command_guard")):
+            reply = execute_cmd_request(
+                deleted, user_id=11, chat_id=22, policy=self.policy,
+                runner=simulate,
+            )
+        self.assertEqual(reply["status"], "SUCCESS")
+        self.assertEqual(seen[0], "del /q dummy-file.txt")
+        self.assertIn("Telegram 手動 Host CMD", reply["message"])
 
 
 if __name__ == "__main__":
