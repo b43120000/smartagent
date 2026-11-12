@@ -232,6 +232,88 @@ def _tar_operation(args: list[str], cwd: Path, root: Path) -> tuple[bool, str]:
     return True, "TURBO_TAR_EXTRACT_EMPTY_DESTINATION"
 
 
+
+def evaluate_native_broker_confirmation(
+    loop, action: Mapping, broker_gate: Mapping,
+) -> dict:
+    """Skip *secondary UNKNOWN-command consent* only for scoped Native Broker.
+
+    This is NOT execution authorization: canonical Action Admission already
+    ran; protected activation was verified by the Runtime-owned broker gate;
+    and the real Broker must independently re-attest Windows AppContainer,
+    policy revision, identity, job and kernel denial for EVERY action.
+    """
+    result = {
+        "schema": "SMARTAGENT_TURBO_DECISION_V2",
+        "auto_confirm": False,
+        "reason_code": "TURBO_NATIVE_BROKER_NOT_REQUIRED",
+        "policy_revision": 0,
+        "turbo_root": "",
+        "workspace_root": str(getattr(loop, "workspace", "") or ""),
+        "confirmation_scope": "SECONDARY_UNKNOWN_ONLY",
+        "authorization_granted": False,
+    }
+    if action.get("tool") != "run_command":
+        return result
+    if broker_gate.get("decision") != "BROKER_REQUIRED":
+        return result
+    state = broker_gate.get("state")
+    if not isinstance(state, Mapping):
+        result["reason_code"] = "TURBO_NATIVE_BROKER_STATE_MISSING"
+        return result
+    if (state.get("acl_mode") != "on"
+            or state.get("turbo_requested") != "ON"
+            or state.get("scope_verdict") != "TURBO_SCOPE_ALLOWED"
+            or state.get("sandbox_status") == "FAILED"):
+        result["reason_code"] = "TURBO_NATIVE_BROKER_POLICY_NOT_ADMITTED"
+        return result
+
+    try:
+        root = Path(str(state["turbo_root"])).expanduser().absolute()
+        authorization = Path(
+            str(broker_gate["authorization_workspace"])
+        ).expanduser().absolute()
+        requested = Path(
+            str(action.get("working_directory") or loop.workspace)
+        ).expanduser().absolute()
+        # Match the Native Broker's canonical cwd mapping: an omitted cwd at
+        # the trusted parent is dispatched in the Turbo Root, not the parent.
+        if requested == authorization:
+            cwd = root
+        elif is_within(requested, root):
+            cwd = requested
+        else:
+            result["reason_code"] = "TURBO_NATIVE_BROKER_CWD_OUTSIDE_ROOT"
+            return result
+        if (not root.is_dir() or not cwd.is_dir()
+                or not is_within(cwd, root)):
+            result["reason_code"] = "TURBO_NATIVE_BROKER_CWD_UNAVAILABLE"
+            return result
+        reject_reparse_components(cwd, root)
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
+        result["reason_code"] = "TURBO_NATIVE_BROKER_SCOPE_UNVERIFIED"
+        return result
+
+    command = str(action.get("command") or "")
+    # Hard command-security bans and explicit outside-workspace executable
+    # approvals are never bypassed by Full-Access UX. Unknown grammar is
+    # *not* reclassified as safe/read-only.
+    if not inspect_command(command, workspace=cwd).allowed:
+        result["reason_code"] = "TURBO_NATIVE_BROKER_COMMAND_SECURITY_DENIED"
+        return result
+    if len(command) > 8192:
+        result["reason_code"] = "TURBO_NATIVE_BROKER_COMMAND_TOO_LARGE"
+        return result
+    result.update({
+        "auto_confirm": True,
+        "reason_code": "TURBO_NATIVE_BROKER_SCOPED_FULL_ACCESS",
+        "turbo_root": str(root),
+        "workspace_root": str(authorization),
+        "policy_revision": int(state.get("policy_revision") or 0),
+        "broker_admission": "BROKER_REQUIRED",
+    })
+    return result
+
 def evaluate_turbo_confirmation(loop, action: Mapping) -> dict:
     """Non-authorizing audit decision, called ONLY after regular admission."""
     result = {
@@ -451,4 +533,4 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
         }
 
 
-__all__ = ["evaluate_turbo_confirmation", "turbo_planning_snapshot"]
+__all__ = ["evaluate_turbo_confirmation", "evaluate_native_broker_confirmation", "turbo_planning_snapshot"]

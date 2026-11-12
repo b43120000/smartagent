@@ -634,10 +634,19 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             # Workspace and pre-execution Admission rejections. Never only
             # record successful auto approvals: Planner and RCA require cause.
             from agent_core.command_risk import classify_command
-            from agent_core.turbo_execution_policy import evaluate_turbo_confirmation
+            from agent_core.turbo_execution_policy import (
+                evaluate_turbo_confirmation, evaluate_native_broker_confirmation,
+            )
             if action:
                 risk_class = classify_command(action)
-                turbo = evaluate_turbo_confirmation(loop, action)
+                # Git52: only the verified Native Broker admission can remove
+                # Turbo's second human consent prompt for UNKNOWN commands.
+                # Execution remains OS-attested, per-action and fail-closed.
+                turbo = (
+                    evaluate_native_broker_confirmation(loop, action, broker_gate)
+                    if broker_gate["decision"] == "BROKER_REQUIRED"
+                    else evaluate_turbo_confirmation(loop, action)
+                )
             else:
                 risk_class = "NOT_ADMITTED"
                 turbo = {
@@ -692,6 +701,24 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "executed": False, "authorization_granted": False,
             })
         if action and decision.tool == "run_command":
+            if (broker_gate["decision"] == "BROKER_REQUIRED"
+                    and not turbo.get("auto_confirm")):
+                # In OS Turbo mode, an out-of-scope or hard-denied command
+                # must BLOCK before execution, never fall back to prompting
+                # for consent that cannot alter the kernel boundary.
+                reason = str(turbo.get("reason_code") or "TURBO_NATIVE_SCOPE_DENIED")
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
+                    "toolName": "run_command", "action_id": action["action_id"],
+                    "risk_class": risk_class, "reason_code": reason,
+                    "executed": False, "authorization_granted": False,
+                })
+                return _finish(
+                    loop, root, request, kind="BLOCKED",
+                    summary="FAIL：TURBO_NATIVE_CONFIRMATION_BLOCKED：" + reason[:120]
+                    + "；沒有要求人工授權、沒有執行工具或退回 Host Executor。",
+                    complete=False,
+                )
             if auto_confirm:
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "TURBO_AUTO_ADMITTED",
