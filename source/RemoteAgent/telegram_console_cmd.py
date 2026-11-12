@@ -5,9 +5,11 @@ command before calling this module. This module never grants execution scope.
 It starts one short-lived CMD console, dispatches one command at a time in
 the same CMD session and reports per-command observed exit status.
 
-Only the ACL OFF / Software Guard execution path uses this adapter. ACL ON
-must use the OS restricted executor and cannot silently downgrade to the
-listener's unrestricted desktop token.
+Only the authenticated Telegram MANUAL host-control channel uses this
+adapter, regardless of ACL/Turbo settings. It executes with the listener's
+Windows token and is intentionally NOT an Agent action; it does not use
+the Restricted Executor/AppContainer. The paired user explicitly owns each
+command and Windows enforces that token's actual permissions.
 """
 from __future__ import annotations
 
