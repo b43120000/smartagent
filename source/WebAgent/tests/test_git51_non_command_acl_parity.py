@@ -80,6 +80,41 @@ def test_internal_session_summary_not_counted_as_untrusted_host_mutation():
         assert turbo_broker_admission.needs_broker(tool)
 
 
+def test_both_executor_loops_have_action_scoped_not_global_turbo_gate():
+    # Regression for the exact Telegram 'Executor BLOCKED' bug:
+    # previously BOTH loops rejected even a web_search whenever Turbo ON.
+    from pathlib import Path
+    source_root = Path(__file__).resolve().parents[1]
+    for name in ("pokeclaw_executor_loop.py", "minimal_core_loop.py"):
+        source = (source_root / name).read_text(encoding="utf-8")
+        assert "broker_gate = admit_action(loop.workspace, action)" in source
+        assert "if broker_gate[\"decision\"] == \"BLOCKED\":" in source
+        assert "require_turbo_backend(turbo_state)" not in source
+
+
+@pytest.mark.parametrize("tool", NON_OS_TOOLS + ("return_artifact", "upload_file", "google_drive_upload"))
+def test_loop_admits_all_non_command_actions_without_broker(monkeypatch, tool):
+    def forbid_gate(*_args, **_kwargs):
+        raise AssertionError("NON_COMMAND_ACL_GATE_MUST_NOT_BE_CALLED")
+
+    monkeypatch.setattr(turbo_broker_admission, "resolve_turbo_state", forbid_gate)
+    result = turbo_broker_admission.admit_action(
+        "/ordinary/workspace", {"tool": tool, "action_id": "ACT-RESEARCH"},
+    )
+    assert result["decision"] == "NORMAL"
+    assert result["reason_code"] == "NON_COMMAND_OPERATION"
+
+
+def test_invalid_before_admission_must_not_query_sandbox(monkeypatch):
+    def forbid_gate(*_args, **_kwargs):
+        raise AssertionError("INVALID_ACTION_CANNOT_REACH_OS_GATE")
+
+    monkeypatch.setattr(turbo_broker_admission, "resolve_turbo_state", forbid_gate)
+    result = turbo_broker_admission.admit_action("/ordinary/workspace", None)
+    assert result["decision"] == "NOT_APPLICABLE"
+    assert result["evidence"] == {}
+
+
 @pytest.mark.parametrize("mode,requested", [
     ("off", False), ("off", True), ("on", False), ("on", True),
 ])
