@@ -144,3 +144,30 @@ def test_actual_proven_read_and_write_security_still_apply(tmp_path, monkeypatch
     assert context.require_write(root / "test.txt") == root / "test.txt"
     with pytest.raises(PathSecurityError):
         context.require_write(outside / "test.txt")
+
+
+def test_failed_supervisor_security_preflight_cannot_block_chat_ingress():
+    # The disabled marker remains set for later Runtime actions. Telegram
+    # receives/queues normal text even while the OS executor is unavailable.
+    from agent_core.host_supervisor import HostSupervisor
+    supervisor = object.__new__(HostSupervisor)
+    supervisor.security_mutation_disabled = True
+    supervisor.security_preflight_report = {
+        "status": "FAIL",
+        "attestation": {"reasons": ["NATIVE_BROKER_NOT_READY"]},
+    }
+    admitted, reason = supervisor._remote_task_security_admission(None)
+    assert admitted is True
+    assert reason == "INGRESS_ONLY_ACTION_GATED_SECURITY"
+    assert supervisor.security_mutation_disabled is True
+
+
+def test_native_pinned_tool_resolution_keeps_host_fallback_forbidden():
+    launcher = (Path(__file__).resolve().parents[3] /
+                "install_smart_agent" / "turbo_appcontainer_probe.cs").read_text(
+                    encoding="utf-8")
+    assert "string trustedAliases" in launcher
+    assert "GIT52_NATIVE_EXECUTABLE_NOT_VISIBLE_" in launcher
+    assert "Set-Alias -Name " in launcher
+    assert "LaunchPowerShell(moniker, wrapped, root" in launcher
+    assert 'Environment.GetEnvironmentVariable("PATH")' not in launcher
