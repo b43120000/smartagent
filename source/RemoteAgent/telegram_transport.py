@@ -1085,7 +1085,51 @@ class TelegramReceiver:
                 conversation_key=message.conversation_key,
                 source_message_id=message.source_message_id,
             )
-            result = self.ingress.accept(message, workspace=self.config.workspace)
+            try:
+                result = self.ingress.accept(message, workspace=self.config.workspace)
+            except ValueError as exc:
+                # Permanent request-shape/workspace rejection is NOT a failed
+                # Telegram POLL. Record a durable denial before advancing the
+                # offset so one poison message cannot starve every later chat.
+                # Storage/queue/OS errors are never swallowed and remain retryable.
+                reason = str(exc)
+                permanent = reason.startswith((
+                    "request_explicit_workspace_",
+                    "request_path_outside_authorized_roots:",
+                    "request_working_directory_unavailable:",
+                    "workspace_writable_roots_not_configured",
+                    "continuation_workspace_reference_not_found_or_ambiguous",
+                    "continuation_workspace_no_longer_writable",
+                    "resolved_workspace_no_longer_writable",
+                    "empty_transport_message",
+                ))
+                if not permanent:
+                    raise
+                self._log(
+                    "ERROR", stage="REQUEST_ADMISSION_REJECTED",
+                    update_id=update_id,
+                    rejection_reason=reason[:240],
+                    request_id=self.ingress._request_id(message)
+                    if hasattr(self.ingress, "_request_id") else "",
+                    permanent=True, executed=False,
+                )
+                # Commit is durable and may raise: NEVER drop the message when
+                # the offset store itself is temporarily unavailable.
+                self.offset_store.commit(update_id)
+                try:
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 請求未建立：工作目錄選擇無效或不在 Edit Workspace 授權範圍。"
+                        "\n請確認明確的 Workspace 設定；文字提及路徑本身不會被擋。",
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                except Exception as send_exc:
+                    self._log(
+                        "ERROR", stage="REQUEST_REJECTION_REPLY_FAILED",
+                        update_id=update_id,
+                        error=f"{type(send_exc).__name__}: {send_exc}"[:240],
+                    )
+                continue
             self.offset_store.commit(update_id)
             if result.response:
                 self.client.send_message(
