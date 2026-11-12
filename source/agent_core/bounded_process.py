@@ -70,7 +70,14 @@ def run_bounded_process(
     # Git49 OS Broker admission. This runs before selecting any executor,
     # so neither direct host subprocess nor a stale service can be a fallback.
     from .turbo_broker_admission import assess
-    broker = assess(cwd, tool="run_command")
+    # cwd is an execution location, not a Workspace authorization identity.
+    # Obtain the only eligible parent from protected policy, never command text.
+    from .workspace_access import resolve_turbo_authorization_workspace
+    authorization_workspace = resolve_turbo_authorization_workspace(cwd)
+    broker = assess(
+        authorization_workspace if authorization_workspace is not None else cwd,
+        tool="run_command",
+    )
     def reject_broker(reason: str) -> dict:
         return {
             "exit_code": None, "stdout": "", "stderr": "",
@@ -85,6 +92,21 @@ def run_bounded_process(
     if broker["decision"] == "BLOCKED":
         return reject_broker(str(broker["reason_code"]))
     if broker["decision"] == "BROKER_REQUIRED":
+        # Even an enrolled Broker must not execute from an unrelated sibling.
+        # The registered parent CWD remains supported and is redirected into
+        # Turbo Root by the native client; all other CWDs must be inside it.
+        from .path_security import is_within
+        state = broker.get("state") or {}
+        if state.get("turbo_root") and authorization_workspace is not None:
+            try:
+                actual_cwd = Path(cwd).expanduser().resolve(strict=True)
+                allowed_parent = Path(authorization_workspace).resolve(strict=True)
+                actual_root = Path(state["turbo_root"]).resolve(strict=True)
+                if (actual_cwd != allowed_parent and
+                        not is_within(actual_cwd, actual_root)):
+                    return reject_broker("TURBO_OS_BROKER_CWD_OUTSIDE_ROOT")
+            except (OSError, RuntimeError, ValueError, TypeError):
+                return reject_broker("TURBO_OS_BROKER_CWD_UNVERIFIED")
         # ONLY the already-admitted single PowerShell command adapter can
         # cross the boundary. Reject all other host process launch forms:
         # arbitrary shell=True, direct Python/Git binaries, elevated scripts,

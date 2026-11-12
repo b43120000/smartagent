@@ -368,16 +368,29 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
     try:
         from .turbo_sandbox import resolve_turbo_state
         gate = resolve_turbo_state(workspace)
+        access = access_snapshot()
+        from .workspace_access import resolve_turbo_authorization_workspace
+        authorization_workspace = workspace
+        if (gate["acl_mode"] == "on" and gate["turbo_requested"] == "ON"
+                and gate["scope_verdict"] != "TURBO_SCOPE_ALLOWED"):
+            parent = resolve_turbo_authorization_workspace(
+                workspace, snapshot=access,
+            )
+            if parent is not None:
+                authorization_workspace = parent
+                gate = resolve_turbo_state(parent)
         from .turbo_broker_admission import assess
         broker_admission = assess(workspace, tool="run_command")
-        broker_enrolled = broker_admission["decision"] == "BROKER_REQUIRED"
-        access = access_snapshot()
+        broker_enrolled = (
+            broker_admission["decision"] == "BROKER_REQUIRED"
+            and gate["scope_verdict"] == "TURBO_SCOPE_ALLOWED"
+        )
         policy = access["policy"]
         roots = [
             str(Path(raw).expanduser().absolute())
             for raw in access.get("turbo_roots") or ()
             if is_valid_turbo_root(
-                raw, workspace, access["writable_workspaces"],
+                raw, authorization_workspace, access["writable_workspaces"],
                 access["read_only_roots"],
                 policy.get("denied_write_roots") or (),
             )
@@ -404,6 +417,8 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
             ),
             "per_action_os_attestation_required": broker_enrolled,
             "configured_roots": roots[:8],
+            "authorization_workspace": str(authorization_workspace or ""),
+            "task_working_directory": str(workspace or ""),
             "policy_revision": int(policy.get("revision", 0) or 0),
             "safe_action_examples": [
                 "git clone <user-requested-https-url> <new-destination-under-turbo-root>",
@@ -429,6 +444,8 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
             "schema": "SMARTAGENT_TURBO_PLANNER_HINT_V1",
             "status": "UNKNOWN_FAIL_CLOSED",
             "configured_roots": [],
+            "authorization_workspace": "",
+            "task_working_directory": str(workspace or ""),
             "runtime_admission_still_required": True,
             "authorization_granted": False,
         }

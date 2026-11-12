@@ -244,6 +244,43 @@ def is_valid_turbo_root(path: str | Path, workspace: str | Path,
         return False
 
 
+def resolve_turbo_authorization_workspace(
+    task_directory: str | Path | None, *, snapshot: dict | None = None,
+) -> Path | None:
+    """Find the UNIQUE policy-owned parent of a task working directory.
+
+    This is identity resolution, NOT a filesystem or OS permission grant.
+    Task/CWD is never allowed to nominate an additional writable container.
+    Ambiguous, missing, reparse and out-of-policy locations fail closed.
+    """
+    if task_directory is None:
+        return None
+    from .path_security import is_within, reject_reparse_components
+    try:
+        access = snapshot if snapshot is not None else access_snapshot()
+        directory = Path(task_directory).expanduser().absolute()
+        if not directory.is_dir():
+            return None
+        candidates: dict[str, Path] = {}
+        for raw_parent in access.get("writable_workspaces") or ():
+            parent = Path(raw_parent).expanduser().resolve(strict=True)
+            if not parent.is_dir() or not is_within(directory, parent):
+                continue
+            reject_reparse_components(directory, parent)
+            if not any(
+                is_valid_turbo_root(
+                    root, parent, access.get("writable_workspaces") or (),
+                    access.get("read_only_roots") or (),
+                    (access.get("policy") or {}).get("denied_write_roots") or (),
+                )
+                for root in access.get("turbo_roots") or ()
+            ):
+                continue
+            candidates[str(parent).casefold()] = parent
+        return next(iter(candidates.values())) if len(candidates) == 1 else None
+    except (OSError, RuntimeError, ValueError):
+        return None
+
 def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
                      expected_revision: int | None = None) -> dict:
     """Atomic shared policy; Telegram and Workspace Manager read same source.
@@ -331,5 +368,6 @@ __all__ = [
     "save_workspace_access_policy",
     "software_only_mode_enabled",
     "workspace_access_policy_path",
-    "is_valid_turbo_root", "save_turbo_roots", "set_turbo_root",
+    "is_valid_turbo_root", "resolve_turbo_authorization_workspace",
+    "save_turbo_roots", "set_turbo_root",
 ]

@@ -123,7 +123,12 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "boolean/number/string/null values, never strings for booleans. "
         "Runtime compares claims AND checks the original Goal; model "
         "cannot grant PASS merely by declaring it.\n"
-        f"Workspace: {tools.workspace_root}\n"
+        f"Task working directory (NOT authorization workspace): {tools.workspace_root}\n"
+        "When Turbo status is BROKER_ENROLLED with native_broker_tools, "
+        "turbo_effective=OFF and sandbox_status=NOT_READY indicate that "
+        "per-action OS attestation is pending, NOT that a tool call is forbidden. "
+        "Propose an allowed tool_call; Runtime must attest or reject it. "
+        "Never claim OS execution or isolation without actual ToolResult evidence.\n"
         "Turbo configured scope (advisory only; every Action is independently "
         "readmitted, never assume this grants permission):\n"
         + json.dumps(turbo_planning_context or {}, ensure_ascii=False,
@@ -385,6 +390,24 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         loop._check_cancelled()
         loop.turn_id = turn
         loop.tools._protocol_turn_seq = turn
+        turbo_context = (
+            __import__("agent_core.turbo_execution_policy",
+                       fromlist=["turbo_planning_snapshot"])
+            .turbo_planning_snapshot(loop.workspace)
+        )
+        if turbo_context.get("turbo_requested") == "ON":
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "TURBO_PLANNER_CONTEXT",
+                "task_working_directory": str(loop.workspace),
+                "authorization_workspace": str(
+                    turbo_context.get("authorization_workspace") or ""),
+                "policy_revision": int(turbo_context.get("policy_revision") or 0),
+                "turbo_status": str(turbo_context.get("status") or ""),
+                "turbo_reason_code": str(turbo_context.get("reason_code") or ""),
+                "configured_roots": list(turbo_context.get("configured_roots") or ()),
+                "native_broker_tools": list(turbo_context.get("native_broker_tools") or ()),
+                "executed": False, "authorization_granted": False,
+            })
         prompt = _prompt(
             request, loop.tools, recent, round_id=turn,
             max_rounds=max_rounds, hint=hint,
@@ -396,11 +419,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                            fromlist=["finish_runtime_status_catalog"])
                 .finish_runtime_status_catalog(loop)
             ),
-            turbo_planning_context=(
-                __import__("agent_core.turbo_execution_policy",
-                           fromlist=["turbo_planning_snapshot"])
-                .turbo_planning_snapshot(loop.workspace)
-            ),
+            turbo_planning_context=turbo_context,
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()

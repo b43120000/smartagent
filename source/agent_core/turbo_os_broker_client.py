@@ -45,6 +45,16 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
     if os.name != "nt":
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_WINDOWS_REQUIRED")
     state = resolve_turbo_state(workspace)
+    if (state.get("acl_mode") == "on" and
+            state.get("turbo_requested") == "ON" and
+            state.get("scope_verdict") != "TURBO_SCOPE_ALLOWED"):
+        # Typed mutations may carry a task-scoped (child) workspace.
+        # Bind the OS activation only to the unique protected policy parent.
+        from .workspace_access import resolve_turbo_authorization_workspace
+        parent = resolve_turbo_authorization_workspace(workspace)
+        if parent is not None:
+            workspace = parent
+            state = resolve_turbo_state(workspace)
     if state.get("sandbox_status") == "FAILED":
         raise TurboOSBrokerUnavailable(str(state.get("reason_code")))
     if (state.get("acl_mode") != "on" or

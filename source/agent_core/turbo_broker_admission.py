@@ -52,7 +52,17 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
                          "authorization_granted": False,
                          "os_execution_result": "NOT_APPLICABLE"},
         }
+    # Task workspace may be a project directory (including Turbo Root).
+    # Only the operator-owned policy may identify its authorization parent.
     state = resolve_turbo_state(workspace)
+    authorization_workspace = workspace
+    if (state["acl_mode"] == "on" and state["turbo_requested"] == "ON"
+            and state["scope_verdict"] != "TURBO_SCOPE_ALLOWED"):
+        from .workspace_access import resolve_turbo_authorization_workspace
+        parent = resolve_turbo_authorization_workspace(workspace)
+        if parent is not None:
+            authorization_workspace = parent
+            state = resolve_turbo_state(parent)
     evidence = sandbox_evidence(state, requested_operation=tool, action_id=action_id)
     if state["sandbox_status"] == "FAILED":
         decision = "BLOCKED"
@@ -64,7 +74,8 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
         # independently attest its Windows process token, Job Object, OS
         # negative access and active policy revision before execution.
         from .turbo_os_broker_client import active_broker_available
-        decision = "BROKER_REQUIRED" if active_broker_available(workspace) else "BLOCKED"
+        decision = ("BROKER_REQUIRED" if
+                    active_broker_available(authorization_workspace) else "BLOCKED")
     else:
         decision = "BLOCKED"
     return {
@@ -72,6 +83,8 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
         "reason_code": state["reason_code"],
         "state": state,
         "evidence": evidence,
+        "authorization_workspace": str(authorization_workspace or ""),
+        "task_working_directory": str(workspace or ""),
     }
 
 def admit_action(workspace, action: dict | None) -> dict:

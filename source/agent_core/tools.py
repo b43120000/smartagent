@@ -574,6 +574,14 @@ def tool_run_command(
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
                 'sandbox_evidence':main.get('sandbox_evidence', {}),
+                'command_error':str(main.get('error') or '')[:512],
+                'command_rejection_stage': (
+                    'COMMAND_SECURITY' if str(main.get('error') or '').startswith(
+                        'SECURITY_COMMAND_REJECTED:')
+                    else 'TURBO_BROKER' if str(main.get('error') or '').startswith(
+                        'TURBO_OS_BROKER_BLOCKED:')
+                    else 'UNCLASSIFIED' if rejected else ''
+                ),
                 'process_state':'RUNNING' if running else 'EXITED' if executed else 'NOT_STARTED', 'pid':main.get('pid')})
     telemetry = None
     if security_context:
