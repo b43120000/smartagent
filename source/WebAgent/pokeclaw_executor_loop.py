@@ -142,7 +142,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Do not repeat the rejected command or use a host-executor fallback. "
         "Native rejection history (nonexecuted): "
         + json.dumps(preexecution_rejections or [], ensure_ascii=False,
-                     separators=(",", ":"))[-1500:] + "\\n"
+                     separators=(",", ":"))[-1500:] + "\n"
         "When Turbo status is BROKER_ENROLLED with native_broker_tools, "
         "turbo_effective=OFF and sandbox_status=NOT_READY indicate that "
         "per-action OS attestation is pending, NOT that a tool call is forbidden. "
