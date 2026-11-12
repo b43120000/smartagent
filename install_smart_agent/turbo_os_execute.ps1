@@ -207,15 +207,15 @@ try {
     # kernel denial probe, NOT a text/Planner/JSON assertion.
     $outsideLiteral=$state.sentinel.Replace("'","''")
     $proof=@"
-$readDenied=$false
+`$readDenied=$false
 try { [void][IO.File]::ReadAllText('$outsideLiteral') }
-catch [System.UnauthorizedAccessException] { $readDenied=$true }
-if (-not $readDenied) { exit 91 }
+catch [System.UnauthorizedAccessException] { `$readDenied=$true }
+if (-not `$readDenied) { exit 91 }
 # Open the existing outside sentinel for WRITE access, but NEVER write data.
 # A successful handle is a kernel escape even if no bytes were modified.
 try {
-    $outsideHandle=[IO.File]::Open('$outsideLiteral',[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
-    $outsideHandle.Dispose()
+    `$outsideHandle=[IO.File]::Open('$outsideLiteral',[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    `$outsideHandle.Dispose()
     exit 92
 } catch [System.UnauthorizedAccessException] {
     [IO.File]::WriteAllText('git50_scope_proof.tmp','OS_DENIED')
