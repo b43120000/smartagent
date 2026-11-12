@@ -513,6 +513,13 @@ public static class SmartAgentGit47AppContainerProbe
         string moniker, string script, string cwd,
         uint timeoutMilliseconds, int maximumBytes)
     {
+        return LaunchPowerShellCaptured(moniker, script, cwd,
+                                        timeoutMilliseconds, maximumBytes, "");
+    }
+    public static string LaunchPowerShellCaptured(
+        string moniker, string script, string cwd,
+        uint timeoutMilliseconds, int maximumBytes, string trustedToolPath)
+    {
         if (maximumBytes < 1 || maximumBytes > 2 * 1024 * 1024)
             throw new ArgumentException("capture_limit_invalid");
         if (string.IsNullOrWhiteSpace(cwd) || !System.IO.Directory.Exists(cwd))
@@ -558,7 +565,7 @@ public static class SmartAgentGit47AppContainerProbe
                     "catch{ $errText=$_.Exception.GetType().Name+':'+$_.Exception.Message; " +
                     putErr + " exit 1 }";
                 string raw = LaunchPowerShell(moniker, wrapped, root,
-                                              timeoutMilliseconds);
+                                               timeoutMilliseconds, trustedToolPath);
                 byte[] outBytes = ReadPinned(stdout, maximumBytes);
                 byte[] errBytes = ReadPinned(stderr, maximumBytes);
                 bool stdoutTruncated = stdout.Length > maximumBytes;
