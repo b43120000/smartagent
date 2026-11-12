@@ -83,6 +83,8 @@ def render_cmd_template(smartagent_root: str | Path) -> str:
         '"echo hello"\n'
         '"echo time"\n\n'
         "每行分別執行並回傳 Exit Code、stdout、stderr。"
+        "這是已配對使用者的 Windows Host CMD，不受 Agent Turbo Root 限制；"
+        "刪除等命令會以 Telegram Listener 的 Windows 帳號權限執行。"
     )
 
 
