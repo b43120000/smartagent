@@ -150,7 +150,8 @@ def capture_command_result_rca(raw_result: object, receipt: object) -> dict:
     evidence = evidence if isinstance(evidence, Mapping) else {}
     os_fields = (
         "sandbox_backend", "sandbox_identity_verified",
-        "kernel_outside_read_denied", "child_process_policy",
+        "kernel_outside_read_denied", "kernel_outside_write_denied",
+        "child_process_policy",
         "os_execution_result", "policy_revision",
         "turbo_effective_for_action", "executed",
         "internet_client_token_verified", "internet_client_capability_sid",

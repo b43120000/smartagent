@@ -28,6 +28,7 @@ def _receipt(root, *, token=True, pins=True, code=0, stderr=""):
         "sandbox_backend": "WIN32_APPCONTAINER",
         "sandbox_identity_verified": True,
         "kernel_outside_read_denied": True,
+        "kernel_outside_write_denied": True,
         "child_process_policy": "JOB_KILL_ON_CLOSE",
         "internet_client_token_verified": token,
         "internet_client_capability_sid": "S-1-15-3-1",
@@ -99,6 +100,7 @@ def test_kernel_internet_client_and_verified_toolchain_reach_runtime_rca(
     ("native_trusted_tools", ["git", "cmd"]),
     ("native_toolchain_status", "UNVERIFIED"),
     ("kernel_outside_read_denied", False),
+    ("kernel_outside_write_denied", False),
     ("sandbox_identity_verified", False),
 ])
 def test_missing_or_forged_native_attestation_is_fatal(

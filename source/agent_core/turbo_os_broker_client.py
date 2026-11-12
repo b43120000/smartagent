@@ -320,6 +320,7 @@ def execute_turbo_command(
         and receipt.get("sandbox_backend") == "WIN32_APPCONTAINER"
         and receipt.get("sandbox_identity_verified") is True
         and receipt.get("kernel_outside_read_denied") is True
+        and receipt.get("kernel_outside_write_denied") is True
         and receipt.get("internet_client_token_verified") is True
         and receipt.get("internet_client_capability_sid") == "S-1-15-3-1"
         and receipt.get("child_process_policy") == "JOB_KILL_ON_CLOSE"
@@ -372,6 +373,7 @@ def execute_turbo_command(
         "sandbox_backend": "WIN32_APPCONTAINER",
         "sandbox_identity_verified": True,
         "kernel_outside_read_denied": True,
+        "kernel_outside_write_denied": True,
         "internet_client_token_verified": True,
         "internet_client_capability_sid": "S-1-15-3-1",
         "native_toolchain_status": receipt["native_toolchain_status"],
