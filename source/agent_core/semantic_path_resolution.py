@@ -151,7 +151,22 @@ def analyze_request_paths(
     are kept verbatim, never replaced by a parent or workspace fallback.
     """
     source = str(request or "")
-    probe = probe or (lambda value: Path(value).exists())
+    if probe is None:
+        # Lexical path hints must never perform an unrestricted filesystem
+        # existence probe. Read policy is owned by Edit Workspace; an unlisted
+        # path is only text, not authority to stat() the host filesystem.
+        def policy_scoped_probe(value: str) -> bool:
+            try:
+                from .workspace_access import access_snapshot
+                from .path_security import authorize_path, PathSecurityError
+                roots = access_snapshot()
+                allowed = (*roots.get("writable_workspaces", ()),
+                           *roots.get("read_only_roots", ()))
+                path = authorize_path(value, allowed, require_absolute=True)
+                return path.exists()
+            except (OSError, RuntimeError, ValueError, PathSecurityError):
+                return False
+        probe = policy_scoped_probe
     resolved: list[str] = []
     records: list[dict] = []
     scan_from = 0
