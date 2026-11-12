@@ -23,6 +23,12 @@ MAX_RECENT_TASKS = 3
 _WINDOWS_PATH = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/])(?:[^\s'\"，,；;。\r\n]*)")
 _QUOTED_PATH = re.compile(r"""(["'])([A-Za-z]:[\\/][^"'\r\n]+)\1""")
 _RECOVERABLE = frozenset({"COMPLETED", "FAILED", "PAUSED", "INTERRUPTED"})
+# Only a dedicated Workspace field may select a Task working directory.
+_WORKSPACE_DIRECTIVE = re.compile(
+    r"(?im)^\s*(?:@workspace|/workspace|workspace|working\s+directory|工作目錄|工作區)"
+    r"\s*[:=：]\s*(?P<path>[^\r\n]+?)\s*$"
+)
+
 
 
 def _key(path: str | Path) -> str:
@@ -68,6 +74,22 @@ def request_paths(text: str) -> list[str]:
         if path and path not in result:
             result.append(path)
     return result
+
+
+def explicit_workspace_directive(text: str) -> str | None:
+    """A narrative reference never nominates a working directory or grants scope."""
+    values: list[str] = []
+    for match in _WORKSPACE_DIRECTIVE.finditer(str(text or "")):
+        value = match.group("path").strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1].strip()
+        if not re.match(r"^[A-Za-z]:[\\/]", value):
+            raise ValueError("request_explicit_workspace_path_invalid")
+        if value not in values:
+            values.append(value)
+    if len(values) > 1:
+        raise ValueError("request_explicit_workspace_ambiguous")
+    return values[0] if values else None
 
 
 def _directory_for_path(raw: str, writable: tuple[Path, ...], readable: tuple[Path, ...]) -> Path | None:
@@ -122,19 +144,19 @@ def resolve_task_workspace(
     Explicit unknown paths fail closed instead of silently choosing a default.
     """
     writable, readable = _policy_roots()
+    # Keep path mentions as Planner data; never inspect/authorize them at ingress.
     paths = request_paths(request)
+    explicit = explicit_workspace_directive(request)
     selected: Path | None = None
     source = ""
     source_task_id = ""
-    for path in paths:
-        candidate = _directory_for_path(path, writable, readable)
-        if candidate is not None and selected is None:
-            selected = candidate
-            source = "CURRENT_REQUEST"
-    if selected is not None:
-        return {"workspace": str(selected), "source": source,
+    if explicit is not None:
+        selected = _directory_for_path(explicit, writable, readable)
+        if selected is None:
+            raise ValueError("request_explicit_workspace_not_writable")
+        return {"workspace": str(selected), "source": "EXPLICIT_WORKSPACE_DIRECTIVE",
                 "source_task_id": "", "context_candidates": [],
-                "explicit_paths": paths}
+                "explicit_paths": [explicit], "mentioned_paths": paths}
 
     # Only a signed task journal can give a historical Task ID authority;
     # matching the text alone does not authorize a new filesystem root.
@@ -198,4 +220,4 @@ def resolve_task_workspace(
     return {"workspace": str(selected), "source": source,
             "source_task_id": source_task_id,
             "context_candidates": filtered,
-            "explicit_paths": paths}
+            "explicit_paths": [], "mentioned_paths": paths}
