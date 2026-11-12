@@ -207,9 +207,9 @@ try {
     # kernel denial probe, NOT a text/Planner/JSON assertion.
     $outsideLiteral=$state.sentinel.Replace("'","''")
     $proof=@"
-`$readDenied=$false
+`$readDenied=`$false
 try { [void][IO.File]::ReadAllText('$outsideLiteral') }
-catch [System.UnauthorizedAccessException] { `$readDenied=$true }
+catch [System.UnauthorizedAccessException] { `$readDenied=`$true }
 if (-not `$readDenied) { exit 91 }
 # Open the existing outside sentinel for WRITE access, but NEVER write data.
 # A successful handle is a kernel escape even if no bytes were modified.
