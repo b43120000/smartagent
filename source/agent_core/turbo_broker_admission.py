@@ -42,7 +42,7 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
     # execution path in ALL ACL/Turbo modes. Do not read or require a
     # command sandbox for web research, observations or ordinary dialogue.
     # The protected mutation list above is still enforced at dispatch.
-    if tool in NON_COMMAND_OPERATIONS:
+    if not needs_broker(tool):
         return {
             "decision": "NORMAL",
             "reason_code": "NON_COMMAND_OPERATION",
@@ -89,9 +89,6 @@ def admit_action(workspace, action: dict | None) -> dict:
             "state": None, "evidence": {},
         }
     tool = str(action.get("tool") or "")
-    if not needs_broker(tool):
-        return assess(workspace, tool=tool,
-                      action_id=str(action.get("action_id") or ""))
     return assess(workspace, tool=tool,
                   action_id=str(action.get("action_id") or ""))
 
