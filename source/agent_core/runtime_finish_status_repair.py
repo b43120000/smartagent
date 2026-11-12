@@ -12,6 +12,7 @@ _SCHEMA = "SMARTAGENT_FINISH_STATUS_REPAIR_V1"
 _STATUSES = frozenset({
     "SUCCEEDED", "FAILED", "REJECTED", "UNKNOWN", "RUNNING", "PARTIAL",
 })
+_VERIFICATION = frozenset({"PASS", "FAIL", "UNVERIFIED", "UNKNOWN", "SPEC_INVALID"})
 
 
 def diagnose_finish_status_mismatch(comparison: Mapping) -> dict | None:
@@ -24,22 +25,28 @@ def diagnose_finish_status_mismatch(comparison: Mapping) -> dict | None:
     corrections = []
     seen = set()
     for item in rows:
-        if not isinstance(item, Mapping) or item.get("field") != "status":
+        if not isinstance(item, Mapping) or item.get("field") not in {
+                "status", "data.verification_status"}:
             return None
         ref = item.get("evidence_ref")
         actual = item.get("actual")
         expected = item.get("expected")
+        allowed = _STATUSES if item["field"] == "status" else _VERIFICATION
         if (not isinstance(ref, str) or not ref.startswith("MIN-EV-")
-                or len(ref) > 90 or ref in seen
-                or actual not in _STATUSES or expected not in _STATUSES
+                or len(ref) > 90 or (ref, item["field"]) in seen
+                or actual not in allowed or expected not in allowed
                 or actual == expected):
             return None
-        seen.add(ref)
+        seen.add((ref, item["field"]))
         corrections.append({
             "evidence_ref": ref,
-            "field": "status",
+            "field": item["field"],
             "model_claimed_status": expected,
             "runtime_actual_status": actual,
+            "missing_postrun_evidence": (
+                item["field"] == "data.verification_status"
+                and actual == "UNVERIFIED"
+            ),
         })
     return {
         "schema": _SCHEMA,
@@ -75,6 +82,8 @@ def finish_runtime_status_catalog(loop, *, max_records: int = 64) -> list[dict]:
             "evidence_ref": evidence_ref,
             "tool": str(row.get("tool") or "")[:48],
             "status": receipt["status"],
+            "verification_status": (receipt.get("data") or {}).get(
+                "verification_status", "NOT_RECORDED"),
             "executed": receipt.get("executed") is True,
             "reason_code": str(receipt.get("reason") or "")[:100],
         })

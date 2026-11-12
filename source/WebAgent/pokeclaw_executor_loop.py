@@ -566,7 +566,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     hint = (
                         "Finish Schema 不完整；reason_code=" + last_finish_reason
                         + "；欄位級診斷=" + diagnostic
-                        + "。FINISH_STATUS_REPAIR 應按照 runtime_actual_status 修正 fields.status；"
+                        + "。FINISH_STATUS_REPAIR 必須依 Runtime 實值修正 status 或 data.verification_status；
+                        UNVERIFIED 不等於 PASS；不得補造後置驗證或改寫 Evidence。"
                         "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
