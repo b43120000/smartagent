@@ -210,3 +210,16 @@ def test_executor_native_outside_cwd_blocks_without_prompt(tmp_path, monkeypatch
     assert not loop.executed
     assert [e for e in board["events"] if e["kind"] == "TURBO_NATIVE_CONFIRMATION_BLOCKED"]
     assert not [e for e in board["events"] if e["kind"] == "HUMAN_APPROVAL_REQUESTED"]
+
+
+@pytest.mark.parametrize("revision", [None, "", "52", 0, -1, True])
+def test_native_consent_never_auto_approves_invalid_policy_revision(configured, revision):
+    workspace, turbo, loop = configured
+    gate = _gate(workspace, turbo)
+    gate["state"]["policy_revision"] = revision
+    result = evaluate_native_broker_confirmation(
+        loop, {"tool": "run_command", "command": _WRITE,
+               "working_directory": str(turbo)}, gate,
+    )
+    assert result["auto_confirm"] is False
+    assert result["reason_code"] == "TURBO_NATIVE_BROKER_POLICY_REVISION_UNVERIFIED"

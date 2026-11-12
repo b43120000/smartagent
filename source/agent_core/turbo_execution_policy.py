@@ -1,13 +1,13 @@
-"""Opt-in Turbo: evidence-producing confirmation policy, not filesystem authority.
+"""Turbo secondary confirmation policy, never filesystem/OS authority.
 
-Second-gate auto confirmation is permitted only after canonical Action Admission
-and only for proven non-destructive single commands. Nothing here grants ACL,
-network, write ceiling, an outside executable, or permission to overwrite/delete.
+Git52: an enrolled and verified Native AppContainer Broker (ACL ON, Turbo ON)
+allows full-access command grammar *within its OS-confined Turbo Root* without
+an extra UNKNOWN-command human prompt. All hard command-security, canonical
+Action Admission and native per-action OS attestation still apply. This does
+not grant ACL, network, outside-root writes, or a host-executor fallback.
 
-Git cloning to a NEW target, Git archive to a NEW tar, and tar extraction to an
-EMPTY target are the supported generic, constrained deployment building blocks.
-Arbitrary shell/scripts, checkout of an existing tree, pipelines, and unproven
-mutations continue to require normal gates. No Case D names or hashes embedded.
+Legacy software confirmation recognizers remain disabled unless an
+independently verified native path is selected. No task-specific hardcoding.
 """
 from __future__ import annotations
 
@@ -304,12 +304,16 @@ def evaluate_native_broker_confirmation(
     if len(command) > 8192:
         result["reason_code"] = "TURBO_NATIVE_BROKER_COMMAND_TOO_LARGE"
         return result
+    revision = state.get("policy_revision")
+    if type(revision) is not int or revision < 1:
+        result["reason_code"] = "TURBO_NATIVE_BROKER_POLICY_REVISION_UNVERIFIED"
+        return result
     result.update({
         "auto_confirm": True,
         "reason_code": "TURBO_NATIVE_BROKER_SCOPED_FULL_ACCESS",
         "turbo_root": str(root),
         "workspace_root": str(authorization),
-        "policy_revision": int(state.get("policy_revision") or 0),
+        "policy_revision": revision,
         "broker_admission": "BROKER_REQUIRED",
     })
     return result
