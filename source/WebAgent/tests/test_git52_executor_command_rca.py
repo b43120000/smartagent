@@ -97,16 +97,22 @@ def test_command_rca_truncation_and_legacy_result_are_explicit():
 def test_executor_blackboard_persists_command_without_executing_twice(
     tmp_path, monkeypatch,
 ):
-    command = "git ls-remote https://github.com/b43120000/test.git HEAD"
+    from WebAgent.tests.test_git52_native_broker_full_access_approval import (
+        _WRITE, _gate,
+    )
+    turbo = tmp_path / "turbo"
+    turbo.mkdir()
+    command = _WRITE
     action = json.dumps({
         "type": "tool_call", "name": "run_command",
         "arguments": {"command": command, "operation": "GENERAL",
-                      "success_criteria": "Check Git HTTPS",
+                      "working_directory": str(turbo),
+                      "success_criteria": "Check Runtime command capture",
                       "verify": [{"action": "file_exists",
-                                  "path": str(tmp_path / "proof.txt"),
+                                  "path": str(turbo / "turbo_exact_verify.txt"),
                                   "expect": True}]},
     })
-    request = "Inspect GitHub refs with one native Runtime command"
+    request = "Capture one Native Broker command for diagnostic evidence"
     loop, _ = _loop(
         tmp_path, monkeypatch,
         [action, '{"type":"blocked","reason":"fixture finished"}'],
@@ -115,7 +121,9 @@ def test_executor_blackboard_persists_command_without_executing_twice(
     monkeypatch.setattr(
         "agent_core.turbo_broker_admission.admit_action",
         lambda workspace, proposal:
-            {"decision": "NOT_APPLICABLE", "state": None, "evidence": {}},
+            _gate(tmp_path, turbo) if proposal and
+            proposal.get("tool") == "run_command"
+            else {"decision": "NOT_APPLICABLE", "state": None, "evidence": {}},
     )
     run_minimal_core(loop, request)
     board = read_executor_run(tmp_path, task_id=loop.task_id)
