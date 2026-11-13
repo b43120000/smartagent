@@ -11,7 +11,8 @@ param(
     [Parameter(Mandatory=$true)][string]$ActionId,
     [Parameter(Mandatory=$true)][string]$CommandBase64,
     [int]$TimeoutSeconds = 30,
-    [int]$MaxOutputBytes = 1048576
+    [int]$MaxOutputBytes = 1048576,
+    [ValidateSet("","git","python")][string]$NativeVersionProbe = ""
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -241,6 +242,27 @@ try {
         throw 'GIT50_BROKER_SCRIPT_LENGTH_INVALID'
     }
     $toolchain=Get-Pinned-Native-Toolchain
+    # Git59: a native child-token probe is only permitted for a literal
+    # --version invocation of the operator-pinned and hash-checked executable.
+    # All other scripts retain their existing behavior. This host-side code
+    # NEVER executes a child without the AppContainer CreateProcess launcher.
+    $git59ProbeExecutable=''
+    if ($NativeVersionProbe -ne '') {
+        if (@($toolchain.tools | Where-Object {$_ -ceq $NativeVersionProbe}).Count -ne 1) {
+            throw 'GIT59_PINNED_VERSION_EXECUTABLE_NOT_ENROLLED'
+        }
+        $relative = if ($NativeVersionProbe -ceq 'git') {
+            '.venv\git\cmd\git.exe'
+        } else {
+            '.venv\Scripts\python.exe'
+        }
+        $git59ProbeExecutable=[IO.Path]::GetFullPath((Join-Path $ProjectRoot $relative))
+        $literalCommand="& '" + $git59ProbeExecutable + "' --version"
+        if (-not $script.Trim().Equals($literalCommand,
+                      [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'GIT59_NATIVE_VERSION_COMMAND_NOT_EXACT_PINNED_LITERAL'
+        }
+    }
     # The native command is the *only* path that receives untrusted script.
     # The elevated/setup PowerShell code must never invoke the command.
     $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
@@ -255,6 +277,59 @@ try {
         $native.internet_client_token_verified -ne $true -or
         $native.internet_client_capability_sid -ne 'S-1-15-3-1') {
         throw 'GIT50_BROKER_KERNEL_PROCESS_RECEIPT_INVALID'
+    }
+    # The Git/Python executable is launched a SECOND TIME, directly by
+    # CreateProcessW with explicit AppContainer security capabilities. Unlike
+    # the first PowerShell-wrapped version command, the returned kernel token
+    # receipt proves the executable process identity itself, independently.
+    $git59Child=@{}
+    $git59Verified=$false
+    if ($NativeVersionProbe -ne '') {
+        try {
+            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchWithTrustedPath(
+                $moniker,$git59ProbeExecutable,'--version',$state.cwd,
+                [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
+            $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
+                $git59Os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+                $git59Os.sandbox_identity_verified -ne $true -or
+                $git59Os.internet_client_token_verified -ne $true -or
+                $git59Os.internet_client_capability_sid -ne 'S-1-15-3-1' -or
+                $git59Os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+                $git59Os.os_process_started -ne $true -or
+                [int64]$git59Os.pid -le 0) {
+                throw 'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Verified=$true
+            $git59Child=[ordered]@{
+                schema='SMARTAGENT_GIT59_DIRECT_NATIVE_CHILD_V1'
+                status='OS_TOKEN_VERIFIED'
+                executable_name=$NativeVersionProbe
+                executable_path=$git59ProbeExecutable
+                sandbox_backend='WIN32_APPCONTAINER'
+                sandbox_identity_verified=$true
+                internet_client_token_verified=$true
+                internet_client_capability_sid='S-1-15-3-1'
+                child_process_policy='JOB_KILL_ON_CLOSE'
+                os_process_started=$true
+                pid=[int64]$git59Os.pid
+                exit_code=[int64]$git59Os.exit_code
+            }
+        } catch {
+            # Preserve the first shell result; an independently unverifiable
+            # native process never receives a success token attestation.
+            $reason='GIT59_NATIVE_CHILD_CREATEPROCESS_FAILED'
+            if ($_.Exception -is [TimeoutException]) {
+                $reason='GIT59_NATIVE_CHILD_EXECUTION_TIMEOUT'
+            } elseif ([string]$_.Exception.Message -eq
+                       'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED') {
+                $reason='GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Child=[ordered]@{
+                status='UNVERIFIED'
+                reason_code=$reason
+            }
+        }
     }
     $fresh=Assert-Trusted-State
     $response=[ordered]@{
@@ -276,6 +351,9 @@ try {
         native_toolchain_status=$(if($toolchain.trusted_count -gt 0){'PINNED'}else{'NOT_ENROLLED'})
         native_trusted_tool_count=[int]$toolchain.trusted_count
         native_trusted_tools=@($toolchain.tools)
+        native_direct_child_probe_kind=[string]$NativeVersionProbe
+        native_direct_child_attestation=$git59Child
+        native_executable_identity_verified=[bool]$git59Verified
         process_started=$true
         executed=$true
         command_exit_code=[int64]$native.exit_code
