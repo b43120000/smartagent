@@ -64,6 +64,8 @@ def _receipt(command: str, output: str, *, sandbox=True, complete=True):
         "sandbox_identity_verified": bool(sandbox),
         "turbo_effective_for_action": "ON" if sandbox else "OFF",
         "native_error_class": "NONE",
+        "kernel_outside_read_denied": bool(sandbox),
+        "kernel_outside_write_denied": bool(sandbox),
         "native_executable_identity_verified": False,
         "native_executable_identity_reason": "POWERSHELL_PARENT_ONLY_ATTESTED",
     }
@@ -167,6 +169,21 @@ def test_report_must_disclose_uncertainty_and_can_report_negative_boolean():
     )
     assert state["verdict"] == "FAIL"
     assert state["state_table"][-1]["condition_id"] == "D09"
+
+
+def test_missing_os_denial_attestation_is_not_a_completed_diagnostic():
+    contract = compile_requirement_goal_state(REQUEST)
+    history = _history()
+    history[0]["receipt"]["data"]["sandbox_evidence"][
+        "kernel_outside_write_denied"] = False
+    state = evaluate_frozen_goal_contract(contract, history, SUMMARY)
+    assert state["verdict"] == "FAIL"
+    assert "D01" in state["unsatisfied_condition_ids"]
+    history = _history()
+    history[1]["receipt"]["data"]["sandbox_evidence"].pop("native_error_class")
+    state = evaluate_frozen_goal_contract(contract, history, SUMMARY)
+    assert state["verdict"] == "FAIL"
+    assert "D04" in state["unsatisfied_condition_ids"]
 
 
 def test_extra_command_or_mutation_not_a_read_only_diagnostic():
