@@ -46,6 +46,8 @@ jobs:
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git53_native_scope_and_full_access.py
+          source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
+          source/WebAgent/tests/test_git52_native_command_trust_replan.py
           source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
           source/WebAgent/tests/test_git52_native_network_toolchain.py
           source/WebAgent/tests/test_git52_action_gated_ingress_scope.py
