@@ -93,14 +93,24 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
     actions = getattr(loop, "_canonical_action_proposals", None)
     if not isinstance(ledger, Mapping) or not isinstance(actions, Mapping):
         return [], [], None, "ACTION_LEDGER_MISSING"
-    events = [
-        row for row in board.get("events", [])
-        if row.get("kind") == "TOOL_RESULT"
-    ]
-    denied = [
-        row for row in board.get("events", [])
-        if row.get("kind") == "ADMISSION_REJECTED"
-    ]
+    event_total = int(board.get("event_count_total", len(board.get("events", []))))
+    if event_total > 10000 or event_total < len(board.get("events", [])):
+        return [], [], None, "EVIDENCE_EVENT_HISTORY_UNBOUNDED_OR_DAMAGED"
+    if event_total != len(board.get("events", [])):
+        from .executor_run_blackboard import read_executor_event
+        try:
+            source_events = [
+                read_executor_event(
+                    root, task_id=loop.task_id, request_id=loop.run_id,
+                    task_epoch=loop.task_epoch, sequence=index,
+                ) for index in range(1, event_total + 1)
+            ]
+        except (OSError, ValueError, KeyError):
+            return [], [], None, "EVIDENCE_EVENT_ARCHIVE_READBACK_FAILED"
+    else:
+        source_events = list(board.get("events", []))
+    events = [row for row in source_events if row.get("kind") == "TOOL_RESULT"]
+    denied = [row for row in source_events if row.get("kind") == "ADMISSION_REJECTED"]
     if any(
         row.get("runtimeEvidence", {}).get("status") != "REJECTED"
         or row.get("runtimeEvidence", {}).get("executed") is not False
@@ -114,7 +124,7 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
         # admitted/pending action or rejected ToolCall is being hidden.
         if (actions or ledger or denied or any(
             row.get("kind") in {"ACTION_ADMITTED", "MODEL_TOOL_CALL"}
-            for row in board.get("events", [])
+            for row in source_events
         )):
             return [], [], None, "NO_TOOL_FINISH_WITH_PENDING_ACTION"
         if (not allow_open and
