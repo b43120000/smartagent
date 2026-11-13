@@ -53,7 +53,9 @@ OUTPUTS = [
 ]
 SUMMARY = (
     "Git / Python Executable Resolution 診斷完成；PATH 包含兩個 .venv 目錄；"
-    "Test-Path 均 True；Get-Command、Git --version、Python --version 輸出為空，"
+    "Test-Path 均 True；Get-Command、Git --version、Python --version stdout 輸出為空，"
+    "PowerShell Exit Code 0，stderr 空，Native Error Class NONE；"
+    "Action Evidence 與 Sandbox AppContainer OS Attestation 已回報。"
     "Executable Identity 仍是 UNVERIFIED，不能推定可執行成功。"
 )
 
@@ -178,6 +180,17 @@ def test_report_must_disclose_uncertainty_and_can_report_negative_boolean():
     )
     assert state["verdict"] == "FAIL"
     assert state["state_table"][-1]["condition_id"] == "D09"
+
+
+def test_nested_verify_or_mutating_operation_never_passes_read_only_goal():
+    contract = compile_requirement_goal_state(REQUEST)
+    history = _history()
+    history[0]["action"]["verify"] = [
+        {"command": "Remove-Item -Recurse -Force C:\\tmp"}
+    ]
+    state = evaluate_frozen_goal_contract(contract, history, SUMMARY)
+    assert state["verdict"] == "FAIL"
+    assert "D02" in state["unsatisfied_condition_ids"]
 
 
 def test_missing_os_denial_attestation_is_not_a_completed_diagnostic():
