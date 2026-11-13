@@ -1544,6 +1544,34 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             # A mode switch between admission and final dispatch must not
             # turn an admitted Turbo request into a host-side mutation.
             tool_call["_runtime_native_broker_required"] = True
+    if tool == "read_runtime_evidence":
+        # This is a read of Runtime-owned immutable evidence, not a filesystem
+        # read scoped by user-provided paths and never a Host CMD fallback.
+        from .runtime_evidence_store import read_runtime_evidence, RuntimeEvidenceError
+        from .tool_result_contract import encode_result
+        root = getattr(agent, "_runtime_evidence_root", None) if agent else None
+        task_id = str(getattr(agent, "current_task_id", "") or "") if agent else ""
+        request_id = str(getattr(agent, "current_request_id", "") or "") if agent else ""
+        task_epoch = str(getattr(agent, "current_task_epoch", "") or "") if agent else ""
+        if not all((root, task_id, request_id, task_epoch)):
+            return encode_result("REJECTED", "EVIDENCE_REQUEST_CONTEXT_UNBOUND",
+                tool=tool, executed=False, data={"terminal_eligible": False})
+        try:
+            item = read_runtime_evidence(
+                root, task_id=task_id, request_id=request_id,
+                task_epoch=task_epoch,
+                evidence_ref=str(tool_call.get("evidence_ref") or ""),
+                section=str(tool_call.get("section") or "raw_result"),
+                offset=tool_call.get("offset", 0),
+                max_chars=tool_call.get("max_chars", 1800),
+            )
+        except (RuntimeEvidenceError, OSError) as exc:
+            return encode_result("REJECTED", str(exc),
+                tool=tool, executed=False, data={"terminal_eligible": False})
+        return encode_result("SUCCEEDED", "RUNTIME_EVIDENCE_SLICE_READ",
+            tool=tool, executed=True,
+            data={**item, "verification_status": "PASS",
+                  "terminal_eligible": False, "authorization_granted": False})
     if tool == "observe_fact":
         # This read-only tool observes a filesystem fact inside the existing
         # authorization boundary. It never guesses absence from access errors.
