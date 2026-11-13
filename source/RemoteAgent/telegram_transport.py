@@ -1044,6 +1044,38 @@ class TelegramReceiver:
                         update_id=update_id, error_type=type(exc).__name__,
                     )
                     continue
+            # Git59: the same already authenticated Telegram receiver may
+            # expand ONE exact native diagnostic command into six strict,
+            # read-only Runtime actions. It is not a Host CMD execution path.
+            from agent_core.git59_telegram_native_live import (
+                COMMAND as GIT59_LIVE_COMMAND,
+                prepare_message as prepare_git59_native_live,
+            )
+            if str(message.text or "").strip() == GIT59_LIVE_COMMAND:
+                try:
+                    message = prepare_git59_native_live(
+                        message, update_id=update_id, project_root=self.install_root,
+                    )
+                    if message is None:
+                        raise ValueError("GIT59_DIAGNOSTIC_NOT_PREPARED")
+                    self._log(
+                        "CONNECT", stage="GIT59_DIAGNOSTIC_TASK_PREPARED",
+                        update_id=update_id,
+                        request_sha256=message.metadata[
+                            "git59_native_exec_live"]["request_sha256"],
+                    )
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self.offset_store.commit(update_id)
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 Git59 Native Executable 診斷拒絕：" + str(exc)[:320],
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                    self._log(
+                        "ERROR", stage="GIT59_DIAGNOSTIC_CONTROL_REJECTED",
+                        update_id=update_id, error_type=type(exc).__name__,
+                    )
+                    continue
             if self.task_admission_guard is not None:
                 try:
                     admission = self.task_admission_guard(message)
