@@ -100,7 +100,7 @@ def compile_requirement_goal_state(request: str) -> dict:
                            "NATIVE_APPCONTAINER_REQUIRED", True),
                 _condition("D02", "PROCESS_CONSTRAINT",
                            "independent read-only steps",
-                           "SIX_READ_ONLY_COMMANDS", True),
+                           "SIX_READ_ONLY_DIAGNOSTIC_ATTEMPTS", True),
                 _condition("D03", "OBSERVATION", "AppContainer PATH",
                            "CAPTURED_VALUE", "REPORT_ACTUAL_MEMBERSHIP"),
                 _condition("D04", "OBSERVATION", paths["git"],
@@ -323,7 +323,8 @@ def _diagnostic_actual(item: Mapping, name: str, paths: Mapping):
 
 
 def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
-                                  summary: str) -> dict:
+                                  summary: str, *,
+                                  admission_denials: list[dict] | None = None) -> dict:
     """Evaluate only actual decoded receipts, never Planner-authored checks."""
     if contract.get("status") != "COMPILED":
         return {
@@ -363,6 +364,23 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
         required = ("path", "git_exists", "python_exists",
                     "resolve", "git_version", "python_version")
         by_step = {step: [] for step in required}
+        denied_steps = {"git_version": [], "python_version": []}
+        # Rejected attempts are NOT ToolResults. They count only for the two
+        # explicitly optional executable launches and only with a verified
+        # Runtime Blackboard event binding to the frozen step.
+        for denial in admission_denials or []:
+            if not isinstance(denial, Mapping):
+                continue
+            step = str(denial.get("goal_diagnostic_step") or "")
+            if (step in denied_steps
+                    and denial.get("kind") == "TURBO_NATIVE_CONFIRMATION_BLOCKED"
+                    and denial.get("toolName") == "run_command"
+                    and denial.get("executed") is False
+                    and denial.get("authorization_granted") is False
+                    and re.fullmatch(r"[0-9a-f]{64}",
+                                     str(denial.get("command_sha256") or ""))
+                    and str(denial.get("reason_code") or "")):
+                denied_steps[step].append(denial)
         unexpected = []
         for item in history:
             action = item["action"]
@@ -408,11 +426,18 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
             [item["evidence_ref"] for item in all_run],
             "NATIVE_SANDBOX_ATTESTED" if sandbox_ok else "NATIVE_SANDBOX_NOT_ATTESTED",
         ))
-        coverage = all(len(by_step[step]) == 1 for step in required)
-        coverage = coverage and not unexpected and len(all_run) == 6
+        coverage = all(
+            len(by_step[step]) + len(denied_steps.get(step, [])) == 1
+            for step in required
+        )
+        coverage = coverage and not unexpected and (
+            len(all_run) + sum(len(rows) for rows in denied_steps.values()) == 6
+        )
         table.append(_row(
             conditions[1], "PASS" if coverage else "FAIL",
             {"step_counts": {key: len(val) for key, val in by_step.items()},
+             "policy_rejected_versions": {
+                 key: len(val) for key, val in denied_steps.items()},
              "unexpected_action_count": len(unexpected)},
             [item["evidence_ref"] for item in all_run],
             "SIX_DISTINCT_READ_ONLY_COMMANDS" if coverage
@@ -421,7 +446,20 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
         for idx, step in enumerate(required):
             condition = conditions[idx + 2]
             candidates = by_step[step]
-            if len(candidates) != 1:
+            policy_denials = denied_steps.get(step, [])
+            if not candidates and len(policy_denials) == 1:
+                denied = policy_denials[0]
+                table.append(_row(
+                    condition, "PASS",
+                    {"classification": "POLICY_REJECTED",
+                     "reason_code": str(denied["reason_code"]),
+                     "executed": False, "authorization_granted": False,
+                     "exit_code": None, "stdout": None, "stderr": None},
+                    [str(denied.get("event_id") or "")],
+                    "TRUSTED_POLICY_REJECTION_OBSERVED",
+                ))
+                continue
+            if len(candidates) != 1 or policy_denials:
                 table.append(_row(
                     condition, "UNVERIFIED", {"attempts": len(candidates)}, [],
                     "DIAGNOSTIC_ACTION_MISSING_OR_DUPLICATED",
@@ -440,6 +478,14 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
                 "COMMAND_STREAM_OR_EXIT_EVIDENCE_MISSING",
             } for row in table
         )
+        policy_denied = any(
+            row["reason_code"] == "TRUSTED_POLICY_REJECTION_OBSERVED"
+            for row in table
+        )
+        mentions_denial = bool(re.search(
+            r"拒絕|不允許|拒絕執行|denied|rejected|blocked",
+            str(summary or ""), re.I
+        ))
         mentions_uncertainty = bool(re.search(
             r"UNVERIFIED|未驗證|無法驗證|無法確認|無法判定|尚未證明|無法證明",
             str(summary or ""), re.I
@@ -467,11 +513,13 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
         }
         report_ok = all(reported.values()) and (
             not uncertain or mentions_uncertainty
-        )
+        ) and (not policy_denied or mentions_denial)
         table.append(_row(
             conditions[-1], "PASS" if report_ok else "FAIL",
             {"explicit_uncertainty": mentions_uncertainty,
              "uncertainty_in_evidence": uncertain,
+             "policy_rejection_in_evidence": policy_denied,
+             "policy_rejection_reported": mentions_denial,
              "report_dimensions": reported},
             [item["evidence_ref"] for item in all_run],
             "DIAGNOSTIC_REPORT_CONSISTENT" if report_ok
