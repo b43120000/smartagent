@@ -435,10 +435,24 @@ def run():
     assert co.classify_observation(
         baseline, {**viewport_changed, 'composer_matches': False}, check_turn_counts=False
     ) == 'PARTIAL_OR_EMPTY'
-    for value, enabled in (('', False), ('1', True)):
+    for user_count, assistant_count, safe in (
+        (3, 3, True), (1, 1, True), (1, 3, True), (4, 2, False), (2, 0, False)
+    ):
+        observed = {**viewport_changed, 'user_count': user_count, 'assistant_count': assistant_count}
+        expected = 'VERIFIED_SAFE_TO_SUBMIT' if safe else 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+        assert co.classify_observation(baseline, observed, turn_count_tolerance=1) == expected
+    assert co.classify_observation(
+        baseline, {**viewport_changed, 'generation_active': True}, turn_count_tolerance=1
+    ) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    for value, enabled in ((None, True), ('0', False), ('1', True)):
         with tempfile.TemporaryDirectory() as temp, patch.dict(
-            os.environ, {'SMARTAGENT_COMPOSER_CHECK_TURN_COUNTS': value}
+            os.environ
         ), patch.object(co, 'run_helper', side_effect=fake_result('VERIFIED_SAFE_TO_SUBMIT')):
+            key = 'SMARTAGENT_COMPOSER_CHECK_TURN_COUNTS'
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
             co.prepare_composer(endpoint='http://127.0.0.1:1272', url=before['url'],
                                 prompt='test', journal_root=temp)
             record = json.loads(next(Path(temp).glob('*.json')).read_text(encoding='utf-8'))

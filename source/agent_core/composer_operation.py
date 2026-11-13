@@ -249,7 +249,7 @@ def _prepare_locked(*,endpoint,url,prompt,journal_root,timeout_sec,
     record['owner_pid']=os.getpid()
     record['logical_prompt_sha256']=logical_prompt_sha(prompt)
     record['check_turn_counts'] = (
-        os.environ.get('SMARTAGENT_COMPOSER_CHECK_TURN_COUNTS', '').strip() == '1'
+        os.environ.get('SMARTAGENT_COMPOSER_CHECK_TURN_COUNTS', '1').strip() != '0'
     )
     write_json_atomic(journal,record)
     payload=dict(mode='write',endpoint=endpoint,url=url,prompt=prompt,journal=str(journal),
@@ -493,10 +493,11 @@ def _atomic_clear_owned(scraper,primary):
     }''',primary))
 
 
-def classify_observation(before,after,*,check_turn_counts=True):
+def classify_observation(before,after,*,check_turn_counts=True,turn_count_tolerance=0):
     if not isinstance(before,dict) or not before or not isinstance(after,dict):
         return 'UNKNOWN'
-    unchanged=_same_turns(before,after,check_turn_counts=check_turn_counts)
+    unchanged=_same_turns(before,after,check_turn_counts=check_turn_counts,
+                          turn_count_tolerance=turn_count_tolerance)
     if not unchanged or before.get('generation_active') or after.get('generation_active'):
         return 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
     return 'VERIFIED_SAFE_TO_SUBMIT' if after.get('composer_matches') is True else 'PARTIAL_OR_EMPTY'
@@ -508,13 +509,17 @@ def _native_identity(turn):
         'data-chatgpt-search-message-ids','id') if attrs.get(name)),'')
 
 
-def _same_turns(before,after,*,check_turn_counts=True):
+def _same_turns(before,after,*,check_turn_counts=True,turn_count_tolerance=0):
     if not before or not after:return False
     if before.get('url') != after.get('url'):return False
-    if check_turn_counts and any(
-        before.get(key) != after.get(key) for key in ('user_count', 'assistant_count')
-    ):
-        return False
+    if check_turn_counts:
+        for key in ('user_count', 'assistant_count'):
+            old_count, new_count = before.get(key), after.get(key)
+            if old_count == new_count:
+                continue
+            if (type(old_count) is not int or type(new_count) is not int
+                    or abs(new_count - old_count) > turn_count_tolerance):
+                return False
     if ('last_turn_status' in before and 'last_turn_status' in after
             and before['last_turn_status'] != after['last_turn_status']):
         return False
@@ -530,13 +535,15 @@ def _same_turns(before,after,*,check_turn_counts=True):
 
 
 
-def _snapshot_difference(before, after, *, check_turn_counts=True):
+def _snapshot_difference(before, after, *, check_turn_counts=True, turn_count_tolerance=0):
     """Digest/index-only diagnostic; never an authorization to recover."""
     if not isinstance(before, dict) or not isinstance(after, dict):
         return {"baseline_available": False, "same_turns": False}
     details = {
         "baseline_available": True,
-        "same_turns": _same_turns(before, after, check_turn_counts=check_turn_counts),
+        "same_turns": _same_turns(before, after, check_turn_counts=check_turn_counts,
+                                  turn_count_tolerance=turn_count_tolerance),
+        "turn_count_tolerance": turn_count_tolerance,
         "check_turn_counts": check_turn_counts,
         "url_same": before.get("url") == after.get("url"),
         "user_count_same": before.get("user_count") == after.get("user_count"),
@@ -1385,11 +1392,14 @@ def helper_main():
         # DOM virtualization can change the number of visible history rows
         # during a write. Keep checking the original conversation and tail.
         # Legacy journals without an explicit setting retain strict behavior.
-        check_turn_counts = record.get('check_turn_counts') is not False
-        status=classify_observation(before,after,check_turn_counts=check_turn_counts)
+        count_policy = dict(
+            check_turn_counts=record.get('check_turn_counts') is not False,
+            turn_count_tolerance=1 if record.get('check_turn_counts') is True else 0,
+        )
+        status=classify_observation(before,after,**count_policy)
         result=dict(status=status,observation=after)
         if status=='TURN_CHANGED_OR_SUBMIT_UNCERTAIN':
-            result['comparison']=_snapshot_difference(before,after,check_turn_counts=check_turn_counts)
+            result['comparison']=_snapshot_difference(before,after,**count_policy)
         print('COMPOSER_RESULT '+json.dumps(result),flush=True)
         # Do not browser.close/page.close: this client does not own Edge.
 
