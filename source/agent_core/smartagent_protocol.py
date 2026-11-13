@@ -130,6 +130,10 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"path": str},
         "optional": {},
     },
+    "read_runtime_evidence": {
+        "required": {"evidence_ref": str},
+        "optional": {"section": str, "offset": int, "max_chars": int},
+    },
     "write_file": {
         "required": {"path": str, "content": str},
         "optional": {},
@@ -914,6 +918,18 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 suggestion=PROJECT_EVIDENCE_ACTION_CONTRACT,
                 block_index=block_index,
             )
+
+    if tool == "read_runtime_evidence":
+        from .runtime_evidence_store import REF_PATTERN, SECTIONS, MAX_SLICE_CHARS
+        if (not REF_PATTERN.fullmatch(call.get("evidence_ref", ""))
+                or call.get("section", "raw_result") not in SECTIONS
+                or type(call.get("offset", 0)) is not int
+                or call.get("offset", 0) < 0
+                or type(call.get("max_chars", 1800)) is not int
+                or not 1 <= call.get("max_chars", 1800) <= MAX_SLICE_CHARS):
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "runtime_evidence_reference_or_slice_invalid", tool=tool,
+                suggestion="Use an actual same-request MIN-EV reference and a bounded slice.")
 
     if tool == "observe_fact":
         from .evidence_foundation import validate_observe_fact_action, EvidenceSpecError
