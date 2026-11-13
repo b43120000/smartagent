@@ -372,14 +372,31 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
             if not isinstance(denial, Mapping):
                 continue
             step = str(denial.get("goal_diagnostic_step") or "")
-            if (step in denied_steps
-                    and denial.get("kind") == "TURBO_NATIVE_CONFIRMATION_BLOCKED"
-                    and denial.get("toolName") == "run_command"
-                    and denial.get("executed") is False
-                    and denial.get("authorization_granted") is False
-                    and re.fullmatch(r"[0-9a-f]{64}",
-                                     str(denial.get("command_sha256") or ""))
-                    and str(denial.get("reason_code") or "")):
+            native_refused = (
+                denial.get("kind") == "TURBO_NATIVE_CONFIRMATION_BLOCKED"
+                and denial.get("executed") is False
+                and denial.get("authorization_granted") is False
+                and re.fullmatch(r"[0-9a-f]{64}",
+                                 str(denial.get("command_sha256") or ""))
+                and str(denial.get("reason_code") or "")
+            )
+            admission = denial.get("admission_diagnostic") or {}
+            rca = denial.get("command_rca") or {}
+            scoped_refused = (
+                denial.get("kind") == "ADMISSION_REJECTED"
+                and (denial.get("runtimeEvidence") or {}).get("status") == "REJECTED"
+                and (denial.get("runtimeEvidence") or {}).get("executed") is False
+                and admission.get("stage") == "SCOPE_PREFLIGHT"
+                and str(admission.get("reason_code") or "").startswith("scope_rejected:")
+                and rca.get("command_capture_status") == "CAPTURED"
+                and not rca.get("command_truncated")
+                and not rca.get("command_redaction_count")
+                and re.fullmatch(r"[0-9a-f]{64}",
+                                 str(rca.get("original_command_sha256") or ""))
+                and str(denial.get("reason_code") or "")
+            )
+            if (step in denied_steps and denial.get("toolName") == "run_command"
+                    and (native_refused or scoped_refused)):
                 denied_steps[step].append(denial)
         unexpected = []
         for item in history:
