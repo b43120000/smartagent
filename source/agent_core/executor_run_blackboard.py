@@ -89,6 +89,12 @@ def read_executor_run(root: str | Path, *, task_id: str, request_id: str | None 
 
 
 def begin_executor_run(root: str | Path, loop, request: str, *, evidence_requirement: Mapping | None = None) -> dict:
+    from .requirement_goal_state import (
+        compile_requirement_goal_state, validate_frozen_goal_contract,
+    )
+    goal_contract = compile_requirement_goal_state(request)
+    if not validate_frozen_goal_contract(goal_contract, request):
+        raise ValueError("executor_run_goal_contract_compilation_invalid")
     task_id = _id(loop.task_id)
     prior = read_executor_run(root, task_id=task_id)
     if prior:
@@ -100,6 +106,12 @@ def begin_executor_run(root: str | Path, loop, request: str, *, evidence_require
             raise ValueError("executor_run_blackboard_restart_requires_continuation")
         if evidence_requirement is not None and prior.get("evidence_requirement") != dict(evidence_requirement):
             raise ValueError("executor_run_blackboard_requirement_conflict")
+        # Goal intent is fixed to original source before any action; a replay
+        # cannot weaken it, even when a different model proposes new checks.
+        if (prior.get("goal_state_contract") != goal_contract
+                or not validate_frozen_goal_contract(
+                    prior.get("goal_state_contract"), request)):
+            raise ValueError("executor_run_goal_contract_frozen_mismatch")
         return prior
     bind = "\0".join((task_id, str(loop.run_id), str(loop.task_epoch)))
     handoff_id = "HOF-" + hashlib.sha256(bind.encode("utf-8")).hexdigest()[:24].upper()
@@ -110,6 +122,8 @@ def begin_executor_run(root: str | Path, loop, request: str, *, evidence_require
         "request_sha256": hashlib.sha256(str(request).encode("utf-8")).hexdigest(),
         "execution_mode": "POKECLAW_AGENT_LOOP",
         "evidence_requirement": dict(evidence_requirement or {}),
+        "goal_state_contract": goal_contract,
+        "goal_contract_frozen_before_execution": True,
         "executor_state": "RUNNING",
         "goal_driver_state": "DISABLED",
         "prerequisite_state": "DISABLED",
@@ -248,6 +262,9 @@ def record_finish_comparison(root: str | Path, loop, comparison: Mapping) -> dic
         "evidence_refs": list(comparison.get("evidence_refs") or []),
         "mismatches": list(comparison.get("mismatches") or [])[:20],
         "tool_results": list(comparison.get("tool_results") or []),
+        "goal_contract_sha256": str(comparison.get("goal_contract_sha256") or ""),
+        "goal_state_table": list(comparison.get("goal_state_table") or [])[:32],
+        "model_goal_checks_advisory": comparison.get("model_goal_checks_advisory"),
     }
     value["terminal"]["finish_comparison"] = record
     value["terminal"]["goal_verified"] = verdict == "PASS"
@@ -279,6 +296,9 @@ def projection(value: Mapping) -> dict:
         "event_read_tool": "read_runtime_blackboard",
         "tool_evidence_refs": list((value.get("terminal") or {}).get("tool_evidence_refs") or []),
         "goal_verified": bool((value.get("terminal") or {}).get("goal_verified", False)),
+        "goal_contract_status": (value.get("goal_state_contract") or {}).get("status", "MISSING"),
+        "goal_contract_kind": (value.get("goal_state_contract") or {}).get("goal_kind", ""),
+        "goal_contract_sha256": (value.get("goal_state_contract") or {}).get("contract_sha256", ""),
     }
 
     
