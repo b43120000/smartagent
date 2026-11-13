@@ -268,6 +268,9 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
         },
         "handoff_id": board["handoff_id"],
         "blackboard_event_count": len(board["events"]),
+        "goal_contract_sha256": comparison.get("goal_contract_sha256", ""),
+        "goal_state_table": list(comparison.get("goal_state_table") or [])[:32],
+        "model_goal_checks_advisory": comparison.get("model_goal_checks_advisory"),
         "summary_sha256": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
     }
     payload["receipt_id"] = "TERM-" + _digest(payload)[:20].upper()
@@ -327,6 +330,30 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         mismatch_lines = "\n不一致欄位：" + json.dumps(
             comparison["mismatches"], ensure_ascii=False, separators=(",", ":"),
         )[:3000]
+    state_report = ""
+    if comparison and comparison.get("goal_state_table"):
+        table = [{
+            "condition_id": row.get("condition_id"),
+            "condition_type": row.get("condition_type"),
+            "expected": row.get("expected"), "actual": row.get("actual"),
+            "verdict": row.get("verdict"), "reason_code": row.get("reason_code"),
+            "evidence_refs": row.get("evidence_refs", []),
+        } for row in comparison["goal_state_table"][:32]]
+        serialized = json.dumps(
+            table, ensure_ascii=False, separators=(",", ":"), default=str
+        )
+        state_report = (
+            "\nRuntime Goal State Table（來源：實際 ToolResult）："
+            + serialized[:5500]
+            + ("\n[GOAL_STATE_TABLE_BOUNDED_PREVIEW；完整內容存於 Blackboard]"
+               if len(serialized) > 5500 else "")
+        )
+        advisory = comparison.get("model_goal_checks_advisory") or {}
+        if advisory and not advisory.get("model_checks_match_actual_values", True):
+            state_report += (
+                "\nPlanner 額外 Goal Check 與 Runtime 實值不符；"
+                "已記錄為非權威提案，不覆寫凍結的 Goal Contract。"
+            )
     trailer = (
         "\n\nExecutor Blackboard（已寫入並回讀）：\n"
         f"Executor：{p['executor_state']}\n"
@@ -336,7 +363,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         f"Tool Evidence：{', '.join(p['tool_evidence_refs']) or '無'}\n"
         f"Parent Dispatch：{p['parent_dispatch_state']}\n"
         f"Parent Consumption：{p['parent_consumption_state']}\n"
-        f"整體目標：{terminal_line}{mismatch_lines}"
+        f"整體目標：{terminal_line}{mismatch_lines}{state_report}"
     )
     if comparison and comparison["verdict"] == "PASS" and (
         comparison.get("completion_kind") == "ANSWER_ONLY"
