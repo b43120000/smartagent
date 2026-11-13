@@ -202,7 +202,7 @@ def build_operation_result(
         },
     }
     if (value in {"INSPECT", "GIT_INSPECT"}
-            and re.fullmatch(r"(?is)Test-Path\\s+-LiteralPath\\s+(['\"]).+?\\1\\s*", command.strip())
+            and re.fullmatch(r"(?is)Test-Path\s+-LiteralPath\s+(['\"]).+?\1\s*", command.strip())
             and output.strip() in {"True", "False"}
             and not stdout_truncated):
         result["observed_boolean"] = output.strip() == "True"
