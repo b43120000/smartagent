@@ -227,6 +227,34 @@ def test_four_mode_results_share_same_stdout_stderr_contract(
     assert data["verification_status"] == "UNVERIFIED"
 
 
+def test_failed_evidence_persist_never_claims_readable_pointer():
+    pointer = {"store_status": "PERSIST_FAILED", "evidence_ref": REF}
+    successful = _tool_result(
+        "SUCCEEDED", "COMMAND_EXITED", {"stdout": "A" * 12000},
+        evidence_pointer=pointer,
+    )
+    assert '"complete_result_available_in_evidence_store":false' in successful["data"]
+    assert '"evidence_delivery_status":"PERSIST_FAILED"' in successful["data"]
+    assert '"read_tool":null' in successful["data"]
+    failed = _tool_result(
+        "FAILED", "COMMAND_EXITED", {"stdout": "", "stderr": "ACCESS_DENIED", "exit_code": 1},
+        evidence_pointer=pointer,
+    )
+    assert "evidence_delivery_status=PERSIST_FAILED" in failed["error"]
+    assert "read_tool=read_runtime_evidence" not in failed["error"]
+
+
+def test_canonical_protocol_and_executor_use_same_action_evidence_reference():
+    # A regression guard against the literal backslash-zero instead of
+    # the NUL byte used in the historical MIN-EV digest contract.
+    root = Path(__file__).resolve().parents[2]
+    executor = (root / "WebAgent" / "pokeclaw_executor_loop.py").read_text(encoding="utf-8")
+    common = (root / "WebAgent" / "protocol_loop.py").read_text(encoding="utf-8")
+    assert 'action["action_id"] + "\\0" + digest' in executor
+    assert 'action_id + "\\0" + _result_digest' in common
+    assert 'action_id + "\\\\0" + _result_digest' not in common
+
+
 def test_blackboard_history_archives_without_loss_and_supports_paged_read(tmp_path):
     loop = SimpleNamespace(task_id=TASK, run_id=REQUEST, task_epoch=EPOCH)
     begin_executor_run(tmp_path, loop, "check source evidence")
