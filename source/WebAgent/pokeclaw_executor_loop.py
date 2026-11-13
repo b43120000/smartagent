@@ -1069,7 +1069,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         loop._planner_original_actions[action["action_id"]] = {
             **proposed, "action_id": action["action_id"],
         }
-        mutating = action_is_mutating(action)
+        mutating = action_is_mutating(action) or (
+            broker_gate["decision"] == "BROKER_REQUIRED"
+            and action.get("tool") == "run_command"
+        )
         append_executor_event(root, loop, {
             "round": turn, "kind": "ACTION_ADMITTED",
             "toolName": action["tool"], "action_id": action["action_id"],
