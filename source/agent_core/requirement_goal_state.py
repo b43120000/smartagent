@@ -393,7 +393,7 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
                 and not rca.get("command_redaction_count")
                 and re.fullmatch(r"[0-9a-f]{64}",
                                  str(rca.get("original_command_sha256") or ""))
-                and str(denial.get("reason_code") or "")
+                and str(admission.get("reason_code") or "")
             )
             if (step in denied_steps and denial.get("toolName") == "run_command"
                     and (native_refused or scoped_refused)):
@@ -469,7 +469,10 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
                 table.append(_row(
                     condition, "PASS",
                     {"classification": "POLICY_REJECTED",
-                     "reason_code": str(denied["reason_code"]),
+                     "reason_code": str(
+                         denied.get("reason_code") or
+                         (denied.get("admission_diagnostic") or {}).get("reason_code")
+                         or "POLICY_REJECTED"),
                      "executed": False, "authorization_granted": False,
                      "exit_code": None, "stdout": None, "stderr": None},
                     [str(denied.get("event_id") or "")],
