@@ -1158,9 +1158,27 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
             repairs_for_same_issue = admission_repair_counts[repair_key]
             consecutive_admission_rejections += 1
+            optional_scope_version = ""
+            if (
+                decision.tool == "run_command"
+                and diagnosis.get("stage") == "SCOPE_PREFLIGHT"
+                and str(rejected or "").startswith("scope_rejected:")
+                and goal_state_contract.get("status") == "COMPILED"
+                and goal_state_contract.get("goal_kind")
+                == "DIAGNOSTIC_EXECUTABLE_RESOLUTION"
+                and isinstance(goal_state_contract.get("executable_targets"), Mapping)
+            ):
+                from agent_core.requirement_goal_state import _step
+                candidate_step = _step(
+                    str((decision.arguments or {}).get("command") or ""),
+                    goal_state_contract["executable_targets"],
+                )
+                if candidate_step in {"git_version", "python_version"}:
+                    optional_scope_version = candidate_step
             row = append_executor_event(root, loop, {
                 "round": turn, "kind": "ADMISSION_REJECTED",
                 "toolName": decision.tool,
+                "goal_diagnostic_step": optional_scope_version,
                 "arguments": _safe_arguments(decision.arguments),
                 "arguments_sha256": _digest(decision.arguments),
                 **({"command_rca": capture_command_rca(
@@ -1183,6 +1201,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "admission_verdict": "REJECTED_BEFORE_EXECUTION",
                 "admission_diagnostic": diagnostic,
             })
+            if optional_scope_version:
+                hint = (
+                    "Runtime SCOPE_PREFLIGHT policy REJECTED optional "
+                    + optional_scope_version
+                    + " absolute --version; no ToolResult was produced. "
+                    "The frozen diagnostic contract records this as "
+                    "POLICY_REJECTED, not executed; do NOT use Host CMD or "
+                    "replay the denied command. Finish remaining observations "
+                    "and report the rejection and missing Exit Code/stdout/stderr."
+                )
+                continue
             hint = (
                 "Tool Admission 拒絕（沒有執行）："
                 + json.dumps(diagnostic, ensure_ascii=False, separators=(",", ":"))[:2500]
