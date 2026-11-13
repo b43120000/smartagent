@@ -106,7 +106,8 @@ def _tool_result(status: str, reason: str, payload: object = None, *, evidence_p
 
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
-            evidence_requirement=None, environment_inventory=None,
+            evidence_requirement=None, goal_state_contract=None,
+            environment_inventory=None,
             runtime_status_catalog=None, turbo_planning_context=None,
             preexecution_rejections=None) -> str:
     from .minimal_core_loop import tool_catalog
@@ -188,6 +189,17 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Available tools: " + json.dumps(
             catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
         "Original user request:\n" + request + "\n"
+        "Frozen Requirement-to-Goal State Contract (Runtime compiled before "
+        "any ToolCall; source-grounded and NOT a permission grant):\n"
+        + json.dumps(goal_state_contract or {}, ensure_ascii=False,
+                     separators=(",", ":"))[:5500] + "\n"
+        "For COMPILED contracts, final Goal acceptance is computed from this "
+        "frozen contract and actual ToolResults, NOT Planner-authored goal_checks. "
+        "A diagnostic goal can be satisfied by truthful UNVERIFIED findings "
+        "when the request explicitly permits this; it does not prove a "
+        "Git/Python child process ran. Report every unknown explicitly. "
+        "For UNCOMPILED requirements, no generic goal state is invented; "
+        "legacy evidence-backed checks remain in force.\n"
         f"Round: {round_id}/{max_rounds}\n"
         "Runtime ToolResult Status Ledger (all actual results, not only recent six; "
         "rejected admissions are NOT ToolResults):\n"
@@ -353,6 +365,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     board = begin_executor_run(
         root, loop, request, evidence_requirement=requirement,
     )
+    goal_state_contract = dict(board.get("goal_state_contract") or {})
     loop.executor_blackboard_terminal = board
     loop.executor_result = {}
     loop.terminal_acceptance = {}
@@ -475,6 +488,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             max_rounds=max_rounds, hint=hint,
             field_catalog=finish_runtime_field_catalog(loop),
             evidence_requirement=requirement,
+            goal_state_contract=goal_state_contract,
             environment_inventory=environment_inventory,
             runtime_status_catalog=(
                 __import__("agent_core.runtime_finish_status_repair",
@@ -559,6 +573,16 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     repairable.add("MODEL_RUNTIME_MISMATCH")
                 if postrun_gap is not None:
                     repairable.add("GOAL_CHECK_RUNTIME_MISMATCH")
+                # A frozen Goal Contract can request further read-only
+                # evidence or a corrected diagnostic report, but neither
+                # its expected values nor source SHA may be rewritten.
+                contract_gap = (
+                    preview.get("finish_diagnostic")
+                    if preview.get("reason_code") == "FROZEN_GOAL_STATE_NOT_SATISFIED"
+                    else None
+                )
+                if contract_gap is not None:
+                    repairable.add("FROZEN_GOAL_STATE_NOT_SATISFIED")
                 # Preserve Git34–35 behavior: after two repairs, missing
                 # declarations still reach a formal comparator FAIL. The
                 # Git42-specific schema error remains distinctly reportable.
@@ -567,7 +591,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                                  and preview["reason_code"] != "MODEL_GOAL_CHECK_SCHEMA_INVALID")):
                     last_finish_reason = str(preview["reason_code"])
                     last_finish_diagnostic = (
-                        status_repair_diagnostic or postrun_gap
+                        status_repair_diagnostic or postrun_gap or contract_gap
                         or preview.get("finish_diagnostic")
                     )
                     if (finish_repairs >= max_finish_repairs
@@ -590,6 +614,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     # tool, even when ordinary Action rounds remain available.
                     if turn >= max_rounds or status_repair_diagnostic is not None:
                         finish_repair_only = True
+                    if contract_gap:
+                        unsatisfied = contract_gap.get("state_table") or []
+                        if unsatisfied and all(
+                            row.get("condition_type") == "REPORT"
+                            for row in unsatisfied if isinstance(row, Mapping)
+                        ):
+                            finish_repair_only = True
                     append_executor_event(root, loop, {
                         "round": turn, "kind": (
                             "MODEL_FINISH_STATUS_REPAIR" if status_repair_diagnostic
@@ -620,9 +651,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
+                        + (
+                            "本次需修復執行前凍結的 Goal State Conditions；"
+                            "診斷結果 UNVERIFIED 可以被如實回報，"
+                            "但缺失的 Action Evidence 不可捏造；"
+                            + json.dumps(contract_gap or {}, ensure_ascii=False,
+                                         separators=(",", ":"))[:1800]
+                            if contract_gap else ""
+                        )
                         + ("請先提交新的唯讀 tool_call，驗證後才可 Finish。"
-                         if postrun_gap and not finish_repair_only
-                         else "請提交新的 finish（而非 tool_call）。")
+                           if (postrun_gap or contract_gap) and not finish_repair_only
+                           else "請提交新的 finish（而非 tool_call）。")
                     )
                     continue
             append_executor_event(root, loop, {
