@@ -1213,6 +1213,16 @@ def _event_projection(runtime, payload: Mapping) -> tuple[list[dict], bool]:
                 or evidence.get("verification_status")
             ),
             "reason_code": _code(evidence.get("result_reason")),
+            "source_evidence_ref": str(evidence.get("evidence_ref") or ""),
+            "evidence_store_status": str(
+                (evidence.get("evidence_store") or {}).get("store_status") or "NOT_RECORDED"
+            ),
+            "read_tool": (
+                "read_runtime_evidence" if (
+                    (evidence.get("evidence_store") or {}).get("store_status")
+                    == "PERSISTED_AND_READBACK_VERIFIED"
+                ) else ""
+            ),
         }
         event["event_id"] = "BBE-" + _digest(event)[:20].upper()
         events.append(event)
@@ -1448,6 +1458,9 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         "event_projection": events,
         "event_projection_truncated": events_truncated,
         "event_count": len(events),
+        "event_projection_limit": 64,
+        "action_result_ledger_count": len(getattr(runtime, "action_result_ledger", {}) or {}),
+
         "ownership": {
             "planner_may_propose": [
                 "STRATEGY", "ACTION", "PROGRESS", "CONTEXT_REQUEST",
@@ -1473,6 +1486,13 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
         },
         "raw_tool_results_included": False,
         "raw_commands_included": False,
+        "full_result_source": "ACTION_RESULT_LEDGER_AND_IMMUTABLE_RUNTIME_EVIDENCE_STORE",
+        "full_result_read_tool": "read_runtime_evidence",
+        "evidence_pointer_rule": (
+            "Use only persisted same-request evidence_ref. "
+            "This bounded projection is not the original ToolResult."
+        ),
+        "event_projection_is_partial": bool(events_truncated),
     }
     board_digest = _digest(board)
     board["snapshot_id"] = "BB-" + board_digest[:20].upper()
