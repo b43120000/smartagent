@@ -1,0 +1,65 @@
+name: Git54 Runtime Evidence Transparency
+
+on:
+  push:
+    branches:
+      - git54/runtime-evidence-transparency-20261113
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: P0-P4 Evidence and Native/Legacy contract / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile canonical, Executor, broker and metadata modules
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/runtime_evidence_store.py
+          source/agent_core/runtime_blackboard_reader.py
+          source/agent_core/executor_run_blackboard.py
+          source/agent_core/shared_blackboard.py
+          source/agent_core/command_operation.py
+          source/agent_core/smartagent_protocol.py
+          source/agent_core/tool_capabilities.py
+          source/agent_core/tools.py
+          source/agent_core/turbo_os_broker_client.py
+          source/agent_core/turbo_broker_admission.py
+          source/WebAgent/minimal_admission.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_git54_runtime_evidence_transparency.py
+      - name: P0-P4 and legacy compatibility regression
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git54_runtime_evidence_transparency.py
+          source/WebAgent/tests/test_git53_native_scope_and_full_access.py
+          source/WebAgent/tests/test_git52_native_broker_full_access_approval.py
+          source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
+          source/WebAgent/tests/test_git52_native_network_toolchain.py
+          source/WebAgent/tests/test_git52_action_gated_ingress_scope.py
+          source/WebAgent/tests/test_git34_runtime_finish_comparator.py
+          source/WebAgent/tests/test_git28_executor_resolution_blackboard.py
+      - name: Windows native AppContainer launcher compiles and broker parses
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Add-Type -Path 'install_smart_agent/turbo_appcontainer_probe.cs' -ErrorAction Stop
+          [ScriptBlock]::Create([IO.File]::ReadAllText('install_smart_agent/turbo_os_execute.ps1')) | Out-Null
