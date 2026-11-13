@@ -234,6 +234,13 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     if protocol_family not in {"SMARTAGENT_V8", "SMARTAGENT_V9"}:
         raise RuntimeError("remote_task_protocol_family_mismatch")
     source_transport = str((task.metadata or {}).get("transport", "")).upper()
+    # Git58: validate the authenticated, ingress-created test selector before
+    # any browser/GPT work. A normal user request never arms injection.
+    from agent_core.git58_telegram_live_control import verify_worker_task
+    git58_live_marker = verify_worker_task(
+        task, source_transport=source_transport,
+    )
+    git58_live_injector = None
     from agent_core.tri_one_shared_worker import use_shared_v9_worker
     if not use_shared_v9_worker(source_transport):
         raise RuntimeError("shared_webagent_worker_transport_not_admitted")
@@ -641,6 +648,21 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             loop.executor_only_mode = (
                 os.environ.get("SMARTAGENT_EXECUTOR_ONLY_MODE", "1").strip() == "1"
             )
+            if git58_live_marker is not None:
+                from agent_core.git58_telegram_live_control import (
+                    install_real_planner_injector,
+                )
+                git58_live_injector = install_real_planner_injector(
+                    loop, task, marker=git58_live_marker,
+                )
+                runtime_log.write(
+                    "CONNECT", component="telegram_webagent_worker",
+                    stage="GIT58_REAL_PLANNER_INJECTOR_ARMED",
+                    task_id=task.task_id, request_id=task.request_id,
+                    task_epoch=task.task_epoch,
+                    original_goal_sha256=git58_live_marker["request_sha256"],
+                    authorization_granted=False,
+                )
             runtime_log.write(
                 "STATUS", component="telegram_webagent_worker",
                 stage="EXECUTOR_ONLY_MODE_SELECTED",
@@ -665,6 +687,40 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 ),
                 trusted_authorized_paths=trusted_authorized_paths,
             )
+            if git58_live_injector is not None:
+                from agent_core.git58_telegram_live_control import (
+                    assess_real_planner_live,
+                )
+                import json
+                git58_report = assess_real_planner_live(
+                    root, task, loop, git58_live_injector,
+                )
+                runtime_log.write(
+                    "STATUS" if git58_report["verdict"] ==
+                    "GIT58_REAL_PLANNER_LIVE_PASS" else "ERROR",
+                    component="telegram_webagent_worker",
+                    stage="GIT58_REAL_PLANNER_LIVE_RESULT",
+                    task_id=task.task_id, request_id=task.request_id,
+                    **{key: git58_report[key] for key in (
+                        "verdict", "tool_execution_count",
+                        "injection_count", "semantic_repair_count",
+                        "evidence_ref", "comparator_cause", "final_verdict",
+                    )},
+                )
+                final_content += (
+                    "\n\n[Git58 真實 GPT Planner Live E2E]\n"
+                    + json.dumps(git58_report, ensure_ascii=False)
+                )
+                if git58_report["verdict"] != "GIT58_REAL_PLANNER_LIVE_PASS":
+                    raise RuntimeError(
+                        "GIT58_REAL_PLANNER_LIVE_FAIL:"
+                        + json.dumps({
+                            key: git58_report[key] for key in (
+                                "tool_execution_count", "injection_count",
+                                "semantic_repair_count", "final_verdict",
+                            )
+                        }, ensure_ascii=False)
+                    )
             if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
                 raise RemoteTaskCancelled("telegram_interrupt_requested")
             # Completion handoff barrier: the v8 response is already UI-idle
