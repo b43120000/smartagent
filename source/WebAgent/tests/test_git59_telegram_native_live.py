@@ -118,6 +118,7 @@ def test_git59_separate_native_child_verdict_never_inferred_from_green_goal():
                     "native_executable_probe_stdout": (
                         "git version 2.47.0" if name == "git" else "Python 3.13.0"
                     ),
+                    "native_executable_probe_stderr": "",
                     "native_executable_probe_capture_complete": True,
                     "native_executable_probe_output_source":
                         "OS_DIRECT_CHILD_PINNED_FILE_HANDLE",
