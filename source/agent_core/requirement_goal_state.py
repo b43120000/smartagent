@@ -297,6 +297,10 @@ def _diagnostic_actual(item: Mapping, name: str, paths: Mapping):
         "stdout": output[:256],
         "stderr": str(data["stderr"])[:256],
         "native_error_class": os_proof.get("native_error_class"),
+        "native_executable_identity_verified": os_proof.get(
+            "native_executable_identity_verified"),
+        "native_executable_identity_reason": os_proof.get(
+            "native_executable_identity_reason"),
     }
     if name.endswith("_exists"):
         if output.strip() in {"True", "False"}:
@@ -365,7 +369,17 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
             tool = action.get("tool")
             if tool == "run_command":
                 step = _step(str(action.get("command") or ""), paths)
-                if step in by_step:
+                # The command itself is read-only, but a run_command envelope
+                # may carry nested verify commands. These must not become
+                # invisible side effects in an accepted diagnostic.
+                safe_envelope = (
+                    str(action.get("operation") or "INSPECT").upper()
+                    in {"INSPECT", "GIT_INSPECT", "GENERAL"}
+                    and not action.get("verify")
+                    and not action.get("expected_verification")
+                    and not action.get("expected_failure")
+                )
+                if step in by_step and safe_envelope:
                     by_step[step].append(item)
                 else:
                     unexpected.append(item)
@@ -430,14 +444,35 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
             r"UNVERIFIED|未驗證|無法驗證|無法確認|無法判定|尚未證明|無法證明",
             str(summary or ""), re.I
         ))
-        summary_has_subject = bool(re.search("git", summary or "", re.I)
-                                   and re.search("python", summary or "", re.I))
-        report_ok = summary_has_subject and (not uncertain or mentions_uncertainty)
+        # The user requested a *report*, not only six tool invocations.
+        # Require acknowledgement of each specified result dimension; accept
+        # both English metadata keys and conventional Traditional Chinese.
+        report_text = str(summary or "")
+        report_patterns = {
+            "path": r"\bPATH\b",
+            "test_path": r"Test-Path",
+            "get_command": r"Get-Command",
+            "git": r"\bGit\b",
+            "python": r"\bPython\b",
+            "exit_code": r"Exit\s*Code|exit_code|退出碼",
+            "stdout": r"stdout|標準輸出|輸出",
+            "stderr": r"stderr|標準錯誤|錯誤輸出",
+            "native_error_class": r"Native\s+Error\s+Class|native_error_class|原生錯誤類別",
+            "evidence": r"Evidence|證據",
+            "sandbox": r"Sandbox|AppContainer|沙盒",
+        }
+        reported = {
+            key: bool(re.search(pattern, report_text, re.I))
+            for key, pattern in report_patterns.items()
+        }
+        report_ok = all(reported.values()) and (
+            not uncertain or mentions_uncertainty
+        )
         table.append(_row(
             conditions[-1], "PASS" if report_ok else "FAIL",
             {"explicit_uncertainty": mentions_uncertainty,
              "uncertainty_in_evidence": uncertain,
-             "subject_names_reported": summary_has_subject},
+             "report_dimensions": reported},
             [item["evidence_ref"] for item in all_run],
             "DIAGNOSTIC_REPORT_CONSISTENT" if report_ok
             else "DIAGNOSTIC_UNCERTAINTY_NOT_REPORTED",
