@@ -1371,8 +1371,9 @@ def resolve_command_working_directory(
     cwd = gate(value or context.workspace_root, require_absolute=True, forbid_glob=True)
     if not cwd.is_dir():
         raise PathSecurityError('command_working_directory_not_directory:' + str(cwd))
+    native_broker = _native_run_command_admitted(cwd)
     is_bound_command = _path_independent_command_must_use_bound_workspace(command)
-    if is_bound_command and cwd != context.workspace_root:
+    if is_bound_command and cwd != context.workspace_root and not native_broker:
         raise PathSecurityError('path_independent_command_cwd_outside_bound_workspace:' + str(cwd))
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
@@ -1386,7 +1387,7 @@ def resolve_command_working_directory(
             str(command or ""), re.I,
         ))
     )
-    if requested and not any(is_within(cwd, root) for root in requested):
+    if requested and not native_broker and not any(is_within(cwd, root) for root in requested):
         if cwd != context.workspace_root or not (
             literal_read_from_bound_cwd
             or _bounded_path_independent_wait(command)
@@ -1428,8 +1429,10 @@ def resolve_command_working_directory(
                 # Built-in Python/Git are an installation-scoped Read Root,
                 # not a model-supplied request path or arbitrary host read.
                 from .workspace_access import builtin_toolchain_read_roots
-                if not any(is_within(resolved, Path(root))
-                           for root in builtin_toolchain_read_roots()):
+                if not native_broker and not any(
+                    is_within(resolved, Path(root))
+                    for root in builtin_toolchain_read_roots()
+                ):
                     raise PathSecurityError('proven_inspect_literal_outside_request_scope')
     return cwd
 
