@@ -6750,6 +6750,8 @@ class WebAgentProtocolLoop:
         self._rejected_action_resolution_traces = []
         self._runtime_action_rewrite_notes = {}
         self.tools.current_task_epoch = self.task_epoch
+        # Runtime-owned evidence store binding, never a Planner-supplied path.
+        self.tools._runtime_evidence_root = (self.progress_root if self.progress_root is not None else self.workspace)
         self.tools.current_intent_digest = self.intent_digest
         # SPR V1 runs before first Planner Progress and before any Tool action.
         # Saved-plan and external trusted scope are NEVER reconstructed from
