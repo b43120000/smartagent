@@ -210,6 +210,18 @@ def finish_executor_run(root: str | Path, loop, *,
         "FORMAT_ERROR", "EXECUTION_OUTCOME_UNKNOWN", "FINISH_CONTRACT_INVALID",
     }:
         raise ValueError("executor_run_blackboard_terminal_kind_invalid")
+    # Archived Blackboard events remain part of the same immutable source.
+    # A bounded recent projection must never hide historical ToolResults.
+    event_total = int(value.get("event_count_total", len(value["events"])))
+    if event_total > 10000:
+        raise ValueError("executor_run_blackboard_event_history_unbounded")
+    all_events = (
+        [read_executor_event(root, task_id=loop.task_id,
+                             request_id=loop.run_id, task_epoch=loop.task_epoch,
+                             sequence=index)
+         for index in range(1, event_total + 1)]
+        if event_total != len(value["events"]) else value["events"]
+    )
     value["executor_state"] = kind
     value["terminal"] = {
         "kind": kind, "round": int(loop.turn_id),
@@ -218,11 +230,11 @@ def finish_executor_run(root: str | Path, loop, *,
         "goal_verified": False,
         "tool_evidence_refs": [
             row.get("runtimeEvidence", {}).get("evidence_ref")
-            for row in value["events"]
+            for row in all_events
             if row.get("runtimeEvidence", {}).get("evidence_ref")
         ],
         "admission_rejection_count": sum(
-            1 for row in value["events"]
+            1 for row in all_events
             if row.get("runtimeEvidence", {}).get("status") == "REJECTED"
         ),
     }
