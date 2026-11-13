@@ -1,6 +1,7 @@
 """Git59 direct child OS token attestation tests (synthetic broker receipts)."""
 from __future__ import annotations
 
+import base64
 import copy
 import os
 from pathlib import Path
@@ -57,6 +58,15 @@ def _os_receipt(project: Path, name: str):
             "executable_path": str(path),
             "pid": 321,
             "exit_code": 0,
+            "git60_child_stdout_base64": base64.b64encode(
+                ("git version 2.47.0" if name == "git" else "Python 3.13.0"
+                ).encode("utf-8")).decode("ascii"),
+            "git60_child_stderr_base64": "",
+            "git60_child_stdout_bytes": len(
+                ("git version 2.47.0" if name == "git"
+                 else "Python 3.13.0").encode("utf-8")),
+            "git60_child_stderr_bytes": 0,
+            "git60_child_capture_complete": True,
         },
     }
 
@@ -69,6 +79,9 @@ def test_native_direct_child_accepts_exact_os_token_receipt(tmp_path, name):
         "verified": True,
         "reason": "OS_DIRECT_EXECUTABLE_TOKEN_VERIFIED",
         "name": name, "exit_code": 0, "pid": 321,
+        "stdout": "git version 2.47.0" if name == "git" else "Python 3.13.0",
+        "stderr": "", "capture_complete": True,
+        "stdout_bytes": 18 if name == "git" else 13, "stderr_bytes": 0,
     }
 
 
@@ -149,6 +162,11 @@ def test_diagnostic_reports_native_child_proof_separate_from_parent(tmp_path):
             "native_executable_probe_pid": 202 + index,
             "native_executable_direct_launch_count": 1,
             "native_executable_probe_is_second_process": True,
+            "native_executable_probe_stdout": value,
+            "native_executable_probe_stderr": "",
+            "native_executable_probe_capture_complete": True,
+            "native_executable_probe_output_source":
+                "OS_DIRECT_CHILD_PINNED_FILE_HANDLE",
         })
         history[index]["receipt"]["data"]["stdout"] = value
     report = (SUMMARY
@@ -174,3 +192,37 @@ def test_diagnostic_success_is_not_child_identity_without_proof():
     assert {row["reason_code"] for row in state["state_table"][6:8]} == {
         "NATIVE_CHILD_TOKEN_UNVERIFIED_EXPLICIT"
     }
+
+
+
+@pytest.mark.parametrize("tamper", [
+    "stdout_base64", "stderr_base64", "stdout_bytes", "capture_complete",
+])
+def test_git60_direct_child_capture_must_not_be_forged(tmp_path, tamper):
+    receipt = _os_receipt(tmp_path, "git")
+    child = receipt["native_direct_child_attestation"]
+    if tamper == "stdout_base64":
+        child["git60_child_stdout_base64"] = "!!!INVALIDBASE64"
+    elif tamper == "stderr_base64":
+        child["git60_child_stderr_base64"] = "@@"
+    elif tamper == "stdout_bytes":
+        child["git60_child_stdout_bytes"] = -1
+    elif tamper == "capture_complete":
+        child["git60_child_capture_complete"] = "yes"
+    with pytest.raises(TurboOSBrokerUnavailable,
+                       match="GIT60_NATIVE_DIRECT_CHILD_CAPTURE_INVALID"):
+        _git59_validate_direct_child(receipt, "git", tmp_path)
+
+
+def test_git60_parent_only_version_output_cannot_prove_native_child():
+    contract = compile_requirement_goal_state(REQUEST)
+    history = _history()
+    history[4]["receipt"]["data"]["stdout"] = "git version 2.47.0"
+    history[5]["receipt"]["data"]["stdout"] = "Python 3.13.0"
+    summary = SUMMARY + " Native direct child capture UNVERIFIED"
+    report = evaluate_frozen_goal_contract(contract, history, summary)
+    assert report["verdict"] == "PASS"
+    assert report["state_table"][6]["reason_code"] == \
+        "NATIVE_CHILD_TOKEN_UNVERIFIED_EXPLICIT"
+    assert report["state_table"][7]["reason_code"] == \
+        "NATIVE_CHILD_TOKEN_UNVERIFIED_EXPLICIT"
