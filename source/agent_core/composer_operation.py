@@ -248,6 +248,9 @@ def _prepare_locked(*,endpoint,url,prompt,journal_root,timeout_sec,
     record['submit_id']=marker.group(0) if marker else ''
     record['owner_pid']=os.getpid()
     record['logical_prompt_sha256']=logical_prompt_sha(prompt)
+    record['check_turn_counts'] = (
+        os.environ.get('SMARTAGENT_COMPOSER_CHECK_TURN_COUNTS', '').strip() == '1'
+    )
     write_json_atomic(journal,record)
     payload=dict(mode='write',endpoint=endpoint,url=url,prompt=prompt,journal=str(journal),
                  operation_id=record['operation_id'],hybrid=bool(hybrid))
@@ -490,10 +493,10 @@ def _atomic_clear_owned(scraper,primary):
     }''',primary))
 
 
-def classify_observation(before,after):
+def classify_observation(before,after,*,check_turn_counts=True):
     if not isinstance(before,dict) or not before or not isinstance(after,dict):
         return 'UNKNOWN'
-    unchanged=_same_turns(before,after)
+    unchanged=_same_turns(before,after,check_turn_counts=check_turn_counts)
     if not unchanged or before.get('generation_active') or after.get('generation_active'):
         return 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
     return 'VERIFIED_SAFE_TO_SUBMIT' if after.get('composer_matches') is True else 'PARTIAL_OR_EMPTY'
@@ -505,9 +508,13 @@ def _native_identity(turn):
         'data-chatgpt-search-message-ids','id') if attrs.get(name)),'')
 
 
-def _same_turns(before,after):
+def _same_turns(before,after,*,check_turn_counts=True):
     if not before or not after:return False
-    if any(before.get(k)!=after.get(k) for k in ('url','user_count','assistant_count')):return False
+    if before.get('url') != after.get('url'):return False
+    if check_turn_counts and any(
+        before.get(key) != after.get(key) for key in ('user_count', 'assistant_count')
+    ):
+        return False
     if ('last_turn_status' in before and 'last_turn_status' in after
             and before['last_turn_status'] != after['last_turn_status']):
         return False
@@ -523,13 +530,14 @@ def _same_turns(before,after):
 
 
 
-def _snapshot_difference(before, after):
+def _snapshot_difference(before, after, *, check_turn_counts=True):
     """Digest/index-only diagnostic; never an authorization to recover."""
     if not isinstance(before, dict) or not isinstance(after, dict):
         return {"baseline_available": False, "same_turns": False}
     details = {
         "baseline_available": True,
-        "same_turns": _same_turns(before, after),
+        "same_turns": _same_turns(before, after, check_turn_counts=check_turn_counts),
+        "check_turn_counts": check_turn_counts,
         "url_same": before.get("url") == after.get("url"),
         "user_count_same": before.get("user_count") == after.get("user_count"),
         "assistant_count_same": before.get("assistant_count") == after.get("assistant_count"),
@@ -1374,10 +1382,14 @@ def helper_main():
         else:
             before=record.get('baseline')
             after=_page_snapshot(scraper,payload['prompt'])
-        status=classify_observation(before,after)
+        # DOM virtualization can change the number of visible history rows
+        # during a write. Keep checking the original conversation and tail.
+        # Legacy journals without an explicit setting retain strict behavior.
+        check_turn_counts = record.get('check_turn_counts') is not False
+        status=classify_observation(before,after,check_turn_counts=check_turn_counts)
         result=dict(status=status,observation=after)
         if status=='TURN_CHANGED_OR_SUBMIT_UNCERTAIN':
-            result['comparison']=_snapshot_difference(before,after)
+            result['comparison']=_snapshot_difference(before,after,check_turn_counts=check_turn_counts)
         print('COMPOSER_RESULT '+json.dumps(result),flush=True)
         # Do not browser.close/page.close: this client does not own Edge.
 
