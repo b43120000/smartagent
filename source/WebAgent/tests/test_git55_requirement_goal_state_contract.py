@@ -310,6 +310,77 @@ def _compare_with_receipts(monkeypatch, request, history, *, summary,
     )
 
 
+def test_finish_comparator_uses_archived_blackboard_evidence(tmp_path):
+    from agent_core.executor_run_blackboard import (
+        append_executor_event, finish_executor_run,
+    )
+    request = "這個資料夾是否存在？ " + r"E:\demo"
+    ref = "MIN-EV-" + "b" * 24
+    action_id = "MIN-GIT55-ARCHIVED"
+    action = {
+        "action_id": action_id, "tool": "inspect_directory",
+        "paths": [r"E:\demo"], "recursive": False,
+    }
+    raw = encode_result(
+        "SUCCEEDED", "DIRECTORY_INSPECTED",
+        tool="inspect_directory", executed=True,
+        requested_path=r"E:\demo", resolved_path=r"E:\demo",
+        data={
+            "observed_exists": False, "observed_is_directory": False,
+            "observation_status": "CONFIRMED",
+        },
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    loop = SimpleNamespace(
+        task_id="TASK-GIT55-ARCHIVE", task_epoch="epoch",
+        run_id="RR-GIT55-ARCHIVE", turn_id=160,
+        action_result_ledger={}, _canonical_action_proposals={action_id: action},
+    )
+    loop.action_result_ledger[action_id] = {
+        "request_id": loop.run_id, "task_id": loop.task_id,
+        "task_epoch": loop.task_epoch, "result_id": ref,
+        "action_id": action_id, "result": raw,
+        "result_sha256": digest, "result_status": "SUCCEEDED",
+        "executed": True, "evidence_status": "ACTIVE",
+    }
+    begin_executor_run(
+        tmp_path, loop, request,
+        evidence_requirement=assess_finish_evidence_requirement(request),
+    )
+    append_executor_event(tmp_path, loop, {
+        "kind": "TOOL_RESULT", "toolName": "inspect_directory",
+        "action_id": action_id,
+        "runtimeEvidence": {
+            "evidence_ref": ref, "status": "SUCCEEDED",
+            "executed": True, "result_sha256": digest,
+        },
+        "toolResult": {"isSuccess": True, "data": "observed", "error": None},
+    })
+    for i in range(148):
+        append_executor_event(
+            tmp_path, loop, {"round": i + 2, "kind": "PLANNER_METADATA_ONLY"}
+        )
+    board = read_executor_run(tmp_path, task_id=loop.task_id)
+    assert len(board["archive_chunks"]) > 0
+    assert not any(row.get("kind") == "TOOL_RESULT" for row in board["events"])
+    terminal = finish_executor_run(
+        tmp_path, loop, terminal_kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
+        summary="已觀測",
+    )
+    assert terminal["terminal"]["tool_evidence_refs"] == [ref]
+    comparison = compare_runtime_finish(
+        loop, tmp_path, request, [{
+            "evidence_ref": ref,
+            "fields": {
+                "status": "SUCCEEDED",
+                "data.observed_exists": False,
+            },
+        }], answer="已觀測",
+    )
+    assert comparison["verdict"] == "PASS", comparison
+    assert comparison["goal_state_table"][0]["actual"]["exists"] is False
+
+
 def test_planner_wrong_goal_check_is_advisory_not_diagnostic_failure(monkeypatch):
     history = _history()
     checks = [
