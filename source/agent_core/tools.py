@@ -1416,7 +1416,12 @@ def resolve_command_working_directory(
             resolved = context.require_read(
                 target, require_absolute=True, forbid_glob=True)
             if requested and not any(is_within(resolved, root) for root in requested):
-                raise PathSecurityError('proven_inspect_literal_outside_request_scope')
+                # Built-in Python/Git are an installation-scoped Read Root,
+                # not a model-supplied request path or arbitrary host read.
+                from .workspace_access import builtin_toolchain_read_roots
+                if not any(is_within(resolved, Path(root))
+                           for root in builtin_toolchain_read_roots()):
+                    raise PathSecurityError('proven_inspect_literal_outside_request_scope')
     return cwd
 
 
