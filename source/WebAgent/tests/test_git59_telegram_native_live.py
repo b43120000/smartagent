@@ -114,7 +114,14 @@ def test_git59_separate_native_child_verdict_never_inferred_from_green_goal():
                     "native_executable_probe_exit_code": 0,
                     "native_executable_direct_launch_count": 1,
                     "native_executable_probe_is_second_process": True,
-                    "exit_code": 0, "stdout": name + " version 1",
+                    "exit_code": 0, "stdout": "",
+                    "native_executable_probe_stdout": (
+                        "git version 2.47.0" if name == "git" else "Python 3.13.0"
+                    ),
+                    "native_executable_probe_stderr": "",
+                    "native_executable_probe_capture_complete": True,
+                    "native_executable_probe_output_source":
+                        "OS_DIRECT_CHILD_PINNED_FILE_HANDLE",
                 },
                 "evidence_refs": ["MIN-EV-" + ("a" * 24 if name == "git"
                                               else "b" * 24)],

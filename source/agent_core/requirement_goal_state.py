@@ -311,6 +311,14 @@ def _diagnostic_actual(item: Mapping, name: str, paths: Mapping):
             "native_executable_direct_launch_count"),
         "native_executable_probe_is_second_process": os_proof.get(
             "native_executable_probe_is_second_process"),
+        "native_executable_probe_stdout": str(
+            os_proof.get("native_executable_probe_stdout") or "")[:256],
+        "native_executable_probe_stderr": str(
+            os_proof.get("native_executable_probe_stderr") or "")[:256],
+        "native_executable_probe_capture_complete": os_proof.get(
+            "native_executable_probe_capture_complete"),
+        "native_executable_probe_output_source": os_proof.get(
+            "native_executable_probe_output_source"),
     }
     if name.endswith("_exists"):
         if output.strip() in {"True", "False"}:
@@ -346,7 +354,17 @@ def _diagnostic_actual(item: Mapping, name: str, paths: Mapping):
         version_prefix = (
             "git version" if expected_tool == "git" else "python "
         )
-        if version_prefix not in output.strip().casefold():
+        native_stdout = str(
+            os_proof.get("native_executable_probe_stdout") or "")
+        native_stderr = str(
+            os_proof.get("native_executable_probe_stderr") or "")
+        if (os_proof.get("native_executable_probe_capture_complete") is not True
+                or os_proof.get("native_executable_probe_output_source")
+                    != "OS_DIRECT_CHILD_PINNED_FILE_HANDLE"
+                or version_prefix not in (native_stdout + "\n" + native_stderr
+                    ).strip().casefold()):
+            # The PowerShell parent stdout is NOT proof that this separately
+            # OS-attested executable actually emitted its version.
             actual["classification"] = "UNVERIFIED"
             return "PASS", "NATIVE_CHILD_VERSION_OUTPUT_UNVERIFIED", actual
         actual["classification"] = "OS_DIRECT_CHILD_TOKEN_AND_VERSION_VERIFIED"

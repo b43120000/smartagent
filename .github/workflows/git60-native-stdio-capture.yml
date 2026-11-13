@@ -1,0 +1,62 @@
+name: Git60 AppContainer Scoped STD Handle Capture
+
+on:
+  push:
+    branches:
+      - git60/appcontainer-stdio-handle-capture-20261114
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Git60 Win32 STD handle capture / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test deps
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile and test Git60 / Git59 / Git58 / Git57 / Git56
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git59_native_executable_child_token.py
+          source/WebAgent/tests/test_git59_telegram_native_live.py
+          source/WebAgent/tests/test_git55_requirement_goal_state_contract.py
+          source/WebAgent/tests/test_git56_finish_semantic_repair.py
+          source/WebAgent/tests/test_git57_live_finish_injector.py
+          source/WebAgent/tests/test_git58_telegram_real_planner_live.py
+      - name: Parse protected Broker and compile Win32 C# launcher
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install_smart_agent/turbo_os_execute.ps1').Path,
+            [ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'GIT60_NATIVE_BROKER_PS_PARSE_FAILED'
+          }
+          Add-Type -Path 'install_smart_agent/turbo_appcontainer_probe.cs' -ErrorAction Stop
+          if (-not ('SmartAgentGit47AppContainerProbe' -as [type])) {
+            throw 'GIT60_NATIVE_CSHARP_PROBE_NOT_COMPILED'
+          }
+          Write-Host 'GIT60_CSHARP_AND_POWERSHELL_COMPILE_PASS'
+      - name: Inherited Windows filesystem evidence E2E
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/git57_live_e2e.py --workspace "$env:RUNNER_TEMP" --target (Join-Path $env:RUNNER_TEMP 'GIT57_LIVE_NONEXISTENT_CI_GIT60') --progress-root . --scenario recover

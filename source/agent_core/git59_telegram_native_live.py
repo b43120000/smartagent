@@ -132,8 +132,14 @@ def assess_native_child_live(task, loop, *, source_transport: str) -> dict:
             and actual.get("native_executable_direct_launch_count") == 1
             and actual.get("native_executable_probe_is_second_process") is True
             and actual.get("exit_code") == 0
-            and isinstance(actual.get("stdout"), str)
-            and bool(actual["stdout"])
+            and actual.get("native_executable_probe_capture_complete") is True
+            and actual.get("native_executable_probe_output_source")
+                == "OS_DIRECT_CHILD_PINNED_FILE_HANDLE"
+            and isinstance(actual.get("native_executable_probe_stdout"), str)
+            and isinstance(actual.get("native_executable_probe_stderr"), str)
+            and bool(
+                actual["native_executable_probe_stdout"]
+                or actual["native_executable_probe_stderr"])
             and len(evidence_refs) == 1
             and str(evidence_refs[0]).startswith("MIN-EV-")
         )

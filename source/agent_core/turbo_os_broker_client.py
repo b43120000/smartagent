@@ -65,7 +65,9 @@ def _git59_validate_direct_child(receipt: dict, requested: str, project: Path) -
         if receipt.get("native_executable_identity_verified") is True or child:
             raise TurboOSBrokerUnavailable("GIT59_UNREQUESTED_CHILD_ATTESTATION")
         return {"verified": False, "reason": "POWERSHELL_PARENT_ONLY_ATTESTED",
-                "name": "", "exit_code": None, "pid": None}
+                "name": "", "exit_code": None, "pid": None,
+                "stdout": "", "stderr": "", "capture_complete": False,
+                "stdout_bytes": 0, "stderr_bytes": 0}
     if (receipt.get("native_direct_child_probe_kind") != requested
             or not isinstance(child, dict)
             or receipt.get("native_executable_identity_verified") is not
@@ -79,7 +81,9 @@ def _git59_validate_direct_child(receipt: dict, requested: str, project: Path) -
                 "GIT59_NATIVE_CHILD_EXIT_UNAVAILABLE"}:
             raise TurboOSBrokerUnavailable("GIT59_CHILD_ATTESTATION_REASON_INVALID")
         return {"verified": False, "reason": child["reason_code"],
-                "name": requested, "exit_code": None, "pid": None}
+                "name": requested, "exit_code": None, "pid": None,
+                "stdout": "", "stderr": "", "capture_complete": False,
+                "stdout_bytes": 0, "stderr_bytes": 0}
     executable = project / ".venv" / (
         "git/cmd/git.exe" if requested == "git" else "Scripts/python.exe")
     if not (
@@ -97,9 +101,32 @@ def _git59_validate_direct_child(receipt: dict, requested: str, project: Path) -
         and type(child.get("exit_code")) is int and child["exit_code"] >= 0
     ):
         raise TurboOSBrokerUnavailable("GIT59_CHILD_OS_TOKEN_PROOF_INVALID")
+    # Git60 native stdout/stderr was written by the actual OS-attested
+    # executable through explicitly allowlisted, scoped standard handles.
+    # Capture text remains untrusted data, not the authority for the SID.
+    try:
+        stdout = base64.b64decode(child["git60_child_stdout_base64"], validate=True)
+        stderr = base64.b64decode(child["git60_child_stderr_base64"], validate=True)
+        out_len = child["git60_child_stdout_bytes"]
+        err_len = child["git60_child_stderr_bytes"]
+        complete = child["git60_child_capture_complete"]
+        if (
+            type(out_len) is not int or type(err_len) is not int
+            or type(complete) is not bool or out_len < len(stdout)
+            or err_len < len(stderr)
+            or len(stdout) > 32768 or len(stderr) > 32768
+            or (complete is not (out_len == len(stdout) and err_len == len(stderr)))
+        ):
+            raise ValueError("capture_length_mismatch")
+    except (TypeError, KeyError, ValueError) as exc:
+        raise TurboOSBrokerUnavailable(
+            "GIT60_NATIVE_DIRECT_CHILD_CAPTURE_INVALID") from exc
     return {"verified": True, "reason": "OS_DIRECT_EXECUTABLE_TOKEN_VERIFIED",
             "name": requested, "exit_code": child["exit_code"],
-            "pid": child["pid"]}
+            "pid": child["pid"], "stdout": stdout.decode("utf-8", errors="replace"),
+            "stderr": stderr.decode("utf-8", errors="replace"),
+            "capture_complete": complete, "stdout_bytes": out_len,
+            "stderr_bytes": err_len}
 
 
 
@@ -479,6 +506,14 @@ def execute_turbo_command(
         "native_executable_probe_name": direct_child["name"],
         "native_executable_probe_exit_code": direct_child["exit_code"],
         "native_executable_probe_pid": direct_child["pid"],
+        "native_executable_probe_stdout": direct_child["stdout"],
+        "native_executable_probe_stderr": direct_child["stderr"],
+        "native_executable_probe_capture_complete": direct_child["capture_complete"],
+        "native_executable_probe_stdout_bytes": direct_child["stdout_bytes"],
+        "native_executable_probe_stderr_bytes": direct_child["stderr_bytes"],
+        "native_executable_probe_output_source": (
+            "OS_DIRECT_CHILD_PINNED_FILE_HANDLE" if native_version_probe
+            else "NONE"),
         "native_executable_direct_launch_count": (
             1 if native_version_probe else 0),
         "native_executable_probe_is_second_process": bool(native_version_probe),

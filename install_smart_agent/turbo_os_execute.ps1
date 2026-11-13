@@ -286,8 +286,8 @@ try {
     $git59Verified=$false
     if ($NativeVersionProbe -ne '') {
         try {
-            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchWithTrustedPath(
-                $moniker,$git59ProbeExecutable,'--version',$state.cwd,
+            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchVersionCaptured(
+                $moniker,$git59ProbeExecutable,$state.cwd,
                 [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
             $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
             if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
@@ -314,6 +314,11 @@ try {
                 os_process_started=$true
                 pid=[int64]$git59Os.pid
                 exit_code=[int64]$git59Os.exit_code
+                git60_child_stdout_base64=[string]$git59Os.git60_child_stdout_base64
+                git60_child_stderr_base64=[string]$git59Os.git60_child_stderr_base64
+                git60_child_stdout_bytes=[int64]$git59Os.git60_child_stdout_bytes
+                git60_child_stderr_bytes=[int64]$git59Os.git60_child_stderr_bytes
+                git60_child_capture_complete=[bool]$git59Os.git60_child_capture_complete
             }
         } catch {
             # Preserve the first shell result; an independently unverifiable
