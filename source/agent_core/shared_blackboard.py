@@ -1198,6 +1198,11 @@ def _event_projection(runtime, payload: Mapping) -> tuple[list[dict], bool]:
         if not isinstance(record, Mapping):
             record = {}
         action = record.get("action") if isinstance(record.get("action"), Mapping) else {}
+        source_record = (
+            evidence.get("evidence_store") or
+            evidence.get("runtime_evidence_store") or
+            record.get("runtime_evidence_store") or {}
+        )
         event = {
             "event_type": "ACTION_RESULT_RECORDED",
             "source_owner": "ACTION_RESULT_LEDGER",
@@ -1213,15 +1218,15 @@ def _event_projection(runtime, payload: Mapping) -> tuple[list[dict], bool]:
                 or evidence.get("verification_status")
             ),
             "reason_code": _code(evidence.get("result_reason")),
-            "source_evidence_ref": str(evidence.get("evidence_ref") or ""),
+            "source_evidence_ref": str(
+                source_record.get("evidence_ref") or evidence.get("evidence_ref") or ""
+            ),
             "evidence_store_status": str(
-                (evidence.get("evidence_store") or {}).get("store_status") or "NOT_RECORDED"
+                source_record.get("store_status") or "NOT_RECORDED"
             ),
             "read_tool": (
-                "read_runtime_evidence" if (
-                    (evidence.get("evidence_store") or {}).get("store_status")
-                    == "PERSISTED_AND_READBACK_VERIFIED"
-                ) else ""
+                "read_runtime_evidence" if source_record.get("store_status")
+                == "PERSISTED_AND_READBACK_VERIFIED" else ""
             ),
         }
         event["event_id"] = "BBE-" + _digest(event)[:20].upper()
