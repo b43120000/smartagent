@@ -195,52 +195,52 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
             pass
         return None, code
     if decision.tool == "run_command" and not native_broker:
-            operation = str(action.get("operation", "")).upper()
-            read_proven = command_is_proven_observation(action)
-            risk = classify_command(action)
+        operation = str(action.get("operation", "")).upper()
+        read_proven = command_is_proven_observation(action)
+        risk = classify_command(action)
+        try:
+            tool_context._last_command_risk_class = risk
+        except (AttributeError, TypeError):
+            pass
+        if (operation in {"INSPECT", "GIT_INSPECT", "VERIFY"}
+                and not read_proven and risk != "UNKNOWN"):
             try:
-                tool_context._last_command_risk_class = risk
+                tool_context._last_minimal_admission_diagnostic = {
+                    "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
+                    "stage": "COMMAND_CLASSIFICATION", "tool": decision.tool,
+                    "reason_code": "command_not_proven_read_only",
+                    "repair_class": "MODEL_ACTION_REASSESSMENT",
+                    "field_issues": [], "executed": False,
+                    "authorization_granted": False,
+                }
             except (AttributeError, TypeError):
                 pass
-            if (operation in {"INSPECT", "GIT_INSPECT", "VERIFY"}
-                    and not read_proven and risk != "UNKNOWN"):
+            return None, "command_not_proven_read_only"
+        if not read_proven:
+            code = ""
+            if not str(action.get("success_criteria", "")).strip():
+                code = "mutation_success_criteria_required"
+            verification = action.get("verify")
+            if not code and (not isinstance(verification, (list, dict)) or not verification):
+                code = "mutation_verification_required"
+            if code:
+                missing = "success_criteria" if code.startswith("mutation_success") else "verify"
                 try:
                     tool_context._last_minimal_admission_diagnostic = {
                         "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
-                        "stage": "COMMAND_CLASSIFICATION", "tool": decision.tool,
-                        "reason_code": "command_not_proven_read_only",
-                        "repair_class": "MODEL_ACTION_REASSESSMENT",
-                        "field_issues": [], "executed": False,
-                        "authorization_granted": False,
+                        "stage": "POSTCONDITION_CONTRACT", "tool": decision.tool,
+                        "reason_code": code, "repair_class": "MODEL_SCHEMA_REPAIR",
+                        "field_issues": [{
+                            "field": missing, "reason": "missing_or_empty",
+                            "expected_type": "str" if missing == "success_criteria"
+                                else "list | dict",
+                            "actual_type": "MISSING_OR_EMPTY",
+                        }],
+                        "executed": False, "authorization_granted": False,
                     }
                 except (AttributeError, TypeError):
                     pass
-                return None, "command_not_proven_read_only"
-            if not read_proven:
-                code = ""
-                if not str(action.get("success_criteria", "")).strip():
-                    code = "mutation_success_criteria_required"
-                verification = action.get("verify")
-                if not code and (not isinstance(verification, (list, dict)) or not verification):
-                    code = "mutation_verification_required"
-                if code:
-                    missing = "success_criteria" if code.startswith("mutation_success") else "verify"
-                    try:
-                        tool_context._last_minimal_admission_diagnostic = {
-                            "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
-                            "stage": "POSTCONDITION_CONTRACT", "tool": decision.tool,
-                            "reason_code": code, "repair_class": "MODEL_SCHEMA_REPAIR",
-                            "field_issues": [{
-                                "field": missing, "reason": "missing_or_empty",
-                                "expected_type": "str" if missing == "success_criteria"
-                                    else "list | dict",
-                                "actual_type": "MISSING_OR_EMPTY",
-                            }],
-                            "executed": False, "authorization_granted": False,
-                        }
-                    except (AttributeError, TypeError):
-                        pass
-                    return None, code
+                return None, code
     if decision.tool == "delete_path" and not native_broker:
         request = str(tool_context.current_request_text or "")
         target = str(action.get("path", "") or "")
