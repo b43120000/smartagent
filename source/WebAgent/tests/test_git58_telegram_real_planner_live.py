@@ -147,3 +147,51 @@ def test_unauthenticated_metadata_cannot_enable_worker_injector(tmp_path):
     }
     with pytest.raises(RuntimeError, match="GIT58_TEST_CONTROL_BINDING_INVALID"):
         verify_worker_task(task, source_transport="TELEGRAM")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows real local Runtime tools")
+def test_git58_bound_planner_full_real_runtime_e2e(tmp_path, monkeypatch):
+    """Run true filesystem inspect, immutable Evidence and Git56 Repair.
+
+    Only GPT model transport is controlled by the deterministic test Planner.
+    The actual Telegram Worker uses live_planner rather than this stub.
+    """
+    from WebAgent.tests.git57_live_e2e import ObservedStatePlanner
+    from WebAgent.protocol_loop import WebAgentProtocolLoop
+    from WebAgent.tool_context import WebAgentToolContext
+    from WebAgent.minimal_core_loop import run_minimal_core
+
+    msg = prepare_message(_message(), workspace=str(tmp_path), update_id=2223)
+    task = _task(msg, tmp_path)
+    marker = verify_worker_task(task, source_transport="TELEGRAM")
+    planner = ObservedStatePlanner("recover")
+    tools = WebAgentToolContext(tmp_path, interface_name="webdirect")
+    loop = WebAgentProtocolLoop(
+        tmp_path, planner, tool_context=tools, progress_root=tmp_path,
+        max_turns=6,
+    )
+    loop.run_id, loop.task_id, loop.task_epoch = (
+        task.request_id, task.task_id, task.task_epoch,
+    )
+    loop.task_request = task.request
+    loop.executor_only_mode = True
+    loop.git57_target = str(
+        tmp_path.resolve() / (LEAF + "2223")
+    )
+    loop.authorized_paths = [loop.git57_target]
+    tools.current_task_id = task.task_id
+    tools.current_task_epoch = task.task_epoch
+    tools.begin_run(task.request_id, task.request, [loop.git57_target])
+    planner.loop = loop
+    injector = install_real_planner_injector(loop, task, marker=marker)
+    output = run_minimal_core(loop, task.request)
+    from agent_core.git58_telegram_live_control import assess_real_planner_live
+    report = assess_real_planner_live(tmp_path, task, loop, injector)
+    assert report["verdict"] == "GIT58_REAL_PLANNER_LIVE_PASS"
+    assert report["injection_count"] == 1
+    assert report["tool_execution_count"] == 1
+    assert report["semantic_repair_count"] == 1
+    assert report["finish_count"] == 2
+    assert report["goal_contract_unchanged"] is True
+    assert report["final_verdict"] == "PASS"
+    assert "不存在" in output
