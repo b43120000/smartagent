@@ -353,6 +353,14 @@ def _powershell_with_native_exit_propagation(command: str) -> str:
     )
 
 
+def _native_run_command_admitted(cwd: str | Path | None) -> bool:
+    """Advisory routing only; OS Broker independently reattests every action."""
+    from .turbo_broker_admission import assess
+    from .workspace_access import resolve_turbo_authorization_workspace
+    parent = resolve_turbo_authorization_workspace(cwd)
+    return assess(parent if parent is not None else cwd, tool="run_command")["decision"] == "BROKER_REQUIRED"
+
+
 def _run_powershell_capture(
     command: str,
     timeout: int = 30,
@@ -364,7 +372,8 @@ def _run_powershell_capture(
 ) -> dict:
     """Execute PowerShell and return structured evidence instead of only text."""
     try:
-        require_command_allowed(command, workspace=cwd, approval_manifest=approval_manifest)
+        if not _native_run_command_admitted(cwd):
+            require_command_allowed(command, workspace=cwd, approval_manifest=approval_manifest)
     except CommandSecurityError as exc:
         return {
             "exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
@@ -1427,6 +1436,10 @@ def resolve_command_working_directory(
 
 def _execution_approval_manifest(tool_call: dict, agent, security_context: SecurityContext, working_directory=None) -> dict | None:
     command = str(tool_call.get("command", "") or "")
+    # Native commands have already passed OS Broker admission; their grammar
+    # does not require legacy one-shot/command-family human approval.
+    if _native_run_command_admitted(working_directory or security_context.workspace_root):
+        return None
     admission = inspect_command(command, workspace=working_directory or security_context.workspace_root)
     if admission.allowed:
         return None
