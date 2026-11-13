@@ -1,0 +1,58 @@
+name: Git58 Telegram Real Planner Live Test Control
+
+on:
+  push:
+    branches:
+      - git58/telegram-real-planner-live-20261113
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Git58 Real Planner test ingress / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile live Telegram Worker + controls
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/git58_telegram_live_control.py
+          source/RemoteAgent/telegram_transport.py
+          source/RemoteAgent/telegram_webagent_worker.py
+          source/agent_core/git57_live_finish_injector.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/tests/test_git58_telegram_real_planner_live.py
+      - name: Git58/57/56/55 regressions
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git58_telegram_real_planner_live.py
+          source/WebAgent/tests/test_git57_live_finish_injector.py
+          source/WebAgent/tests/test_git56_finish_semantic_repair.py
+          source/WebAgent/tests/test_git55_requirement_goal_state_contract.py
+          source/WebAgent/tests/test_git52_telegram_poison_request.py
+      - name: Windows real Runtime recover scenario
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/git57_live_e2e.py --workspace "$env:RUNNER_TEMP" --target (Join-Path $env:RUNNER_TEMP 'GIT57_LIVE_NONEXISTENT_CI_GIT58_RECOVER') --progress-root . --scenario recover
+      - name: Windows real Runtime exhaust scenario
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/git57_live_e2e.py --workspace "$env:RUNNER_TEMP" --target (Join-Path $env:RUNNER_TEMP 'GIT57_LIVE_NONEXISTENT_CI_GIT58_EXHAUST') --progress-root . --scenario exhaust
