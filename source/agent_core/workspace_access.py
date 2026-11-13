@@ -173,6 +173,29 @@ def save_workspace_access_policy(
     return payload
 
 
+def builtin_toolchain_read_roots() -> tuple[str, ...]:
+    """Runtime-owned read-only toolchain installed with SmartAgent.
+
+    This path is never supplied by the Planner or Edit Workspace.  It does
+    not grant execution trust: the native broker independently verifies each
+    pinned Git/Python executable and enforces the AppContainer RX ACL.
+    """
+    try:
+        from .path_security import is_reparse_path
+        profile_path = default_profile_path()
+        if (profile_path.parent.name.casefold() != "windows_security"
+                or profile_path.parent.parent.name.casefold() != "secure"
+                or profile_path.parent.parent.parent.name.casefold() != "localdata"):
+            return ()
+        install_root = profile_path.parents[3]
+        toolchain = install_root / ".venv"
+        if not toolchain.is_dir() or is_reparse_path(toolchain):
+            return ()
+        return (str(toolchain.resolve(strict=True)),)
+    except (OSError, ValueError, RuntimeError, IndexError):
+        return ()
+
+
 def access_snapshot() -> dict:
     software_only = software_only_mode_enabled()
     try:
@@ -190,10 +213,12 @@ def access_snapshot() -> dict:
     policy = load_workspace_access_policy(profile=profile)
     writable = tuple(policy["writable_workspaces"])
     user_read_only = tuple(policy["read_only_roots"])
+    builtins = builtin_toolchain_read_roots()
     protected_read_only = _normalized_roots(
         (
             *tuple(profile.get("skill_roots") or ()),
             profile.get("executor_code_root", ""),
+            *builtins,
         )
     )
     read_only = tuple(dict.fromkeys((*user_read_only, *protected_read_only)))
@@ -202,6 +227,7 @@ def access_snapshot() -> dict:
         "policy": policy,
         "writable_workspaces": writable,
         "read_only_roots": read_only,
+        "builtin_toolchain_read_roots": builtins,
         "turbo_roots": tuple(policy.get("turbo_roots") or ()),
         "turbo_requested": policy.get("turbo_requested") is True,
     }
