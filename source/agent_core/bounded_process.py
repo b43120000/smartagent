@@ -53,20 +53,6 @@ def run_bounded_process(
         else subprocess.list2cmdline([str(value) for value in command])
     )
     security_text = str(security_command if security_command is not None else command_text)
-    try:
-        if security_text != command_text:
-            require_command_allowed(command_text)
-        require_command_allowed(security_text, workspace=cwd, approval_manifest=approval_manifest)
-    except CommandSecurityError as exc:
-        return {
-            "exit_code": None, "stdout": "", "stderr": "",
-            "stdout_bytes": 0, "stderr_bytes": 0,
-            "stdout_truncated": False, "stderr_truncated": False,
-            "stdout_ref": "", "stderr_ref": "", "timed_out": False,
-            "error": f"SECURITY_COMMAND_REJECTED:{exc}",
-            "security_rejected": True,
-            "process_started": False,
-        }
     # Git49 OS Broker admission. This runs before selecting any executor,
     # so neither direct host subprocess nor a stale service can be a fallback.
     from .turbo_broker_admission import assess
@@ -91,6 +77,25 @@ def run_bounded_process(
 
     if broker["decision"] == "BLOCKED":
         return reject_broker(str(broker["reason_code"]))
+    if broker["decision"] != "BROKER_REQUIRED":
+        # Preserve the original command blacklist, one-shot authorization,
+        # and executable checks in ACL OFF / Turbo OFF modes.
+        try:
+            if security_text != command_text:
+                require_command_allowed(command_text)
+            require_command_allowed(
+                security_text, workspace=cwd,
+                approval_manifest=approval_manifest,
+            )
+        except CommandSecurityError as exc:
+            return {
+                "exit_code": None, "stdout": "", "stderr": "",
+                "stdout_bytes": 0, "stderr_bytes": 0,
+                "stdout_truncated": False, "stderr_truncated": False,
+                "stdout_ref": "", "stderr_ref": "", "timed_out": False,
+                "error": f"SECURITY_COMMAND_REJECTED:{exc}",
+                "security_rejected": True, "process_started": False,
+            }
     if broker["decision"] == "BROKER_REQUIRED":
         # Even an enrolled Broker must not execute from an unrelated sibling.
         # The registered parent CWD remains supported and is redirected into
