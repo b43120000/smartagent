@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import ntpath
 import os
 import re
 import subprocess
@@ -31,6 +32,75 @@ _ACTION_ID = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
 class TurboOSBrokerUnavailable(RuntimeError):
     pass
+
+
+_GIT59_EXACT_VERSION = re.compile(r"\A&\s+'([^'\r\n]+)'\s+--version\s*\Z", re.I)
+
+
+def _git59_native_version_probe(command: str, project: Path) -> str:
+    """Opt in ONLY to exact quoted, pinned, read-only --version commands.
+
+    The protected broker checks the command again independently.
+    """
+    matched = _GIT59_EXACT_VERSION.fullmatch(str(command or "").strip())
+    if not matched:
+        return ""
+    candidate = ntpath.normcase(ntpath.normpath(matched.group(1)))
+    paths = {
+        "git": ntpath.normcase(ntpath.normpath(str(
+            project / ".venv" / "git" / "cmd" / "git.exe"))),
+        "python": ntpath.normcase(ntpath.normpath(str(
+            project / ".venv" / "Scripts" / "python.exe"))),
+    }
+    for name, pinned in paths.items():
+        if candidate == pinned:
+            return name
+    return ""
+
+
+def _git59_validate_direct_child(receipt: dict, requested: str, project: Path) -> dict:
+    """Validate the protected broker's kernel-derived child-token receipt."""
+    child = receipt.get("native_direct_child_attestation")
+    if not requested:
+        if receipt.get("native_executable_identity_verified") is True or child:
+            raise TurboOSBrokerUnavailable("GIT59_UNREQUESTED_CHILD_ATTESTATION")
+        return {"verified": False, "reason": "POWERSHELL_PARENT_ONLY_ATTESTED",
+                "name": "", "exit_code": None, "pid": None}
+    if (receipt.get("native_direct_child_probe_kind") != requested
+            or not isinstance(child, dict)
+            or receipt.get("native_executable_identity_verified") is not
+                (child.get("status") == "OS_TOKEN_VERIFIED")):
+        raise TurboOSBrokerUnavailable("GIT59_CHILD_ATTESTATION_SCHEMA_INVALID")
+    if child.get("status") != "OS_TOKEN_VERIFIED":
+        if child.get("reason_code") not in {
+                "GIT59_NATIVE_CHILD_CREATEPROCESS_FAILED",
+                "GIT59_NATIVE_CHILD_EXECUTION_TIMEOUT",
+                "GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED",
+                "GIT59_NATIVE_CHILD_EXIT_UNAVAILABLE"}:
+            raise TurboOSBrokerUnavailable("GIT59_CHILD_ATTESTATION_REASON_INVALID")
+        return {"verified": False, "reason": child["reason_code"],
+                "name": requested, "exit_code": None, "pid": None}
+    executable = project / ".venv" / (
+        "git/cmd/git.exe" if requested == "git" else "Scripts/python.exe")
+    if not (
+        child.get("schema") == "SMARTAGENT_GIT59_DIRECT_NATIVE_CHILD_V1"
+        and child.get("sandbox_backend") == "WIN32_APPCONTAINER"
+        and child.get("sandbox_identity_verified") is True
+        and child.get("internet_client_token_verified") is True
+        and child.get("internet_client_capability_sid") == "S-1-15-3-1"
+        and child.get("child_process_policy") == "JOB_KILL_ON_CLOSE"
+        and child.get("os_process_started") is True
+        and child.get("executable_name") == requested
+        and ntpath.normcase(str(child.get("executable_path") or ""))
+            == ntpath.normcase(str(executable))
+        and type(child.get("pid")) is int and child["pid"] > 0
+        and type(child.get("exit_code")) is int and child["exit_code"] >= 0
+    ):
+        raise TurboOSBrokerUnavailable("GIT59_CHILD_OS_TOKEN_PROOF_INVALID")
+    return {"verified": True, "reason": "OS_DIRECT_EXECUTABLE_TOKEN_VERIFIED",
+            "name": requested, "exit_code": child["exit_code"],
+            "pid": child["pid"]}
+
 
 
 # Classify *known* native broker stderr without exposing a full PowerShell
@@ -288,6 +358,9 @@ def execute_turbo_command(
         "-TimeoutSeconds", str(timeout),
         "-MaxOutputBytes", str(limit),
     ]
+    native_version_probe = _git59_native_version_probe(command, _install_root())
+    if native_version_probe:
+        args.extend(["-NativeVersionProbe", native_version_probe])
     try:
         completed = subprocess.run(
             args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -363,6 +436,9 @@ def execute_turbo_command(
         or any(name not in ("git", "python") for name in tools)
     ):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_TOOLCHAIN_RECEIPT_INVALID")
+    direct_child = _git59_validate_direct_child(
+        receipt, native_version_probe, _install_root(),
+    )
     # Process exit 1 is distinct from not starting, DNS/TLS failures, and
     # from native command-policy denials. Keep native output and typed hint.
     stderr_text = stderr.decode("utf-8", errors="replace")
@@ -398,8 +474,14 @@ def execute_turbo_command(
         "stderr_capture_state": ("TRUNCATED" if err_cut else
                                  "COMPLETE_NONEMPTY" if err_size else "COMPLETE_EMPTY"),
         "stream_capture_complete": not (out_cut or err_cut),
-        "native_executable_identity_verified": False,
-        "native_executable_identity_reason": "POWERSHELL_PARENT_ONLY_ATTESTED",
+        "native_executable_identity_verified": direct_child["verified"],
+        "native_executable_identity_reason": direct_child["reason"],
+        "native_executable_probe_name": direct_child["name"],
+        "native_executable_probe_exit_code": direct_child["exit_code"],
+        "native_executable_probe_pid": direct_child["pid"],
+        "native_executable_direct_launch_count": (
+            1 if native_version_probe else 0),
+        "native_executable_probe_is_second_process": bool(native_version_probe),
         "child_process_policy": "JOB_KILL_ON_CLOSE",
         "policy_revision": state["policy_revision"],
         "task_id": request_task,
