@@ -78,6 +78,11 @@ def compile_requirement_goal_state(request: str) -> dict:
         and "git" in lower and "python" in lower
         and "acl on" in lower and "turbo on" in lower
         and git_match is not None and python_match is not None
+        and bool(re.search(r"unverified|未驗證|無法判定|缺乏證據", lower))
+        and not bool(re.search(
+            r"必須.{0,18}(?:成功執行|正常啟動|載入成功)|"
+            r"must.{0,18}(?:execute successfully|run successfully)",
+            lower, re.I))
     )
     if diagnostic:
         paths = {
