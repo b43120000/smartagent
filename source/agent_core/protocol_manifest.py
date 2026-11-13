@@ -273,6 +273,15 @@ CORE_FILES = (
     'source/WebAgent/tool_context.py',
     'source/RemoteAgent/telegram_webagent_worker.py',
     'source/RemoteAgent/telegram_transport.py',
+    # Native executable token + Telegram test controls are security-critical.
+    # Both the Receiver and Worker must load the exact tested implementation.
+    'source/agent_core/git57_live_finish_injector.py',
+    'source/agent_core/git58_telegram_live_control.py',
+    'source/agent_core/git59_telegram_native_live.py',
+    'source/agent_core/requirement_goal_state.py',
+    'source/agent_core/turbo_os_broker_client.py',
+    'install_smart_agent/turbo_os_execute.ps1',
+    'install_smart_agent/turbo_appcontainer_probe.cs',
     'source/RemoteAgent/telegram_artifacts.py',
     'source/RemoteAgent/telegram_delivery.py',
     'source/RemoteAgent/webgpt_delivery.py',
