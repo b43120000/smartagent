@@ -721,7 +721,8 @@ def _validate_run_command_complexity(command: str, *, block_index: int | None = 
 
 
 def validate_tool_envelope(call: object, raw_payload: str = "",
-                           block_index: int | None = None) -> tuple[bool, dict | None]:
+                           block_index: int | None = None, *,
+                           native_broker: bool = False) -> tuple[bool, dict | None]:
     """Validate schema and control-plane complexity before any execution."""
     call = normalize_tool_numeric_fields(call)
     raw_tool = call.get("tool") if isinstance(call, dict) else _guess_tool_name(raw_payload)
@@ -992,26 +993,39 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
 
     if tool == "run_command":
         command = call.get("command", "")
-        valid_command, command_error = _validate_run_command_complexity(
-            command,
-            block_index=block_index,
-            field_path="command",
-        )
-        if not valid_command:
-            return False, command_error
-        admission = inspect_command(command)
-        if not admission.allowed:
-            return False, _diagnostic(
-                "[TOOL_ENVELOPE_REJECTED]",
-                admission.code,
-                tool=tool,
-                detail=admission.detail,
-                suggestion="不要用 run_command 執行破壞性操作；改用 runtime 提供的 typed operation。",
-                block_index=block_index,
+        if native_broker:
+            # Runtime-owned mode only; not selectable from the model envelope.
+            # AppContainer, not a content blacklist, bounds native commands.
+            if (not isinstance(command, str) or not command.strip()
+                    or len(command) > 8192 or "\x00" in command):
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]",
+                    "native_run_command_invalid", tool=tool,
+                    detail="empty, NUL, or exceeds 8192 characters",
+                    block_index=block_index,
+                )
+        else:
+            valid_command, command_error = _validate_run_command_complexity(
+                command, block_index=block_index, field_path="command",
             )
+            if not valid_command:
+                return False, command_error
+            admission = inspect_command(command)
+            if not admission.allowed:
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]", admission.code,
+                    tool=tool, detail=admission.detail,
+                    suggestion="不要用 run_command 執行破壞性操作；改用 runtime 提供的 typed operation。",
+                    block_index=block_index,
+                )
 
         try:
-            mismatch = operation_mismatch_detail(call)
+            if native_broker:
+                from .command_operation import normalize_command_operation
+                normalize_command_operation(call.get("operation"))
+                mismatch = ""
+            else:
+                mismatch = operation_mismatch_detail(call)
         except ValueError as exc:
             return False, _diagnostic(
                 "[TOOL_ENVELOPE_REJECTED]",
