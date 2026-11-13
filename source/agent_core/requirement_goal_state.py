@@ -124,7 +124,7 @@ def compile_requirement_goal_state(request: str) -> dict:
                 lower, re.I))
             exact_false = bool(re.search(r"不存在|刪除|移除|delete|remove", lower))
             exact_true = bool(re.search(
-                r"建立|創建|新增|確保.*存在|確認.*存在|create|mkdir|ensure.*exists",
+                r"建立|創建|新增|確保.*(?<!不)存在|確認.*(?<!不)存在|create|mkdir|ensure.*exists",
                 lower, re.I))
             if question and not exact_false and not re.search(
                 r"建立|創建|新增|create|mkdir", lower, re.I
