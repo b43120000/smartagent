@@ -156,6 +156,36 @@ def test_empty_version_output_is_unverified_diagnosis_not_failed_task():
     assert state["state_table"][7]["evidence_refs"]
 
 
+def test_optional_version_policy_denial_is_truthful_diagnostic_outcome():
+    contract = compile_requirement_goal_state(REQUEST)
+    history = [row for index, row in enumerate(_history()) if index < 4]
+    denied = [{
+        "kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
+        "toolName": "run_command",
+        "goal_diagnostic_step": target + "_version",
+        "event_id": "ER-EV-" + target,
+        "command_sha256": str(index) * 64,
+        "executed": False, "authorization_granted": False,
+        "reason_code": "TRUSTED_EXECUTABLE_POLICY_DENIED",
+    } for index, target in ((4, "git"), (5, "python"))]
+    report = SUMMARY + " Git/Python 絕對路徑 --version 已遭 Native 政策拒絕執行。"
+    state = evaluate_frozen_goal_contract(
+        contract, history, report, admission_denials=denied)
+    assert state["verdict"] == "PASS", state
+    assert state["state_table"][6]["actual"]["classification"] == "POLICY_REJECTED"
+    assert state["state_table"][7]["actual"]["executed"] is False
+    assert state["state_table"][6]["evidence_refs"] == ["ER-EV-git"]
+    assert state["state_table"][-1]["actual"]["policy_rejection_reported"] is True
+    unreported = evaluate_frozen_goal_contract(
+        contract, history, SUMMARY, admission_denials=denied)
+    assert unreported["verdict"] == "FAIL"
+    assert "D09" in unreported["unsatisfied_condition_ids"]
+    forged = [dict(denied[0], executed=True), denied[1]]
+    rejected = evaluate_frozen_goal_contract(
+        contract, history, report, admission_denials=forged)
+    assert rejected["verdict"] == "FAIL"
+
+
 def test_missing_step_wrong_backend_or_incomplete_capture_fails():
     contract = compile_requirement_goal_state(REQUEST)
     cases = [
