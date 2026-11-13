@@ -117,6 +117,15 @@ def test_unknown_or_more_demanding_goal_cannot_gain_easy_unverified_contract():
     )["status"] == "UNCOMPILED"
 
 
+def test_directory_compiler_does_not_ignore_extra_natural_language_clauses():
+    mixed = (
+        "請確認資料夾存在 E:\\demo，然後傳送電子郵件通知主管"
+    )
+    contract = compile_requirement_goal_state(mixed)
+    assert contract["status"] == "UNCOMPILED"
+    assert contract["uncompiled_reason"] == "MULTI_CLAUSE_OR_UNSUPPORTED_DIRECTORY_GOAL"
+
+
 def test_six_native_steps_are_strict_independent_commands():
     targets = compile_requirement_goal_state(REQUEST)["executable_targets"]
     assert [_step(cmd, targets) for cmd in COMMANDS] == [
