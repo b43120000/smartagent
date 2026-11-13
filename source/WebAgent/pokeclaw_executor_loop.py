@@ -106,7 +106,8 @@ def _tool_result(status: str, reason: str, payload: object = None, *, evidence_p
 
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
-            evidence_requirement=None, environment_inventory=None,
+            evidence_requirement=None, goal_state_contract=None,
+            environment_inventory=None,
             runtime_status_catalog=None, turbo_planning_context=None,
             preexecution_rejections=None) -> str:
     from .minimal_core_loop import tool_catalog
@@ -188,6 +189,17 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Available tools: " + json.dumps(
             catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
         "Original user request:\n" + request + "\n"
+        "Frozen Requirement-to-Goal State Contract (Runtime compiled before "
+        "any ToolCall; source-grounded and NOT a permission grant):\n"
+        + json.dumps(goal_state_contract or {}, ensure_ascii=False,
+                     separators=(",", ":"))[:5500] + "\n"
+        "For COMPILED contracts, final Goal acceptance is computed from this "
+        "frozen contract and actual ToolResults, NOT Planner-authored goal_checks. "
+        "A diagnostic goal can be satisfied by truthful UNVERIFIED findings "
+        "when the request explicitly permits this; it does not prove a "
+        "Git/Python child process ran. Report every unknown explicitly. "
+        "For UNCOMPILED requirements, no generic goal state is invented; "
+        "legacy evidence-backed checks remain in force.\n"
         f"Round: {round_id}/{max_rounds}\n"
         "Runtime ToolResult Status Ledger (all actual results, not only recent six; "
         "rejected admissions are NOT ToolResults):\n"
@@ -256,6 +268,9 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
         },
         "handoff_id": board["handoff_id"],
         "blackboard_event_count": len(board["events"]),
+        "goal_contract_sha256": comparison.get("goal_contract_sha256", ""),
+        "goal_state_table": list(comparison.get("goal_state_table") or [])[:32],
+        "model_goal_checks_advisory": comparison.get("model_goal_checks_advisory"),
         "summary_sha256": hashlib.sha256(summary.encode("utf-8")).hexdigest(),
     }
     payload["receipt_id"] = "TERM-" + _digest(payload)[:20].upper()
@@ -315,6 +330,30 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         mismatch_lines = "\n不一致欄位：" + json.dumps(
             comparison["mismatches"], ensure_ascii=False, separators=(",", ":"),
         )[:3000]
+    state_report = ""
+    if comparison and comparison.get("goal_state_table"):
+        table = [{
+            "condition_id": row.get("condition_id"),
+            "condition_type": row.get("condition_type"),
+            "expected": row.get("expected"), "actual": row.get("actual"),
+            "verdict": row.get("verdict"), "reason_code": row.get("reason_code"),
+            "evidence_refs": row.get("evidence_refs", []),
+        } for row in comparison["goal_state_table"][:32]]
+        serialized = json.dumps(
+            table, ensure_ascii=False, separators=(",", ":"), default=str
+        )
+        state_report = (
+            "\nRuntime Goal State Table（來源：實際 ToolResult）："
+            + serialized[:5500]
+            + ("\n[GOAL_STATE_TABLE_BOUNDED_PREVIEW；完整內容存於 Blackboard]"
+               if len(serialized) > 5500 else "")
+        )
+        advisory = comparison.get("model_goal_checks_advisory") or {}
+        if advisory and not advisory.get("model_checks_match_actual_values", True):
+            state_report += (
+                "\nPlanner 額外 Goal Check 與 Runtime 實值不符；"
+                "已記錄為非權威提案，不覆寫凍結的 Goal Contract。"
+            )
     trailer = (
         "\n\nExecutor Blackboard（已寫入並回讀）：\n"
         f"Executor：{p['executor_state']}\n"
@@ -324,7 +363,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         f"Tool Evidence：{', '.join(p['tool_evidence_refs']) or '無'}\n"
         f"Parent Dispatch：{p['parent_dispatch_state']}\n"
         f"Parent Consumption：{p['parent_consumption_state']}\n"
-        f"整體目標：{terminal_line}{mismatch_lines}"
+        f"整體目標：{terminal_line}{mismatch_lines}{state_report}"
     )
     if comparison and comparison["verdict"] == "PASS" and (
         comparison.get("completion_kind") == "ANSWER_ONLY"
@@ -353,6 +392,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     board = begin_executor_run(
         root, loop, request, evidence_requirement=requirement,
     )
+    goal_state_contract = dict(board.get("goal_state_contract") or {})
     loop.executor_blackboard_terminal = board
     loop.executor_result = {}
     loop.terminal_acceptance = {}
@@ -475,6 +515,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             max_rounds=max_rounds, hint=hint,
             field_catalog=finish_runtime_field_catalog(loop),
             evidence_requirement=requirement,
+            goal_state_contract=goal_state_contract,
             environment_inventory=environment_inventory,
             runtime_status_catalog=(
                 __import__("agent_core.runtime_finish_status_repair",
@@ -559,6 +600,16 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     repairable.add("MODEL_RUNTIME_MISMATCH")
                 if postrun_gap is not None:
                     repairable.add("GOAL_CHECK_RUNTIME_MISMATCH")
+                # A frozen Goal Contract can request further read-only
+                # evidence or a corrected diagnostic report, but neither
+                # its expected values nor source SHA may be rewritten.
+                contract_gap = (
+                    preview.get("finish_diagnostic")
+                    if preview.get("reason_code") == "FROZEN_GOAL_STATE_NOT_SATISFIED"
+                    else None
+                )
+                if contract_gap is not None:
+                    repairable.add("FROZEN_GOAL_STATE_NOT_SATISFIED")
                 # Preserve Git34–35 behavior: after two repairs, missing
                 # declarations still reach a formal comparator FAIL. The
                 # Git42-specific schema error remains distinctly reportable.
@@ -567,7 +618,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                                  and preview["reason_code"] != "MODEL_GOAL_CHECK_SCHEMA_INVALID")):
                     last_finish_reason = str(preview["reason_code"])
                     last_finish_diagnostic = (
-                        status_repair_diagnostic or postrun_gap
+                        status_repair_diagnostic or postrun_gap or contract_gap
                         or preview.get("finish_diagnostic")
                     )
                     if (finish_repairs >= max_finish_repairs
@@ -590,6 +641,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     # tool, even when ordinary Action rounds remain available.
                     if turn >= max_rounds or status_repair_diagnostic is not None:
                         finish_repair_only = True
+                    if contract_gap:
+                        unsatisfied = contract_gap.get("state_table") or []
+                        if unsatisfied and all(
+                            row.get("condition_type") == "REPORT"
+                            for row in unsatisfied if isinstance(row, Mapping)
+                        ):
+                            finish_repair_only = True
                     append_executor_event(root, loop, {
                         "round": turn, "kind": (
                             "MODEL_FINISH_STATUS_REPAIR" if status_repair_diagnostic
@@ -620,9 +678,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
+                        + (
+                            "本次需修復執行前凍結的 Goal State Conditions；"
+                            "診斷結果 UNVERIFIED 可以被如實回報，"
+                            "但缺失的 Action Evidence 不可捏造；"
+                            + json.dumps(contract_gap or {}, ensure_ascii=False,
+                                         separators=(",", ":"))[:1800]
+                            if contract_gap else ""
+                        )
                         + ("請先提交新的唯讀 tool_call，驗證後才可 Finish。"
-                         if postrun_gap and not finish_repair_only
-                         else "請提交新的 finish（而非 tool_call）。")
+                           if (postrun_gap or contract_gap) and not finish_repair_only
+                           else "請提交新的 finish（而非 tool_call）。")
                     )
                     continue
             append_executor_event(root, loop, {
@@ -790,6 +856,24 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         if action and decision.tool == "run_command":
             if native_precheck_blocked:
                 # Never run or fake a ToolResult for a denied proposal.
+                # A source-frozen diagnostic may explicitly allow either
+                # execution or a policy rejection for absolute --version.
+                # This exception only concerns completion evidence, NEVER
+                # sandbox admission or operating system permissions.
+                from agent_core.requirement_goal_state import _step
+                optional_version_step = ""
+                if (
+                    goal_state_contract.get("status") == "COMPILED"
+                    and goal_state_contract.get("goal_kind")
+                    == "DIAGNOSTIC_EXECUTABLE_RESOLUTION"
+                    and isinstance(goal_state_contract.get("executable_targets"), Mapping)
+                ):
+                    candidate_step = _step(
+                        str(action.get("command") or ""),
+                        goal_state_contract["executable_targets"],
+                    )
+                    if candidate_step in {"git_version", "python_version"}:
+                        optional_version_step = candidate_step
                 reason = str(turbo.get("reason_code") or "TURBO_NATIVE_SCOPE_DENIED")
                 command_hash = hashlib.sha256(
                     str(action.get("command") or "").encode("utf-8")
@@ -803,7 +887,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     len(native_preexecution_rejections) < max_native_precheck_replans
                     and turn < max_rounds
                 )
-                replan = bool(recoverable and distinct and budget_available)
+                replan = bool(
+                    recoverable and distinct and budget_available
+                    and not optional_version_step
+                )
                 rejection = {
                     "round": turn, "action_id": str(action["action_id"]),
                     "reason_code": reason,
@@ -826,6 +913,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
                     "toolName": "run_command", "action_id": action["action_id"],
+                    "goal_diagnostic_step": optional_version_step,
                     "risk_class": risk_class, "reason_code": reason,
                     "command_sha256": command_hash,
                     "arguments_sha256": _digest(decision.arguments),
@@ -865,6 +953,25 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         + "; executed=false; no permission granted. Do NOT "
                         "repeat this command. Propose a different legal action "
                         "and independently verify any mutations."
+                    )
+                    continue
+                if optional_version_step:
+                    # This exact step is optional by the original request:
+                    # policy denial is a valid diagnostic *outcome*. Keep
+                    # going to the next independent command or final report.
+                    # The denied action is never inserted into ToolResult
+                    # history or treated as successful executable loading.
+                    native_denied_command_hashes.add(command_hash)
+                    hint = (
+                        "Native AppContainer policy REJECTED optional "
+                        + optional_version_step
+                        + " --version before execution. "
+                        + "reason_code=" + reason[:120]
+                        + "; The frozen diagnostic contract accepts this "
+                        "as a POLICY_REJECTED observation, not a ToolResult. "
+                        "Do not retry or fallback to Host CMD. Continue "
+                        "remaining independent diagnostics and explicitly "
+                        "report the rejection in Finish."
                     )
                     continue
                 append_executor_event(root, loop, {
@@ -1051,9 +1158,27 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
             repairs_for_same_issue = admission_repair_counts[repair_key]
             consecutive_admission_rejections += 1
+            optional_scope_version = ""
+            if (
+                decision.tool == "run_command"
+                and diagnosis.get("stage") == "SCOPE_PREFLIGHT"
+                and str(rejected or "").startswith("scope_rejected:")
+                and goal_state_contract.get("status") == "COMPILED"
+                and goal_state_contract.get("goal_kind")
+                == "DIAGNOSTIC_EXECUTABLE_RESOLUTION"
+                and isinstance(goal_state_contract.get("executable_targets"), Mapping)
+            ):
+                from agent_core.requirement_goal_state import _step
+                candidate_step = _step(
+                    str((decision.arguments or {}).get("command") or ""),
+                    goal_state_contract["executable_targets"],
+                )
+                if candidate_step in {"git_version", "python_version"}:
+                    optional_scope_version = candidate_step
             row = append_executor_event(root, loop, {
                 "round": turn, "kind": "ADMISSION_REJECTED",
                 "toolName": decision.tool,
+                "goal_diagnostic_step": optional_scope_version,
                 "arguments": _safe_arguments(decision.arguments),
                 "arguments_sha256": _digest(decision.arguments),
                 **({"command_rca": capture_command_rca(
@@ -1076,6 +1201,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "admission_verdict": "REJECTED_BEFORE_EXECUTION",
                 "admission_diagnostic": diagnostic,
             })
+            if optional_scope_version:
+                hint = (
+                    "Runtime SCOPE_PREFLIGHT policy REJECTED optional "
+                    + optional_scope_version
+                    + " absolute --version; no ToolResult was produced. "
+                    "The frozen diagnostic contract records this as "
+                    "POLICY_REJECTED, not executed; do NOT use Host CMD or "
+                    "replay the denied command. Finish remaining observations "
+                    "and report the rejection and missing Exit Code/stdout/stderr."
+                )
+                continue
             hint = (
                 "Tool Admission 拒絕（沒有執行）："
                 + json.dumps(diagnostic, ensure_ascii=False, separators=(",", ":"))[:2500]

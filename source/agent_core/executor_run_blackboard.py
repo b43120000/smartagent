@@ -89,6 +89,12 @@ def read_executor_run(root: str | Path, *, task_id: str, request_id: str | None 
 
 
 def begin_executor_run(root: str | Path, loop, request: str, *, evidence_requirement: Mapping | None = None) -> dict:
+    from .requirement_goal_state import (
+        compile_requirement_goal_state, validate_frozen_goal_contract,
+    )
+    goal_contract = compile_requirement_goal_state(request)
+    if not validate_frozen_goal_contract(goal_contract, request):
+        raise ValueError("executor_run_goal_contract_compilation_invalid")
     task_id = _id(loop.task_id)
     prior = read_executor_run(root, task_id=task_id)
     if prior:
@@ -98,6 +104,12 @@ def begin_executor_run(root: str | Path, loop, request: str, *, evidence_require
             raise ValueError("executor_run_blackboard_identity_conflict")
         if prior.get("events"):
             raise ValueError("executor_run_blackboard_restart_requires_continuation")
+        # A changed original requirement is a Goal Contract identity failure,
+        # not a generic requirement projection change.
+        if (prior.get("goal_state_contract") != goal_contract
+                or not validate_frozen_goal_contract(
+                    prior.get("goal_state_contract"), request)):
+            raise ValueError("executor_run_goal_contract_frozen_mismatch")
         if evidence_requirement is not None and prior.get("evidence_requirement") != dict(evidence_requirement):
             raise ValueError("executor_run_blackboard_requirement_conflict")
         return prior
@@ -110,6 +122,8 @@ def begin_executor_run(root: str | Path, loop, request: str, *, evidence_require
         "request_sha256": hashlib.sha256(str(request).encode("utf-8")).hexdigest(),
         "execution_mode": "POKECLAW_AGENT_LOOP",
         "evidence_requirement": dict(evidence_requirement or {}),
+        "goal_state_contract": goal_contract,
+        "goal_contract_frozen_before_execution": True,
         "executor_state": "RUNNING",
         "goal_driver_state": "DISABLED",
         "prerequisite_state": "DISABLED",
@@ -196,6 +210,18 @@ def finish_executor_run(root: str | Path, loop, *,
         "FORMAT_ERROR", "EXECUTION_OUTCOME_UNKNOWN", "FINISH_CONTRACT_INVALID",
     }:
         raise ValueError("executor_run_blackboard_terminal_kind_invalid")
+    # Archived Blackboard events remain part of the same immutable source.
+    # A bounded recent projection must never hide historical ToolResults.
+    event_total = int(value.get("event_count_total", len(value["events"])))
+    if event_total > 10000:
+        raise ValueError("executor_run_blackboard_event_history_unbounded")
+    all_events = (
+        [read_executor_event(root, task_id=loop.task_id,
+                             request_id=loop.run_id, task_epoch=loop.task_epoch,
+                             sequence=index)
+         for index in range(1, event_total + 1)]
+        if event_total != len(value["events"]) else value["events"]
+    )
     value["executor_state"] = kind
     value["terminal"] = {
         "kind": kind, "round": int(loop.turn_id),
@@ -204,11 +230,11 @@ def finish_executor_run(root: str | Path, loop, *,
         "goal_verified": False,
         "tool_evidence_refs": [
             row.get("runtimeEvidence", {}).get("evidence_ref")
-            for row in value["events"]
+            for row in all_events
             if row.get("runtimeEvidence", {}).get("evidence_ref")
         ],
         "admission_rejection_count": sum(
-            1 for row in value["events"]
+            1 for row in all_events
             if row.get("runtimeEvidence", {}).get("status") == "REJECTED"
         ),
     }
@@ -248,6 +274,9 @@ def record_finish_comparison(root: str | Path, loop, comparison: Mapping) -> dic
         "evidence_refs": list(comparison.get("evidence_refs") or []),
         "mismatches": list(comparison.get("mismatches") or [])[:20],
         "tool_results": list(comparison.get("tool_results") or []),
+        "goal_contract_sha256": str(comparison.get("goal_contract_sha256") or ""),
+        "goal_state_table": list(comparison.get("goal_state_table") or [])[:32],
+        "model_goal_checks_advisory": comparison.get("model_goal_checks_advisory"),
     }
     value["terminal"]["finish_comparison"] = record
     value["terminal"]["goal_verified"] = verdict == "PASS"
@@ -279,6 +308,9 @@ def projection(value: Mapping) -> dict:
         "event_read_tool": "read_runtime_blackboard",
         "tool_evidence_refs": list((value.get("terminal") or {}).get("tool_evidence_refs") or []),
         "goal_verified": bool((value.get("terminal") or {}).get("goal_verified", False)),
+        "goal_contract_status": (value.get("goal_state_contract") or {}).get("status", "MISSING"),
+        "goal_contract_kind": (value.get("goal_state_contract") or {}).get("goal_kind", ""),
+        "goal_contract_sha256": (value.get("goal_state_contract") or {}).get("contract_sha256", ""),
     }
 
     

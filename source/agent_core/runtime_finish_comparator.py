@@ -57,7 +57,10 @@ def _lookup(receipt: Mapping, field: str) -> tuple[bool, object]:
 
 def _fail(reason: str, refs: list[str] | None = None, *,
           mismatches: list[dict] | None = None, tool_results: list[dict] | None = None,
-          finish_diagnostic: dict | None = None) -> dict:
+          finish_diagnostic: dict | None = None,
+          goal_state_table: list[dict] | None = None,
+          goal_contract_sha256: str = "",
+          model_goal_checks_advisory: dict | None = None) -> dict:
     result = {
         "verdict": "FAIL", "reason_code": reason,
         "goal_kind": "", "goal_evidence_reason": reason,
@@ -67,6 +70,12 @@ def _fail(reason: str, refs: list[str] | None = None, *,
     }
     if finish_diagnostic is not None:
         result["finish_diagnostic"] = dict(finish_diagnostic)
+    if goal_state_table is not None:
+        result["goal_state_table"] = list(goal_state_table)[:32]
+    if goal_contract_sha256:
+        result["goal_contract_sha256"] = str(goal_contract_sha256)
+    if model_goal_checks_advisory is not None:
+        result["model_goal_checks_advisory"] = dict(model_goal_checks_advisory)
     return result
 
 
@@ -84,13 +93,30 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
     actions = getattr(loop, "_canonical_action_proposals", None)
     if not isinstance(ledger, Mapping) or not isinstance(actions, Mapping):
         return [], [], None, "ACTION_LEDGER_MISSING"
-    events = [
-        row for row in board.get("events", [])
-        if row.get("kind") == "TOOL_RESULT"
-    ]
-    denied = [
-        row for row in board.get("events", [])
-        if row.get("kind") == "ADMISSION_REJECTED"
+    event_total = int(board.get("event_count_total", len(board.get("events", []))))
+    if event_total > 10000 or event_total < len(board.get("events", [])):
+        return [], [], None, "EVIDENCE_EVENT_HISTORY_UNBOUNDED_OR_DAMAGED"
+    if event_total != len(board.get("events", [])):
+        from .executor_run_blackboard import read_executor_event
+        try:
+            source_events = [
+                read_executor_event(
+                    root, task_id=loop.task_id, request_id=loop.run_id,
+                    task_epoch=loop.task_epoch, sequence=index,
+                ) for index in range(1, event_total + 1)
+            ]
+        except (OSError, ValueError, KeyError):
+            return [], [], None, "EVIDENCE_EVENT_ARCHIVE_READBACK_FAILED"
+    else:
+        source_events = list(board.get("events", []))
+    events = [row for row in source_events if row.get("kind") == "TOOL_RESULT"]
+    denied = [row for row in source_events if row.get("kind") == "ADMISSION_REJECTED"]
+    native_denials = [
+        row for row in source_events
+        if row.get("kind") == "TURBO_NATIVE_CONFIRMATION_BLOCKED"
+        and row.get("toolName") == "run_command"
+        and row.get("executed") is False
+        and row.get("authorization_granted") is False
     ]
     if any(
         row.get("runtimeEvidence", {}).get("status") != "REJECTED"
@@ -105,7 +131,7 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
         # admitted/pending action or rejected ToolCall is being hidden.
         if (actions or ledger or denied or any(
             row.get("kind") in {"ACTION_ADMITTED", "MODEL_TOOL_CALL"}
-            for row in board.get("events", [])
+            for row in source_events
         )):
             return [], [], None, "NO_TOOL_FINISH_WITH_PENDING_ACTION"
         if (not allow_open and
@@ -161,7 +187,11 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
         return [], [], None, "ACTION_COVERAGE_INCOMPLETE"
     if not allow_open and list(board["terminal"].get("tool_evidence_refs", [])) != refs:
         return [], [], None, "BLACKBOARD_EVIDENCE_SET_MISMATCH"
-    return history, refs, {"board": board, "results": results}, ""
+    return history, refs, {
+        "board": board, "results": results,
+        "admission_denials": denied,
+        "native_denials": native_denials,
+    }, ""
 
 
 def _single_inspect_query(goal: str, history: list[dict]) -> tuple[str, str] | None:
@@ -402,6 +432,13 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     ).hexdigest():
         return _fail("REQUEST_DIGEST_MISMATCH", refs, tool_results=context["results"])
     results = context["results"]
+    from .requirement_goal_state import (
+        validate_frozen_goal_contract, evaluate_frozen_goal_contract,
+    )
+    contract = context["board"].get("goal_state_contract")
+    if not validate_frozen_goal_contract(contract, goal):
+        return _fail("FROZEN_GOAL_CONTRACT_MISSING_OR_TAMPERED", refs,
+                     tool_results=results)
     from .finish_evidence_requirement import valid_finish_evidence_requirement
     requirement = context["board"].get("evidence_requirement")
     if not valid_finish_evidence_requirement(requirement, goal):
@@ -489,11 +526,65 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED"}
            for item in history):
         return _fail("RUNTIME_RESULT_STATUS_UNSUPPORTED", refs, tool_results=results)
+    # The same source-grounded contract is fixed before execution. For a
+    # compiled requirement the Planner may describe its preferred checks, but
+    # those checks have no authority to rewrite desired conditions.
+    if contract["status"] == "COMPILED":
+        state = evaluate_frozen_goal_contract(
+            contract, history, answer,
+            admission_denials=(
+                list(context.get("native_denials") or [])
+                + list(context.get("admission_denials") or [])
+            ),
+        )
+        advisory = None
+        if goal_checks is not None:
+            check_ok, check_reason, check_mismatch = _evaluate_model_goal_checks(
+                history, refs, claimed, goal_checks)
+            advisory = {
+                "model_checks_match_actual_values": bool(check_ok),
+                "reason_code": check_reason,
+                "mismatches": check_mismatch[:12],
+                "authoritative": False,
+            }
+        if not any(
+            field.startswith("data.") for fields in claimed.values() for field in fields
+        ):
+            return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs,
+                         tool_results=results, goal_state_table=state["state_table"],
+                         goal_contract_sha256=contract["contract_sha256"],
+                         model_goal_checks_advisory=advisory)
+        if state["verdict"] != "PASS":
+            return _fail(
+                "FROZEN_GOAL_STATE_NOT_SATISFIED", refs,
+                tool_results=results, goal_state_table=state["state_table"],
+                goal_contract_sha256=contract["contract_sha256"],
+                model_goal_checks_advisory=advisory,
+                finish_diagnostic={
+                    "repair_class": "GOAL_STATE_EVIDENCE_OR_REPORT_REPAIR",
+                    "unsatisfied_condition_ids": state["unsatisfied_condition_ids"],
+                    "state_table": [
+                        row for row in state["state_table"] if row["verdict"] != "PASS"
+                    ],
+                    "frozen_contract": True, "authorization_granted": False,
+                },
+            )
+        return {
+            "verdict": "PASS",
+            "reason_code": "FROZEN_GOAL_STATE_SATISFIED",
+            "goal_kind": contract["goal_kind"],
+            "goal_evidence_reason": state["reason_code"],
+            "coverage_basis": "RUNTIME_FROZEN_GOAL_CONTRACT",
+            "goal_contract_sha256": contract["contract_sha256"],
+            "goal_state_table": state["state_table"],
+            "model_goal_checks_advisory": advisory,
+            "evidence_refs": refs, "mismatches": [], "tool_results": results,
+        }
     proof = _goal_proof(goal, valid_goal_history)
     if proof is None and _recognized_but_unsatisfied(goal, valid_goal_history):
         return _fail("KNOWN_GOAL_POSTCONDITION_NOT_SATISFIED", refs, tool_results=results)
-    # Even an independent goal proof requires the model to reference a
-    # task-relevant fact, not merely compare the generic Tool status.
+    # For uncompiled requirements preserve legacy checks but never claim that
+    # a universal natural-language state contract was verified.
     if not any(
         field.startswith("data.") for fields in claimed.values() for field in fields
     ):
