@@ -186,6 +186,46 @@ def test_optional_version_policy_denial_is_truthful_diagnostic_outcome():
     assert rejected["verdict"] == "FAIL"
 
 
+def test_scope_admission_denial_counts_only_when_typed_and_source_bound():
+    from agent_core.executor_command_rca import capture_command_rca
+    contract = compile_requirement_goal_state(REQUEST)
+    history = [row for index, row in enumerate(_history()) if index < 4]
+    scope = {
+        "kind": "ADMISSION_REJECTED",
+        "toolName": "run_command", "goal_diagnostic_step": "git_version",
+        "event_id": "ER-EV-SCOPE-DENIED",
+        "runtimeEvidence": {"status": "REJECTED", "executed": False},
+        "admission_diagnostic": {
+            "stage": "SCOPE_PREFLIGHT",
+            "reason_code": "scope_rejected:EXECUTABLE_NOT_TRUSTED",
+        },
+        "command_rca": capture_command_rca({
+            "command": COMMANDS[4], "operation": "INSPECT",
+        }),
+    }
+    native = {
+        "kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
+        "toolName": "run_command", "goal_diagnostic_step": "python_version",
+        "event_id": "ER-EV-NATIVE-DENIED",
+        "command_sha256": "b" * 64,
+        "reason_code": "TURBO_NATIVE_POLICY_DENIED",
+        "executed": False, "authorization_granted": False,
+    }
+    report = SUMMARY + " Git/Python 絕對路徑版本檢查遭到政策拒絕。"
+    state = evaluate_frozen_goal_contract(
+        contract, history, report, admission_denials=[scope, native],
+    )
+    assert state["verdict"] == "PASS", state
+    forged = dict(scope)
+    forged["admission_diagnostic"] = {
+        "stage": "SCHEMA_VALIDATION", "reason_code": "scope_rejected:foo"
+    }
+    result = evaluate_frozen_goal_contract(
+        contract, history, report, admission_denials=[forged, native],
+    )
+    assert result["verdict"] == "FAIL", result
+
+
 def test_missing_step_wrong_backend_or_incomplete_capture_fails():
     contract = compile_requirement_goal_state(REQUEST)
     cases = [
