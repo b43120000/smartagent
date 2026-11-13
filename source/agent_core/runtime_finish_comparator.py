@@ -532,7 +532,10 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if contract["status"] == "COMPILED":
         state = evaluate_frozen_goal_contract(
             contract, history, answer,
-            admission_denials=context.get("native_denials") or [],
+            admission_denials=(
+                list(context.get("native_denials") or [])
+                + list(context.get("admission_denials") or [])
+            ),
         )
         advisory = None
         if goal_checks is not None:
