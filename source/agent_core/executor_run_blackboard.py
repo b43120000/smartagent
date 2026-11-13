@@ -104,14 +104,14 @@ def begin_executor_run(root: str | Path, loop, request: str, *, evidence_require
             raise ValueError("executor_run_blackboard_identity_conflict")
         if prior.get("events"):
             raise ValueError("executor_run_blackboard_restart_requires_continuation")
-        if evidence_requirement is not None and prior.get("evidence_requirement") != dict(evidence_requirement):
-            raise ValueError("executor_run_blackboard_requirement_conflict")
-        # Goal intent is fixed to original source before any action; a replay
-        # cannot weaken it, even when a different model proposes new checks.
+        # A changed original requirement is a Goal Contract identity failure,
+        # not a generic requirement projection change.
         if (prior.get("goal_state_contract") != goal_contract
                 or not validate_frozen_goal_contract(
                     prior.get("goal_state_contract"), request)):
             raise ValueError("executor_run_goal_contract_frozen_mismatch")
+        if evidence_requirement is not None and prior.get("evidence_requirement") != dict(evidence_requirement):
+            raise ValueError("executor_run_blackboard_requirement_conflict")
         return prior
     bind = "\0".join((task_id, str(loop.run_id), str(loop.task_epoch)))
     handoff_id = "HOF-" + hashlib.sha256(bind.encode("utf-8")).hexdigest()[:24].upper()
