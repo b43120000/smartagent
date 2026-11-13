@@ -134,6 +134,10 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"evidence_ref": str},
         "optional": {"section": str, "offset": int, "max_chars": int},
     },
+    "read_runtime_blackboard": {
+        "required": {"section": str},
+        "optional": {"sequence": int, "offset": int, "max_chars": int},
+    },
     "write_file": {
         "required": {"path": str, "content": str},
         "optional": {},
@@ -918,6 +922,18 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 suggestion=PROJECT_EVIDENCE_ACTION_CONTRACT,
                 block_index=block_index,
             )
+
+    if tool == "read_runtime_blackboard":
+        from .runtime_blackboard_reader import SECTIONS, MAX_SLICE_CHARS
+        if (call.get("section") not in SECTIONS
+                or type(call.get("sequence", 0)) is not int
+                or call.get("sequence", 0) < 0
+                or type(call.get("offset", 0)) is not int
+                or call.get("offset", 0) < 0
+                or type(call.get("max_chars", 1800)) is not int
+                or not 1 <= call.get("max_chars", 1800) <= MAX_SLICE_CHARS):
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "runtime_blackboard_read_slice_invalid", tool=tool)
 
     if tool == "read_runtime_evidence":
         from .runtime_evidence_store import REF_PATTERN, SECTIONS, MAX_SLICE_CHARS
