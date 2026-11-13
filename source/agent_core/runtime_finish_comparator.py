@@ -111,6 +111,13 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
         source_events = list(board.get("events", []))
     events = [row for row in source_events if row.get("kind") == "TOOL_RESULT"]
     denied = [row for row in source_events if row.get("kind") == "ADMISSION_REJECTED"]
+    native_denials = [
+        row for row in source_events
+        if row.get("kind") == "TURBO_NATIVE_CONFIRMATION_BLOCKED"
+        and row.get("toolName") == "run_command"
+        and row.get("executed") is False
+        and row.get("authorization_granted") is False
+    ]
     if any(
         row.get("runtimeEvidence", {}).get("status") != "REJECTED"
         or row.get("runtimeEvidence", {}).get("executed") is not False
@@ -180,7 +187,11 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
         return [], [], None, "ACTION_COVERAGE_INCOMPLETE"
     if not allow_open and list(board["terminal"].get("tool_evidence_refs", [])) != refs:
         return [], [], None, "BLACKBOARD_EVIDENCE_SET_MISMATCH"
-    return history, refs, {"board": board, "results": results}, ""
+    return history, refs, {
+        "board": board, "results": results,
+        "admission_denials": denied,
+        "native_denials": native_denials,
+    }, ""
 
 
 def _single_inspect_query(goal: str, history: list[dict]) -> tuple[str, str] | None:
@@ -519,7 +530,10 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     # compiled requirement the Planner may describe its preferred checks, but
     # those checks have no authority to rewrite desired conditions.
     if contract["status"] == "COMPILED":
-        state = evaluate_frozen_goal_contract(contract, history, answer)
+        state = evaluate_frozen_goal_contract(
+            contract, history, answer,
+            admission_denials=context.get("native_denials") or [],
+        )
         advisory = None
         if goal_checks is not None:
             check_ok, check_reason, check_mismatch = _evaluate_model_goal_checks(
