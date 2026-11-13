@@ -89,7 +89,10 @@ def _tool_result(status: str, reason: str, payload: object = None, *, evidence_p
             details += "; streams=" + json.dumps(streams, ensure_ascii=False, default=str)[:1600]
     if evidence_pointer and evidence_pointer.get("evidence_ref"):
         details += "; evidence_ref=" + str(evidence_pointer["evidence_ref"])
-        details += "; read_tool=read_runtime_evidence"
+        if evidence_pointer.get("store_status") == "PERSISTED_AND_READBACK_VERIFIED":
+            details += "; read_tool=read_runtime_evidence"
+        else:
+            details += "; evidence_delivery_status=PERSIST_FAILED"
     return {
         "isSuccess": False, "data": None,
         "error": (
