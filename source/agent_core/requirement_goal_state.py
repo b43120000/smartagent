@@ -240,8 +240,12 @@ def _step(command: str, paths: Mapping) -> str:
 
 def _has_stream_evidence(receipt: Mapping) -> bool:
     data = receipt.get("data") or {}
+    sandbox = data.get("sandbox_evidence") or {}
     return (
-        receipt.get("executed") is True
+        isinstance(sandbox, Mapping)
+        and isinstance(sandbox.get("native_error_class"), str)
+        and bool(sandbox.get("native_error_class"))
+        and receipt.get("executed") is True
         and receipt.get("status") in {"SUCCEEDED", "FAILED"}
         and isinstance(data, Mapping)
         and type(data.get("exit_code")) is int
@@ -350,6 +354,10 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
                 "sandbox_identity_verified") is True
             and (item["receipt"].get("data") or {}).get("sandbox_evidence", {}).get(
                 "turbo_effective_for_action") == "ON"
+            and (item["receipt"].get("data") or {}).get("sandbox_evidence", {}).get(
+                "kernel_outside_read_denied") is True
+            and (item["receipt"].get("data") or {}).get("sandbox_evidence", {}).get(
+                "kernel_outside_write_denied") is True
             for item in all_run
         )
         table.append(_row(
