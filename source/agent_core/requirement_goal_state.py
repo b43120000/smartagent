@@ -123,6 +123,31 @@ def compile_requirement_goal_state(request: str) -> dict:
         if len(paths) == 1 and len(request) <= 700 and (
             re.search(r"(?:資料夾|目錄|directory|folder)", lower)
         ):
+            # Single-goal only. A mixed request such as "create folder and
+            # email a report" must not be accepted by checking just one
+            # filesystem state. The anchored grammar intentionally fails
+            # closed on extra clauses and numbered instructions.
+            residue = re.sub(
+                r"\s+", " ", request.replace(paths[0], " ")
+            ).strip().casefold()
+            single_goal = bool(
+                re.fullmatch(
+                    r"(?:請你?|請幫我|幫我)?\s*(?:確認|確保|驗證|保證)?\s*"
+                    r"(?:這個|這|該|目標)?\s*(?:資料夾|目錄|directory|folder)\s*"
+                    r"(?:是否存在|有沒有|存在嗎|存在|不存在)[？?。.!]*",
+                    residue, re.I
+                )
+                or re.fullmatch(
+                    r"(?:請你?|請幫我|幫我)?\s*(?:在\s*)?"
+                    r"(?:建立|創建|新增|刪除|移除|create|mkdir|delete|remove)\s*"
+                    r"(?:這個|這|該|目標)?\s*(?:資料夾|目錄|directory|folder)[。.!]*",
+                    residue, re.I
+                )
+            )
+            if not single_goal:
+                result["uncompiled_reason"] = "MULTI_CLAUSE_OR_UNSUPPORTED_DIRECTORY_GOAL"
+                result["contract_sha256"] = _digest(result)
+                return result
             target = _path(paths[0].rstrip(".!"))
             question = bool(re.search(
                 r"是否存在|有沒有|存在嗎|存在？|存在\?|是否有|does.*exist|is.*there",
