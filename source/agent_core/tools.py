@@ -776,7 +776,12 @@ def tool_run_command(
     operation_result = build_operation_result(
         operation, command=command, execution_status="SUCCEEDED",
         verification_status=verification_status, stdout=main.get("stdout", ""),
-        stdout_ref=main.get("stdout_ref", ""), verification_evidence=verification_evidence,
+        stderr=main.get("stderr", ""),
+        stdout_bytes=main.get("stdout_bytes"), stderr_bytes=main.get("stderr_bytes"),
+        stdout_truncated=bool(main.get("stdout_truncated")),
+        stderr_truncated=bool(main.get("stderr_truncated")),
+        stdout_ref=main.get("stdout_ref", ""), stderr_ref=main.get("stderr_ref", ""),
+        verification_evidence=verification_evidence,
         verifies_action_id=verifies_action_id,
         condition_id=condition_id,
         expectation_status=expectation_status, expectation_evidence=expectation_evidence,
