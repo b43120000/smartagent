@@ -116,7 +116,8 @@ def begin_executor_run(root: str | Path, loop, request: str, *, evidence_require
         "parent_dispatch_state": "NOT_DISPATCHED",
         "parent_consumption_state": "NOT_APPLICABLE_EXECUTOR_ONLY",
         "handoff_id": handoff_id,
-        "events": [], "terminal": None,
+        "events": [], "event_count_total": 0,
+        "archive_chunks": [], "terminal": None,
         "authorization_granted_by_blackboard": False,
     }
     _atomic(_path(root, task_id), record)
@@ -130,9 +131,40 @@ def append_executor_event(root: str | Path, loop, event: dict) -> dict:
     )
     if value is None or value.get("terminal") is not None:
         raise ValueError("executor_run_blackboard_not_open")
+    number = int(value.get("event_count_total", len(value["events"]))) + 1
     if len(value["events"]) >= MAX_EVENTS:
-        raise ValueError("executor_run_blackboard_event_limit")
-    number = len(value["events"]) + 1
+        # Keep a bounded current projection, but never discard historical
+        # metadata: archive exactly half the full-fidelity events first.
+        batch = value["events"][:MAX_EVENTS // 2]
+        first = int(batch[0]["sequence"])
+        last = int(batch[-1]["sequence"])
+        archive_dir = _path(root, loop.task_id).parent / "event_archive" / _id(loop.task_id)
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_file = archive_dir / (str(first) + "-" + str(last) + ".json")
+        archive = {
+            "schema": "SMARTAGENT_EXECUTOR_RUN_EVENTS_ARCHIVE_V1",
+            "task_id": loop.task_id, "request_id": loop.run_id,
+            "task_epoch": loop.task_epoch,
+            "first_sequence": first, "last_sequence": last,
+            "events": batch,
+        }
+        digest = _digest(archive)
+        archive["sha256"] = digest
+        if archive_file.exists():
+            prior = json.loads(archive_file.read_text(encoding="utf-8"))
+            if prior != archive:
+                raise ValueError("executor_run_archive_immutable_conflict")
+        else:
+            with archive_file.open("x", encoding="utf-8") as handle:
+                json.dump(archive, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+        value.setdefault("archive_chunks", []).append({
+            "first_sequence": first, "last_sequence": last,
+            "archive_name": archive_file.name, "sha256": digest,
+        })
+        value["events"] = value["events"][MAX_EVENTS // 2:]
+
     row = {**event, "sequence": number}
     row["event_id"] = "ER-EV-" + _digest({
         "task_id": loop.task_id, "task_epoch": loop.task_epoch,
@@ -144,6 +176,7 @@ def append_executor_event(root: str | Path, loop, event: dict) -> dict:
         # it does NOT invent an OS execution/evidence reference.
         row["evidence_ref"] = row["event_id"]
     value["events"].append(row)
+    value["event_count_total"] = number
     _atomic(_path(root, loop.task_id), value)
     return row
 
@@ -239,13 +272,49 @@ def projection(value: Mapping) -> dict:
         "handoff_id": value["handoff_id"],
         "parent_dispatch_state": value["parent_dispatch_state"],
         "parent_consumption_state": value["parent_consumption_state"],
-        "event_count": len(value["events"]),
+        "event_count": int(value.get("event_count_total", len(value["events"]))),
+        "active_event_count": len(value["events"]),
+        "archive_chunk_count": len(value.get("archive_chunks") or []),
+        "full_event_history_retrievable": True,
+        "event_read_tool": "read_runtime_blackboard",
         "tool_evidence_refs": list((value.get("terminal") or {}).get("tool_evidence_refs") or []),
         "goal_verified": bool((value.get("terminal") or {}).get("goal_verified", False)),
     }
 
+    
+def read_executor_event(root: str | Path, *, task_id: str,
+                        request_id: str, task_epoch: str,
+                        sequence: int) -> dict:
+    """Source event readback, including immutable archived event chunks."""
+    value = read_executor_run(root, task_id=task_id,
+                              request_id=request_id, task_epoch=task_epoch)
+    if value is None or type(sequence) is not int or sequence < 1:
+        raise ValueError("executor_run_event_read_binding_invalid")
+    for row in value["events"]:
+        if row.get("sequence") == sequence:
+            return dict(row)
+    for chunk in value.get("archive_chunks", ()):
+        if not (chunk["first_sequence"] <= sequence <= chunk["last_sequence"]):
+            continue
+        archive_file = (_path(root, task_id).parent / "event_archive" /
+                        _id(task_id) / str(chunk["archive_name"]))
+        # Archive names originate from Runtime and are constrained on read.
+        if not re.fullmatch(r"\\d+-\\d+\\.json", archive_file.name):
+            raise ValueError("executor_run_archive_reference_invalid")
+        archive = json.loads(archive_file.read_text(encoding="utf-8"))
+        digest = archive.pop("sha256", "")
+        if (_digest(archive) != digest or digest != chunk["sha256"]
+                or archive.get("task_id") != task_id
+                or archive.get("request_id") != request_id
+                or archive.get("task_epoch") != task_epoch):
+            raise ValueError("executor_run_archive_integrity_invalid")
+        for row in archive.get("events", ()):
+            if row.get("sequence") == sequence:
+                return dict(row)
+    raise ValueError("executor_run_event_not_found")
+
 
 __all__ = [
     "begin_executor_run", "append_executor_event", "finish_executor_run",
-    "read_executor_run", "record_finish_comparison", "projection", "_safe_arguments",
+    "read_executor_run", "read_executor_event", "record_finish_comparison", "projection", "_safe_arguments",
 ]
