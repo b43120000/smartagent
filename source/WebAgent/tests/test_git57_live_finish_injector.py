@@ -59,7 +59,7 @@ def test_one_shot_typed_flip_uses_real_claim_and_logs_hashes(monkeypatch):
     assert events[0]["executed"] is False
     assert json.loads(inj("prompt", None, []))["expected_runtime"][0]["fields"]["data.observed_exists"] is False
     assert len(events) == 1
-    assert loop.action_result_ledger["action-1"]["result"].startswith("{")
+    assert loop.action_result_ledger["action-1"]["result"].startswith("[TOOL_RESULT] ")
 
 
 @pytest.mark.parametrize("status,persisted", [
