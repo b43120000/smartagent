@@ -1013,6 +1013,37 @@ class TelegramReceiver:
                         update_id=update_id,
                     )
                 continue
+            # Git58: authenticated, one-message Real Planner Live E2E.
+            # Only the private/paired Telegram receiver may generate this
+            # task-bound test selector. The Planner sees a plain folder query.
+            from agent_core.git58_telegram_live_control import (
+                COMMAND as GIT58_LIVE_COMMAND, prepare_message as prepare_git58_live,
+            )
+            if str(message.text or "").strip() == GIT58_LIVE_COMMAND:
+                try:
+                    message = prepare_git58_live(
+                        message, workspace=self.config.workspace, update_id=update_id,
+                    )
+                    if message is None:
+                        raise ValueError("GIT58_CONTROL_NOT_PREPARED")
+                    self._log(
+                        "CONNECT", stage="GIT58_TEST_TASK_PREPARED",
+                        update_id=update_id,
+                        request_sha256=message.metadata[
+                            "git58_real_planner_live"]["request_sha256"],
+                    )
+                except (ValueError, OSError, RuntimeError) as exc:
+                    self.offset_store.commit(update_id)
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 Git58 Real Planner Live 測試拒絕：" + str(exc)[:320],
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                    self._log(
+                        "ERROR", stage="GIT58_TEST_CONTROL_REJECTED",
+                        update_id=update_id, error_type=type(exc).__name__,
+                    )
+                    continue
             if self.task_admission_guard is not None:
                 try:
                     admission = self.task_admission_guard(message)
