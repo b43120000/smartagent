@@ -721,6 +721,34 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                             )
                         }, ensure_ascii=False)
                     )
+            # Git59: report the Native Git/Python CHILD verdict separately
+            # from the diagnostic Goal PASS. A correct UNVERIFIED report must
+            # never be announced as executable success.
+            if (source_transport == "TELEGRAM"
+                    and (task.metadata or {}).get("ingress_metadata", {}).get(
+                        "git59_native_exec_live") is not None):
+                from agent_core.git59_telegram_native_live import (
+                    assess_native_child_live,
+                )
+                import json
+                git59_report = assess_native_child_live(
+                    task, loop, source_transport=source_transport,
+                )
+                runtime_log.write(
+                    "STATUS", component="telegram_webagent_worker",
+                    stage="GIT59_NATIVE_CHILD_LIVE_RESULT",
+                    task_id=task.task_id, request_id=task.request_id,
+                    verdict=git59_report["verdict"],
+                    diagnostic_goal_verdict=git59_report["diagnostic_goal_verdict"],
+                    git_direct_child_verified=git59_report["git_direct_child_verified"],
+                    python_direct_child_verified=git59_report["python_direct_child_verified"],
+                    git_reason=git59_report["git_reason"],
+                    python_reason=git59_report["python_reason"],
+                )
+                final_content += (
+                    "\n\n[Git59 Native AppContainer Git/Python 子程序驗收]\n"
+                    + json.dumps(git59_report, ensure_ascii=False)
+                )
             if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
                 raise RemoteTaskCancelled("telegram_interrupt_requested")
             # Completion handoff barrier: the v8 response is already UI-idle

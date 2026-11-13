@@ -1,0 +1,70 @@
+name: Git59 Native AppContainer Executable Child Token
+on:
+  push:
+    branches:
+      - git59/native-executable-child-token-e2e-20261113
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Git59 native executable evidence / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile Python native broker and goal comparer
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/turbo_os_broker_client.py
+          source/agent_core/requirement_goal_state.py
+          source/agent_core/git58_telegram_live_control.py
+          source/agent_core/git59_telegram_native_live.py
+          source/RemoteAgent/telegram_transport.py
+          source/RemoteAgent/telegram_webagent_worker.py
+      - name: Git59 and baseline goal tests
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git59_native_executable_child_token.py
+          source/WebAgent/tests/test_git59_telegram_native_live.py
+          source/WebAgent/tests/test_git55_requirement_goal_state_contract.py
+          source/WebAgent/tests/test_git56_finish_semantic_repair.py
+          source/WebAgent/tests/test_git57_live_finish_injector.py
+          source/WebAgent/tests/test_git58_telegram_real_planner_live.py
+      - name: Parse and compile actual Windows AppContainer broker
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          $ast=[System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install_smart_agent/turbo_os_execute.ps1').Path,
+            [ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'GIT59_NATIVE_BROKER_POWERSHELL_PARSER_FAILED'
+          }
+          Add-Type -Path 'install_smart_agent/turbo_appcontainer_probe.cs' -ErrorAction Stop
+          if (-not ('SmartAgentGit47AppContainerProbe' -as [type])) {
+            throw 'GIT59_NATIVE_CSHARP_PROBE_NOT_COMPILED'
+          }
+          Write-Host 'GIT59_NATIVE_BROKER_STATIC_COMPILE_PASS'
+      - name: Windows real Runtime recover baseline
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -B source/WebAgent/tests/git57_live_e2e.py --workspace "$env:RUNNER_TEMP" --target (Join-Path $env:RUNNER_TEMP 'GIT57_LIVE_NONEXISTENT_CI_GIT59') --progress-root . --scenario recover

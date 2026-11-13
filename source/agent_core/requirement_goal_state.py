@@ -301,6 +301,16 @@ def _diagnostic_actual(item: Mapping, name: str, paths: Mapping):
             "native_executable_identity_verified"),
         "native_executable_identity_reason": os_proof.get(
             "native_executable_identity_reason"),
+        "native_executable_probe_name": os_proof.get(
+            "native_executable_probe_name"),
+        "native_executable_probe_exit_code": os_proof.get(
+            "native_executable_probe_exit_code"),
+        "native_executable_probe_pid": os_proof.get(
+            "native_executable_probe_pid"),
+        "native_executable_direct_launch_count": os_proof.get(
+            "native_executable_direct_launch_count"),
+        "native_executable_probe_is_second_process": os_proof.get(
+            "native_executable_probe_is_second_process"),
     }
     if name.endswith("_exists"):
         if output.strip() in {"True", "False"}:
@@ -315,6 +325,32 @@ def _diagnostic_actual(item: Mapping, name: str, paths: Mapping):
             } for tool, exe in paths.items()
         }
         return "PASS", "PATH_CAPTURED", actual
+    if name in {"git_version", "python_version"}:
+        expected_tool = name.split("_", 1)[0]
+        proof = (
+            os_proof.get("native_executable_identity_verified") is True
+            and os_proof.get("native_executable_probe_name") == expected_tool
+            and os_proof.get("native_executable_direct_launch_count") == 1
+            and os_proof.get("native_executable_probe_is_second_process") is True
+            and type(os_proof.get("native_executable_probe_exit_code")) is int
+            and type(os_proof.get("native_executable_probe_pid")) is int
+            and os_proof["native_executable_probe_pid"] > 0
+        )
+        if not proof:
+            actual["classification"] = "UNVERIFIED"
+            return "PASS", "NATIVE_CHILD_TOKEN_UNVERIFIED_EXPLICIT", actual
+        if (data["exit_code"] != 0
+                or os_proof["native_executable_probe_exit_code"] != 0):
+            actual["classification"] = "EXIT_NONZERO"
+            return "PASS", "NATIVE_CHILD_EXECUTION_NONZERO_OBSERVED", actual
+        version_prefix = (
+            "git version" if expected_tool == "git" else "python "
+        )
+        if version_prefix not in output.strip().casefold():
+            actual["classification"] = "UNVERIFIED"
+            return "PASS", "NATIVE_CHILD_VERSION_OUTPUT_UNVERIFIED", actual
+        actual["classification"] = "OS_DIRECT_CHILD_TOKEN_AND_VERSION_VERIFIED"
+        return "PASS", "NATIVE_CHILD_EXECUTION_VERIFIED", actual
     if output.strip():
         actual["classification"] = "OBSERVED_OUTPUT"
         return "PASS", "COMMAND_OUTPUT_OBSERVED", actual
@@ -496,6 +532,9 @@ def evaluate_frozen_goal_contract(contract: Mapping, history: list[dict],
                 "EMPTY_OUTPUT_UNVERIFIED",
                 "TEST_PATH_UNVERIFIED_EXPLICIT",
                 "COMMAND_STREAM_OR_EXIT_EVIDENCE_MISSING",
+                "NATIVE_CHILD_TOKEN_UNVERIFIED_EXPLICIT",
+                "NATIVE_CHILD_VERSION_OUTPUT_UNVERIFIED",
+                "NATIVE_CHILD_EXECUTION_NONZERO_OBSERVED",
             } for row in table
         )
         policy_denied = any(
