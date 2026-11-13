@@ -577,6 +577,16 @@ def tool_run_command(
         return attach_runtime_result('\n'.join(lines), status,
             'COMMAND_REJECTED' if rejected else 'COMMAND_RUNNING' if running else 'COMMAND_EXITED' if executed else 'PROCESS_NOT_STARTED', tool='run_command',
             executed=executed, data={**operation_result,
+                # Full captured streams are Runtime evidence. The Planner
+                # receives inline small data or a task-bound evidence pointer;
+                # no metadata is dropped at this producer boundary.
+                'stdout':str(main.get('stdout') or ''),
+                'stderr':str(main.get('stderr') or ''),
+                'stdout_bytes':main.get('stdout_bytes', len(str(main.get('stdout') or '').encode('utf-8'))),
+                'stderr_bytes':main.get('stderr_bytes', len(str(main.get('stderr') or '').encode('utf-8'))),
+                'stdout_truncated':bool(main.get('stdout_truncated')),
+                'stderr_truncated':bool(main.get('stderr_truncated')),
+                'output_complete':not (main.get('stdout_truncated') or main.get('stderr_truncated')),
                 'execution_status':status, 'verification_status':'UNVERIFIED' if running else operation_result['verification_status'],
                 'terminal_eligible':False if running or rejected else operation_result['terminal_eligible'],
                 'working_directory':str(cwd),
