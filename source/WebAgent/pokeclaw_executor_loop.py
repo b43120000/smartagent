@@ -691,7 +691,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "authorization_granted": False,
                 }
             auto_confirm = bool(
-                action and risk_class == "UNKNOWN"
+                action and broker_gate["decision"] == "BROKER_REQUIRED"
                 and turbo.get("auto_confirm") is True
             )
             native_precheck_blocked = bool(
@@ -950,7 +950,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "可在新接續任務重新發起一次性授權。"
                     )
                     continue
-        if action and action_is_mutating(action):
+        if action and (action_is_mutating(action) or (
+                broker_gate["decision"] == "BROKER_REQUIRED"
+                and action.get("tool") == "run_command")):
             fingerprint = _digest({
                 key: value for key, value in action.items() if key != "action_id"
             })
