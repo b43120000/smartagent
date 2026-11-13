@@ -14,6 +14,9 @@ public static class SmartAgentGit47AppContainerProbe
     const uint CREATE_NO_WINDOW = 0x08000000;
     const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     const int PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009;
+    const int PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
+    const uint STARTF_USESTDHANDLES = 0x00000100;
+    const uint HANDLE_FLAG_INHERIT = 0x00000001;
     const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     const int JobObjectExtendedLimitInformation = 9;
     const uint TOKEN_QUERY = 0x0008;
@@ -118,6 +121,12 @@ public static class SmartAgentGit47AppContainerProbe
         IntPtr attributeList, uint flags, IntPtr attribute,
         ref SECURITY_CAPABILITIES value, IntPtr size,
         IntPtr previous, IntPtr returnedSize);
+    [DllImport("kernel32.dll", EntryPoint="UpdateProcThreadAttribute", SetLastError=true)]
+    static extern bool UpdateProcThreadAttributeHandles(
+        IntPtr attributeList, uint flags, IntPtr attribute,
+        IntPtr value, IntPtr size, IntPtr previous, IntPtr returnedSize);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
     [DllImport("kernel32.dll")]
     static extern void DeleteProcThreadAttributeList(IntPtr list);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
@@ -344,6 +353,26 @@ public static class SmartAgentGit47AppContainerProbe
                                 string arguments, string cwd,
                                 uint timeoutMilliseconds, string trustedToolPath)
     {
+        return LaunchWithTrustedPathCore(moniker, executable, arguments, cwd,
+                                         timeoutMilliseconds, trustedToolPath, false);
+    }
+
+    // The protected broker calls this only for exact enrolled --version.
+    // All inherited handles refer to disposable files INSIDE Turbo Root.
+    public static string LaunchVersionCaptured(string moniker, string executable,
+                                string cwd, uint timeoutMilliseconds, string trustedToolPath)
+    {
+        return LaunchWithTrustedPathCore(moniker, executable, "--version", cwd,
+                                         timeoutMilliseconds, trustedToolPath, true);
+    }
+
+    static string LaunchWithTrustedPathCore(string moniker, string executable,
+                                string arguments, string cwd,
+                                uint timeoutMilliseconds, string trustedToolPath,
+                                bool captureVersion)
+    {
+        if (captureVersion && arguments != "--version")
+            throw new ArgumentException("git60_version_capture_scope_invalid");
         if (string.IsNullOrWhiteSpace(moniker)
             || string.IsNullOrWhiteSpace(executable)
             || !System.IO.Path.IsPathRooted(executable)
@@ -353,7 +382,9 @@ public static class SmartAgentGit47AppContainerProbe
         string sidString = DeriveSid(moniker);
         IntPtr sid = IntPtr.Zero, attributeList = IntPtr.Zero, environment = IntPtr.Zero;
         IntPtr internetSid = IntPtr.Zero, capArray = IntPtr.Zero;
-        IntPtr job = IntPtr.Zero;
+        IntPtr job = IntPtr.Zero, handleList = IntPtr.Zero;
+        System.IO.FileStream stdin = null, stdout = null, stderr = null;
+        string stdinPath = "", stdoutPath = "", stderrPath = "";
         PROCESS_INFORMATION pi = new PROCESS_INFORMATION();
         bool started = false;
         bool listInitialized = false;
@@ -363,12 +394,43 @@ public static class SmartAgentGit47AppContainerProbe
             if (hresult != 0 || sid == IntPtr.Zero)
                 throw new InvalidOperationException("profile_sid_unavailable");
 
+            // A no-console CreateProcess child may receive INVALID_HANDLE
+            // for STDIN/STDOUT/STDERR. Create three bounded capture handles
+            // ONLY for this read-only --version probe inside the Turbo root.
+            IntPtr[] childHandles = null;
+            if (captureVersion)
+            {
+                string nonce = Guid.NewGuid().ToString("N");
+                stdinPath = System.IO.Path.Combine(cwd, ".smartagent-" + nonce + ".stdin");
+                stdoutPath = System.IO.Path.Combine(cwd, ".smartagent-" + nonce + ".stdout");
+                stderrPath = System.IO.Path.Combine(cwd, ".smartagent-" + nonce + ".stderr");
+                stdin = new System.IO.FileStream(stdinPath, System.IO.FileMode.CreateNew,
+                            System.IO.FileAccess.ReadWrite, System.IO.FileShare.ReadWrite);
+                stdout = new System.IO.FileStream(stdoutPath, System.IO.FileMode.CreateNew,
+                            System.IO.FileAccess.ReadWrite, System.IO.FileShare.ReadWrite);
+                stderr = new System.IO.FileStream(stderrPath, System.IO.FileMode.CreateNew,
+                            System.IO.FileAccess.ReadWrite, System.IO.FileShare.ReadWrite);
+                childHandles = new IntPtr[] {
+                    stdin.SafeFileHandle.DangerousGetHandle(),
+                    stdout.SafeFileHandle.DangerousGetHandle(),
+                    stderr.SafeFileHandle.DangerousGetHandle(),
+                };
+                foreach (IntPtr handle in childHandles)
+                {
+                    if (!SetHandleInformation(handle, HANDLE_FLAG_INHERIT,
+                                              HANDLE_FLAG_INHERIT))
+                        throw Last("SetHandleInformation(Git60StdHandle)");
+                }
+            }
+
             IntPtr attrSize = IntPtr.Zero;
-            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attrSize);
+            InitializeProcThreadAttributeList(IntPtr.Zero, captureVersion ? 2 : 1,
+                                              0, ref attrSize);
             if (attrSize == IntPtr.Zero)
                 throw new InvalidOperationException("attribute_size_unavailable");
             attributeList = Marshal.AllocHGlobal(attrSize);
-            if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attrSize))
+            if (!InitializeProcThreadAttributeList(attributeList, captureVersion ? 2 : 1,
+                                                    0, ref attrSize))
                 throw Last("InitializeProcThreadAttributeList");
             listInitialized = true;
             if (!ConvertStringSidToSidW(INTERNET_CLIENT_SID, out internetSid)
@@ -391,12 +453,26 @@ public static class SmartAgentGit47AppContainerProbe
 
             STARTUPINFOEX si = new STARTUPINFOEX();
             si.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+            if (captureVersion)
+            {
+                handleList = Marshal.AllocHGlobal(IntPtr.Size * childHandles.Length);
+                Marshal.Copy(childHandles, 0, handleList, childHandles.Length);
+                if (!UpdateProcThreadAttributeHandles(attributeList, 0,
+                    (IntPtr)PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                    handleList, (IntPtr)(IntPtr.Size * childHandles.Length),
+                    IntPtr.Zero, IntPtr.Zero))
+                    throw Last("UpdateProcThreadAttribute(Git60HandleList)");
+                si.StartupInfo.dwFlags = (int)STARTF_USESTDHANDLES;
+                si.StartupInfo.hStdInput = childHandles[0];
+                si.StartupInfo.hStdOutput = childHandles[1];
+                si.StartupInfo.hStdError = childHandles[2];
+            }
             si.lpAttributeList = attributeList;
             StringBuilder command = new StringBuilder(
                 "\"" + executable.Replace("\"", "") + "\" " + (arguments ?? ""));
             environment = CleanEnvironment(cwd, executable, trustedToolPath);
             if (!CreateProcessW(executable, command,
-                IntPtr.Zero, IntPtr.Zero, false,
+                IntPtr.Zero, IntPtr.Zero, captureVersion,
                 EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW
                     | CREATE_UNICODE_ENVIRONMENT,
                 environment, cwd, ref si, out pi))
@@ -435,7 +511,19 @@ public static class SmartAgentGit47AppContainerProbe
                 + "\"internet_client_capability_sid\":\"S-1-15-3-1\","
                 + "\"os_process_started\":true,"
                 + "\"exit_code\":" + exitCode + ","
-                + "\"pid\":" + pi.dwProcessId + "}";
+                + "\"pid\":" + pi.dwProcessId
+                + (captureVersion
+                    ? (",\"git60_child_stdout_base64\":\""
+                       + Convert.ToBase64String(ReadPinned(stdout, 32768))
+                       + "\",\"git60_child_stderr_base64\":\""
+                       + Convert.ToBase64String(ReadPinned(stderr, 32768))
+                       + "\",\"git60_child_stdout_bytes\":" + stdout.Length
+                       + ",\"git60_child_stderr_bytes\":" + stderr.Length
+                       + ",\"git60_child_capture_complete\":"
+                       + ((stdout.Length <= 32768 && stderr.Length <= 32768)
+                           ? "true" : "false"))
+                    : "")
+                + "}";
         }
         catch
         {
@@ -455,6 +543,16 @@ public static class SmartAgentGit47AppContainerProbe
             if (job != IntPtr.Zero) CloseHandle(job);
             if (listInitialized) DeleteProcThreadAttributeList(attributeList);
             if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);
+            if (handleList != IntPtr.Zero) Marshal.FreeHGlobal(handleList);
+            if (stdin != null) stdin.Dispose();
+            if (stdout != null) stdout.Dispose();
+            if (stderr != null) stderr.Dispose();
+            foreach (string capture in new string[] { stdinPath, stdoutPath, stderrPath })
+            {
+                if (capture.Length > 0) {
+                    try { System.IO.File.Delete(capture); } catch { }
+                }
+            }
             if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
             if (capArray != IntPtr.Zero) Marshal.FreeHGlobal(capArray);
             if (internetSid != IntPtr.Zero) LocalFree(internetSid);
