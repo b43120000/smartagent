@@ -856,6 +856,24 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         if action and decision.tool == "run_command":
             if native_precheck_blocked:
                 # Never run or fake a ToolResult for a denied proposal.
+                # A source-frozen diagnostic may explicitly allow either
+                # execution or a policy rejection for absolute --version.
+                # This exception only concerns completion evidence, NEVER
+                # sandbox admission or operating system permissions.
+                from agent_core.requirement_goal_state import _step
+                optional_version_step = ""
+                if (
+                    goal_state_contract.get("status") == "COMPILED"
+                    and goal_state_contract.get("goal_kind")
+                    == "DIAGNOSTIC_EXECUTABLE_RESOLUTION"
+                    and isinstance(goal_state_contract.get("executable_targets"), Mapping)
+                ):
+                    candidate_step = _step(
+                        str(action.get("command") or ""),
+                        goal_state_contract["executable_targets"],
+                    )
+                    if candidate_step in {"git_version", "python_version"}:
+                        optional_version_step = candidate_step
                 reason = str(turbo.get("reason_code") or "TURBO_NATIVE_SCOPE_DENIED")
                 command_hash = hashlib.sha256(
                     str(action.get("command") or "").encode("utf-8")
@@ -869,7 +887,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     len(native_preexecution_rejections) < max_native_precheck_replans
                     and turn < max_rounds
                 )
-                replan = bool(recoverable and distinct and budget_available)
+                replan = bool(
+                    recoverable and distinct and budget_available
+                    and not optional_version_step
+                )
                 rejection = {
                     "round": turn, "action_id": str(action["action_id"]),
                     "reason_code": reason,
@@ -892,6 +913,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "TURBO_NATIVE_CONFIRMATION_BLOCKED",
                     "toolName": "run_command", "action_id": action["action_id"],
+                    "goal_diagnostic_step": optional_version_step,
                     "risk_class": risk_class, "reason_code": reason,
                     "command_sha256": command_hash,
                     "arguments_sha256": _digest(decision.arguments),
@@ -931,6 +953,25 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         + "; executed=false; no permission granted. Do NOT "
                         "repeat this command. Propose a different legal action "
                         "and independently verify any mutations."
+                    )
+                    continue
+                if optional_version_step:
+                    # This exact step is optional by the original request:
+                    # policy denial is a valid diagnostic *outcome*. Keep
+                    # going to the next independent command or final report.
+                    # The denied action is never inserted into ToolResult
+                    # history or treated as successful executable loading.
+                    native_denied_command_hashes.add(command_hash)
+                    hint = (
+                        "Native AppContainer policy REJECTED optional "
+                        + optional_version_step
+                        + " --version before execution. "
+                        + "reason_code=" + reason[:120]
+                        + "; The frozen diagnostic contract accepts this "
+                        "as a POLICY_REJECTED observation, not a ToolResult. "
+                        "Do not retry or fallback to Host CMD. Continue "
+                        "remaining independent diagnostics and explicitly "
+                        "report the rejection in Finish."
                     )
                     continue
                 append_executor_event(root, loop, {
