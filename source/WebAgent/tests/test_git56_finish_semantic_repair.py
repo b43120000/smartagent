@@ -177,7 +177,14 @@ def test_real_executor_loop_repairs_finish_semantics_without_reexecuting_tools(
 ):
     loop, reply, board, executed = _exercise_loop(
         tmp_path, monkeypatch, wrong_kind=wrong_kind)
-    assert len(executed) == 1
+    assert len(executed) == 1, {
+        "reply": reply[:1700],
+        "event_kinds": [e.get("kind") for e in board.get("events", [])],
+        "admission": [e.get("admission_diagnostic")
+                      for e in board.get("events", [])
+                      if e.get("kind") == "ADMISSION_REJECTED"][:3],
+        "planner_rounds": len(loop.prompts),
+    }
     assert len(loop.prompts) == 3
     assert loop.terminal_outcome == "SUCCESS", reply
     repairs = [e for e in board["events"]
@@ -195,7 +202,14 @@ def test_repeated_wrong_semantic_finish_exhausts_repair_without_false_pass(
 ):
     loop, reply, board, executed = _exercise_loop(
         tmp_path, monkeypatch, wrong_kind="predicate", stuck=True)
-    assert len(executed) == 1
+    assert len(executed) == 1, {
+        "reply": reply[:1700],
+        "event_kinds": [e.get("kind") for e in board.get("events", [])],
+        "admission": [e.get("admission_diagnostic")
+                      for e in board.get("events", [])
+                      if e.get("kind") == "ADMISSION_REJECTED"][:3],
+        "planner_rounds": len(loop.prompts),
+    }
     assert loop.terminal_outcome != "SUCCESS"
     assert board["executor_state"] == "FINISH_CONTRACT_INVALID"
     assert board["terminal"]["goal_verified"] is False
