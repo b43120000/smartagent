@@ -623,12 +623,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
                 if contract_gap is not None:
                     repairable.add("FROZEN_GOAL_STATE_NOT_SATISFIED")
-                # Preserve Git34–35 behavior: after two repairs, missing
-                # declarations still reach a formal comparator FAIL. The
-                # Git42-specific schema error remains distinctly reportable.
-                if (preview["reason_code"] in repairable
-                        and not (finish_repairs >= max_finish_repairs
-                                 and preview["reason_code"] != "MODEL_GOAL_CHECK_SCHEMA_INVALID")):
+                # A repeatedly malformed or semantically incorrect Finish is
+                # a Planner contract failure, NOT evidence the user's desired
+                # environment state failed. Keep that distinction at the
+                # repair budget boundary, without ever granting a PASS.
+                if preview["reason_code"] in repairable:
                     last_finish_reason = str(preview["reason_code"])
                     last_finish_diagnostic = (
                         status_repair_diagnostic or postrun_gap or semantic_repair
