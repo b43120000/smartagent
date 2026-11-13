@@ -77,3 +77,63 @@ def test_attachments_disallowed():
         prepare_message(_message(
             attachments=(InboundAttachment(kind="document", transport_id="abc"),)
         ), update_id=20, project_root=Path(r"C:\smartagent"))
+
+
+
+def test_git59_separate_native_child_verdict_never_inferred_from_green_goal():
+    import hashlib
+    from types import SimpleNamespace
+    from agent_core.git59_telegram_native_live import assess_native_child_live
+    from WebAgent.tests.test_git55_requirement_goal_state_contract import REQUEST
+    goal = compile_requirement_goal_state(REQUEST)
+    marker = {
+        "schema": "SMARTAGENT_GIT59_NATIVE_EXEC_LIVE_SELECTOR_V1",
+        "original_command": COMMAND,
+        "request_sha256": hashlib.sha256(REQUEST.encode("utf-8")).hexdigest(),
+        "source_message_id": "10",
+        "action_authorization_granted": False,
+    }
+    task = SimpleNamespace(
+        task_id="TASK-GIT59-FAKE", request_id="RR-GIT59-FAKE",
+        request=REQUEST,
+        metadata={"source_message_id": "10",
+                  "ingress_metadata": {MARKER: marker}},
+    )
+    rows = []
+    for key in ("D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08", "D09"):
+        row = {"condition_id": key, "verdict": "PASS",
+               "reason_code": "OTHER", "actual": {}, "evidence_refs": []}
+        if key in {"D07", "D08"}:
+            name = "git" if key == "D07" else "python"
+            row.update({
+                "reason_code": "NATIVE_CHILD_EXECUTION_VERIFIED",
+                "actual": {
+                    "native_executable_identity_verified": True,
+                    "native_executable_probe_name": name,
+                    "native_executable_probe_pid": 250,
+                    "native_executable_probe_exit_code": 0,
+                    "native_executable_direct_launch_count": 1,
+                    "native_executable_probe_is_second_process": True,
+                    "exit_code": 0, "stdout": name + " version 1",
+                },
+                "evidence_refs": ["MIN-EV-" + ("a" * 24 if name == "git"
+                                              else "b" * 24)],
+            })
+        rows.append(row)
+    terminal = {
+        "final_verdict": "PASS",
+        "goal_contract_sha256": goal["contract_sha256"],
+        "comparison": {"reason_code": "FROZEN_GOAL_STATE_SATISFIED"},
+        "goal_state_table": rows,
+    }
+    loop = SimpleNamespace(terminal_acceptance=terminal)
+    positive = assess_native_child_live(task, loop, source_transport="TELEGRAM")
+    assert positive["verdict"] == "GIT59_NATIVE_CHILD_EXECUTION_PASS"
+    terminal["goal_state_table"][7]["actual"]["native_executable_identity_verified"] = False
+    # A green diagnostic is NOT positive executable evidence.
+    negative = assess_native_child_live(task, loop, source_transport="TELEGRAM")
+    assert negative["diagnostic_goal_verdict"] == "PASS"
+    assert negative["verdict"] == "GIT59_NATIVE_CHILD_EXECUTION_UNVERIFIED"
+    assert negative["python_direct_child_verified"] is False
+    with pytest.raises(ValueError, match="GIT59_DIAGNOSTIC_TASK_BOUNDARY_INVALID"):
+        assess_native_child_live(task, loop, source_transport="WEBGPT_COPILOT")
