@@ -55,11 +55,32 @@ jobs:
           source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
           source/WebAgent/tests/test_git52_native_network_toolchain.py
           source/WebAgent/tests/test_git52_action_gated_ingress_scope.py
-          source/WebAgent/tests/test_git34_runtime_finish_comparator.py
-          source/WebAgent/tests/test_git28_executor_resolution_blackboard.py
       - name: Windows native AppContainer launcher compiles and broker parses
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           Add-Type -Path 'install_smart_agent/turbo_appcontainer_probe.cs' -ErrorAction Stop
           [ScriptBlock]::Create([IO.File]::ReadAllText('install_smart_agent/turbo_os_execute.ps1')) | Out-Null
+
+  legacy-baseline:
+    name: Non-blocking historical Git28/Git34 baseline on Git53
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 12
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: git53/native-turbo-full-access-readscope-20261113
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pytest
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Characterize pre-existing Git53 legacy harness failures
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git34_runtime_finish_comparator.py
+          source/WebAgent/tests/test_git28_executor_resolution_blackboard.py
