@@ -126,6 +126,17 @@ def test_exact_state_mismatch_is_real_goal_failure_not_planner_repair():
 def _exercise_loop(tmp_path, monkeypatch, *, wrong_kind, stuck=False):
     request = "檢視執行紀錄，依實際程序退出碼確認是否符合本次檢查目標"
     loop, _ = _loop(tmp_path, monkeypatch, [], request=request)
+    # Explicit simulated ACL OFF admission for this unit test; it never
+    # invokes Native Broker, changes a machine policy or supplies authority
+    # to the production dispatcher.
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.assess",
+        lambda *a, **kw: {"decision": "NORMAL", "reason_code": "TEST_ACL_OFF"},
+    )
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.admit_action",
+        lambda *a, **kw: {"decision": "NORMAL", "reason_code": "TEST_ACL_OFF"},
+    )
     executed = []
     def run(action):
         executed.append(dict(action))
