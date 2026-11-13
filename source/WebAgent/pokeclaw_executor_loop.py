@@ -263,6 +263,7 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
         "goal_coverage_basis": comparison.get("coverage_basis", "NOT_VERIFIED"),
         "comparison": {
             "reason_code": comparison["reason_code"],
+            "failure_origin": comparison.get("failure_origin", ""),
             "mismatches": list(comparison["mismatches"]),
             "tool_results": list(comparison["tool_results"]),
         },
@@ -354,6 +355,10 @@ def _finish(loop, root: Path, request: str, *, kind: str,
                 "\nPlanner 額外 Goal Check 與 Runtime 實值不符；"
                 "已記錄為非權威提案，不覆寫凍結的 Goal Contract。"
             )
+    failure_origin = (
+        "\n驗收失敗來源：" + str(comparison.get("failure_origin") or "UNKNOWN")
+        if comparison and comparison.get("verdict") == "FAIL" else ""
+    )
     trailer = (
         "\n\nExecutor Blackboard（已寫入並回讀）：\n"
         f"Executor：{p['executor_state']}\n"
@@ -363,7 +368,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         f"Tool Evidence：{', '.join(p['tool_evidence_refs']) or '無'}\n"
         f"Parent Dispatch：{p['parent_dispatch_state']}\n"
         f"Parent Consumption：{p['parent_consumption_state']}\n"
-        f"整體目標：{terminal_line}{mismatch_lines}{state_report}"
+        f"整體目標：{terminal_line}{failure_origin}{mismatch_lines}{state_report}"
     )
     if comparison and comparison["verdict"] == "PASS" and (
         comparison.get("completion_kind") == "ANSWER_ONLY"
