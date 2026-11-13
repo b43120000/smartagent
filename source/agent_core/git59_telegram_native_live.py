@@ -79,3 +79,94 @@ def prepare_message(message, *, update_id: int, project_root: str | Path):
         message, text=requirement,
         metadata={**dict(message.metadata or {}), MARKER: marker},
     )
+
+
+def assess_native_child_live(task, loop, *, source_transport: str) -> dict:
+    """Separate successful diagnostic from positive native executable proof.
+
+    Reads only Runtime-owned terminal Goal State evidence, never model prose.
+    An accurate UNVERIFIED report can pass its diagnostic Goal; that is NOT
+    native executable execution success.
+    """
+    metadata = dict((getattr(task, "metadata", None) or {}).get(
+        "ingress_metadata") or {})
+    marker = metadata.get(MARKER)
+    if marker is None:
+        raise ValueError("GIT59_DIAGNOSTIC_MARKER_MISSING")
+    request = str(getattr(task, "request", "") or "")
+    if (
+        source_transport != "TELEGRAM"
+        or not isinstance(marker, dict)
+        or marker.get("schema") != "SMARTAGENT_GIT59_NATIVE_EXEC_LIVE_SELECTOR_V1"
+        or marker.get("original_command") != COMMAND
+        or marker.get("action_authorization_granted") is not False
+        or marker.get("request_sha256") != hashlib.sha256(
+            request.encode("utf-8")).hexdigest()
+        or str(marker.get("source_message_id") or "") != str(
+            (task.metadata or {}).get("source_message_id") or "")
+    ):
+        raise ValueError("GIT59_DIAGNOSTIC_TASK_BOUNDARY_INVALID")
+    from agent_core.requirement_goal_state import compile_requirement_goal_state
+    contract = compile_requirement_goal_state(request)
+    terminal = dict(getattr(loop, "terminal_acceptance", {}) or {})
+    rows = {
+        str(row.get("condition_id") or ""): row
+        for row in terminal.get("goal_state_table", [])
+        if isinstance(row, dict)
+    }
+    kinds = {"D07": "git", "D08": "python"}
+    positive = {}
+    for condition_id, name in kinds.items():
+        row = rows.get(condition_id, {})
+        actual = row.get("actual") or {}
+        evidence_refs = row.get("evidence_refs") or []
+        positive[name] = bool(
+            row.get("verdict") == "PASS"
+            and row.get("reason_code") == "NATIVE_CHILD_EXECUTION_VERIFIED"
+            and isinstance(actual, dict)
+            and actual.get("native_executable_identity_verified") is True
+            and actual.get("native_executable_probe_name") == name
+            and type(actual.get("native_executable_probe_pid")) is int
+            and actual["native_executable_probe_pid"] > 0
+            and actual.get("native_executable_probe_exit_code") == 0
+            and actual.get("native_executable_direct_launch_count") == 1
+            and actual.get("native_executable_probe_is_second_process") is True
+            and actual.get("exit_code") == 0
+            and isinstance(actual.get("stdout"), str)
+            and bool(actual["stdout"])
+            and len(evidence_refs) == 1
+            and str(evidence_refs[0]).startswith("MIN-EV-")
+        )
+    required = ("D01", "D02", "D03", "D04", "D05", "D06", "D07", "D08", "D09")
+    complete = bool(
+        contract.get("status") == "COMPILED"
+        and contract.get("goal_kind") == "DIAGNOSTIC_EXECUTABLE_RESOLUTION"
+        and terminal.get("final_verdict") == "PASS"
+        and terminal.get("goal_contract_sha256") ==
+            contract.get("contract_sha256")
+        and terminal.get("comparison", {}).get("reason_code") ==
+            "FROZEN_GOAL_STATE_SATISFIED"
+        and len(rows) == len(required)
+        and all(rows.get(step, {}).get("verdict") == "PASS" for step in required)
+    )
+    verdict = (
+        "GIT59_NATIVE_CHILD_EXECUTION_PASS" if (
+            complete and all(positive.values()))
+        else "GIT59_NATIVE_CHILD_EXECUTION_UNVERIFIED"
+    )
+    return {
+        "schema": "SMARTAGENT_GIT59_NATIVE_CHILD_LIVE_REPORT_V1",
+        "task_id": str(getattr(task, "task_id", "")),
+        "request_id": str(getattr(task, "request_id", "")),
+        "diagnostic_goal_verdict": terminal.get("final_verdict", "NOT_ADMITTED"),
+        "goal_coverage_complete": complete,
+        "sandbox_probe": rows.get("D01", {}).get("reason_code", "MISSING"),
+        "tool_coverage": rows.get("D02", {}).get("reason_code", "MISSING"),
+        "git_direct_child_verified": positive["git"],
+        "python_direct_child_verified": positive["python"],
+        "git_reason": rows.get("D07", {}).get("reason_code", "MISSING"),
+        "python_reason": rows.get("D08", {}).get("reason_code", "MISSING"),
+        "git_evidence_refs": rows.get("D07", {}).get("evidence_refs", []),
+        "python_evidence_refs": rows.get("D08", {}).get("evidence_refs", []),
+        "verdict": verdict,
+    }
