@@ -6367,6 +6367,39 @@ class WebAgentProtocolLoop:
             "recovery_context": recovery_context,
             **evidence,
         }
+        # Shared source of truth for Executor-only, Goal Driver and legacy
+        # protocol actions alike. The PokeClaw adapter uses the same digest
+        # and evidence ref, so its later readback is strictly idempotent.
+        from agent_core.runtime_evidence_store import persist_runtime_evidence
+        from agent_core.tool_result_contract import decode_result as _decode_source_result
+        _final_result = str(result)
+        _final_receipt = _decode_source_result(_final_result)
+        if isinstance(_final_receipt, dict) and action_id:
+            _result_digest = hashlib.sha256(_final_result.encode("utf-8")).hexdigest()
+            _source_ref = "MIN-EV-" + hashlib.sha256(
+                (action_id + "\\0" + _result_digest).encode("utf-8")
+            ).hexdigest()[:24]
+            try:
+                _source = persist_runtime_evidence(
+                    self.progress_root if self.progress_root is not None else self.workspace,
+                    task_id=self.task_id, request_id=self.run_id,
+                    task_epoch=self.task_epoch, action_id=action_id,
+                    evidence_ref=_source_ref, raw_result=_final_result,
+                    receipt=_final_receipt,
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                _source = {
+                    "evidence_ref": _source_ref, "store_status": "PERSIST_FAILED",
+                    "error_class": type(exc).__name__,
+                }
+            self.action_ledger[action_id]["runtime_evidence_store"] = dict(_source)
+            self._emit(
+                "runtime_source_evidence_recorded",
+                request_id=self.run_id, round=self.turn_id,
+                action_id=action_id, evidence_ref=_source_ref,
+                store_status=_source["store_status"],
+                no_authorization_granted=True,
+            )
         # Index a successfully observed source structure only in Agent-owned
         # metadata, isolated by owner, instance, workspace and Goal Identity.
         # No current read permission or content-integrity assertion follows.
