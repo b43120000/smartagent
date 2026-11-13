@@ -299,7 +299,7 @@ def read_executor_event(root: str | Path, *, task_id: str,
         archive_file = (_path(root, task_id).parent / "event_archive" /
                         _id(task_id) / str(chunk["archive_name"]))
         # Archive names originate from Runtime and are constrained on read.
-        if not re.fullmatch(r"\\d+-\\d+\\.json", archive_file.name):
+        if not re.fullmatch(r"\d+-\d+\.json", archive_file.name):
             raise ValueError("executor_run_archive_reference_invalid")
         archive = json.loads(archive_file.read_text(encoding="utf-8"))
         digest = archive.pop("sha256", "")
