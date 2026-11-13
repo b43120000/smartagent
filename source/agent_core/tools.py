@@ -353,6 +353,14 @@ def _powershell_with_native_exit_propagation(command: str) -> str:
     )
 
 
+def _native_run_command_admitted(cwd: str | Path | None) -> bool:
+    """Advisory routing only; OS Broker independently reattests every action."""
+    from .turbo_broker_admission import assess
+    from .workspace_access import resolve_turbo_authorization_workspace
+    parent = resolve_turbo_authorization_workspace(cwd)
+    return assess(parent if parent is not None else cwd, tool="run_command")["decision"] == "BROKER_REQUIRED"
+
+
 def _run_powershell_capture(
     command: str,
     timeout: int = 30,
@@ -364,7 +372,8 @@ def _run_powershell_capture(
 ) -> dict:
     """Execute PowerShell and return structured evidence instead of only text."""
     try:
-        require_command_allowed(command, workspace=cwd, approval_manifest=approval_manifest)
+        if not _native_run_command_admitted(cwd):
+            require_command_allowed(command, workspace=cwd, approval_manifest=approval_manifest)
     except CommandSecurityError as exc:
         return {
             "exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
@@ -1362,8 +1371,9 @@ def resolve_command_working_directory(
     cwd = gate(value or context.workspace_root, require_absolute=True, forbid_glob=True)
     if not cwd.is_dir():
         raise PathSecurityError('command_working_directory_not_directory:' + str(cwd))
+    native_broker = _native_run_command_admitted(cwd)
     is_bound_command = _path_independent_command_must_use_bound_workspace(command)
-    if is_bound_command and cwd != context.workspace_root:
+    if is_bound_command and cwd != context.workspace_root and not native_broker:
         raise PathSecurityError('path_independent_command_cwd_outside_bound_workspace:' + str(cwd))
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
@@ -1377,7 +1387,7 @@ def resolve_command_working_directory(
             str(command or ""), re.I,
         ))
     )
-    if requested and not any(is_within(cwd, root) for root in requested):
+    if requested and not native_broker and not any(is_within(cwd, root) for root in requested):
         if cwd != context.workspace_root or not (
             literal_read_from_bound_cwd
             or _bounded_path_independent_wait(command)
@@ -1416,12 +1426,23 @@ def resolve_command_working_directory(
             resolved = context.require_read(
                 target, require_absolute=True, forbid_glob=True)
             if requested and not any(is_within(resolved, root) for root in requested):
-                raise PathSecurityError('proven_inspect_literal_outside_request_scope')
+                # Built-in Python/Git are an installation-scoped Read Root,
+                # not a model-supplied request path or arbitrary host read.
+                from .workspace_access import builtin_toolchain_read_roots
+                if not native_broker and not any(
+                    is_within(resolved, Path(root))
+                    for root in builtin_toolchain_read_roots()
+                ):
+                    raise PathSecurityError('proven_inspect_literal_outside_request_scope')
     return cwd
 
 
 def _execution_approval_manifest(tool_call: dict, agent, security_context: SecurityContext, working_directory=None) -> dict | None:
     command = str(tool_call.get("command", "") or "")
+    # Native commands have already passed OS Broker admission; their grammar
+    # does not require legacy one-shot/command-family human approval.
+    if _native_run_command_admitted(working_directory or security_context.workspace_root):
+        return None
     admission = inspect_command(command, workspace=working_directory or security_context.workspace_root)
     if admission.allowed:
         return None

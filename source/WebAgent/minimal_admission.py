@@ -141,7 +141,17 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
         **arguments,
         "action_id": "MIN-" + uuid.uuid4().hex[:24].upper(),
     }
-    valid, diag = validate_tool_envelope(action)
+    # Runtime-owned native admission; never accept a Planner-supplied flag.
+    native_broker = False
+    if decision.tool in {"run_command", "delete_path"}:
+        from agent_core.turbo_broker_admission import assess
+        workspace = (getattr(tool_context, "workspace_root", None)
+                     or getattr(tool_context, "workspace", None))
+        if workspace is not None:
+            native_broker = assess(workspace, tool=decision.tool)["decision"] == "BROKER_REQUIRED"
+    valid, diag = validate_tool_envelope(
+        action, native_broker=native_broker and decision.tool == "run_command"
+    )
     if not valid:
         # Preserve the typed contract failure; never echo raw model arguments
         # (commands may contain credentials). This receipt is NOT permission.
@@ -184,7 +194,7 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
         except (AttributeError, TypeError):
             pass
         return None, code
-    if decision.tool == "run_command":
+    if decision.tool == "run_command" and not native_broker:
         operation = str(action.get("operation", "")).upper()
         read_proven = command_is_proven_observation(action)
         risk = classify_command(action)
@@ -231,7 +241,7 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
                 except (AttributeError, TypeError):
                     pass
                 return None, code
-    if decision.tool == "delete_path":
+    if decision.tool == "delete_path" and not native_broker:
         request = str(tool_context.current_request_text or "")
         target = str(action.get("path", "") or "")
         if not re.search(r"刪除|移除|delete|remove", request, re.I):

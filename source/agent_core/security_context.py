@@ -85,6 +85,12 @@ class SecurityContext:
             protected = root / ".agents" / "security"
             if is_within(resolved, protected):
                 raise PathSecurityError(f"runtime_owned_security_state:{resolved}")
+        # Even a broad editable workspace cannot make SmartAgent's bundled
+        # interpreter/toolchain files mutable through the Agent API.
+        from .workspace_access import builtin_toolchain_read_roots
+        if any(is_within(resolved, Path(root))
+               for root in builtin_toolchain_read_roots()):
+            raise PathSecurityError("builtin_toolchain_read_only")
         return resolved
 
     def require_read(
@@ -138,7 +144,7 @@ class SecurityContext:
         configured_writes, configured_reads = _configured_access_roots()
         # An untrusted task prompt or Planner path hint NEVER grants read
         # permission. The only data-read authority comes from Edit Workspace.
-        # Internal broker toolchain RX enrollment is separate from this scope.
+        # Runtime-owned .venv joins Read Scope, never generic Write Scope.
         return cls.for_workspace(
             workspace,
             write_roots=configured_writes,

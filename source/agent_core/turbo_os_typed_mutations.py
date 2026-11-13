@@ -188,33 +188,29 @@ def write_file_in_broker(path, content, *, security_context, action_id="") -> st
 
 def delete_path_in_broker(path, *, recursive=False, security_context,
                           action_id="") -> str:
-    """Delete one regular file or one EMPTY directory under the native SID.
+    """Delete a scoped regular file or directory using the native OS token.
 
-    Recursive tree deletion remains blocked: it requires a separate
-    race-resistant, reparse-aware native implementation and is not equivalent
-    to passing a checked pathname to Directory.Delete(recursive=True).
+    Recursive deletion is preflighted against reparse components and the
+    existing manifest ceiling, then executed INSIDE the AppContainer.  The OS
+    remains authoritative for outside-root denial; no host delete fallback.
     """
     tool = "delete_path"
-    if recursive:
-        return encode_result(
-            "REJECTED", "TURBO_RECURSIVE_DELETE_OS_ADAPTER_NOT_ATTESTED",
-            tool=tool, executed=False, requested_path=path,
-            data={"terminal_eligible": False},
-        )
     try:
         from .safe_file_operations import SafeFileOperationError, build_delete_manifest
         target, root = _checked_target(security_context, path)
         manifest = build_delete_manifest(
-            security_context, str(target), recursive=False
+            security_context, str(target), recursive=bool(recursive)
         )
-        if target.is_dir() and next(target.iterdir(), None) is not None:
+        # A non-recursive delete never removes a populated directory.
+        if not recursive and target.is_dir() and next(target.iterdir(), None) is not None:
             raise TurboBrokerScopeError("TURBO_DELETE_NONEMPTY_DIRECTORY_REJECTED")
         literal = str(target).replace("'", "''")
         script = (
             "if ([IO.File]::Exists('" + literal + "')) " +
             "{ [IO.File]::Delete('" + literal + "') } " +
             "elseif ([IO.Directory]::Exists('" + literal + "')) " +
-            "{ [IO.Directory]::Delete('" + literal + "',$false) } " +
+            "{ [IO.Directory]::Delete('" + literal + "'," +
+            ("$true" if recursive else "$false") + ") } " +
             "else { exit 72 };"
         )
         result = execute_turbo_command(
@@ -240,6 +236,7 @@ def delete_path_in_broker(path, *, recursive=False, security_context,
                 "manifest_digest": manifest["manifest_digest"],
                 "entry_count": manifest["entry_count"],
                 "total_bytes": manifest["total_bytes"],
+                "recursive": bool(recursive),
                 "sandbox_evidence": proof,
                 "terminal_eligible": True,
                 "no_parent_directories_deleted": True,
