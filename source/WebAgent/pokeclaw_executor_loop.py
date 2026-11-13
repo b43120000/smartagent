@@ -31,18 +31,26 @@ def _digest(value: object) -> str:
     ).encode("utf-8")).hexdigest()
 
 
-def _tool_result(status: str, reason: str, payload: object = None) -> dict:
+def _tool_result(status: str, reason: str, payload: object = None, *, evidence_pointer: dict | None = None) -> dict:
     """Exactly PokeClaw's three tool-facing fields; semantics are action-only."""
     if status == "SUCCEEDED":
         text = json.dumps(
             {"reason": reason, "result": payload if payload is not None else {}},
             ensure_ascii=False, default=str, separators=(",", ":"),
         )
-        # Truncation is explicit; an incomplete listing proves no absence.
+        # A preview is only a transport projection. Every original byte in
+        # the Runtime's captured ToolResult must remain addressable by ID.
         if len(text) > 6000:
+            stored = bool(evidence_pointer and evidence_pointer.get("store_status")
+                          == "PERSISTED_AND_READBACK_VERIFIED")
             text = json.dumps({
-                "reason": reason, "data_preview": text[:5500],
-                "truncated": True, "complete_result_available_in_blackboard": False,
+                "reason": reason, "data_preview": text[:4400],
+                "truncated": True,
+                "complete_result_available_in_blackboard": False,
+                "complete_result_available_in_evidence_store": stored,
+                "content_ref": (evidence_pointer or {}).get("evidence_ref") if stored else None,
+                "read_tool": "read_runtime_evidence" if stored else None,
+                "evidence_delivery_status": ("POINTER_AVAILABLE" if stored else "PERSIST_FAILED"),
             }, ensure_ascii=False, separators=(",", ":"))
         return {"isSuccess": True, "data": text, "error": None}
     details = ""
@@ -69,6 +77,22 @@ def _tool_result(status: str, reason: str, payload: object = None) -> dict:
             details += "; " + json.dumps(
                 diagnostic, ensure_ascii=False, separators=(",", ":"),
             )[:520]
+    # Failed commands also have stdout/stderr and must remain diagnosable.
+    if isinstance(payload, Mapping):
+        streams = {
+            key: payload[key] for key in (
+                "stdout", "stderr", "exit_code", "native_error_class",
+                "stdout_bytes", "stderr_bytes", "output_complete",
+            ) if key in payload
+        }
+        if streams:
+            details += "; streams=" + json.dumps(streams, ensure_ascii=False, default=str)[:1600]
+    if evidence_pointer and evidence_pointer.get("evidence_ref"):
+        details += "; evidence_ref=" + str(evidence_pointer["evidence_ref"])
+        if evidence_pointer.get("store_status") == "PERSISTED_AND_READBACK_VERIFIED":
+            details += "; read_tool=read_runtime_evidence"
+        else:
+            details += "; evidence_delivery_status=PERSIST_FAILED"
     return {
         "isSuccess": False, "data": None,
         "error": (
@@ -169,6 +193,19 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "rejected admissions are NOT ToolResults):\n"
         + json.dumps(runtime_status_catalog or [], ensure_ascii=False,
                      separators=(",", ":"))[:8500] + "\n"
+        "Runtime evidence is lossless and task-bound: small stdout/stderr "
+        "are in ToolResult.data. If a result has truncated=true or missing "
+        "required content, call read_runtime_evidence using the real MIN-EV "
+        "reference, section=raw_result/receipt/stdout/stderr/metadata and "
+        "offset/max_chars for pagination; do not replay commands to recover "
+        "previously observed facts. A pointer is not a proof of a fact until "
+        "you read it. No evidence read grants OS command authorization.\n"
+        "Executor Blackboard is a bounded projection plus an append-only event archive. "
+        "For historical events, use read_runtime_blackboard section=events_index "
+        "to find sequence IDs, then section=event with sequence and offset/max_chars. "
+        "section=terminal and section=metadata show task-bound state. Do not infer "
+        "absence from a last-six-result preview. Evidence and Blackboard reads "
+        "never authorize command execution.\n"
         "Recent actual PokeClaw ToolResults:\n" + json.dumps(
             recent[-6:], ensure_ascii=False, separators=(",", ":")) + "\n"
         "Upstream evidence requirement (Runtime-owned minimum, not task plan):\n"
@@ -1113,12 +1150,31 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             (action["action_id"] + "\0" + digest).encode("utf-8")
         ).hexdigest()[:24]
         result_data = receipt.get("data")
-        tool_result = _tool_result(runtime_status, runtime_reason, result_data)
+        # Persist before projecting/truncating anything for the Planner or
+        # Blackboard. This write is a Runtime-owned evidence operation only.
+        from agent_core.runtime_evidence_store import persist_runtime_evidence
+        try:
+            evidence_pointer = persist_runtime_evidence(
+                root, task_id=loop.task_id, request_id=loop.run_id,
+                task_epoch=loop.task_epoch, action_id=action["action_id"],
+                evidence_ref=evidence_ref, raw_result=str(raw_result),
+                receipt=receipt,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            evidence_pointer = {
+                "evidence_ref": evidence_ref, "store_status": "PERSIST_FAILED",
+                "error_class": type(exc).__name__,
+            }
+        tool_result = _tool_result(
+            runtime_status, runtime_reason, result_data,
+            evidence_pointer=evidence_pointer,
+        )
         loop.action_result_ledger[action["action_id"]] = {
             "action_id": action["action_id"], "tool": action["tool"],
             "request_id": loop.run_id, "task_id": loop.task_id,
             "task_epoch": loop.task_epoch, "produced_round": turn,
             "result_id": evidence_ref, "result": str(raw_result),
+            "evidence_store": dict(evidence_pointer),
             "result_sha256": digest, "result_status": runtime_status,
             "result_reason": runtime_reason,
             "execution_status": runtime_status,
@@ -1133,6 +1189,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "round": turn, "kind": "TOOL_RESULT",
             "toolName": action["tool"], "action_id": action["action_id"],
             "toolResult": tool_result,
+            "evidence_store": dict(evidence_pointer),
             **({"command_execution_rca": capture_command_result_rca(
                 raw_result, receipt,
             )} if action["tool"] == "run_command" else {}),
@@ -1217,6 +1274,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "round": turn, "tool": action["tool"],
             "action_id": action["action_id"],
             "toolResult": tool_result, "evidence_ref": evidence_ref,
+            "evidence_store_status": evidence_pointer.get("store_status"),
         })
         loop.protocol_state = "OBSERVED"
         loop.executor_result = {

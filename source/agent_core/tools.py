@@ -577,6 +577,16 @@ def tool_run_command(
         return attach_runtime_result('\n'.join(lines), status,
             'COMMAND_REJECTED' if rejected else 'COMMAND_RUNNING' if running else 'COMMAND_EXITED' if executed else 'PROCESS_NOT_STARTED', tool='run_command',
             executed=executed, data={**operation_result,
+                # Full captured streams are Runtime evidence. The Planner
+                # receives inline small data or a task-bound evidence pointer;
+                # no metadata is dropped at this producer boundary.
+                'stdout':str(main.get('stdout') or ''),
+                'stderr':str(main.get('stderr') or ''),
+                'stdout_bytes':main.get('stdout_bytes', len(str(main.get('stdout') or '').encode('utf-8'))),
+                'stderr_bytes':main.get('stderr_bytes', len(str(main.get('stderr') or '').encode('utf-8'))),
+                'stdout_truncated':bool(main.get('stdout_truncated')),
+                'stderr_truncated':bool(main.get('stderr_truncated')),
+                'output_complete':not (main.get('stdout_truncated') or main.get('stderr_truncated')),
                 'execution_status':status, 'verification_status':'UNVERIFIED' if running else operation_result['verification_status'],
                 'terminal_eligible':False if running or rejected else operation_result['terminal_eligible'],
                 'working_directory':str(cwd),
@@ -682,7 +692,13 @@ def tool_run_command(
         operation_result = build_operation_result(
             operation, command=command, execution_status=execution_status,
             verification_status=verification_status, stdout=main.get("stdout", ""),
-            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""), verifies_action_id=verifies_action_id,
             condition_id=condition_id, expectation_status=expectation_status,
             expected_failure=expected_failure, expectation_evidence=expectation_evidence,
         )
@@ -700,7 +716,13 @@ def tool_run_command(
         operation_result = build_operation_result(
             operation, command=command, execution_status="FAILED",
             verification_status=verification_status, stdout=main.get("stdout", ""),
-            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""), verifies_action_id=verifies_action_id,
             condition_id=condition_id,
         )
         lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
@@ -723,7 +745,13 @@ def tool_run_command(
         operation_result = build_operation_result(
             operation, command=command, execution_status="SUCCEEDED",
             verification_status=verification_status, stdout=main.get("stdout", ""),
-            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""), verifies_action_id=verifies_action_id,
             condition_id=condition_id,
         )
         lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
@@ -758,7 +786,12 @@ def tool_run_command(
     operation_result = build_operation_result(
         operation, command=command, execution_status="SUCCEEDED",
         verification_status=verification_status, stdout=main.get("stdout", ""),
-        stdout_ref=main.get("stdout_ref", ""), verification_evidence=verification_evidence,
+        stderr=main.get("stderr", ""),
+        stdout_bytes=main.get("stdout_bytes"), stderr_bytes=main.get("stderr_bytes"),
+        stdout_truncated=bool(main.get("stdout_truncated")),
+        stderr_truncated=bool(main.get("stderr_truncated")),
+        stdout_ref=main.get("stdout_ref", ""), stderr_ref=main.get("stderr_ref", ""),
+        verification_evidence=verification_evidence,
         verifies_action_id=verifies_action_id,
         condition_id=condition_id,
         expectation_status=expectation_status, expectation_evidence=expectation_evidence,
@@ -1544,6 +1577,59 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             # A mode switch between admission and final dispatch must not
             # turn an admitted Turbo request into a host-side mutation.
             tool_call["_runtime_native_broker_required"] = True
+    if tool == "read_runtime_blackboard":
+        from .runtime_blackboard_reader import read_runtime_blackboard
+        from .tool_result_contract import encode_result
+        root = getattr(agent, "_runtime_evidence_root", None) if agent else None
+        task_id = str(getattr(agent, "current_task_id", "") or "") if agent else ""
+        request_id = str(getattr(agent, "current_request_id", "") or "") if agent else ""
+        task_epoch = str(getattr(agent, "current_task_epoch", "") or "") if agent else ""
+        if not all((root, task_id, request_id, task_epoch)):
+            return encode_result("REJECTED", "BLACKBOARD_REQUEST_CONTEXT_UNBOUND",
+                                 tool=tool, executed=False)
+        try:
+            entry = read_runtime_blackboard(
+                root, task_id=task_id, request_id=request_id,
+                task_epoch=task_epoch, section=tool_call.get("section", ""),
+                sequence=tool_call.get("sequence", 0),
+                offset=tool_call.get("offset", 0),
+                max_chars=tool_call.get("max_chars", 1800),
+            )
+        except (ValueError, OSError, KeyError) as exc:
+            return encode_result("REJECTED", str(exc), tool=tool, executed=False)
+        return encode_result("SUCCEEDED", "BLACKBOARD_SOURCE_SLICE_READ",
+            tool=tool, executed=True, data={
+                **entry, "verification_status": "PASS",
+                "terminal_eligible": False, "authorization_granted": False,
+            })
+    if tool == "read_runtime_evidence":
+        # This is a read of Runtime-owned immutable evidence, not a filesystem
+        # read scoped by user-provided paths and never a Host CMD fallback.
+        from .runtime_evidence_store import read_runtime_evidence, RuntimeEvidenceError
+        from .tool_result_contract import encode_result
+        root = getattr(agent, "_runtime_evidence_root", None) if agent else None
+        task_id = str(getattr(agent, "current_task_id", "") or "") if agent else ""
+        request_id = str(getattr(agent, "current_request_id", "") or "") if agent else ""
+        task_epoch = str(getattr(agent, "current_task_epoch", "") or "") if agent else ""
+        if not all((root, task_id, request_id, task_epoch)):
+            return encode_result("REJECTED", "EVIDENCE_REQUEST_CONTEXT_UNBOUND",
+                tool=tool, executed=False, data={"terminal_eligible": False})
+        try:
+            item = read_runtime_evidence(
+                root, task_id=task_id, request_id=request_id,
+                task_epoch=task_epoch,
+                evidence_ref=str(tool_call.get("evidence_ref") or ""),
+                section=str(tool_call.get("section") or "raw_result"),
+                offset=tool_call.get("offset", 0),
+                max_chars=tool_call.get("max_chars", 1800),
+            )
+        except (RuntimeEvidenceError, OSError) as exc:
+            return encode_result("REJECTED", str(exc),
+                tool=tool, executed=False, data={"terminal_eligible": False})
+        return encode_result("SUCCEEDED", "RUNTIME_EVIDENCE_SLICE_READ",
+            tool=tool, executed=True,
+            data={**item, "verification_status": "PASS",
+                  "terminal_eligible": False, "authorization_granted": False})
     if tool == "observe_fact":
         # This read-only tool observes a filesystem fact inside the existing
         # authorization boundary. It never guesses absence from access errors.

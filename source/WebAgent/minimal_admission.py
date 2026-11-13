@@ -17,6 +17,7 @@ _READ_ONLY_TOOLS = frozenset({
     "inspect_semantic_map", "query_project", "query_project_history",
     "inspect_project_ledger", "compare_project_snapshot",
     "observe_fact", "extract_project_dependencies", "web_search",
+    "read_runtime_evidence", "read_runtime_blackboard",
 })
 
 

@@ -24,6 +24,7 @@ MUTATORS = frozenset({
 NON_COMMAND_OPERATIONS = frozenset({
     "web_search", "ask_executor", "read_file", "list_directory",
     "inspect_directory", "find_file", "query_project", "observe_fact",
+    "read_runtime_evidence", "read_runtime_blackboard",
     "save_session_summary",
 })
 

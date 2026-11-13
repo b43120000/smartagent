@@ -142,6 +142,12 @@ def build_operation_result(
     verification_status: str,
     stdout: str = "",
     stdout_ref: str = "",
+    stderr: str = "",
+    stderr_ref: str = "",
+    stdout_bytes: int | None = None,
+    stderr_bytes: int | None = None,
+    stdout_truncated: bool = False,
+    stderr_truncated: bool = False,
     verification_evidence: object = None,
     verifies_action_id: str = "",
     condition_id: str = "",
@@ -157,6 +163,7 @@ def build_operation_result(
     """
     value = normalize_command_operation(operation)
     output = str(stdout or "")
+    error_output = str(stderr or "")
     evidence = list(verification_evidence or [])
     execution = str(execution_status or "UNKNOWN").upper()
     verification = str(verification_status or "UNKNOWN").upper()
@@ -166,13 +173,40 @@ def build_operation_result(
         "sha256": hashlib.sha256(output.encode("utf-8", errors="replace")).hexdigest()
         if output else "",
     }
+    # Inline normal-sized observations as typed Runtime metadata. Larger
+    # streams remain in immutable raw evidence, retrieved by MIN-EV reference.
+    # Never substitute a hash/byte count for a small observed value.
+    inline_limit = 4000
+    stdout_complete = len(output) <= inline_limit
+    stderr_complete = len(error_output) <= inline_limit
     result: dict[str, Any] = {
         "schema": result_schema_for_operation(value),
         "operation": value,
         "execution_status": execution,
         "verification_status": verification,
         "terminal_eligible": operation_terminal_eligible(value, verification),
+        "stdout": output if stdout_complete else output[:inline_limit],
+        "stderr": error_output if stderr_complete else error_output[:inline_limit],
+        "stdout_inline_complete": stdout_complete and not stdout_truncated,
+        "stderr_inline_complete": stderr_complete and not stderr_truncated,
+        "stdout_bytes": stdout_bytes if type(stdout_bytes) is int else len(output.encode("utf-8")),
+        "stderr_bytes": stderr_bytes if type(stderr_bytes) is int else len(error_output.encode("utf-8")),
+        "stdout_truncated": bool(stdout_truncated),
+        "stderr_truncated": bool(stderr_truncated),
+        "output_complete": not (stdout_truncated or stderr_truncated),
+        "stderr_or_local_ref": {
+            "local_ref": str(stderr_ref or ""),
+            "inline_bytes": len(error_output.encode("utf-8", errors="replace")),
+            "sha256": hashlib.sha256(error_output.encode("utf-8", errors="replace")).hexdigest()
+            if error_output else "",
+        },
     }
+    if (value in {"INSPECT", "GIT_INSPECT"}
+            and re.fullmatch(r"(?is)Test-Path\s+-LiteralPath\s+(['\"]).+?\1\s*", command.strip())
+            and output.strip() in {"True", "False"}
+            and not stdout_truncated):
+        result["observed_boolean"] = output.strip() == "True"
+        result["observation_value_confirmed"] = True
     expectation = str(expectation_status or "").strip().upper()
     if expectation:
         result["expectation_status"] = expectation

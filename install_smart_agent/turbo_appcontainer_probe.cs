@@ -579,15 +579,30 @@ public static class SmartAgentGit47AppContainerProbe
                 }
                 // No host execution: LaunchPowerShell encodes this script
                 // and starts system PowerShell only under the AppContainer SID.
+                // Capture the COMMAND success bit BEFORE any conversion or
+                // file-write operation changes PowerShell's $? variable.
+                // Never merge stderr into stdout: retain ErrorRecord identity.
+                // A guaranteed final flush writes both streams even on errors.
                 string wrapped =
                     "$ErrorActionPreference='Stop'; " +
-                    "$global:LASTEXITCODE=$null; " +
-                    "try{ " + trustedAliases + "$items=@(& {\n" + script + "\n} 2>&1); " +
-                    "$text=[string]::Join([Environment]::NewLine,[string[]]$items); " +
-                    "$rc=if($null -ne $global:LASTEXITCODE){[int]$global:LASTEXITCODE}" +
-                    "elseif($?){0}else{1}; " + putOut + " exit $rc } " +
-                    "catch{ $errText=$_.Exception.GetType().Name+':'+$_.Exception.Message; " +
-                    putErr + " exit 1 }";
+                    "$global:LASTEXITCODE=$null; $text=''; $errText=''; $rc=1; " +
+                    "try { " + trustedAliases +
+                    "$items=@(& {\n" + script + "\n} 2>&1); " +
+                    "$commandSucceeded=$?; $nativeExit=$global:LASTEXITCODE; " +
+                    "$outList=New-Object 'System.Collections.Generic.List[string]'; " +
+                    "$errList=New-Object 'System.Collections.Generic.List[string]'; " +
+                    "foreach($item in $items) { " +
+                    "if($item -is [System.Management.Automation.ErrorRecord]) {" +
+                    "$errList.Add([string]$item.ToString())} " +
+                    "else { $outList.Add([string]$item) } }; " +
+                    "$text=[string]::Join([Environment]::NewLine,$outList.ToArray()); " +
+                    "$errText=[string]::Join([Environment]::NewLine,$errList.ToArray()); " +
+                    "$rc=if($null -ne $nativeExit){[int]$nativeExit}" +
+                    "elseif($commandSucceeded){0}else{1}; " +
+                    "} catch { " +
+                    "$rc=1; $errText=($_.Exception.GetType().Name+':'+$_.Exception.Message); " +
+                    "} finally { " + putOut + putErr + " } " +
+                    "exit [int]$rc;";
                 string raw = LaunchPowerShell(moniker, wrapped, root,
                                                timeoutMilliseconds, trustedToolPath);
                 byte[] outBytes = ReadPinned(stdout, maximumBytes);

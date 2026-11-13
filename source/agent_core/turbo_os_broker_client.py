@@ -340,6 +340,18 @@ def execute_turbo_command(
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_NATIVE_DATA_INVALID") from exc
     if len(stdout) > limit or len(stderr) > limit:
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_STREAM_CAP_VIOLATED")
+    # Treat capture lengths as evidence-quality metadata, never infer a
+    # successful Git/Python launch from the PowerShell parent exit code.
+    out_size = receipt.get("stdout_bytes")
+    err_size = receipt.get("stderr_bytes")
+    out_cut = receipt.get("stdout_truncated")
+    err_cut = receipt.get("stderr_truncated")
+    if (type(out_size) is not int or type(err_size) is not int
+            or out_size < len(stdout) or err_size < len(stderr)
+            or type(out_cut) is not bool or type(err_cut) is not bool
+            or out_cut != (out_size > len(stdout))
+            or err_cut != (err_size > len(stderr))):
+        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_CAPTURE_METADATA_INVALID")
     tools = receipt.get("native_trusted_tools")
     if (
         receipt.get("native_toolchain_status") not in {"PINNED", "NOT_ENROLLED"}
@@ -381,6 +393,13 @@ def execute_turbo_command(
         "native_toolchain_status": receipt["native_toolchain_status"],
         "native_trusted_tools": tools,
         "native_error_class": error_class,
+        "stdout_capture_state": ("TRUNCATED" if out_cut else
+                                 "COMPLETE_NONEMPTY" if out_size else "COMPLETE_EMPTY"),
+        "stderr_capture_state": ("TRUNCATED" if err_cut else
+                                 "COMPLETE_NONEMPTY" if err_size else "COMPLETE_EMPTY"),
+        "stream_capture_complete": not (out_cut or err_cut),
+        "native_executable_identity_verified": False,
+        "native_executable_identity_reason": "POWERSHELL_PARENT_ONLY_ATTESTED",
         "child_process_policy": "JOB_KILL_ON_CLOSE",
         "policy_revision": state["policy_revision"],
         "task_id": request_task,
@@ -401,6 +420,7 @@ def execute_turbo_command(
         "stdout_truncated": bool(receipt["stdout_truncated"]),
         "stderr_truncated": bool(receipt["stderr_truncated"]),
         "stdout_ref": "", "stderr_ref": "",
+        "output_complete": not (out_cut or err_cut),
         "timed_out": False,
         "process_started": True,
         "security_rejected": False,
