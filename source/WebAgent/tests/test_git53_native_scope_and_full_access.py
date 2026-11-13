@@ -196,3 +196,36 @@ def test_recursive_typed_delete_uses_native_broker(monkeypatch, tmp_path):
     assert not target.exists()
     assert len(commands) == 1
     assert "$true" in commands[0]
+
+
+def test_native_cwd_is_not_rejected_for_path_independent_diagnostics(
+    monkeypatch, tmp_path,
+):
+    from agent_core import tools
+    root = tmp_path / "Turbo"
+    root.mkdir()
+    context = SecurityContext.for_workspace(tmp_path)
+    monkeypatch.setattr(tools, "_native_run_command_admitted", lambda cwd: True)
+    assert tools.resolve_command_working_directory(
+        root, context, command="Get-Location", operation="INSPECT",
+    ) == root
+    monkeypatch.setattr(tools, "_native_run_command_admitted", lambda cwd: False)
+    with pytest.raises(PathSecurityError, match="path_independent_command"):
+        tools.resolve_command_working_directory(
+            root, context, command="Get-Location", operation="INSPECT",
+        )
+
+
+def test_native_literal_read_still_checks_configured_read_scope(
+    monkeypatch, tmp_path,
+):
+    from agent_core import tools
+    root = tmp_path / "Turbo"
+    root.mkdir()
+    context = SecurityContext.for_workspace(tmp_path)
+    monkeypatch.setattr(tools, "_native_run_command_admitted", lambda cwd: True)
+    command = "Test-Path -LiteralPath '" + str(tmp_path.parent / "private" / "secret.txt") + "'"
+    with pytest.raises(PathSecurityError, match="outside_authorized"):
+        tools.resolve_command_working_directory(
+            root, context, command=command, operation="INSPECT",
+        )
