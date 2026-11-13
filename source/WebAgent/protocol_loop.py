@@ -6377,7 +6377,7 @@ class WebAgentProtocolLoop:
         if isinstance(_final_receipt, dict) and action_id:
             _result_digest = hashlib.sha256(_final_result.encode("utf-8")).hexdigest()
             _source_ref = "MIN-EV-" + hashlib.sha256(
-                (action_id + "\\0" + _result_digest).encode("utf-8")
+                (action_id + "\0" + _result_digest).encode("utf-8")
             ).hexdigest()[:24]
             try:
                 _source = persist_runtime_evidence(
