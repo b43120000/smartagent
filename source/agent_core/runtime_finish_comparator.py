@@ -61,8 +61,19 @@ def _fail(reason: str, refs: list[str] | None = None, *,
           goal_state_table: list[dict] | None = None,
           goal_contract_sha256: str = "",
           model_goal_checks_advisory: dict | None = None) -> dict:
+    origin = (
+        "PLANNER_FACT_DECLARATION_ERROR"
+        if reason in {"MODEL_RUNTIME_MISMATCH", "MODEL_FINISH_GOAL_FACT_NOT_DECLARED"}
+        else "PLANNER_PREDICATE_OR_GOAL_UNRESOLVED"
+        if reason == "GOAL_CHECK_RUNTIME_MISMATCH"
+        else "GOAL_STATE_NOT_SATISFIED"
+        if reason in {"FROZEN_GOAL_STATE_NOT_SATISFIED",
+                      "KNOWN_GOAL_POSTCONDITION_NOT_SATISFIED"}
+        else "EVIDENCE_OR_FINISH_CONTRACT_INCOMPLETE"
+    )
     result = {
         "verdict": "FAIL", "reason_code": reason,
+        "failure_origin": origin,
         "goal_kind": "", "goal_evidence_reason": reason,
         "evidence_refs": list(refs or []),
         "mismatches": list(mismatches or [])[:20],
@@ -464,7 +475,8 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         if not eligible:
             return _fail("ANSWER_ONLY_ADMISSION_REJECTED:" + str(reason)[:100], refs)
         return {
-            "verdict": "PASS", "reason_code": "ANSWER_ONLY_RESPONSE_ADMITTED",
+            "verdict": "PASS", "failure_origin": "NONE",
+            "reason_code": "ANSWER_ONLY_RESPONSE_ADMITTED",
             "goal_kind": "ANSWER_ONLY",
             "goal_evidence_reason": "TEXT_RESPONSE_ACCEPTED_NO_TOOL_NEEDED",
             "coverage_basis": "RUNTIME_TEXT_ADMISSION",
@@ -571,6 +583,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
             )
         return {
             "verdict": "PASS",
+            "failure_origin": "NONE",
             "reason_code": "FROZEN_GOAL_STATE_SATISFIED",
             "goal_kind": contract["goal_kind"],
             "goal_evidence_reason": state["reason_code"],
@@ -620,7 +633,8 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         kind, reason = "MODEL_GENERATED_GOAL_CHECKS", "MODEL_DECLARED_GOAL_CHECKS_CONFIRMED"
         basis = "MODEL_DECLARED_RUNTIME_EVIDENCE_MATCH"
     return {
-        "verdict": "PASS", "reason_code": "MODEL_RUNTIME_AND_GOAL_MATCH",
+        "verdict": "PASS", "failure_origin": "NONE",
+        "reason_code": "MODEL_RUNTIME_AND_GOAL_MATCH",
         "goal_kind": kind, "goal_evidence_reason": reason,
         "coverage_basis": basis,
         "evidence_refs": refs, "mismatches": [],

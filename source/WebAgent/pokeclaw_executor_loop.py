@@ -263,6 +263,7 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
         "goal_coverage_basis": comparison.get("coverage_basis", "NOT_VERIFIED"),
         "comparison": {
             "reason_code": comparison["reason_code"],
+            "failure_origin": comparison.get("failure_origin", ""),
             "mismatches": list(comparison["mismatches"]),
             "tool_results": list(comparison["tool_results"]),
         },
@@ -354,6 +355,10 @@ def _finish(loop, root: Path, request: str, *, kind: str,
                 "\nPlanner 額外 Goal Check 與 Runtime 實值不符；"
                 "已記錄為非權威提案，不覆寫凍結的 Goal Contract。"
             )
+    failure_origin = (
+        "\n驗收失敗來源：" + str(comparison.get("failure_origin") or "UNKNOWN")
+        if comparison and comparison.get("verdict") == "FAIL" else ""
+    )
     trailer = (
         "\n\nExecutor Blackboard（已寫入並回讀）：\n"
         f"Executor：{p['executor_state']}\n"
@@ -363,7 +368,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         f"Tool Evidence：{', '.join(p['tool_evidence_refs']) or '無'}\n"
         f"Parent Dispatch：{p['parent_dispatch_state']}\n"
         f"Parent Consumption：{p['parent_consumption_state']}\n"
-        f"整體目標：{terminal_line}{mismatch_lines}{state_report}"
+        f"整體目標：{terminal_line}{failure_origin}{mismatch_lines}{state_report}"
     )
     if comparison and comparison["verdict"] == "PASS" and (
         comparison.get("completion_kind") == "ANSWER_ONLY"
@@ -587,6 +592,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 status_repair_diagnostic = diagnose_finish_status_mismatch(preview)
                 from agent_core.runtime_finish_status_repair import diagnose_missing_postrun_evidence
                 postrun_gap = diagnose_missing_postrun_evidence(preview)
+                from agent_core.finish_semantic_repair import diagnose_finish_semantic_mismatch
+                semantic_repair = diagnose_finish_semantic_mismatch(preview, request)
+                if semantic_repair and not semantic_repair.get("repair_only"):
+                    # A real desired-state failure is not a recoverable
+                    # model formatting problem. Preserve comparator FAIL.
+                    semantic_repair = None
                 repairable = {
                     "MODEL_FINISH_GOAL_FACT_NOT_DECLARED",
                     "MODEL_GOAL_CHECKS_REQUIRED",
@@ -600,6 +611,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     repairable.add("MODEL_RUNTIME_MISMATCH")
                 if postrun_gap is not None:
                     repairable.add("GOAL_CHECK_RUNTIME_MISMATCH")
+                if semantic_repair is not None:
+                    repairable.add(str(preview.get("reason_code") or ""))
                 # A frozen Goal Contract can request further read-only
                 # evidence or a corrected diagnostic report, but neither
                 # its expected values nor source SHA may be rewritten.
@@ -610,16 +623,15 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
                 if contract_gap is not None:
                     repairable.add("FROZEN_GOAL_STATE_NOT_SATISFIED")
-                # Preserve Git34–35 behavior: after two repairs, missing
-                # declarations still reach a formal comparator FAIL. The
-                # Git42-specific schema error remains distinctly reportable.
-                if (preview["reason_code"] in repairable
-                        and not (finish_repairs >= max_finish_repairs
-                                 and preview["reason_code"] != "MODEL_GOAL_CHECK_SCHEMA_INVALID")):
+                # A repeatedly malformed or semantically incorrect Finish is
+                # a Planner contract failure, NOT evidence the user's desired
+                # environment state failed. Keep that distinction at the
+                # repair budget boundary, without ever granting a PASS.
+                if preview["reason_code"] in repairable:
                     last_finish_reason = str(preview["reason_code"])
                     last_finish_diagnostic = (
-                        status_repair_diagnostic or postrun_gap or contract_gap
-                        or preview.get("finish_diagnostic")
+                        status_repair_diagnostic or postrun_gap or semantic_repair
+                        or contract_gap or preview.get("finish_diagnostic")
                     )
                     if (finish_repairs >= max_finish_repairs
                             or turn >= max_rounds + finish_grace_rounds):
@@ -639,7 +651,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     finish_repairs += 1
                     # Status-only Finish repair can never authorize another
                     # tool, even when ordinary Action rounds remain available.
-                    if turn >= max_rounds or status_repair_diagnostic is not None:
+                    if (turn >= max_rounds or status_repair_diagnostic is not None
+                            or semantic_repair is not None):
                         finish_repair_only = True
                     if contract_gap:
                         unsatisfied = contract_gap.get("state_table") or []
@@ -651,10 +664,16 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     append_executor_event(root, loop, {
                         "round": turn, "kind": (
                             "MODEL_FINISH_STATUS_REPAIR" if status_repair_diagnostic
+                            else "MODEL_FINISH_SEMANTIC_REPAIR" if semantic_repair
                             else "MODEL_FINISH_SCHEMA_REPAIR"
                         ),
                         "reason_code": last_finish_reason,
                         "finish_diagnostic": last_finish_diagnostic,
+                        "failure_origin": (
+                            "PLANNER_ASSERTION_MISMATCH" if semantic_repair
+                            else "GOAL_EVIDENCE_INCOMPLETE" if postrun_gap or contract_gap
+                            else "MODEL_FINISH_CONTRACT_ERROR"
+                        ),
                         "repair_attempt": finish_repairs,
                         "repair_only": finish_repair_only,
                         "expected_runtime_sha256": _digest(decision.expected_runtime),
@@ -678,6 +697,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
+                        + (
+                            "Git56 Planner Semantic Repair：僅能修正對 Runtime "
+                            "實際欄位的聲明，不得把未完成的原始 Goal 改寫成已完成。"
+                            "請重新閱讀原始需求，判斷是查詢型還是指定目標狀態；"
+                            "無新工具指令、無新授權、無 Evidence 覆寫。"
+                            if semantic_repair else ""
+                        )
                         + (
                             "本次需修復執行前凍結的 Goal State Conditions；"
                             "診斷結果 UNVERIFIED 可以被如實回報，"
