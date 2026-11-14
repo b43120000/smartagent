@@ -772,6 +772,28 @@ def _security_menu() -> int:
                             + script + ":" + str(result.returncode)
                         )
 
+                # Check existing targets before revoking a working Broker
+                # or publishing a policy revision that would invalidate it.
+                enrollment_owners = {}
+                for root in needs_enrollment:
+                    owners = [
+                        owner for owner in writable
+                        if _is_strict_turbo_child(root, owner)
+                    ]
+                    if len(owners) != 1:
+                        raise RuntimeError(
+                            "TURBO_ROOT_AUTHORIZATION_WORKSPACE_AMBIGUOUS:" + root
+                        )
+                    enrollment_owners[root] = owners[0]
+                    if Path(root).exists():
+                        if not Path(root).is_dir():
+                            raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY:" + root)
+                        invoke_native(
+                            "turbo_existing_root_preflight.ps1",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Workspace", owners[0], "-TurboRoot", root,
+                        )
+
                 # Native revocation is mandatory BEFORE removing an active
                 # Root from the registry. No policy-only removal of OS grants.
                 if legacy_migration_needed:
@@ -826,17 +848,7 @@ def _security_menu() -> int:
                         continue
                     if legacy_active and legacy_journal.is_file():
                         continue
-                    if Path(root).exists() and not Path(root).is_dir():
-                        raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY:" + root)
-                    matching_workspaces = [
-                        owner for owner in writable
-                        if _is_strict_turbo_child(root, owner)
-                    ]
-                    if len(matching_workspaces) != 1:
-                        raise RuntimeError(
-                            "TURBO_ROOT_AUTHORIZATION_WORKSPACE_AMBIGUOUS:" + root
-                        )
-                    owner = matching_workspaces[0]
+                    owner = enrollment_owners[root]
                     if Path(root).is_dir():
                         invoke_native(
                             "turbo_existing_root_activate.ps1",
