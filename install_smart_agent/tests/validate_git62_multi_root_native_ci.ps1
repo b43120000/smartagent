@@ -84,7 +84,13 @@ try{
  & $revoke -Action Revoke -ProjectRoot $project
  Check (-not (Test-Path -LiteralPath $jb.activation)) 'GIT62_ALL_REVOKE_FAILED'
  foreach($path in @($ws,$rootA,$rootB,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))){
-  Check ((Get-Acl -LiteralPath $path -Audit).Sddl -ceq $before[$path]) ('GIT62_SDDL_NOT_RESTORED:'+$path)
+  $current=(Get-Acl -LiteralPath $path -Audit).Sddl
+  if($current -cne $before[$path]){
+    # CI fixture only, no user files. Print original and final descriptors.
+    Write-Host ('GIT62_SDDL_BEFORE: '+$before[$path])
+    Write-Host ('GIT62_SDDL_AFTER:  '+$current)
+    throw ('GIT62_SDDL_NOT_RESTORED:'+$path)
+  }
  }
  foreach($file in @($hashes.Keys)){
   Check ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $hashes[$file]) ('GIT62_CONTENT_CHANGED:'+$file)
