@@ -572,7 +572,7 @@ def _security_menu() -> int:
             except (ValueError, IndexError):
                 print("[!] Invalid index.")
         elif choice == "5":
-            path = str(Path(input("Turbo path (existing directory or unused Workspace child): ").strip().strip('"')).expanduser().resolve())
+            path = str(Path(input("Turbo path (existing directory or unused Workspace child): ").strip().strip('"')).expanduser().absolute())
             denied = profile.get("denied_write_roots") or ()
             if not any(is_valid_turbo_root(path, root, writable, read_only, denied)
                        for root in writable):
