@@ -30,6 +30,7 @@ if not exist "%SMARTAGENT_PYTHON%" (
 set "NO_PAUSE="
 set "EXCLUDE_PID_ARGS="
 set "AFTER_UPDATE_ARGS="
+set "GIT_SOURCE_ARGS="
 set "RECOVER_TURBO_ROOT="
 set "LAUNCHER_SELF_TEST="
 :parse_args
@@ -65,6 +66,17 @@ if /I "%~1"=="--recover-turbo-import" (
     goto parse_args
 )
 
+if /I "%~1"=="--git-source-root" (
+    if "%~2"=="" (
+        echo [SmartAgent] ERROR --git-source-root requires a checkout path.
+        endlocal & exit /b 64
+    )
+    set GIT_SOURCE_ARGS=--git-source-root "%~2"
+    shift
+    shift
+    goto parse_args
+)
+
 if /I "%~1"=="--after-git-update" (
     if "%~2"=="" (
         echo [SmartAgent] ERROR --after-git-update requires a full commit SHA.
@@ -85,7 +97,7 @@ if defined LAUNCHER_SELF_TEST (
 )
 echo [SmartAgent] Stopping LocalAgent, WebAgent, RemoteAgent, monitors and workers...
 echo [SmartAgent] Install Root: "%SMARTAGENT_INSTALL_ROOT%"
-"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%SMARTAGENT_INSTALL_ROOT%" %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS%
+"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%SMARTAGENT_INSTALL_ROOT%" %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS% %GIT_SOURCE_ARGS%
 set "STOP_EXIT=%errorlevel%"
 if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
