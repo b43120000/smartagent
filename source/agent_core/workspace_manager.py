@@ -624,7 +624,9 @@ def _security_menu() -> int:
                             "TURBO_PENDING_TRANSACTION_REQUIRES_VERIFIED_RECOVERY"
                         )
                 needs_activation = bool(turbo and not active_journal.exists())
-                if not access_changed and not turbo_changed and not needs_activation:
+                policy_requested = load_workspace_access_policy().get("turbo_requested") is True
+                request_changed = bool(turbo) != policy_requested
+                if not access_changed and not turbo_changed and not needs_activation and not request_changed:
                     print("[OK] Workspace/Turbo policy unchanged; no ACL reconfiguration.")
                     return 0
                 existing_import = bool(
@@ -657,7 +659,7 @@ def _security_menu() -> int:
                     if access_changed else 0
                 )
                 if return_code == 0:
-                    if access_changed or turbo_changed:
+                    if access_changed or turbo_changed or request_changed:
                         save_turbo_roots(turbo)
                     if set(map(_path_key, load_workspace_access_policy()["turbo_roots"])) != set(map(_path_key, turbo)):
                         raise RuntimeError("turbo_root_apply_postcondition_failed")
