@@ -261,9 +261,16 @@ def is_valid_turbo_root(path: str | Path, workspace: str | Path,
         if not any(is_within(root, Path(p).expanduser().resolve())
                    for p in writable_roots):
             return False
+        from .path_security import workspace_path_mode
+        reads = tuple(Path(p).expanduser().resolve() for p in read_only_roots)
+        writes = tuple(Path(p).expanduser().resolve() for p in writable_roots)
+        if workspace_path_mode(target, writes, reads) != "writable":
+            return False
+        if any(is_within(p, target) for p in reads):
+            return False
         if any(is_within(target, Path(p).expanduser().resolve()) or
                is_within(Path(p).expanduser().resolve(), target)
-               for p in (*read_only_roots, *denied_write_roots)):
+               for p in denied_write_roots):
             return False
         return True
     except (OSError, ValueError, RuntimeError):

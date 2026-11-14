@@ -102,6 +102,7 @@ if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1' -or
 foreach($value in @($policy.read_only_roots)+@($policy.denied_write_roots)) {
     if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
     $protected=Full ([string]$value)
+        if ($value -in @($policy.read_only_roots) -and $value -notin @($policy.denied_write_roots) -and ((Under $workspace $protected))) { continue }
     if ((Same $protected $root) -or (Under $protected $root) -or (Under $root $protected)) {
         throw 'TURBO_B_P3_PROTECTED_ROOT_OVERLAP'
     }

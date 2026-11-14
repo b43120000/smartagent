@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .path_security import is_within, reject_reparse_components
+from .path_security import is_within, reject_reparse_components, workspace_path_mode
 from .workspace_access import access_snapshot
 
 MAX_RECENT_TASKS = 3
@@ -92,16 +92,20 @@ def explicit_workspace_directive(text: str) -> str | None:
     return values[0] if values else None
 
 
+def _writable_directory(path: Path, writable: tuple[Path, ...], readable: tuple[Path, ...]) -> bool:
+    return workspace_path_mode(path, writable, readable) == "writable" and _authorized(path, writable)
+
+
 def _directory_for_path(raw: str, writable: tuple[Path, ...], readable: tuple[Path, ...]) -> Path | None:
     requested = Path(raw).expanduser().resolve(strict=False)
-    if not _authorized(requested, writable):
+    if workspace_path_mode(requested, writable, readable) != "writable" or not _authorized(requested, writable):
         if _authorized(requested, readable):
             return None  # Read-only target is not a working directory.
         raise ValueError("request_path_outside_authorized_roots:" + str(requested))
     directory = requested if requested.is_dir() else requested.parent
     while not directory.is_dir() and directory != directory.parent:
         directory = directory.parent
-    if not directory.is_dir() or not _authorized(directory, writable):
+    if not directory.is_dir() or not _writable_directory(directory, writable, readable):
         raise ValueError("request_working_directory_unavailable:" + str(requested))
     return directory
 
@@ -184,13 +188,13 @@ def resolve_task_workspace(
         source_task_id = task.task_id
         selected = Path(task.workspace).resolve()
         source = "EXPLICIT_CONTINUATION"
-        if not selected.is_dir() or not _authorized(selected, writable):
+        if not selected.is_dir() or not _writable_directory(selected, writable, readable):
             raise ValueError("continuation_workspace_no_longer_writable")
 
     filtered = []
     for row in recent:
         candidate = Path(row["workspace"]).resolve()
-        if candidate.is_dir() and _authorized(candidate, writable):
+        if candidate.is_dir() and _writable_directory(candidate, writable, readable):
             filtered.append(row)
     if selected is None and filtered:
         unique = {_key(row["workspace"]) for row in filtered}
@@ -215,7 +219,7 @@ def resolve_task_workspace(
         # in Edit_workspace Security setup. It is not the old WebGPT binding.
         selected = writable[0]
         source = "WRITABLE_PRIMARY_DEFAULT"
-    if not selected.is_dir() or not _authorized(selected, writable):
+    if not selected.is_dir() or not _writable_directory(selected, writable, readable):
         raise ValueError("resolved_workspace_no_longer_writable")
     return {"workspace": str(selected), "source": source,
             "source_task_id": source_task_id,

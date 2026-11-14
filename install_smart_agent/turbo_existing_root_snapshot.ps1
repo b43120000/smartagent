@@ -62,6 +62,7 @@ if ($CandidateOnly) {
     foreach($value in @($policy.read_only_roots)+@($policy.denied_write_roots)) {
         if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
         $protected=Full ([string]$value)
+        if ($value -in @($policy.read_only_roots) -and $value -notin @($policy.denied_write_roots) -and ($workspace.StartsWith($protected+'\',[StringComparison]::OrdinalIgnoreCase))) { continue }
         if ((Equal $protected $root) -or
             $protected.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or
             $root.StartsWith($protected+'\',[StringComparison]::OrdinalIgnoreCase)) {

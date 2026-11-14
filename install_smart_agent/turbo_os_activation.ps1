@@ -229,6 +229,7 @@ try {
     foreach ($protected in @($policy.read_only_roots) + @($policy.denied_write_roots)) {
         if ([string]::IsNullOrWhiteSpace([string]$protected)) { continue }
         $forbidden = [IO.Path]::GetFullPath([string]$protected).TrimEnd('\')
+        if ($protected -in @($policy.read_only_roots) -and $protected -notin @($policy.denied_write_roots) -and ($ws.StartsWith($forbidden + '\',[StringComparison]::OrdinalIgnoreCase))) { continue }
         if ($root.Equals($forbidden,[StringComparison]::OrdinalIgnoreCase) -or
             $root.StartsWith($forbidden + '\',[StringComparison]::OrdinalIgnoreCase) -or
             $forbidden.StartsWith($root + '\',[StringComparison]::OrdinalIgnoreCase)) {

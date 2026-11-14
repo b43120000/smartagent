@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .path_security import PathSecurityError, authorize_path, is_within
+from .path_security import PathSecurityError, authorize_path, is_within, workspace_path_mode
 from .security_config import SecurityConfig
 
 
-def _configured_access_roots() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+def _configured_access_roots() -> tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]]:
     """Return runtime-owned writable/read-only roots from the shared policy.
 
     The model cannot add roots.  ``Edit_workspace.bat`` owns the persistent
@@ -30,12 +30,26 @@ def _configured_access_roots() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
             for value in (snapshot.get("read_only_roots") or ())
             if str(value or "").strip()
         )
-        return tuple(dict.fromkeys(writes)), tuple(dict.fromkeys(reads))
+        policy = snapshot.get("policy") or {}
+        profile = snapshot.get("profile") or {}
+        protected = tuple(
+            Path(value).expanduser().resolve()
+            for value in (
+                *(policy.get("denied_write_roots") or ()),
+                *(profile.get("denied_write_roots") or ()),
+                *(profile.get("skill_roots") or ()),
+                profile.get("executor_code_root"),
+                profile.get("controller_state_root"),
+                *(snapshot.get("builtin_toolchain_read_roots") or ()),
+            )
+            if str(value or "").strip()
+        )
+        return tuple(dict.fromkeys(writes)), tuple(dict.fromkeys(reads)), protected
     except Exception:
         # Software-only mode and partially installed development trees must
         # remain usable.  Security preflight separately fails closed when a
         # restricted executor is required but its profile is invalid.
-        return (), ()
+        return (), (), ()
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,8 @@ class SecurityContext:
     request_id: str = ""
     task_id: str = ""
     interface_name: str = "local"
+    policy_write_roots: tuple[Path, ...] = ()
+    protected_write_denials: tuple[Path, ...] = ()
 
     @property
     def workspace_root(self) -> Path:
@@ -77,6 +93,12 @@ class SecurityContext:
             allow_root=allow_root,
             forbid_glob=forbid_glob,
         )
+        if any(is_within(resolved, root) for root in self.protected_write_denials):
+            raise PathSecurityError("protected_workspace_path_read_only", str(resolved))
+        if workspace_path_mode(
+            resolved, self.policy_write_roots, self.config.read_roots
+        ) == "read_only":
+            raise PathSecurityError("workspace_path_read_only", str(resolved))
         workspace_roots = tuple(dict.fromkeys((
             self.config.workspace_root,
             *self.config.write_roots,
@@ -117,6 +139,7 @@ class SecurityContext:
         *,
         write_roots: tuple[str | Path, ...] = (),
         read_roots: tuple[str | Path, ...] = (),
+        protected_write_denials: tuple[Path, ...] = (),
         request_id: str = "",
         task_id: str = "",
         interface_name: str = "local",
@@ -130,6 +153,8 @@ class SecurityContext:
             request_id=str(request_id or ""),
             task_id=str(task_id or ""),
             interface_name=str(interface_name or "local"),
+            policy_write_roots=tuple(Path(root).resolve() for root in write_roots),
+            protected_write_denials=protected_write_denials,
         )
 
     @classmethod
@@ -141,7 +166,8 @@ class SecurityContext:
         if workspace is None:
             raise PathSecurityError("security_workspace_missing")
 
-        configured_writes, configured_reads = _configured_access_roots()
+        configured_writes, configured_reads, *denials = _configured_access_roots()
+        protected = denials[0] if denials else ()
         # An untrusted task prompt or Planner path hint NEVER grants read
         # permission. The only data-read authority comes from Edit Workspace.
         # Runtime-owned .venv joins Read Scope, never generic Write Scope.
@@ -149,6 +175,7 @@ class SecurityContext:
             workspace,
             write_roots=configured_writes,
             read_roots=configured_reads,
+            protected_write_denials=protected,
             request_id=str(getattr(agent, "current_request_id", "") or ""),
             task_id=str(getattr(agent, "current_task_id", "") or ""),
             interface_name=str(getattr(agent, "interface_name", "local") or "local"),

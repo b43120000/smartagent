@@ -419,6 +419,13 @@ foreach ($candidate in @($ReadOnlyRoots) + @($DeniedWriteRoots)) {
     $resolvedCandidate = [IO.Path]::GetFullPath($candidate)
     if (-not (Test-Path -LiteralPath $resolvedCandidate)) { throw "Security root does not exist: $resolvedCandidate" }
     foreach ($allowedRoot in $allowedDeploymentRoots) {
+        if ($candidate -in $ReadOnlyRoots -and $candidate -notin $DeniedWriteRoots -and
+            $allowedRoot -ieq $workspace -and
+            $workspace.TrimEnd('\').StartsWith($resolvedCandidate.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) {
+            # The primary workspace already has a protected DACL. Ancestor
+            # read-only inheritance stops at that writable boundary.
+            continue
+        }
         if (Test-PathOverlap $resolvedCandidate $allowedRoot) {
             throw "Security root overlaps an executor deployment root: $resolvedCandidate <-> $allowedRoot"
         }

@@ -611,19 +611,20 @@ def _security_menu() -> int:
                 pending_switch = active_journal.with_name(
                     "turbo_existing_root_switch.json"
                 )
-                if (access_changed or turbo_changed) and active_journal.exists():
+                refresh_broker = access_changed and not turbo_changed and active_journal.is_file()
+                if (access_changed or turbo_changed) and active_journal.exists() and not refresh_broker:
                     raise RuntimeError(
                         "TURBO_ACTIVE_BROKER_REQUIRES_VERIFIED_REVOKE_OR_SWITCH:"
                         "never overwrite a live Broker policy from Workspace Manager"
                     )
-                if pending_import.exists() or pending_switch.exists():
+                if pending_switch.exists() or (pending_import.exists() and not refresh_broker):
                     if access_changed or turbo_changed or (
                         turbo and not active_journal.exists()
                     ):
                         raise RuntimeError(
                             "TURBO_PENDING_TRANSACTION_REQUIRES_VERIFIED_RECOVERY"
                         )
-                needs_activation = bool(turbo and not active_journal.exists())
+                needs_activation = bool(turbo and (refresh_broker or not active_journal.exists()))
                 policy_requested = load_workspace_access_policy().get("turbo_requested") is True
                 request_changed = bool(turbo) != policy_requested
                 if not access_changed and not turbo_changed and not needs_activation and not request_changed:
@@ -650,6 +651,22 @@ def _security_menu() -> int:
                         raise RuntimeError(
                             "TURBO_EXISTING_ROOT_EXACT_CONFIRMATION_REQUIRED"
                         )
+                if refresh_broker:
+                    from .workspace_access import is_valid_turbo_root
+
+                    denied = profile.get("denied_write_roots") or ()
+                    for target in turbo:
+                        if not any(is_valid_turbo_root(target, parent, writable, read_only, denied)
+                                   for parent in writable):
+                            raise ValueError("turbo_root_conflicts_with_workspace_changes")
+                    subprocess.run(
+                        ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                         "-File", str(AGENT_PROJECT_ROOT / "install_smart_agent/turbo_os_activation.ps1"),
+                         "-Action", "Revoke", "-ProjectRoot", str(AGENT_PROJECT_ROOT)],
+                        cwd=AGENT_PROJECT_ROOT, check=True,
+                    )
+                    if active_journal.exists() or pending_import.exists() or pending_switch.exists():
+                        raise RuntimeError("workspace_apply_turbo_revocation_unconfirmed")
                 # Re-running Configure Security when access roots have NOT
                 # changed can rewrite existing project ACLs before the
                 # immutable pre-import security snapshot. Avoid that entirely.
