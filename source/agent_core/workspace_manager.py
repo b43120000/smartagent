@@ -638,6 +638,13 @@ def _security_menu() -> int:
                 if turbo and Path(turbo[0]).exists() and not Path(turbo[0]).is_dir():
                     raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY")
                 if existing_import:
+                    matching_workspaces = [
+                        root for root in writable
+                        if _is_strict_turbo_child(turbo[0], root)
+                    ]
+                    if len(matching_workspaces) != 1:
+                        raise RuntimeError("TURBO_EXISTING_ROOT_WORKSPACE_NOT_UNIQUE")
+                    selected_workspace = matching_workspaces[0]
                     # Only this elevated human-operated manager may trigger an
                     # existing-tree import. A Telegram setting is not a grant.
                     print("\n[Turbo] Existing project directory selected:")
@@ -645,20 +652,11 @@ def _security_menu() -> int:
                     print("[Turbo] Native AppContainer import will snapshot and")
                     print("        change NTFS ACL/Integrity Labels; file contents")
                     print("        and the existing directory will NOT be replaced.")
-                    confirmation = input(
-                        "Confirm by entering the exact Turbo path: "
-                    ).strip().strip('"')
-                    if confirmation.casefold() != str(turbo[0]).casefold():
-                        raise RuntimeError(
-                            "TURBO_EXISTING_ROOT_EXACT_CONFIRMATION_REQUIRED"
-                        )
-                if access_changed and not software_only and input(
-                    "Type APPLY to update Windows workspace permissions: "
+                if (existing_import or (access_changed and not software_only)) and input(
+                    "Type APPLY to confirm these security changes: "
                 ).strip() != "APPLY":
                     return 1
                 if refresh_broker:
-                    from .workspace_access import is_valid_turbo_root
-
                     denied = profile.get("denied_write_roots") or ()
                     for target in turbo:
                         if not any(is_valid_turbo_root(target, parent, writable, read_only, denied)
@@ -691,19 +689,12 @@ def _security_menu() -> int:
                                 AGENT_PROJECT_ROOT / "install_smart_agent"
                                 / "turbo_existing_root_activate.ps1"
                             )
-                            matching_workspaces = [
-                                root for root in writable
-                                if _is_strict_turbo_child(turbo[0], root)
-                            ]
-                            if len(matching_workspaces) != 1:
-                                raise RuntimeError("TURBO_EXISTING_ROOT_WORKSPACE_NOT_UNIQUE")
-                            selected_workspace = matching_workspaces[0]
                             native_args = [
                                 "-Action", "Activate",
                                 "-ProjectRoot", str(AGENT_PROJECT_ROOT),
                                 "-Workspace", selected_workspace,
                                 "-TurboRoot", turbo[0],
-                                "-ConfirmTarget", confirmation,
+                                "-ConfirmTarget", turbo[0],
                             ]
                         else:
                             native_script = (

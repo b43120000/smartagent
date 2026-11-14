@@ -81,7 +81,7 @@ def manager(tmp_path, monkeypatch):
 
 def test_existing_directory_can_enroll_without_recreation(manager):
     original = manager.original.read_bytes()
-    manager.provide("5", str(manager.root), "7", str(manager.root), "")
+    manager.provide("5", str(manager.root), "7", "APPLY", "")
     assert workspace_manager._security_menu() == 0
     assert manager.original.read_bytes() == original
     assert manager.root.is_dir()
@@ -114,7 +114,7 @@ def test_existing_active_broker_cannot_be_replaced_by_apply(manager):
 
 def test_already_registered_but_not_requested_root_can_enroll(manager):
     manager.policy["turbo_roots"] = [str(manager.root)]
-    manager.provide("7", str(manager.root), "")
+    manager.provide("7", "APPLY", "")
     assert workspace_manager._security_menu() == 0
     assert manager.policy["turbo_requested"] is True
     assert len(manager.calls) == 1
@@ -130,7 +130,7 @@ def test_nested_writable_workspace_ownership_is_rejected(manager):
     # Root is strict child of exactly one Workspace in this fixture; append
     # the outer directory as a second registered root to create ambiguity.
     manager.policy["writable_workspaces"].append(str(manager.workspace.parent))
-    manager.provide("5", str(second), "7", "")
+    manager.provide("5", str(second), "7", "APPLY", "")
     assert workspace_manager._security_menu() == 1
     assert not manager.calls and not manager.saves
 

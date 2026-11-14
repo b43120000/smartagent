@@ -307,7 +307,7 @@
     "source/agent_core/windows_process_job.py": "e78233d731fbfafa85d5ad493e117c75b160ef660548a5a0aa84bfc2d3b19037",
     "source/agent_core/windows_security.py": "8a07aee0e778821d6862916666f2dd5c5438c581b5b4301d23a5d5f5d8e87ddc",
     "source/agent_core/workspace_access.py": "1a45afeab0582ac3e3216970de3dc3b475367aa07c4a662919d61193f0fe7a43",
-    "source/agent_core/workspace_manager.py": "8077d11aa2e38ad501ac80421dfcc92111012f4344068bcd6bb6fd01d0ed8561",
+    "source/agent_core/workspace_manager.py": "229ac65b2863d4096c13f6a34a4f8a397c205fa1ebe8c1dc75959622f7cda033",
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443"
   },
   "manifest_schema_version": 1,
