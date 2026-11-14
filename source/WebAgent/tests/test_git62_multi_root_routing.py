@@ -104,3 +104,91 @@ def test_single_root_workspace_legacy_fallback(installed):
     assert broker._resolve_workspace_and_cwd(ws) == (ws, a)
     state = turbo_sandbox.resolve_turbo_state(ws)
     assert state["turbo_root"] == str(a)
+
+
+
+def test_runtime_run_command_uses_exact_multi_root_cwd_not_workspace_parent(installed, monkeypatch):
+    """Regression: Task CWD is valid but bounded_process silently replaced it
+    with the shared writable parent, triggering TURBO_MULTI_ROOT_CWD_REQUIRED.
+    This is a routing test with a FAKE broker; Windows CI separately tests
+    real kernel token/SID isolation and negative access enforcement.
+    """
+    from agent_core import bounded_process, tools, workspace_access
+
+    ws, a, b, policy = installed
+    attempted = []
+
+    # The protected policy legitimately resolves BOTH Turbo roots to the same
+    # broad writable Workspace. This parent must never select a Turbo SID.
+    monkeypatch.setattr(
+        workspace_access, "resolve_turbo_authorization_workspace",
+        lambda path: ws,
+    )
+    monkeypatch.setattr(
+        broker, "active_broker_available",
+        lambda path: str(Path(path)) in {str(a), str(b), str(a / "nested"), str(b / "nested")},
+    )
+
+    def fake_native(command, *, cwd, **kwargs):
+        attempted.append((Path(cwd), str(command), kwargs))
+        return {"exit_code": 0, "stdout": "MOCKED_NATIVE_ROUTING_ONLY",
+                "stderr": "", "sandbox_evidence": {"executed": True}}
+
+    monkeypatch.setattr(broker, "execute_turbo_command", fake_native)
+
+    def never_host(*args, **kwargs):
+        raise AssertionError("ordinary host process fallback is forbidden")
+
+    monkeypatch.setattr(bounded_process.subprocess, "Popen", never_host)
+
+    for target in (a, b):
+        # Exercise the actual tools -> bounded_process path used by
+        # Runtime run_command, not merely the low-level root resolver.
+        result = tools._run_powershell_capture(
+            "(Get-Location).Path",
+            timeout=10,
+            cwd=target,
+            telemetry={"task_id": "TASK-GIT62-ROUTING",
+                       "action_id": "ACT-GIT62-ROUTING"},
+        )
+        assert result["exit_code"] == 0
+        assert result["stdout"] == "MOCKED_NATIVE_ROUTING_ONLY"
+
+    assert [item[0] for item in attempted] == [a, b]
+    assert all(item[2]["task_id"] == "TASK-GIT62-ROUTING" for item in attempted)
+
+
+def test_runtime_multi_root_parent_and_missing_cwd_block_without_host_fallback(
+    installed, monkeypatch,
+):
+    """Fail closed for ambiguous Workspace even if a native root exists."""
+    from agent_core import bounded_process, workspace_access
+
+    ws, a, b, policy = installed
+    monkeypatch.setattr(
+        workspace_access, "resolve_turbo_authorization_workspace",
+        lambda path: ws if path is not None else None,
+    )
+    monkeypatch.setattr(
+        broker, "active_broker_available", lambda path: True,
+    )
+
+    def no_native(*args, **kwargs):
+        raise AssertionError("ambiguous CWD must never launch Native AppContainer")
+
+    def no_host(*args, **kwargs):
+        raise AssertionError("ambiguous CWD must never fall back to the host")
+
+    monkeypatch.setattr(broker, "execute_turbo_command", no_native)
+    monkeypatch.setattr(bounded_process.subprocess, "Popen", no_host)
+
+    for target in (ws, None):
+        result = bounded_process.run_bounded_process(
+            ["powershell", "-NoProfile", "-Command", "(Get-Location).Path"],
+            cwd=target, timeout=10, security_command="(Get-Location).Path",
+        )
+        assert result["security_rejected"] is True
+        assert result["process_started"] is False
+        assert result["exit_code"] is None
+        assert result["error"].startswith("TURBO_OS_BROKER_BLOCKED:")
+        assert result["sandbox_evidence"].get("executed") is False
