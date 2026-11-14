@@ -4,7 +4,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
-    [ValidateSet('Apply','Status')][string]$Action='Apply'
+    [ValidateSet('Apply','Status')][string]$Action='Apply',
+    [string]$TurboRoot=''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -12,7 +13,9 @@ $root=[IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $secure=Join-Path $root 'localdata\secure\windows_security'
 $modePath=Join-Path $secure 'acl_mode.json'
 $policyPath=Join-Path $secure 'workspace_access_policy.json'
-$journalPath=Join-Path $secure 'turbo_os_activation.json'
+$legacyJournal=Join-Path $secure 'turbo_os_activation.json'
+$journalPath=$legacyJournal
+. (Join-Path $PSScriptRoot 'turbo_multi_root_paths.ps1')
 $native=Join-Path $PSScriptRoot 'turbo_os_activation.ps1'
 function Read-State([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -35,10 +38,20 @@ if ($policy.turbo_requested -ne $true) {
     return
 }
 $roots=@($policy.turbo_roots)
-if ($roots.Count -ne 1) {
-    throw 'TURBO_AUTOSTART_SINGLE_ROOT_REQUIRED'
+if ($roots.Count -lt 1) {throw 'GIT62_TURBO_AUTOSTART_NO_ROOT'}
+if($roots.Count -gt 1 -and -not $TurboRoot){
+    throw 'GIT62_TURBO_AUTOSTART_EXACT_ROOT_REQUIRED'
 }
-$target=[IO.Path]::GetFullPath([string]$roots[0]).TrimEnd('\')
+$target=if($TurboRoot){[IO.Path]::GetFullPath($TurboRoot).TrimEnd('\')}
+        else{[IO.Path]::GetFullPath([string]$roots[0]).TrimEnd('\')}
+if(@($roots | Where-Object {
+   [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+      $target,[StringComparison]::OrdinalIgnoreCase)
+}).Count -ne 1){throw 'GIT62_TURBO_AUTOSTART_ROOT_NOT_REGISTERED'}
+$indexed=Get-TurboRootJournalPaths $secure $target
+if($roots.Count -gt 1 -or (Test-Path -LiteralPath $indexed.activation -PathType Leaf)){
+    $journalPath=$indexed.activation
+}
 $writable=@($policy.writable_workspaces | ForEach-Object {
     [IO.Path]::GetFullPath([string]$_).TrimEnd('\')
 })
