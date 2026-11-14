@@ -8,7 +8,7 @@ param(
     [Parameter(Mandatory=$true)][string]$TurboRoot,
     [ValidateSet('Prepare','Verify')][string]$Action='Prepare',
     [string]$SnapshotId='',
-    [ValidateRange(1,100000)][int]$MaxEntries=5000
+    [ValidateRange(1,200000)][int]$MaxEntries=200000
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -157,7 +157,8 @@ function Verify-Snapshot([string]$id) {
             throw 'TURBO_B_P3_TREE_PATH_MISMATCH'
         }
         $node=$current[$path]
-        if ([string]$node.identity -cne [string]$entry.identity -or
+        $expectedLinks=if($entry.PSObject.Properties['link_count']){[uint32]$entry.link_count}else{1}
+        if ($node.link_count -ne $expectedLinks -or [string]$node.identity -cne [string]$entry.identity -or
             [string]$node.sddl -cne [string]$entry.sddl -or
             [bool]$node.directory -ne [bool]$entry.directory -or
             [string]$node.relative -cne [string]$entry.relative) {

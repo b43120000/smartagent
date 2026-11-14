@@ -100,11 +100,16 @@ try {
     Assert $permissionRejected 'TURBO_B_BACKUP_DIR_WITH_EXTRA_WRITE_ACE_WAS_ACCEPTED'
     Write-Host 'TURBO_B_PREEXISTING_BACKUP_DIR_ACL_FAIL_CLOSED_PASS'
 
+    $internalAlias=Join-Path $root 'internal_hardlink.py'
+    & fsutil.exe hardlink create $internalAlias $file | Out-Null
+    Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_INTERNAL_HARDLINK_CREATE_FAILED'
+    & $pre -ProjectRoot $project -Workspace $workspace -TurboRoot $root | Out-Null
+    Remove-Item -LiteralPath $internalAlias -Force
     # Real NTFS hardlink on a disposable copy: refuse escape aliases.
     $alias=Join-Path $workspace 'external_hardlink.py'
     & fsutil.exe hardlink create $alias $file | Out-Null
     Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_HARDLINK_CREATE_FAILED'
-    Expected-Block 'TURBO_B_HARDLINK_FORBIDDEN'
+    Expected-Block 'TURBO_B_HARDLINK_SCOPE_UNVERIFIED'
     Remove-Item -LiteralPath $alias -Force
     # A junction must never be traversed into a different path.
     $junction=Join-Path $root 'unsafe_junction'

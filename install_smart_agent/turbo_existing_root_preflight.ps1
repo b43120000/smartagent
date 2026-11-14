@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [Parameter(Mandatory=$true)][string]$Workspace,
     [Parameter(Mandatory=$true)][string]$TurboRoot,
-    [int]$MaxEntries = 5000,
+    [int]$MaxEntries = 200000,
     [int]$MaxDepth = 32,
     [switch]$IncludeSensitiveInventory
 )
@@ -27,7 +27,7 @@ function Under([string]$Child,[string]$Parent) {
 $project=Full $ProjectRoot
 $workspace=Full $Workspace
 $root=Full $TurboRoot
-if ($MaxEntries -lt 1 -or $MaxEntries -gt 100000 -or $MaxDepth -lt 1 -or $MaxDepth -gt 100) {
+if ($MaxEntries -lt 1 -or $MaxEntries -gt 200000 -or $MaxDepth -lt 1 -or $MaxDepth -gt 100) {
     throw 'TURBO_B_PREFLIGHT_LIMITS_INVALID'
 }
 if (-not (Under $root $workspace) -or (Under $root $project) -or
@@ -59,7 +59,7 @@ while ($true) {
         -not (Same $ancestor $workspace)) { throw 'TURBO_B_PREFLIGHT_PARENT_ESCAPE' }
 }
 # The Windows API exposes nNumberOfLinks and stable per-volume file IDs.
-# A hardlinked regular file must NEVER be silently granted an AppContainer ACE.
+# Compare NTFS link counts with the complete inventory inside this root.
 if (-not ('SmartAgentTurboBFileId' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -88,6 +88,10 @@ public static class SmartAgentTurboBFileId {
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool GetFileInformationByHandle(SafeFileHandle h, out TurboBInfo info);
     public static string Check(string path, bool directory) {
+        uint links;
+        return Inspect(path, directory, out links);
+    }
+    public static string Inspect(string path, bool directory, out uint links) {
         using(var h = CreateFileW(path, 0x80, 0x1|0x2|0x4, IntPtr.Zero, 3,
                                  directory ? 0x02000000u : 0u, IntPtr.Zero)) {
             if(h.IsInvalid) throw new System.ComponentModel.Win32Exception(
@@ -95,8 +99,9 @@ public static class SmartAgentTurboBFileId {
             TurboBInfo i;
             if(!GetFileInformationByHandle(h, out i)) throw new System.ComponentModel.Win32Exception(
                 Marshal.GetLastWin32Error(), "TURBO_B_FILE_ID_QUERY_FAILED:"+path);
-            if(i.links != 1) throw new InvalidOperationException(
-                "TURBO_B_HARDLINK_FORBIDDEN:"+path+":links="+i.links.ToString());
+            if(directory && i.links != 1) throw new InvalidOperationException(
+                "TURBO_B_DIRECTORY_LINK_COUNT_INVALID:"+path);
+            links = i.links;
             return i.volume.ToString("X8")+":"+i.fileIdHigh.ToString("X8")+i.fileIdLow.ToString("X8");
         }
     }
@@ -104,6 +109,7 @@ public static class SmartAgentTurboBFileId {
 '@ -ErrorAction Stop
 }
 $nodes=New-Object System.Collections.Generic.List[object]
+$linkGroups=@{}
 $pending=New-Object System.Collections.Generic.Queue[object]
 $pending.Enqueue([pscustomobject]@{path=$root;depth=0})
 while ($pending.Count -gt 0) {
@@ -119,7 +125,11 @@ while ($pending.Count -gt 0) {
         throw ('TURBO_B_PREFLIGHT_REPARSE_ENTRY:'+$path)
     }
     $isDir=$item.PSIsContainer
-    $id=[SmartAgentTurboBFileId]::Check($path,[bool]$isDir)
+    $links=[uint32]0
+    $id=[SmartAgentTurboBFileId]::Inspect($path,[bool]$isDir,[ref]$links)
+    if (-not $isDir -and $links -gt 1) {
+        $linkGroups[$id] = 1 + [int]$linkGroups[$id]
+    }
     # A full security snapshot must be readable by the CURRENT administrator.
     # '-Audit' is required to obtain labels/SACL rather than DACL-only backup.
     try {
@@ -139,6 +149,7 @@ while ($pending.Count -gt 0) {
         relative=$relativePath
         directory=[bool]$isDir
         identity=$id
+        link_count=$links
         sddl=$sddl
     })
     if ($nodes.Count -gt $MaxEntries) { throw 'TURBO_B_PREFLIGHT_ENTRY_LIMIT_EXCEEDED' }
@@ -153,7 +164,12 @@ foreach ($item in $nodes.ToArray()) {
     if (-not (Test-Path -LiteralPath $item.path)) {
         throw ('TURBO_B_PREFLIGHT_TREE_CHANGED:'+$item.path)
     }
-    $now=[SmartAgentTurboBFileId]::Check([string]$item.path,[bool]$item.directory)
+    $links=[uint32]0
+    $now=[SmartAgentTurboBFileId]::Inspect([string]$item.path,[bool]$item.directory,[ref]$links)
+    if ($links -ne $item.link_count -or
+        ($links -gt 1 -and $linkGroups[$now] -ne $links)) {
+        throw ('TURBO_B_HARDLINK_SCOPE_UNVERIFIED:'+$item.path)
+    }
     if ($now -cne [string]$item.identity) {
         throw ('TURBO_B_PREFLIGHT_FILE_REPLACED:'+$item.path)
     }

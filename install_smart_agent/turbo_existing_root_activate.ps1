@@ -8,7 +8,7 @@ param(
  [string]$Workspace='',
  [string]$TurboRoot='',
  [string]$ConfirmTarget='',
- [ValidateRange(1,100000)][int]$MaxEntries=5000
+ [ValidateRange(1,200000)][int]$MaxEntries=200000
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'

@@ -284,6 +284,8 @@ CORE_FILES = (
     'source/agent_core/turbo_os_broker_client.py',
     'install_smart_agent/turbo_os_activation.ps1',
     'install_smart_agent/turbo_existing_root_snapshot.ps1',
+    'install_smart_agent/turbo_existing_root_activate.ps1',
+    'install_smart_agent/turbo_existing_root_preflight.ps1',
     'install_smart_agent/turbo_existing_root_prepare.ps1',
     'source/agent_core/task_workspace_resolver.py',
     'install_smart_agent/turbo_existing_security.cs',

@@ -6,7 +6,7 @@ param(
  [Parameter(Mandatory=$true)][ValidateSet('Activate','Revoke','Recover','Status')][string]$Action,
  [Parameter(Mandatory=$true)][string]$ProjectRoot,
  [string]$Workspace='', [string]$TurboRoot='', [string]$SnapshotId='',
- [ValidateRange(1,100000)][int]$MaxEntries=5000,
+ [ValidateRange(1,200000)][int]$MaxEntries=200000,
  [switch]$ExperimentalCiOnly,
  [string]$SwitchReceiptId='',
  [string]$DirectOperatorConfirmation=''
@@ -62,7 +62,10 @@ function Check-Identity([object]$entry) {
  $item=Get-Item -LiteralPath $p -Force -ErrorAction Stop
  if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'TURBO_D3_REPARSE_TREE'}
  if([bool]$item.PSIsContainer -ne [bool]$entry.directory){throw 'TURBO_D3_FILE_TYPE_CHANGED'}
- if([SmartAgentTurboBFileId]::Check($p,[bool]$entry.directory) -cne [string]$entry.identity){
+ $links=[uint32]0
+ $id=[SmartAgentTurboBFileId]::Inspect($p,[bool]$entry.directory,[ref]$links)
+ $expectedLinks=if($entry.PSObject.Properties['link_count']){[uint32]$entry.link_count}else{1}
+ if($id -cne [string]$entry.identity -or $links -ne $expectedLinks){
   throw ('TURBO_D3_FILE_ID_CHANGED:'+$p)
  }
 }
@@ -382,9 +385,11 @@ try {
  try {
    Prepare-SharedAncestors @($ancestors) $sid
    $sidObj=[Security.Principal.SecurityIdentifier]::new($sid)
+   $processedFiles = [Collections.Generic.HashSet[string]]::new()
    foreach($entry in @($snap.entries | Sort-Object {([string]$_.path).Length} -Descending)){
       Check-Identity $entry
       $p=[string]$entry.path
+      if(-not $entry.directory -and -not $processedFiles.Add([string]$entry.identity)){continue}
       if((Sddl $p) -cne [string]$entry.sddl){throw 'TURBO_D3_SNAPSHOT_STALE'}
       $acl=Get-Acl -LiteralPath $p
       if(Same $p $script:root){
