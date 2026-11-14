@@ -117,7 +117,7 @@
     "source/agent_core/attachment_transaction.py": "bfb88a2feac1ba678dc360e8b6c9724c1d4d398968bc3434a95c8d65d6126720",
     "source/agent_core/auto_rca_upload.py": "97a830b8b0d583106182f21ceb8b1a418ba1dedf4fdee1b4a8aa332de6a5cc2e",
     "source/agent_core/batch_apply.py": "3e16ad969477af9ceec3d56ff417706b21def08a2ff47b7adbb74d4b24c45118",
-    "source/agent_core/bounded_process.py": "d1d6325e1b00c519e0b4bec167408ae711a46a3204438971735291e3ad539c55",
+    "source/agent_core/bounded_process.py": "6804c61d8c3d1d960d545a317c757f3eecd47c24b2efd0174d22f4066f8ced2e",
     "source/agent_core/bounded_repair.py": "004e316f316b2a3925ee8f89cf5e8ea6f3badc949790e4d17cf8e33155e01480",
     "source/agent_core/bp1_observation_terminal.py": "c059bc55262f96d1ca7ca952a100376adf3faaac19ec27e0a98dcd16672a5abe",
     "source/agent_core/browser_preferences.py": "4aadf625407015633a89c0b82e198988c4f8f9c758233add82e01662ec499011",
