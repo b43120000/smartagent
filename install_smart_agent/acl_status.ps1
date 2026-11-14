@@ -904,7 +904,8 @@ if ($Mode -eq 'on') {
     # state. Native AppContainer import/rollback is not implemented for them.
     if ($accessPolicy -and $accessPolicy.turbo_requested -eq $true) {
         $selectedTurbo = @($accessPolicy.turbo_roots)
-        if ($selectedTurbo.Count -ne 1) {
+        if ($selectedTurbo.Count -ne 1 -and -not (
+            $RestoreTurboAfterUpgrade -and $selectedTurbo.Count -gt 1)) {
             throw 'ACL_ON_TURBO_SINGLE_ROOT_REQUIRED_NO_SECURITY_CHANGES'
         }
         if (-not $RestoreTurboAfterUpgrade -and (Test-Path -LiteralPath ([string]$selectedTurbo[0]))) {
