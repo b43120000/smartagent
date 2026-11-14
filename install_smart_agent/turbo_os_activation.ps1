@@ -14,7 +14,20 @@ $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $securityRoot = Join-Path $ProjectRoot 'localdata\secure\windows_security'
 $modePath = Join-Path $securityRoot 'acl_mode.json'
 $policyPath = Join-Path $securityRoot 'workspace_access_policy.json'
-$journalPath = Join-Path $securityRoot 'turbo_os_activation.json'
+$legacyJournal = Join-Path $securityRoot 'turbo_os_activation.json'
+$journalPath = $legacyJournal
+. (Join-Path $PSScriptRoot 'turbo_multi_root_paths.ps1')
+if ($TurboRoot) {
+    $candidate=Get-TurboRootJournalPaths $securityRoot $TurboRoot
+    if(Test-Path -LiteralPath $candidate.activation -PathType Leaf){
+        $journalPath=$candidate.activation
+    } elseif($Action -eq 'Activate') {
+        $policyPreview=Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if(@($policyPreview.turbo_roots).Count -gt 1){
+            $journalPath=$candidate.activation
+        }
+    }
+}
 if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
     throw 'GIT50_PROJECT_ROOT_NOT_FOUND'
 }
@@ -172,6 +185,30 @@ try {
         Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
     }
     if ($Action -eq 'Revoke') {
+        if (-not $TurboRoot) {
+            # ACL OFF must revoke EVERY independently enrolled AppContainer,
+            # even when a single legacy journal still exists.
+            $folder=Join-Path $securityRoot 'turbo_root_activations'
+            if(Test-Path -LiteralPath $folder -PathType Container){
+                foreach($entry in @(Get-ChildItem -LiteralPath $folder -File -Filter 'activation-*.json' -ErrorAction Stop)){
+                    if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){
+                        throw 'GIT62_REVOKE_JOURNAL_REPARSE'
+                    }
+                    $multiRecord=Load-Json $entry.FullName
+                    if($multiRecord.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+                       [string]::IsNullOrWhiteSpace([string]$multiRecord.turbo_root)){
+                        throw 'GIT62_REVOKE_UNKNOWN_ENROLLMENT'
+                    }
+                    $expected=Get-TurboRootJournalPaths $securityRoot ([string]$multiRecord.turbo_root)
+                    if(-not $expected.activation.Equals($entry.FullName,[StringComparison]::OrdinalIgnoreCase)){
+                        throw 'GIT62_REVOKE_JOURNAL_KEY_MISMATCH'
+                    }
+                    & $PSCommandPath -Action Revoke -ProjectRoot $ProjectRoot -TurboRoot ([string]$multiRecord.turbo_root)
+                    if(-not $?){throw 'GIT62_REVOKE_ROOT_FAILED'}
+                }
+            }
+            $journalPath=$legacyJournal
+        }
         if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf)) {
             Write-Output 'GIT50_TURBO_ROOT_NOT_ACTIVE'
             return
@@ -187,7 +224,7 @@ try {
             if (-not (Test-Path -LiteralPath $recovery -PathType Leaf)) {
                 throw 'TURBO_D3_REVOKER_UNAVAILABLE_FAIL_CLOSED'
             }
-            & $recovery -Action Revoke -ProjectRoot $ProjectRoot
+            & $recovery -Action Revoke -ProjectRoot $ProjectRoot -TurboRoot ([string]$record.turbo_root)
             if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
                 throw 'TURBO_D3_REVOKE_ACTIVATION_STILL_PRESENT'
             }
@@ -201,6 +238,12 @@ try {
 
     if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
         throw 'GIT50_PREVIOUS_TURBO_ACTIVATION_MUST_BE_REVOKED_FIRST'
+    }
+    if($journalPath -ne $legacyJournal){
+        if(Test-Path -LiteralPath $legacyJournal -PathType Leaf){
+            throw 'GIT62_LEGACY_SINGLE_BROKER_REQUIRES_VERIFIED_MIGRATION'
+        }
+        Assert-TurboRootJournalDirectory $securityRoot
     }
     $mode = Load-Json $modePath
     $policy = Load-Json $policyPath
@@ -219,8 +262,9 @@ try {
     $root = [IO.Path]::GetFullPath($TurboRoot).TrimEnd('\')
     $writable = @($policy.writable_workspaces | ForEach-Object { [IO.Path]::GetFullPath([string]$_).TrimEnd('\') })
     $configured = @($policy.turbo_roots | ForEach-Object { [IO.Path]::GetFullPath([string]$_).TrimEnd('\') })
-    if (@($configured).Count -ne 1 -or
-        -not $root.Equals($configured[0], [StringComparison]::OrdinalIgnoreCase) -or
+    if (@($configured | Where-Object {
+            $_.Equals($root,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -ne 1 -or
         -not @($writable | Where-Object { $_.Equals($ws,[StringComparison]::OrdinalIgnoreCase) }).Count -or
         -not $root.StartsWith($ws + '\', [StringComparison]::OrdinalIgnoreCase) -or
         $root.StartsWith($ProjectRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
