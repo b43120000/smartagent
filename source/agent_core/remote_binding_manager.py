@@ -201,7 +201,9 @@ class RemoteBindingManager:
             f"Reason Code：{sandbox_state['reason_code']}",
             f"Skill Path：{candidate['skill_path']}",
             "",
-            "Telegram listener 持續在線；OS 安全預檢已同步更新，下一個遠端任務會使用新設定。",
+            "Telegram listener 持續在線；Turbo Root 登錄不等於 OS 授權。"
+            "未完成管理員 Native AppContainer Enrollment 的 Root，"
+            "寫入任務將被阻擋，不會退回一般 Executor。",
         ))
 
     def render_skills(self) -> str:
