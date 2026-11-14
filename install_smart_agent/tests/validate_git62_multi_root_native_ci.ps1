@@ -47,7 +47,7 @@ try{
  Check ([string]$a.moniker -cne [string]$b.moniker) 'GIT62_SAME_MONIKER_UNSAFE'
  Check (-not (Test-Path -LiteralPath (Join-Path $sec 'turbo_os_activation.json'))) 'GIT62_LEGACY_JOURNAL_UNEXPECTED'
  function Scoped($record,[string]$cwd,[string]$id){
-  $cmd='[IO.File]::WriteAllText("own.txt","ROOT_'+$id+'");Write-Output "ROOT_'+$id+'"'
+  $cmd='[IO.File]::WriteAllText("own.txt","ROOT_'+$id+'");[Console]::WriteLine("ROOT_'+$id+'")'
   $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
   $answer=& ([string]$record.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $cwd -SelectedTurboRoot $cwd -ExpectedRevision 62 -TaskId ('TASK-GIT62-'+$id) -ActionId ('ACT-GIT62-'+$id) -CommandBase64 $encoded -TimeoutSeconds 30
   $proof=$answer | Out-String | ConvertFrom-Json -ErrorAction Stop
