@@ -84,7 +84,15 @@ function Restore-Exact([string]$p,[string]$s) {
  # Windows may recompute the automatic-inheritance marker during restore.
  # Require exact ACEs, owner, group and protection flags after that normalization.
  $normalize = { param($descriptor) $descriptor -creplace '([DS]:[A-Z]*?)AI(?=[A-Z]*(?:\(|S:|$))','$1' }
- if ((& $normalize $actual) -cne (& $normalize $s)) {
+ $expectedNormalized = & $normalize $s
+ $actualNormalized = & $normalize $actual
+ if ($expectedNormalized.EndsWith('S:P') -and -not $actualNormalized.Contains('S:')) {
+    $audit = Get-Acl -LiteralPath $p -Audit -ErrorAction Stop
+    if ($audit.AreAuditRulesProtected -and @($audit.Audit).Count -eq 0) {
+        $actualNormalized += 'S:P'
+    }
+ }
+ if ($actualNormalized -cne $expectedNormalized) {
   if($env:GITHUB_ACTIONS -ceq 'true'){
     Write-Host ('TURBO_D3_CI_SDDL_EXPECTED='+$s)
     Write-Host ('TURBO_D3_CI_SDDL_ACTUAL='+(Sddl $p))

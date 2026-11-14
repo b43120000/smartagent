@@ -57,7 +57,7 @@
     "install_smart_agent/reinstall.ps1": "51ee980ab1f2fc6c165438119763c91690354fd003380051eeee36adea6b3279",
     "install_smart_agent/security_acl_policy.ps1": "f77774f2f1880a8bc0232ed36c6e92b2826a6f79f7880570d5d1d343e673c009",
     "install_smart_agent/turbo_appcontainer_probe.cs": "b2ea7b1fb23ba739f37788dfb908c89ec57289fe14813447669d56bd1935ce8a",
-    "install_smart_agent/turbo_existing_root_import.ps1": "365c3fa7ecadc13013f4048e52450566bd2a3c1d6bc876dc1f916cb38eddc4b8",
+    "install_smart_agent/turbo_existing_root_import.ps1": "ca4952f4256ebbfbd934dc02d33bddca5ada505eec68c05700ade67af6d07eb4",
     "install_smart_agent/turbo_existing_root_prepare.ps1": "70b6a9bb41dbc11121dda2f335cce5f4bfd4cb7d410e3582a83afb2060d174e7",
     "install_smart_agent/turbo_existing_root_snapshot.ps1": "21c7e2f1e11f6203a19d46c74fe6bd45e22999fe9ce72296c1f044ee745a2c8e",
     "install_smart_agent/turbo_existing_security.cs": "e7392f085b07f118abf1f3f9133e6cc339f9b621e9968fb0dabc82472a4a9e52",
