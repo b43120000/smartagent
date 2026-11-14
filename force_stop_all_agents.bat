@@ -92,7 +92,12 @@ endlocal & exit /b 64
 
 :args_parsed
 if defined LAUNCHER_SELF_TEST (
+    for %%I in ("%~dp0.") do if /I not "%%~fI"=="%SMARTAGENT_INSTALL_ROOT%" (
+        echo FORCE_STOP_ALL_AGENTS_LAUNCHER_ROOT_CHANGED
+        endlocal & exit /b 2
+    )
     echo FORCE_STOP_ALL_AGENTS_LAUNCHER_PARSE_OK %EXCLUDE_PID_ARGS%
+    echo FORCE_STOP_RECOVERY_SCRIPT=%SMARTAGENT_INSTALL_ROOT%\install_smart_agent\turbo_pending_import_recovery.ps1
     endlocal & exit /b 0
 )
 echo [SmartAgent] Stopping LocalAgent, WebAgent, RemoteAgent, monitors and workers...
