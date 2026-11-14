@@ -687,8 +687,8 @@ public static class SmartAgentGit47AppContainerProbe
                     "try { " + trustedAliases +
                     "$items=@(& {\n" + script + "\n} 2>&1); " +
                     "$commandSucceeded=$?; $nativeExit=$global:LASTEXITCODE; " +
-                    "$outList=New-Object 'System.Collections.Generic.List[string]'; " +
-                    "$errList=New-Object 'System.Collections.Generic.List[string]'; " +
+                    "$outList=[System.Collections.Generic.List[string]]::new(); " +
+                    "$errList=[System.Collections.Generic.List[string]]::new(); " +
                     "foreach($item in $items) { " +
                     "if($item -is [System.Management.Automation.ErrorRecord]) {" +
                     "$errList.Add([string]$item.ToString())} " +
