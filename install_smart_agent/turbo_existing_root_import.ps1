@@ -76,7 +76,15 @@ function Restore-Exact([string]$p,[string]$s) {
  if((Sddl $p) -cne $s) {
     [SmartAgentTurboExistingSecurity]::RestoreOriginalDacl($p,$s)
  }
- if((Sddl $p) -cne $s){
+ $actual = Sddl $p
+ if ($actual -cne $s -and $s -match 'S:(?<flags>[A-Z]*)(?:\(|$)') {
+    [SmartAgentTurboExistingSecurity]::RestoreOriginalAuditAcl($p,$s,$Matches.flags.Contains('P'))
+    $actual = Sddl $p
+ }
+ # Windows may recompute the automatic-inheritance marker during restore.
+ # Require exact ACEs, owner, group and protection flags after that normalization.
+ $normalize = { param($descriptor) $descriptor -creplace '([DS]:[A-Z]*?)AI(?=[A-Z]*(?:\(|S:|$))','$1' }
+ if ((& $normalize $actual) -cne (& $normalize $s)) {
   if($env:GITHUB_ACTIONS -ceq 'true'){
     Write-Host ('TURBO_D3_CI_SDDL_EXPECTED='+$s)
     Write-Host ('TURBO_D3_CI_SDDL_ACTUAL='+(Sddl $p))

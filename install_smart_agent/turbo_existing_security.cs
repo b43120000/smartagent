@@ -60,6 +60,17 @@ public static class SmartAgentTurboExistingSecurity {
                 throw new Win32Exception(Marshal.GetLastWin32Error(),"TURBO_EXISTING_DACL_RESTORE");
         } finally {LocalFree(sd);}
     }
+    public static void RestoreOriginalAuditAcl(string path, string originalSddl, bool protect) {
+        EnableSecurityPrivilege();
+        IntPtr sd; uint bytes;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(originalSddl, 1, out sd, out bytes))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "TURBO_EXISTING_SACL_PARSE");
+        try {
+            uint flags = 8u | (protect ? 0x40000000u : 0x10000000u);
+            if (!SetFileSecurityW(path, flags, sd))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "TURBO_EXISTING_SACL_RESTORE");
+        } finally { LocalFree(sd); }
+    }
     public static void RestoreMandatoryLabel(string path, string originalSddl) {
         if (String.IsNullOrEmpty(path) || String.IsNullOrEmpty(originalSddl))
             throw new ArgumentException("TURBO_EXISTING_SDDL_ARGS");

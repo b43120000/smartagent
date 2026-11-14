@@ -286,6 +286,8 @@ CORE_FILES = (
     'install_smart_agent/turbo_existing_root_snapshot.ps1',
     'install_smart_agent/turbo_existing_root_prepare.ps1',
     'source/agent_core/task_workspace_resolver.py',
+    'install_smart_agent/turbo_existing_security.cs',
+    'install_smart_agent/turbo_existing_root_import.ps1',
     'install_smart_agent/turbo_os_execute.ps1',
     'install_smart_agent/turbo_appcontainer_probe.cs',
     'source/RemoteAgent/telegram_artifacts.py',
