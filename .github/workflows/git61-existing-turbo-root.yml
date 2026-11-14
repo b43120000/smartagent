@@ -1,0 +1,80 @@
+name: Git61 Existing Turbo Root Native Enrollment
+
+on:
+  push:
+    branches: [git61]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    name: Git61 Python and PowerShell syntax
+    runs-on: windows-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Python Workspace Manager syntax
+        run: |
+          python -m py_compile source/agent_core/workspace_manager.py
+          if ($LASTEXITCODE -ne 0) { throw 'GIT61_PYTHON_PARSE_FAILED' }
+      - name: Parse all protected native scripts
+        run: |
+          foreach ($path in @(
+            'install_smart_agent/turbo_existing_root_activate.ps1',
+            'install_smart_agent/turbo_existing_root_import.ps1',
+            'install_smart_agent/turbo_existing_root_snapshot.ps1',
+            'install_smart_agent/turbo_existing_root_prepare.ps1',
+            'install_smart_agent/turbo_os_activation.ps1',
+            'install_smart_agent/tests/validate_turbo_git61_existing_root_ci.ps1'
+          )) {
+            $tokens=$null; $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('GIT61_POWERSHELL_PARSE_FAILED:'+$path)
+            }
+          }
+      - name: Compile native AppContainer process probe
+        run: |
+          Add-Type -Path 'install_smart_agent/turbo_appcontainer_probe.cs' -ErrorAction Stop
+          Add-Type -Path 'install_smart_agent/turbo_existing_security.cs' -ErrorAction Stop
+          Write-Host 'GIT61_NATIVE_TYPES_COMPILED'
+
+  native-existing-root:
+    name: Native import, preservation, OS isolation, exact SDDL rollback
+    runs-on: windows-latest
+    needs: syntax
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm disposable elevated Windows runner
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') {
+            throw 'GIT61_RUNNER_UNTRUSTED'
+          }
+          $p=[Security.Principal.WindowsPrincipal]::new(
+            [Security.Principal.WindowsIdentity]::GetCurrent())
+          if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'GIT61_ADMINISTRATOR_REQUIRED'
+          }
+      - name: Git61 new direct-existing import and original-content preservation
+        run: |
+          .\install_smart_agent\tests\validate_turbo_git61_existing_root_ci.ps1
+      - name: Existing D3 importer and revocation backward-compatibility
+        run: |
+          .\install_smart_agent\tests\validate_turbo_d3_existing_import_ci.ps1
+      - name: Existing Broker-to-root safe switch compatibility
+        run: |
+          .\install_smart_agent\tests\validate_turbo_d3_full_switch_ci.ps1
