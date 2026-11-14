@@ -79,7 +79,11 @@ Git62 workflow runs isolated Python routing/manager/WebGPT tests and an
 elevated disposable Windows real OS integration. Windows must enroll TWO
 existing populated Roots with distinct Package SIDs, run a protected Broker
 command inside EACH Root, reject cross-root write, revoke A while preserving
-B's operation, revoke ALL, and verify original file hashes and NTFS SDDL.
+B's operation, revoke ALL, and verify original file hashes and the
+original ACE, owner and group security rights. Windows may add the metadata-only
+D:AI inherited-DACL marker; CI reports this deviation separately rather than
+claiming byte-identical SDDL. Shared Workspace ancestors preserve their original
+security baseline until the last dependent SID is revoked.
 
 This document describes intended behavior. PASS must be taken from matching
 GitHub Actions Windows job evidence, not inferred from source code or
