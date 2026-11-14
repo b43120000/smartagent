@@ -495,6 +495,17 @@ def _initialize_security_profile() -> int:
     return int(result.returncode)
 
 
+
+def _is_strict_turbo_child(path: str | Path, workspace: str | Path) -> bool:
+    """Only the exact nominated writable Workspace may enroll this Root."""
+    try:
+        target = Path(path).expanduser().resolve()
+        parent = Path(workspace).expanduser().resolve()
+        return target != parent and parent in target.parents
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 def _security_menu() -> int:
     software_only = _acl_off_enabled()
     if not software_only and not _is_admin():
@@ -561,7 +572,7 @@ def _security_menu() -> int:
             except (ValueError, IndexError):
                 print("[!] Invalid index.")
         elif choice == "5":
-            path = str(Path(input("Turbo path (new workspace child, not an existing project): ").strip().strip('"')).expanduser().resolve())
+            path = str(Path(input("Turbo path (existing directory or unused Workspace child): ").strip().strip('"')).expanduser().resolve())
             denied = profile.get("denied_write_roots") or ()
             if not any(is_valid_turbo_root(path, root, writable, read_only, denied)
                        for root in writable):
@@ -576,43 +587,115 @@ def _security_menu() -> int:
                 print("[!] Invalid Turbo index.")
         elif choice == "7":
             try:
-                # Do not partially mutate workspaces before discovering ACL OFF.
                 if turbo and acl_mode() != "on":
                     raise ValueError("TURBO_REQUIRES_ACL_ON")
-                if turbo and not software_only:
-                    if len(turbo) != 1:
-                        raise RuntimeError("turbo_native_single_root_required")
-                    active_journal = (
-                        AGENT_PROJECT_ROOT / "localdata" / "secure"
-                        / "windows_security" / "turbo_os_activation.json"
+                if turbo and not software_only and len(turbo) != 1:
+                    raise RuntimeError("turbo_native_single_root_required")
+                access_changed = (
+                    {_path_key(v) for v in writable} !=
+                    {_path_key(v) for v in baseline[0]}
+                    or {_path_key(v) for v in read_only} !=
+                    {_path_key(v) for v in baseline[1]}
+                )
+                turbo_changed = (
+                    {_path_key(v) for v in turbo} !=
+                    {_path_key(v) for v in baseline[2]}
+                )
+                active_journal = (
+                    AGENT_PROJECT_ROOT / "localdata" / "secure"
+                    / "windows_security" / "turbo_os_activation.json"
+                )
+                pending_import = active_journal.with_name(
+                    "turbo_existing_root_import.json"
+                )
+                pending_switch = active_journal.with_name(
+                    "turbo_existing_root_switch.json"
+                )
+                if (access_changed or turbo_changed) and active_journal.exists():
+                    raise RuntimeError(
+                        "TURBO_ACTIVE_BROKER_REQUIRES_VERIFIED_REVOKE_OR_SWITCH:"
+                        "never overwrite a live Broker policy from Workspace Manager"
                     )
-                    if Path(turbo[0]).exists() and not active_journal.is_file():
+                if pending_import.exists() or pending_switch.exists():
+                    if access_changed or turbo_changed or (
+                        turbo and not active_journal.exists()
+                    ):
                         raise RuntimeError(
-                            "TURBO_AUTOSTART_EXISTING_ROOT_IMPORT_UNSUPPORTED:"
-                            "existing files and ACLs are untouched; use a "
-                            "brand-new, nonexistent Turbo child root"
+                            "TURBO_PENDING_TRANSACTION_REQUIRES_VERIFIED_RECOVERY"
                         )
+                needs_activation = bool(turbo and not active_journal.exists())
+                if not access_changed and not turbo_changed and not needs_activation:
+                    print("[OK] Workspace/Turbo policy unchanged; no ACL reconfiguration.")
+                    return 0
+                existing_import = bool(
+                    needs_activation and not software_only and
+                    Path(turbo[0]).is_dir()
+                )
+                if turbo and Path(turbo[0]).exists() and not Path(turbo[0]).is_dir():
+                    raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY")
+                if existing_import:
+                    # Only this elevated human-operated manager may trigger an
+                    # existing-tree import. A Telegram setting is not a grant.
+                    print("\n[Turbo] Existing project directory selected:")
+                    print("  " + turbo[0])
+                    print("[Turbo] Native AppContainer import will snapshot and")
+                    print("        change NTFS ACL/Integrity Labels; file contents")
+                    print("        and the existing directory will NOT be replaced.")
+                    confirmation = input(
+                        "Confirm by entering the exact Turbo path: "
+                    ).strip().strip('"')
+                    if confirmation.casefold() != str(turbo[0]).casefold():
+                        raise RuntimeError(
+                            "TURBO_EXISTING_ROOT_EXACT_CONFIRMATION_REQUIRED"
+                        )
+                # Re-running Configure Security when access roots have NOT
+                # changed can rewrite existing project ACLs before the
+                # immutable pre-import security snapshot. Avoid that entirely.
                 return_code = (
-                    _apply_software_only_access(writable, read_only, profile)
-                    if software_only
-                    else _apply_access(writable, read_only, profile)
+                    (_apply_software_only_access(writable, read_only, profile)
+                     if software_only else _apply_access(writable, read_only, profile))
+                    if access_changed else 0
                 )
                 if return_code == 0:
-                    save_turbo_roots(turbo)
+                    if access_changed or turbo_changed:
+                        save_turbo_roots(turbo)
                     if set(map(_path_key, load_workspace_access_policy()["turbo_roots"])) != set(map(_path_key, turbo)):
                         raise RuntimeError("turbo_root_apply_postcondition_failed")
-                    if turbo:
-                        # Existing-root import is intentionally unsupported:
-                        # never silently widen the DACL of a populated project.
-                        # The native activator must attest its newly enrolled
-                        # scoped root; a requested preference alone is not ON.
-                        auto = AGENT_PROJECT_ROOT / "install_smart_agent" / "turbo_auto_activate.ps1"
-                        if not auto.is_file():
-                            raise RuntimeError("turbo_native_autostart_script_missing")
+                    if needs_activation:
+                        if existing_import:
+                            native_script = (
+                                AGENT_PROJECT_ROOT / "install_smart_agent"
+                                / "turbo_existing_root_activate.ps1"
+                            )
+                            selected_workspace = next(
+                                (root for root in writable
+                                 if _is_strict_turbo_child(turbo[0], root)),
+                                None,
+                            )
+                            if not selected_workspace:
+                                raise RuntimeError("TURBO_EXISTING_ROOT_WORKSPACE_NOT_UNIQUE")
+                            native_args = [
+                                "-Action", "Activate",
+                                "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                                "-Workspace", selected_workspace,
+                                "-TurboRoot", turbo[0],
+                                "-ConfirmTarget", confirmation,
+                            ]
+                        else:
+                            native_script = (
+                                AGENT_PROJECT_ROOT / "install_smart_agent"
+                                / "turbo_auto_activate.ps1"
+                            )
+                            native_args = [
+                                "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                                "-Action", "Apply",
+                            ]
+                        if not native_script.is_file():
+                            raise RuntimeError("turbo_native_activation_script_missing")
                         native = subprocess.run(
                             ["powershell", "-NoProfile", "-NonInteractive",
-                             "-ExecutionPolicy", "Bypass", "-File", str(auto),
-                             "-ProjectRoot", str(AGENT_PROJECT_ROOT), "-Action", "Apply"],
+                             "-ExecutionPolicy", "Bypass", "-File", str(native_script),
+                             *native_args],
                             cwd=str(AGENT_PROJECT_ROOT), check=False,
                             capture_output=True, text=True, encoding="utf-8",
                             errors="replace",
@@ -627,9 +710,9 @@ def _security_menu() -> int:
                         )
                         if native.returncode != 0:
                             raise RuntimeError(
-                                "turbo_os_activation_failed:"
-                                "the ACL/Executor Apply succeeded but Turbo broker "
-                                "was NOT activated; see native error above"
+                                "turbo_native_activation_failed:"
+                                "policy may remain requested but Broker is NOT"
+                                " verified; see native error/recovery journal"
                             )
                 print(f"\nAPPLY_EXIT_CODE={return_code}")
                 _write_apply_log(f"APPLY_MENU_RESULT code={return_code}")
