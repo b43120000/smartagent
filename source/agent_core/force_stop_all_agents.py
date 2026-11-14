@@ -281,7 +281,11 @@ def _apply_git_upgrade(root: Path, commit: str) -> None:
     turbo_requested = policy.get("turbo_requested") is True
 
     def turbo_ready():
-        return any(active_broker_available(parent) for parent in policy["writable_workspaces"])
+        # Multi-root native SIDs are selected by their exact policy-owned Root,
+        # not by the common writable Workspace parent. Require ALL configured
+        # Roots to have current, individually verified Native enrollment.
+        roots = tuple(policy.get("turbo_roots") or ())
+        return bool(roots) and all(active_broker_available(root) for root in roots)
 
     needs_restore = status == "MATCH" and (
         acl_mode(profile, allow_on_transition=True) == "transitioning_on"
