@@ -588,10 +588,22 @@ def _security_menu() -> int:
                 print("[!] Invalid Turbo index.")
         elif choice == "7":
             try:
+                from .turbo_root_registry import (
+                    journal_path as per_root_journal, validate_root_set,
+                )
                 if turbo and acl_mode() != "on":
                     raise ValueError("TURBO_REQUIRES_ACL_ON")
-                if turbo and not software_only and len(turbo) != 1:
-                    raise RuntimeError("turbo_native_single_root_required")
+                validate_root_set(turbo)
+                denied = profile.get("denied_write_roots") or ()
+                for candidate in turbo:
+                    if not any(
+                        is_valid_turbo_root(
+                            candidate, owner, writable, read_only, denied
+                        ) for owner in writable
+                    ):
+                        raise RuntimeError(
+                            "TURBO_ROOT_OUTSIDE_AUTHORIZED_WORKSPACE:" + candidate
+                        )
                 access_changed = (
                     {_path_key(v) for v in writable} !=
                     {_path_key(v) for v in baseline[0]}
@@ -602,138 +614,228 @@ def _security_menu() -> int:
                     {_path_key(v) for v in turbo} !=
                     {_path_key(v) for v in baseline[2]}
                 )
-                active_journal = (
+                prior_policy = load_workspace_access_policy()
+                request_changed = bool(turbo) != (
+                    prior_policy.get("turbo_requested") is True
+                )
+                security_dir = (
                     AGENT_PROJECT_ROOT / "localdata" / "secure"
-                    / "windows_security" / "turbo_os_activation.json"
+                    / "windows_security"
                 )
-                pending_import = active_journal.with_name(
-                    "turbo_existing_root_import.json"
+                legacy_journal = security_dir / "turbo_os_activation.json"
+                multi_dir = security_dir / "turbo_root_activations"
+                pending = (
+                    security_dir / "turbo_existing_root_import.json",
+                    security_dir / "turbo_existing_root_switch.json",
                 )
-                pending_switch = active_journal.with_name(
-                    "turbo_existing_root_switch.json"
-                )
-                refresh_broker = access_changed and not turbo_changed and active_journal.is_file()
-                if (access_changed or turbo_changed) and active_journal.exists() and not refresh_broker:
+                if any(path.exists() for path in pending):
                     raise RuntimeError(
-                        "TURBO_ACTIVE_BROKER_REQUIRES_VERIFIED_REVOKE_OR_SWITCH:"
-                        "never overwrite a live Broker policy from Workspace Manager"
+                        "TURBO_PENDING_TRANSACTION_REQUIRES_VERIFIED_RECOVERY"
                     )
-                if pending_switch.exists() or (pending_import.exists() and not refresh_broker):
-                    if access_changed or turbo_changed or (
-                        turbo and not active_journal.exists()
-                    ):
+                if multi_dir.exists() and (
+                    not multi_dir.is_dir() or multi_dir.is_symlink()
+                ):
+                    raise RuntimeError("TURBO_MULTI_ROOT_JOURNAL_DIR_UNTRUSTED")
+                journals = sorted(multi_dir.glob("activation-*.json")) if (
+                    multi_dir.is_dir()) else []
+                if any(path.is_symlink() or not path.is_file()
+                       for path in journals):
+                    raise RuntimeError("TURBO_MULTI_ROOT_JOURNAL_UNTRUSTED")
+                current_roots = {
+                    _path_key(path) for path in turbo
+                }
+                active_roots: dict[str, str] = {}
+                for path in journals:
+                    try:
+                        record = json.loads(path.read_text(encoding="utf-8-sig"))
+                        root = str(record["turbo_root"])
+                        if per_root_journal(security_dir, root) != path or (
+                            record.get("schema") !=
+                            "SMARTAGENT_TURBO_OS_ACTIVATION_V1"
+                        ):
+                            raise ValueError("journal mismatch")
+                        active_roots[_path_key(root)] = root
+                    except (OSError, TypeError, ValueError, KeyError) as exc:
                         raise RuntimeError(
-                            "TURBO_PENDING_TRANSACTION_REQUIRES_VERIFIED_RECOVERY"
-                        )
-                needs_activation = bool(turbo and (refresh_broker or not active_journal.exists()))
-                policy_requested = load_workspace_access_policy().get("turbo_requested") is True
-                request_changed = bool(turbo) != policy_requested
-                if not access_changed and not turbo_changed and not needs_activation and not request_changed:
-                    print("[OK] Workspace/Turbo policy unchanged; no ACL reconfiguration.")
-                    return 0
-                existing_import = bool(
-                    needs_activation and not software_only and
-                    Path(turbo[0]).is_dir()
+                            "TURBO_MULTI_ROOT_JOURNAL_UNVERIFIED"
+                        ) from exc
+                # When an old single-root Broker is already active, an
+                # operator-authorized multi-root change must first revoke it.
+                # No live activation journal is overwritten or migrated
+                # without rollback. The original root remains on disk.
+                legacy_active = legacy_journal.is_file()
+                legacy_migration_needed = bool(
+                    legacy_active and (
+                        access_changed or turbo_changed or len(turbo) > 1
+                    )
                 )
-                if turbo and Path(turbo[0]).exists() and not Path(turbo[0]).is_dir():
-                    raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY")
-                if existing_import:
+                removed_active = [
+                    root for key, root in active_roots.items()
+                    if key not in current_roots or access_changed
+                ]
+                # Even an interrupted import without a completed activation
+                # prevents unguarded admission of this target.
+                for root in turbo:
+                    from .turbo_root_registry import import_journal_path
+                    imported = import_journal_path(security_dir, root)
+                    activated = per_root_journal(security_dir, root)
+                    if imported.is_file() and not activated.is_file():
+                        raise RuntimeError(
+                            "TURBO_PENDING_IMPORT_REQUIRES_RECOVERY:" + root
+                        )
+                needs_enrollment = [
+                    root for root in turbo
+                    if not per_root_journal(security_dir, root).is_file()
+                    and not (
+                        legacy_active and not legacy_migration_needed
+                        and len(turbo) == 1
+                        and _path_key(root) in {
+                            _path_key(v) for v in baseline[2]
+                        }
+                    )
+                ]
+                if not (access_changed or turbo_changed or request_changed
+                        or legacy_migration_needed or removed_active
+                        or needs_enrollment):
+                    print("[OK] All registered Turbo Roots unchanged.")
+                    return 0
+                print("\n[Git62] Multi-root Native AppContainer Apply")
+                print("    Registered Roots: " + str(len(turbo)))
+                print("    New enrollments: " + str(len(needs_enrollment)))
+                print("    Roots to revoke: " + str(len(removed_active)))
+                if legacy_migration_needed:
+                    print("    Legacy Broker: revoke and re-enroll safely")
+                print("    Existing folders retain their contents; Native")
+                print("    enrollment adjusts NTFS DACL / Integrity Labels.")
+                if input("Type APPLY to confirm all listed changes: ").strip() != "APPLY":
+                    return 1
+
+                def invoke_native(script: str, *args: str) -> None:
+                    target = (
+                        AGENT_PROJECT_ROOT / "install_smart_agent" / script
+                    )
+                    if not target.is_file():
+                        raise RuntimeError(
+                            "TURBO_NATIVE_SCRIPT_MISSING:" + script
+                        )
+                    result = subprocess.run(
+                        ["powershell", "-NoProfile", "-NonInteractive",
+                         "-ExecutionPolicy", "Bypass", "-File",
+                         str(target), *args],
+                        cwd=str(AGENT_PROJECT_ROOT), check=False,
+                        capture_output=True, text=True,
+                        encoding="utf-8", errors="replace",
+                    )
+                    if result.stdout:
+                        print(result.stdout, end="")
+                    if result.stderr:
+                        print(result.stderr, end="", file=sys.stderr)
+                    _write_apply_log(
+                        f"GIT62_NATIVE script={script} code={result.returncode}"
+                        f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            "TURBO_NATIVE_OPERATION_FAILED:"
+                            + script + ":" + str(result.returncode)
+                        )
+
+                # Native revocation is mandatory BEFORE removing an active
+                # Root from the registry. No policy-only removal of OS grants.
+                if legacy_migration_needed:
+                    invoke_native(
+                        "turbo_os_activation.ps1", "-Action", "Revoke",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT)
+                    )
+                    if legacy_journal.exists():
+                        raise RuntimeError(
+                            "TURBO_LEGACY_BROKER_REVOCATION_NOT_VERIFIED"
+                        )
+                    legacy_active = False
+                for root in removed_active:
+                    invoke_native(
+                        "turbo_os_activation.ps1", "-Action", "Revoke",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-TurboRoot", root,
+                    )
+                    if per_root_journal(security_dir, root).exists():
+                        raise RuntimeError(
+                            "TURBO_REMOVED_ROOT_STILL_ENROLLED:" + root
+                        )
+
+                if access_changed:
+                    code = (
+                        _apply_software_only_access(
+                            writable, read_only, profile
+                        ) if software_only else
+                        _apply_access(writable, read_only, profile)
+                    )
+                    if code != 0:
+                        return code
+                if access_changed or turbo_changed or request_changed:
+                    save_turbo_roots(turbo)
+                actual = load_workspace_access_policy()
+                if {_path_key(p) for p in actual["turbo_roots"]} != current_roots:
+                    raise RuntimeError("TURBO_MULTI_ROOT_POLICY_POSTCONDITION_FAILED")
+
+                # Existing active SIDs have to be independently re-attested
+                # against the *new* policy revision before their journals
+                # are rebound; otherwise they remain fail-closed.
+                if multi_dir.exists() and list(
+                    multi_dir.glob("activation-*.json")
+                ):
+                    invoke_native(
+                        "turbo_multi_root_rebind.ps1",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                    )
+                for root in turbo:
+                    activation = per_root_journal(security_dir, root)
+                    if activation.is_file():
+                        continue
+                    if legacy_active and legacy_journal.is_file():
+                        continue
+                    if Path(root).exists() and not Path(root).is_dir():
+                        raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY:" + root)
                     matching_workspaces = [
-                        root for root in writable
-                        if _is_strict_turbo_child(turbo[0], root)
+                        owner for owner in writable
+                        if _is_strict_turbo_child(root, owner)
                     ]
                     if len(matching_workspaces) != 1:
-                        raise RuntimeError("TURBO_EXISTING_ROOT_WORKSPACE_NOT_UNIQUE")
-                    selected_workspace = matching_workspaces[0]
-                    # Only this elevated human-operated manager may trigger an
-                    # existing-tree import. A Telegram setting is not a grant.
-                    print("\n[Turbo] Existing project directory selected:")
-                    print("  " + turbo[0])
-                    print("[Turbo] Native AppContainer import will snapshot and")
-                    print("        change NTFS ACL/Integrity Labels; file contents")
-                    print("        and the existing directory will NOT be replaced.")
-                if (existing_import or (access_changed and not software_only)) and input(
-                    "Type APPLY to confirm these security changes: "
-                ).strip() != "APPLY":
-                    return 1
-                if refresh_broker:
-                    denied = profile.get("denied_write_roots") or ()
-                    for target in turbo:
-                        if not any(is_valid_turbo_root(target, parent, writable, read_only, denied)
-                                   for parent in writable):
-                            raise ValueError("turbo_root_conflicts_with_workspace_changes")
-                    subprocess.run(
-                        ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                         "-File", str(AGENT_PROJECT_ROOT / "install_smart_agent/turbo_os_activation.ps1"),
-                         "-Action", "Revoke", "-ProjectRoot", str(AGENT_PROJECT_ROOT)],
-                        cwd=AGENT_PROJECT_ROOT, check=True,
-                    )
-                    if active_journal.exists() or pending_import.exists() or pending_switch.exists():
-                        raise RuntimeError("workspace_apply_turbo_revocation_unconfirmed")
-                # Re-running Configure Security when access roots have NOT
-                # changed can rewrite existing project ACLs before the
-                # immutable pre-import security snapshot. Avoid that entirely.
-                return_code = (
-                    (_apply_software_only_access(writable, read_only, profile)
-                     if software_only else _apply_access(writable, read_only, profile))
-                    if access_changed else 0
-                )
-                if return_code == 0:
-                    if access_changed or turbo_changed or request_changed:
-                        save_turbo_roots(turbo)
-                    if set(map(_path_key, load_workspace_access_policy()["turbo_roots"])) != set(map(_path_key, turbo)):
-                        raise RuntimeError("turbo_root_apply_postcondition_failed")
-                    if needs_activation:
-                        if existing_import:
-                            native_script = (
-                                AGENT_PROJECT_ROOT / "install_smart_agent"
-                                / "turbo_existing_root_activate.ps1"
-                            )
-                            native_args = [
-                                "-Action", "Activate",
-                                "-ProjectRoot", str(AGENT_PROJECT_ROOT),
-                                "-Workspace", selected_workspace,
-                                "-TurboRoot", turbo[0],
-                                "-ConfirmTarget", turbo[0],
-                            ]
-                        else:
-                            native_script = (
-                                AGENT_PROJECT_ROOT / "install_smart_agent"
-                                / "turbo_auto_activate.ps1"
-                            )
-                            native_args = [
-                                "-ProjectRoot", str(AGENT_PROJECT_ROOT),
-                                "-Action", "Apply",
-                            ]
-                        if not native_script.is_file():
-                            raise RuntimeError("turbo_native_activation_script_missing")
-                        native = subprocess.run(
-                            ["powershell", "-NoProfile", "-NonInteractive",
-                             "-ExecutionPolicy", "Bypass", "-File", str(native_script),
-                             *native_args],
-                            cwd=str(AGENT_PROJECT_ROOT), check=False,
-                            capture_output=True, text=True, encoding="utf-8",
-                            errors="replace",
+                        raise RuntimeError(
+                            "TURBO_ROOT_AUTHORIZATION_WORKSPACE_AMBIGUOUS:" + root
                         )
-                        if native.stdout:
-                            print(native.stdout, end="")
-                        if native.stderr:
-                            print(native.stderr, end="", file=sys.stderr)
-                        _write_apply_log(
-                            f"TURBO_NATIVE_ACTIVATION_EXIT code={native.returncode}"
-                            f"\nSTDOUT:\n{native.stdout}\nSTDERR:\n{native.stderr}"
+                    owner = matching_workspaces[0]
+                    if Path(root).is_dir():
+                        invoke_native(
+                            "turbo_existing_root_activate.ps1",
+                            "-Action", "Activate",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Workspace", owner,
+                            "-TurboRoot", root,
+                            "-ConfirmTarget", root,
                         )
-                        if native.returncode != 0:
-                            raise RuntimeError(
-                                "turbo_native_activation_failed:"
-                                "policy may remain requested but Broker is NOT"
-                                " verified; see native error/recovery journal"
-                            )
-                print(f"\nAPPLY_EXIT_CODE={return_code}")
-                _write_apply_log(f"APPLY_MENU_RESULT code={return_code}")
-                return return_code
+                    else:
+                        invoke_native(
+                            "turbo_auto_activate.ps1",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Action", "Apply",
+                            "-TurboRoot", root,
+                        )
+                    if not (
+                        activation.is_file() or (
+                            len(turbo) == 1 and legacy_journal.is_file()
+                        )
+                    ):
+                        raise RuntimeError(
+                            "TURBO_NATIVE_ENROLLMENT_JOURNAL_MISSING:" + root
+                        )
+                print(f"\nAPPLY_EXIT_CODE=0 roots={len(turbo)}")
+                _write_apply_log("GIT62_MULTI_ROOT_APPLY_PASS")
+                return 0
             except Exception as exc:
-                _write_apply_log(f"APPLY_EXCEPTION type={type(exc).__name__} message={exc}")
+                _write_apply_log(
+                    f"GIT62_APPLY_EXCEPTION type={type(exc).__name__} message={exc}"
+                )
                 print(f"\nAPPLY_EXCEPTION: {type(exc).__name__}: {exc}")
                 return 1
             finally:
