@@ -667,13 +667,13 @@ def _security_menu() -> int:
                                 AGENT_PROJECT_ROOT / "install_smart_agent"
                                 / "turbo_existing_root_activate.ps1"
                             )
-                            selected_workspace = next(
-                                (root for root in writable
-                                 if _is_strict_turbo_child(turbo[0], root)),
-                                None,
-                            )
-                            if not selected_workspace:
+                            matching_workspaces = [
+                                root for root in writable
+                                if _is_strict_turbo_child(turbo[0], root)
+                            ]
+                            if len(matching_workspaces) != 1:
                                 raise RuntimeError("TURBO_EXISTING_ROOT_WORKSPACE_NOT_UNIQUE")
+                            selected_workspace = matching_workspaces[0]
                             native_args = [
                                 "-Action", "Activate",
                                 "-ProjectRoot", str(AGENT_PROJECT_ROOT),
