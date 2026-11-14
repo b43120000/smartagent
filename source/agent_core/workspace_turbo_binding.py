@@ -31,7 +31,7 @@ def turbo_mode_for_workspace(workspace: str | Path) -> str:
         for path in policy.get("turbo_roots") or ()
         if _under(path, workspace)
     ]
-    return roots[0] if roots and policy.get("turbo_requested") is True else "off"
+    return ";".join(roots) if roots and policy.get("turbo_requested") is True else "off"
 
 
 def prepare_turbo_mode_update(mode: str | None, workspace: str | Path) -> dict | None:
@@ -47,8 +47,16 @@ def prepare_turbo_mode_update(mode: str | None, workspace: str | Path) -> dict |
     if not raw:
         raise ValueError("turbomode_value_required")
     disabled = raw.casefold() == "off"
-    if not disabled:
-        # Preflight before any Workspace/Telegram binding mutation.
+    existing = [str(p) for p in policy.get("turbo_roots") or ()]
+    local = [p for p in existing if _under(p, parent)]
+    other = [p for p in existing if not _under(p, parent)]
+    chosen = "off"
+    if disabled:
+        proposed = other
+    else:
+        # One path means ADD; a semicolon-delimited form is a complete
+        # replacement of THIS Workspace's list. '-<absolute path>' removes
+        # just one root. Registrations never install NTFS grants by themselves.
         from .windows_security import acl_mode
         try:
             current_acl = acl_mode()
@@ -56,21 +64,38 @@ def prepare_turbo_mode_update(mode: str | None, workspace: str | Path) -> dict |
             current_acl = "unknown"
         if current_acl != "on":
             raise ValueError("TURBO_REQUIRES_ACL_ON")
-        target = Path(raw).expanduser()
-        if not target.is_absolute():
-            raise ValueError("turbo_absolute_path_required")
-        if not is_valid_turbo_root(
-            target, parent, writable,
-            policy.get("read_only_roots") or (),
-            policy.get("denied_write_roots") or (),
-        ):
-            raise ValueError("turbo_root_not_strict_writable_workspace_child")
-        chosen = str(target.absolute())
-    else:
-        chosen = "off"
-    # Other workspaces' Turbo settings must not be removed by this form.
-    retained = [p for p in policy.get("turbo_roots") or () if not _under(p, parent)]
-    proposed = retained + ([] if disabled else [chosen])
+        is_removal = raw.startswith("-")
+        exact_list = ";" in raw and not is_removal
+        items = (
+            [item.strip() for item in raw.split(";") if item.strip()]
+            if exact_list else [raw[1:].strip() if is_removal else raw]
+        )
+        if not items:
+            raise ValueError("turbomode_value_required")
+        target_paths: list[str] = []
+        for item in items:
+            target = Path(item).expanduser()
+            if not target.is_absolute():
+                raise ValueError("turbo_absolute_path_required")
+            if not is_removal and not is_valid_turbo_root(
+                target, parent, writable,
+                policy.get("read_only_roots") or (),
+                policy.get("denied_write_roots") or (),
+            ):
+                raise ValueError("turbo_root_not_strict_writable_workspace_child")
+            target_paths.append(str(target.absolute()))
+        if is_removal:
+            if len(target_paths) != 1:
+                raise ValueError("turbomode_single_removal_required")
+            local = [p for p in local
+                     if p.casefold() != target_paths[0].casefold()]
+        elif exact_list:
+            local = target_paths
+        else:
+            if all(p.casefold() != target_paths[0].casefold() for p in local):
+                local.append(target_paths[0])
+        chosen = ";".join(local) if local else "off"
+        proposed = other + local
     return {
         "mode": chosen,
         "workspace": str(parent),
