@@ -36,7 +36,7 @@ jobs:
       - name: Test Python routing and multi-root Workspace Apply
         run: |
           python -m pip install --disable-pip-version-check pytest playwright
-          python -B -m pytest -q source/WebAgent/tests/test_git62_multi_root_routing.py source/WebAgent/tests/test_git62_multi_root_manager.py source/WebAgent/tests/test_git44_telegram_turbo_binding_manager.py
+          python -B -m pytest -q source/WebAgent/tests/test_git62_multi_root_routing.py source/WebAgent/tests/test_git62_multi_root_manager.py source/WebAgent/tests/test_git62_multi_root_telegram.py
 
   windows-native:
     name: Two AppContainer SIDs and kernel cross-root denial
