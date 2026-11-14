@@ -2,6 +2,11 @@
 setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
+for %%I in ("%~dp0.") do set "SMARTAGENT_INSTALL_ROOT=%%~fI"
+if not exist "%SMARTAGENT_INSTALL_ROOT%\config\protocol_manifest.json" (
+    echo [SmartAgent] ERROR install_root_missing_protocol_manifest: "%SMARTAGENT_INSTALL_ROOT%"
+    exit /b 2
+)
 set "SMARTAGENT_SOURCE=%~dp0source"
 if not exist "%SMARTAGENT_SOURCE%\agent_core\__init__.py" (
     echo [SmartAgent] ERROR Canonical source is missing: %SMARTAGENT_SOURCE%
@@ -79,7 +84,8 @@ if defined LAUNCHER_SELF_TEST (
     endlocal & exit /b 0
 )
 echo [SmartAgent] Stopping LocalAgent, WebAgent, RemoteAgent, monitors and workers...
-"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%~dp0." %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS%
+echo [SmartAgent] Install Root: "%SMARTAGENT_INSTALL_ROOT%"
+"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%SMARTAGENT_INSTALL_ROOT%" %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS%
 set "STOP_EXIT=%errorlevel%"
 if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
@@ -92,7 +98,7 @@ if defined RECOVER_TURBO_ROOT (
         echo [SmartAgent Turbo] Recovery BLOCKED: force stop or Git upgrade did not pass.
     ) else (
         echo [SmartAgent Turbo] Explicit Native Recovery requested for "%RECOVER_TURBO_ROOT%".
-        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\turbo_pending_import_recovery.ps1" -ProjectRoot "%~dp0." -TurboRoot "%RECOVER_TURBO_ROOT%"
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\turbo_pending_import_recovery.ps1" -ProjectRoot "%SMARTAGENT_INSTALL_ROOT%" -TurboRoot "%RECOVER_TURBO_ROOT%"
         if errorlevel 1 (
             echo [SmartAgent Turbo] Recovery FAILED. Journal retained unless Native rollback completed.
             set "STOP_EXIT=2"
