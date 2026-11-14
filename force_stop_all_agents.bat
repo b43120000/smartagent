@@ -25,6 +25,7 @@ if not exist "%SMARTAGENT_PYTHON%" (
 set "NO_PAUSE="
 set "EXCLUDE_PID_ARGS="
 set "AFTER_UPDATE_ARGS="
+set "RECOVER_TURBO_ROOT="
 set "LAUNCHER_SELF_TEST="
 :parse_args
 if "%~1"=="" goto args_parsed
@@ -48,6 +49,17 @@ if /I "%~1"=="--exclude-pid" (
     shift
     goto parse_args
 )
+if /I "%~1"=="--recover-turbo-import" (
+    if "%~2"=="" (
+        echo [SmartAgent] ERROR --recover-turbo-import requires an exact Turbo Root.
+        endlocal & exit /b 64
+    )
+    set "RECOVER_TURBO_ROOT=%~2"
+    shift
+    shift
+    goto parse_args
+)
+
 if /I "%~1"=="--after-git-update" (
     if "%~2"=="" (
         echo [SmartAgent] ERROR --after-git-update requires a full commit SHA.
@@ -73,6 +85,21 @@ if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
 ) else (
     echo [SmartAgent] Force stop completed with errors. exit_code=%STOP_EXIT%
+)
+
+if defined RECOVER_TURBO_ROOT (
+    if not "%STOP_EXIT%"=="0" (
+        echo [SmartAgent Turbo] Recovery BLOCKED: force stop or Git upgrade did not pass.
+    ) else (
+        echo [SmartAgent Turbo] Explicit Native Recovery requested for "%RECOVER_TURBO_ROOT%".
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\turbo_pending_import_recovery.ps1" -ProjectRoot "%~dp0." -TurboRoot "%RECOVER_TURBO_ROOT%"
+        if errorlevel 1 (
+            echo [SmartAgent Turbo] Recovery FAILED. Journal retained unless Native rollback completed.
+            set "STOP_EXIT=2"
+        ) else (
+            echo [SmartAgent Turbo] Recovery completed; check Native Recovery receipt above.
+        )
+    )
 )
 
 if not defined NO_PAUSE pause
