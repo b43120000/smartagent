@@ -56,14 +56,16 @@ def run_bounded_process(
     # Git49 OS Broker admission. This runs before selecting any executor,
     # so neither direct host subprocess nor a stale service can be a fallback.
     from .turbo_broker_admission import assess
-    # cwd is an execution location, not a Workspace authorization identity.
-    # Obtain the only eligible parent from protected policy, never command text.
+    # Git62: multi-root admission MUST use the exact action CWD.  The
+    # writable Workspace is an authorization parent, not the Turbo Root
+    # selector.  Substituting it here loses the selected AppContainer SID
+    # and incorrectly blocks all commands with MULTI_ROOT_CWD_REQUIRED.
+    # The Broker independently checks the enrollment and root on execution.
+    broker = assess(cwd, tool="run_command")
+    # Parent is consulted only for the legacy single-root CWD boundary check;
+    # it must NEVER replace the action CWD in admission.
     from .workspace_access import resolve_turbo_authorization_workspace
     authorization_workspace = resolve_turbo_authorization_workspace(cwd)
-    broker = assess(
-        authorization_workspace if authorization_workspace is not None else cwd,
-        tool="run_command",
-    )
     def reject_broker(reason: str) -> dict:
         return {
             "exit_code": None, "stdout": "", "stderr": "",
