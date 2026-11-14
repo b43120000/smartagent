@@ -507,6 +507,33 @@ def _is_strict_turbo_child(path: str | Path, workspace: str | Path) -> bool:
         return False
 
 
+def _completed_legacy_turbo_import(
+    imported: Path, activation: Path, install: Path, revision: int
+) -> bool:
+    from .path_security import is_reparse_path
+
+    try:
+        if any(is_reparse_path(path) for path in (imported, activation)):
+            return False
+        old = json.loads(imported.read_text(encoding="utf-8-sig"))
+        live = json.loads(activation.read_text(encoding="utf-8-sig"))
+        return bool(
+            old["schema"] == "SMARTAGENT_TURBO_EXISTING_IMPORT_V1"
+            and live["schema"] == "SMARTAGENT_TURBO_OS_ACTIVATION_V1"
+            and old["status"] == "ACTIVE"
+            and live["status"] == "ACTIVE_PROVISIONED"
+            and live["existing_root_import"] is True
+            and _path_key(old["install_root"]) == _path_key(live["install_root"]) == _path_key(install)
+            and old["policy_revision"] == live["policy_revision"] == revision
+            and all(old[key] and _path_key(old[key]) == _path_key(live[key])
+                    for key in ("workspace_root", "turbo_root"))
+            and all(old[key] and old[key] == live[key] for key in ("package_sid", "moniker"))
+            and old["snapshot_id"] and old["snapshot_id"] == live["existing_import_snapshot_id"]
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def _security_menu() -> int:
     software_only = _acl_off_enabled()
     if not software_only and not _is_admin():
@@ -628,7 +655,12 @@ def _security_menu() -> int:
                     security_dir / "turbo_existing_root_import.json",
                     security_dir / "turbo_existing_root_switch.json",
                 )
-                if any(path.exists() for path in pending):
+                legacy_import, legacy_switch = pending
+                if legacy_switch.exists() or (
+                    legacy_import.exists() and not _completed_legacy_turbo_import(
+                        legacy_import, legacy_journal, AGENT_PROJECT_ROOT, latest_revision
+                    )
+                ):
                     raise RuntimeError(
                         "TURBO_PENDING_TRANSACTION_REQUIRES_VERIFIED_RECOVERY"
                     )
