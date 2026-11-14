@@ -1018,6 +1018,20 @@ if ($Mode -eq 'on') {
                 $target.StartsWith(([string]$_).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)
             })
             if ($parents.Count -ne 1) { throw 'ACL_UPGRADE_TURBO_WORKSPACE_NOT_UNIQUE' }
+            # A previous snapshot directory may have been writable by the
+            # controller. Preserve it for inspection; never trust its contents.
+            # The import and switch journals have already been checked above.
+            $snapshots = Join-Path $SecurityRoot 'turbo_existing_root_snapshots'
+            if (Test-Path -LiteralPath $snapshots) {
+                Assert-RevocationPath $snapshots
+                if ((Test-Path -LiteralPath $activeTurboJournal) -or
+                    (Test-Path -LiteralPath $importJournal) -or
+                    (Test-Path -LiteralPath $switchJournal)) {
+                    throw 'ACL_UPGRADE_TURBO_JOURNAL_CHANGED'
+                }
+                $archiveName = 'turbo_existing_root_snapshots_previous-' + [guid]::NewGuid().ToString('N')
+                Rename-Item -LiteralPath $snapshots -NewName $archiveName -ErrorAction Stop
+            }
             $restore = @{
                 Action='Activate'; ProjectRoot=$ProjectRoot; Workspace=$parents[0]
                 TurboRoot=$target; ConfirmTarget=$target
