@@ -26,8 +26,12 @@ def _p64(data: str) -> str:
 def _checked_target(context, raw_path) -> tuple[Path, Path]:
     allowed = context.require_write(raw_path, require_absolute=True,
                                     forbid_glob=True, allow_root=False)
-    workspace = context.workspace_root
-    _, state, _ = _load_activation(workspace)
+    # Git62: an authorized writable Workspace may contain multiple distinct
+    # AppContainers. Resolve from the target's existing parent rather than
+    # the broad Workspace or the first registered Turbo Root.
+    if not Path(allowed).parent.is_dir():
+        raise TurboBrokerScopeError("TURBO_TYPED_PARENT_MISSING")
+    _, state, _ = _load_activation(Path(allowed).parent)
     root = Path(state["turbo_root"]).absolute()
     target = _checked_path(allowed, root)
     if target == root or is_reparse_path(target):
