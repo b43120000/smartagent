@@ -112,6 +112,7 @@ $rootNames=@{}
 $packageSids=@{}
 foreach($root in $roots){
  $full=[IO.Path]::GetFullPath([string]$root).TrimEnd('\')
+ Assert-RealPath $full
  $key=$full.ToUpperInvariant()
  if($rootNames.ContainsKey($key)){throw 'GIT62_UPGRADE_DUPLICATE_ROOT'}
  $rootNames[$key]=$true
