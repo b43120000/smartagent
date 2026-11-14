@@ -283,7 +283,7 @@ def _editable_read_only(snapshot: dict) -> list[str]:
         for value in (*tuple(profile.get("skill_roots") or ()), profile.get("executor_code_root", ""))
         if str(value or "").strip()
     }
-    return [value for value in snapshot["read_only_roots"] if value.casefold() not in protected]
+    return [value for value in snapshot["policy"]["read_only_roots"] if value.casefold() not in protected]
 
 
 def _path_key(value: str | Path) -> str:
@@ -372,7 +372,7 @@ def _apply_access(writable: list[str], read_only: list[str], profile: dict) -> i
         "-ExecutorUser", executor_user,
         "-ProfilePath", str(default_profile_path()),
         "-ExecutorPython", str(profile["executor_python"]),
-        "-Apply",
+        "-NonInteractive", "-Apply",
     ])
     _write_apply_log(
         "APPLY_ACCESS_REQUEST "
@@ -651,6 +651,10 @@ def _security_menu() -> int:
                         raise RuntimeError(
                             "TURBO_EXISTING_ROOT_EXACT_CONFIRMATION_REQUIRED"
                         )
+                if access_changed and not software_only and input(
+                    "Type APPLY to update Windows workspace permissions: "
+                ).strip() != "APPLY":
+                    return 1
                 if refresh_broker:
                     from .workspace_access import is_valid_turbo_root
 
