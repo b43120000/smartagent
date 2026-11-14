@@ -250,7 +250,7 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
     # A protected old-to-new switch remains non-authoritative until its
     # final durable commit. No Planner / Runtime action may enter the new
     # Broker while the switch journal is present, including after a crash.
-    if journal_path.with_name("turbo_existing_root_switch.json").exists():
+    if secure.joinpath("turbo_existing_root_switch.json").exists():
         raise TurboOSBrokerUnavailable(
             "TURBO_OS_BROKER_SWITCH_TRANSACTION_PENDING")
     try:
@@ -280,7 +280,7 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
     ):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ACTIVATION_STALE")
 
-    code_dir = journal_path.parent / "turbo_broker_code"
+    code_dir = secure / "turbo_broker_code"
     broker = code_dir / "turbo_os_execute.ps1"
     if (is_reparse_path(code_dir) or is_reparse_path(broker) or
             not broker.is_file() or
