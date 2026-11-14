@@ -132,7 +132,15 @@ function Revoke-Tree([object]$j) {
    $p=Full ([string]$ancestor.path)
    if(-not ((Same $p $ws) -or (Under $p $ws))){throw 'TURBO_D3_ANCESTOR_ESCAPE'}
    if([SmartAgentTurboBFileId]::Check($p,$true) -cne [string]$ancestor.identity){throw 'TURBO_D3_ANCESTOR_CHANGED'}
-   Restore-Exact $p ([string]$ancestor.sddl)
+   if($script:multi) {
+       # Shared Workspace ancestors may carry OTHER active AppContainer
+       # traverse ACEs. Restoring an old SDDL would remove another Root SID
+       # or resurrect a SID already revoked. Remove only this Root's SID.
+       & icacls.exe $p '/remove:g' ('*'+[string]$j.package_sid) | Out-Null
+       if($LASTEXITCODE -ne 0){throw 'GIT62_SHARED_ANCESTOR_REVOKE_FAILED'}
+   } else {
+       Restore-Exact $p ([string]$ancestor.sddl)
+   }
  }
  foreach($entry in @($snap.entries | Sort-Object {([string]$_.path).Length})){
    $p=Full ([string]$entry.path)
@@ -180,6 +188,22 @@ $script:project=Full $ProjectRoot
 $sec=Join-Path $script:project 'localdata\secure\windows_security'
 $script:activation=Join-Path $sec 'turbo_os_activation.json'
 $script:journal=Join-Path $sec 'turbo_existing_root_import.json'
+# Git62: multiple independent Root journals, each bound to a distinct SID.
+# Legacy single-root receipts remain available for existing installations.
+. (Join-Path $PSScriptRoot 'turbo_multi_root_paths.ps1')
+$multi=$false
+if (-not [string]::IsNullOrWhiteSpace($TurboRoot)) {
+    $candidate=Get-TurboRootJournalPaths $sec $TurboRoot
+    $policyState=Load (Join-Path $sec 'workspace_access_policy.json')
+    $multi=(@($policyState.turbo_roots).Count -gt 1 -or
+            (Test-Path -LiteralPath $candidate.activation -PathType Leaf) -or
+            (Test-Path -LiteralPath $candidate.import -PathType Leaf))
+    if($multi){
+        if($Action -eq 'Activate'){Assert-TurboRootJournalDirectory $sec}
+        $script:activation=$candidate.activation
+        $script:journal=$candidate.import
+    }
+}
 $script:snapshotDir=Join-Path $sec 'turbo_existing_root_snapshots'
 if($Action -eq 'Status'){
  if(Test-Path -LiteralPath $script:journal){Write-Host ('TURBO_D3_STATUS='+(Load $script:journal).status)}
@@ -253,8 +277,8 @@ try {
     }
  }
  if($mode.mode -ne 'on' -or -not (Same $mode.install_root $script:project) -or
-    $policy.turbo_requested -ne $true -or @($policy.turbo_roots).Count -ne 1 -or
-    -not (Same $policy.turbo_roots[0] $script:root) -or
+    $policy.turbo_requested -ne $true -or
+    @($policy.turbo_roots | Where-Object { Same ([string]$_) $script:root }).Count -ne 1 -or
     @($policy.writable_workspaces | Where-Object {Same ([string]$_) $ws}).Count -ne 1){
     throw 'TURBO_D3_ACL_ON_TURBO_POLICY_REQUIRED'
  }
