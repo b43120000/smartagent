@@ -28,7 +28,7 @@
     "config/source_discovery_catalog.json": "ff00a70ade698cdc4f2c82e15b45f2fb8aeb0e07b2367bcb3a9f5861d9e03644",
     "doc/runtime_fact_ledger_dynamic_contract_p0_p3.md": "ad9aaa0ff521dcbef0cd0769e8c6cccfc3ec8bc05b161f03c3753ef471ade4c4",
     "Edit_workspace.bat": "bfe3f2b9ca9eb71045bea7f55c1f3988935c7bc45d6444c0340d2609b2f34dfd",
-    "force_stop_all_agents.bat": "01e46082062efae4ff63165f6f7c39ac38c73e57f6ddd665d14abad8ca49488e",
+    "force_stop_all_agents.bat": "4c6e650aca88b74b0e8a52641c2fc553d04f5b386d285da1eb12facb01d98a09",
     "install_smart_agent/acl_mode_command.ps1": "8703f41f028e5e5d8876a93ecb99de334181cfdd35fc827a67b069aebb607122",
     "install_smart_agent/acl_mode_launcher.ps1": "f3fc9ea896c1cc11f3ec21a7f91c1d2336efafd1b261d06bc34dfbcf608078c7",
     "install_smart_agent/acl_status.ps1": "76929a17a5d1831436438954bb126c122ac1d201fe8803be3a7defdc3dc4bc0d",
