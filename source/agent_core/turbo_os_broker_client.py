@@ -261,6 +261,30 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ACTIVATION_UNAVAILABLE") from exc
     if not isinstance(activation, dict):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ACTIVATION_INVALID")
+    if activation.get("existing_root_import") is True:
+        from .turbo_root_registry import import_journal_path
+        imported_path = (
+            import_journal_path(journal_path.parent.parent, root)
+            if journal_path.parent.name == "turbo_root_activations"
+            else journal_path.with_name("turbo_existing_root_import.json")
+        )
+        try:
+            if is_reparse_path(imported_path):
+                raise TurboOSBrokerUnavailable(
+                    "TURBO_OS_BROKER_IMPORT_JOURNAL_REPARSE")
+            imported = json.loads(imported_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, TypeError) as exc:
+            raise TurboOSBrokerUnavailable(
+                "TURBO_OS_BROKER_IMPORT_NOT_COMMITTED") from exc
+        if (not isinstance(imported, dict) or
+                imported.get("schema") != "SMARTAGENT_TURBO_EXISTING_IMPORT_V1" or
+                imported.get("status") != "ACTIVE" or
+                str(imported.get("turbo_root", "")).casefold() != str(root).casefold() or
+                imported.get("package_sid") != activation.get("package_sid") or
+                imported.get("snapshot_id") !=
+                activation.get("existing_import_snapshot_id")):
+            raise TurboOSBrokerUnavailable(
+                "TURBO_OS_BROKER_IMPORT_NOT_COMMITTED")
     project = _install_root()
     workspace_path = Path(workspace).absolute()
     if (
