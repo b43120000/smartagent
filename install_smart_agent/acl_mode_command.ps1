@@ -2,6 +2,7 @@
 # This is NOT a separate ACL diagnostic command and changes no ACL policy.
 [CmdletBinding()]
 param(
+    [switch]$RestoreTurboAfterUpgrade,
     [ValidateSet('on','off')][string]$Mode = '',
     [string]$ProjectRoot = '',
     [string]$ControllerSid = '',
@@ -146,7 +147,7 @@ try {
         }
     }
     Write-Host ('[SmartAgent ACL] Starting '+$Mode.ToUpperInvariant()+' security operation.')
-    & $core -Mode $Mode -ProjectRoot $root -ControllerSid $ControllerSid
+    & $core -Mode $Mode -ProjectRoot $root -ControllerSid $ControllerSid -RestoreTurboAfterUpgrade:$RestoreTurboAfterUpgrade
     $actualMode=Read-PersistedMode $root
     if ($actualMode -ne $Mode) {
         throw ('ACL_'+$Mode.ToUpperInvariant()+'_POSTCONDITION_MODE_MISMATCH: '+$actualMode)

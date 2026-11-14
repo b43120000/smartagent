@@ -2,6 +2,7 @@
 # than inside CMD FOR /F, whose nested quotes break on some Windows hosts.
 [CmdletBinding()]
 param(
+    [switch]$RestoreTurboAfterUpgrade,
     [ValidateSet('on','off')][string]$Mode = '',
     [string]$ProjectRoot = '',
     [switch]$SelfTest
@@ -51,6 +52,7 @@ try {
             '-ReceiptPath',('"' + $receipt + '"'),
             '-TranscriptPath',('"' + $transcript + '"')
         )
+        if ($RestoreTurboAfterUpgrade) { $arguments += '-RestoreTurboAfterUpgrade' }
         $process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $root -Verb RunAs -Wait -PassThru -ErrorAction Stop
         $childExit = [int]$process.ExitCode
     } catch {

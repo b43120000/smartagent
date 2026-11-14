@@ -274,17 +274,30 @@ def _apply_git_upgrade(root: Path, commit: str) -> None:
     if acl_mode(profile) != "on" or not profile.is_file():
         raise RuntimeError("force_stop_upgrade_requires_existing_acl_on")
     status = _machine_manifest_status(root)
-    if status == "machine_authorization_manifest_mismatch":
-        if profile.with_name("turbo_os_activation.json").is_file():
-            raise RuntimeError("GIT50_TURBO_BROKER_REVOKE_REQUIRED_BEFORE_ACL_ON_RECONFIGURE")
+    from .workspace_access import load_workspace_access_policy
+    from .turbo_os_broker_client import active_broker_available
+
+    policy = load_workspace_access_policy()
+    turbo_requested = policy.get("turbo_requested") is True
+
+    def turbo_ready():
+        return any(active_broker_available(parent) for parent in policy["writable_workspaces"])
+
+    needs_restore = status == "MATCH" and turbo_requested and not turbo_ready()
+    if status == "machine_authorization_manifest_mismatch" or needs_restore:
+        powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
         subprocess.run(
-            [os.environ.get("ComSpec", "cmd.exe"), "/d", "/c", "ACLstatus.bat", "on"],
+            [str(powershell), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+             str(root / "install_smart_agent/acl_mode_launcher.ps1"), "-Mode", "on",
+             "-ProjectRoot", str(root), "-RestoreTurboAfterUpgrade"],
             cwd=root, check=True,
         )
         _verify_upgrade_commit(root, commit)
         status = _machine_manifest_status(root)
     if status != "MATCH":
         raise RuntimeError(status)
+    if turbo_requested and not turbo_ready():
+        raise RuntimeError("force_stop_upgrade_turbo_restore_unverified")
     report = preflight("remote")
     if report.get("status") != "PASS":
         reasons = (report.get("attestation") or {}).get("reasons") or []

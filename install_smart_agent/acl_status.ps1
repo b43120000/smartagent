@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [switch]$RestoreTurboAfterUpgrade,
     [Parameter(Mandatory=$true)][ValidateSet('on','off')][string]$Mode,
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [string]$ControllerSid = ''
@@ -812,7 +813,7 @@ if ($Mode -eq 'on') {
     # Re-provisioning ACL ON while an AppContainer SID still has inherited
     # grants is unsafe. Require the transactional revoker first.
     $activeTurboJournal = Join-Path $SecurityRoot 'turbo_os_activation.json'
-    if (Test-Path -LiteralPath $activeTurboJournal -PathType Leaf) {
+    if (-not $RestoreTurboAfterUpgrade -and (Test-Path -LiteralPath $activeTurboJournal -PathType Leaf)) {
         throw 'GIT50_TURBO_BROKER_REVOKE_REQUIRED_BEFORE_ACL_ON_RECONFIGURE'
     }
     $defaultExecutorPython = Assert-OnEnvironmentReady
@@ -866,9 +867,30 @@ if ($Mode -eq 'on') {
         if ($selectedTurbo.Count -ne 1) {
             throw 'ACL_ON_TURBO_SINGLE_ROOT_REQUIRED_NO_SECURITY_CHANGES'
         }
-        if (Test-Path -LiteralPath ([string]$selectedTurbo[0])) {
+        if (-not $RestoreTurboAfterUpgrade -and (Test-Path -LiteralPath ([string]$selectedTurbo[0]))) {
             throw 'ACL_ON_TURBO_EXISTING_ROOT_IMPORT_UNSUPPORTED_NO_SECURITY_CHANGES'
         }
+    }
+    if ($RestoreTurboAfterUpgrade) {
+        if (-not $profileBoundToRoot -or (Get-RecordedValue $previousModeState 'mode') -ne 'on') {
+            throw 'ACL_UPGRADE_REQUIRES_BOUND_ACL_ON'
+        }
+        $importJournal = Join-Path $SecurityRoot 'turbo_existing_root_import.json'
+        $switchJournal = Join-Path $SecurityRoot 'turbo_existing_root_switch.json'
+        if (Test-Path -LiteralPath $switchJournal) { throw 'ACL_UPGRADE_PENDING_TURBO_SWITCH' }
+        if (Test-Path -LiteralPath $activeTurboJournal) {
+            Assert-RevocationPath $activeTurboJournal
+            $activeTurbo = Get-Content -LiteralPath $activeTurboJournal -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($activeTurbo.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+                $activeTurbo.install_root -ine $ProjectRoot -or
+                -not $accessPolicy -or $accessPolicy.turbo_requested -ne $true -or
+                [string]$selectedTurbo[0] -ine [string]$activeTurbo.turbo_root) {
+                throw 'ACL_UPGRADE_TURBO_BINDING_MISMATCH'
+            }
+            & (Join-Path $PSScriptRoot 'turbo_os_activation.ps1') -Action Revoke -ProjectRoot $ProjectRoot
+            if (Test-Path -LiteralPath $activeTurboJournal) { throw 'ACL_UPGRADE_TURBO_REVOCATION_UNCONFIRMED' }
+        }
+        if (Test-Path -LiteralPath $importJournal) { throw 'ACL_UPGRADE_PENDING_TURBO_IMPORT' }
     }
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     Write-ModeState 'transitioning_on' $executorSid $callerSid
@@ -983,7 +1005,20 @@ if ($Mode -eq 'on') {
             throw 'ACL_ON_TURBO_AUTOSTART_SCRIPT_MISSING:ACL_ON_COMMITTED_TURBO_NOT_READY'
         }
         Write-Host '[SmartAgent ACL] Enrolling configured scoped Turbo Root...' -ForegroundColor Cyan
-        & $turboAuto -ProjectRoot $ProjectRoot -Action Apply
+        $target = [string]@($finalTurboPolicy.turbo_roots)[0]
+        if ($RestoreTurboAfterUpgrade -and (Test-Path -LiteralPath $target -PathType Container)) {
+            $parents = @($finalTurboPolicy.writable_workspaces | Where-Object {
+                $target.StartsWith(([string]$_).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($parents.Count -ne 1) { throw 'ACL_UPGRADE_TURBO_WORKSPACE_NOT_UNIQUE' }
+            $restore = @{
+                Action='Activate'; ProjectRoot=$ProjectRoot; Workspace=$parents[0]
+                TurboRoot=$target; ConfirmTarget=$target
+            }
+            & (Join-Path $PSScriptRoot 'turbo_existing_root_activate.ps1') @restore
+        } else {
+            & $turboAuto -ProjectRoot $ProjectRoot -Action Apply
+        }
         if (-not $?) {
             throw 'ACL_ON_TURBO_AUTOSTART_FAILED:ACL_ON_COMMITTED_TURBO_NOT_READY'
         }

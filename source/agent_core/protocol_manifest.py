@@ -80,6 +80,8 @@ CORE_FILES = (
     'install_smart_agent/deploy_public_layout.ps1',
     'install_smart_agent/install.ps1',
     'install_smart_agent/configure_security.ps1',
+    'install_smart_agent/acl_mode_command.ps1',
+    'install_smart_agent/acl_mode_launcher.ps1',
     'install_smart_agent/acl_status.ps1',
     'install_smart_agent/security_acl_policy.ps1',
     'install_smart_agent/update.ps1',
