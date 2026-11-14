@@ -11,6 +11,9 @@ def test_force_stop_does_not_recover_on_normal_restart():
     assert 'if defined RECOVER_TURBO_ROOT' in bat
     assert 'if not "%STOP_EXIT%"=="0"' in bat
     assert 'turbo_pending_import_recovery.ps1' in bat
+    assert '--require-startup-contract' in bat
+    assert '--root "%SMARTAGENT_INSTALL_ROOT%"' in bat
+    assert '--root "%~dp0."' not in bat
     assert 'Recovery BLOCKED: force stop or Git upgrade did not pass.' in bat
     assert "TURBO_PENDING_IMPORT_RECOVERY_PASS" not in bat
 
