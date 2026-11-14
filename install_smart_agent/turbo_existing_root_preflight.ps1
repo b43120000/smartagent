@@ -65,6 +65,7 @@ if (-not ('SmartAgentTurboBFileId' -as [type])) {
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 [StructLayout(LayoutKind.Sequential)]
 public struct TurboBFileTime { public uint lo; public uint hi; }
@@ -87,6 +88,36 @@ public static class SmartAgentTurboBFileId {
         IntPtr security, uint creation, uint flags, IntPtr template);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool GetFileInformationByHandle(SafeFileHandle h, out TurboBInfo info);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool DeviceIoControl(SafeFileHandle h, uint code,
+        IntPtr input, uint inputLength, [Out] byte[] output, uint outputLength,
+        out uint returned, IntPtr overlapped);
+    // Open the LINK OBJECT (not its target). The reparse-buffer digest also
+    // detects a junction being retargeted while preserving its NTFS File ID.
+    public static string InspectReparse(string path, bool directory) {
+        uint flags = 0x00200000u | (directory ? 0x02000000u : 0u);
+        using (var handle = CreateFileW(path, 0x80u, 0x1|0x2|0x4,
+                 IntPtr.Zero, 3, flags, IntPtr.Zero)) {
+            if (handle.IsInvalid) throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(), "TURBO_B_REPARSE_OPEN_FAILED:"+path);
+            TurboBInfo info;
+            if (!GetFileInformationByHandle(handle, out info))
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "TURBO_B_REPARSE_ID_FAILED:"+path);
+            byte[] buffer = new byte[16384];
+            uint returned;
+            if (!DeviceIoControl(handle, 0x000900A8u, IntPtr.Zero, 0u,
+                                 buffer, (uint)buffer.Length, out returned, IntPtr.Zero))
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "TURBO_B_REPARSE_DATA_FAILED:"+path);
+            using (var sha = SHA256.Create()) {
+                byte[] digest = sha.ComputeHash(buffer, 0, (int)returned);
+                return info.volume.ToString("X8")+":"+
+                       info.fileIdHigh.ToString("X8")+info.fileIdLow.ToString("X8")+
+                       ":"+BitConverter.ToString(digest).Replace("-","");
+            }
+        }
+    }
     public static string Check(string path, bool directory) {
         uint links;
         return Inspect(path, directory, out links);
@@ -121,10 +152,29 @@ while ($pending.Count -gt 0) {
         throw ('TURBO_B_PREFLIGHT_ENTRY_OUTSIDE_ROOT:'+$path)
     }
     $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
-    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw ('TURBO_B_PREFLIGHT_REPARSE_ENTRY:'+$path)
+    # A link inside an existing project is an OPAQUE inventory entry:
+    # never traverse its target, inspect its target ACL or grant the Turbo SID.
+    # Reparse ancestors and the Turbo Root itself remain strictly forbidden.
+    $isLink=(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+    if($isLink -and (Same $path $root)){
+        throw ('TURBO_B_PREFLIGHT_REPARSE_ROOT:'+$path)
     }
     $isDir=$item.PSIsContainer
+    if($isLink){
+        $relativePath=$path.Substring($root.Length+1)
+        $id=[SmartAgentTurboBFileId]::InspectReparse($path,[bool]$isDir)
+        [void]$nodes.Add([pscustomobject]@{
+            path=$path
+            relative=$relativePath
+            directory=[bool]$isDir
+            reparse=$true
+            identity=$id
+            link_count=[uint32]1
+            sddl=''
+        })
+        if($nodes.Count -gt $MaxEntries){throw 'TURBO_B_PREFLIGHT_ENTRY_LIMIT_EXCEEDED'}
+        continue
+    }
     $links=[uint32]0
     $id=[SmartAgentTurboBFileId]::Inspect($path,[bool]$isDir,[ref]$links)
     if (-not $isDir -and $links -gt 1) {
@@ -150,6 +200,7 @@ while ($pending.Count -gt 0) {
         directory=[bool]$isDir
         identity=$id
         link_count=$links
+        reparse=$false
         sddl=$sddl
     })
     if ($nodes.Count -gt $MaxEntries) { throw 'TURBO_B_PREFLIGHT_ENTRY_LIMIT_EXCEEDED' }
@@ -161,8 +212,20 @@ while ($pending.Count -gt 0) {
 }
 # Detect concurrent addition/deletion during enumeration before any mutation.
 foreach ($item in $nodes.ToArray()) {
-    if (-not (Test-Path -LiteralPath $item.path)) {
-        throw ('TURBO_B_PREFLIGHT_TREE_CHANGED:'+$item.path)
+    # Test-Path can return false for a broken junction; Get-Item examines
+    # the directory entry without requiring its external target to exist.
+    $node=Get-Item -LiteralPath $item.path -Force -ErrorAction Stop
+    $nowIsLink=(($node.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+    if($nowIsLink -ne [bool]$item.reparse){
+        throw ('TURBO_B_PREFLIGHT_LINK_TYPE_CHANGED:'+$item.path)
+    }
+    if($nowIsLink){
+        $actual=[SmartAgentTurboBFileId]::InspectReparse(
+            [string]$item.path,[bool]$item.directory)
+        if($actual -cne [string]$item.identity){
+            throw ('TURBO_B_PREFLIGHT_LINK_RETARGETED:'+$item.path)
+        }
+        continue
     }
     $links=[uint32]0
     $now=[SmartAgentTurboBFileId]::Inspect([string]$item.path,[bool]$item.directory,[ref]$links)
@@ -186,7 +249,8 @@ $inventory=[ordered]@{
     entries=$rootEntries
 }
 # Full SDDL contains sensitive ACL/identity information. Do NOT print it.
-Write-Host ('TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries='+$rootEntries.Count)
+$linkCount=@($rootEntries | Where-Object {$_.reparse}).Count
+Write-Host ('TURBO_B_EXISTING_ROOT_PREFLIGHT_PASS entries='+$rootEntries.Count+' opaque_links='+$linkCount)
 Write-Host 'TURBO_B_IMPORT_NOT_YET_AUTHORIZED: read-only inventory complete.'
 # Do not disclose owner/SACL/SDDL fields through normal interactive output.
 # A future protected transaction importer may explicitly opt into this
