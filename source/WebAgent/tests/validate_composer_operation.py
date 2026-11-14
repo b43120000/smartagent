@@ -444,6 +444,30 @@ def run():
     assert co.classify_observation(
         baseline, {**viewport_changed, 'generation_active': True}, turn_count_tolerance=1
     ) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    one_visible = {
+        **baseline, 'user_count': 1, 'assistant_count': 1, 'user_native_ids': [''],
+        'composer_matches': True,
+    }
+    older_history_visible = {
+        **one_visible, 'user_count': 2, 'assistant_count': 2,
+        'user_anchors': [['older-u', 'older'], *one_visible['user_anchors']],
+        'assistant_anchors': [['older-a', 'older'], *one_visible['assistant_anchors']],
+        'user_native_ids': ['older-user-id', ''],
+        'assistant_native_ids': ['older-assistant-id', 'assistant-id'],
+    }
+    for first, second in ((one_visible, older_history_visible), (older_history_visible, one_visible)):
+        assert co.classify_observation(first, second, turn_count_tolerance=1) == 'VERIFIED_SAFE_TO_SUBMIT'
+        assert co.classify_observation(first, second) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    for change in (
+        {'assistant_native_ids': ['older-assistant-id', 'new-assistant-id']},
+        {'assistant_anchors': [*one_visible['assistant_anchors'], ['new-a', 'new']]},
+        {'user_count': 3},
+        {'user_count': 1},
+        {'generation_active': True},
+    ):
+        assert co.classify_observation(
+            one_visible, {**older_history_visible, **change}, turn_count_tolerance=1
+        ) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
     for value, enabled in ((None, True), ('0', False), ('1', True)):
         with tempfile.TemporaryDirectory() as temp, patch.dict(
             os.environ

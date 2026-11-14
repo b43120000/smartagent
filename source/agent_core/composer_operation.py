@@ -525,8 +525,21 @@ def _same_turns(before,after,*,check_turn_counts=True,turn_count_tolerance=0):
         return False
     for role in ('user','assistant'):
         a=before.get(role+'_anchors',[]);b=after.get(role+'_anchors',[])
-        if [v[1] for v in a]!=[v[1] for v in b]:return False
         old=before.get(role+'_native_ids');new=after.get(role+'_native_ids')
+        if check_turn_counts and turn_count_tolerance and len(a) != len(b):
+            old_count = before.get(role + '_count')
+            new_count = after.get(role + '_count')
+            # Only align when an older visible row was added or removed.
+            # Losing all shared anchors cannot establish turn identity.
+            if (not a or not b or type(old_count) is not int or type(new_count) is not int
+                    or new_count - old_count != len(b) - len(a)
+                    or old is None or new is None
+                    or len(old) != len(a) or len(new) != len(b)):
+                return False
+            overlap = min(len(a), len(b))
+            a, b = a[-overlap:], b[-overlap:]
+            old, new = old[-overlap:], new[-overlap:]
+        if [v[1] for v in a]!=[v[1] for v in b]:return False
         if old is not None and new is not None and old!=new:return False
         # Legacy records did not store native IDs. They can migrate only via
         # equal counts+ordered content tails and two stable fresh observations.

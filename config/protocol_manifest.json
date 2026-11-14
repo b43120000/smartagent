@@ -77,7 +77,7 @@
     "source/agent_core/command_operation.py": "ea85af876d41b45c23cd8a9fefb5de3494bbbacad552da740a50241e6f44b265",
     "source/agent_core/command_repair_readiness.py": "3eb1696ce20ada78b7d76b10b192b61bfc13a4179ea5d8aff526b14a10bf994a",
     "source/agent_core/command_security.py": "88e54b591ce2af05c204d4783b605473e3b892073a07386369a610a157d3b1d4",
-    "source/agent_core/composer_operation.py": "6ec511b74821ba0b8a5d99a06d04c4ee22e73a3f125a321e4211adb280d1f55e",
+    "source/agent_core/composer_operation.py": "b2120b65456e84a901e7485a4d71ba5d213d2cff003d371f7206a9b8cbe0de32",
     "source/agent_core/conditional_goal_policy.py": "c47148c4a3f94d9bb3c41b21f1aaf2f056e947b86e588b5ac3ebe80270191f58",
     "source/agent_core/context_acquisition.py": "4067b432a3538e39a1a0521d9d21c64aedc6fb64fa9258868fd96794464157ad",
     "source/agent_core/cross_contract_repair.py": "ae487d29d0f302fa3fe7ece9ac617522f83239784626bfb41f7c6d9282d75a17",
