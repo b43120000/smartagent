@@ -74,6 +74,9 @@ jobs:
               throw ('GIT62_POWERSHELL_PARSE_FAILED:'+$name)
             }
           }
+      - name: Git62 opaque junction inventory and external hardlink regression
+        run: |
+          .\install_smart_agent\tests\validate_turbo_b_existing_root_preflight.ps1
       - name: Git62 live two roots, independent cross-root kernel and SDDL test
         run: |
           .\install_smart_agent\tests\validate_git62_multi_root_native_ci.ps1
