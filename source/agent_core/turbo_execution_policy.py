@@ -514,6 +514,12 @@ def turbo_planning_snapshot(workspace: str | Path) -> dict:
                 gate = resolve_turbo_state(parent)
         from .turbo_broker_admission import assess
         broker_admission = assess(workspace, tool="run_command")
+        # Inventory uses the policy owner, never a nested project Task CWD.
+        # The selected AppContainer still comes from the actual Action Root.
+        authorization_workspace = (
+            broker_admission.get("authorization_workspace")
+            or authorization_workspace
+        )
         broker_enrolled = (
             broker_admission["decision"] == "BROKER_REQUIRED"
             and gate["scope_verdict"] == "TURBO_SCOPE_ALLOWED"

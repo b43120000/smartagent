@@ -128,6 +128,78 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
         return state
 
 
+
+def global_turbo_snapshot(*, access: dict | None = None) -> dict[str, Any]:
+    """Global inventory is not an action and MUST NOT select a single Root.
+
+    Enrollment hints are advisory; every command independently attests its
+    AppContainer token, NTFS boundary, job and kernel-denial probes.
+    """
+    snapshot = access if access is not None else access_snapshot()
+    policy = snapshot.get("policy") or {}
+    roots = list(snapshot.get("turbo_roots") or policy.get("turbo_roots") or ())
+    writable = list(snapshot.get("writable_workspaces") or policy.get("writable_workspaces") or ())
+    readable = list(snapshot.get("read_only_roots") or policy.get("read_only_roots") or ())
+    denied = list(policy.get("denied_write_roots") or ())
+    try:
+        mode = acl_mode()
+    except (OSError, RuntimeError, ValueError):
+        mode = "unknown"
+    requested = bool(policy.get("turbo_requested"))
+    records = []
+    for raw in roots:
+        root = str(Path(raw).expanduser().absolute())
+        owners = [str(parent) for parent in writable if is_valid_turbo_root(
+            root, parent, writable, readable, denied)]
+        registered = len(owners) == 1
+        enrolled = False
+        if mode == "on" and requested and registered:
+            try:
+                from .turbo_os_broker_client import active_broker_available
+                enrolled = bool(active_broker_available(root))
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+                enrolled = False
+        records.append({
+            "path": root,
+            "authorization_workspace": owners[0] if registered else "",
+            "registration_status": "REGISTERED" if registered else "SCOPE_INVALID",
+            "native_enrollment": (
+                "ENROLLED_ADVISORY" if enrolled else
+                "NOT_ENROLLED_OR_STALE" if mode == "on" and requested and registered else
+                "NOT_CHECKED"
+            ),
+            "per_action_attestation_required": True,
+            "authorization_granted": False,
+        })
+    active = mode == "on" and requested and bool(roots)
+    return {
+        "schema": "SMARTAGENT_GLOBAL_TURBO_INVENTORY_V1",
+        "acl_mode": mode,
+        "turbo_requested": "ON" if requested else "OFF",
+        "turbo_effective": "PER_ACTION" if active else "OFF",
+        "sandbox_status": (
+            "PER_ACTION_ATTESTATION_REQUIRED" if active else
+            "ACL_MODE_UNVERIFIED" if mode not in {"on", "off"} else
+            "DISABLED"
+        ),
+        "reason_code": (
+            "TURBO_PER_ACTION_ATTESTATION_REQUIRED" if active else
+            "ACL_MODE_UNVERIFIED" if mode not in {"on", "off"} else
+            "TURBO_SUPPRESSED_ACL_OFF" if mode == "off" and requested else
+            "TURBO_DISABLED"
+        ),
+        "policy_revision": int(policy.get("revision", 0) or 0),
+        "writable_workspaces": writable,
+        "read_only_roots": readable,
+        "configured_roots": [r["path"] for r in records],
+        "configured_root_count": len(records),
+        "enrolled_root_count": sum(
+            r["native_enrollment"] == "ENROLLED_ADVISORY" for r in records),
+        "roots": records,
+        "authorization_granted": False,
+    }
+
+
 def sandbox_evidence(state: dict, *, action_id: str = "",
                      requested_operation: str = "") -> dict[str, Any]:
     """Privacy-safe, non-authorizing blackboard receipt; no raw shell text."""
@@ -218,7 +290,7 @@ def main(argv=None) -> int:
                   state["turbo_requested"] == "OFF")) else 2
 
 
-__all__ = ["SCHEMA", "resolve_turbo_state", "sandbox_evidence",
+__all__ = ["SCHEMA", "resolve_turbo_state", "global_turbo_snapshot", "sandbox_evidence",
            "require_turbo_backend"]
 
 

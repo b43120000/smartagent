@@ -133,12 +133,10 @@ def _binding_snapshot() -> dict:
         "writable_workspaces": list(access["writable_workspaces"]),
         "read_only_roots": list(access["read_only_roots"]),
         "turbo_roots": list(access.get("turbo_roots") or ()),
+        # A manager renders all Roots, not the selected Action's CWD.
         "turbo_sandbox": __import__(
-            "agent_core.turbo_sandbox", fromlist=["resolve_turbo_state"]
-        ).resolve_turbo_state(
-            (remote.get("workspace") if isinstance(remote, dict) else None)
-            or next(iter(access.get("writable_workspaces") or ()), None)
-        ),
+            "agent_core.turbo_sandbox", fromlist=["global_turbo_snapshot"]
+        ).global_turbo_snapshot(access=access),
         "policy_revision": int((access.get("policy") or {}).get("revision", 0) or 0),
         "local": load_startup_preferences(),
         "remote": remote,
@@ -573,8 +571,8 @@ def _security_menu() -> int:
         print("Read-only roots:")
         for i, value in enumerate(read_only, 1):
             print(f"  R{i}. {value}")
-        from .turbo_sandbox import resolve_turbo_state
-        state = resolve_turbo_state(next(iter(writable), None))
+        from .turbo_sandbox import global_turbo_snapshot
+        state = global_turbo_snapshot(access=snapshot)
         print("Turbo requested=" + state["turbo_requested"]
               + " effective=" + state["turbo_effective"]
               + " sandbox=" + state["sandbox_status"]
@@ -582,6 +580,8 @@ def _security_menu() -> int:
         print("Turbo mode roots (strict writable Workspace descendants):")
         for i, value in enumerate(turbo, 1):
             print(f"  T{i}. {value}")
+        for record in state["roots"]:
+            print("    enrollment: " + record["path"] + " = " + record["native_enrollment"])
         print("\n[1] Add writable  [2] Remove writable  [3] Add read-only  [4] Remove read-only")
         print("[5] Add turbo mode  [6] Remove turbo mode  [7] Apply  [8] Back")
         choice = input("Select: ").strip()
@@ -1487,6 +1487,9 @@ def _interactive() -> int:
     print("ACL=" + state["acl_mode"] + " requested=" + state["turbo_requested"]
           + " effective=" + state["turbo_effective"] + " sandbox=" + state["sandbox_status"])
     print("Turbo reason=" + state["reason_code"])
+    print("Turbo roots: " + str(state["configured_root_count"])
+          + " registered; " + str(state["enrolled_root_count"])
+          + " enrolled (advisory; per-action OS verification required)")
     print("\nWritable workspaces:")
     if snapshot["writable_workspaces"]:
         for value in snapshot["writable_workspaces"]:
@@ -1494,8 +1497,8 @@ def _interactive() -> int:
     else:
         print("  (none - configure Security first)")
     print("Turbo Mode roots:")
-    for value in snapshot.get("turbo_roots") or ():
-        print(f"  - {value}")
+    for record in state["roots"]:
+        print("  - " + record["path"] + " [" + record["native_enrollment"] + "]")
     print("Read-only roots:")
     if snapshot["read_only_roots"]:
         for value in snapshot["read_only_roots"]:

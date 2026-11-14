@@ -4,6 +4,7 @@ Not an OS attestation or permission grant. A requested Turbo command cannot
 fall back to a privileged controller subprocess when a broker is unavailable.
 """
 from __future__ import annotations
+from pathlib import Path
 from .turbo_sandbox import resolve_turbo_state, sandbox_evidence
 
 # All known typed mutation / code execution tools; extend this set when adding
@@ -64,6 +65,20 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
         if parent is not None:
             authorization_workspace = parent
             state = resolve_turbo_state(parent)
+    if (state["acl_mode"] == "on" and state["turbo_requested"] == "ON"
+            and state["scope_verdict"] == "TURBO_SCOPE_ALLOWED"):
+        # A selected Root belongs to exactly one operator-owned Workspace.
+        # The user Task CWD is NOT the owner and cannot be used as such.
+        from .turbo_root_registry import owning_workspace, TurboRootRoutingError
+        from . import turbo_sandbox as sandbox
+        try:
+            authorization_workspace = owning_workspace(
+                Path(state["turbo_root"]), sandbox.access_snapshot()["policy"])
+        except (TurboRootRoutingError, KeyError, TypeError, ValueError, OSError, RuntimeError):
+            state = dict(state)
+            state["scope_verdict"] = "TURBO_SCOPE_DENIED"
+            state["sandbox_status"] = "FAILED"
+            state["reason_code"] = "TURBO_AUTHORIZATION_WORKSPACE_NOT_UNIQUE"
     evidence = sandbox_evidence(state, requested_operation=tool, action_id=action_id)
     if state["sandbox_status"] == "FAILED":
         decision = "BLOCKED"
@@ -81,7 +96,7 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
             # remain mandatory per action; no host fallback.
             from .turbo_os_broker_client import active_broker_available
             decision = ("BROKER_REQUIRED" if
-                        active_broker_available(authorization_workspace) else "BLOCKED")
+                        active_broker_available(state["turbo_root"]) else "BLOCKED")
     else:
         decision = "BLOCKED"
     return {
@@ -108,7 +123,15 @@ def admit_action(workspace, action: dict | None) -> dict:
             "state": None, "evidence": {},
         }
     tool = str(action.get("tool") or "")
-    return assess(workspace, tool=tool,
+    target = workspace
+    # The first gate must see the Action's CWD, not the Telegram/WebGPT
+    # bootstrap Workspace. Final dispatch independently validates the target.
+    if tool == "run_command" and action.get("working_directory"):
+        target = action["working_directory"]
+    elif tool in {"create_directory", "write_file", "delete_path"} and action.get("path"):
+        requested = Path(str(action["path"])).expanduser().absolute()
+        target = requested if requested.is_dir() else requested.parent
+    return assess(target, tool=tool,
                   action_id=str(action.get("action_id") or ""))
 
 

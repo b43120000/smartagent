@@ -70,12 +70,20 @@ class RemoteBindingManager:
         workspaces = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["writable_workspaces"], 1)) or "  （尚未設定）"
         read_only = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["read_only_roots"], 1)) or "  （尚未設定）"
         turbo = turbo_mode_for_workspace(binding["workspace"])
-        from .turbo_sandbox import resolve_turbo_state
-        sandbox_state = resolve_turbo_state(binding["workspace"])
+        from .turbo_sandbox import global_turbo_snapshot
+        sandbox_state = global_turbo_snapshot(access=access)
+        root_lines = "\n".join(
+            "  - " + record["path"] + " [" + record["native_enrollment"] + "]"
+            for record in sandbox_state["roots"]
+        ) or "  （尚未設定）"
         return "\n".join((
             "目前允許讀寫的 Workspaces：", workspaces, "",
             "目前唯讀路徑：", read_only, "",
-            "支援 ChatGPT、Gemini、Claude、M365 與 Other HTTP(S) URL。Other 網站需先完成 DOM 校準。\n請修改 WebGPT URL、Workspace、Turbo Mode 與 Skill Path 後，將整段訊息直接送出。Turbo 必須是 Workspace 的子路徑（off 為預設）：",
+            "目前 Turbo Mode roots（全域，與 Edit Workspace 共用 Policy）：", root_lines, "",
+            "支援 ChatGPT、Gemini、Claude、M365 與 Other HTTP(S) URL。Other 網站需先完成 DOM 校準。\n"
+            "下方 workspace 僅是 WebGPT 的預設工作目錄，不會停用其他 Turbo Root。"
+            "turbomode 欄位只編輯該 Workspace 的 Root 子集合，其他 Root 保留。"
+            "新增 Native Root 的 OS Enrollment 須透過 Edit Workspace 管理員程序。",
             "",
             UPDATE_OPEN,
             f"transaction_id={transaction_id}",
@@ -87,6 +95,7 @@ class RemoteBindingManager:
             "",
             "ACL: " + sandbox_state["acl_mode"] + " | Requested: " + sandbox_state["turbo_requested"] + " | Effective: " + sandbox_state["turbo_effective"],
             "Sandbox: " + sandbox_state["sandbox_status"] + " | Reason: " + sandbox_state["reason_code"],
+            "Native enrollment: " + str(sandbox_state["enrolled_root_count"]) + "/" + str(sandbox_state["configured_root_count"]) + " (advisory)",
             "有效時間：10 分鐘。更新期間若有任務執行中，設定不會被切換。",
         ))
 
@@ -184,8 +193,8 @@ class RemoteBindingManager:
                 candidate["_turbo_prepared"] = turbo_prepared
             runtime_apply(candidate)
         actual_turbo = turbo_mode_for_workspace(candidate["workspace"])
-        from .turbo_sandbox import resolve_turbo_state
-        sandbox_state = resolve_turbo_state(candidate["workspace"])
+        from .turbo_sandbox import global_turbo_snapshot
+        sandbox_state = global_turbo_snapshot(access=access_snapshot())
         if turbo_prepared is not None and actual_turbo.casefold() != turbo_prepared["mode"].casefold():
             raise RuntimeError("remote_binding_turbo_postcondition_failed")
         return "\n".join((
@@ -194,6 +203,8 @@ class RemoteBindingManager:
             f"WebGPT URL：{candidate['gpt_url']}",
             f"Workspace：{candidate['workspace']}",
             f"Turbo Mode Requested Path：{actual_turbo}",
+            f"Turbo Mode：{actual_turbo}",
+            "Turbo Mode roots（全域）：" + (";".join(sandbox_state["configured_roots"]) or "off"),
             f"ACL Mode：{sandbox_state['acl_mode']}",
             f"Turbo Requested：{sandbox_state['turbo_requested']}",
             f"Turbo Effective：{sandbox_state['turbo_effective']}",

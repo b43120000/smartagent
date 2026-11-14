@@ -1543,7 +1543,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
     tool_call = dict(normalize_tool_numeric_fields(tool_call))
     # Never accept a Planner-supplied internal Broker decision marker.
     tool_call.pop("_runtime_native_broker_required", None)
-    from .tool_result_contract import decode_result, attach_runtime_result
+    from .tool_result_contract import decode_result, attach_runtime_result, encode_result
     from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
     p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
     tool = str(tool_call.get('tool', ''))
@@ -1581,8 +1581,15 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                     operation=tool_call.get("operation", "GENERAL"),
                 )
             except (PathSecurityError, ValueError, OSError,
-                    CommandSecurityError):
-                action_workspace = bound_workspace
+                    CommandSecurityError) as exc:
+                # Never silently bind an invalid explicit Action CWD to
+                # another registered Root and misreport broker admission.
+                return encode_result(
+                    'REJECTED', 'RUN_COMMAND_WORKING_DIRECTORY_REJECTED',
+                    tool=tool, executed=False, detail=type(exc).__name__,
+                    data={"os_execution_result": "NOT_EXECUTED",
+                          "terminal_eligible": False},
+                )
         broker = assess(action_workspace, tool=tool,
                         action_id=str(tool_call.get("action_id", "") or ""))
         if (broker["decision"] == "BLOCKED" or

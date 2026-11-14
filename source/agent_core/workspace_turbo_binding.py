@@ -95,7 +95,21 @@ def prepare_turbo_mode_update(mode: str | None, workspace: str | Path) -> dict |
             if all(p.casefold() != target_paths[0].casefold() for p in local):
                 local.append(target_paths[0])
         chosen = ";".join(local) if local else "off"
-        proposed = other + local
+        # Preserve global registry order when a Telegram form updates only
+        # its Workspace. A harmless URL-only form must not reorder Roots,
+        # advance the policy revision, or stale every native activation.
+        desired = {p.casefold(): p for p in local}
+        used: set[str] = set()
+        proposed = []
+        for existing_root in existing:
+            key = existing_root.casefold()
+            if not _under(existing_root, parent):
+                proposed.append(existing_root)
+            elif key in desired and key not in used:
+                proposed.append(desired[key])
+                used.add(key)
+        proposed.extend(p for p in local if p.casefold() not in used)
+        chosen = ";".join(p for p in proposed if _under(p, parent)) or "off"
     return {
         "mode": chosen,
         "workspace": str(parent),

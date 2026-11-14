@@ -110,6 +110,47 @@ def _directory_for_path(raw: str, writable: tuple[Path, ...], readable: tuple[Pa
     return directory
 
 
+
+def _request_authorized_turbo_directory(
+    paths: list[str], writable: tuple[Path, ...], readable: tuple[Path, ...],
+) -> Path | None:
+    """Current-request path wins only within one already-authorized Turbo Root.
+
+    Plain text never grants a new Root. Multiple distinct matched Roots are
+    ambiguous and must be handled through explicit action-specific CWDs.
+    """
+    if not paths:
+        return None
+    access = access_snapshot()
+    policy = access.get("policy") or {}
+    configured = access.get("turbo_roots") or policy.get("turbo_roots") or ()
+    if not (policy.get("turbo_requested") and configured):
+        return None
+    from .workspace_access import is_valid_turbo_root
+    matched: dict[str, Path] = {}
+    for raw in paths:
+        try:
+            target = Path(raw).expanduser().resolve(strict=False)
+            if not _writable_directory(target, writable, readable):
+                continue
+            for candidate in configured:
+                root = Path(candidate).expanduser().resolve(strict=False)
+                if not is_within(target, root):
+                    continue
+                owners = [owner for owner in writable if is_valid_turbo_root(
+                    root, owner, writable, readable,
+                    policy.get("denied_write_roots") or (),
+                )]
+                if len(owners) != 1:
+                    continue
+                selected = _directory_for_path(str(target), writable, readable)
+                if selected is not None and is_within(selected, root):
+                    matched.setdefault(_key(root), selected)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return next(iter(matched.values())) if len(matched) == 1 else None
+
+
 def _recent_candidates(store, *, conversation_key: str, transport: str, sender_id: str) -> list[dict]:
     # TaskStore is cross-process: refresh under its durable state lock.
     with store.process_lock():
@@ -190,6 +231,15 @@ def resolve_task_workspace(
         source = "EXPLICIT_CONTINUATION"
         if not selected.is_dir() or not _writable_directory(selected, writable, readable):
             raise ValueError("continuation_workspace_no_longer_writable")
+
+    # The actual current request has precedence over a stale conversation
+    # fallback. Resolve only operator-registered Turbo scopes; this grants
+    # no privilege and final Action Admission still rechecks the policy.
+    if selected is None:
+        inferred = _request_authorized_turbo_directory(paths, writable, readable)
+        if inferred is not None:
+            selected = inferred
+            source = "REQUEST_AUTHORIZED_TURBO_PATH"
 
     filtered = []
     for row in recent:
