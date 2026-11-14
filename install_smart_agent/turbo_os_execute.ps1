@@ -262,6 +262,34 @@ try {
     # outside sentinel, and can write a disposable marker inside. This is a
     # kernel denial probe, NOT a text/Planner/JSON assertion.
     $outsideLiteral=$state.sentinel.Replace("'","''")
+    # Git62: each OS process must be denied a write handle in EVERY other
+    # nominated Turbo Root, not just the parent sentinel.
+    $crossRootProof=''
+    foreach($other in @($state.policy.turbo_roots)){
+        $alternate=[IO.Path]::GetFullPath([string]$other).TrimEnd('\')
+        if($alternate.Equals([string]$state.root,[StringComparison]::OrdinalIgnoreCase)){
+            continue
+        }
+        if(-not (Test-Path -LiteralPath $alternate -PathType Container) -or
+           ((Get-Item -LiteralPath $alternate -Force).Attributes -band
+               [IO.FileAttributes]::ReparsePoint)){
+            throw 'GIT62_CROSS_ROOT_PROBE_TARGET_UNAVAILABLE'
+        }
+        $candidate=(Join-Path $alternate ('.git62-crossroot-denial-'+
+             [Guid]::NewGuid().ToString('N'))).Replace("'","''")
+        $block=@'
+try {
+    $crossHandle=[IO.File]::Open('__CROSS_ROOT_PATH__',
+        [IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    $crossHandle.Dispose()
+    [IO.File]::Delete('__CROSS_ROOT_PATH__')
+    exit 96
+} catch [System.UnauthorizedAccessException] {
+    # The distinct Root denies this SID.
+} catch {exit 97}
+'@
+        $crossRootProof+=$block.Replace('__CROSS_ROOT_PATH__',$candidate)
+    }
     $proof=@"
 `$readDenied=`$false
 try { [void][IO.File]::ReadAllText('$outsideLiteral') }
@@ -274,6 +302,7 @@ try {
     `$outsideHandle.Dispose()
     exit 92
 } catch [System.UnauthorizedAccessException] {
+$crossRootProof
     [IO.File]::WriteAllText('git50_scope_proof.tmp','OS_DENIED')
     exit 0
 }
