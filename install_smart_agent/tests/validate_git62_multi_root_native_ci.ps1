@@ -11,6 +11,10 @@ $project=Join-Path $fixture 'project'
 $ws=Join-Path $fixture 'workspace'
 $rootA=Join-Path $ws 'alpha'
 $rootB=Join-Path $ws 'beta'
+$externalWritable=Join-Path $ws 'external_writable'
+$externalReadOnly=Join-Path $fixture 'external_read_only'
+$linkWritable=Join-Path $rootB 'node_modules'
+$linkReadOnly=Join-Path $rootB 'read_only_link'
 $sec=Join-Path $project 'localdata\secure\windows_security'
 $activate=Join-Path $PSScriptRoot '..\turbo_existing_root_activate.ps1'
 $revoke=Join-Path $PSScriptRoot '..\turbo_os_activation.ps1'
@@ -22,17 +26,31 @@ $jb=Get-TurboRootJournalPaths $sec $rootB
 $before=@{}
 $hashes=@{}
 try{
- New-Item -ItemType Directory -Force -Path $sec,$rootA,$rootB | Out-Null
+ New-Item -ItemType Directory -Force -Path $sec,$rootA,$rootB,$externalWritable,$externalReadOnly | Out-Null
+ # A project may contain junctions to a writable sibling and a registered
+ # read-only location. They must stay opaque, without target ACL modification.
+ $outsideFiles=@((Join-Path $externalWritable 'package.txt'),
+                 (Join-Path $externalReadOnly 'readme.txt'))
+ foreach($f in $outsideFiles){
+    [IO.File]::WriteAllText($f,'OUTSIDE_ORIGINAL_UNMODIFIED')
+    $hashes[$f]=(Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash
+ }
+ New-Item -ItemType Junction -Path $linkWritable -Target $externalWritable -ErrorAction Stop | Out-Null
+ New-Item -ItemType Junction -Path $linkReadOnly -Target $externalReadOnly -ErrorAction Stop | Out-Null
+ foreach($link in @($linkWritable,$linkReadOnly)){
+    Check ((Get-Item -LiteralPath $link -Force).Attributes -band
+      [IO.FileAttributes]::ReparsePoint) ('GIT62_TEST_JUNCTION_MISSING:'+$link)
+ }
  foreach($root in @($rootA,$rootB)){
   $f=Join-Path $root 'keep.txt'
   [IO.File]::WriteAllText($f,'PRESERVE_GIT62_USER_FILE')
   $hashes[$f]=(Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash
  }
- foreach($path in @($ws,$rootA,$rootB,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))){
+ foreach($path in @($ws,$rootA,$rootB,$externalWritable,$externalReadOnly,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))+$outsideFiles){
   $before[$path]=(Get-Acl -LiteralPath $path -Audit -ErrorAction Stop).Sddl
  }
  $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
- $policy=[ordered]@{schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1';revision=62;writable_workspaces=@($ws);read_only_roots=@();denied_write_roots=@();turbo_roots=@($rootA,$rootB);turbo_requested=$true}
+ $policy=[ordered]@{schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1';revision=62;writable_workspaces=@($ws);read_only_roots=@($externalReadOnly);denied_write_roots=@();turbo_roots=@($rootA,$rootB);turbo_requested=$true}
  $profile=[ordered]@{schema='SMARTAGENT_WINDOWS_SECURITY_V2';trusted_executables=@()}
  [IO.File]::WriteAllText((Join-Path $sec 'acl_mode.json'),($mode|ConvertTo-Json -Depth 10))
  [IO.File]::WriteAllText((Join-Path $sec 'workspace_access_policy.json'),($policy|ConvertTo-Json -Depth 10))
@@ -48,6 +66,10 @@ try{
  Check ([string]$a.package_sid -cne [string]$b.package_sid) 'GIT62_SAME_SID_UNSAFE'
  Check ([string]$a.moniker -cne [string]$b.moniker) 'GIT62_SAME_MONIKER_UNSAFE'
  Check (-not (Test-Path -LiteralPath (Join-Path $sec 'turbo_os_activation.json'))) 'GIT62_LEGACY_JOURNAL_UNEXPECTED'
+ foreach($f in $outsideFiles){
+  Check ((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -eq $hashes[$f]) 'GIT62_LINK_TARGET_CHANGED_ON_ENROLLMENT'
+ }
+ Write-Host 'GIT62_OPAQUE_NODE_MODULES_ENROLLED_PASS'
  function Scoped($record,[string]$cwd,[string]$id){
   $cmd='[IO.File]::WriteAllText("own.txt","ROOT_'+$id+'");"ROOT_'+$id+'"'
   $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
@@ -78,6 +100,21 @@ try{
  Scoped $a $rootA 'A'
  Scoped $b $rootB 'B'
  Write-Host 'GIT62_TWO_SEPARATE_APP_CONTAINER_SIDS_AND_CROSS_ROOT_KERNEL_DENIAL_PASS'
+ $linkWriteProof=@'
+try {
+  $h=[IO.File]::Open('node_modules\escape.txt',[IO.FileMode]::CreateNew,
+      [IO.FileAccess]::Write,[IO.FileShare]::None)
+  $h.Dispose()
+  exit 94
+} catch [System.UnauthorizedAccessException] { exit 0 }
+catch { exit 95 }
+'@
+ $linkProof=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+    [string]$b.moniker,$linkWriteProof,$rootB,[uint32]30000) | ConvertFrom-Json
+ Check ($linkProof.sandbox_identity_verified -eq $true -and
+   [int]$linkProof.exit_code -eq 0 -and
+   -not (Test-Path -LiteralPath (Join-Path $externalWritable 'escape.txt'))) 'GIT62_LINK_OUTSIDE_ROOT_WRITE_ESCAPE'
+ Write-Host 'GIT62_JUNCTION_TARGET_KERNEL_WRITE_DENIED_PASS'
  # A Registry/Workspace update changes Policy revision. Independently verify
  # and rebind BOTH still-active Root SIDs before continuing native execution.
  $policy.revision=63
@@ -99,7 +136,7 @@ try{
  Write-Host 'GIT62_INDEPENDENT_BROKER_REVOCATION_PASS'
  & $revoke -Action Revoke -ProjectRoot $project
  Check (-not (Test-Path -LiteralPath $jb.activation)) 'GIT62_ALL_REVOKE_FAILED'
- foreach($path in @($ws,$rootA,$rootB,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))){
+ foreach($path in @($ws,$rootA,$rootB,$externalWritable,$externalReadOnly,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))+$outsideFiles){
   $current=(Get-Acl -LiteralPath $path -Audit).Sddl
   $normalize = {param([string]$descriptor)
     $descriptor -creplace '([DS]:[A-Z]*?)AI(?=[A-Z]*(?:\(|S:|$))','$1'
@@ -115,6 +152,10 @@ try{
  }
  foreach($file in @($hashes.Keys)){
   Check ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -eq $hashes[$file]) ('GIT62_CONTENT_CHANGED:'+$file)
+ }
+ foreach($link in @($linkWritable,$linkReadOnly)){
+  Check ((Get-Item -LiteralPath $link -Force).Attributes -band
+    [IO.FileAttributes]::ReparsePoint) ('GIT62_ORIGINAL_LINK_DELETED:'+$link)
  }
  Check (Test-Path -LiteralPath (Join-Path $rootA 'own.txt') -PathType Leaf) 'GIT62_A_USER_OUTPUT_DELETED'
  Check (Test-Path -LiteralPath (Join-Path $rootB 'own.txt') -PathType Leaf) 'GIT62_B_USER_OUTPUT_DELETED'
