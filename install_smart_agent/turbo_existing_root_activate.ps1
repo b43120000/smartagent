@@ -45,6 +45,18 @@ if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
 }
 $workspace=Full $Workspace
 $root=Full $TurboRoot
+# Git62: select a per-root state file before checking whether the target is
+# already enrolled. Never let a second Root overwrite the legacy journal.
+. (Join-Path $PSScriptRoot 'turbo_multi_root_paths.ps1')
+$policyBefore=Read-State (Join-Path $sec 'workspace_access_policy.json')
+if(@($policyBefore.turbo_roots).Count -gt 1){
+ $indexed=Get-TurboRootJournalPaths $sec $root
+ if(Test-Path -LiteralPath $activation){
+  throw 'GIT62_LEGACY_SINGLE_BROKER_REQUIRES_REVOKE_OR_MIGRATION'
+ }
+ $activation=$indexed.activation
+ $importJournal=$indexed.import
+}
 if(-not (Same $root $ConfirmTarget)){throw 'TURBO_GIT61_EXACT_TARGET_CONFIRMATION_REQUIRED'}
 if(-not (Under $root $workspace) -or (Under $root $project) -or
    (Under $project $workspace) -or (Under $workspace $project)){
@@ -61,8 +73,8 @@ $policy=Read-State (Join-Path $sec 'workspace_access_policy.json')
 if($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or $mode.mode -ne 'on' -or
    -not (Same $mode.install_root $project)){throw 'TURBO_GIT61_ACL_ON_REQUIRED'}
 if($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1' -or
-   $policy.turbo_requested -ne $true -or @($policy.turbo_roots).Count -ne 1 -or
-   -not (Same ([string]$policy.turbo_roots[0]) $root) -or
+   $policy.turbo_requested -ne $true -or
+   @($policy.turbo_roots | Where-Object { Same ([string]$_) $root }).Count -ne 1 -or
    @($policy.writable_workspaces | Where-Object {Same ([string]$_) $workspace}).Count -ne 1){
  throw 'TURBO_GIT61_POLICY_OR_WORKSPACE_MISMATCH'
 }
