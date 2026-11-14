@@ -143,7 +143,7 @@ if not "%SMARTAGENT_RECOVERY_EXIT%"=="0" (
     echo [SmartAgent Turbo] Recovery process failed, exit_code=%SMARTAGENT_RECOVERY_EXIT%. Log: "%SMARTAGENT_RECOVERY_LOG%"
     exit /b 2
 )
-findstr /c:"TURBO_RECOVERY_ELEVATED_EXIT_PASS" /c:"TURBO_PENDING_IMPORT_RECOVERY_PASS" "%SMARTAGENT_RECOVERY_LOG%" >nul
+findstr /c:"TURBO_RECOVERY_ELEVATED_EXIT_PASS" "%SMARTAGENT_RECOVERY_LOG%" >nul
 if errorlevel 1 (
     echo [SmartAgent Turbo] Recovery FAIL: native success receipt missing. Log: "%SMARTAGENT_RECOVERY_LOG%"
     exit /b 2
