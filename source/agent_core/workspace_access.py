@@ -334,6 +334,10 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
         denied = current["denied_write_roots"]
         parent = str(Path(workspace).expanduser().resolve()) if workspace else ""
         requested = list(_normalized_roots(turbo_roots))
+        # Git62: independent AppContainer roots must never overlap; an
+        # ancestor/descendant pair would make per-root OS scope ambiguous.
+        from .turbo_root_registry import validate_root_set
+        validate_root_set(requested)
         if requested:
             try:
                 mode = acl_mode()
@@ -346,6 +350,11 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
             if not any(is_valid_turbo_root(item, root, writable, read_only, denied)
                        for root in parents):
                 raise ValueError("turbo_root_not_strict_writable_workspace_child:" + item)
+        # Repeated identical settings do not revoke previously enrolled
+        # per-root Broker journals by spuriously advancing the revision.
+        if (requested == list(current.get("turbo_roots") or ()) and (
+                current.get("turbo_requested") is True) == bool(requested):
+            return current
         payload = dict(current)
         payload["turbo_roots"] = requested
         # ON is only a requested preference, NEVER an OS execution grant.
