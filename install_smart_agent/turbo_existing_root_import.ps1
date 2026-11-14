@@ -423,7 +423,7 @@ try {
    # The importer journal contains sensitive per-entry SDDL and is intentionally
    # admin-only. Publish a second, NON-sensitive commit bit in the user-readable
    # protected activation receipt only after the admin-only journal is durable.
-   $active.existing_import_committed=$true
+   $active['existing_import_committed']=$true
    Save-Atomic $script:activation $active $true
    Write-Host 'TURBO_D3_EXISTING_ROOT_NATIVE_BROKER_ATTESTED_PASS'
    Write-Host 'TURBO_D3_PER_ACTION_BROKER_REQUIRED'
