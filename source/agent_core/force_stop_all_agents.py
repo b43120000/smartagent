@@ -244,32 +244,126 @@ def _machine_manifest_status(root: Path) -> str:
     return "MATCH"
 
 
-def _verify_upgrade_commit(root: Path, commit: str) -> None:
-    def git(*args):
-        return subprocess.check_output(["git", *args], cwd=root)
+def _verified_install_root(root: str | Path) -> Path:
+    """Fail before changing any Runtime state if the launcher selected a foreign root.
 
-    if git("rev-parse", "HEAD").decode().strip() != commit.lower():
-        raise RuntimeError("force_stop_upgrade_head_mismatch")
-    if Path(os.fsdecode(git("rev-parse", "--show-toplevel").rstrip())).resolve() != root:
-        raise RuntimeError("force_stop_upgrade_git_root_mismatch")
+    A BAT argument is not sufficient to authorize cleanup of another instance.
+    The running module must belong to the same physically resolved install.
+    """
+    requested = Path(root).expanduser().resolve()
+    running_code = Path(__file__).resolve().parents[2]
+    if requested != running_code:
+        raise RuntimeError(
+            f"force_stop_install_root_mismatch:requested={requested}:module={running_code}"
+        )
+    required = (
+        requested / "config" / "protocol_manifest.json",
+        requested / "source" / "agent_core" / "force_stop_all_agents.py",
+        requested / "localdata" / "secure" / "windows_security" / "acl_mode.json",
+    )
+    for marker in required:
+        if not marker.is_file():
+            raise RuntimeError(f"force_stop_install_marker_missing:{marker}")
+    return requested
+
+
+def _deployed_git_source(root: Path) -> Path:
+    """Recover the original Git checkout from an installation deployment receipt.
+
+    Deployed installations deliberately exclude .git. This receipt only locates
+    a candidate checkout; the requested SHA and every protected installed
+    source byte are verified against Git before any authorization transition.
+    """
+    receipt = root / "localdata" / "update" / "deployment_baseline.json"
+    if not receipt.is_file():
+        raise RuntimeError(
+            "force_stop_upgrade_source_checkout_required:"
+            "deployed_install_has_no_git_and_no_deployment_receipt"
+        )
+    try:
+        value = json.loads(receipt.read_text(encoding="utf-8-sig"))
+        if (value.get("schema") != "SMARTAGENT_DEPLOYMENT_BASELINE_V1"
+                or Path(str(value["install_root"])).resolve() != root):
+            raise ValueError("deployment_receipt_root_mismatch")
+        candidate = Path(str(value["source_root"])).expanduser()
+        if not candidate.is_absolute() or candidate.resolve() == root:
+            raise ValueError("deployment_receipt_source_invalid")
+        return candidate.resolve()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            "force_stop_upgrade_deployment_receipt_untrusted"
+        ) from exc
+
+
+def _verify_upgrade_commit(
+    root: Path, commit: str, git_source_root: str | Path | None = None,
+) -> None:
+    """Pin a verified Git commit to installed bytes, with no on-disk Git requirement."""
+    root = Path(root).resolve()
+    source = (Path(git_source_root).expanduser().resolve()
+              if git_source_root is not None else root)
+    git_exe = root / ".venv" / "git" / "cmd" / "git.exe"
+    git_binary = str(git_exe) if git_exe.is_file() else "git"
+
+    def git(*args: str) -> bytes:
+        return subprocess.check_output(
+            [git_binary, "-C", str(source), *args],
+            stderr=subprocess.PIPE,
+        )
+
+    if git_source_root is None:
+        # An installed release must not be treated as a Git working copy
+        # simply because a 'git.exe' binary exists in its virtual environment.
+        try:
+            recorded_root = Path(os.fsdecode(
+                git("rev-parse", "--show-toplevel").rstrip()
+            )).resolve()
+        except (OSError, subprocess.SubprocessError):
+            source = _deployed_git_source(root)
+        else:
+            if recorded_root != root:
+                source = _deployed_git_source(root)
+
+    if not source.is_dir():
+        raise RuntimeError(f"force_stop_upgrade_source_checkout_missing:{source}")
+    try:
+        head = git("rev-parse", "HEAD").decode("ascii").strip()
+        worktree = Path(os.fsdecode(
+            git("rev-parse", "--show-toplevel").rstrip()
+        )).resolve()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            f"force_stop_upgrade_source_not_git_repository:{source}"
+        ) from exc
+    if worktree != source:
+        raise RuntimeError("force_stop_upgrade_source_git_root_mismatch")
+    if head.lower() != commit.lower():
+        raise RuntimeError("force_stop_upgrade_source_head_mismatch")
+
     relative = "config/protocol_manifest.json"
     manifest = root / relative
+    if not manifest.is_file():
+        raise RuntimeError(f"force_stop_upgrade_installed_manifest_missing:{manifest}")
     if hashlib.sha256(manifest.read_bytes()).digest() != hashlib.sha256(
         git("show", f"{commit}:{relative}")
     ).digest():
         raise RuntimeError("force_stop_upgrade_manifest_differs_from_commit")
-    status = git("status", "--porcelain", "--untracked-files=all", "--",
-                 relative, *CORE_FILES)
-    if status:
-        raise RuntimeError("force_stop_upgrade_managed_files_modified")
+    dirty = git("status", "--porcelain", "--untracked-files=all", "--",
+                relative, *CORE_FILES)
+    if dirty:
+        raise RuntimeError("force_stop_upgrade_source_managed_files_modified")
+    # Installed core files are verified against the commit's complete hash
+    # ledger, not against a mutable deployment receipt or checkout directory.
     _verify_startup_contract(root)
 
 
-def _apply_git_upgrade(root: Path, commit: str) -> None:
+def _apply_git_upgrade(
+    root: Path, commit: str, git_source_root: str | Path | None = None,
+) -> None:
     from .security_preflight import preflight
     from .windows_security import acl_mode
 
-    _verify_upgrade_commit(root, commit)
+    _verify_upgrade_commit(root, commit, git_source_root)
     profile = root / "localdata" / "secure" / "windows_security" / "security_profile.json"
     if not profile.is_file() or acl_mode(profile, allow_on_transition=True) not in {"on", "transitioning_on"}:
         raise RuntimeError("force_stop_upgrade_requires_existing_acl_on")
@@ -281,11 +375,10 @@ def _apply_git_upgrade(root: Path, commit: str) -> None:
     turbo_requested = policy.get("turbo_requested") is True
 
     def turbo_ready():
-        # Multi-root native SIDs are selected by their exact policy-owned Root,
-        # not by the common writable Workspace parent. Require ALL configured
-        # Roots to have current, individually verified Native enrollment.
+        # Verify EVERY enrolled Root; a writable Workspace parent is not a
+        # Native SID selector and cannot establish multi-root readiness.
         roots = tuple(policy.get("turbo_roots") or ())
-        return bool(roots) and all(active_broker_available(root) for root in roots)
+        return bool(roots) and all(active_broker_available(p) for p in roots)
 
     needs_restore = status == "MATCH" and (
         acl_mode(profile, allow_on_transition=True) == "transitioning_on"
@@ -299,7 +392,7 @@ def _apply_git_upgrade(root: Path, commit: str) -> None:
              "-ProjectRoot", str(root), "-RestoreTurboAfterUpgrade"],
             cwd=root, check=True,
         )
-        _verify_upgrade_commit(root, commit)
+        _verify_upgrade_commit(root, commit, git_source_root)
         status = _machine_manifest_status(root)
     if status != "MATCH":
         raise RuntimeError(status)
@@ -449,12 +542,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--exclude-pid", action="append", type=int, default=[])
     parser.add_argument("--after-git-update", metavar="COMMIT")
+    parser.add_argument("--git-source-root", metavar="CHECKOUT")
     args = parser.parse_args(argv)
     if args.after_git_update is not None and (
         args.dry_run or not re.fullmatch(r"[0-9a-fA-F]{40}", args.after_git_update)
     ):
         parser.error("--after-git-update requires a full commit SHA and a real stop")
+    if args.git_source_root is not None and args.after_git_update is None:
+        parser.error("--git-source-root requires --after-git-update")
     try:
+        _verified_install_root(args.root)
         exclusions = set(args.exclude_pid)
         if args.after_git_update is None:
             result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions)
@@ -467,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = _force_stop_all_locked(root, exclude_pids=exclusions)
                 if result.get("success"):
                     try:
-                        _apply_git_upgrade(root, args.after_git_update)
+                        _apply_git_upgrade(root, args.after_git_update, args.git_source_root)
                         result["git_upgrade"] = {"status": "PASS"}
                     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
                         result["git_upgrade"] = {"status": "FAIL", "error": str(exc)}
