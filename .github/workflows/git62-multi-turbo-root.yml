@@ -99,6 +99,35 @@ jobs:
               throw ('GIT62_POWERSHELL_PARSE_FAILED:'+$name)
             }
           }
+      - name: Windows CMD SHIFT preserves launcher root and recovery path
+        run: |
+          $fixture=Join-Path $env:RUNNER_TEMP ('git62-force-stop-'+[Guid]::NewGuid().ToString('N'))
+          try {
+            foreach($rel in @('config','source/agent_core','.venv/Scripts','install_smart_agent')) {
+              New-Item -ItemType Directory -Path (Join-Path $fixture $rel) -Force | Out-Null
+            }
+            Copy-Item 'force_stop_all_agents.bat' (Join-Path $fixture 'force_stop_all_agents.bat') -ErrorAction Stop
+            [IO.File]::WriteAllText((Join-Path $fixture 'config/protocol_manifest.json'),'fixture')
+            [IO.File]::WriteAllText((Join-Path $fixture 'source/agent_core/__init__.py'),'')
+            [IO.File]::WriteAllText((Join-Path $fixture '.venv/Scripts/python.exe'),'fixture')
+            Copy-Item 'install_smart_agent/turbo_pending_import_recovery.ps1' (Join-Path $fixture 'install_smart_agent/turbo_pending_import_recovery.ps1') -ErrorAction Stop
+            Push-Location $fixture
+            try {
+              $out=@(& $env:ComSpec /d /c 'force_stop_all_agents.bat --after-git-update 711c26c575cbda52bb6e6b675ecd380b43e32278 --recover-turbo-import C:\Users\user\Desktop\remoteagent --launcher-self-test' 2>&1)
+              $code=$LASTEXITCODE
+            } finally { Pop-Location }
+            if($code -ne 0) { throw ('GIT62_FORCE_STOP_CMD_SHIFT_FAILED:'+($out -join ';')) }
+            if(-not (@($out | Where-Object {$_ -match 'FORCE_STOP_ALL_AGENTS_LAUNCHER_PARSE_OK'}).Count)) {
+              throw 'GIT62_FORCE_STOP_CMD_PARSER_FAILED'
+            }
+            $expected='FORCE_STOP_RECOVERY_SCRIPT='+(Join-Path $fixture 'install_smart_agent/turbo_pending_import_recovery.ps1')
+            if(-not (@($out | Where-Object {([string]$_).Trim() -ieq $expected}).Count)) {
+              throw ('GIT62_FORCE_STOP_SCRIPT_PATH_CHANGED:'+$($out -join ';'))
+            }
+            Write-Host 'GIT62_CMD_SHIFT_AND_RECOVERY_PATH_PASS'
+          } finally {
+            if(Test-Path -LiteralPath $fixture){ Remove-Item -LiteralPath $fixture -Recurse -Force }
+          }
       - name: Git62 opaque junction inventory and external hardlink regression
         run: |
           .\install_smart_agent\tests\validate_turbo_b_existing_root_preflight.ps1
