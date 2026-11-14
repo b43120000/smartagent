@@ -53,7 +53,7 @@ def test_upgrade_checks_all_roots_not_their_parent(
 
     monkeypatch.setattr(cleanup.subprocess, "run", no_reprovision)
     cleanup._apply_git_upgrade(root, "a" * 40)
-    assert seen == roots
+    assert seen == roots + roots  # readiness before and after upgrade gate
 
 
 def test_manifest_mismatch_requires_admin_restore_and_rechecks_every_root(
