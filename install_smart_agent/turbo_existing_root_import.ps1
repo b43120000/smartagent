@@ -101,6 +101,83 @@ function Restore-Exact([string]$p,[string]$s) {
   throw ('TURBO_D3_EXACT_SDDL_RESTORE_FAILED:'+$p)
  }
 }
+# Git62: original Workspace ancestor SDDL must survive MULTIPLE independent
+# Root SIDs. The FIRST Root records an immutable per-ancestor baseline under
+# the protected security journal directory. Later imports never replace it.
+function Get-SharedAncestorBaseline([string]$p){
+ $folder=Join-Path $sec 'turbo_root_activations'
+ $key=Get-TurboRootKey $p
+ return (Join-Path $folder ('ancestor-'+$key+'.json'))
+}
+function Other-Active-RootUsesAncestor([string]$ancestor,[string]$selfSid){
+ $folder=Join-Path $sec 'turbo_root_activations'
+ if(-not (Test-Path -LiteralPath $folder -PathType Container)){return $false}
+ foreach($item in @(Get-ChildItem -LiteralPath $folder -File -Filter 'activation-*.json' -ErrorAction Stop)){
+  $other=Load $item.FullName
+  if($other.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+     [string]$other.package_sid -notmatch '^S-1-15-2-'){
+    throw 'GIT62_ANCESTOR_OTHER_ACTIVATION_UNTRUSTED'
+  }
+  if([string]$other.package_sid -ceq $selfSid){continue}
+  if($other.status -ne 'ACTIVE_PROVISIONED'){
+    throw 'GIT62_ANCESTOR_OTHER_ACTIVATION_PENDING'
+  }
+  $otherRoot=Full ([string]$other.turbo_root)
+  if((Same $otherRoot $ancestor) -or (Under $otherRoot $ancestor)){
+    return $true
+  }
+ }
+ return $false
+}
+function Prepare-SharedAncestors([object[]]$entries,[string]$selfSid){
+ if(-not $script:multi){return}
+ foreach($entry in @($entries)){
+  $p=Full ([string]$entry.path)
+  $f=Get-SharedAncestorBaseline $p
+  if(Test-Path -LiteralPath $f){
+    $saved=Load $f
+    if($saved.schema -ne 'SMARTAGENT_TURBO_SHARED_ANCESTOR_V1' -or
+       -not (Same $saved.path $p) -or
+       -not (Same $saved.install_root $script:project) -or
+       [string]$saved.identity -cne [string]$entry.identity){
+        throw 'GIT62_SHARED_ANCESTOR_BASELINE_INVALID'
+    }
+  } else {
+    if(Other-Active-RootUsesAncestor $p $selfSid){
+        throw 'GIT62_SHARED_ANCESTOR_BASELINE_MISSING_WITH_ACTIVE_SID'
+    }
+    if((Sddl $p) -cne [string]$entry.sddl){
+        throw 'GIT62_SHARED_ANCESTOR_CHANGED_BEFORE_SNAPSHOT'
+    }
+    Save-Atomic $f ([ordered]@{
+      schema='SMARTAGENT_TURBO_SHARED_ANCESTOR_V1'
+      install_root=$script:project
+      path=$p
+      identity=[string]$entry.identity
+      sddl=[string]$entry.sddl
+    }) $false
+  }
+ }
+}
+function Revoke-SharedAncestor([object]$entry,[string]$selfSid){
+ $p=Full ([string]$entry.path)
+ & icacls.exe $p '/remove:g' ('*'+$selfSid) | Out-Null
+ if($LASTEXITCODE -ne 0){throw 'GIT62_SHARED_ANCESTOR_REVOKE_FAILED'}
+ if(Other-Active-RootUsesAncestor $p $selfSid){return}
+ $baselineFile=Get-SharedAncestorBaseline $p
+ $saved=Load $baselineFile
+ if($saved.schema -ne 'SMARTAGENT_TURBO_SHARED_ANCESTOR_V1' -or
+    -not (Same $saved.install_root $script:project) -or
+    -not (Same $saved.path $p) -or
+    [string]$saved.identity -cne [string]$entry.identity){
+     throw 'GIT62_SHARED_ANCESTOR_RESTORE_BASELINE_INVALID'
+ }
+ Restore-Exact $p ([string]$saved.sddl)
+ if((Sddl $p) -cne [string]$saved.sddl){
+     throw 'GIT62_SHARED_ANCESTOR_EXACT_SDDL_RESTORE_FAILED'
+ }
+ Remove-Item -LiteralPath $baselineFile -Force -ErrorAction Stop
+}
 function Revoke-Tree([object]$j) {
  $script:root=Full ([string]$j.turbo_root)
  $ws=Full ([string]$j.workspace_root)
@@ -136,8 +213,7 @@ function Revoke-Tree([object]$j) {
        # Shared Workspace ancestors may carry OTHER active AppContainer
        # traverse ACEs. Restoring an old SDDL would remove another Root SID
        # or resurrect a SID already revoked. Remove only this Root's SID.
-       & icacls.exe $p '/remove:g' ('*'+[string]$j.package_sid) | Out-Null
-       if($LASTEXITCODE -ne 0){throw 'GIT62_SHARED_ANCESTOR_REVOKE_FAILED'}
+       Revoke-SharedAncestor $ancestor ([string]$j.package_sid)
    } else {
        Restore-Exact $p ([string]$ancestor.sddl)
    }
@@ -304,6 +380,7 @@ try {
  }
  Save-Atomic $script:journal $j $false
  try {
+   Prepare-SharedAncestors @($ancestors) $sid
    $sidObj=[Security.Principal.SecurityIdentifier]::new($sid)
    foreach($entry in @($snap.entries | Sort-Object {([string]$_.path).Length} -Descending)){
       Check-Identity $entry
