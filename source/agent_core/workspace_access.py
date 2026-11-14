@@ -350,6 +350,43 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
             if not any(is_valid_turbo_root(item, root, writable, read_only, denied)
                        for root in parents):
                 raise ValueError("turbo_root_not_strict_writable_workspace_child:" + item)
+        # Git62: Telegram/WebGPT may REGISTER a Root but cannot silently
+        # remove an OS-enrolled SID. The elevated native revoker must first
+        # verify that the protected activation journal is gone.
+        from .turbo_root_registry import journal_path as turbo_journal_path
+        previous_roots = list(current.get("turbo_roots") or ())
+        removed = [
+            root for root in previous_roots
+            if _key(root) not in {_key(item) for item in requested}
+        ]
+        secure = policy_path.parent
+        legacy = secure / "turbo_os_activation.json"
+        for removed_root in removed:
+            indexed = turbo_journal_path(secure, removed_root)
+            try:
+                indexed.stat()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    "turbo_native_enrollment_status_unverifiable"
+                ) from exc
+            else:
+                raise RuntimeError(
+                    "turbo_native_revoke_required_before_root_removal:"
+                    + removed_root
+                )
+            try:
+                if legacy.is_file():
+                    existing = json.loads(legacy.read_text(encoding="utf-8-sig"))
+                    if _key(existing.get("turbo_root", "")) == _key(removed_root):
+                        raise RuntimeError(
+                            "turbo_legacy_native_revoke_required_before_root_removal"
+                        )
+            except (OSError, ValueError, TypeError) as exc:
+                raise RuntimeError(
+                    "turbo_legacy_enrollment_status_unverifiable"
+                ) from exc
         # Repeated identical settings do not revoke previously enrolled
         # per-root Broker journals by spuriously advancing the revision.
         if (requested == list(current.get("turbo_roots") or ()) and (
