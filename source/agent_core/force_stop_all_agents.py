@@ -4,6 +4,7 @@ from __future__ import annotations
 """Force-stop only processes owned by this SmartAgent checkout."""
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .conversation_ownership import ConversationOwnershipRegistry
-from .protocol_manifest import validate_protocol_manifest, write_protocol_manifest
+from .protocol_manifest import CORE_FILES, validate_protocol_manifest
 from .paths import force_stop_flag_path, webgpt_submit_lock_path
 from .paths import runtime_root
 from .process_file_lock import exclusive_process_lock
@@ -219,25 +220,75 @@ def _finalize_runtime_states(root: Path) -> dict[str, bool]:
     return finalized
 
 
-def _sync_startup_contract(root: Path) -> dict[str, Any]:
-    """Rebuild and validate manifests only after all Agent writers are stopped."""
-    import compileall
+def _verify_startup_contract(root: Path) -> dict[str, Any]:
+    report = validate_protocol_manifest(root)
+    if report["hash_verification"] != "PASS":
+        raise RuntimeError("protocol_manifest_source_unverified")
+    return {"manifest_roots": [str(root)], "hash_verification": "PASS"}
 
-    checked: list[str] = []
-    for tree in (root, root / "release"):
-        if tree == root / "release" and not tree.is_dir():
-            continue
-        write_protocol_manifest(tree)
-        validate_protocol_manifest(tree)
-        checked.append(str(tree))
-    compile_ok = all(
-        compileall.compile_dir(str(root / folder), quiet=1, force=True)
-        for folder in ("agent_core", "RemoteAgent", "WebAgent")
-        if (root / folder).is_dir()
-    )
-    if not compile_ok:
-        raise RuntimeError("startup_contract_python_compile_failed")
-    return {"manifest_roots": checked, "python_compile": True}
+
+def _machine_manifest_status(root: Path) -> str:
+    from .windows_security import load_machine_authorization, machine_authorization_path
+
+    path = machine_authorization_path()
+    if not path.is_file():
+        return "machine_authorization_missing"
+    authorization = json.loads(path.read_bytes())
+    if Path(authorization["install_root"]).resolve() != root:
+        return "machine_authorization_install_root_mismatch"
+    try:
+        if load_machine_authorization() is None:
+            return "machine_authorization_missing"
+    except RuntimeError as exc:
+        return str(exc).split(":", 1)[0]
+    return "MATCH"
+
+
+def _verify_upgrade_commit(root: Path, commit: str) -> None:
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=root)
+
+    if git("rev-parse", "HEAD").decode().strip() != commit.lower():
+        raise RuntimeError("force_stop_upgrade_head_mismatch")
+    if Path(os.fsdecode(git("rev-parse", "--show-toplevel").rstrip())).resolve() != root:
+        raise RuntimeError("force_stop_upgrade_git_root_mismatch")
+    relative = "config/protocol_manifest.json"
+    manifest = root / relative
+    if hashlib.sha256(manifest.read_bytes()).digest() != hashlib.sha256(
+        git("show", f"{commit}:{relative}")
+    ).digest():
+        raise RuntimeError("force_stop_upgrade_manifest_differs_from_commit")
+    status = git("status", "--porcelain", "--untracked-files=all", "--",
+                 relative, *CORE_FILES)
+    if status:
+        raise RuntimeError("force_stop_upgrade_managed_files_modified")
+    _verify_startup_contract(root)
+
+
+def _apply_git_upgrade(root: Path, commit: str) -> None:
+    from .security_preflight import preflight
+    from .windows_security import acl_mode
+
+    _verify_upgrade_commit(root, commit)
+    profile = root / "localdata" / "secure" / "windows_security" / "security_profile.json"
+    if acl_mode(profile) != "on" or not profile.is_file():
+        raise RuntimeError("force_stop_upgrade_requires_existing_acl_on")
+    status = _machine_manifest_status(root)
+    if status == "machine_authorization_manifest_mismatch":
+        if profile.with_name("turbo_os_activation.json").is_file():
+            raise RuntimeError("GIT50_TURBO_BROKER_REVOKE_REQUIRED_BEFORE_ACL_ON_RECONFIGURE")
+        subprocess.run(
+            [os.environ.get("ComSpec", "cmd.exe"), "/d", "/c", "ACLstatus.bat", "on"],
+            cwd=root, check=True,
+        )
+        _verify_upgrade_commit(root, commit)
+        status = _machine_manifest_status(root)
+    if status != "MATCH":
+        raise RuntimeError(status)
+    report = preflight("remote")
+    if report.get("status") != "PASS":
+        reasons = (report.get("attestation") or {}).get("reasons") or []
+        raise RuntimeError("force_stop_upgrade_preflight_failed:" + ",".join(reasons))
 
 
 def force_stop_all(
@@ -347,9 +398,10 @@ def _force_stop_all_locked(
         try:
             result["startup_contract"] = {
                 "status": "PASS",
-                **_sync_startup_contract(project),
+                **_verify_startup_contract(project),
+                "machine_authorization": _machine_manifest_status(project),
             }
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
             result["startup_contract"] = {
                 "status": "FAIL",
                 "error": f"{type(exc).__name__}: {exc}",
@@ -361,7 +413,6 @@ def _force_stop_all_locked(
         and lock_clean
         and work_clean
         and controls_clean
-        and result["startup_contract"].get("status") == "PASS"
     )
     # Still inside the startup barrier: include excluded/blocked new launchers.
     last = discover_agent_pids(_powershell_process_inventory(), project, exclude_pids={os.getpid()})
@@ -374,14 +425,35 @@ def _force_stop_all_locked(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Force-stop this checkout's Agent processes")
-    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[2]))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--exclude-pid", action="append", type=int, default=[])
+    parser.add_argument("--after-git-update", metavar="COMMIT")
     args = parser.parse_args(argv)
+    if args.after_git_update is not None and (
+        args.dry_run or not re.fullmatch(r"[0-9a-fA-F]{40}", args.after_git_update)
+    ):
+        parser.error("--after-git-update requires a full commit SHA and a real stop")
     try:
-        result = force_stop_all(
-            args.root, dry_run=args.dry_run, exclude_pids=set(args.exclude_pid)
-        )
+        exclusions = set(args.exclude_pid)
+        if args.after_git_update is None:
+            result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions)
+        else:
+            root = Path(args.root).resolve()
+            with exclusive_process_lock(
+                runtime_root(root) / "force_stop_cleanup.lock",
+                timeout_sec=5.0, label="force-stop/startup barrier",
+            ):
+                result = _force_stop_all_locked(root, exclude_pids=exclusions)
+                if result.get("success"):
+                    try:
+                        _apply_git_upgrade(root, args.after_git_update)
+                        result["git_upgrade"] = {"status": "PASS"}
+                    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+                        result["git_upgrade"] = {"status": "FAIL", "error": str(exc)}
+                        result["success"] = False
+                else:
+                    result["git_upgrade"] = {"status": "SKIPPED", "reason": "force_stop_failed"}
     except Exception as exc:
         print(json.dumps({"success": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
         return 1

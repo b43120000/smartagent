@@ -24,6 +24,7 @@ if not exist "%SMARTAGENT_PYTHON%" (
 
 set "NO_PAUSE="
 set "EXCLUDE_PID_ARGS="
+set "AFTER_UPDATE_ARGS="
 set "LAUNCHER_SELF_TEST="
 :parse_args
 if "%~1"=="" goto args_parsed
@@ -47,6 +48,16 @@ if /I "%~1"=="--exclude-pid" (
     shift
     goto parse_args
 )
+if /I "%~1"=="--after-git-update" (
+    if "%~2"=="" (
+        echo [SmartAgent] ERROR --after-git-update requires a full commit SHA.
+        endlocal & exit /b 64
+    )
+    set AFTER_UPDATE_ARGS=--after-git-update "%~2"
+    shift
+    shift
+    goto parse_args
+)
 echo [SmartAgent] ERROR Unknown argument: %~1
 endlocal & exit /b 64
 
@@ -56,7 +67,7 @@ if defined LAUNCHER_SELF_TEST (
     endlocal & exit /b 0
 )
 echo [SmartAgent] Stopping LocalAgent, WebAgent, RemoteAgent, monitors and workers...
-"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%~dp0." %EXCLUDE_PID_ARGS%
+"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%~dp0." %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS%
 set "STOP_EXIT=%errorlevel%"
 if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
