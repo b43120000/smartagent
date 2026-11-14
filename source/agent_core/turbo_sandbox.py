@@ -95,9 +95,24 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
         if not allowed:
             state["reason_code"] = "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
             return state
-        # A workspace may have several nominated roots. Selection of a single
-        # OS-verified execution boundary belongs to the broker, not Planner.
-        state["turbo_root"] = str(allowed[0])
+        # Git62: if the supplied task working directory is inside a
+        # registered Turbo Root, select exactly that Root. Never take the
+        # first root of a multi-root Workspace. A legacy single-root Workspace
+        # parent is still supported.
+        from .turbo_root_registry import resolve_root, TurboRootRoutingError
+        selected = None
+        try:
+            selected = resolve_root(workspace, {"turbo_roots": [str(p) for p in allowed]})
+        except TurboRootRoutingError:
+            if len(allowed) == 1 and parent in allowed[0].parents:
+                selected = allowed[0]
+        if selected is None:
+            state["reason_code"] = (
+                "TURBO_MULTI_ROOT_CWD_REQUIRED" if len(allowed) > 1
+                else "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
+            )
+            return state
+        state["turbo_root"] = str(selected)
         state["scope_verdict"] = "TURBO_SCOPE_ALLOWED"
         state["reason_code"] = "SANDBOX_UNAVAILABLE"
         return state
