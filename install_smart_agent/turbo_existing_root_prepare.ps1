@@ -158,7 +158,11 @@ function Verify-Snapshot([string]$id) {
         }
         $node=$current[$path]
         $expectedLinks=if($entry.PSObject.Properties['link_count']){[uint32]$entry.link_count}else{1}
-        if ($node.link_count -ne $expectedLinks -or [string]$node.identity -cne [string]$entry.identity -or
+        $expectedReparse=($entry.PSObject.Properties['reparse'] -and
+            [bool]$entry.reparse)
+        if ([bool]$node.reparse -ne [bool]$expectedReparse -or
+            $node.link_count -ne $expectedLinks -or
+            [string]$node.identity -cne [string]$entry.identity -or
             [string]$node.sddl -cne [string]$entry.sddl -or
             [bool]$node.directory -ne [bool]$entry.directory -or
             [string]$node.relative -cne [string]$entry.relative) {
