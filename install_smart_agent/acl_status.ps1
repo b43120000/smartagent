@@ -851,7 +851,12 @@ if ($Mode -eq 'on') {
     }
     $configure = Join-Path $PSScriptRoot 'configure_security.ps1'
     $taskBefore = Get-ExecutorTask
-    if ($taskBefore -and (Get-RecordedValue $previousModeState 'mode') -eq 'transitioning_on') {
+    $retryUpgrade = $RestoreTurboAfterUpgrade -and $profileBoundToRoot -and
+        (Get-RecordedValue $previousModeState 'mode') -eq 'transitioning_on' -and
+        -not (Test-Path -LiteralPath $aclPending) -and
+        -not (Test-Path -LiteralPath (Join-Path $SecurityRoot 'executor_install_pending.json')) -and
+        -not (Test-Path -LiteralPath $activeTurboJournal)
+    if ($taskBefore -and (Get-RecordedValue $previousModeState 'mode') -eq 'transitioning_on' -and -not $retryUpgrade) {
         throw 'ACL_ON_PREVIOUS_ATTEMPT_INCOMPLETE:run ACLstatus.bat off before retrying'
     }
     $options = if (-not $profileStructurallyValid) { Get-SecurityProvisioningOptions }
@@ -872,7 +877,7 @@ if ($Mode -eq 'on') {
         }
     }
     if ($RestoreTurboAfterUpgrade) {
-        if (-not $profileBoundToRoot -or (Get-RecordedValue $previousModeState 'mode') -ne 'on') {
+        if (-not $profileBoundToRoot -or ((Get-RecordedValue $previousModeState 'mode') -ne 'on' -and -not $retryUpgrade)) {
             throw 'ACL_UPGRADE_REQUIRES_BOUND_ACL_ON'
         }
         $importJournal = Join-Path $SecurityRoot 'turbo_existing_root_import.json'
@@ -924,6 +929,8 @@ if ($Mode -eq 'on') {
             } else {
                 @($profile.denied_write_roots | ForEach-Object { [string]$_ })
             }
+            $readOnlyRoots = @($readOnlyRoots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $deniedWriteRoots = @($deniedWriteRoots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
             $skillRoot = if (@($profile.skill_roots).Count -gt 0) { [string]$profile.skill_roots[0] } else { Join-Path $SecurityRoot 'skills' }
             Write-Host '[SmartAgent ACL] Re-applying the complete security profile...' -ForegroundColor Cyan
             & $configure `

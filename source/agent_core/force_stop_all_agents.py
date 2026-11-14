@@ -271,7 +271,7 @@ def _apply_git_upgrade(root: Path, commit: str) -> None:
 
     _verify_upgrade_commit(root, commit)
     profile = root / "localdata" / "secure" / "windows_security" / "security_profile.json"
-    if acl_mode(profile) != "on" or not profile.is_file():
+    if not profile.is_file() or acl_mode(profile, allow_on_transition=True) not in {"on", "transitioning_on"}:
         raise RuntimeError("force_stop_upgrade_requires_existing_acl_on")
     status = _machine_manifest_status(root)
     from .workspace_access import load_workspace_access_policy
@@ -283,7 +283,10 @@ def _apply_git_upgrade(root: Path, commit: str) -> None:
     def turbo_ready():
         return any(active_broker_available(parent) for parent in policy["writable_workspaces"])
 
-    needs_restore = status == "MATCH" and turbo_requested and not turbo_ready()
+    needs_restore = status == "MATCH" and (
+        acl_mode(profile, allow_on_transition=True) == "transitioning_on"
+        or (turbo_requested and not turbo_ready())
+    )
     if status == "machine_authorization_manifest_mismatch" or needs_restore:
         powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
         subprocess.run(
