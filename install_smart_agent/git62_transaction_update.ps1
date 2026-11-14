@@ -69,6 +69,14 @@ try {
    [string]$machine.protocol_manifest_sha256 -match '^[0-9a-fA-F]{64}$') 'UPDATE_MACHINE_OWNER_NOT_TRUSTED'
  $machineAcl=Get-Acl -LiteralPath $machinePath -ErrorAction Stop
  Require ($machineAcl.AreAccessRulesProtected) 'UPDATE_MACHINE_AUTHORIZATION_ACL_UNPROTECTED'
+ $pinnedUpdater=Join-Path $root 'install_smart_agent\\update.ps1'
+ $pinnedPolicy=Join-Path $root 'install_smart_agent\\security_acl_policy.ps1'
+ Require (Test-Path -LiteralPath $pinnedUpdater -PathType Leaf) 'UPDATE_PINNED_UPDATER_MISSING'
+ Require (Test-Path -LiteralPath $pinnedPolicy -PathType Leaf) 'UPDATE_PINNED_POLICY_MISSING'
+ Require ([string]$machine.updater_sha256 -ieq (Get-FileHash -LiteralPath $pinnedUpdater -Algorithm SHA256).Hash) 'UPDATE_PINNED_UPDATER_CHANGED'
+ Require ([string]$machine.updater_policy_sha256 -ieq (Get-FileHash -LiteralPath $pinnedPolicy -Algorithm SHA256).Hash) 'UPDATE_PINNED_UPDATER_POLICY_CHANGED'
+ Require (Test-Path -LiteralPath ([string]$machine.updater_path) -PathType Leaf) 'UPDATE_MACHINE_PINNED_UPDATER_MISSING'
+ Require ([string]$machine.updater_sha256 -ieq (Get-FileHash -LiteralPath ([string]$machine.updater_path) -Algorithm SHA256).Hash) 'UPDATE_MACHINE_PINNED_UPDATER_CHANGED'
  $roots=@($policy.turbo_roots)
  Require ($roots.Count -gt 1) 'UPDATE_SINGLE_ROOT_REQUIRES_SEPARATE_VERIFIED_MIGRATION'
  $previousHash=([string]$machine.protocol_manifest_sha256).ToLowerInvariant()

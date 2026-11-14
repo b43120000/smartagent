@@ -56,6 +56,7 @@ try{
    Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
  }
  $entries=@(Get-ChildItem -LiteralPath $dir -File -Filter 'activation-*.json' -ErrorAction Stop)
+ if($entries.Count -ne @($policy.turbo_roots).Count){throw 'GIT62_REBIND_JOURNAL_COUNT_MISMATCH'}
  # Phase 1: verify ALL active journals and their OS child-token isolation
  # BEFORE modifying any journal revisions.
  $verified=@()

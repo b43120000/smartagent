@@ -64,7 +64,7 @@
     "install_smart_agent/turbo_existing_root_snapshot.ps1": "21c7e2f1e11f6203a19d46c74fe6bd45e22999fe9ce72296c1f044ee745a2c8e",
     "install_smart_agent/turbo_existing_security.cs": "e7392f085b07f118abf1f3f9133e6cc339f9b621e9968fb0dabc82472a4a9e52",
     "install_smart_agent/turbo_multi_root_paths.ps1": "6018e7e1701f398b6e2bfd2bacbb43c55211f30df8f9af0ddc0d9cec892a87c7",
-    "install_smart_agent/turbo_multi_root_rebind.ps1": "6ae32def0e48e2b558e0f330b5cfc05074c93bf947fe831265758fbf3851211a",
+    "install_smart_agent/turbo_multi_root_rebind.ps1": "295fd78639f5b9403e6dc8f1d0972e7e326a651504901cccce79ab1dd810acf9",
     "install_smart_agent/turbo_multi_root_upgrade_authorization.ps1": "fd541b1cc411ba7235e15c56ed17e767b7d54295f976841a99dbbf8d8fbe8990",
     "install_smart_agent/turbo_os_activation.ps1": "3acd29fda3469b5f2b77d4de5b92ffd5dca200464c49e2861981b17353abef6f",
     "install_smart_agent/turbo_os_execute.ps1": "2451b83ae6410bea3d8ca9c3afaf1befac31ca95b59d3dd37524e83fe4578bd2",
@@ -315,8 +315,8 @@
     "source/WebAgent/tests/test_git27_failure_causal_pipeline.py": "04acab60421d50bd919fcfa884f991b3a7b88feec60c44f538af5596f3b9cc37",
     "source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py": "7be7da2abad8d3bfb8a299d36ab390b3507f7fee430a17b3f84350145ae1a3ea",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
-    "update.bat": "c7871d87a21ed67fcf25f61a98c0e9458dce796a15f9cb0600c50a7d3c8c7b59",
-    "install_smart_agent/git62_transaction_update.ps1": "600b7341633064ab9ccf0eafeeeb13f4adb6e77a5c1de9376493824be8ddf6e0"
+    "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
+    "install_smart_agent/git62_transaction_update.ps1": "a35761bcd451ce573dc519efa832bf273b99a57cb1e86e7699b34a53127201ce"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

@@ -11,6 +11,10 @@ if "%~1"=="" (
 set "TARGET_SHA=%~1"
 set "VERIFY_OPT="
 if /I "%~2"=="--verify" set "VERIFY_OPT=-VerifyOnly"
+if not "%~2"=="" if /I not "%~2"=="--verify" (
+    echo [SmartAgent Update] Unknown option. Only --verify is supported.
+    exit /b 2
+)
 if not "%~3"=="" (
     echo [SmartAgent Update] Unsupported arguments.
     exit /b 2
