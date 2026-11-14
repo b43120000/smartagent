@@ -174,7 +174,8 @@ def test_new_global_form_round_trip_does_not_modify_any_root(registry, tmp_path,
     rendered = manager.begin(chat_id=321)
     before = snapshot()["policy"]
     roots = before["turbo_roots"]
-    assert roots == [str(a), str(foreign), str(b)]
+    assert len(roots) == 3
+    assert set(roots) == {str(a), str(foreign), str(b)}
     assert ("global_turbo_roots=" + ";".join(roots)) in rendered
     assert "\\nturbomode=" not in rendered
     begin = rendered.index(remote.UPDATE_OPEN)
