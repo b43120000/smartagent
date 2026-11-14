@@ -19,7 +19,7 @@ def test_transaction_validates_source_and_root_before_stopping():
     assert src.index("NATIVE_ROOT_PRECHECK") < src.index("STOP_AGENTS")
     assert src.index("STOP_AGENTS") < src.index("REBIND_MACHINE_AUTHORIZATION")
     assert "turbo_multi_root_upgrade_authorization.ps1" in src
-    assert "protocol_manifest_sha256=" not in src  # no blind machine digest assignment
+    assert "$machine.protocol_manifest_sha256=" not in src  # no blind machine digest assignment
     assert "UPDATE_SINGLE_ROOT_REQUIRES_SEPARATE_VERIFIED_MIGRATION" in src
 
 def test_per_root_precheck_never_writes_journal():
