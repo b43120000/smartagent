@@ -310,6 +310,7 @@ def _verify_access_postcondition(writable: list[str], read_only: list[str]) -> N
     expected_writable = {_path_key(value) for value in writable}
     actual_writable = {_path_key(value) for value in applied["writable_workspaces"]}
     protected_read_only = [
+        *list(applied.get("builtin_toolchain_read_roots") or ()),
         *list(applied_profile.get("skill_roots") or ()),
         applied_profile.get("executor_code_root", ""),
     ]
