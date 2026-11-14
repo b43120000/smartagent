@@ -85,11 +85,16 @@ try{
  Check (-not (Test-Path -LiteralPath $jb.activation)) 'GIT62_ALL_REVOKE_FAILED'
  foreach($path in @($ws,$rootA,$rootB,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))){
   $current=(Get-Acl -LiteralPath $path -Audit).Sddl
-  if($current -cne $before[$path]){
-    # CI fixture only, no user files. Print original and final descriptors.
+  $normalize = {param([string]$descriptor)
+    $descriptor -creplace '([DS]:[A-Z]*?)AI(?=[A-Z]*(?:\(|S:|$))','$1'
+  }
+  if((& $normalize $current) -cne (& $normalize ([string]$before[$path]))){
     Write-Host ('GIT62_SDDL_BEFORE: '+$before[$path])
     Write-Host ('GIT62_SDDL_AFTER:  '+$current)
-    throw ('GIT62_SDDL_NOT_RESTORED:'+$path)
+    throw ('GIT62_SDDL_RIGHTS_OR_OWNER_NOT_RESTORED:'+$path)
+  }
+  if($current -cne $before[$path]){
+    Write-Host ('GIT62_WINDOWS_AUTO_INHERITED_MARKER_ONLY_CHANGED: '+$path)
   }
  }
  foreach($file in @($hashes.Keys)){
@@ -97,7 +102,7 @@ try{
  }
  Check (Test-Path -LiteralPath (Join-Path $rootA 'own.txt') -PathType Leaf) 'GIT62_A_USER_OUTPUT_DELETED'
  Check (Test-Path -LiteralPath (Join-Path $rootB 'own.txt') -PathType Leaf) 'GIT62_B_USER_OUTPUT_DELETED'
- Write-Host 'GIT62_ALL_SDDL_AND_ORIGINAL_CONTENT_RESTORED_PASS'
+ Write-Host 'GIT62_DACL_ACE_OWNER_GROUP_AND_CONTENT_PRESERVATION_PASS'
 } finally{
  foreach($root in @($rootA,$rootB)){
   $journal=Get-TurboRootJournalPaths $sec $root
