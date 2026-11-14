@@ -51,12 +51,13 @@ try{
   $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
   $answer=& ([string]$record.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $cwd -SelectedTurboRoot $cwd -ExpectedRevision 62 -TaskId ('TASK-GIT62-'+$id) -ActionId ('ACT-GIT62-'+$id) -CommandBase64 $encoded -TimeoutSeconds 30
   $proof=$answer | Out-String | ConvertFrom-Json -ErrorAction Stop
-  Write-Host ('GIT62_NATIVE_RECEIPT_DIAGNOSTIC root='+$id+
-    ' identity='+$proof.sandbox_identity_verified+
-    ' kernel_read='+$proof.kernel_outside_read_denied+
-    ' kernel_write='+$proof.kernel_outside_write_denied+
-    ' exit='+$proof.command_exit_code+
-    ' state='+$proof.os_execution_result)
+  $diagnostic=@('sandbox_identity_verified','kernel_outside_read_denied',
+    'kernel_outside_write_denied','command_exit_code','child_process_policy')
+  $pairs=@($diagnostic | ForEach-Object {
+    $prop=$proof.PSObject.Properties[$_]
+    $_+'='+$(if($null -eq $prop){'MISSING'}else{[string]$prop.Value})
+  })
+  Write-Host ('GIT62_NATIVE_RECEIPT_DIAGNOSTIC root='+$id+' '+($pairs -join ' '))
   Check ($proof.sandbox_identity_verified -eq $true -and $proof.kernel_outside_read_denied -eq $true -and $proof.kernel_outside_write_denied -eq $true -and [int]$proof.command_exit_code -eq 0) ('GIT62_NATIVE_PROOF_FAILED_'+$id)
   Check ([IO.File]::ReadAllText((Join-Path $cwd 'own.txt')) -ceq ('ROOT_'+$id)) ('GIT62_ROOT_WRITE_FAILED_'+$id)
   $stdout=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$proof.stdout_base64))
