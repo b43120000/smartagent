@@ -37,12 +37,12 @@ set "LAUNCHER_SELF_TEST="
 if "%~1"=="" goto args_parsed
 if /I "%~1"=="--launcher-self-test" (
     set "LAUNCHER_SELF_TEST=1"
-    shift
+    shift /1
     goto parse_args
 )
 if /I "%~1"=="--no-pause" (
     set "NO_PAUSE=1"
-    shift
+    shift /1
     goto parse_args
 )
 if /I "%~1"=="--exclude-pid" (
@@ -51,8 +51,8 @@ if /I "%~1"=="--exclude-pid" (
         endlocal & exit /b 64
     )
     set "EXCLUDE_PID_ARGS=%EXCLUDE_PID_ARGS% --exclude-pid %~2"
-    shift
-    shift
+    shift /1
+    shift /1
     goto parse_args
 )
 if /I "%~1"=="--recover-turbo-import" (
@@ -61,8 +61,8 @@ if /I "%~1"=="--recover-turbo-import" (
         endlocal & exit /b 64
     )
     set "RECOVER_TURBO_ROOT=%~2"
-    shift
-    shift
+    shift /1
+    shift /1
     goto parse_args
 )
 
@@ -72,8 +72,8 @@ if /I "%~1"=="--git-source-root" (
         endlocal & exit /b 64
     )
     set GIT_SOURCE_ARGS=--git-source-root "%~2"
-    shift
-    shift
+    shift /1
+    shift /1
     goto parse_args
 )
 
@@ -83,8 +83,8 @@ if /I "%~1"=="--after-git-update" (
         endlocal & exit /b 64
     )
     set AFTER_UPDATE_ARGS=--after-git-update "%~2"
-    shift
-    shift
+    shift /1
+    shift /1
     goto parse_args
 )
 echo [SmartAgent] ERROR Unknown argument: %~1
@@ -111,16 +111,37 @@ if defined RECOVER_TURBO_ROOT (
     if not "%STOP_EXIT%"=="0" (
         echo [SmartAgent Turbo] Recovery BLOCKED: force stop or Git upgrade did not pass.
     ) else (
-        echo [SmartAgent Turbo] Explicit Native Recovery requested for "%RECOVER_TURBO_ROOT%".
-        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\turbo_pending_import_recovery.ps1" -ProjectRoot "%SMARTAGENT_INSTALL_ROOT%" -TurboRoot "%RECOVER_TURBO_ROOT%"
+        call :perform_native_recovery
         if errorlevel 1 (
-            echo [SmartAgent Turbo] Recovery FAILED. Journal retained unless Native rollback completed.
+            echo [SmartAgent Turbo] Recovery FAILED. Preserve Journal and inspect recovery log.
             set "STOP_EXIT=2"
         ) else (
-            echo [SmartAgent Turbo] Recovery completed; check Native Recovery receipt above.
+            echo [SmartAgent Turbo] Native Recovery verified by elevated exit receipt.
         )
     )
 )
-
 if not defined NO_PAUSE pause
 endlocal & exit /b %STOP_EXIT%
+
+:perform_native_recovery
+set "SMARTAGENT_RECOVERY_SCRIPT=%SMARTAGENT_INSTALL_ROOT%\install_smart_agent\turbo_pending_import_recovery.ps1"
+if not exist "%SMARTAGENT_RECOVERY_SCRIPT%" (
+    echo [SmartAgent Turbo] Recovery BLOCKED: recovery_script_missing: "%SMARTAGENT_RECOVERY_SCRIPT%"
+    exit /b 3
+)
+echo [SmartAgent Turbo] Explicit Native Recovery requested for "%RECOVER_TURBO_ROOT%".
+set "SMARTAGENT_RECOVERY_LOG=%TEMP%\smartagent_native_recovery_%RANDOM%_%RANDOM%.txt"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SMARTAGENT_RECOVERY_SCRIPT%" -ProjectRoot "%SMARTAGENT_INSTALL_ROOT%" -TurboRoot "%RECOVER_TURBO_ROOT%" >"%SMARTAGENT_RECOVERY_LOG%" 2>&1
+set "SMARTAGENT_RECOVERY_EXIT=%errorlevel%"
+type "%SMARTAGENT_RECOVERY_LOG%"
+if not "%SMARTAGENT_RECOVERY_EXIT%"=="0" (
+    echo [SmartAgent Turbo] Recovery process failed, exit_code=%SMARTAGENT_RECOVERY_EXIT%. Log: "%SMARTAGENT_RECOVERY_LOG%"
+    exit /b 2
+)
+findstr /c:"TURBO_RECOVERY_ELEVATED_EXIT_PASS" /c:"TURBO_PENDING_IMPORT_RECOVERY_PASS" "%SMARTAGENT_RECOVERY_LOG%" >nul
+if errorlevel 1 (
+    echo [SmartAgent Turbo] Recovery FAIL: native success receipt missing. Log: "%SMARTAGENT_RECOVERY_LOG%"
+    exit /b 2
+)
+echo [SmartAgent Turbo] Native recovery receipt verified. Log: "%SMARTAGENT_RECOVERY_LOG%"
+exit /b 0
