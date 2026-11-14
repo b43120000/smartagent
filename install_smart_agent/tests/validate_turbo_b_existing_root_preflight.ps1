@@ -111,17 +111,24 @@ try {
     Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_HARDLINK_CREATE_FAILED'
     Expected-Block 'TURBO_B_HARDLINK_SCOPE_UNVERIFIED'
     Remove-Item -LiteralPath $alias -Force
-    # A junction must never be traversed into a different path.
+    # Git62: an internal junction is a LINK OBJECT, not a traversal into
+    # its external target. Inventory records its own FileID and reparse bytes,
+    # with zero SDDL/ACL mutation and no recursive enumeration of the target.
     $junction=Join-Path $root 'unsafe_junction'
     & cmd.exe /d /c ('mklink /J "'+$junction+'" "'+$workspace+'"') | Out-Null
     Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_JUNCTION_CREATE_FAILED'
-    Expected-Block 'TURBO_B_PREFLIGHT_REPARSE_ENTRY'
+    $linked=@(Inventory)
+    Assert ($linked.Count -eq 1 -and $linked[0].count -eq 4) 'TURBO_B_LINK_WAS_FOLLOWED'
+    $node=@($linked[0].entries | Where-Object { $_.path -eq $junction })
+    Assert ($node.Count -eq 1 -and $node[0].reparse -eq $true) 'TURBO_B_LINK_ENTRY_NOT_RECORDED'
+    Assert ([string]$node[0].sddl -ceq '') 'TURBO_B_LINK_TARGET_ACL_SNAPSHOT_FORBIDDEN'
+    Assert ([string]$node[0].identity -match '^[0-9A-F]+:[0-9A-F]+:[0-9A-F]{64}$') 'TURBO_B_LINK_ID_OR_RAW_REPARSE_HASH_MISSING'
     # Windows PowerShell 5.1 Remove-Item can throw NullReferenceException for
     # junctions. cmd rmdir removes the reparse ENTRY, not its target.
     & cmd.exe /d /c ('rmdir "'+$junction+'"') | Out-Null
     Assert ($LASTEXITCODE -eq 0) 'TURBO_B_FIXTURE_JUNCTION_REMOVE_FAILED'
     Assert (Test-Path -LiteralPath $workspace -PathType Container) 'TURBO_B_JUNCTION_TARGET_MODIFIED'
-    Write-Host 'TURBO_B_REPARSE_AND_HARDLINK_FAIL_CLOSED_PASS'
+    Write-Host 'TURBO_B_OPAQUE_REPARSE_PRESERVED_AND_EXTERNAL_HARDLINK_DENIED_PASS'
 } finally {
     if (Test-Path -LiteralPath $base) {
         Remove-Item -LiteralPath $base -Recurse -Force
