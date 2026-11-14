@@ -94,3 +94,49 @@ def test_invalid_outside_root_rejected_without_registry_mutation(registry, tmp_p
     with pytest.raises(ValueError, match="turbo_root_not_strict_writable_workspace_child"):
         update(str(external), ws)
     assert not workspace_access.load_workspace_access_policy()["turbo_roots"]
+
+
+
+def test_live_webgpt_workspace_manager_two_sequential_updates(registry, tmp_path, monkeypatch):
+    """End-to-end one-use Telegram form and postcondition, not just prepare()."""
+    from agent_core import remote_binding_manager as remote
+    from agent_core.workspace_turbo_binding import commit_turbo_mode_update
+
+    ws, a, b, _, _ = registry
+    skill_root = tmp_path / "skills"
+    skill_root.mkdir()
+    binding = {
+        "workspace": str(ws),
+        "gpt_url": "https://chatgpt.com/c/abcdef00-1234-1234-1234-123456789abc",
+        "skill_path": str(skill_root),
+    }
+    monkeypatch.setattr(remote, "load", lambda *_: dict(binding))
+    monkeypatch.setattr(
+        remote, "access_snapshot",
+        lambda: {
+            "policy": workspace_access.load_workspace_access_policy(),
+            "writable_workspaces": workspace_access.load_workspace_access_policy()["writable_workspaces"],
+            "read_only_roots": [],
+        },
+    )
+    monkeypatch.setattr(remote, "require_writable_workspace", lambda _: str(ws))
+    manager = remote.RemoteBindingManager(tmp_path)
+
+    def submit(new_value):
+        rendered = manager.begin(chat_id=123)
+        begin = rendered.index(remote.UPDATE_OPEN)
+        end = rendered.index(remote.UPDATE_CLOSE) + len(remote.UPDATE_CLOSE)
+        form = rendered[begin:end]
+        old_line = next(line for line in form.splitlines() if line.startswith("turbomode="))
+        form = form.replace(old_line, "turbomode=" + str(new_value))
+        def apply(record):
+            if record.get("_turbo_prepared") is not None:
+                commit_turbo_mode_update(record["_turbo_prepared"])
+        return manager.apply(form, chat_id=123, runtime_apply=apply)
+
+    first = submit(a)
+    second = submit(b)
+    assert "Turbo Mode Requested Path：" + str(a) in first
+    assert "Turbo Mode Requested Path：" + str(a) + ";" + str(b) in second
+    assert workspace_access.load_workspace_access_policy()["turbo_roots"] == [str(a), str(b)]
+    assert "登錄不等於 OS 授權" in second
