@@ -97,7 +97,9 @@ if defined LAUNCHER_SELF_TEST (
 )
 echo [SmartAgent] Stopping LocalAgent, WebAgent, RemoteAgent, monitors and workers...
 echo [SmartAgent] Install Root: "%SMARTAGENT_INSTALL_ROOT%"
-"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%SMARTAGENT_INSTALL_ROOT%" %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS% %GIT_SOURCE_ARGS%
+set "REQUIRE_STARTUP_ARGS="
+if defined RECOVER_TURBO_ROOT set "REQUIRE_STARTUP_ARGS=--require-startup-contract"
+"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%SMARTAGENT_INSTALL_ROOT%" %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS% %GIT_SOURCE_ARGS% %REQUIRE_STARTUP_ARGS%
 set "STOP_EXIT=%errorlevel%"
 if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
