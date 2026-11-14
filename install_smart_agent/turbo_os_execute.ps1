@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [Parameter(Mandatory=$true)][string]$Workspace,
     [Parameter(Mandatory=$true)][string]$WorkingDirectory,
+    [string]$SelectedTurboRoot='',
     [Parameter(Mandatory=$true)][int]$ExpectedRevision,
     [Parameter(Mandatory=$true)][string]$TaskId,
     [Parameter(Mandatory=$true)][string]$ActionId,
@@ -37,7 +38,32 @@ if (-not [IO.Path]::GetFullPath($PSScriptRoot).Equals(
 }
 $modePath = Join-Path $secure 'acl_mode.json'
 $policyPath = Join-Path $secure 'workspace_access_policy.json'
-$journalPath = Join-Path $secure 'turbo_os_activation.json'
+$legacyJournal = Join-Path $secure 'turbo_os_activation.json'
+$policyPreview = Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+$rootsPreview = @($policyPreview.turbo_roots)
+if ($rootsPreview.Count -gt 1) {
+    if (-not [IO.Path]::IsPathRooted($SelectedTurboRoot)) {
+        throw 'GIT62_NATIVE_SELECTED_ROOT_REQUIRED'
+    }
+    $chosen=[IO.Path]::GetFullPath($SelectedTurboRoot).TrimEnd('\')
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        $key=[BitConverter]::ToString($sha.ComputeHash(
+          [Text.Encoding]::UTF8.GetBytes($chosen.ToUpperInvariant()))).Replace('-','').ToLowerInvariant()
+    } finally {$sha.Dispose()}
+    $journalPath=Join-Path $secure ('turbo_root_activations\activation-'+$key+'.json')
+} else {
+    $journalPath=$legacyJournal
+    if (-not (Test-Path -LiteralPath $journalPath -PathType Leaf) -and
+        $rootsPreview.Count -eq 1) {
+        $chosen=[IO.Path]::GetFullPath([string]$rootsPreview[0]).TrimEnd('\')
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try {$key=[BitConverter]::ToString($sha.ComputeHash(
+             [Text.Encoding]::UTF8.GetBytes($chosen.ToUpperInvariant()))).Replace('-','').ToLowerInvariant()}
+        finally{$sha.Dispose()}
+        $journalPath=Join-Path $secure ('turbo_root_activations\activation-'+$key+'.json')
+    }
+}
 $pendingSwitchPath = Join-Path $secure 'turbo_existing_root_switch.json'
 foreach($item in @($modePath,$policyPath,$journalPath)) {
     if (-not (Test-Path -LiteralPath $item -PathType Leaf)) {
@@ -133,9 +159,13 @@ function Assert-Trusted-State {
             [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
                 $workspace,[StringComparison]::OrdinalIgnoreCase)
         }).Count -or
-        @($policy.turbo_roots).Count -ne 1 -or
-        -not [IO.Path]::GetFullPath([string]$policy.turbo_roots[0]).TrimEnd('\').Equals(
-            $root,[StringComparison]::OrdinalIgnoreCase)) {
+        -not @($policy.turbo_roots | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $root,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        ($SelectedTurboRoot -and
+         -not [IO.Path]::GetFullPath($SelectedTurboRoot).TrimEnd('\').Equals(
+             $root,[StringComparison]::OrdinalIgnoreCase))) {
         throw 'GIT50_BROKER_SCOPE_POLICY_MISMATCH'
     }
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
