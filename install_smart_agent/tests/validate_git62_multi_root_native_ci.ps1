@@ -58,6 +58,16 @@ try{
     $_+'='+$(if($null -eq $prop){'MISSING'}else{[string]$prop.Value})
   })
   Write-Host ('GIT62_NATIVE_RECEIPT_DIAGNOSTIC root='+$id+' '+($pairs -join ' '))
+  # The disposable command and fixture contain no user data; emit capped
+  # native streams to distinguish command failure from OS isolation failure.
+  foreach($streamName in @('stdout_base64','stderr_base64')){
+    $prop=$proof.PSObject.Properties[$streamName]
+    if($null -ne $prop -and $prop.Value){
+      $decoded=[Text.Encoding]::UTF8.GetString(
+          [Convert]::FromBase64String([string]$prop.Value))
+      Write-Host ('GIT62_NATIVE_'+$streamName+'='+$decoded.Substring(0,[Math]::Min(800,$decoded.Length)))
+    }
+  }
   Check ($proof.sandbox_identity_verified -eq $true -and $proof.kernel_outside_read_denied -eq $true -and $proof.kernel_outside_write_denied -eq $true -and [int]$proof.command_exit_code -eq 0) ('GIT62_NATIVE_PROOF_FAILED_'+$id)
   Check ([IO.File]::ReadAllText((Join-Path $cwd 'own.txt')) -ceq ('ROOT_'+$id)) ('GIT62_ROOT_WRITE_FAILED_'+$id)
   $stdout=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$proof.stdout_base64))
