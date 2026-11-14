@@ -14,6 +14,8 @@ $rootB=Join-Path $ws 'beta'
 $sec=Join-Path $project 'localdata\secure\windows_security'
 $activate=Join-Path $PSScriptRoot '..\turbo_existing_root_activate.ps1'
 $revoke=Join-Path $PSScriptRoot '..\turbo_os_activation.ps1'
+$rebind=Join-Path $PSScriptRoot '..\turbo_multi_root_rebind.ps1'
+$script:revision=62
 . (Join-Path $PSScriptRoot '..\turbo_multi_root_paths.ps1')
 $ja=Get-TurboRootJournalPaths $sec $rootA
 $jb=Get-TurboRootJournalPaths $sec $rootB
@@ -49,7 +51,7 @@ try{
  function Scoped($record,[string]$cwd,[string]$id){
   $cmd='[IO.File]::WriteAllText("own.txt","ROOT_'+$id+'");"ROOT_'+$id+'"'
   $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
-  $answer=& ([string]$record.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $cwd -SelectedTurboRoot $cwd -ExpectedRevision 62 -TaskId ('TASK-GIT62-'+$id) -ActionId ('ACT-GIT62-'+$id) -CommandBase64 $encoded -TimeoutSeconds 30
+  $answer=& ([string]$record.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $cwd -SelectedTurboRoot $cwd -ExpectedRevision $script:revision -TaskId ('TASK-GIT62-'+$id) -ActionId ('ACT-GIT62-'+$id) -CommandBase64 $encoded -TimeoutSeconds 30
   $proof=$answer | Out-String | ConvertFrom-Json -ErrorAction Stop
   $diagnostic=@('sandbox_identity_verified','kernel_outside_read_denied',
     'kernel_outside_write_denied','command_exit_code','child_process_policy')
@@ -76,6 +78,20 @@ try{
  Scoped $a $rootA 'A'
  Scoped $b $rootB 'B'
  Write-Host 'GIT62_TWO_SEPARATE_APP_CONTAINER_SIDS_AND_CROSS_ROOT_KERNEL_DENIAL_PASS'
+ # A Registry/Workspace update changes Policy revision. Independently verify
+ # and rebind BOTH still-active Root SIDs before continuing native execution.
+ $policy.revision=63
+ [IO.File]::WriteAllText((Join-Path $sec 'workspace_access_policy.json'),
+     ($policy | ConvertTo-Json -Depth 10))
+ & $rebind -ProjectRoot $project
+ $script:revision=63
+ foreach($f in @($ja.activation,$jb.activation)){
+  $updated=Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
+  Check ([int]$updated.policy_revision -eq 63) 'GIT62_REBIND_REVISION_NOT_DURABLE'
+ }
+ Scoped $a $rootA 'A'
+ Scoped $b $rootB 'B'
+ Write-Host 'GIT62_NATIVE_PER_ROOT_POLICY_REVISION_REBIND_PASS'
  & $revoke -Action Revoke -ProjectRoot $project -TurboRoot $rootA
  Check (-not (Test-Path -LiteralPath $ja.activation)) 'GIT62_A_REVOKE_FAILED'
  Check (Test-Path -LiteralPath $jb.activation) 'GIT62_B_REVOKED_WITH_A'
