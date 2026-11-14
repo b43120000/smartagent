@@ -82,15 +82,17 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
         if not configured or workspace is None:
             state["reason_code"] = "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
             return state
-        parent = Path(workspace).expanduser().resolve()
+        task_directory = Path(workspace).expanduser().resolve()
+        writable = [Path(p).expanduser().resolve()
+                    for p in access["writable_workspaces"]]
         allowed = [
             Path(root).expanduser().resolve()
             for root in configured
-            if is_valid_turbo_root(
-                root, parent, access["writable_workspaces"],
+            if any(is_valid_turbo_root(
+                root, owner, access["writable_workspaces"],
                 access["read_only_roots"],
                 policy.get("denied_write_roots") or (),
-            )
+            ) for owner in writable)
         ]
         if not allowed:
             state["reason_code"] = "TURBO_ROOT_NOT_BOUND_TO_ACTIVE_WORKSPACE"
@@ -102,9 +104,11 @@ def resolve_turbo_state(workspace: str | Path | None = None) -> dict[str, Any]:
         from .turbo_root_registry import resolve_root, TurboRootRoutingError
         selected = None
         try:
-            selected = resolve_root(workspace, {"turbo_roots": [str(p) for p in allowed]})
+            selected = resolve_root(task_directory, {"turbo_roots": [str(p) for p in allowed]})
         except TurboRootRoutingError:
-            if len(allowed) == 1 and parent in allowed[0].parents:
+            if len(allowed) == 1 and any(
+                    task_directory == owner for owner in writable
+                    if owner in allowed[0].parents):
                 selected = allowed[0]
         if selected is None:
             state["reason_code"] = (
