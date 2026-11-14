@@ -154,6 +154,31 @@ function Assert-Trusted-State {
     $workspace = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
     $root = [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\')
     $activatedWorkspace = [IO.Path]::GetFullPath([string]$activation.workspace_root).TrimEnd('\')
+    if ($activation.PSObject.Properties.Name -contains 'existing_root_import' -and
+        $activation.existing_root_import -eq $true) {
+        # An ACTIVE_PROVISIONED activation is written before the importer
+        # commits its final ACTIVE receipt. Refuse commands in that window.
+        $importPath=if($journalPath -eq $legacyJournal) {
+            Join-Path $secure 'turbo_existing_root_import.json'
+        } else {
+            Join-Path (Split-Path -Parent $journalPath) (
+                [IO.Path]::GetFileName($journalPath).Replace('activation-','import-'))
+        }
+        if (-not (Test-Path -LiteralPath $importPath -PathType Leaf) -or
+            ((Get-Item -LiteralPath $importPath -Force).Attributes -band
+                [IO.FileAttributes]::ReparsePoint)) {
+            throw 'GIT62_BROKER_IMPORT_NOT_COMMITTED'
+        }
+        $import=Load-State $importPath
+        if ($import.schema -ne 'SMARTAGENT_TURBO_EXISTING_IMPORT_V1' -or
+            $import.status -ne 'ACTIVE' -or
+            [string]$import.package_sid -cne [string]$activation.package_sid -or
+            [string]$import.snapshot_id -cne [string]$activation.existing_import_snapshot_id -or
+            -not [IO.Path]::GetFullPath([string]$import.turbo_root).TrimEnd('\').Equals(
+                $root,[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'GIT62_BROKER_IMPORT_NOT_COMMITTED'
+        }
+    }
     if (-not $activatedWorkspace.Equals($workspace,[StringComparison]::OrdinalIgnoreCase) -or
         -not @($policy.writable_workspaces | Where-Object {
             [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
