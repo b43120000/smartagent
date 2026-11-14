@@ -202,8 +202,18 @@ catch { exit 95 }
  Check (Test-Path -LiteralPath $jb.activation) 'GIT62_B_REVOKED_WITH_A'
  Scoped $b $rootB 'B'
  Write-Host 'GIT62_INDEPENDENT_BROKER_REVOCATION_PASS'
- & $revoke -Action Revoke -ProjectRoot $project
- Check (-not (Test-Path -LiteralPath $jb.activation)) 'GIT62_ALL_REVOKE_FAILED'
+ # Simulate a crashed import with an import journal but no Activation.
+ # Native Recovery MUST restore the original DACL/SID without deleting files.
+ $orphanReceipt=$jb.activation+'.ci-orphaned-activation'
+ Move-Item -LiteralPath $jb.activation -Destination $orphanReceipt -ErrorAction Stop
+ try{
+  & (Join-Path $PSScriptRoot '..\turbo_existing_root_import.ps1') -Action Recover -ProjectRoot $project -TurboRoot $rootB
+  Check (-not (Test-Path -LiteralPath $jb.import)) 'GIT62_NATIVE_RECOVER_LEFT_IMPORT_JOURNAL'
+  Check (-not (Test-Path -LiteralPath $jb.activation)) 'GIT62_NATIVE_RECOVER_RESURRECTED_ACTIVATION'
+  Write-Host 'GIT62_PENDING_IMPORT_NATIVE_RECOVERY_PASS'
+ }finally{
+  if(Test-Path -LiteralPath $orphanReceipt){Remove-Item -LiteralPath $orphanReceipt -Force -ErrorAction Stop}
+ }
  foreach($path in @($ws,$rootA,$rootB,$externalWritable,$externalReadOnly,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))+$outsideFiles){
   $current=(Get-Acl -LiteralPath $path -Audit).Sddl
   $normalize = {param([string]$descriptor)
