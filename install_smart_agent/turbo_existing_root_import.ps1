@@ -86,10 +86,11 @@ function Restore-Exact([string]$p,[string]$s) {
  $normalize = { param($descriptor) $descriptor -creplace '([DS]:[A-Z]*?)AI(?=[A-Z]*(?:\(|S:|$))','$1' }
  $expectedNormalized = & $normalize $s
  $actualNormalized = & $normalize $actual
- if ($expectedNormalized.EndsWith('S:P') -and -not $actualNormalized.Contains('S:')) {
+ if ($expectedNormalized -cmatch 'S:(P?)$' -and -not $actualNormalized.Contains('S:')) {
+    $expectedProtected = $Matches[1] -ceq 'P'
     $audit = Get-Acl -LiteralPath $p -Audit -ErrorAction Stop
-    if ($audit.AreAuditRulesProtected -and @($audit.Audit).Count -eq 0) {
-        $actualNormalized += 'S:P'
+    if ($audit.AreAuditRulesProtected -eq $expectedProtected -and @($audit.Audit).Count -eq 0) {
+        $actualNormalized += 'S:' + $(if ($expectedProtected) {'P'})
     }
  }
  if ($actualNormalized -cne $expectedNormalized) {
