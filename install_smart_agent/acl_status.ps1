@@ -859,6 +859,41 @@ if ($Mode -eq 'on') {
     if ($taskBefore -and (Get-RecordedValue $previousModeState 'mode') -eq 'transitioning_on' -and -not $retryUpgrade) {
         throw 'ACL_ON_PREVIOUS_ATTEMPT_INCOMPLETE:run ACLstatus.bat off before retrying'
     }
+    # Git62 multi-root Git upgrade: preserve existing Native SIDs and NTFS
+    # rights. A verified manifest refresh does not require full ACL re-provision.
+    if ($RestoreTurboAfterUpgrade -and $accessPolicy -and
+        $accessPolicy.turbo_requested -eq $true -and
+        @($accessPolicy.turbo_roots).Count -gt 1) {
+        if (-not $profileBoundToRoot -or -not $profileStructurallyValid -or
+            $machineAuthorizationState.state -ne 'BOUND' -or
+            (Get-RecordedValue $previousModeState 'mode') -ne 'on' -or
+            -not $taskBefore -or
+            (Test-Path -LiteralPath $aclPending) -or
+            (Test-Path -LiteralPath (Join-Path $SecurityRoot 'executor_install_pending.json'))) {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_SECURITY_STATE_NOT_VERIFIED'
+        }
+        $taskOwner = Get-ExecutorTaskBinding $taskBefore
+        if ($taskOwner.root -ine $ProjectRoot -or
+            $taskOwner.sid -ne [string]$profile.executor_sid -or
+            $taskOwner.user -ne [string]$profile.executor_user) {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_EXECUTOR_OWNERSHIP_MISMATCH'
+        }
+        $upgrade = Join-Path $PSScriptRoot 'turbo_multi_root_upgrade_authorization.ps1'
+        if (-not (Test-Path -LiteralPath $upgrade -PathType Leaf)) {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_HELPER_MISSING'
+        }
+        Write-Host '[SmartAgent ACL] Multi-root Git upgrade: verifying all Native SIDs before machine authorization rebind.' -ForegroundColor Cyan
+        & $upgrade -ProjectRoot $ProjectRoot
+        $currentHash=(Get-FileHash -LiteralPath (Join-Path $ProjectRoot 'config\protocol_manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+        $authorization=Read-MachineAuthorization
+        if ($authorization.state -ne 'BOUND' -or
+            [string]$authorization.value.protocol_manifest_sha256 -ne $currentHash -or
+            (Get-RecordedValue $previousModeState 'mode') -ne 'on') {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_MACHINE_POSTCONDITION_FAILED'
+        }
+        Write-Host ('GIT62_MULTI_ROOT_ACL_UPGRADE_PASS roots=' + @($accessPolicy.turbo_roots).Count) -ForegroundColor Green
+        return
+    }
     $options = if (-not $profileStructurallyValid) { Get-SecurityProvisioningOptions }
     $repairExecutor = $false
     if ($options) {
