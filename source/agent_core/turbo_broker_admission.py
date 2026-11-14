@@ -70,13 +70,18 @@ def assess(workspace=None, *, tool: str, action_id: str = "") -> dict:
     elif state["acl_mode"] == "off" or state["turbo_requested"] == "OFF":
         decision = "NORMAL"
     elif state["acl_mode"] == "on" and state["turbo_requested"] == "ON":
-        # Presence of protected enrollment only permits attempting the
-        # native OS broker. It is NOT a permission grant: every action must
-        # independently attest its Windows process token, Job Object, OS
-        # negative access and active policy revision before execution.
-        from .turbo_os_broker_client import active_broker_available
-        decision = ("BROKER_REQUIRED" if
-                    active_broker_available(authorization_workspace) else "BLOCKED")
+        # Native availability must NEVER turn a denied/ambiguous Root scope
+        # into BROKER_REQUIRED, even if a future availability provider
+        # incorrectly reports True for a broad writable Workspace.
+        if state["scope_verdict"] != "TURBO_SCOPE_ALLOWED":
+            decision = "BLOCKED"
+        else:
+            # Protected enrollment only permits attempting the Native
+            # AppContainer. OS token, Job, kernel denial and policy revision
+            # remain mandatory per action; no host fallback.
+            from .turbo_os_broker_client import active_broker_available
+            decision = ("BROKER_REQUIRED" if
+                        active_broker_available(authorization_workspace) else "BLOCKED")
     else:
         decision = "BLOCKED"
     return {
