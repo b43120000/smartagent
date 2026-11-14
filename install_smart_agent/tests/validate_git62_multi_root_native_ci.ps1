@@ -51,7 +51,7 @@ try{
  }
  $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
  $policy=[ordered]@{schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1';revision=62;writable_workspaces=@($ws);read_only_roots=@($externalReadOnly);denied_write_roots=@();turbo_roots=@($rootA,$rootB);turbo_requested=$true}
- $profile=[ordered]@{schema='SMARTAGENT_WINDOWS_SECURITY_V2';trusted_executables=@()}
+ $profile=[ordered]@{schema='SMARTAGENT_WINDOWS_SECURITY_V2';trusted_executables=@();executor_user='GIT62_CI_EXEC';executor_sid='S-1-5-21-100-200-300-400';executor_task_name='SmartAgent Restricted Executor';executor_endpoint=(Join-Path $sec 'executor_queue')}
  [IO.File]::WriteAllText((Join-Path $sec 'acl_mode.json'),($mode|ConvertTo-Json -Depth 10))
  [IO.File]::WriteAllText((Join-Path $sec 'workspace_access_policy.json'),($policy|ConvertTo-Json -Depth 10))
  [IO.File]::WriteAllText((Join-Path $sec 'security_profile.json'),($profile|ConvertTo-Json -Depth 10))
@@ -70,6 +70,74 @@ try{
   Check ((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -eq $hashes[$f]) 'GIT62_LINK_TARGET_CHANGED_ON_ENROLLMENT'
  }
  Write-Host 'GIT62_OPAQUE_NODE_MODULES_ENROLLED_PASS'
+ # Git62 regression: isolate ProgramData so the machine-pointer test can
+ # NEVER modify the Windows CI runner's real machine authorization.
+ $savedProgramData=$env:ProgramData
+ try{
+  $env:ProgramData=Join-Path $fixture 'isolated_programdata'
+  $machineDir=Join-Path $env:ProgramData 'SmartAgent'
+  $configDir=Join-Path $project 'config'
+  $sourceDir=Join-Path $project 'install_smart_agent'
+  New-Item -ItemType Directory -Force -Path $machineDir,$configDir,$sourceDir | Out-Null
+  $manifestPath=Join-Path $configDir 'protocol_manifest.json'
+  [IO.File]::WriteAllText($manifestPath,'{"protocol_family":"SMARTAGENT_V9","protocol_version":9,"core_files":{}}')
+  foreach($name in @('update.ps1','security_acl_policy.ps1')){
+   Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('..\'+$name)) -Destination (Join-Path $sourceDir $name) -Force -ErrorAction Stop
+  }
+  $protectedUpdater=Join-Path $machineDir 'protected_updater.ps1'
+  Copy-Item -LiteralPath (Join-Path $sourceDir 'update.ps1') -Destination $protectedUpdater -ErrorAction Stop
+  $updaterHash=(Get-FileHash -LiteralPath $protectedUpdater -Algorithm SHA256).Hash.ToLowerInvariant()
+  $policyHash=(Get-FileHash -LiteralPath (Join-Path $sourceDir 'security_acl_policy.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+  $machineFile=Join-Path $machineDir 'machine_authorization.json'
+  $oldMachineHash=('0' * 64)
+  $machine=[ordered]@{
+   schema='SMARTAGENT_MACHINE_AUTHORIZATION_V1'
+   protocol_family='SMARTAGENT_V9';protocol_version=9
+   protocol_manifest_sha256=$oldMachineHash
+   install_root=$project
+   security_profile=(Join-Path $sec 'security_profile.json')
+   executor_sid=$profile.executor_sid;executor_user=$profile.executor_user
+   executor_task_name=$profile.executor_task_name
+   executor_endpoint=$profile.executor_endpoint
+   updater_path=$protectedUpdater;updater_sha256=$updaterHash
+   updater_policy_sha256=$policyHash;updated_at=0
+  }
+  [IO.File]::WriteAllText($machineFile,($machine|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
+  & icacls.exe $machineFile '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
+  Check ($LASTEXITCODE -eq 0) 'GIT62_CI_MACHINE_POINTER_ACL_FAILED'
+  $upgrade=Join-Path $PSScriptRoot '..\turbo_multi_root_upgrade_authorization.ps1'
+  $holdPath=$jb.activation+'.hold'
+  Move-Item -LiteralPath $jb.activation -Destination $holdPath -ErrorAction Stop
+  try{
+   $negative=''
+   try{& $upgrade -ProjectRoot $project | Out-Null}
+   catch{$negative=[string]$_.Exception.Message}
+   Check ($negative -eq 'GIT62_UPGRADE_PARTIAL_ENROLLMENT') ('GIT62_CI_PARTIAL_ENROLLMENT_NOT_BLOCKED:'+$negative)
+   $unchanged=Get-Content -LiteralPath $machineFile -Raw | ConvertFrom-Json
+   Check ($unchanged.protocol_manifest_sha256 -eq $oldMachineHash) 'GIT62_CI_PARTIAL_ENROLLMENT_CHANGED_MACHINE_POINTER'
+  }finally{Move-Item -LiteralPath $holdPath -Destination $jb.activation -ErrorAction Stop}
+  $rootBefore=@{}
+  foreach($r in @($rootA,$rootB)){
+   $rootBefore[$r]=(Get-Acl -LiteralPath $r -Audit -ErrorAction Stop).Sddl
+  }
+  $journalBefore=@{}
+  foreach($j in @($ja.activation,$jb.activation)){
+   $journalBefore[$j]=(Get-FileHash -LiteralPath $j -Algorithm SHA256).Hash
+  }
+  & $upgrade -ProjectRoot $project
+  $published=Get-Content -LiteralPath $machineFile -Raw -Encoding UTF8 | ConvertFrom-Json
+  $expected=(Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  Check ($published.protocol_manifest_sha256 -eq $expected) 'GIT62_CI_UPGRADE_MACHINE_DIGEST_NOT_REBOUND'
+  Check ((Get-Acl -LiteralPath $machineFile).AreAccessRulesProtected) 'GIT62_CI_UPGRADE_MACHINE_ACL_NOT_PROTECTED'
+  foreach($r in @($rootA,$rootB)){
+   Check ((Get-Acl -LiteralPath $r -Audit -ErrorAction Stop).Sddl -ceq $rootBefore[$r]) 'GIT62_CI_UPGRADE_CHANGED_TURBO_ROOT_ACL'
+  }
+  foreach($j in @($ja.activation,$jb.activation)){
+   Check ((Get-FileHash -LiteralPath $j -Algorithm SHA256).Hash -eq $journalBefore[$j]) 'GIT62_CI_UPGRADE_CHANGED_ENROLLMENT_JOURNAL'
+  }
+  & $upgrade -ProjectRoot $project
+  Write-Host 'GIT62_MULTI_ROOT_MACHINE_UPGRADE_NATIVE_PASS'
+ }finally{$env:ProgramData=$savedProgramData}
  function Scoped($record,[string]$cwd,[string]$id){
   $cmd='[IO.File]::WriteAllText("own.txt","ROOT_'+$id+'");"ROOT_'+$id+'"'
   $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
