@@ -62,7 +62,7 @@ jobs:
       - name: Test Python routing and multi-root Workspace Apply
         run: |
           python -m pip install --disable-pip-version-check pytest playwright
-          python -B -m pytest -q source/WebAgent/tests/test_git44_telegram_turbo_binding_manager.py source/WebAgent/tests/test_git35_multi_root_permission_alignment.py source/WebAgent/tests/test_git62_multi_root_routing.py source/WebAgent/tests/test_git62_multi_root_manager.py source/WebAgent/tests/test_git62_multi_root_telegram.py source/WebAgent/tests/test_git62_multi_root_upgrade.py source/WebAgent/tests/test_git62_pending_import_recovery_flag.py source/WebAgent/tests/test_git62_deployed_force_stop.py
+          python -B -m pytest -q source/WebAgent/tests/test_git44_telegram_turbo_binding_manager.py source/WebAgent/tests/test_git35_multi_root_permission_alignment.py source/WebAgent/tests/test_git62_multi_root_routing.py source/WebAgent/tests/test_git62_multi_root_manager.py source/WebAgent/tests/test_git62_multi_root_telegram.py source/WebAgent/tests/test_git62_multi_root_upgrade.py source/WebAgent/tests/test_git62_pending_import_recovery_flag.py source/WebAgent/tests/test_git62_deployed_force_stop.py source/WebAgent/tests/test_git62_transaction_update.py
 
   windows-native:
     name: Two AppContainer SIDs and kernel cross-root denial
@@ -85,6 +85,7 @@ jobs:
           foreach($name in @(
             'install_smart_agent/turbo_multi_root_paths.ps1',
             'install_smart_agent/turbo_multi_root_rebind.ps1',
+            'install_smart_agent/git62_transaction_update.ps1',
             'install_smart_agent/turbo_multi_root_upgrade_authorization.ps1',
             'install_smart_agent/turbo_pending_import_recovery.ps1',
             'install_smart_agent/acl_status.ps1',
@@ -102,6 +103,13 @@ jobs:
               $errors | Format-List | Out-String | Write-Host
               throw ('GIT62_POWERSHELL_PARSE_FAILED:'+$name)
             }
+          }
+      - name: Git62 updater CMD entrypoint smoke test
+        shell: pwsh
+        run: |
+          $out=@(& $env:ComSpec /d /c 'update.bat --launcher-self-test' 2>&1)
+          if($LASTEXITCODE -ne 0 -or ($out -join ' ') -notmatch 'GIT62_TRANSACTION_UPDATE_LAUNCHER_PARSE_OK') {
+            throw 'GIT62_UPDATE_BAT_SELFTEST_FAILED'
           }
       - name: Windows CMD SHIFT preserves launcher root and recovery path
         run: |

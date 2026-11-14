@@ -3,7 +3,8 @@
 # until each existing enrollment independently passes this native OS check.
 [CmdletBinding()]
 param(
- [Parameter(Mandatory=$true)][string]$ProjectRoot
+ [Parameter(Mandatory=$true)][string]$ProjectRoot,
+ [switch]$VerifyOnly
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -102,7 +103,7 @@ catch [System.UnauthorizedAccessException] { exit 0 }
       $os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
       $os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
       [int]$os.exit_code -ne 0){
-      throw 'GIT62_REBIND_KERNEL_ATTESTATION_FAILED'
+      throw ('GIT62_REBIND_KERNEL_ATTESTATION_FAILED:root='+$root+';exit_code='+[int]$os.exit_code+';identity='+[string]$os.sandbox_identity_verified+';backend='+[string]$os.sandbox_backend+';child_policy='+[string]$os.child_process_policy)
    }
    # Verify protected Broker executable identity remains identical.
    $entry=[IO.Path]::GetFullPath([string]$a.broker_entry).TrimEnd('\')
@@ -113,6 +114,10 @@ catch [System.UnauthorizedAccessException] { exit 0 }
       throw 'GIT62_REBIND_BROKER_HASH_CHANGED'
    }
    $verified+=,[pscustomobject]@{path=$file.FullName;record=$a}
+ }
+ if($VerifyOnly){
+   Write-Host ('GIT62_PER_ROOT_PRECHECK_PASS roots='+$verified.Count)
+   return
  }
  # Phase 2: independent, protected, replace-atomic journal writes. A crash
  # before every Root is rebased leaves that Root fail-closed (stale revision).
