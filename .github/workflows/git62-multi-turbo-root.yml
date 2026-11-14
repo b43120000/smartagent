@@ -1,0 +1,79 @@
+name: Git62 Multi-Turbo-Root Native AppContainer
+
+on:
+  push:
+    branches: [git62]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-routing:
+    name: Policy and Runtime multi-root routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Python parser for changed Runtime files
+        run: >-
+          python -m py_compile
+          source/agent_core/workspace_access.py
+          source/agent_core/turbo_root_registry.py
+          source/agent_core/turbo_sandbox.py
+          source/agent_core/turbo_os_broker_client.py
+          source/agent_core/turbo_os_typed_mutations.py
+          source/agent_core/workspace_turbo_binding.py
+          source/agent_core/workspace_manager.py
+          source/agent_core/tools.py
+      - name: Test Python routing and multi-root Workspace Apply
+        run: |
+          python -m pip install --disable-pip-version-check pytest playwright
+          python -B -m pytest -q source/WebAgent/tests/test_git62_multi_root_routing.py source/WebAgent/tests/test_git62_multi_root_manager.py source/WebAgent/tests/test_git44_telegram_turbo_binding_manager.py
+
+  windows-native:
+    name: Two AppContainer SIDs and kernel cross-root denial
+    runs-on: windows-latest
+    needs: python-routing
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require elevated disposable Windows CI
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw 'GIT62_UNTRUSTED_RUNNER' }
+          $principal=[Security.Principal.WindowsPrincipal]::new(
+            [Security.Principal.WindowsIdentity]::GetCurrent())
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'GIT62_ADMIN_REQUIRED' }
+      - name: Windows PowerShell 5.1 parser gate
+        run: |
+          foreach($name in @(
+            'install_smart_agent/turbo_multi_root_paths.ps1',
+            'install_smart_agent/turbo_multi_root_rebind.ps1',
+            'install_smart_agent/turbo_os_execute.ps1',
+            'install_smart_agent/turbo_os_activation.ps1',
+            'install_smart_agent/turbo_auto_activate.ps1',
+            'install_smart_agent/turbo_existing_root_activate.ps1',
+            'install_smart_agent/turbo_existing_root_import.ps1',
+            'install_smart_agent/tests/validate_git62_multi_root_native_ci.ps1'
+          )) {
+            $tokens=$null; $errors=$null
+            [void][Management.Automation.Language.Parser]::ParseFile(
+               (Resolve-Path $name).Path,[ref]$tokens,[ref]$errors)
+            if (@($errors).Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw ('GIT62_POWERSHELL_PARSE_FAILED:'+$name)
+            }
+          }
+      - name: Git62 live two roots, independent cross-root kernel and SDDL test
+        run: |
+          .\install_smart_agent\tests\validate_git62_multi_root_native_ci.ps1
