@@ -14,6 +14,14 @@ def test_force_stop_does_not_recover_on_normal_restart():
     assert '--require-startup-contract' in bat
     assert '--root "%SMARTAGENT_INSTALL_ROOT%"' in bat
     assert '--root "%~dp0."' not in bat
+    assert 'shift\n' not in bat.replace('shift /1', 'SHIFTPRESERVE')
+    assert bat.count('shift /1') >= 8
+    assert 'set "SMARTAGENT_RECOVERY_SCRIPT=%SMARTAGENT_INSTALL_ROOT%\\install_smart_agent\\turbo_pending_import_recovery.ps1"' in bat
+    assert 'if not exist "%SMARTAGENT_RECOVERY_SCRIPT%"' in bat
+    assert 'TURBO_RECOVERY_ELEVATED_EXIT_PASS' in bat
+    assert 'native success receipt missing' in bat
+    assert 'if errorlevel 1' in bat
+    assert '%~dp0install_smart_agent\\turbo_pending_import_recovery.ps1' not in bat
     assert 'Recovery BLOCKED: force stop or Git upgrade did not pass.' in bat
     assert "TURBO_PENDING_IMPORT_RECOVERY_PASS" not in bat
 
