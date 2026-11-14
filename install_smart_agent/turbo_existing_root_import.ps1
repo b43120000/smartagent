@@ -60,8 +60,15 @@ function Check-Identity([object]$entry) {
  $p=Full ([string]$entry.path)
  if(-not ((Same $p $script:root) -or (Under $p $script:root))){throw 'TURBO_D3_PATH_ESCAPE'}
  $item=Get-Item -LiteralPath $p -Force -ErrorAction Stop
- if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'TURBO_D3_REPARSE_TREE'}
+ $nowReparse=(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+ $expectedReparse=($entry.PSObject.Properties['reparse'] -and [bool]$entry.reparse)
+ if($nowReparse -ne [bool]$expectedReparse){throw 'TURBO_D3_LINK_TYPE_CHANGED'}
  if([bool]$item.PSIsContainer -ne [bool]$entry.directory){throw 'TURBO_D3_FILE_TYPE_CHANGED'}
+ if($expectedReparse){
+    if([SmartAgentTurboBFileId]::InspectReparse($p,[bool]$entry.directory) -cne
+       [string]$entry.identity){throw ('TURBO_D3_LINK_RETARGETED:'+$p)}
+    return # do not dereference the link or its external target
+ }
  $links=[uint32]0
  $id=[SmartAgentTurboBFileId]::Inspect($p,[bool]$entry.directory,[ref]$links)
  $expectedLinks=if($entry.PSObject.Properties['link_count']){[uint32]$entry.link_count}else{1}
@@ -199,6 +206,17 @@ function Revoke-Tree([object]$j) {
  # low-integrity labels to the Windows default Medium only.
  foreach($item in @($items[0].entries | Sort-Object {([string]$_.path).Length} -Descending)){
    $p=Full ([string]$item.path)
+   if([bool]$item.reparse){
+      # A junction/symlink is not an OS grant to its external target.
+      # Do not run icacls or Set-Acl on this path, even during rollback.
+      $priorLink=$original[$p]
+      if($null -ne $priorLink -and $priorLink.PSObject.Properties['reparse'] -and
+         [bool]$priorLink.reparse -and
+         [string]$item.identity -cne [string]$priorLink.identity){
+          Write-Warning ('TURBO_D3_OPAQUE_LINK_CHANGED_NOT_TOUCHED:'+$p)
+      }
+      continue
+   }
    $prior=$original[$p]
    if($null -eq $prior -or [string]$prior.identity -cne [string]$item.identity){
       & icacls.exe $p '/remove:g' ('*'+[string]$j.package_sid) | Out-Null
@@ -223,6 +241,9 @@ function Revoke-Tree([object]$j) {
  }
  foreach($entry in @($snap.entries | Sort-Object {([string]$_.path).Length})){
    $p=Full ([string]$entry.path)
+   if($entry.PSObject.Properties['reparse'] -and [bool]$entry.reparse){
+       continue # no original SID/IL mutation; never dereference the target
+   }
    if(-not (Test-Path -LiteralPath $p)){continue} # intentionally deleted
    $current=Get-Item -LiteralPath $p -Force
    if([bool]$current.PSIsContainer -ne [bool]$entry.directory){continue}
@@ -233,6 +254,7 @@ function Revoke-Tree([object]$j) {
  $after=@(& (Join-Path $PSScriptRoot 'turbo_existing_root_preflight.ps1') -ProjectRoot $script:project -Workspace $ws -TurboRoot $script:root -IncludeSensitiveInventory -MaxEntries $MaxEntries |
      Where-Object {$_ -is [System.Collections.Specialized.OrderedDictionary]})
  foreach($item in @($after[0].entries)){
+    if([bool]$item.reparse){continue}
     if([string]$item.sddl -match [Regex]::Escape([string]$j.package_sid)){
        throw ('TURBO_D3_PACKAGE_SID_REMAINING:'+$item.path)
     }
@@ -388,6 +410,9 @@ try {
    $processedFiles = [Collections.Generic.HashSet[string]]::new()
    foreach($entry in @($snap.entries | Sort-Object {([string]$_.path).Length} -Descending)){
       Check-Identity $entry
+      if($entry.PSObject.Properties['reparse'] -and [bool]$entry.reparse){
+          continue # opaque reparse; never grant SID or lower target IL
+      }
       $p=[string]$entry.path
       if(-not $entry.directory -and -not $processedFiles.Add([string]$entry.identity)){continue}
       if((Sddl $p) -cne [string]$entry.sddl){throw 'TURBO_D3_SNAPSHOT_STALE'}
