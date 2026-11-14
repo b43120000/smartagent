@@ -356,9 +356,9 @@ def _powershell_with_native_exit_propagation(command: str) -> str:
 def _native_run_command_admitted(cwd: str | Path | None) -> bool:
     """Advisory routing only; OS Broker independently reattests every action."""
     from .turbo_broker_admission import assess
-    from .workspace_access import resolve_turbo_authorization_workspace
-    parent = resolve_turbo_authorization_workspace(cwd)
-    return assess(parent if parent is not None else cwd, tool="run_command")["decision"] == "BROKER_REQUIRED"
+    # Git62: a parent Workspace can contain multiple independent Root SIDs.
+    # Never replace the specific command CWD with its broad Workspace owner.
+    return assess(cwd, tool="run_command")["decision"] == "BROKER_REQUIRED"
 
 
 def _run_powershell_capture(
@@ -1557,7 +1557,33 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
         ) if agent else None
         if bound_workspace is None:
             bound_workspace = Path.cwd()
-        broker = assess(bound_workspace, tool=tool,
+        # Git62: select the Broker for the actual operation path. The broad
+        # writable Workspace is not an AppContainer authorization boundary.
+        action_workspace = bound_workspace
+        if tool in {"write_file", "create_directory", "delete_path"}:
+            try:
+                auth = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+                requested = auth.require_write(
+                    tool_call.get("path", ""), require_absolute=True,
+                    forbid_glob=True, allow_root=False,
+                )
+                action_workspace = requested if requested.is_dir() else requested.parent
+            except (PathSecurityError, ValueError, OSError, TypeError):
+                # A malformed or unauthorized target must be rejected, never
+                # treated as host-executable by a fallback path.
+                action_workspace = bound_workspace
+        elif tool == "run_command" and tool_call.get("working_directory"):
+            try:
+                auth = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+                action_workspace = resolve_command_working_directory(
+                    tool_call.get("working_directory"), auth, agent,
+                    command=tool_call.get("command", ""),
+                    operation=tool_call.get("operation", "GENERAL"),
+                )
+            except (PathSecurityError, ValueError, OSError,
+                    CommandSecurityError):
+                action_workspace = bound_workspace
+        broker = assess(action_workspace, tool=tool,
                         action_id=str(tool_call.get("action_id", "") or ""))
         if (broker["decision"] == "BLOCKED" or
                 (broker["decision"] == "BROKER_REQUIRED" and
@@ -1888,7 +1914,19 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             )
         target = Path(scope["resolved_paths"][0])
         from .turbo_broker_admission import assess
-        native = assess(security_context.workspace_root, tool=tool)
+        requested_target = tool_call.get("path", "")
+        try:
+            checked_target = security_context.require_write(
+                requested_target, require_absolute=True,
+                forbid_glob=True, allow_root=False,
+            )
+            native_scope = (
+                checked_target if checked_target.is_dir()
+                else checked_target.parent
+            )
+        except (PathSecurityError, ValueError, OSError, TypeError):
+            native_scope = security_context.workspace_root
+        native = assess(native_scope, tool=tool)
         if native["decision"] == "BROKER_REQUIRED":
             from .turbo_os_typed_mutations import create_directory_in_broker
             return create_directory_in_broker(
@@ -2079,7 +2117,19 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             return encode_result('FAILED', 'READ_IO_ERROR', executed=True, requested_path=path, detail=str(exc), tool=tool)
     elif tool == "write_file":
         from .turbo_broker_admission import assess
-        native = assess(security_context.workspace_root, tool=tool)
+        requested_target = tool_call.get("path", "")
+        try:
+            checked_target = security_context.require_write(
+                requested_target, require_absolute=True,
+                forbid_glob=True, allow_root=False,
+            )
+            native_scope = (
+                checked_target if checked_target.is_dir()
+                else checked_target.parent
+            )
+        except (PathSecurityError, ValueError, OSError, TypeError):
+            native_scope = security_context.workspace_root
+        native = assess(native_scope, tool=tool)
         if native["decision"] == "BROKER_REQUIRED":
             from .turbo_os_typed_mutations import write_file_in_broker
             return write_file_in_broker(
@@ -2475,7 +2525,19 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         )
     elif tool == "delete_path":
         from .turbo_broker_admission import assess
-        native = assess(security_context.workspace_root, tool=tool)
+        requested_target = tool_call.get("path", "")
+        try:
+            checked_target = security_context.require_write(
+                requested_target, require_absolute=True,
+                forbid_glob=True, allow_root=False,
+            )
+            native_scope = (
+                checked_target if checked_target.is_dir()
+                else checked_target.parent
+            )
+        except (PathSecurityError, ValueError, OSError, TypeError):
+            native_scope = security_context.workspace_root
+        native = assess(native_scope, tool=tool)
         if native["decision"] == "BROKER_REQUIRED":
             from .turbo_os_typed_mutations import delete_path_in_broker
             return delete_path_in_broker(
