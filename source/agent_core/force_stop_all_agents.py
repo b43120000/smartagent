@@ -259,7 +259,6 @@ def _verified_install_root(root: str | Path) -> Path:
     required = (
         requested / "config" / "protocol_manifest.json",
         requested / "source" / "agent_core" / "force_stop_all_agents.py",
-        requested / "localdata" / "secure" / "windows_security" / "acl_mode.json",
     )
     for marker in required:
         if not marker.is_file():
@@ -543,6 +542,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--exclude-pid", action="append", type=int, default=[])
     parser.add_argument("--after-git-update", metavar="COMMIT")
     parser.add_argument("--git-source-root", metavar="CHECKOUT")
+    parser.add_argument("--require-startup-contract", action="store_true")
     args = parser.parse_args(argv)
     if args.after_git_update is not None and (
         args.dry_run or not re.fullmatch(r"[0-9a-fA-F]{40}", args.after_git_update)
@@ -555,6 +555,9 @@ def main(argv: list[str] | None = None) -> int:
         exclusions = set(args.exclude_pid)
         if args.after_git_update is None:
             result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions)
+            if args.require_startup_contract and result.get("startup_contract", {}).get("status") != "PASS":
+                result["success"] = False
+                result["recovery_admission"] = {"status": "BLOCKED", "reason": "startup_contract_not_verified"}
         else:
             root = Path(args.root).resolve()
             with exclusive_process_lock(
@@ -562,6 +565,9 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_sec=5.0, label="force-stop/startup barrier",
             ):
                 result = _force_stop_all_locked(root, exclude_pids=exclusions)
+                if args.require_startup_contract and result.get("startup_contract", {}).get("status") != "PASS":
+                    result["success"] = False
+                    result["recovery_admission"] = {"status": "BLOCKED", "reason": "startup_contract_not_verified"}
                 if result.get("success"):
                     try:
                         _apply_git_upgrade(root, args.after_git_update, args.git_source_root)
@@ -570,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
                         result["git_upgrade"] = {"status": "FAIL", "error": str(exc)}
                         result["success"] = False
                 else:
-                    result["git_upgrade"] = {"status": "SKIPPED", "reason": "force_stop_failed"}
+                    result["git_upgrade"] = {"status": "SKIPPED", "reason": "force_stop_or_startup_contract_failed"}
     except Exception as exc:
         print(json.dumps({"success": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
         return 1
