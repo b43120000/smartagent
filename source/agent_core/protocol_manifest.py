@@ -84,6 +84,7 @@ CORE_FILES = (
     'install_smart_agent/acl_mode_launcher.ps1',
     'install_smart_agent/acl_status.ps1',
     'install_smart_agent/turbo_multi_root_upgrade_authorization.ps1',
+    'install_smart_agent/turbo_pending_import_recovery.ps1',
     'install_smart_agent/turbo_multi_root_rebind.ps1',
     'install_smart_agent/turbo_multi_root_paths.ps1',
     'install_smart_agent/security_acl_policy.ps1',
