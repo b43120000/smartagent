@@ -58,13 +58,19 @@ def form_env(tmp_path, monkeypatch):
 
 def new_form(manager, turbo=None, chat_id=123):
     rendered = manager.begin(chat_id=chat_id)
-    assert rendered.count("turbomode=") == 1
+    assert rendered.count("global_turbo_roots=") == 1
     block = rendered[rendered.index(UPDATE_OPEN):rendered.index(UPDATE_CLOSE)
                      + len(UPDATE_CLOSE)]
-    if turbo is not None:
-        line = next(v for v in block.splitlines() if v.startswith("turbomode="))
-        block = block.replace(line, "turbomode=" + str(turbo))
+    # Historical Git44 tests exercise the backwards-compatible legacy
+    # per-Workspace mutation form. New Telegram forms are global READ-ONLY.
+    line = next(v for v in block.splitlines() if v.startswith("global_turbo_roots="))
+    local = turbo_mode_for_workspace(manager_binding_workspace(manager))
+    block = block.replace(line, "turbomode=" + str(turbo if turbo is not None else local))
     return block
+
+
+def manager_binding_workspace(manager):
+    return remote_binding_manager.load(manager.root)["workspace"]
 
 
 def fake_host(seen):
@@ -97,7 +103,7 @@ def test_enable_and_manager_reads_back_value(form_env):
     )
     assert f"Turbo Mode：{project}" in result
     assert turbo_mode_for_workspace(binding["workspace"]) == str(project)
-    assert f"turbomode={project}" in manager.begin(chat_id=123)
+    assert f"global_turbo_roots={project}" in manager.begin(chat_id=123)
 
 
 def test_fenced_single_line_is_accepted(form_env):

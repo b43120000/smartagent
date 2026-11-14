@@ -127,7 +127,10 @@ def test_live_webgpt_workspace_manager_two_sequential_updates(registry, tmp_path
         begin = rendered.index(remote.UPDATE_OPEN)
         end = rendered.index(remote.UPDATE_CLOSE) + len(remote.UPDATE_CLOSE)
         form = rendered[begin:end]
-        old_line = next(line for line in form.splitlines() if line.startswith("turbomode="))
+        old_line = next(line for line in form.splitlines()
+                        if line.startswith("global_turbo_roots="))
+        # Legacy input remains accepted, but is no longer rendered as the
+        # default Telegram form. This test covers its old semantics.
         form = form.replace(old_line, "turbomode=" + str(new_value))
         def apply(record):
             if record.get("_turbo_prepared") is not None:
@@ -140,3 +143,86 @@ def test_live_webgpt_workspace_manager_two_sequential_updates(registry, tmp_path
     assert "Turbo Mode Requested Path：" + str(a) + ";" + str(b) in second
     assert workspace_access.load_workspace_access_policy()["turbo_roots"] == [str(a), str(b)]
     assert "登錄不等於 OS 授權" in second
+
+
+def test_new_global_form_round_trip_does_not_modify_any_root(registry, tmp_path, monkeypatch):
+    """Telegram inventory displays ALL roots; sending it back edits no ACL policy."""
+    from agent_core import remote_binding_manager as remote
+    ws, a, b, ws2, foreign = registry
+    update(str(a), ws)
+    update(str(foreign), ws2)
+    update(str(b), ws)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    binding = {
+        "workspace": str(ws),
+        "gpt_url": "https://chatgpt.com/c/abcdef00-1234-1234-1234-123456789abc",
+        "skill_path": str(skills),
+    }
+    monkeypatch.setattr(remote, "load", lambda *_: dict(binding))
+    def snapshot():
+        policy = workspace_access.load_workspace_access_policy()
+        return {
+            "policy": policy,
+            "writable_workspaces": tuple(policy["writable_workspaces"]),
+            "read_only_roots": tuple(policy["read_only_roots"]),
+            "turbo_roots": tuple(policy["turbo_roots"]),
+        }
+    monkeypatch.setattr(remote, "access_snapshot", snapshot)
+    monkeypatch.setattr(remote, "require_writable_workspace", lambda _path: str(ws))
+    manager = remote.RemoteBindingManager(tmp_path)
+    rendered = manager.begin(chat_id=321)
+    before = snapshot()["policy"]
+    roots = before["turbo_roots"]
+    assert roots == [str(a), str(foreign), str(b)]
+    assert ("global_turbo_roots=" + ";".join(roots)) in rendered
+    assert "\\nturbomode=" not in rendered
+    begin = rendered.index(remote.UPDATE_OPEN)
+    end = rendered.index(remote.UPDATE_CLOSE) + len(remote.UPDATE_CLOSE)
+    form = rendered[begin:end]
+    seen = []
+    result = manager.apply(form, chat_id=321, runtime_apply=lambda x: seen.append(x))
+    after = snapshot()["policy"]
+    assert len(seen) == 1
+    assert "_turbo_prepared" not in seen[0]
+    assert before["revision"] == after["revision"]
+    assert after["turbo_roots"] == roots
+    assert "global_turbo_roots=" + ";".join(roots) in result
+
+
+def test_global_form_cannot_grant_or_remove_turbo_roots(registry, tmp_path, monkeypatch):
+    from agent_core import remote_binding_manager as remote
+    ws, a, _, ws2, foreign = registry
+    update(str(a), ws)
+    update(str(foreign), ws2)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setattr(remote, "load", lambda *_: {
+        "workspace": str(ws),
+        "gpt_url": "https://chatgpt.com/c/abcdef00-1234-1234-1234-123456789abc",
+        "skill_path": str(skills),
+    })
+    def snapshot():
+        policy = workspace_access.load_workspace_access_policy()
+        return {
+            "policy": policy,
+            "writable_workspaces": tuple(policy["writable_workspaces"]),
+            "read_only_roots": tuple(policy["read_only_roots"]),
+            "turbo_roots": tuple(policy["turbo_roots"]),
+        }
+    monkeypatch.setattr(remote, "access_snapshot", snapshot)
+    monkeypatch.setattr(remote, "require_writable_workspace", lambda _path: str(ws))
+    manager = remote.RemoteBindingManager(tmp_path)
+    text = manager.begin(chat_id=321)
+    form = text[text.index(remote.UPDATE_OPEN):text.index(remote.UPDATE_CLOSE)
+                + len(remote.UPDATE_CLOSE)]
+    original = snapshot()["policy"]
+    tampered = form.replace(
+        "global_turbo_roots=" + ";".join(original["turbo_roots"]),
+        "global_turbo_roots=" + str(a),
+    )
+    with pytest.raises(ValueError, match="global_turbo_roots_read_only"):
+        manager.apply(tampered, chat_id=321,
+                      runtime_apply=lambda _: pytest.fail("must not dispatch"))
+    assert snapshot()["policy"]["turbo_roots"] == original["turbo_roots"]
+    assert snapshot()["policy"]["revision"] == original["revision"]

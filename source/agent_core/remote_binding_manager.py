@@ -69,9 +69,9 @@ class RemoteBindingManager:
             write_json_atomic(self.state_path, state)
         workspaces = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["writable_workspaces"], 1)) or "  （尚未設定）"
         read_only = "\n".join(f"  {index}. {value}" for index, value in enumerate(access["read_only_roots"], 1)) or "  （尚未設定）"
-        turbo = turbo_mode_for_workspace(binding["workspace"])
         from .turbo_sandbox import global_turbo_snapshot
         sandbox_state = global_turbo_snapshot(access=access)
+        global_roots = ";".join(sandbox_state["configured_roots"]) or "off"
         root_lines = "\n".join(
             "  - " + record["path"] + " [" + record["native_enrollment"] + "]"
             for record in sandbox_state["roots"]
@@ -82,14 +82,14 @@ class RemoteBindingManager:
             "目前 Turbo Mode roots（全域，與 Edit Workspace 共用 Policy）：", root_lines, "",
             "支援 ChatGPT、Gemini、Claude、M365 與 Other HTTP(S) URL。Other 網站需先完成 DOM 校準。\n"
             "下方 workspace 僅是 WebGPT 的預設工作目錄，不會停用其他 Turbo Root。"
-            "turbomode 欄位只編輯該 Workspace 的 Root 子集合，其他 Root 保留。"
-            "新增 Native Root 的 OS Enrollment 須透過 Edit Workspace 管理員程序。",
+            "global_turbo_roots 是全域 Root 登錄清單（唯讀），不限定 Telegram 的執行範圍。"
+            "修改 Root 請使用 Edit Workspace；OS Enrollment 仍由管理員程序完成。",
             "",
             UPDATE_OPEN,
             f"transaction_id={transaction_id}",
             f"webgpt_url={binding['gpt_url']}",
             f"workspace={binding['workspace']}",
-            f"turbomode={turbo}",
+            f"global_turbo_roots={global_roots}",
             f"skill_path={binding['skill_path']}",
             UPDATE_CLOSE,
             "",
@@ -131,7 +131,9 @@ class RemoteBindingManager:
                            not fenced_fields[0].startswith("turbomode="))):
             raise ValueError("remote_binding_update_turbo_fence_invalid")
         expected = {"transaction_id", "webgpt_url", "workspace", "skill_path"}
-        allowed = expected | {"turbomode"}
+        allowed = expected | {"turbomode", "global_turbo_roots"}
+        if "turbomode" in fields and "global_turbo_roots" in fields:
+            raise ValueError("remote_binding_turbo_fields_mutually_exclusive")
         if not expected.issubset(fields) or set(fields) - allowed:
             missing = sorted(expected - set(fields))
             extra = sorted(set(fields) - allowed)
@@ -157,10 +159,19 @@ class RemoteBindingManager:
             ),
         })
         candidate["workspace"] = require_writable_workspace(candidate["workspace"])
-        turbo_value = fields.get("turbomode")
-        # Strict opt-in: old (pre-Git44) manager forms do not change Turbo;
-        # newly generated forms always show explicit off or actual active path.
-        turbo_prepared = prepare_turbo_mode_update(turbo_value, candidate["workspace"])
+        global_roots = fields.get("global_turbo_roots")
+        # A global inventory is not an authorization form. It cannot edit the
+        # policy or implicitly remove other roots when the WebGPT binding moves.
+        # Old 'turbomode=' transactions remain supported for compatibility,
+        # using their original per-Workspace mutation rules.
+        if global_roots is not None:
+            from .turbo_sandbox import global_turbo_snapshot
+            latest = global_turbo_snapshot(access=access_snapshot())
+            expected_roots = ";".join(latest["configured_roots"]) or "off"
+            if global_roots.casefold() != expected_roots.casefold():
+                raise ValueError("remote_binding_global_turbo_roots_read_only")
+        turbo_prepared = prepare_turbo_mode_update(
+            fields.get("turbomode"), candidate["workspace"])
         transaction_id = fields["transaction_id"]
         now = time.time()
         with exclusive_process_lock(
@@ -174,9 +185,14 @@ class RemoteBindingManager:
                 raise ValueError("remote_binding_transaction_chat_mismatch")
             if float(transaction.get("expires_at", 0.0) or 0.0) <= now:
                 raise ValueError("remote_binding_transaction_expired")
-            if (turbo_prepared is not None and
-                    int(transaction.get("workspace_policy_revision", -1))
-                    != int(turbo_prepared["expected_revision"])):
+            # Both global-inventory and legacy local-root forms require a
+            # fresh policy snapshot; do not accept a stale or forged list.
+            revision = int((access_snapshot().get("policy") or {}).get("revision", 0) or 0)
+            if (global_roots is not None or turbo_prepared is not None) and (
+                int(transaction.get("workspace_policy_revision", -1)) != revision
+                or (turbo_prepared is not None
+                    and int(turbo_prepared["expected_revision"]) != revision)
+            ):
                 raise ValueError("remote_binding_workspace_policy_stale_retry_manager")
 
             # Persist consumption before invoking the side effect.  A process
@@ -198,13 +214,15 @@ class RemoteBindingManager:
         if turbo_prepared is not None and actual_turbo.casefold() != turbo_prepared["mode"].casefold():
             raise RuntimeError("remote_binding_turbo_postcondition_failed")
         return "\n".join((
-            "✅ WebGPT、Workspace、Turbo Mode 與 Skill Path 已更新。",
+            ("✅ WebGPT、Workspace、Turbo Mode 與 Skill Path 已更新。"
+             if turbo_prepared is not None else
+             "✅ WebGPT、Workspace 與 Skill Path 已更新；Turbo Roots 未修改。"),
             "",
             f"WebGPT URL：{candidate['gpt_url']}",
             f"Workspace：{candidate['workspace']}",
             f"Turbo Mode Requested Path：{actual_turbo}",
             f"Turbo Mode：{actual_turbo}",
-            "Turbo Mode roots（全域）：" + (";".join(sandbox_state["configured_roots"]) or "off"),
+            "global_turbo_roots=" + (";".join(sandbox_state["configured_roots"]) or "off"),
             f"ACL Mode：{sandbox_state['acl_mode']}",
             f"Turbo Requested：{sandbox_state['turbo_requested']}",
             f"Turbo Effective：{sandbox_state['turbo_effective']}",

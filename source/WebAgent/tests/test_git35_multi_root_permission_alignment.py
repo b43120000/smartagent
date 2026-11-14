@@ -120,7 +120,9 @@ def test_telegram_and_edit_workspace_use_same_global_roots(
     page = telegram.begin(chat_id=123)
     for path in (roots.a, roots.b, roots.c):
         assert str(path) in page
-    assert "turbomode=" + str(roots.a) in page
+    assert "global_turbo_roots=" + ";".join(
+        [str(roots.a), str(roots.b), str(roots.c)]) in page
+    assert "\\nturbomode=" not in page
     assert "TURBO_MULTI_ROOT_CWD_REQUIRED" not in page
 
     monkeypatch.setattr(workspace_manager, "_management_access_snapshot",
