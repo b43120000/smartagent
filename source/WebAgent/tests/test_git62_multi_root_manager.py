@@ -16,6 +16,7 @@ def env(tmp_path, monkeypatch):
     scripts = install / "install_smart_agent"
     scripts.mkdir(parents=True)
     for name in ("turbo_existing_root_activate.ps1", "turbo_auto_activate.ps1",
+                 "turbo_existing_root_preflight.ps1",
                  "turbo_os_activation.ps1", "turbo_multi_root_rebind.ps1"):
         (scripts / name).write_text("# mocked process", encoding="utf-8")
     ws = tmp_path / "workspace"
@@ -127,3 +128,15 @@ def test_operator_does_not_confirm_os_mutations(env):
     assert manager._security_menu() == 1
     assert not env.calls
     assert env.policy["turbo_roots"] == []
+
+
+def test_edit_workspace_shows_both_turbo_paths_after_apply(env, capsys):
+    """End-user acceptance: Edit_workspace manager lists T1 and the new tool T2."""
+    env.select("5", str(env.a), "5", str(env.b), "7", "APPLY", "")
+    assert manager._security_menu() == 0
+    env.select("8")
+    assert manager._security_menu() == 0
+    displayed = capsys.readouterr().out
+    assert "T1. " + str(env.a) in displayed
+    assert "T2. " + str(env.b) in displayed
+    assert all(x in env.policy["turbo_roots"] for x in (str(env.a), str(env.b)))
