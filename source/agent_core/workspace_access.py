@@ -389,8 +389,8 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
                 ) from exc
         # Repeated identical settings do not revoke previously enrolled
         # per-root Broker journals by spuriously advancing the revision.
-        if (requested == list(current.get("turbo_roots") or ()) and (
-                current.get("turbo_requested") is True) == bool(requested):
+        if (requested == list(current.get("turbo_roots") or ()) and
+                (current.get("turbo_requested") is True) == bool(requested)):
             return current
         payload = dict(current)
         payload["turbo_roots"] = requested
