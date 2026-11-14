@@ -133,3 +133,21 @@ def test_nested_writable_workspace_ownership_is_rejected(manager):
     manager.provide("5", str(second), "7", "")
     assert workspace_manager._security_menu() == 1
     assert not manager.calls and not manager.saves
+
+
+def test_symlink_selection_is_validated_before_canonicalization(manager, monkeypatch):
+    alias = manager.workspace / "alias_of_existing_project"
+    try:
+        alias.symlink_to(manager.root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Test environment does not permit directory symlinks")
+    observed = []
+
+    def validate(path, *_args):
+        observed.append(str(path))
+        return not Path(path).is_symlink()
+    monkeypatch.setattr(workspace_manager, "is_valid_turbo_root", validate)
+    manager.provide("5", str(alias), "8")
+    assert workspace_manager._security_menu() == 0
+    assert observed == [str(alias)]
+    assert not manager.calls and not manager.saves
