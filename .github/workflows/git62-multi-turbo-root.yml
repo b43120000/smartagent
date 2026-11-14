@@ -33,6 +33,27 @@ jobs:
           source/agent_core/workspace_turbo_binding.py
           source/agent_core/workspace_manager.py
           source/agent_core/tools.py
+      - name: Enforce tracked protocol manifest SHA256 after Turbo script changes
+        run: |
+          python - <<'PY'
+          import json
+          from agent_core.protocol_manifest import CORE_FILES, build_protocol_manifest
+
+          with open("config/protocol_manifest.json", encoding="utf-8") as fp:
+              expected = json.load(fp)
+          actual = build_protocol_manifest(".")
+          assert not actual["missing_files"], (
+              "protocol_manifest_files_missing:" + ",".join(actual["missing_files"])
+          )
+          mismatched = [
+              path for path in CORE_FILES
+              if actual["core_files"].get(path) != expected["core_files"].get(path)
+          ]
+          assert not mismatched, (
+              "protocol_manifest_hash_mismatch:" + ",".join(mismatched)
+          )
+          print("GIT62_PROTOCOL_MANIFEST_SHA256_PASS files=" + str(len(CORE_FILES)))
+          PY
       - name: Test Python routing and multi-root Workspace Apply
         run: |
           python -m pip install --disable-pip-version-check pytest playwright
