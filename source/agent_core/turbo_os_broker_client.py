@@ -225,19 +225,28 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
             state.get("scope_verdict") != "TURBO_SCOPE_ALLOWED"):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_SCOPE_NOT_REQUESTED")
 
-    # No implicit "first of many" root authority: a native activation binds
-    # exactly one workspace and one project root.
+    # Git62: route by actual task directory, not 'first of many'.
+    from .turbo_root_registry import (
+        journal_path as root_journal_path, owning_workspace,
+        TurboRootRoutingError,
+    )
     access = access_snapshot()
     policy = access["policy"]
     roots = tuple(access.get("turbo_roots") or ())
-    if len(roots) != 1:
-        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_AMBIGUOUS_ROOT_SET")
     root = Path(state["turbo_root"]).absolute()
-    if (root != Path(roots[0]).absolute() or not root.is_dir() or
-            is_reparse_path(root)):
+    if not any(root == Path(r).absolute() for r in roots) or (
+            not root.is_dir() or is_reparse_path(root)):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ROOT_NOT_VERIFIED")
-
-    journal_path = _activation_path()
+    try:
+        workspace = owning_workspace(root, policy)
+    except TurboRootRoutingError as exc:
+        raise TurboOSBrokerUnavailable(str(exc)) from exc
+    secure = _activation_path().parent
+    journal_path = (
+        root_journal_path(secure, root) if len(roots) > 1
+        else (_activation_path() if _activation_path().is_file()
+              else root_journal_path(secure, root))
+    )
     # A protected old-to-new switch remains non-authoritative until its
     # final durable commit. No Planner / Runtime action may enter the new
     # Broker while the switch journal is present, including after a crash.
@@ -306,26 +315,32 @@ def active_broker_available(workspace: str | Path | None) -> bool:
 
 
 def _resolve_workspace_and_cwd(cwd: str | Path | None) -> tuple[Path, Path]:
+    from .turbo_root_registry import (
+        resolve_root, owning_workspace, TurboRootRoutingError,
+    )
     access = access_snapshot()
+    policy = access["policy"]
     roots = tuple(access.get("turbo_roots") or ())
-    if len(roots) != 1:
-        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ROOT_SET_NOT_UNIQUE")
-    root = Path(roots[0]).absolute()
-    candidates = [
-        Path(candidate).absolute()
-        for candidate in access["writable_workspaces"]
-        if is_within(root, Path(candidate).absolute(), allow_root=False)
-    ]
-    if len(candidates) != 1:
-        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_WORKSPACE_AMBIGUOUS")
-    workspace = candidates[0]
-    requested_cwd = Path(cwd).absolute() if cwd else workspace
-    if requested_cwd == workspace:
-        actual_cwd = root
-    elif is_within(requested_cwd, root):
-        actual_cwd = requested_cwd
-    else:
-        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_CWD_OUTSIDE_ROOT")
+    if not roots:
+        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_NO_ROOTS")
+    if cwd is None and len(roots) != 1:
+        raise TurboOSBrokerUnavailable("TURBO_MULTI_ROOT_CWD_REQUIRED")
+    requested_cwd = Path(cwd).expanduser().absolute() if cwd else Path(roots[0]).absolute()
+    try:
+        root = resolve_root(requested_cwd, policy)
+        workspace = owning_workspace(root, policy)
+    except TurboRootRoutingError as exc:
+        # Backward compatibility: a single configured root can still use
+        # the parent Workspace as its CWD, but this is NEVER used with 2+.
+        if (len(roots) == 1
+                and requested_cwd in Path(roots[0]).absolute().parents):
+            root = Path(roots[0]).absolute()
+            workspace = owning_workspace(root, policy)
+            if requested_cwd != workspace:
+                raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_CWD_OUTSIDE_ROOT") from exc
+        else:
+            raise TurboOSBrokerUnavailable(str(exc)) from exc
+    actual_cwd = root if requested_cwd == workspace else requested_cwd
     if not actual_cwd.is_dir() or is_reparse_path(actual_cwd):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_CWD_UNAVAILABLE")
     return workspace, actual_cwd
@@ -359,7 +374,7 @@ def execute_turbo_command(
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_TIMEOUT_INVALID")
     limit = min(max(int(max_stream_bytes), 1), 2 * 1024 * 1024)
     workspace, actual_cwd = _resolve_workspace_and_cwd(cwd)
-    activation, state, broker = _load_activation(workspace)
+    activation, state, broker = _load_activation(actual_cwd)
     request_task = _id(task_id, "TASK-")
     request_action = _id(action_id, "ACT-")
 
@@ -378,6 +393,7 @@ def execute_turbo_command(
         "-ProjectRoot", str(_install_root()),
         "-Workspace", str(workspace),
         "-WorkingDirectory", str(actual_cwd),
+        "-SelectedTurboRoot", str(activation["turbo_root"]),
         "-ExpectedRevision", str(state["policy_revision"]),
         "-TaskId", request_task,
         "-ActionId", request_action,
