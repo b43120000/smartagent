@@ -25,6 +25,12 @@ jobs:
         run: |
           python -m py_compile source/agent_core/workspace_manager.py
           if ($LASTEXITCODE -ne 0) { throw 'GIT61_PYTHON_PARSE_FAILED' }
+      - name: Git61 Workspace Manager admission regressions
+        run: |
+          python -m pip install --disable-pip-version-check pytest playwright
+          $env:PYTHONPATH='source'
+          python -B -m pytest -q source/WebAgent/tests/test_git61_existing_root_manager.py
+          if ($LASTEXITCODE -ne 0) { throw 'GIT61_MANAGER_REGRESSION_FAILED' }
       - name: Parse all protected native scripts
         run: |
           foreach ($path in @(
