@@ -698,9 +698,9 @@ foreach($item in @($executorCommandRows)) {
   $ev=$item.sandbox_evidence
   if($null -eq $ev) { continue }
   $codes=@($ev.native_command_trace | Where-Object { $null -ne $_ })
-  $stage=Safe-Code $ev.native_failure_stage
+  $failureStage=Safe-Code $ev.native_failure_stage
   $substage=Safe-Code $ev.native_failure_substage
-  if($codes.Count -eq 0 -and -not $stage) { continue }
+  if($codes.Count -eq 0 -and -not $failureStage) { continue }
   $nativeLines.Add('---- Round '+$item.round+' | Action '+$item.action_id+' ----')
   $steps=@()
   foreach($code in $codes){
@@ -712,7 +712,7 @@ foreach($item in @($executorCommandRows)) {
     $steps+=([ordered]@{step=$label;status=$status;instruction=$instruction})
     $nativeLines.Add(('  [{0}] {1} : {2}' -f $status,$label,$instruction))
   }
-  $nativeLines.Add('  failure_stage: '+$stage)
+  $nativeLines.Add('  failure_stage: '+$failureStage)
   $nativeLines.Add('  failure_substage: '+$substage)
   $nativeLines.Add('  exception_type: '+(Safe-Code $ev.native_exception_type))
   $nativeLines.Add('  exception_hresult: '+(Safe-Code $ev.native_exception_hresult))
@@ -725,7 +725,7 @@ foreach($item in @($executorCommandRows)) {
     action_id=(Safe-Code $item.action_id)
     evidence_ref=(Safe-Code $item.evidence_ref)
     round=[int]$item.round
-    failure_stage=$stage
+    failure_stage=$failureStage
     failure_substage=$substage
     exception_type=(Safe-Code $ev.native_exception_type)
     exception_hresult=(Safe-Code $ev.native_exception_hresult)
