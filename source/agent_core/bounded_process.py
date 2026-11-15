@@ -159,25 +159,69 @@ def run_bounded_process(
             telemetry_root = telemetry.get("root"); telemetry_task = telemetry.get("task_id")
             if telemetry_root and telemetry_task:
                 from .execution_telemetry import write_snapshot
-                write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="RUNNING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid())
+                write_snapshot(
+                    telemetry_root, telemetry_task,
+                    request_id=telemetry.get("request_id", ""),
+                    action_id=telemetry.get("action_id", ""),
+                    state="QUEUED", command=command_text[:500],
+                    started_at=__import__("time").time(),
+                    worker_pid=os.getpid(), liveness_verified=False,
+                )
+            def record_restricted_running(observation):
+                if not (telemetry_root and telemetry_task):
+                    return
+                try:
+                    write_snapshot(
+                        telemetry_root, telemetry_task,
+                        state="RUNNING", pid=observation.get("pid"),
+                        execution_id=observation.get("execution_id"),
+                        liveness_verified=True,
+                        liveness_evidence=observation,
+                        liveness_observed_at=observation["observed_at"],
+                    )
+                except OSError:
+                    pass
             result = execute_restricted(
                 command, cwd=cwd, timeout=timeout, shell=shell,
                 max_stream_bytes=max_stream_bytes,
                 approval_manifest=approval_manifest, security_command=security_text,
-                noninteractive=noninteractive,
+                noninteractive=noninteractive, on_running=record_restricted_running,
             )
             result.setdefault('process_started', True if result.get('exit_code') is not None else None)
             if telemetry_root and telemetry_task:
-                write_snapshot(telemetry_root, telemetry_task, state="TIMED_OUT" if result.get("timed_out") else "EXITED", ended_at=__import__("time").time(), exit_code=result.get("exit_code"), stdout_tail=str(result.get("stdout", ""))[-8192:], stderr_tail=str(result.get("stderr", ""))[-8192:])
+                write_snapshot(
+                    telemetry_root, telemetry_task,
+                    state=("TIMED_OUT" if result.get("timed_out")
+                           else "EXITED" if result.get("process_state") == "EXITED"
+                           else "UNKNOWN"),
+                    liveness_verified=False,
+                    liveness_evidence=result.get("liveness_evidence"),
+                    ended_at=__import__("time").time(),
+                    exit_code=result.get("exit_code"),
+                    stdout_tail=str(result.get("stdout", ""))[-8192:],
+                    stderr_tail=str(result.get("stderr", ""))[-8192:],
+                )
             return result
         except Exception as exc:
+            unconfirmed = "restricted_executor_timeout:" in str(exc)
+            if unconfirmed and telemetry_root and telemetry_task:
+                try:
+                    write_snapshot(
+                        telemetry_root, telemetry_task,
+                        state="UNKNOWN", liveness_verified=False,
+                        error="RESTRICTED_EXECUTOR_RESPONSE_TIMEOUT",
+                    )
+                except OSError:
+                    pass
             return {
                 "exit_code": None, "stdout": "", "stderr": "",
                 "stdout_bytes": 0, "stderr_bytes": 0,
                 "stdout_truncated": False, "stderr_truncated": False,
                 "stdout_ref": "", "stderr_ref": "", "timed_out": False,
                 "error": f"RESTRICTED_EXECUTOR_REQUIRED:{type(exc).__name__}: {exc}",
-                "security_rejected": True,
+                "security_rejected": not unconfirmed,
+                "possible_partial_execution": unconfirmed,
+                "process_state": "UNKNOWN" if unconfirmed else "NOT_STARTED",
                 "process_started": None,
             }
     capture_dir = (
