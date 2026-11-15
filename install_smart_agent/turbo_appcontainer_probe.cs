@@ -753,7 +753,9 @@ public static class SmartAgentGit47AppContainerProbe
                 string wrapped =
                     "$ErrorActionPreference='Stop'; " +
                     "$global:LASTEXITCODE=$null; $text=''; $errText=''; $rc=1; " +
+                    "$script:smartagentTrace=New-Object 'System.Collections.Generic.List[string]'; " +
                     "$script:smartagentStage='ENV_SETUP'; " +
+                    "$script:smartagentSubstage='WRAPPER_INIT'; " +
                     "try { " + trustedAliases +
                     "$items=@(& {\n" + script + "\n} 2>&1); " +
                     "$commandSucceeded=$?; $nativeExit=$global:LASTEXITCODE; " +
@@ -770,10 +772,21 @@ public static class SmartAgentGit47AppContainerProbe
                     "} catch { " +
                     "$rc=1; $errText=('SMARTAGENT_NATIVE_FAILURE_STAGE=' + " +
                     "[string]$script:smartagentStage + ';' + " +
+                    "'SMARTAGENT_NATIVE_FAILURE_SUBSTAGE=' + " +
+                    "[string]$script:smartagentSubstage + ';HRESULT=' + " +
+                    "$_.Exception.HResult.ToString('X8') + ';' + " +
                     "$_.Exception.GetType().Name + ':' + $_.Exception.Message); " +
                     "} finally { " +
                     "$script:smartagentStage='OUTPUT_CAPTURE'; " +
-                    "try { " + putOut + putErr + " } catch { exit 95 } " +
+                    "try { " +
+                    "$trace=if($null -ne $script:smartagentTrace){" +
+                    "[string]::Join(',', $script:smartagentTrace.ToArray())" +
+                    "}else{''}; " +
+                    "$errText=([string]$errText + [Environment]::NewLine + " +
+                    "'SMARTAGENT_NATIVE_TRACE_V1=' + $trace).TrimStart(" +
+                    "[char]10,[char]13); " +
+                    putOut + putErr +
+                    " } catch { exit 95 } " +
                     "} exit [int]$rc;";
                 string raw = LaunchPowerShell(moniker, wrapped, root,
                                                timeoutMilliseconds, trustedToolPath);
