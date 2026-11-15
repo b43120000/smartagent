@@ -10,6 +10,7 @@ from .security_approval import SecurityApprovalLedger
 from .protocol_v8 import sha256_digest
 from .windows_security import acl_mode,authorized_workspace_roots,default_profile_path,is_admin,load_security_profile,workspace_traverse_roots
 from .windows_process_job import ensure_current_process_kill_job
+from .process_liveness import observe_owned_process, communicate_with_liveness
 
 def _probe_write(root:Path,*,expect_allowed:bool)->tuple[bool,str]:
  root=root.resolve()
@@ -97,14 +98,36 @@ def _run(req:dict,profile:dict)->dict:
  flags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=='nt' else 0
  cp=subprocess.Popen(req['command'],cwd=str(cwd),shell=bool(req.get('shell')),stdout=subprocess.PIPE,stderr=subprocess.PIPE,stdin=subprocess.DEVNULL if noninteractive else None,env=env,creationflags=flags)
  timed_out=False
- try:stdout,stderr=cp.communicate(timeout=int(req.get('timeout',30)))
+ last_running_evidence=None
+ status_path=Path(profile['executor_endpoint']).resolve()/'status'/(str(req['request_id'])+'.json')
+ def record_running(observation):
+  nonlocal last_running_evidence
+  if not observation.get('liveness_verified'):return
+  last_running_evidence=observation
+  try:
+   status_path.parent.mkdir(parents=True,exist_ok=True)
+   write_json_atomic(status_path,{
+    'schema':'SMARTAGENT_EXECUTOR_PROGRESS_V1',
+    'request_id':req['request_id'],'state':'RUNNING',
+    'liveness_evidence':observation,
+   })
+  except OSError:
+   # A telemetry write failure is not a child-process failure.
+   pass
+ try:
+  stdout,stderr=communicate_with_liveness(
+   cp,int(req.get('timeout',30)),on_running=record_running,
+   execution_id=str(req['request_id']),interval=2.0)
  except subprocess.TimeoutExpired:
   timed_out=True
   if os.name=='nt':subprocess.run(['taskkill','/PID',str(cp.pid),'/T','/F'],capture_output=True,check=False,timeout=10)
   else:os.killpg(os.getpgid(cp.pid),signal.SIGKILL)
   stdout,stderr=cp.communicate(timeout=5)
- limit=int(req.get('max_stream_bytes',5*1024*1024));result={'exit_code':cp.returncode,'stdout':stdout[:limit].decode('utf-8',errors='replace').strip(),'stderr':stderr[:limit].decode('utf-8',errors='replace').strip(),'stdout_bytes':len(stdout),'stderr_bytes':len(stderr),'stdout_truncated':len(stdout)>limit,'stderr_truncated':len(stderr)>limit,'stdout_ref':'','stderr_ref':'','timed_out':timed_out}
- if timed_out:result['error']=f'command exceeded {req.get("timeout",30)} seconds; process tree terminated'
+ final_liveness=observe_owned_process(cp,execution_id=str(req['request_id']))
+ limit=int(req.get('max_stream_bytes',5*1024*1024));result={'exit_code':cp.returncode,'stdout':stdout[:limit].decode('utf-8',errors='replace').strip(),'stderr':stderr[:limit].decode('utf-8',errors='replace').strip(),'stdout_bytes':len(stdout),'stderr_bytes':len(stderr),'stdout_truncated':len(stdout)>limit,'stderr_truncated':len(stderr)>limit,'stdout_ref':'','stderr_ref':'','timed_out':timed_out,'process_started':True,'process_state':final_liveness['process_state'],'pid':cp.pid,'liveness_evidence':final_liveness,'last_running_evidence':last_running_evidence}
+ if timed_out:result['error']=f'command exceeded {req.get("timeout",30)} seconds; process tree termination requested'
+ try:status_path.unlink(missing_ok=True)
+ except OSError:pass
  return result
 
 def serve(*,once=False,poll=.2):
