@@ -941,6 +941,19 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 or type(call.get("max_chars", 1800)) is not int
                 or not 1 <= call.get("max_chars", 1800) <= MAX_SLICE_CHARS):
             bad_section = call.get("section")
+            if bad_section not in SECTIONS:
+                guidance = (
+                    "This API only reads Executor event/events_index/metadata/terminal. "
+                    "For Software Inventory or Global Toolchain Ledger, use "
+                    "inspect_toolchain_environment (no Planner path or section). "
+                    "Do not repeat the invalid blackboard section."
+                )
+            else:
+                guidance = (
+                    "Keep the selected Executor Blackboard section, but correct "
+                    "sequence/offset/max_chars to the documented integer ranges. "
+                    "For section=event, use a real nonzero event sequence."
+                )
             return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
                 "runtime_blackboard_read_slice_invalid", tool=tool,
                 detail=(
@@ -948,13 +961,7 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                     "; allowed_sections=event,events_index,metadata,terminal;" +
                     " sequence>=0;offset>=0;max_chars=1.." + str(MAX_SLICE_CHARS)
                 ),
-                suggestion=(
-                    "read_runtime_blackboard only reads Executor run events, "
-                    "not Software Inventory or Global Environment Ledger. "
-                    "For Toolchain discovery or fresh post-install state, "
-                    "use inspect_toolchain_environment with no fields other "
-                    "than tool/action_id. Do not retry this invalid slice."
-                ))
+                suggestion=guidance)
 
     if tool == "read_runtime_evidence":
         from .runtime_evidence_store import REF_PATTERN, SECTIONS, MAX_SLICE_CHARS
