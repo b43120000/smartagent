@@ -677,6 +677,7 @@ def _security_menu() -> int:
                     _path_key(path) for path in turbo
                 }
                 active_roots: dict[str, str] = {}
+                active_owners: dict[str, str] = {}
                 for path in journals:
                     try:
                         record = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -687,6 +688,7 @@ def _security_menu() -> int:
                         ):
                             raise ValueError("journal mismatch")
                         active_roots[_path_key(root)] = root
+                        active_owners[_path_key(root)] = str(record["workspace_root"])
                     except (OSError, TypeError, ValueError, KeyError) as exc:
                         raise RuntimeError(
                             "TURBO_MULTI_ROOT_JOURNAL_UNVERIFIED"
@@ -701,10 +703,16 @@ def _security_menu() -> int:
                         access_changed or turbo_changed or len(turbo) > 1
                     )
                 )
-                removed_active = [
-                    root for key, root in active_roots.items()
-                    if key not in current_roots or access_changed
-                ]
+                # Only revoke changed or removed identities, never all Roots
+                # because unrelated writable/read-only access was edited.
+                removed_active = []
+                for key, root in active_roots.items():
+                    owners = [owner for owner in writable
+                              if _is_strict_turbo_child(root, owner)]
+                    if (key not in current_roots or len(owners) != 1 or
+                            _path_key(active_owners[key]) != _path_key(owners[0])):
+                        removed_active.append(root)
+                revoked_keys = {_path_key(root) for root in removed_active}
                 # Even an interrupted import without a completed activation
                 # prevents unguarded admission of this target.
                 for root in turbo:
@@ -717,7 +725,8 @@ def _security_menu() -> int:
                         )
                 needs_enrollment = [
                     root for root in turbo
-                    if not per_root_journal(security_dir, root).is_file()
+                    if (_path_key(root) in revoked_keys or
+                        not per_root_journal(security_dir, root).is_file())
                     and not (
                         legacy_active and not legacy_migration_needed
                         and len(turbo) == 1
@@ -785,7 +794,7 @@ def _security_menu() -> int:
                             "TURBO_ROOT_AUTHORIZATION_WORKSPACE_AMBIGUOUS:" + root
                         )
                     enrollment_owners[root] = owners[0]
-                    if Path(root).exists():
+                    if Path(root).exists() and _path_key(root) not in revoked_keys:
                         if not Path(root).is_dir():
                             raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY:" + root)
                         invoke_native(
@@ -794,15 +803,26 @@ def _security_menu() -> int:
                             "-Workspace", owners[0], "-TurboRoot", root,
                         )
 
+                # Upgrade only after native attestation; this also recovers
+                # incomplete Rev 34 policies with a pending third enrollment.
+                if active_roots:
+                    invoke_native(
+                        "turbo_multi_root_rebind.ps1",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-MigrateRootEpochs", "-AllowPendingEnrollments",
+                    )
+
                 # Validate all retained SIDs and actual OS kernel denial
                 # while the OLD policy is still valid and BEFORE revocation.
                 # Only a missing, exact negative sentinel may be recreated.
                 for root in turbo:
-                    if _path_key(root) in active_roots:
+                    if (_path_key(root) in active_roots and
+                            _path_key(root) not in revoked_keys):
                         invoke_native(
                             "turbo_multi_root_rebind.ps1",
                             "-ProjectRoot", str(AGENT_PROJECT_ROOT),
                             "-RepairMissingSentinels", "-SelectedTurboRoot", root,
+                            "-AllowPendingEnrollments",
                         )
 
                 # Native revocation is mandatory BEFORE removing an active
@@ -852,6 +872,7 @@ def _security_menu() -> int:
                     invoke_native(
                         "turbo_multi_root_rebind.ps1",
                         "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-AllowPendingEnrollments",
                     )
                 for root in turbo:
                     activation = per_root_journal(security_dir, root)
@@ -860,6 +881,12 @@ def _security_menu() -> int:
                     if legacy_active and legacy_journal.is_file():
                         continue
                     owner = enrollment_owners[root]
+                    if (_path_key(root) in revoked_keys and Path(root).is_dir()):
+                        invoke_native(
+                            "turbo_existing_root_preflight.ps1",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Workspace", owner, "-TurboRoot", root,
+                        )
                     if Path(root).is_dir():
                         invoke_native(
                             "turbo_existing_root_activate.ps1",
@@ -887,7 +914,7 @@ def _security_menu() -> int:
                 # A successful OS rebind must also be accepted by the
                 # Runtime's regular user-mode Broker gate for each Root.
                 from .turbo_os_broker_client import active_broker_available
-                expected_revision = int(actual.get("revision", 0) or 0)
+                from .workspace_access import turbo_root_epoch
                 for root in turbo:
                     indexed = per_root_journal(security_dir, root)
                     receipt_path = (
@@ -908,7 +935,7 @@ def _security_menu() -> int:
                         or receipt.get("status") != "ACTIVE_PROVISIONED"
                         or _path_key(receipt.get("turbo_root", "")) != _path_key(root)
                         or type(receipt.get("policy_revision")) is not int
-                        or receipt["policy_revision"] != expected_revision
+                        or receipt["policy_revision"] != turbo_root_epoch(actual, root)
                     ):
                         raise RuntimeError(
                             "TURBO_RETAINED_ROOT_ACTIVATION_STALE:" + root

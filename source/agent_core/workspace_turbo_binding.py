@@ -119,8 +119,12 @@ def commit_turbo_mode_update(prepared: dict | None) -> dict | None:
     """Commit only after the host's idle/scope/security binding preflight."""
     if prepared is None:
         return None
-    # Also recheck against a concurrent Workspace Manager edit inside the
-    # shared policy's file lock (save_turbo_roots implements revision CAS).
+    # The Telegram/WebGPT binding is not an elevated Native enrollment
+    # transaction. For a real membership edit require Edit Workspace.
+    current = load_workspace_access_policy()
+    if [str(p).casefold() for p in current.get("turbo_roots") or ()] != [
+            str(p).casefold() for p in prepared["roots"]]:
+        raise RuntimeError("TURBO_NATIVE_EDIT_WORKSPACE_REQUIRED")
     return save_turbo_roots(
         prepared["roots"], expected_revision=int(prepared["expected_revision"]),
     )
