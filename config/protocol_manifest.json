@@ -64,7 +64,7 @@
     "install_smart_agent/turbo_existing_root_snapshot.ps1": "21c7e2f1e11f6203a19d46c74fe6bd45e22999fe9ce72296c1f044ee745a2c8e",
     "install_smart_agent/turbo_existing_security.cs": "e7392f085b07f118abf1f3f9133e6cc339f9b621e9968fb0dabc82472a4a9e52",
     "install_smart_agent/turbo_multi_root_paths.ps1": "d8c2cc6df8f1068893da3044f8c034d8b880c5edaa69ef25e3c96078b04d8049",
-    "install_smart_agent/turbo_multi_root_rebind.ps1": "583c4eb20de8c2745c84fa1dff2304a77616f82dbbeb66f90a2a41826952a7a9",
+    "install_smart_agent/turbo_multi_root_rebind.ps1": "e79837b6f8cd1c4288dda532e293addc3b113663e12a6efe1fcb16c188dae5f0",
     "install_smart_agent/turbo_multi_root_upgrade_authorization.ps1": "8808b172e1aa76ffb39e27dd5cea4e539907db8ef1d117db0a5204af671737ff",
     "install_smart_agent/turbo_os_activation.ps1": "76c7c52fcf30b6ad7608a58c5c8fcb6503d54bbb0973b2e0fd3478ef9d008795",
     "install_smart_agent/turbo_os_execute.ps1": "1f5d302e2f7224a57d0ab6ebb3e316f4e82db5f22160257b78cde09fb1c3006b",
