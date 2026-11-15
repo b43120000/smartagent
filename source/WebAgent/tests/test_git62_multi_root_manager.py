@@ -31,6 +31,7 @@ def env(tmp_path, monkeypatch):
     }
     secure = install / "localdata" / "secure" / "windows_security"
     calls = []
+    events = []
     monkeypatch.setattr(manager, "AGENT_PROJECT_ROOT", install)
     monkeypatch.setattr(manager, "_acl_off_enabled", lambda: False)
     monkeypatch.setattr(manager, "_is_admin", lambda: True)
@@ -50,7 +51,10 @@ def env(tmp_path, monkeypatch):
                             not Path(path).is_symlink()
                         ))
     monkeypatch.setattr(manager, "_apply_access", lambda *_args: 0)
+    monkeypatch.setattr("agent_core.turbo_os_broker_client.active_broker_available",
+                        lambda *_a: True)
     def save(roots):
+        events.append(("policy_commit", policy["revision"]))
         policy["turbo_roots"] = list(roots)
         policy["turbo_requested"] = bool(roots)
         policy["revision"] += 1
@@ -60,6 +64,7 @@ def env(tmp_path, monkeypatch):
     def run(argv, **_kwargs):
         calls.append(list(argv))
         script = Path(argv[argv.index("-File") + 1]).name
+        events.append(("native", script, policy["revision"], list(argv)))
         if script == "turbo_existing_root_activate.ps1":
             root = argv[argv.index("-TurboRoot") + 1]
             j = journal_path(secure, root)
@@ -72,13 +77,20 @@ def env(tmp_path, monkeypatch):
         if script == "turbo_os_activation.ps1":
             root = argv[argv.index("-TurboRoot") + 1]
             journal_path(secure, root).unlink()
+        if script == "turbo_multi_root_rebind.ps1" and "-RepairMissingSentinels" not in argv:
+            for root in policy["turbo_roots"]:
+                j = journal_path(secure, root)
+                if j.is_file():
+                    entry = json.loads(j.read_text(encoding="utf-8"))
+                    entry["policy_revision"] = policy["revision"]
+                    j.write_text(json.dumps(entry), encoding="utf-8")
         return SimpleNamespace(returncode=0, stdout="native accepted\n", stderr="")
     monkeypatch.setattr(manager.subprocess, "run", run)
     def select(*values):
         replies = iter(values)
         monkeypatch.setattr("builtins.input", lambda prompt="": next(replies))
     return SimpleNamespace(ws=ws, a=a, b=b, policy=policy, calls=calls,
-                           select=select, secure=secure, install=install)
+                           events=events, select=select, secure=secure, install=install)
 
 
 def test_add_two_existing_roots_one_apply_and_preserve_user_files(env):
@@ -121,6 +133,42 @@ def test_revoke_only_removed_root_before_registry_commit(env):
     assert journal_path(env.secure, env.a).exists()
     assert not journal_path(env.secure, env.b).exists()
     assert any("turbo_os_activation.ps1" in str(call) for call in env.calls)
+    preflight = next(i for i, row in enumerate(env.events)
+                     if row[0] == "native" and row[1] == "turbo_multi_root_rebind.ps1"
+                     and "-RepairMissingSentinels" in row[3])
+    revoke = next(i for i, row in enumerate(env.events)
+                  if i > preflight and row[0] == "native"
+                  and row[1] == "turbo_os_activation.ps1")
+    commit = next(i for i, row in enumerate(env.events)
+                  if i > revoke and row[0] == "policy_commit")
+    assert preflight < revoke < commit
+    assert env.events[preflight][2] < env.events[commit][1]
+
+
+def test_failed_retained_precheck_keeps_policy_and_existing_roots(env, monkeypatch):
+    env.select("5", str(env.a), "5", str(env.b), "7", "APPLY", "")
+    assert manager._security_menu() == 0
+    revision = env.policy["revision"]
+    previous_events = len(env.events)
+    original = manager.subprocess.run
+
+    def fail(argv, **kwargs):
+        if "-RepairMissingSentinels" in argv:
+            return SimpleNamespace(returncode=3, stdout="",
+                                   stderr="SIMULATED_KERNEL_DENIAL_TEST_FAILURE")
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(manager.subprocess, "run", fail)
+    env.select("6", "2", "7", "APPLY", "")
+    assert manager._security_menu() == 1
+    assert env.policy["revision"] == revision
+    assert env.policy["turbo_roots"] == [str(env.a), str(env.b)]
+    assert journal_path(env.secure, env.a).exists()
+    assert journal_path(env.secure, env.b).exists()
+    assert not any(row[1] == "turbo_os_activation.ps1"
+                   for row in env.events[previous_events:] if row[0] == "native")
+    assert (env.a / "original.txt").read_text() == "ORIGINAL"
+    assert (env.b / "original.txt").read_text() == "ORIGINAL"
 
 
 def test_operator_does_not_confirm_os_mutations(env):

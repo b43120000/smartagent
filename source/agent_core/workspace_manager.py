@@ -794,6 +794,17 @@ def _security_menu() -> int:
                             "-Workspace", owners[0], "-TurboRoot", root,
                         )
 
+                # Validate all retained SIDs and actual OS kernel denial
+                # while the OLD policy is still valid and BEFORE revocation.
+                # Only a missing, exact negative sentinel may be recreated.
+                for root in turbo:
+                    if _path_key(root) in active_roots:
+                        invoke_native(
+                            "turbo_multi_root_rebind.ps1",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-RepairMissingSentinels", "-SelectedTurboRoot", root,
+                        )
+
                 # Native revocation is mandatory BEFORE removing an active
                 # Root from the registry. No policy-only removal of OS grants.
                 if legacy_migration_needed:
@@ -872,6 +883,39 @@ def _security_menu() -> int:
                     ):
                         raise RuntimeError(
                             "TURBO_NATIVE_ENROLLMENT_JOURNAL_MISSING:" + root
+                        )
+                # A successful OS rebind must also be accepted by the
+                # Runtime's regular user-mode Broker gate for each Root.
+                from .turbo_os_broker_client import active_broker_available
+                expected_revision = int(actual.get("revision", 0) or 0)
+                for root in turbo:
+                    indexed = per_root_journal(security_dir, root)
+                    receipt_path = (
+                        indexed if indexed.is_file() else
+                        legacy_journal if len(turbo) == 1 and
+                        legacy_journal.is_file() else None
+                    )
+                    if receipt_path is None:
+                        raise RuntimeError(
+                            "TURBO_RETAINED_ROOT_ACTIVATION_MISSING:" + root
+                        )
+                    receipt = json.loads(
+                        receipt_path.read_text(encoding="utf-8-sig")
+                    )
+                    if (
+                        receipt.get("schema")
+                        != "SMARTAGENT_TURBO_OS_ACTIVATION_V1"
+                        or receipt.get("status") != "ACTIVE_PROVISIONED"
+                        or _path_key(receipt.get("turbo_root", "")) != _path_key(root)
+                        or type(receipt.get("policy_revision")) is not int
+                        or receipt["policy_revision"] != expected_revision
+                    ):
+                        raise RuntimeError(
+                            "TURBO_RETAINED_ROOT_ACTIVATION_STALE:" + root
+                        )
+                    if not active_broker_available(root):
+                        raise RuntimeError(
+                            "TURBO_RETAINED_ROOT_BROKER_UNAVAILABLE:" + root
                         )
                 print(f"\nAPPLY_EXIT_CODE=0 roots={len(turbo)}")
                 _write_apply_log("GIT62_MULTI_ROOT_APPLY_PASS")

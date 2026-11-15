@@ -275,7 +275,7 @@
     "source/agent_core/windows_process_job.py": "e78233d731fbfafa85d5ad493e117c75b160ef660548a5a0aa84bfc2d3b19037",
     "source/agent_core/windows_security.py": "8a07aee0e778821d6862916666f2dd5c5438c581b5b4301d23a5d5f5d8e87ddc",
     "source/agent_core/workspace_access.py": "e62608ed3b120f11a3e16c33faca20e85f015e6fd032e199a44b2b35e88572a4",
-    "source/agent_core/workspace_manager.py": "a67d89427cdd6a825edabeda5e46169b892a5c7b678f9bf93e246347f8fe3b51",
+    "source/agent_core/workspace_manager.py": "e1e05d24dc8315b9f32bc9ec8cc552be4bb77e4827a12d620e9aba303a76227a",
     "source/RemoteAgent/remote_feature_catalog.py": "6cf8f8d1399021808bab0924d35fec53670419373185e579e5aacab2f4baabe0",
     "source/RemoteAgent/remote_protocol.py": "38f0335979fc804619b0441a402401676c924f7b99418ba58a26f4089fd7ccab",
     "source/RemoteAgent/remote_runtime.py": "ceeb3d41d343e14e000d9e4b1ad158eb3cf861dbb01ede0329b10e5309a24ef5",
