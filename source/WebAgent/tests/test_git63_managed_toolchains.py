@@ -97,7 +97,7 @@ def test_unconfigured_catalog_cannot_trigger_untrusted_host_command(monkeypatch,
     result=json.loads(installer.install_toolchain_action({"name":"unknown","version":"123"},root=tmp_path))
     # Format may be encoded with a Runtime envelope; inspect the text for
     # the deterministic catalog rejection, never accept arbitrary URLs.
-    assert "GIT63_TOOL_NOT_IN_TRUSTED_CATALOG" in json.dumps(result)
+    assert "GIT63_DYNAMIC_SOURCE_REQUIRED" in json.dumps(result)
 
 def test_repository_catalog_does_not_preinstall_jdk_or_any_other_tool():
     # Task demand, not installation-time defaults, chooses the tool/version.
