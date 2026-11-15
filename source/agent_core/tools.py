@@ -1893,6 +1893,19 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         return "[TOOL_SCOPE_REJECTED] " + json.dumps(
             scope, ensure_ascii=False, separators=(",", ":")
         )
+    if tool == "inspect_toolchain_environment":
+        from .toolchain_environment_reader import inspect_toolchain_environment
+        from .tool_result_contract import encode_result
+        try:
+            observation = inspect_toolchain_environment()
+        except (OSError, ValueError, TypeError) as exc:
+            return encode_result("UNKNOWN", "GLOBAL_TOOLCHAIN_INSPECTION_UNAVAILABLE",
+                tool=tool, executed=False, detail=type(exc).__name__,
+                data={"terminal_eligible": False, "installation_granted": False})
+        return encode_result("SUCCEEDED", "GLOBAL_TOOLCHAIN_INVENTORY_READ",
+            tool=tool, executed=True,
+            data={**observation, "verification_status": "PASS",
+                  "terminal_eligible": False})
     if tool == "install_toolchain":
         from .managed_toolchain_install import install_toolchain_action
         return install_toolchain_action(tool_call)
