@@ -222,6 +222,10 @@ catch { exit 95 }
  # Three-Root regression: an unfinished new enrollment must not invalidate
  # the two existing AppContainer grants. The global CAS advances to 64 but
  # their immutable Root epochs stay 63, without any sibling Rebind.
+ $unchangedJournalHashes=@(
+   (Get-FileHash -LiteralPath $ja.activation -Algorithm SHA256).Hash,
+   (Get-FileHash -LiteralPath $jb.activation -Algorithm SHA256).Hash
+ )
  $rootC=Join-Path $ws 'gamma'
  New-Item -ItemType Directory -Path $rootC -Force | Out-Null
  [IO.File]::WriteAllText((Join-Path $rootC 'keep.txt'),'THIRD_ROOT_USER_DATA')
@@ -240,6 +244,8 @@ catch { exit 95 }
  Check ([int]@($policy.turbo_root_epochs | Where-Object {$_.root -eq $rootB})[0].epoch -eq 63) 'GIT62_CI_OLD_ROOT_B_EPOCH_CHANGED'
  Check ([int]@($policy.turbo_root_epochs | Where-Object {$_.root -eq $rootC})[0].epoch -eq 64) 'GIT62_CI_NEW_ROOT_C_EPOCH_WRONG'
  $script:revision=64
+ & $rebind -ProjectRoot $project -RefreshBrokerSource -AllowPendingEnrollments
+ Write-Host 'GIT62_PARTIAL_BROKER_REFRESH_NATIVE_PASS'
  & $rebind -ProjectRoot $project -VerifyOnly -AllowPendingEnrollments
  Check (-not (Test-Path -LiteralPath $jc.activation)) 'GIT62_CI_UNENROLLED_ROOT_PREMATURELY_ACTIVE'
  Scoped $a $rootA 'A'
@@ -270,6 +276,8 @@ catch { exit 95 }
  $script:revision=65
  Scoped $a $rootA 'A'
  Scoped $b $rootB 'B'
+ Check ((Get-FileHash -LiteralPath $ja.activation -Algorithm SHA256).Hash -eq $unchangedJournalHashes[0]) 'GIT62_CI_REMOVAL_CHANGED_ROOT_A_JOURNAL'
+ Check ((Get-FileHash -LiteralPath $jb.activation -Algorithm SHA256).Hash -eq $unchangedJournalHashes[1]) 'GIT62_CI_REMOVAL_CHANGED_ROOT_B_JOURNAL'
  Write-Host 'GIT62_REMOVE_THIRD_ROOT_NO_SIBLING_REBIND_PASS'
  & $revoke -Action Revoke -ProjectRoot $project -TurboRoot $rootA
  Check (-not (Test-Path -LiteralPath $ja.activation)) 'GIT62_A_REVOKE_FAILED'
