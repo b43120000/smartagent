@@ -204,6 +204,14 @@ def planner_environment_snapshot(root: str | Path | None = None) -> dict:
         "checked_at": payload["checked_at"],
         "tools": compact,
         "managed_tools": managed_hints(payload,root),
+        "external_tool_hints": [
+            {"name": str(hint.get("name", ""))[:100],
+             "path": str(hint.get("path", ""))[:1024],
+             "availability": "RECORDED_REPROBE_REQUIRED",
+             "execution_authorized": False}
+            for hint in list((payload.get("external_tool_hints") or {}).values())[:64]
+            if isinstance(hint, dict)
+        ],
         "install_catalog": catalog,
         "on_demand_install": {
             "tool": "install_toolchain",
