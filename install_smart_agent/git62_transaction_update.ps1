@@ -53,7 +53,7 @@ try {
    $syntaxErrors=$null
    [System.Management.Automation.Language.Parser]::ParseFile(
       $scriptFile,[ref]$syntaxTokens,[ref]$syntaxErrors) | Out-Null
-   if(@($syntaxErrors).Count -ne 0){
+   if($null -ne $syntaxErrors -and $syntaxErrors.Count -gt 0){
      $detail=[string]$syntaxErrors[0].Message
      throw ('UPDATE_SCRIPT_SYNTAX_INVALID:'+ $relativeScript + ':' + $detail)
    }
