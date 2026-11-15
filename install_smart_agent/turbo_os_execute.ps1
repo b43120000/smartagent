@@ -119,10 +119,77 @@ function Get-Pinned-Native-Toolchain {
         $verified.Add([IO.Path]::GetDirectoryName($full))
         $toolNames.Add([IO.Path]::GetFileNameWithoutExtension($full).ToLowerInvariant())
     }
+    # Git63: every task uses the same immutable managed-tool pointers. Re-hash
+    # each executable before admitting it to the AppContainer child PATH.
+    $javaHome=''
+    $androidSdkRoot=''
+    $store=Join-Path $ProjectRoot 'localdata\toolchains'
+    $ledgerFile=Join-Path $ProjectRoot 'localdata\metadata\environment_ledger.json'
+    if(Test-Path -LiteralPath $ledgerFile -PathType Leaf){
+        $ledger=Load-State $ledgerFile
+        if($ledger.schema -ne 'SMARTAGENT_ENVIRONMENT_LEDGER_V1'){
+            throw 'GIT63_NATIVE_LEDGER_SCHEMA_INVALID'
+        }
+        if($ledger.PSObject.Properties.Name -contains 'managed_tools'){
+            if($ledger.PSObject.Properties.Name -notcontains 'managed_sources'){
+                throw 'GIT63_NATIVE_MANAGED_SOURCE_MISSING'
+            }
+            foreach($record in @($ledger.managed_tools.PSObject.Properties)){
+                $entry=$record.Value
+                $tool=[string]$entry.tool
+                $version=[string]$entry.version
+                $alias=[string]$entry.alias
+                $key=$tool+':'+$version
+                if($tool -cnotmatch '^[a-z][a-z0-9_-]{0,31}$' -or
+                   $version -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$' -or
+                   $alias -cnotmatch '^[a-z][a-z0-9_-]{0,31}$' -or
+                   $ledger.managed_sources.PSObject.Properties.Name -cnotcontains $key){
+                    throw 'GIT63_NATIVE_MANAGED_IDENTITY_INVALID'
+                }
+                $source=$ledger.managed_sources.PSObject.Properties[$key].Value
+                if([string]$entry.archive_sha256 -ine [string]$source.archive_sha256 -or
+                   $source.executables.PSObject.Properties.Name -cnotcontains $alias){
+                    throw 'GIT63_NATIVE_MANAGED_SOURCE_MISMATCH'
+                }
+                $home=[IO.Path]::GetFullPath((Join-Path (Join-Path $store $tool) $version)).TrimEnd('\')
+                $full=[IO.Path]::GetFullPath([string]$entry.executable)
+                $relative=[string]$source.executables.PSObject.Properties[$alias].Value
+                $expected=[IO.Path]::GetFullPath((Join-Path $home $relative))
+                if(-not $full.Equals($expected,[StringComparison]::OrdinalIgnoreCase) -or
+                   -not $full.StartsWith($home+'\', [StringComparison]::OrdinalIgnoreCase) -or
+                   [string]$entry.executable_sha256 -cnotmatch '^[0-9a-fA-F]{64}$'){
+                    throw 'GIT63_NATIVE_MANAGED_PATH_INVALID'
+                }
+                $walk=$store
+                foreach($part in $full.Substring($store.Length).TrimStart([char]92).Split([char]92)){
+                    if(-not $part){continue}
+                    $walk=Join-Path $walk $part
+                    if((Get-Item -LiteralPath $walk -Force -ErrorAction Stop).Attributes -band
+                       [IO.FileAttributes]::ReparsePoint){
+                        throw 'GIT63_NATIVE_MANAGED_REPARSE_FORBIDDEN'
+                    }
+                }
+                if((Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -ine
+                   [string]$entry.executable_sha256){
+                    throw 'GIT63_NATIVE_MANAGED_SHA256_MISMATCH'
+                }
+                $verified.Add([IO.Path]::GetDirectoryName($full))
+                $toolNames.Add($alias)
+                if($alias -ceq 'java'){
+                    $javaHome=[IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($full))
+                }
+                if($alias -ceq 'adb'){
+                    $androidSdkRoot=[IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($full))
+                }
+            }
+        }
+    }
     return @{
         path=([string]::Join(';',[string[]]$verified.ToArray()))
         tools=@($toolNames.ToArray())
         trusted_count=$verified.Count
+        java_home=$javaHome
+        android_sdk_root=$androidSdkRoot
     }
 }
 
@@ -343,8 +410,22 @@ $crossRootProof
     }
     # The native command is the *only* path that receives untrusted script.
     # The elevated/setup PowerShell code must never invoke the command.
+    # Environment is injected into the native child only, never the OS PATH.
+    $envSetup=''
+    if(-not [string]::IsNullOrWhiteSpace([string]$toolchain.java_home)){
+        $literal=([string]$toolchain.java_home).Replace("'","''")
+        $envSetup+="[Environment]::SetEnvironmentVariable('JAVA_HOME','$literal');"
+    }
+    if(-not [string]::IsNullOrWhiteSpace([string]$toolchain.android_sdk_root)){
+        $literal=([string]$toolchain.android_sdk_root).Replace("'","''")
+        $envSetup+="[Environment]::SetEnvironmentVariable('ANDROID_HOME','$literal');"
+        $envSetup+="[Environment]::SetEnvironmentVariable('ANDROID_SDK_ROOT','$literal');"
+    }
+    $gradleHome=(Join-Path $state.root '.gradle').Replace("'","''")
+    $envSetup+="[Environment]::SetEnvironmentVariable('GRADLE_USER_HOME','$gradleHome');"
+    $nativeScript=$envSetup+[Environment]::NewLine+$script
     $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
-        $moniker,$script,$state.cwd,[uint32]($TimeoutSeconds*1000),
+        $moniker,$nativeScript,$state.cwd,[uint32]($TimeoutSeconds*1000),
         [int]$MaxOutputBytes,[string]$toolchain.path)
     $native=$nativeRaw | ConvertFrom-Json -ErrorAction Stop
     if ($native.sandbox_identity_verified -ne $true -or
