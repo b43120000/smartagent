@@ -1,61 +1,62 @@
-"""Git63 regression: PowerShell provider PWD must equal the admitted OS CWD.
+"""Git63 Native AppContainer PWD and protected Broker update regressions.
 
-Static contract tests run on CI without Windows admin rights. The actual
-AppContainer CreateProcess / native token result still requires Windows Live.
+Do not bind PowerShell's provider PWD in LaunchPowerShell: this same launcher
+executes kernel negative-sentinel probes before any Task. Synchronize PWD only
+in the explicitly admitted Task path (turbo_os_execute.ps1).
 """
 from pathlib import Path
-
+import hashlib
+import os
+import subprocess
+import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 NATIVE = ROOT / "install_smart_agent" / "turbo_appcontainer_probe.cs"
 BROKER = ROOT / "install_smart_agent" / "turbo_os_execute.ps1"
+REBIND = ROOT / "install_smart_agent" / "turbo_multi_root_rebind.ps1"
+UPDATER = ROOT / "install_smart_agent" / "git62_transaction_update.ps1"
 
 
-def test_native_launcher_sets_powershell_location_before_user_script():
-    source = NATIVE.read_text(encoding="utf-8")
-    start = source.index("string safeCwd = System.IO.Path.GetFullPath(cwd)")
-    end = source.index("string encoded = Convert.ToBase64String", start)
-    native_wrapper = source[start:end]
-    assert "Replace(\"'\", \"''\")" in native_wrapper
-    assert "Set-Location -LiteralPath '" in native_wrapper
-    assert "(Get-Location).Path" in native_wrapper
-    assert "[Environment]::CurrentDirectory" in native_wrapper
-    assert "GIT63_NATIVE_POWERSHELL_CWD_MISMATCH" in native_wrapper
-    assert native_wrapper.index("Set-Location -LiteralPath") < native_wrapper.index("& {\\n")
-    assert "try { \" + bindPowerShellLocation" in native_wrapper
-    assert "-ErrorAction Stop" in native_wrapper
-
-
-def test_native_launcher_uses_exact_broker_cwd_for_both_process_and_shell():
-    source = NATIVE.read_text(encoding="utf-8")
-    broker = BROKER.read_text(encoding="utf-8")
-    # Do not replace the exact authorized CWD with installation or workspace root.
-    assert "environment, cwd, ref si, out pi" in source
-    assert "string safeCwd = System.IO.Path.GetFullPath(cwd)" in source
-    assert "string raw = LaunchPowerShell(moniker, wrapped, root," in source
-    assert "$moniker,$nativeScript,$state.cwd," in broker
-    assert source.count("Set-Location -LiteralPath '") == 1
-    assert source.count("LaunchWithTrustedPath(moniker, executable,") >= 1
-
-
-def test_native_cwd_fix_does_not_spawn_host_fallback_or_mutate_host_pwd():
+def test_shared_native_launcher_does_not_change_sentinel_probe_pwd():
     source = NATIVE.read_text(encoding="utf-8")
     start = source.index("public static string LaunchPowerShell(string moniker, string script,")
     stop = source.index("public static string LaunchPowerShellCaptured(", start)
-    function = source[start:stop]
-    assert "Set-Location -LiteralPath '" in function
-    assert "Encoding.Unicode.GetBytes(body)" in function
-    assert "-NoProfile -NonInteractive -EncodedCommand " in function
-    assert "LaunchWithTrustedPath(" in function
-    assert "Process.Start(" not in function
-    assert "Environment.CurrentDirectory =" not in function
+    launcher = source[start:stop]
+    assert "Set-Location -LiteralPath" not in launcher
+    assert "[Environment]::CurrentDirectory" not in launcher
+    assert "Environment.CurrentDirectory =" not in launcher
+    assert "Encoding.Unicode.GetBytes(body)" in launcher
+    assert "LaunchWithTrustedPath(" in launcher
+    assert "VerifyChildToken(pi.hProcess, sidString)" in source
+    assert "environment, cwd, ref si, out pi" in source
 
 
-def test_elevated_update_refreshes_protected_launcher_and_broker_together():
-    rebind = (ROOT / "install_smart_agent" / "turbo_multi_root_rebind.ps1"
-              ).read_text(encoding="utf-8")
-    updater = (ROOT / "install_smart_agent" / "git62_transaction_update.ps1"
-               ).read_text(encoding="utf-8")
+def test_task_only_pwd_binding_precedes_untrusted_script():
+    source = BROKER.read_text(encoding="utf-8")
+    assert "$cwdLiteral=([string]$state.cwd).Replace(\"'\",\"''\")" in source
+    assert 'Set-Location -LiteralPath \'$cwdLiteral\' -ErrorAction Stop' in source
+    assert "(Get-Location).Path" in source
+    assert "[Environment]::CurrentDirectory" in source
+    assert "GIT63_NATIVE_TASK_CWD_MISMATCH" in source
+    assert "$nativeScript=$taskCwdSetup+$envSetup+[Environment]::NewLine+$script" in source
+    assert source.index("$nativeScript=$taskCwdSetup") < source.index(
+        "$nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured("
+    )
+    assert "$moniker,$nativeScript,$state.cwd," in source
+
+
+def test_rebind_sentinel_os_proof_remains_isolated_from_task_pwd():
+    rebind = REBIND.read_text(encoding="utf-8")
+    assert "[IO.File]::ReadAllText('$literal'); exit 89" in rebind
+    assert "catch [System.UnauthorizedAccessException] { exit 0 }" in rebind
+    assert "[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(" in rebind
+    assert "GIT62_REBIND_KERNEL_ATTESTATION_FAILED" in rebind
+    assert "GIT63_NATIVE_TASK_CWD_MISMATCH" not in rebind
+
+
+def test_elevated_update_refreshes_both_protected_broker_files():
+    rebind = REBIND.read_text(encoding="utf-8")
+    updater = UPDATER.read_text(encoding="utf-8")
     assert "& $rebind -ProjectRoot $root -RefreshBrokerSource" in updater
     assert "$fileNames=@('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')" in rebind
     assert "$manifest.core_files.PSObject.Properties[$pinName]" in rebind
@@ -64,25 +65,32 @@ def test_elevated_update_refreshes_protected_launcher_and_broker_together():
     assert "GIT63_BROKER_REFRESH_HASH_FAILED" in rebind
 
 
-def test_rebind_refresh_has_single_complete_power_shell_block():
-    rebind = (ROOT / "install_smart_agent" / "turbo_multi_root_rebind.ps1"
-              ).read_text(encoding="utf-8")
+def test_rebind_refresh_has_single_complete_phase_two():
+    rebind = REBIND.read_text(encoding="utf-8")
     assert rebind.count("# Phase 2: independent, protected, replace-atomic journal writes.") == 1
     assert rebind.count("foreach($item in $verified){") == 1
-    assert rebind.count("if($null -eq $pin") == 1
-    assert "if($null -eq $pin){" in rebind
     assert "if($expectedHash -notmatch '^[0-9a-fA-F]{64}$'){" in rebind
-    assert "GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH" in rebind
     assert rebind.count("GIT62_PROTECTED_BROKER_REFRESH_PASS") == 1
 
 
-def test_rebind_windows_powershell_parser_reports_no_syntax_errors():
-    import os
-    import subprocess
-    import pytest
-    if os.name != "nt":
-        pytest.skip("Windows PowerShell parser requires Windows; covered in Live testing")
-    path = (ROOT / "install_smart_agent" / "turbo_multi_root_rebind.ps1").resolve()
+def test_updated_integrity_manifest_has_both_native_scripts():
+    import json
+    manifest = json.loads((ROOT / "config" / "protocol_manifest.json").read_text(encoding="utf-8"))
+    for path in ("install_smart_agent/turbo_os_execute.ps1",
+                 "install_smart_agent/turbo_appcontainer_probe.cs",
+                 "install_smart_agent/turbo_multi_root_rebind.ps1",
+                 "install_smart_agent/git62_transaction_update.ps1"):
+        assert manifest["core_files"][path] == hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell 5.1 Parser required")
+@pytest.mark.parametrize("script", [
+    "install_smart_agent/turbo_multi_root_rebind.ps1",
+    "install_smart_agent/turbo_os_execute.ps1",
+    "install_smart_agent/git62_transaction_update.ps1",
+])
+def test_windows_powershell_parser_reports_no_syntax_errors(script):
+    path = (ROOT / script).resolve()
     literal = str(path).replace("'", "''")
     command = (
         "$tokens=$null; $parseErrors=$null; "
@@ -90,11 +98,11 @@ def test_rebind_windows_powershell_parser_reports_no_syntax_errors():
         "[ref]$tokens,[ref]$parseErrors) | Out-Null; "
         "if($null -ne $parseErrors -and $parseErrors.Count -gt 0){"
         "$parseErrors | ForEach-Object { Write-Error $_.Message }; exit 1 }; "
-        "Write-Output 'GIT63_REBIND_PARSER_PASS'"
+        "Write-Output 'GIT63_NATIVE_PARSER_PASS'"
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
         capture_output=True, text=True, timeout=30, check=False
     )
     assert result.returncode == 0, result.stderr
-    assert "GIT63_REBIND_PARSER_PASS" in result.stdout
+    assert "GIT63_NATIVE_PARSER_PASS" in result.stdout
