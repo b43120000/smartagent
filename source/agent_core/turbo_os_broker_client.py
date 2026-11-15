@@ -134,7 +134,7 @@ def _git59_validate_direct_child(receipt: dict, requested: str, project: Path) -
 # exception, command text, paths or potentially sensitive process output.
 # Report only bounded native error codes, not raw stderr or paths.
 _NATIVE_BROKER_REASON = re.compile(
-    r"\b(?:GIT50|GIT59|GIT62|TURBO_D3)_[A-Z0-9_]{3,120}\b"
+    r"\b(?:GIT50|GIT59|GIT62|GIT63|TURBO_D3)_[A-Z0-9_]{3,120}\b"
 )
 _NATIVE_OS_OPERATIONS = (
     ("CreateProcessW(AppContainer)", "WIN32_CREATEPROCESS_APP_CONTAINER"),
