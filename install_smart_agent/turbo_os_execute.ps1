@@ -425,7 +425,17 @@ $crossRootProof
     $envSetup+="[Environment]::SetEnvironmentVariable('SMARTAGENT_TOOLCHAIN_ROOT','$managedRoot');"
     $gradleHome=(Join-Path $state.root '.gradle').Replace("'","''")
     $envSetup+="[Environment]::SetEnvironmentVariable('GRADLE_USER_HOME','$gradleHome');"
-    $nativeScript=$envSetup+[Environment]::NewLine+$script
+    # Git63: PWD synchronization belongs to the admitted user TASK,
+    # not to every AppContainer verification / installer probe.
+    # The broker has already verified state.cwd is the exact authorized root.
+    $cwdLiteral=([string]$state.cwd).Replace("'","''")
+    $taskCwdSetup="Set-Location -LiteralPath '$cwdLiteral' -ErrorAction Stop; "
+    $taskCwdSetup+="if(-not [string]::Equals((Get-Location).Path,'$cwdLiteral',"+
+        "[StringComparison]::OrdinalIgnoreCase) -or "+
+        "-not [string]::Equals([Environment]::CurrentDirectory,'$cwdLiteral',"+
+        "[StringComparison]::OrdinalIgnoreCase))"+
+        "{throw 'GIT63_NATIVE_TASK_CWD_MISMATCH'}; "
+    $nativeScript=$taskCwdSetup+$envSetup+[Environment]::NewLine+$script
     $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
         $moniker,$nativeScript,$state.cwd,[uint32]($TimeoutSeconds*1000),
         [int]$MaxOutputBytes,[string]$toolchain.path)
