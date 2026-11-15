@@ -37,8 +37,8 @@ def test_windows_powershell_native_python_c_does_not_depend_on_embedded_quotes()
     import ast
     import re
     source=(ROOT/"install_smart_agent/git62_transaction_update.ps1").read_text(encoding="utf-8")
-    validate=re.search(r"(?m)^\\s*\\$validate='([^']+)'$",source)
-    post=re.search(r"(?m)^\\s*& \\$python -c '([^']+)'$",source)
+    validate=re.search(r"(?m)^\s*\$validate='([^']+)'$",source)
+    post=re.search(r"(?m)^\s*& \$python -c '([^']+)'$",source)
     assert validate is not None and post is not None
     for statement in (validate.group(1),post.group(1)):
         assert '"' not in statement
