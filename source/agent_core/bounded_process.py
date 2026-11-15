@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from .payload_budget import RESULT_ATTACHMENT_MAX_BYTES
+from .process_liveness import observe_owned_process, wait_with_liveness
 
 
 def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
@@ -195,6 +196,8 @@ def run_bounded_process(
         from .execution_telemetry import write_snapshot
         write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="STARTING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid(), stdout_path=str(stdout_path), stderr_path=str(stderr_path))
     process_started = False
+    last_running_evidence = None
+    final_liveness_evidence = None
     try:
         from .runtime_environment import build_runtime_environment
         child_environment = build_runtime_environment()
@@ -218,11 +221,30 @@ def run_bounded_process(
                 env=child_environment,
             )
             process_started = True
-            if telemetry_root and telemetry_task:
-                write_snapshot(telemetry_root, telemetry_task, state="RUNNING", pid=process.pid)
+            def record_running(observation):
+                nonlocal last_running_evidence
+                if not observation.get("liveness_verified"):
+                    return
+                last_running_evidence = observation
+                if telemetry_root and telemetry_task:
+                    try:
+                        write_snapshot(
+                            telemetry_root, telemetry_task,
+                            state="RUNNING", execution_id=capture_id,
+                            pid=process.pid, liveness_evidence=observation,
+                            liveness_verified=True,
+                            liveness_observed_at=observation["observed_at"],
+                        )
+                    except OSError:
+                        # Telemetry is secondary; never abandon a live child
+                        # because a display snapshot could not be written.
+                        pass
             timed_out = False
             try:
-                process.wait(timeout=timeout)
+                wait_with_liveness(
+                    process, timeout, on_running=record_running,
+                    execution_id=capture_id, interval=2.0,
+                )
             except subprocess.TimeoutExpired:
                 timed_out = True
                 # On Windows shell=True owns cmd.exe, not just the actual child.
@@ -241,6 +263,9 @@ def run_bounded_process(
                 if process.poll() is None:
                     process.kill()
                 process.wait(timeout=5)
+            final_liveness_evidence = observe_owned_process(
+                process, execution_id=capture_id,
+            )
 
         stdout, stdout_bytes, stdout_truncated, stdout_ref = _read_capture(stdout_path, max_stream_bytes)
         stderr, stderr_bytes, stderr_truncated, stderr_ref = _read_capture(stderr_path, max_stream_bytes)
@@ -256,11 +281,26 @@ def run_bounded_process(
             "stderr_ref": stderr_ref,
             "timed_out": timed_out,
             "process_started": process_started,
+            "process_state": (
+                final_liveness_evidence["process_state"]
+                if final_liveness_evidence else "UNKNOWN"
+            ),
+            "pid": process.pid,
+            "execution_id": capture_id,
+            "liveness_evidence": final_liveness_evidence,
+            "last_running_evidence": last_running_evidence,
         }
         if timed_out:
             result["error"] = f"指令超過 {timeout} 秒"
         if telemetry_root and telemetry_task:
-            write_snapshot(telemetry_root, telemetry_task, state="TIMED_OUT" if timed_out else "EXITED", ended_at=__import__("time").time(), exit_code=process.returncode, stdout_tail=stdout[-8192:], stderr_tail=stderr[-8192:])
+            write_snapshot(
+                telemetry_root, telemetry_task,
+                state="TIMED_OUT" if timed_out else "EXITED",
+                ended_at=__import__("time").time(),
+                liveness_verified=False, liveness_evidence=final_liveness_evidence,
+                exit_code=process.returncode,
+                stdout_tail=stdout[-8192:], stderr_tail=stderr[-8192:],
+            )
         return result
     except Exception as exc:
         for path in (stdout_path, stderr_path):
