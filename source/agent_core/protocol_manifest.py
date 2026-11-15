@@ -25,6 +25,8 @@ CORE_FILES = (
     'source/agent_core/managed_toolchains.py',
     'source/agent_core/managed_toolchain_install.py',
     'source/agent_core/process_liveness.py',
+    # Git64: local Python test adapter and tightening-only native execution guard.
+    'source/agent_core/runtime_test_gateway.py',
     'source/agent_core/execution_telemetry.py',
     'source/agent_core/executor_command_rca.py',
     'source/agent_core/toolchain_environment_reader.py',
