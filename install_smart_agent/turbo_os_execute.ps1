@@ -470,7 +470,8 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
     throw 'GIT63_NATIVE_TASK_CWD_MISMATCH'
 }
 [void]$script:smartagentTrace.Add('CWD_COMPARE.PASS')
-'@.Replace('__CWD_LITERAL__',$cwdLiteral)
+'@
+    $taskCwdSetup=$taskCwdSetup.Replace('__CWD_LITERAL__',$cwdLiteral)
     $envSetup+="[void]"+'$script:smartagentTrace.Add(''ENV_APPLY.PASS''); '
     $envSetup+='$script:smartagentStage=''COMMAND_EXECUTE''; '+
         '$script:smartagentSubstage=''COMMAND_DISPATCH''; '+
