@@ -83,6 +83,15 @@ try {
  $previousHash=([string]$machine.protocol_manifest_sha256).ToLowerInvariant()
  $rebind=Join-Path $root 'install_smart_agent\turbo_multi_root_rebind.ps1'
  Require (Test-Path -LiteralPath $rebind -PathType Leaf) 'UPDATE_NATIVE_PRECHECK_HELPER_MISSING'
+ # A previous Root removal can leave an old activation revision and a
+ # missing sentinel. Full updates may repair that one probe, after protected
+ # owner/hash checks and real SID/kernel attestation. --verify stays read-only.
+ if(-not $VerifyOnly){
+   $stage='NATIVE_SENTINEL_RECOVERY'
+   Say 'Checking missing Native negative sentinels through admin-only recovery.'
+   & $rebind -ProjectRoot $root -RepairMissingSentinels
+   Require ($?) 'UPDATE_NATIVE_SENTINEL_RECOVERY_FAILED'
+ }
  $stage='NATIVE_ROOT_PRECHECK'
  Say ('PRECHECK_ROOTS count='+$roots.Count)
  & $rebind -ProjectRoot $root -VerifyOnly
