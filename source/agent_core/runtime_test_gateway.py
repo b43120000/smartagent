@@ -134,6 +134,14 @@ def _safe_runtime_summary(receipt: Mapping[str, Any]) -> dict[str, Any]:
     )
     running = data.get("last_running_evidence") or {}
     running = running if isinstance(running, dict) else {}
+    steps = sandbox.get("native_command_trace")
+    steps = [x for x in steps if isinstance(x, str)][:32] if isinstance(steps, list) else []
+    cwd_binding = (
+        "PSDRIVE_ROOT_FALLBACK" if "CWD_PSDRIVE_FALLBACK.PASS" in steps
+        else "DIRECT_SET_LOCATION" if "CWD_SET_LOCATION.PASS" in steps
+        else "INITIAL_PROVIDER_CWD" if "CWD_SET_LOCATION.SKIP" in steps
+        else "UNVERIFIED"
+    )
     return {
         "tool_status": receipt.get("status"),
         "tool_reason": receipt.get("reason"),
@@ -143,6 +151,8 @@ def _safe_runtime_summary(receipt: Mapping[str, Any]) -> dict[str, Any]:
         "execution_id": data.get("execution_id"),
         "sandbox": {k: sandbox[k] for k in accepted if k in sandbox},
         "cwd_probes": {k: probes[k] for k in probe_names if k in probes},
+        "cwd_binding_method": cwd_binding,
+        "native_setup_trace": steps,
         "last_running_evidence": {
             k: running[k] for k in (
                 "evidence_source", "pid", "execution_id",
