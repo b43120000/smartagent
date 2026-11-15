@@ -584,12 +584,25 @@ public static class SmartAgentGit47AppContainerProbe
             "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
         if (!System.IO.File.Exists(executable))
             throw new InvalidOperationException("appcontainer_powershell_unavailable");
+        // Win32 CreateProcessW sets the OS process CWD, but Windows PowerShell
+        // may initialize its provider location (PWD/Get-Location) to C:\\.
+        // Bind BOTH locations to the already admitted exact Native Broker CWD
+        // in the LOWBOX CHILD before ANY user script; never chdir in the host.
+        // Path.GetFullPath resolves dot segments; quote apostrophes as literals.
+        string safeCwd = System.IO.Path.GetFullPath(cwd).Replace("'", "''");
+        string bindPowerShellLocation =
+            "Set-Location -LiteralPath '" + safeCwd + "' -ErrorAction Stop; " +
+            "if(-not [string]::Equals((Get-Location).Path,'" + safeCwd +
+                "',[StringComparison]::OrdinalIgnoreCase) -or " +
+            "-not [string]::Equals([Environment]::CurrentDirectory,'" + safeCwd +
+                "',[StringComparison]::OrdinalIgnoreCase))" +
+            "{throw 'GIT63_NATIVE_POWERSHELL_CWD_MISMATCH'}; ";
         // No -ExecutionPolicy Bypass, no inherited controller environment,
         // no privileged handles; Launch verifies the OS token before resume.
         string body =
             "$ErrorActionPreference='Stop'; " +
             "$global:LASTEXITCODE=$null; " +
-            "try { & {\n" + script + "\n}; " +
+            "try { " + bindPowerShellLocation + "& {\n" + script + "\n}; " +
             "$code=if($null -ne $global:LASTEXITCODE){[int]$global:LASTEXITCODE}" +
             "elseif($?){0}else{1}; exit $code } " +
             "catch { [Console]::Error.WriteLine($_.Exception.GetType().Name); exit 1 }";
