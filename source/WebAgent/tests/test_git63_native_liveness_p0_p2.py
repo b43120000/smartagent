@@ -150,6 +150,7 @@ def test_native_failed_command_preserves_phase_and_does_not_claim_success(monkey
         stderr="SMARTAGENT_NATIVE_FAILURE_STAGE=CWD_SETUP;UnauthorizedAccessException:Access denied",
     )
     receipt.update(
+        native_command_trace=["CWD_GET_LOCATION_INITIAL.START"],
         native_failure_stage="CWD_SETUP",
         native_failure_substage="CWD_GET_LOCATION_INITIAL",
         native_exception_type="UnauthorizedAccessException",
