@@ -316,7 +316,7 @@
     "source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py": "7be7da2abad8d3bfb8a299d36ab390b3507f7fee430a17b3f84350145ae1a3ea",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
-    "install_smart_agent/git62_transaction_update.ps1": "6c04264652a4df0e7ef0eb582d239afdd7c7ca5df5f74187d820d61d42374b1d"
+    "install_smart_agent/git62_transaction_update.ps1": "f043fbab4fc653dbc21395702a7b30dbfeda34d24c7ea79a288bc6ba0e3a500a"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

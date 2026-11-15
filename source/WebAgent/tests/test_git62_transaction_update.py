@@ -45,3 +45,14 @@ def test_windows_powershell_native_python_c_does_not_depend_on_embedded_quotes()
         ast.parse(statement)
     assert 'print(UPDATE_VERIFIED_COMMIT_AND_CORE_FILES)' not in source
     assert 'print(UPDATE_MACHINE_AUTHORIZATION_PASS)' not in source
+
+
+def test_uac_console_pauses_only_after_elevated_worker_completes():
+    source=(ROOT/"install_smart_agent/git62_transaction_update.ps1").read_text(encoding="utf-8")
+    assert "} finally {" in source
+    assert "if($Elevated){" in source
+    assert "Read-Host 'Press ENTER to close'" in source
+    assert "ELEVATED_RESULT=PASS" in source
+    assert "ELEVATED_RESULT=FAIL stage=" in source
+    assert "Start-Process -FilePath $exe -ArgumentList $arg -Verb RunAs -Wait -PassThru" in source
+    assert "exit 20\n} finally {" in source

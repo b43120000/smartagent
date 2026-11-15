@@ -13,6 +13,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $stage='INPUT'
 $authorizationUpdated=$false
+$updateSucceeded=$false
 function Say([string]$message){Write-Host ('[SmartAgent Update] '+$message)}
 function Require([bool]$ok,[string]$reason){if(-not $ok){throw $reason}}
 try {
@@ -124,6 +125,7 @@ try {
  Require ($LASTEXITCODE -eq 0) 'UPDATE_REMOTE_PREFLIGHT_FAILED'
  $stage='COMPLETE'
  Say ('UPDATE_STATUS=PASS commit='+$Commit+' manifest_sha256='+$expectedHash+' roots='+$roots.Count)
+ $updateSucceeded=$true
  exit 0
 } catch {
  Say ('UPDATE_STATUS=FAIL stage='+$stage+' reason='+$_.Exception.Message)
@@ -134,4 +136,25 @@ try {
  }
  Say 'POST_PULL_MODE: checkout was already changed by git pull; automatic rollback of pre-pull program bytes is NOT guaranteed.'
  exit 20
+} finally {
+ # Only the separately launched UAC console pauses; the original CMD remains
+ # synchronously blocked on Start-Process -Wait until this console is dismissed.
+ # Keep the process's explicit exit 0/20 status from the try/catch above.
+ if($Elevated){
+   Write-Host ''
+   Write-Host '=============================================='
+   if($updateSucceeded){
+     Say 'ELEVATED_RESULT=PASS'
+   } else {
+     Say ('ELEVATED_RESULT=FAIL stage='+$stage)
+   }
+   Say 'The administrator window is paused so you can inspect the result.'
+   Say 'Press ENTER to close this window and return the exit code to CMD.'
+   Write-Host '=============================================='
+   try {
+     [void](Read-Host 'Press ENTER to close')
+   } catch {
+     Say ('PAUSE_UNAVAILABLE: '+$_.Exception.GetType().Name)
+   }
+ }
 }
