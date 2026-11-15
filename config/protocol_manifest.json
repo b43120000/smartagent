@@ -316,7 +316,7 @@
     "source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py": "7be7da2abad8d3bfb8a299d36ab390b3507f7fee430a17b3f84350145ae1a3ea",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
-    "install_smart_agent/git62_transaction_update.ps1": "17fff730ea57f48ac448bf09c56d6ae2c9a34c5f52ad3fa05948ed1741ebd83a",
+    "install_smart_agent/git62_transaction_update.ps1": "4d409c59b470d8a50459b167aa16aa57a56fb297adb9138816b8941117fc5454",
     "source/agent_core/managed_toolchains.py": "ed58b93bde654055b998d787d6e500b306debfc8d2db7c88352717a653d8d751",
     "source/agent_core/managed_toolchain_install.py": "31ec1122113591c31781ee553515146d62ef2d0cd5b1f64069dd18386b0d9a97",
     "config/managed_toolchains_catalog.json": "bb6061dc0620b7d52031dd387716c7b78c8277025d075f4c062fb12af04843d3",
