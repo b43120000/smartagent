@@ -38,14 +38,16 @@ def install_toolchain_action(action: dict, *, root=None) -> str:
     if source is not None and installed_source is not None and package != installed_source:
         return encode_result("REJECTED", "GIT63_MANAGED_VERSION_SOURCE_CONFLICT",
             tool="install_toolchain", executed=False, data={"terminal_eligible":False})
-    for row in managed_hints(ledger, root):
-        if row["tool"] == tool and row["version"] == version:
-            return encode_result("SUCCEEDED", "GIT63_TOOL_ALREADY_DISCOVERABLE",
-                tool="install_toolchain", executed=False,
-                data={"installation_status":"RECORDED_REPROBE_REQUIRED",
-                      "tool_paths":{tool:row["path"]},
-                      "native_execution_verified":False,
-                      "terminal_eligible":False})
+    reusable = [row for row in managed_hints(ledger, root)
+                if row["tool"] == tool and row["version"] == version]
+    if reusable:
+        return encode_result("SUCCEEDED", "GIT63_TOOL_ALREADY_DISCOVERABLE",
+            tool="install_toolchain", executed=False,
+            data={"installation_status":"RECORDED_REPROBE_REQUIRED",
+                  "tool_paths":{f'{row["name"]}:{version}':row["path"]
+                                for row in reusable},
+                  "native_execution_verified":False,
+                  "terminal_eligible":False})
     if os.name != "nt":
         return encode_result("REJECTED", "GIT63_WINDOWS_NATIVE_REQUIRED",
             tool="install_toolchain", executed=False)
