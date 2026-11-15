@@ -32,6 +32,7 @@ _CATEGORY_MEMBERS = {
         "list_directory", "inspect_directory", "find_file", "observe_fact",
         "read_runtime_evidence",
         "read_runtime_blackboard",
+        "inspect_toolchain_environment",
         "inspect_project_scope", "inspect_project_working_set", "compare_project_snapshot",
         "inspect_semantic_map", "update_semantic_map", "update_semantic_map_file",
         "extract_project_dependencies", "build_project_bundle",
