@@ -156,3 +156,30 @@ def test_dynamic_install_requires_native_checksum_evidence_and_reuse(tmp_path):
         register_install_receipt(receipt, root=tmp_path, source={
             **source, "url": "https://services.gradle.org/distributions/evil.zip"
         })
+
+def test_native_broker_is_single_and_integrity_pinned():
+    # Prevent recurrence of the 1,905-line duplicated PowerShell regression.
+    root = Path(__file__).resolve().parents[3]
+    native = root / "install_smart_agent" / "turbo_os_execute.ps1"
+    manifest = json.loads((root / "config" / "protocol_manifest.json").read_text(encoding="utf-8"))
+    code = native.read_text(encoding="utf-8")
+    assert code.count("function Assert-Trusted-State") == 1
+    assert code.count("LaunchPowerShellCaptured(") == 1
+    assert "GIT63_NATIVE_MANAGED_SHA256_MISMATCH" in code
+    assert hashlib.sha256(native.read_bytes()).hexdigest() == (
+        manifest["core_files"]["install_smart_agent/turbo_os_execute.ps1"]
+    )
+
+
+def test_global_ledger_refresh_preserves_dynamic_installer_receipts(monkeypatch, tmp_path):
+    path = tmp_path / "localdata" / "metadata" / "environment_ledger.json"
+    path.parent.mkdir(parents=True)
+    expected_source = {"gradle:8.0": {"tool": "gradle", "version": "8.0"}}
+    path.write_text(json.dumps({
+        "schema": runtime_environment.ENVIRONMENT_LEDGER_SCHEMA,
+        "tools": {}, "managed_tools": {}, "managed_sources": expected_source,
+    }))
+    monkeypatch.setattr(runtime_environment, "_probe_tool", lambda *args: {"status": "MISSING"})
+    result = runtime_environment.refresh_environment_ledger(tmp_path)
+    assert result["managed_sources"] == expected_source
+    assert runtime_environment.read_environment_ledger(tmp_path)["managed_sources"] == expected_source
