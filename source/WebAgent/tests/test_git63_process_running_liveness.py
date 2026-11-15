@@ -148,6 +148,16 @@ def test_planner_running_requires_verified_handle_not_pid(monkeypatch, tmp_path)
     assert running["reason"] == "COMMAND_RUNNING_OS_VERIFIED"
     assert running["data"]["terminal_eligible"] is False
 
+    # An old kernel observation cannot be recycled as live RUNNING proof.
+    stale_proof = {**proof, "observed_at": time.time() - 40}
+    stale = _mock_command(monkeypatch, tmp_path, {
+        "exit_code": None, "process_started": True,
+        "process_state": "RUNNING", "pid": 1234,
+        "liveness_evidence": stale_proof,
+    })
+    assert stale["status"] == "UNKNOWN"
+    assert stale["data"]["terminal_eligible"] is False
+
 
 def test_running_telemetry_does_not_extend_command_timeout():
     # OS proof is a progress observation, not authority to detach or extend
