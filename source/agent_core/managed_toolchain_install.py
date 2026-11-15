@@ -1,6 +1,7 @@
 """Git63 noninteractive managed installer Action: no Host CMD fallback."""
 from __future__ import annotations
 import json
+import base64
 import os
 import re
 import subprocess
@@ -15,7 +16,7 @@ _SAFE = re.compile(r"\bGIT63_[A-Z0-9_]{3,100}\b")
 
 
 def install_toolchain_action(action: dict, *, root=None) -> str:
-    """Only a catalog tool/version, never Planner URL, path, script or command.
+    """Install a source validated by Runtime; no Planner command or target path.
 
     First-time administrator setup is a separate, explicit operation.
     Once provisioned, the installer has its own restricted AppContainer SID
@@ -23,10 +24,13 @@ def install_toolchain_action(action: dict, *, root=None) -> str:
     """
     tool, version = action.get("name"), action.get("version")
     root = install_root(root)
+    source = action.get("source")
+    # Source is a bounded declarative archive/checksum descriptor, not a script.
     try:
-        select_package(tool, version, root)
-    except (ValueError, OSError, TypeError):
-        return encode_result("REJECTED", "GIT63_TOOL_NOT_IN_TRUSTED_CATALOG",
+        package = select_package(tool, version, root, source=source)
+    except (ValueError, OSError, TypeError) as exc:
+        reason = str(exc) if str(exc).startswith("GIT63_") else "GIT63_SOURCE_INVALID"
+        return encode_result("REJECTED", reason,
             tool="install_toolchain", executed=False, data={"terminal_eligible":False})
     from .runtime_environment import read_environment_ledger
     for row in managed_hints(read_environment_ledger(root), root):
@@ -47,6 +51,11 @@ def install_toolchain_action(action: dict, *, root=None) -> str:
     args = [str(exe), "-NoProfile", "-NonInteractive",
             "-ExecutionPolicy", "RemoteSigned", "-File", str(script),
             "-ProjectRoot", str(root), "-Tool", tool, "-Version", version]
+    if source is not None:
+        descriptor = {key:package[key] for key in
+                      ("url", "archive_sha256", "checksum_url", "executables", "archive_type")}
+        encoded = base64.b64encode(json.dumps(descriptor, separators=(",", ":")).encode("utf-8"))
+        args.extend(["-SourceSpecBase64", encoded.decode("ascii")])
     try:
         result = subprocess.run(args, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -63,7 +72,7 @@ def install_toolchain_action(action: dict, *, root=None) -> str:
                                   "terminal_eligible":False})
     try:
         record = json.loads(result.stdout.strip().splitlines()[-1])
-        committed = register_install_receipt(record, root=root)
+        committed = register_install_receipt(record, root=root, source=source)
     except (KeyError, ValueError, TypeError, OSError, IndexError) as exc:
         return encode_result("UNKNOWN", "GIT63_INSTALL_RECEIPT_UNVERIFIED",
             tool="install_toolchain", executed=False,
