@@ -1779,7 +1779,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             action_id=tool_call.get('action_id',''),
             request_id=getattr(agent,'current_request_id','') if agent else '',
             task_id=getattr(agent,'current_task_id','') if agent else '')
-    if tool not in {'read_file','write_file','create_directory','list_directory','find_file','run_command','upload_file','upload_files','return_artifact',
+    if tool not in {'read_file','write_file','create_directory','list_directory','find_file','run_command','install_toolchain','upload_file','upload_files','return_artifact',
                     'download_artifact','web_edit_file','execute_artifact_bundle',
                     'web_search','save_session_summary','google_drive_upload','ask_executor'} | P1_TOOLS:
         return result
@@ -1893,6 +1893,9 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         return "[TOOL_SCOPE_REJECTED] " + json.dumps(
             scope, ensure_ascii=False, separators=(",", ":")
         )
+    if tool == "install_toolchain":
+        from .managed_toolchain_install import install_toolchain_action
+        return install_toolchain_action(tool_call)
     if tool == "run_command" and not scope["allowed"]:
         from .tool_result_contract import encode_result
         return encode_result('REJECTED', 'COMMAND_SCOPE_REJECTED', tool=tool,
