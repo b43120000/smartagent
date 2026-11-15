@@ -1939,6 +1939,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
 
 
 def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) -> str:
+    from .tool_result_contract import encode_result
     models = models or getattr(agent, "_models_registry", {}) or {}
     tool = tool_call.get("tool", "")
     from .pr_bcd_request_scope import check_action_against_write_ceiling
