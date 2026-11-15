@@ -488,7 +488,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         environment_inventory = {
             "status": "INVENTORY_UNAVAILABLE", "execution_authorized": False,
         }
-    max_rounds = min(int(loop.max_turns), 30)
+    max_rounds = min(int(loop.max_turns), 1000)
     for turn in range(1, max_rounds + finish_grace_rounds + 1):
         # Extra turns are strictly for repairing an already submitted Finish;
         # they do not increase the number of executable ToolCall rounds.

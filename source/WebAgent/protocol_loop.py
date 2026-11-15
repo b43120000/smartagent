@@ -298,7 +298,7 @@ class WebAgentProtocolLoop:
         planner: PlannerCall,
         *,
         tool_context: WebAgentToolContext | None = None,
-        max_turns: int = 250,
+        max_turns: int = 1000,
         event_sink: Callable[..., None] | None = None,
         display_name: str = "WebAgent",
         cancel_check: Callable[[], None] | None = None,
