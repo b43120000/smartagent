@@ -530,25 +530,47 @@ def execute_turbo_command(
 
     # P0: diagnostic stage is not a kernel security attestation.
     native_stage = receipt.get("native_failure_stage")
+    native_substage = receipt.get("native_failure_substage")
     native_exception_type = receipt.get("native_exception_type")
+    native_exception_hresult = receipt.get("native_exception_hresult")
     native_stage_source = receipt.get("native_failure_stage_source")
+    native_command_trace = receipt.get("native_command_trace")
+    known_steps = {
+        "CWD_GET_LOCATION_INITIAL", "CWD_SET_LOCATION",
+        "CWD_GET_LOCATION_VERIFY", "CWD_GET_NATIVE_CURRENT_DIRECTORY",
+        "CWD_COMPARE", "ENV_APPLY", "COMMAND_DISPATCH",
+    }
+    if (not isinstance(native_command_trace, list)
+            or len(native_command_trace) > 32
+            or any(not isinstance(t, str) or len(t) > 80
+                   or not re.fullmatch(r"[A-Z_]+\.(START|PASS|SKIP|FINISH)", t)
+                   or t.split(".", 1)[0] not in known_steps
+                   for t in native_command_trace)):
+        raise TurboOSBrokerUnavailable("GIT63_NATIVE_COMMAND_TRACE_INVALID")
     if (not isinstance(native_stage, str)
             or native_stage not in {
                 "", "CWD_SETUP", "ENV_SETUP", "COMMAND_EXECUTE", "OUTPUT_CAPTURE"}
+            or not isinstance(native_substage, str)
+            or native_substage not in (known_steps | {"", "OUTPUT_CAPTURE_WRITE", "WRAPPER_INIT"})
             or not isinstance(native_exception_type, str)
             or not re.fullmatch(r"[A-Za-z0-9.]{0,100}", native_exception_type)
+            or not isinstance(native_exception_hresult, str)
+            or not re.fullmatch(r"[0-9A-F]{0,8}", native_exception_hresult)
             or native_stage_source not in {
                 "NONE", "WRAPPER_RESERVED_EXIT_CODE",
                 "SANDBOX_WRAPPER_DIAGNOSTIC"}
             or (native_stage_source == "NONE" and
-                (native_stage != "" or native_exception_type != ""))
+                (native_stage != "" or native_substage != ""
+                 or native_exception_type != "" or native_exception_hresult != ""))
             or (native_stage_source == "WRAPPER_RESERVED_EXIT_CODE" and
-                (native_stage != "OUTPUT_CAPTURE" or
-                 native_exception_type != "" or exit_code != 95))
+                (native_stage != "OUTPUT_CAPTURE"
+                 or native_substage != "OUTPUT_CAPTURE_WRITE"
+                 or native_exception_type != "" or native_exception_hresult != ""
+                 or exit_code != 95))
             or (native_stage_source == "SANDBOX_WRAPPER_DIAGNOSTIC" and
-                (native_stage not in {
-                    "CWD_SETUP", "ENV_SETUP", "COMMAND_EXECUTE"}
-                 or not native_exception_type or exit_code == 0))
+                (native_stage not in {"CWD_SETUP", "ENV_SETUP", "COMMAND_EXECUTE"}
+                 or not native_substage or not native_exception_type
+                 or len(native_exception_hresult) != 8 or exit_code == 0))
             or (exit_code == 0 and native_stage != "")):
         raise TurboOSBrokerUnavailable("GIT63_NATIVE_FAILURE_STAGE_INVALID")
 
@@ -583,8 +605,11 @@ def execute_turbo_command(
         "native_trusted_tools": tools,
         "native_error_class": error_class,
         "native_failure_stage": native_stage,
+        "native_failure_substage": native_substage,
         "native_exception_type": native_exception_type,
+        "native_exception_hresult": native_exception_hresult,
         "native_failure_stage_source": native_stage_source,
+        "native_command_trace": list(native_command_trace),
         "native_process_pid": process_pid,
         "native_running_sample_count": native_samples,
         "stdout_capture_state": ("TRUNCATED" if out_cut else
