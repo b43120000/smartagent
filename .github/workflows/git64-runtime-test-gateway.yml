@@ -5,6 +5,10 @@ on:
       - "git64/runtime-test-gateway-20261116"
     paths:
       - "source/agent_core/runtime_test_gateway.py"
+      - "source/agent_core/tools.py"
+      - "source/agent_core/bounded_process.py"
+      - "source/agent_core/protocol_manifest.py"
+      - "config/protocol_manifest.json"
       - "source/WebAgent/tests/test_git64_runtime_test_gateway.py"
       - ".github/workflows/git64-runtime-test-gateway.yml"
   workflow_dispatch:
@@ -32,9 +36,26 @@ jobs:
         run: |
           export PYTHONPATH="$PWD/source"
           python -m unittest discover -s source/WebAgent/tests -p "test_git64_runtime_test_gateway.py" -v
-      - name: Parse protected PowerShell Broker source (no execution)
+      - name: Validate integrity pins used by the test gateway
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          manifest=json.loads(Path("config/protocol_manifest.json").read_text(encoding="utf-8"))
+          for path in (
+              "source/agent_core/runtime_test_gateway.py",
+              "source/agent_core/bounded_process.py",
+              "source/agent_core/tools.py",
+              "source/agent_core/protocol_manifest.py",
+          ):
+              actual=hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert manifest["core_files"][path]==actual, path
+          print("GIT64_GATEWAY_INTEGRITY_PASS")
+          PY
+      - name: Parse protected PowerShell Broker source using Windows PowerShell 5.1
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $path = Join-Path $env:GITHUB_WORKSPACE 'install_smart_agent/turbo_os_execute.ps1'
           $tokens = $null; $parseErrors = $null
