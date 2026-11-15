@@ -63,7 +63,7 @@ def read_catalog(root=None):
             raise ValueError("GIT63_CATALOG_EXECUTABLE_INVALID")
         for alias, relative in paths.items():
             parts = str(relative).replace("\\","/").split("/")
-            if not TOKEN.fullmatch(str(alias)) or not str(relative).endswith(".exe") or any(p in ("",".","..") for p in parts) or ":" in str(relative) or str(relative).startswith(("/","\\")):
+            if not TOKEN.fullmatch(str(alias)) or not str(relative).casefold().endswith((".exe",".bat",".cmd")) or any(p in ("",".","..") for p in parts) or ":" in str(relative) or str(relative).startswith(("/","\\")):
                 raise ValueError("GIT63_CATALOG_EXECUTABLE_INVALID")
     return catalog
 
@@ -86,7 +86,7 @@ def managed_hints(ledger: Mapping, root=None):
             base = store_root(root) / item["tool"] / item["version"]
             if not within(path, base) or not path.is_file() or sha256_file(path) != item["executable_sha256"]:
                 continue
-            output.append({"name":item["alias"],"version":item["version"],"path":str(path),
+            output.append({"name":item["alias"],"tool":item["tool"],"version":item["version"],"path":str(path),
                 "availability":"RECORDED_REPROBE_REQUIRED","execution_authorized":False})
         except (OSError, ValueError, TypeError, KeyError):
             continue
