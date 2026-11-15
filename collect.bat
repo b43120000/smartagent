@@ -680,6 +680,65 @@ Write-Json (Join-Path $stage 'executor_sandbox_evidence.json') @($executorSandbo
 Write-Json (Join-Path $stage 'executor_native_confirmation_blocks.json') @($executorNativeConfirmationBlocks)
 Write-Json (Join-Path $stage 'executor_native_replans.json') @($executorNativeReplans)
 Write-Json (Join-Path $stage 'executor_run_commands.json') @($executorCommandRows)
+# Git63 Native instruction trace, sourced from Runtime's bounded RCA
+# fields (not raw task input or credentials).
+$nativeCommands=[ordered]@{
+  CWD_GET_LOCATION_INITIAL='(Get-Location).Path'
+  CWD_SET_LOCATION="Set-Location -LiteralPath '<AUTHORIZED_CWD>' -ErrorAction Stop"
+  CWD_GET_LOCATION_VERIFY='(Get-Location).Path'
+  CWD_GET_NATIVE_CURRENT_DIRECTORY='[Environment]::CurrentDirectory'
+  CWD_COMPARE='Compare PowerShell Provider and OS CurrentDirectory with authorized CWD'
+  ENV_APPLY='[Environment]::SetEnvironmentVariable(<NAME>,<MANAGED_VALUE>)'
+  COMMAND_DISPATCH='<REDACTED_USER_COMMAND>: see executor_run_commands.txt'
+}
+$nativeLines=New-Object 'System.Collections.Generic.List[string]'
+$nativeTraceRows=@()
+$nativeLines.Add('SmartAgent Native Execution Trace - bounded, values redacted')
+foreach($item in @($executorCommandRows)) {
+  $ev=$item.sandbox_evidence
+  if($null -eq $ev) { continue }
+  $codes=@($ev.native_command_trace | Where-Object { $null -ne $_ })
+  $stage=Safe-Code $ev.native_failure_stage
+  $substage=Safe-Code $ev.native_failure_substage
+  if($codes.Count -eq 0 -and -not $stage) { continue }
+  $nativeLines.Add('---- Round '+$item.round+' | Action '+$item.action_id+' ----')
+  $steps=@()
+  foreach($code in $codes){
+    $token=Safe-Code $code
+    if($token -notmatch '^([A-Z_]+)\.(START|PASS|SKIP|FINISH)$') { continue }
+    $label=[string]$Matches[1]; $status=[string]$Matches[2]
+    if(-not $nativeCommands.Contains($label)) { continue }
+    $instruction=[string]$nativeCommands[$label]
+    $steps+=([ordered]@{step=$label;status=$status;instruction=$instruction})
+    $nativeLines.Add(('  [{0}] {1} : {2}' -f $status,$label,$instruction))
+  }
+  $nativeLines.Add('  failure_stage: '+$stage)
+  $nativeLines.Add('  failure_substage: '+$substage)
+  $nativeLines.Add('  exception_type: '+(Safe-Code $ev.native_exception_type))
+  $nativeLines.Add('  exception_hresult: '+(Safe-Code $ev.native_exception_hresult))
+  $nativeLines.Add('  native_error_class: '+(Safe-Code $ev.native_error_class))
+  $nativeLines.Add('  exit_code: '+[string]$item.command_exit_code)
+  $nativeTraceRows+=([ordered]@{
+    schema='SMARTAGENT_NATIVE_STEP_TRACE_RCA_V1'
+    task_id=(Safe-Code $task)
+    request_id=(Safe-Code $request)
+    action_id=(Safe-Code $item.action_id)
+    evidence_ref=(Safe-Code $item.evidence_ref)
+    round=[int]$item.round
+    failure_stage=$stage
+    failure_substage=$substage
+    exception_type=(Safe-Code $ev.native_exception_type)
+    exception_hresult=(Safe-Code $ev.native_exception_hresult)
+    native_error_class=(Safe-Code $ev.native_error_class)
+    native_process_pid=$(if($null -ne $ev.native_process_pid){[int]$ev.native_process_pid}else{0})
+    native_running_sample_count=$(if($null -ne $ev.native_running_sample_count){[int]$ev.native_running_sample_count}else{0})
+    steps=@($steps)
+    command_values_redacted=$true
+  })
+}
+Write-Json (Join-Path $stage 'native_execution_trace.json') @($nativeTraceRows)
+[IO.File]::WriteAllLines((Join-Path $stage 'native_execution_trace.txt'),
+  [string[]]$nativeLines.ToArray(), (New-Object Text.UTF8Encoding $false))
 $commandLines = New-Object 'System.Collections.Generic.List[string]'
 $commandLines.Add('SmartAgent RCA: sanitized Planner commands and Runtime outcomes')
 $commandLines.Add('Review before sharing. Passwords and common credentials are masked (best effort).')
@@ -697,6 +756,9 @@ foreach ($entry in @($executorCommandRows)) {
     $commandLines.Add('stdout: ' + $entry.stdout_excerpt_redacted)
     $commandLines.Add('error: ' + $entry.error_excerpt_redacted)
     $commandLines.Add('network_failure_hint: ' + $entry.network_failure_hint)
+    $commandLines.Add('native_failure_substage: ' + (Safe-Code $entry.sandbox_evidence.native_failure_substage))
+    $commandLines.Add('native_exception_hresult: ' + (Safe-Code $entry.sandbox_evidence.native_exception_hresult))
+    $commandLines.Add('native_command_trace: native_execution_trace.txt')
     $commandLines.Add('capture_status: ' + $entry.command_capture_status + '; ' + $entry.result_capture_status)
 }
 [IO.File]::WriteAllLines((Join-Path $stage 'executor_run_commands.txt'),
@@ -2001,6 +2063,7 @@ try {
         'Git52: native confirmation blocks, safe command-security classifier codes, detail hashes, and decision linkage.',
         'Git52 P1: bounded preexecution replans export rejected Action IDs/digests; no ToolResult or Host CMD fallback.',
         'Git52 RCA: executor_run_commands.json/.txt exports bounded, redacted Planner and dispatched commands, exit codes, stderr/stdout excerpts, and OS evidence.',
+        'Git63: native_execution_trace.json/.txt contains fixed native CWD instruction names, ordered START/PASS/SKIP/FINISH, failing substep and HRESULT.',
         'Command capture is runtime-persisted only in new tasks. Existing legacy task commands cannot be recovered from old Blackboard events.',
         'Credential masking is best effort; review filenames, paths, URLs and text carefully before sharing.',
         'Git45: Finish status-only repair diagnostics retain typed REJECTED/FAILED differences; no raw model Finish.',
