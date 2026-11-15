@@ -89,6 +89,7 @@ try {
  Require ($?) 'UPDATE_NATIVE_ROOT_PRECHECK_FAILED'
  if($VerifyOnly){
    Say ('UPDATE_VERIFY_PASS manifest_match='+[string]($previousHash -eq $expectedHash)+'; roots='+$roots.Count)
+   $updateSucceeded=$true
    exit 0
  }
  $stage='STOP_AGENTS'

@@ -53,6 +53,7 @@ def test_uac_console_pauses_only_after_elevated_worker_completes():
     assert "if($Elevated){" in source
     assert "Read-Host 'Press ENTER to close'" in source
     assert "ELEVATED_RESULT=PASS" in source
+    assert source.count("$updateSucceeded=$true") == 2
     assert "ELEVATED_RESULT=FAIL stage=" in source
     assert "Start-Process -FilePath $exe -ArgumentList $arg -Verb RunAs -Wait -PassThru" in source
     assert "exit 20\n} finally {" in source
