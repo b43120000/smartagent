@@ -146,10 +146,26 @@ def run_bounded_process(
                 action_id=str(metadata.get("action_id") or ""),
             )
         except (TurboOSBrokerUnavailable, OSError, ValueError) as exc:
-            # No host/restricted-executor fallback on invalid or timed-out
-            # broker output. On an uncertain timeout, never claim process
-            # execution or a successful result.
-            return reject_broker(str(exc))
+            # A controller timeout can happen AFTER the native child started.
+            # Do not convert this into a pre-execution SECURITY_REJECTED or
+            # a confirmed FAILED command. No host executor fallback.
+            reason = str(exc)
+            if "TIMEOUT_EXECUTION_UNCERTAIN" in reason or "NATIVE_CHILD_EXECUTION_TIMEOUT" in reason:
+                return {
+                    "exit_code": None, "stdout": "", "stderr": "",
+                    "stdout_bytes": 0, "stderr_bytes": 0,
+                    "stdout_truncated": False, "stderr_truncated": False,
+                    "stdout_ref": "", "stderr_ref": "",
+                    "timed_out": True,
+                    "error": "TURBO_OS_BROKER_OUTCOME_UNKNOWN:" + reason,
+                    "security_rejected": False,
+                    "possible_partial_execution": True,
+                    "process_started": None,
+                    "process_state": "UNKNOWN",
+                    "liveness_evidence": {},
+                    "sandbox_evidence": broker["evidence"],
+                }
+            return reject_broker(reason)
     from .windows_security import restricted_executor_required
     restricted_required = restricted_executor_required()
     if restricted_required and os.environ.get("SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE") != "1":
