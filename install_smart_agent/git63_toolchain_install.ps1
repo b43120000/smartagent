@@ -4,7 +4,8 @@
 param(
  [Parameter(Mandatory=$true)][string]$ProjectRoot,
  [Parameter(Mandatory=$true)][string]$Tool,
- [Parameter(Mandatory=$true)][string]$Version
+ [Parameter(Mandatory=$true)][string]$Version,
+ [string]$SourceSpecBase64=''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -26,23 +27,46 @@ if($expected -notmatch '^[0-9a-fA-F]{64}$' -or
 }
 $catalog=Get-Content -LiteralPath $catalogFile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
 if($catalog.schema -ne 'SMARTAGENT_GIT63_CATALOG_V1'){throw 'GIT63_CATALOG_SCHEMA_INVALID'}
-$selected=@($catalog.packages | Where-Object {$_.tool -ceq $Tool -and $_.version -ceq $Version})
-if($selected.Count -ne 1){throw 'GIT63_TOOL_NOT_IN_TRUSTED_CATALOG'}
-$entry=$selected[0]
+if($SourceSpecBase64){
+ if($SourceSpecBase64.Length -gt 16384 -or
+    $SourceSpecBase64 -notmatch '^[A-Za-z0-9+/=]+$'){throw 'GIT63_SOURCE_SPEC_INVALID'}
+ try{
+  $entry=[Text.Encoding]::UTF8.GetString(
+    [Convert]::FromBase64String($SourceSpecBase64)) | ConvertFrom-Json -ErrorAction Stop
+ }catch{throw 'GIT63_SOURCE_SPEC_INVALID'}
+ $fieldNames=(@($entry.PSObject.Properties.Name | Sort-Object) -join ',')
+ if($fieldNames -cne 'archive_sha256,archive_type,checksum_url,executables,url'){
+  throw 'GIT63_SOURCE_SPEC_FIELDS_INVALID'
+ }
+}else{
+ $selected=@($catalog.packages | Where-Object {$_.tool -ceq $Tool -and $_.version -ceq $Version})
+ if($selected.Count -ne 1){throw 'GIT63_DYNAMIC_SOURCE_REQUIRED'}
+ $entry=$selected[0]
+}
 if($entry.archive_type -cne 'zip' -or [string]$entry.archive_sha256 -notmatch '^[0-9a-fA-F]{64}$'){
  throw 'GIT63_SOURCE_HASH_UNTRUSTED'
 }
 $url=[Uri]([string]$entry.url)
-if($url.Scheme -cne 'https' -or
-   $url.Host.ToLowerInvariant() -notin @('github.com','api.adoptium.net','dl.google.com','storage.googleapis.com','services.gradle.org','download.eclipse.org')){
+$allow=@('github.com','api.adoptium.net','dl.google.com','storage.googleapis.com','services.gradle.org','download.eclipse.org')
+if($url.Scheme -cne 'https' -or $url.Host.ToLowerInvariant() -notin $allow -or
+   $url.UserInfo -or $url.Fragment -or ([string]$url).Length -gt 2048){
  throw 'GIT63_SOURCE_URL_NOT_TRUSTED'
+}
+$checksumUrl=''
+if($SourceSpecBase64){
+ $check=[Uri]([string]$entry.checksum_url)
+ if($check.Scheme -cne 'https' -or $check.Host.ToLowerInvariant() -ne $url.Host.ToLowerInvariant() -or
+    $check.UserInfo -or $check.Fragment -or ([string]$check).Length -gt 2048){
+  throw 'GIT63_SOURCE_CHECKSUM_ORIGIN_UNTRUSTED'
+ }
+ $checksumUrl=[string]$check
 }
 $aliases=@()
 foreach($property in $entry.executables.PSObject.Properties){
  $alias=[string]$property.Name
  $relative=[string]$property.Value
  if($alias -cnotmatch '^[a-z][a-z0-9_-]{0,31}$' -or
-   $relative -notmatch '^[A-Za-z0-9_.+-]+(?:[\\/][A-Za-z0-9_.+-]+)*\.exe$' -or
+   $relative -notmatch '^[A-Za-z0-9_.+-]+(?:[\\/][A-Za-z0-9_.+-]+)*\(?:exe|bat|cmd)$' -or
    $relative -match '(?:^|[\\/])\.\.(?:[\\/]|$)'){
   throw 'GIT63_CATALOG_EXECUTABLE_UNTRUSTED'
  }
@@ -78,6 +102,7 @@ $settings=@(
  ('$Version='+(Quote $Version)),
  ('$SourceUrl='+(Quote ([string]$url))),
  ('$ArchiveSHA256='+(Quote ([string]$entry.archive_sha256))),
+ ('$ChecksumUrl='+(Quote $checksumUrl)),
  ('$AliasesJsonBase64='+(Quote $aliasesB64)),
  ('$OutsideDenialProbe='+(Quote $denial))
 )
