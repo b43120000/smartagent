@@ -21,6 +21,14 @@ PROTOCOL_VERSION = 9
 # Keep this list small and explicit: these files define the wire/tool and
 # project-sync behavior that must be identical in every process/package.
 CORE_FILES = (
+    # Git63 security-critical managed toolchain components.
+    'source/agent_core/managed_toolchains.py',
+    'source/agent_core/managed_toolchain_install.py',
+    'config/managed_toolchains_catalog.json',
+    'install_smart_agent/git63_toolchain_provision.ps1',
+    'install_smart_agent/git63_toolchain_install.ps1',
+    'install_smart_agent/git63_toolchain_install_child.ps1',
+
     # Minimal Core v10 and Tri-One terminal admission are security-critical.
     'source/WebAgent/minimal_decision.py',
     'source/WebAgent/minimal_admission.py',
