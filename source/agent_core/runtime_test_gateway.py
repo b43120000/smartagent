@@ -25,7 +25,24 @@ TOOLS = frozenset({
     "observe_fact", "read_file", "list_directory", "inspect_directory",
 })
 MUTATORS = frozenset({"run_command", "create_directory", "write_file", "delete_path"})
-FIELD_PATTERN = re.compile(r"^(?:status|reason|executed|data(?:\.[A-Za-z_][A-Za-z0-9_]*){1,5})$")
+SAFE_EXPECT_FIELDS = frozenset({
+    "status", "reason", "executed",
+    "data.exit_code", "data.process_state", "data.execution_status",
+    "data.observation_confirmed", "data.verification_status",
+    "data.sandbox_evidence.sandbox_backend",
+    "data.sandbox_evidence.sandbox_identity_verified",
+    "data.sandbox_evidence.turbo_effective_for_action",
+    "data.sandbox_evidence.native_error_class",
+    "data.sandbox_evidence.native_failure_stage",
+    "data.sandbox_evidence.native_failure_substage",
+    "data.sandbox_evidence.native_exception_hresult",
+    "data.sandbox_evidence.native_running_sample_count",
+    "data.sandbox_evidence.native_cwd_probes.native_cwd_status",
+    "data.sandbox_evidence.native_cwd_probes.psdrive_status",
+    "data.sandbox_evidence.native_cwd_probes.provider_path_status",
+    "data.last_running_evidence.liveness_verified",
+    "data.last_running_evidence.evidence_source",
+})
 MAX_ACTIONS = 12
 MAX_CASE_BYTES = 65536
 
@@ -80,7 +97,7 @@ def _validate_case(spec: Mapping[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         if not isinstance(expect, dict) or not expect:
             raise GatewayError("GATEWAY_EXPECTATIONS_REQUIRED")
         if len(expect) > 32 or any(
-            not isinstance(k, str) or not FIELD_PATTERN.fullmatch(k)
+            not isinstance(k, str) or k not in SAFE_EXPECT_FIELDS
             or not isinstance(v, (str, int, float, bool, type(None)))
             for k, v in expect.items()
         ):
@@ -211,9 +228,20 @@ def run_case(
         # admission, typed mutations and bounded-process dispatch. A policy
         # transition cannot silently launch an ordinary host executor.
         from agent_core.bounded_process import native_only_runtime_test
-        with native_only_runtime_test():
-            raw = dispatch(action, agent=agent)
-        receipt = result_decoder(raw)
+        try:
+            with native_only_runtime_test():
+                raw = dispatch(action, agent=agent)
+            receipt = result_decoder(raw)
+        except Exception as exc:
+            # Do not retry an uncertain action or print exception messages that
+            # may contain user commands, paths or secret-bearing output.
+            cases.append({
+                "index": index, "tool": tool, "status": "UNKNOWN",
+                "reason": "GATEWAY_RUNTIME_DISPATCH_EXCEPTION",
+                "exception_type": type(exc).__name__,
+                "admission_decision": decision,
+            })
+            break
         if not isinstance(receipt, dict):
             cases.append({
                 "index": index, "tool": tool, "status": "FAIL",
