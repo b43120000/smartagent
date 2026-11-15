@@ -125,7 +125,7 @@ def _run(req:dict,profile:dict)->dict:
   else:os.killpg(os.getpgid(cp.pid),signal.SIGKILL)
   stdout,stderr=cp.communicate(timeout=5)
  final_liveness=observe_owned_process(cp,execution_id=str(req['request_id']))
- limit=int(req.get('max_stream_bytes',5*1024*1024));result={'exit_code':cp.returncode,'stdout':stdout[:limit].decode('utf-8',errors='replace').strip(),'stderr':stderr[:limit].decode('utf-8',errors='replace').strip(),'stdout_bytes':len(stdout),'stderr_bytes':len(stderr),'stdout_truncated':len(stdout)>limit,'stderr_truncated':len(stderr)>limit,'stdout_ref':'','stderr_ref':'','timed_out':timed_out,'process_started':True,'process_state':final_liveness['process_state'],'pid':cp.pid,'liveness_evidence':final_liveness,'last_running_evidence':last_running_evidence}
+ limit=int(req.get('max_stream_bytes',5*1024*1024));result={'exit_code':cp.returncode,'stdout':stdout[:limit].decode('utf-8',errors='replace').strip(),'stderr':stderr[:limit].decode('utf-8',errors='replace').strip(),'stdout_bytes':len(stdout),'stderr_bytes':len(stderr),'stdout_truncated':len(stdout)>limit,'stderr_truncated':len(stderr)>limit,'stdout_ref':'','stderr_ref':'','timed_out':timed_out,'process_started':True,'process_state':'EXITED' if cp.returncode is not None else final_liveness['process_state'],'pid':cp.pid,'liveness_evidence':final_liveness,'last_running_evidence':last_running_evidence}
  if timed_out:result['error']=f'command exceeded {req.get("timeout",30)} seconds; process tree termination requested'
  try:status_path.unlink(missing_ok=True)
  except OSError:pass
