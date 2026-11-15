@@ -34,11 +34,11 @@ def test_shared_native_launcher_does_not_change_sentinel_probe_pwd():
 def test_task_only_pwd_binding_precedes_untrusted_script():
     source = BROKER.read_text(encoding="utf-8")
     assert "$cwdLiteral=([string]$state.cwd).Replace(\"'\",\"''\")" in source
-    assert 'Set-Location -LiteralPath \'$cwdLiteral\' -ErrorAction Stop' in source
+    assert "Set-Location -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop" in source
     assert "(Get-Location).Path" in source
     assert "[Environment]::CurrentDirectory" in source
     assert "GIT63_NATIVE_TASK_CWD_MISMATCH" in source
-    assert "$nativeScript=$taskCwdSetup+$envSetup+[Environment]::NewLine+$script" in source
+    assert "$nativeScript=$taskCwdSetup+[Environment]::NewLine+$envSetup+" in source
     assert source.index("$nativeScript=$taskCwdSetup") < source.index(
         "$nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured("
     )
