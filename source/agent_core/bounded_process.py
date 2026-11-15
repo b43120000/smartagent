@@ -342,7 +342,8 @@ def run_bounded_process(
             "timed_out": timed_out,
             "process_started": process_started,
             "process_state": (
-                final_liveness_evidence["process_state"]
+                "EXITED" if process.returncode is not None
+                else final_liveness_evidence["process_state"]
                 if final_liveness_evidence else "UNKNOWN"
             ),
             "pid": process.pid,
