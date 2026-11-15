@@ -68,6 +68,34 @@ def observe_owned_process(process: subprocess.Popen, *, execution_id: str = "") 
     }
 
 
+def verified_running_evidence(
+    proof: object, *, execution_id: str = "", now: float | None = None,
+    freshness_seconds: float = 10.0,
+) -> bool:
+    """Accept only an in-date OS-handle observation, never a PID/text hint."""
+    if not isinstance(proof, dict):
+        return False
+    if not (
+        proof.get("schema") == SCHEMA
+        and proof.get("process_state") == "RUNNING"
+        and proof.get("liveness_verified") is True
+        and proof.get("process_identity_verified") is True
+        and proof.get("evidence_source") in {
+            "WIN32_WAIT_FOR_SINGLE_OBJECT", "OWNED_POPEN_WAITPID"
+        }
+        and type(proof.get("pid")) is int
+        and proof["pid"] > 0
+    ):
+        return False
+    if execution_id and proof.get("execution_id") != execution_id:
+        return False
+    try:
+        age = (time.time() if now is None else float(now)) - float(proof["observed_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return -1.0 <= age <= float(freshness_seconds)
+
+
 def wait_with_liveness(
     process: subprocess.Popen, timeout: float,
     *, on_running: Callable[[dict], None] | None = None,
@@ -120,5 +148,5 @@ def communicate_with_liveness(
 
 __all__ = [
     "SCHEMA", "observe_owned_process", "wait_with_liveness",
-    "communicate_with_liveness",
+    "communicate_with_liveness", "verified_running_evidence",
 ]
