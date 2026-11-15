@@ -31,3 +31,17 @@ def test_per_root_precheck_never_writes_journal():
     assert "GIT62_REBIND_KERNEL_ATTESTATION_FAILED:root=" in src
     assert "GIT62_REBIND_JOURNAL_COUNT_MISMATCH" in src
     assert src.index("if($VerifyOnly)") < src.index("foreach($item in $verified)")
+
+def test_windows_powershell_native_python_c_does_not_depend_on_embedded_quotes():
+    """PowerShell 5.1 can strip embedded double quotes from native -c argument strings."""
+    import ast
+    import re
+    source=(ROOT/"install_smart_agent/git62_transaction_update.ps1").read_text(encoding="utf-8")
+    validate=re.search(r"(?m)^\\s*\\$validate='([^']+)'$",source)
+    post=re.search(r"(?m)^\\s*& \\$python -c '([^']+)'$",source)
+    assert validate is not None and post is not None
+    for statement in (validate.group(1),post.group(1)):
+        assert '"' not in statement
+        ast.parse(statement)
+    assert 'print(UPDATE_VERIFIED_COMMIT_AND_CORE_FILES)' not in source
+    assert 'print(UPDATE_MACHINE_AUTHORIZATION_PASS)' not in source

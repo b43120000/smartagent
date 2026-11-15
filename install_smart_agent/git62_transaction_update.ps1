@@ -30,7 +30,7 @@ try {
  Require (Test-Path -LiteralPath $manifest -PathType Leaf) 'UPDATE_MANIFEST_MISSING'
  $env:PYTHONPATH=(Join-Path $root 'source')+';'+[string]$env:PYTHONPATH
  $stage='VERIFY_COMMIT_AND_FILES'
- $validate='import sys; from pathlib import Path; from agent_core.force_stop_all_agents import _verify_upgrade_commit; _verify_upgrade_commit(Path(sys.argv[1]),sys.argv[2]); print("UPDATE_VERIFIED_COMMIT_AND_CORE_FILES")'
+ $validate='import sys; from pathlib import Path; from agent_core.force_stop_all_agents import _verify_upgrade_commit; _verify_upgrade_commit(Path(sys.argv[1]),sys.argv[2])'
  & $python -c $validate $root $Commit
  Require ($LASTEXITCODE -eq 0) 'UPDATE_COMMIT_OR_PROTOCOL_MANIFEST_INVALID'
  $expectedHash=(Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -114,7 +114,7 @@ try {
  Require ([string]$published.protocol_manifest_sha256 -ieq $expectedHash -and
    [string]$published.executor_sid -eq [string]$machine.executor_sid -and
    [string]$published.install_root -ieq $root) 'UPDATE_MACHINE_POSTCONDITION_MISMATCH'
- & $python -c 'from agent_core.windows_security import load_machine_authorization; assert load_machine_authorization() is not None; print("UPDATE_MACHINE_AUTHORIZATION_PASS")'
+ & $python -c 'from agent_core.windows_security import load_machine_authorization; assert load_machine_authorization() is not None'
  Require ($LASTEXITCODE -eq 0) 'UPDATE_MACHINE_AUTHORIZATION_NOT_TRUSTED'
  $stage='POSTCHECK_NATIVE_ROOTS'
  & $rebind -ProjectRoot $root -VerifyOnly
