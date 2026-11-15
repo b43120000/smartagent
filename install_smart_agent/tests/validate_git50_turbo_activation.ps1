@@ -16,6 +16,7 @@ try {
     New-Item -ItemType Directory -Force -Path $secure,$workspace | Out-Null
     $mode=[ordered]@{
         schema='SMARTAGENT_ACL_MODE_V1'; mode='on'; install_root=$project
+        controller_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     }
     [IO.File]::WriteAllText((Join-Path $secure 'acl_mode.json'),
         ($mode | ConvertTo-Json), [Text.Encoding]::UTF8)

@@ -126,7 +126,8 @@ try {
         turbo_roots=@($old)
         turbo_requested=$true
     }
-    $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
+    $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project
+       controller_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
     [IO.File]::WriteAllText((Join-Path $sec 'acl_mode.json'),($mode | ConvertTo-Json -Depth 8))
     $policyPath=Join-Path $sec 'workspace_access_policy.json'
     [IO.File]::WriteAllText($policyPath,($policy | ConvertTo-Json -Depth 8))

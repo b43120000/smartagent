@@ -31,7 +31,8 @@ try{
  foreach($p in @($ws,$root,$sub,$file)){
   $baseline[$p]=(Get-Acl -LiteralPath $p -Audit -ErrorAction Stop).Sddl
  }
- $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
+ $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project
+    controller_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
  $policy=[ordered]@{
   schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1';revision=5
   writable_workspaces=@($ws);read_only_roots=@();denied_write_roots=@()

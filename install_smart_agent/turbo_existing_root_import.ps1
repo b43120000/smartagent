@@ -171,20 +171,40 @@ function Prepare-SharedAncestors([object[]]$entries,[string]$selfSid){
 }
 function Revoke-SharedAncestor([object]$entry,[string]$selfSid){
  $p=Full ([string]$entry.path)
+ $otherActive=Other-Active-RootUsesAncestor $p $selfSid
+ $baselineFile=Get-SharedAncestorBaseline $p
+ if(-not $otherActive){
+  $saved=Load $baselineFile
+  if($saved.schema -ne 'SMARTAGENT_TURBO_SHARED_ANCESTOR_V1' -or
+     -not (Same $saved.install_root $script:project) -or
+     -not (Same $saved.path $p) -or
+     [string]$saved.identity -cne [string]$entry.identity){
+      throw 'GIT62_SHARED_ANCESTOR_RESTORE_BASELINE_INVALID'
+  }
+ }
+ # Compare against the live descriptor with only this Root's allow ACEs
+ # removed. The original snapshot predates later Workspace ACL changes.
+ $expected=Get-Acl -LiteralPath $p -Audit -ErrorAction Stop
+ $sidType=[Security.Principal.SecurityIdentifier]
+ foreach($ace in @($expected.GetAccessRules($true,$false,$sidType))){
+  if($ace.IdentityReference.Value -ceq $selfSid -and
+     $ace.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow){
+   $expected.RemoveAccessRuleSpecific($ace)
+  }
+ }
  & icacls.exe $p '/remove:g' ('*'+$selfSid) | Out-Null
  if($LASTEXITCODE -ne 0){throw 'GIT62_SHARED_ANCESTOR_REVOKE_FAILED'}
- if(Other-Active-RootUsesAncestor $p $selfSid){return}
- $baselineFile=Get-SharedAncestorBaseline $p
- $saved=Load $baselineFile
- if($saved.schema -ne 'SMARTAGENT_TURBO_SHARED_ANCESTOR_V1' -or
-    -not (Same $saved.install_root $script:project) -or
-    -not (Same $saved.path $p) -or
-    [string]$saved.identity -cne [string]$entry.identity){
-     throw 'GIT62_SHARED_ANCESTOR_RESTORE_BASELINE_INVALID'
+ $normalize={param($descriptor) $descriptor -creplace '([DS]:[A-Z]*?)AI(?=[A-Z]*(?:\(|S:|$))','$1'}
+ $after=Sddl $p
+ $normalizedAfter=& $normalize $after
+ if($normalizedAfter -cne (& $normalize $expected.Sddl)){
+  throw 'GIT62_SHARED_ANCESTOR_UNRELATED_ACL_CHANGED'
  }
- Restore-Exact $p ([string]$saved.sddl)
- if((Sddl $p) -cne [string]$saved.sddl){
-     throw 'GIT62_SHARED_ANCESTOR_EXACT_SDDL_RESTORE_FAILED'
+ if($otherActive){return}
+ # Restore the exact snapshot only when the live ACL is still equivalent.
+ if($after -cne [string]$saved.sddl -and
+    $normalizedAfter -ceq (& $normalize ([string]$saved.sddl))){
+  Restore-Exact $p ([string]$saved.sddl)
  }
  Remove-Item -LiteralPath $baselineFile -Force -ErrorAction Stop
 }
@@ -377,7 +397,8 @@ try {
         throw 'TURBO_D3_UNTRUSTED_SWITCH_AUTHORIZATION'
     }
  }
- if($mode.mode -ne 'on' -or -not (Same $mode.install_root $script:project) -or
+ if($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or
+    $mode.mode -ne 'on' -or -not (Same $mode.install_root $script:project) -or
     $policy.turbo_requested -ne $true -or
     @($policy.turbo_roots | Where-Object { Same ([string]$_) $script:root }).Count -ne 1 -or
     @($policy.writable_workspaces | Where-Object {Same ([string]$_) $ws}).Count -ne 1){
@@ -462,7 +483,7 @@ try {
       Set-Acl -LiteralPath $p -AclObject $acl -ErrorAction Stop
    }
    $sentinel=[string]$j.negative_sentinel_path
-   [IO.File]::WriteAllText($sentinel,'OUTSIDE_SENTINEL')
+   $null=Set-TurboNegativeSentinel $sentinel $mode $false
    $probe=Join-Path $script:root ('.turbo-d3-attest-'+[Guid]::NewGuid().ToString('N'))
    $inside=$probe.Replace("'","''")
    $outside=$sentinel.Replace("'","''")

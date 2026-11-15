@@ -6,6 +6,8 @@ param(
  [Parameter(Mandatory=$true)][string]$ProjectRoot,
  [switch]$VerifyOnly,
  [switch]$RepairMissingSentinels,
+ [switch]$RepairLegacySentinel,
+ [switch]$RebindAfterSentinelRepair,
  [switch]$AllowPendingEnrollments,
  [switch]$MigrateRootEpochs,
  [switch]$RefreshBrokerSource,
@@ -16,7 +18,7 @@ $ErrorActionPreference='Stop'
 $project=[IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 $sec=Join-Path $project 'localdata\secure\windows_security'
 $dir=Join-Path $sec 'turbo_root_activations'
-if(-not (Test-Path -LiteralPath $dir -PathType Container)){return}
+if(-not $RepairLegacySentinel -and -not (Test-Path -LiteralPath $dir -PathType Container)){return}
 . (Join-Path $PSScriptRoot 'turbo_multi_root_paths.ps1')
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
@@ -31,11 +33,14 @@ $held=$false
 $restored=0
 # VerifyOnly must remain read-only; explicit repair never publishes a revision.
 if(($VerifyOnly -and ($RepairMissingSentinels -or $MigrateRootEpochs -or $RefreshBrokerSource)) -or
-   ($RepairMissingSentinels -and ($MigrateRootEpochs -or $RefreshBrokerSource)) -or
-   ($MigrateRootEpochs -and $RefreshBrokerSource)){
+   ($RepairMissingSentinels -and $RefreshBrokerSource) -or
+   ($MigrateRootEpochs -and $RefreshBrokerSource) -or
+   ($RepairLegacySentinel -and ($VerifyOnly -or $SelectedTurboRoot -or $RepairMissingSentinels -or
+     $AllowPendingEnrollments -or $MigrateRootEpochs -or $RefreshBrokerSource -or $RebindAfterSentinelRepair)) -or
+   ($RebindAfterSentinelRepair -and (-not $RepairMissingSentinels -or $SelectedTurboRoot -or $MigrateRootEpochs))){
  throw 'GIT62_REBIND_REPAIR_AND_VERIFY_CONFLICT'
 }
-if($SelectedTurboRoot -and -not ($VerifyOnly -or $RepairMissingSentinels)){
+if($SelectedTurboRoot -and (-not ($VerifyOnly -or $RepairMissingSentinels) -or $MigrateRootEpochs)){
  throw 'GIT62_REBIND_PARTIAL_COMMIT_FORBIDDEN'
 }
 function Read-Json([string]$path){
@@ -51,8 +56,10 @@ try{
  try{$held=$mutex.WaitOne([TimeSpan]::FromSeconds(320))}
  catch [Threading.AbandonedMutexException]{$held=$true}
  if(-not $held){throw 'GIT62_REBIND_MUTEX_TIMEOUT'}
- if((Get-Item -LiteralPath $dir -Force).Attributes -band
-   [IO.FileAttributes]::ReparsePoint){throw 'GIT62_REBIND_JOURNAL_DIR_REPARSE'}
+ if((Test-Path -LiteralPath $dir) -and
+    ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){
+   throw 'GIT62_REBIND_JOURNAL_DIR_REPARSE'
+ }
  $mode=Read-Json (Join-Path $sec 'acl_mode.json')
  $policy=Read-Json (Join-Path $sec 'workspace_access_policy.json')
  if($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or $mode.mode -ne 'on' -or
@@ -64,13 +71,23 @@ try{
  if(Test-Path -LiteralPath (Join-Path $sec 'turbo_existing_root_switch.json')){
    throw 'GIT62_REBIND_SWITCH_PENDING'
  }
- if(Test-Path -LiteralPath (Join-Path $sec 'turbo_os_activation.json')){
-   throw 'GIT62_REBIND_LEGACY_BROKER_REQUIRES_REVOKE'
+ $legacyPath=Join-Path $sec 'turbo_os_activation.json'
+ $entries=@()
+ if(Test-Path -LiteralPath $dir -PathType Container){
+   $entries=@(Get-ChildItem -LiteralPath $dir -File -Filter 'activation-*.json' -ErrorAction Stop)
+ }
+ if($RepairLegacySentinel){
+   if($entries.Count -ne 0 -or @($policy.turbo_roots).Count -ne 1 -or
+      -not (Test-Path -LiteralPath $legacyPath -PathType Leaf)){
+     throw 'GIT62_REBIND_LEGACY_SENTINEL_SCOPE_INVALID'
+   }
+   $entries=@(Get-Item -LiteralPath $legacyPath -Force -ErrorAction Stop)
+ } elseif(Test-Path -LiteralPath $legacyPath){
+      throw 'GIT62_REBIND_LEGACY_BROKER_REQUIRES_REVOKE'
  }
  if(-not ('SmartAgentGit47AppContainerProbe' -as [type])){
    Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
  }
- $entries=@(Get-ChildItem -LiteralPath $dir -File -Filter 'activation-*.json' -ErrorAction Stop)
  if(($AllowPendingEnrollments -and $entries.Count -gt @($policy.turbo_roots).Count) -or
     (-not $AllowPendingEnrollments -and $entries.Count -ne @($policy.turbo_roots).Count)){
    throw 'GIT62_REBIND_JOURNAL_COUNT_MISMATCH'
@@ -96,8 +113,12 @@ try{
      throw 'GIT62_REBIND_ACTIVATION_UNTRUSTED'
    }
    $j=Get-TurboRootJournalPaths $sec ([string]$a.turbo_root)
-   if(-not $j.activation.Equals($file.FullName,[StringComparison]::OrdinalIgnoreCase)){
+   if(-not $RepairLegacySentinel -and
+      -not $j.activation.Equals($file.FullName,[StringComparison]::OrdinalIgnoreCase)){
      throw 'GIT62_REBIND_INDEX_MISMATCH'
+   }
+   if($RepairLegacySentinel -and [int]$a.policy_revision -ne [int]$policy.revision){
+     throw 'GIT62_REBIND_LEGACY_POLICY_REVISION_MISMATCH'
    }
    if(@($policy.turbo_roots | Where-Object { Equal ([string]$_) ([string]$a.turbo_root) }).Count -ne 1 -or
       @($policy.writable_workspaces | Where-Object { Equal ([string]$_) ([string]$a.workspace_root) }).Count -ne 1){
@@ -146,19 +167,14 @@ try{
      if(-not $next -or $next -eq $cursor){break}
      $cursor=$next
    }
-   if(-not [IO.File]::Exists($sentinel)){
-     if(-not $RepairMissingSentinels){
-       throw ('GIT62_REBIND_SENTINEL_MISSING:root='+$root)
+   if($RepairMissingSentinels -or $RepairLegacySentinel){
+     $result=Set-TurboNegativeSentinel $sentinel $mode $true
+     if($result -ne 'UNCHANGED'){
+       $restored++
+       Write-Host ('GIT62_SENTINEL_'+$result+'_PENDING_ATTESTATION root='+$root)
      }
-     $bytes=[Text.Encoding]::UTF8.GetBytes('OUTSIDE_SENTINEL')
-     $stream=[IO.FileStream]::new($sentinel,[IO.FileMode]::CreateNew,
-       [IO.FileAccess]::Write,[IO.FileShare]::None)
-     try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}
-     finally{$stream.Dispose()}
-     & icacls.exe $sentinel '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
-     if($LASTEXITCODE -ne 0){throw 'GIT62_REBIND_SENTINEL_PROTECTION_FAILED'}
-     $restored++
-     Write-Host ('GIT62_SENTINEL_RECREATED_PENDING_ATTESTATION root='+$root)
+   } elseif(-not [IO.File]::Exists($sentinel)){
+     throw ('GIT62_REBIND_SENTINEL_MISSING:root='+$root)
    }
    $sentinelItem=Get-Item -LiteralPath $sentinel -Force -ErrorAction Stop
    if(($sentinelItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
@@ -169,6 +185,12 @@ try{
    $literal=$sentinel.Replace("'","''")
    $script=@"
 try { [void][IO.File]::ReadAllText('$literal'); exit 89 }
+catch [System.UnauthorizedAccessException] {}
+try {
+    `$handle=[IO.File]::Open('$literal',[IO.FileMode]::Open,[IO.FileAccess]::Write)
+    `$handle.Dispose()
+    exit 90
+}
 catch [System.UnauthorizedAccessException] { exit 0 }
 "@
    $os=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
@@ -242,12 +264,11 @@ catch [System.UnauthorizedAccessException] { exit 0 }
    Write-Host ('GIT62_PER_ROOT_PRECHECK_PASS roots='+$verified.Count)
    return
  }
- if($RepairMissingSentinels){
-   # No revision is written: this operation only repairs absent probes and
-   # attests every selected AppContainer using genuine kernel denial.
+ if($RepairMissingSentinels -or $RepairLegacySentinel){
+   # Standalone repair leaves publication to the caller.
    Write-Host ('GIT62_SENTINEL_RECOVERY_PRECHECK_PASS roots='+$verified.Count+
      ' restored='+$restored)
-   return
+   if(-not $RebindAfterSentinelRepair){return}
  }
  if($RefreshBrokerSource){
    if($SelectedTurboRoot -or $verified.Count -lt 1){

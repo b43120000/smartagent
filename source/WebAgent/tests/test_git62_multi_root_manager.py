@@ -78,7 +78,7 @@ def env(tmp_path, monkeypatch):
         if script == "turbo_os_activation.ps1":
             root = argv[argv.index("-TurboRoot") + 1]
             journal_path(secure, root).unlink()
-        if script == "turbo_multi_root_rebind.ps1" and "-RepairMissingSentinels" not in argv:
+        if script == "turbo_multi_root_rebind.ps1":
             for root in policy["turbo_roots"]:
                 j = journal_path(secure, root)
                 if j.is_file():
@@ -96,7 +96,7 @@ def env(tmp_path, monkeypatch):
 
 def test_add_two_existing_roots_one_apply_and_preserve_user_files(env):
     env.select("5", str(env.a), "5", str(env.b), "7", "APPLY", "")
-    assert manager._security_menu() == 0
+    assert manager._security_menu() == manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
     assert env.policy["turbo_roots"] == [str(env.a), str(env.b)]
     assert all((x / "original.txt").read_text() == "ORIGINAL"
                for x in (env.a, env.b))
@@ -106,13 +106,16 @@ def test_add_two_existing_roots_one_apply_and_preserve_user_files(env):
     assert sum("turbo_existing_root_activate.ps1" in c for c in commands) == 2
 
 
-def test_reapply_after_two_enrollments_is_a_noop(env):
+def test_reapply_repairs_without_changing_policy_or_enrolling_again(env):
     env.select("5", str(env.a), "5", str(env.b), "7", "APPLY", "")
-    assert manager._security_menu() == 0
-    count = len(env.calls)
-    env.select("7", "")
-    assert manager._security_menu() == 0
-    assert len(env.calls) == count
+    assert manager._security_menu() == manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
+    revision = env.policy["revision"]
+    env.calls.clear()
+    env.select("7", "APPLY", "")
+    assert manager._security_menu() == manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
+    assert env.policy["revision"] == revision
+    assert env.calls
+    assert all("-RepairMissingSentinels" in call for call in env.calls)
 
 
 def test_deny_overlapping_roots_before_native_execution(env):
@@ -126,10 +129,10 @@ def test_deny_overlapping_roots_before_native_execution(env):
 
 def test_revoke_only_removed_root_before_registry_commit(env):
     env.select("5", str(env.a), "5", str(env.b), "7", "APPLY", "")
-    assert manager._security_menu() == 0
+    assert manager._security_menu() == manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
     env.calls.clear()
     env.select("6", "2", "7", "APPLY", "")
-    assert manager._security_menu() == 0
+    assert manager._security_menu() == manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
     assert env.policy["turbo_roots"] == [str(env.a)]
     assert journal_path(env.secure, env.a).exists()
     assert not journal_path(env.secure, env.b).exists()
@@ -149,7 +152,7 @@ def test_revoke_only_removed_root_before_registry_commit(env):
 
 def test_failed_retained_precheck_keeps_policy_and_existing_roots(env, monkeypatch):
     env.select("5", str(env.a), "5", str(env.b), "7", "APPLY", "")
-    assert manager._security_menu() == 0
+    assert manager._security_menu() == manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
     revision = env.policy["revision"]
     previous_events = len(env.events)
     original = manager.subprocess.run
@@ -183,10 +186,66 @@ def test_operator_does_not_confirm_os_mutations(env):
 def test_edit_workspace_shows_both_turbo_paths_after_apply(env, capsys):
     """End-user acceptance: Edit_workspace manager lists T1 and the new tool T2."""
     env.select("5", str(env.a), "5", str(env.b), "7", "APPLY", "")
-    assert manager._security_menu() == 0
+    assert manager._security_menu() == manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
     env.select("8")
     assert manager._security_menu() == 0
     displayed = capsys.readouterr().out
     assert "T1. " + str(env.a) in displayed
     assert "T2. " + str(env.b) in displayed
     assert all(x in env.policy["turbo_roots"] for x in (str(env.a), str(env.b)))
+
+
+def test_controller_checks_remaining_roots_using_native_broker(env, monkeypatch, capsys):
+    env.policy["turbo_roots"] = [str(env.a)]
+    seen = []
+
+    def execute(command, *, cwd):
+        seen.append((command, cwd))
+        return {
+            "exit_code": 0,
+            "output_complete": True,
+            "stdout": cwd + "\n",
+            "sandbox_evidence": {
+                "turbo_root": cwd,
+                "sandbox_backend": "WIN32_APPCONTAINER",
+                "sandbox_identity_verified": True,
+                "kernel_outside_read_denied": True,
+                "kernel_outside_write_denied": True,
+            },
+        }
+
+    monkeypatch.setattr(
+        "agent_core.turbo_os_broker_client.execute_turbo_command", execute,
+    )
+    assert manager._verify_applied_turbo_roots() == 0
+    assert seen == [("[Environment]::CurrentDirectory", str(env.a))]
+    assert "APPLY_EXIT_CODE=0 roots=1" in capsys.readouterr().out
+
+    def rejected(_command, *, cwd):
+        raise PermissionError("BROKER_SENTINEL_ACCESS_DENIED")
+
+    monkeypatch.setattr(
+        "agent_core.turbo_os_broker_client.execute_turbo_command", rejected,
+    )
+    assert manager._verify_applied_turbo_roots() == 1
+    output = capsys.readouterr().out
+    assert "TURBO_RUNTIME_VERIFY_FAILED root=" + str(env.a) in output
+    assert "APPLY_EXIT_CODE=0" not in output
+
+
+def test_standard_launcher_reports_runtime_failure_after_elevated_apply(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        manager.subprocess, "run",
+        lambda *_a, **_k: SimpleNamespace(
+            returncode=manager._TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION,
+        ),
+    )
+
+    def verify():
+        calls.append("verified")
+        return 1
+
+    monkeypatch.setattr(manager, "_verify_applied_turbo_roots", verify)
+    assert manager._launch_elevated_security_menu() == 1
+    assert calls == ["verified"]

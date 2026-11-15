@@ -61,18 +61,22 @@ def test_uac_console_pauses_only_after_elevated_worker_completes():
 
 def test_missing_sentinel_recovery_is_explicit_and_verify_mode_stays_read_only():
     native=(ROOT/"install_smart_agent/turbo_multi_root_rebind.ps1").read_text(encoding="utf-8")
+    sentinel=(ROOT/"install_smart_agent/turbo_multi_root_paths.ps1").read_text(encoding="utf-8")
     updater=(ROOT/"install_smart_agent/git62_transaction_update.ps1").read_text(encoding="utf-8")
     assert "[switch]$RepairMissingSentinels" in native
     assert "GIT62_REBIND_REPAIR_AND_VERIFY_CONFLICT" in native
     assert "GIT62_REBIND_PARTIAL_COMMIT_FORBIDDEN" in native
     assert "GIT62_REBIND_SELECTED_JOURNAL_MISSING" in native
-    assert "[IO.FileMode]::CreateNew" in native
+    assert "FileMode.CreateNew" in sentinel
+    assert "FileSystemRights.Read, AccessControlType.Allow" in sentinel
+    assert "info.Links != 1" in sentinel
     assert "GIT62_REBIND_SENTINEL_PARENT_REPARSE" in native
     assert "GIT62_REBIND_SENTINEL_UNTRUSTED" in native
     assert "GIT62_SENTINEL_RECOVERY_PRECHECK_PASS" in native
-    assert native.index("GIT62_REBIND_BROKER_HASH_CHANGED") < native.index("[IO.FileMode]::CreateNew")
-    assert native.index("GIT62_REBIND_KERNEL_ATTESTATION_FAILED") < native.index("if($RepairMissingSentinels){")
-    assert native.index("if($RepairMissingSentinels){") < native.index("foreach($item in $verified)")
+    assert native.index("GIT62_REBIND_BROKER_HASH_CHANGED") < native.index("Set-TurboNegativeSentinel")
+    repair_result = native.index("GIT62_SENTINEL_RECOVERY_PRECHECK_PASS")
+    assert native.index("GIT62_REBIND_KERNEL_ATTESTATION_FAILED") < repair_result
+    assert repair_result < native.index("foreach($item in $verified)")
     assert "if(-not $VerifyOnly){" in updater
     assert "-RepairMissingSentinels" in updater
     assert updater.index("NATIVE_SENTINEL_RECOVERY") < updater.index("NATIVE_ROOT_PRECHECK")

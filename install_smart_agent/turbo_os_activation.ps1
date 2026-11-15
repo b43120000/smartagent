@@ -372,7 +372,7 @@ try {
 
         $outside = [string]$record.negative_sentinel_path
         try {
-            [IO.File]::WriteAllText($outside,'OUTSIDE_SENTINEL')
+            $null = Set-TurboNegativeSentinel $outside $mode $false
             $outsideLiteral = $outside.Replace("'","''")
             $denyScript = @"
 try { [IO.File]::WriteAllText('$outsideLiteral','NOT_ALLOWED'); exit 91 }

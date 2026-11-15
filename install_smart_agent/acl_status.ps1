@@ -861,9 +861,17 @@ if ($Mode -eq 'on') {
     }
     # Git62 multi-root Git upgrade: preserve existing Native SIDs and NTFS
     # rights. A verified manifest refresh does not require full ACL re-provision.
+    $hasIndexedTurbo = $false
     if ($RestoreTurboAfterUpgrade -and $accessPolicy -and
         $accessPolicy.turbo_requested -eq $true -and
-        @($accessPolicy.turbo_roots).Count -gt 1) {
+        @($accessPolicy.turbo_roots).Count -eq 1) {
+        . (Join-Path $PSScriptRoot 'turbo_multi_root_paths.ps1')
+        $indexed = Get-TurboRootJournalPaths $SecurityRoot ([string]$accessPolicy.turbo_roots[0])
+        $hasIndexedTurbo = Test-Path -LiteralPath $indexed.activation -PathType Leaf
+    }
+    if ($RestoreTurboAfterUpgrade -and $accessPolicy -and
+        $accessPolicy.turbo_requested -eq $true -and
+        (@($accessPolicy.turbo_roots).Count -gt 1 -or $hasIndexedTurbo)) {
         if (-not $profileBoundToRoot -or -not $profileStructurallyValid -or
             $machineAuthorizationState.state -ne 'BOUND' -or
             (Get-RecordedValue $previousModeState 'mode') -ne 'on' -or

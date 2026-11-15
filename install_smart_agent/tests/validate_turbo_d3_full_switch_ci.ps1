@@ -24,7 +24,8 @@ try{
  $inputFile=Join-Path $sub 'original.txt'
  [IO.File]::WriteAllText($inputFile,'ORIGINAL_INTACT')
  $inputHash=(Get-FileHash -LiteralPath $inputFile -Algorithm SHA256).Hash
- $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
+ $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project
+    controller_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
  $policy=[ordered]@{schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1';revision=43;writable_workspaces=@($ws);read_only_roots=@();denied_write_roots=@();turbo_roots=@($old);turbo_requested=$true}
  [IO.File]::WriteAllText((Join-Path $secure 'acl_mode.json'),($mode | ConvertTo-Json -Depth 8))
  [IO.File]::WriteAllText($policyPath,($policy | ConvertTo-Json -Depth 8))

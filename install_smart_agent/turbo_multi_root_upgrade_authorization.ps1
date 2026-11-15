@@ -92,7 +92,7 @@ if(-not $originalAcl.AreAccessRulesProtected){
  throw 'GIT62_UPGRADE_MACHINE_AUTHORIZATION_ACL_UNPROTECTED'
 }
 $roots=@($policy.turbo_roots)
-if($roots.Count -lt 2){throw 'GIT62_UPGRADE_MULTI_ROOT_REQUIRED'}
+if($roots.Count -lt 1){throw 'GIT62_UPGRADE_ACTIVE_ROOT_REQUIRED'}
 if(-not (Test-Path -LiteralPath $activations -PathType Container)){
  throw 'GIT62_UPGRADE_ACTIVATIONS_MISSING'
 }
@@ -137,7 +137,17 @@ foreach($root in $roots){
 # Each protected journal is independently OS-attested by launching its
 # AppContainer and verifying native token + kernel negative read.
 # No pointer is published until every Root is verified.
-& (Join-Path $PSScriptRoot 'turbo_multi_root_rebind.ps1') -ProjectRoot $project
+$rebind=Join-Path $PSScriptRoot 'turbo_multi_root_rebind.ps1'
+& $rebind -ProjectRoot $project -RepairMissingSentinels -MigrateRootEpochs
+$brokerName='turbo_os_execute.ps1'
+$brokerSource=Join-Path $PSScriptRoot $brokerName
+$protectedBroker=Join-Path (Join-Path $sec 'turbo_broker_code') $brokerName
+if((Get-FileHash -LiteralPath $protectedBroker -Algorithm SHA256).Hash -ine
+   (Get-FileHash -LiteralPath $brokerSource -Algorithm SHA256).Hash){
+ & $rebind -ProjectRoot $project -RefreshBrokerSource
+}else{
+ & $rebind -ProjectRoot $project
+}
 $manifestHash=(Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if($recordedHash.ToLowerInvariant() -eq $manifestHash){
  Write-Host ('GIT62_MULTI_ROOT_MACHINE_AUTHORIZATION_PASS roots='+$roots.Count+' changed=false')

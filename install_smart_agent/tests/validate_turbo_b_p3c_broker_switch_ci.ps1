@@ -28,7 +28,8 @@ try {
     New-Item -ItemType Directory -Path (Split-Path -Parent $existingFile) -Force | Out-Null
     [IO.File]::WriteAllText($existingFile,'P3C_UNTOUCHED_TARGET')
     $targetHash=(Get-FileHash -LiteralPath $existingFile -Algorithm SHA256).Hash
-    $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
+    $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project
+       controller_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
     $policy=[ordered]@{
         schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1'
         revision=88

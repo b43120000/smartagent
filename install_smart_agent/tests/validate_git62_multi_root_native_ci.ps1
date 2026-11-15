@@ -49,7 +49,8 @@ try{
  foreach($path in @($ws,$rootA,$rootB,$externalWritable,$externalReadOnly,(Join-Path $rootA 'keep.txt'),(Join-Path $rootB 'keep.txt'))+$outsideFiles){
   $before[$path]=(Get-Acl -LiteralPath $path -Audit -ErrorAction Stop).Sddl
  }
- $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
+ $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project
+    controller_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
  $policy=[ordered]@{schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1';revision=62;writable_workspaces=@($ws);read_only_roots=@($externalReadOnly);denied_write_roots=@();turbo_roots=@($rootA,$rootB);turbo_requested=$true}
  $profile=[ordered]@{schema='SMARTAGENT_WINDOWS_SECURITY_V2';trusted_executables=@();executor_user='GIT62_CI_EXEC';executor_sid='S-1-5-21-100-200-300-400';executor_task_name='SmartAgent Restricted Executor';executor_endpoint=(Join-Path $sec 'executor_queue')}
  [IO.File]::WriteAllText((Join-Path $sec 'acl_mode.json'),($mode|ConvertTo-Json -Depth 10))
@@ -139,7 +140,7 @@ try{
   Write-Host 'GIT62_MULTI_ROOT_MACHINE_UPGRADE_NATIVE_PASS'
  }finally{$env:ProgramData=$savedProgramData}
  function Scoped($record,[string]$cwd,[string]$id){
-  $cmd='[IO.File]::WriteAllText("own.txt","ROOT_'+$id+'");"ROOT_'+$id+'"'
+  $cmd='[IO.File]::WriteAllText("own.txt","ROOT_'+$id+'");[Environment]::CurrentDirectory'
   $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cmd))
   $answer=& ([string]$record.broker_entry) -ProjectRoot $project -Workspace $ws -WorkingDirectory $cwd -SelectedTurboRoot $cwd -ExpectedRevision $script:revision -TaskId ('TASK-GIT62-'+$id) -ActionId ('ACT-GIT62-'+$id) -CommandBase64 $encoded -TimeoutSeconds 30
   $proof=$answer | Out-String | ConvertFrom-Json -ErrorAction Stop
@@ -163,7 +164,7 @@ try{
   Check ($proof.sandbox_identity_verified -eq $true -and $proof.kernel_outside_read_denied -eq $true -and $proof.kernel_outside_write_denied -eq $true -and [int]$proof.command_exit_code -eq 0) ('GIT62_NATIVE_PROOF_FAILED_'+$id)
   Check ([IO.File]::ReadAllText((Join-Path $cwd 'own.txt')) -ceq ('ROOT_'+$id)) ('GIT62_ROOT_WRITE_FAILED_'+$id)
   $stdout=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$proof.stdout_base64))
-  Check ($stdout.Contains('ROOT_'+$id)) ('GIT62_STDOUT_MISSING_'+$id)
+  Check ($stdout.Trim() -ieq $cwd) ('GIT62_WRONG_PROCESS_CWD_'+$id)
  }
  Scoped $a $rootA 'A'
  Scoped $b $rootB 'B'
@@ -192,6 +193,18 @@ catch { exit 95 }
  # new Rev 63 policy, missing sibling negative sentinel.
  $sentinelB=[string]$b.negative_sentinel_path
  Check (Test-Path -LiteralPath $sentinelB -PathType Leaf) 'GIT62_CI_SENTINEL_ORIGIN_MISSING'
+ & icacls.exe $sentinelB '/remove:g' ('*'+$mode.controller_sid) | Out-Null
+ Check ($LASTEXITCODE -eq 0) 'GIT62_CI_SENTINEL_ACL_FIXTURE_FAILED'
+ & $rebind -ProjectRoot $project -RepairMissingSentinels -SelectedTurboRoot $rootB
+ $controller=[Security.Principal.SecurityIdentifier]::new($mode.controller_sid)
+ $sentinelAcl=Get-Acl -LiteralPath $sentinelB
+ $controllerRules=@($sentinelAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) |
+   Where-Object {$_.IdentityReference -eq $controller})
+ Check ($sentinelAcl.AreAccessRulesProtected -and $controllerRules.Count -eq 1 -and
+   $controllerRules[0].AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+   ($controllerRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -eq 0 -and
+   ($controllerRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::Read) -eq
+      [Security.AccessControl.FileSystemRights]::Read) 'GIT62_CI_SENTINEL_CONTROLLER_NOT_READ_ONLY'
  [IO.File]::WriteAllText($sentinelB,'TAMPERED')
  $tamperBlocked=$false
  try{& $rebind -ProjectRoot $project -RepairMissingSentinels -SelectedTurboRoot $rootB | Out-Null}
@@ -279,6 +292,18 @@ catch { exit 95 }
  Check ((Get-FileHash -LiteralPath $ja.activation -Algorithm SHA256).Hash -eq $unchangedJournalHashes[0]) 'GIT62_CI_REMOVAL_CHANGED_ROOT_A_JOURNAL'
  Check ((Get-FileHash -LiteralPath $jb.activation -Algorithm SHA256).Hash -eq $unchangedJournalHashes[1]) 'GIT62_CI_REMOVAL_CHANGED_ROOT_B_JOURNAL'
  Write-Host 'GIT62_REMOVE_THIRD_ROOT_NO_SIBLING_REBIND_PASS'
+ # A later Workspace ACL edit must survive both partial and final revocation.
+ $lateSid=[Security.Principal.SecurityIdentifier]::new('S-1-5-21-100-200-300-401')
+ $lateRule=[Security.AccessControl.FileSystemAccessRule]::new(
+   $lateSid,[Security.AccessControl.FileSystemRights]::ReadAndExecute,
+   [Security.AccessControl.AccessControlType]::Allow)
+ $workspaceAcl=Get-Acl -LiteralPath $ws
+ $workspaceAcl.AddAccessRule($lateRule)
+ Set-Acl -LiteralPath $ws -AclObject $workspaceAcl
+ $expectedWorkspaceAcl=[Security.AccessControl.DirectorySecurity]::new()
+ $expectedWorkspaceAcl.SetSecurityDescriptorSddlForm([string]$before[$ws])
+ $expectedWorkspaceAcl.AddAccessRule($lateRule)
+ $before[$ws]=$expectedWorkspaceAcl.Sddl
  & $revoke -Action Revoke -ProjectRoot $project -TurboRoot $rootA
  Check (-not (Test-Path -LiteralPath $ja.activation)) 'GIT62_A_REVOKE_FAILED'
  Check (Test-Path -LiteralPath $jb.activation) 'GIT62_B_REVOKED_WITH_A'

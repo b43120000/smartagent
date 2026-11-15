@@ -532,7 +532,47 @@ def _completed_legacy_turbo_import(
         return False
 
 
-def _security_menu() -> int:
+_TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION = 10
+
+
+def _verify_applied_turbo_roots() -> int:
+    from .turbo_os_broker_client import execute_turbo_command
+
+    policy = load_workspace_access_policy()
+    roots = policy["turbo_roots"]
+    revision = policy["revision"]
+    for root in roots:
+        try:
+            # Windows PowerShell's provider location can differ from the OS
+            # working directory when the AppContainer cannot read ancestors.
+            result = execute_turbo_command("[Environment]::CurrentDirectory", cwd=root)
+            evidence = result["sandbox_evidence"]
+            if (
+                result["exit_code"] != 0
+                or not result["output_complete"]
+                or _path_key(result["stdout"].strip()) != _path_key(root)
+                or _path_key(evidence["turbo_root"]) != _path_key(root)
+                or evidence["sandbox_backend"] != "WIN32_APPCONTAINER"
+                or evidence["sandbox_identity_verified"] is not True
+                or evidence["kernel_outside_read_denied"] is not True
+                or evidence["kernel_outside_write_denied"] is not True
+            ):
+                raise RuntimeError("TURBO_RUNTIME_ATTESTATION_INVALID")
+        except Exception as exc:
+            message = f"TURBO_RUNTIME_VERIFY_FAILED root={root} error={exc}"
+            _write_apply_log(message)
+            print(message)
+            print("Configuration saved. Retry Apply to repair and verify.")
+            return 1
+    if load_workspace_access_policy()["revision"] != revision:
+        print("TURBO_RUNTIME_VERIFY_POLICY_CHANGED. Retry Apply.")
+        return 1
+    print(f"\nAPPLY_EXIT_CODE=0 roots={len(roots)}")
+    _write_apply_log("GIT62_MULTI_ROOT_APPLY_PASS")
+    return 0
+
+
+def _security_menu(*, verify_from_parent: bool = False) -> int:
     software_only = _acl_off_enabled()
     if not software_only and not _is_admin():
         raise RuntimeError("security_menu_requires_administrator")
@@ -737,7 +777,7 @@ def _security_menu() -> int:
                 ]
                 if not (access_changed or turbo_changed or request_changed
                         or legacy_migration_needed or removed_active
-                        or needs_enrollment):
+                        or needs_enrollment or turbo):
                     print("[OK] All registered Turbo Roots unchanged.")
                     return 0
                 print("\n[Git62] Multi-root Native AppContainer Apply")
@@ -803,27 +843,21 @@ def _security_menu() -> int:
                             "-Workspace", owners[0], "-TurboRoot", root,
                         )
 
-                # Upgrade only after native attestation; this also recovers
-                # incomplete Rev 34 policies with a pending third enrollment.
+                # Repair and attest under the old policy before revoking
+                # roots. The same pass can migrate legacy per-root epochs.
                 if active_roots:
                     invoke_native(
                         "turbo_multi_root_rebind.ps1",
                         "-ProjectRoot", str(AGENT_PROJECT_ROOT),
                         "-MigrateRootEpochs", "-AllowPendingEnrollments",
+                        "-RepairMissingSentinels",
                     )
-
-                # Validate all retained SIDs and actual OS kernel denial
-                # while the OLD policy is still valid and BEFORE revocation.
-                # Only a missing, exact negative sentinel may be recreated.
-                for root in turbo:
-                    if (_path_key(root) in active_roots and
-                            _path_key(root) not in revoked_keys):
-                        invoke_native(
-                            "turbo_multi_root_rebind.ps1",
-                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
-                            "-RepairMissingSentinels", "-SelectedTurboRoot", root,
-                            "-AllowPendingEnrollments",
-                        )
+                elif legacy_active and not legacy_migration_needed:
+                    invoke_native(
+                        "turbo_multi_root_rebind.ps1",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-RepairLegacySentinel",
+                    )
 
                 # Native revocation is mandatory BEFORE removing an active
                 # Root from the registry. No policy-only removal of OS grants.
@@ -872,7 +906,8 @@ def _security_menu() -> int:
                     invoke_native(
                         "turbo_multi_root_rebind.ps1",
                         "-ProjectRoot", str(AGENT_PROJECT_ROOT),
-                        "-AllowPendingEnrollments",
+                        "-AllowPendingEnrollments", "-RepairMissingSentinels",
+                        "-RebindAfterSentinelRepair",
                     )
                 for root in turbo:
                     activation = per_root_journal(security_dir, root)
@@ -944,9 +979,12 @@ def _security_menu() -> int:
                         raise RuntimeError(
                             "TURBO_RETAINED_ROOT_BROKER_UNAVAILABLE:" + root
                         )
-                print(f"\nAPPLY_EXIT_CODE=0 roots={len(turbo)}")
-                _write_apply_log("GIT62_MULTI_ROOT_APPLY_PASS")
-                return 0
+                if turbo and _is_admin():
+                    print("TURBO_CONFIGURATION_SAVED_RUNTIME_VERIFICATION_PENDING")
+                    if not verify_from_parent:
+                        print("Run Edit_workspace.bat --verify-turbo-apply from a standard window.")
+                    return _TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
+                return _verify_applied_turbo_roots()
             except Exception as exc:
                 _write_apply_log(
                     f"GIT62_APPLY_EXCEPTION type={type(exc).__name__} message={exc}"
@@ -954,7 +992,8 @@ def _security_menu() -> int:
                 print(f"\nAPPLY_EXCEPTION: {type(exc).__name__}: {exc}")
                 return 1
             finally:
-                input("\nApply finished. Press Enter to continue...")
+                if not verify_from_parent:
+                    input("\nApply finished. Press Enter to continue...")
         elif choice == "8":
             return 0
 
@@ -1002,6 +1041,9 @@ def _run_elevated_workspace_manager(argument: str) -> int:
         encoding="utf-8",
         errors="replace",
     )
+    if (argument == "--security-menu-from-controller"
+            and result.returncode == _TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION):
+        return _verify_applied_turbo_roots()
     if result.returncode != 0:
         outer_detail = (result.stderr or result.stdout or "").strip()
         detail = outer_detail or f"security_workflow_failed; see {elevated_log}"
@@ -1013,7 +1055,7 @@ def _run_elevated_workspace_manager(argument: str) -> int:
 
 
 def _launch_elevated_security_menu() -> int:
-    return _run_elevated_workspace_manager("--security-menu")
+    return _run_elevated_workspace_manager("--security-menu-from-controller")
 
 
 def _launch_elevated_security_initialize() -> int:
@@ -1610,6 +1652,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--security-menu", action="store_true")
+    parser.add_argument("--security-menu-from-controller", action="store_true",
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--verify-turbo-apply", action="store_true")
     parser.add_argument("--initialize-security", action="store_true")
     parser.add_argument("--set-binding", choices=("local", "remote"))
     parser.add_argument("--workspace", default="")
@@ -1635,6 +1680,12 @@ def main(argv=None) -> int:
                           "agent":args.feature_agent or "global"},
                           ensure_ascii=False))
         return 0
+    if args.verify_turbo_apply:
+        if _is_admin():
+            raise RuntimeError("turbo_apply_verification_requires_standard_token")
+        return _verify_applied_turbo_roots()
+    if args.security_menu_from_controller:
+        return _security_menu(verify_from_parent=True)
     if args.security_menu: return _security_menu()
     if args.initialize_security:
         if not _is_admin():

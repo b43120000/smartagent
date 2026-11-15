@@ -25,7 +25,8 @@ try {
     foreach($path in @($ws,$root,$sub,$file)){
         $baseline[$path]=(Get-Acl -LiteralPath $path -Audit -ErrorAction Stop).Sddl
     }
-    $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project}
+    $mode=[ordered]@{schema='SMARTAGENT_ACL_MODE_V1';mode='on';install_root=$project
+       controller_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
     $policy=[ordered]@{
         schema='SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1'
         revision=4
