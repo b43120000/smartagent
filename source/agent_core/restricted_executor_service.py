@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Queue worker that must be launched as the configured non-admin identity."""
 from __future__ import annotations
-import argparse,getpass,json,os,signal,subprocess,time,uuid
+import argparse,getpass,json,os,re,signal,subprocess,time,uuid
 from pathlib import Path
 from .json_state_io import read_json_retry,write_json_atomic
 from .path_security import authorize_path
@@ -73,6 +73,7 @@ def _run(req:dict,profile:dict)->dict:
  require_turbo_backend(sandbox)
  supplied=str(req.get('request_digest',''));unsigned={key:value for key,value in req.items() if key!='request_digest'}
  if supplied!=sha256_digest(unsigned):raise RuntimeError('restricted_executor_request_digest_mismatch')
+ if not re.fullmatch(r'EXEC-[0-9A-F]{32}',str(req.get('request_id',''))):raise RuntimeError('restricted_executor_request_id_invalid')
  noninteractive=req.get('noninteractive',False)
  if type(noninteractive) is not bool:raise RuntimeError('restricted_executor_noninteractive_invalid')
  command=req.get('command')
