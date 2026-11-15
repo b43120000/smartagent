@@ -68,8 +68,11 @@ def _mock_receipt(tmp_path, code=0, stderr="", samples=4):
         "native_running_sample_count": samples,
         "native_last_running_evidence": proof,
         "native_failure_stage": "",
+        "native_failure_substage": "",
         "native_exception_type": "",
+        "native_exception_hresult": "",
         "native_failure_stage_source": "NONE",
+        "native_command_trace": ["CWD_GET_LOCATION_INITIAL.START", "CWD_GET_LOCATION_INITIAL.PASS"],
     }
 
 
@@ -148,7 +151,9 @@ def test_native_failed_command_preserves_phase_and_does_not_claim_success(monkey
     )
     receipt.update(
         native_failure_stage="CWD_SETUP",
+        native_failure_substage="CWD_GET_LOCATION_INITIAL",
         native_exception_type="UnauthorizedAccessException",
+        native_exception_hresult="80070005",
         native_failure_stage_source="SANDBOX_WRAPPER_DIAGNOSTIC",
     )
     result = _execute(monkeypatch, tmp_path, receipt)
@@ -158,6 +163,8 @@ def test_native_failed_command_preserves_phase_and_does_not_claim_success(monkey
     evidence = result["sandbox_evidence"]
     assert evidence["native_error_class"] == "NATIVE_ACCESS_DENIED"
     assert evidence["native_failure_stage"] == "CWD_SETUP"
+    assert evidence["native_failure_substage"] == "CWD_GET_LOCATION_INITIAL"
+    assert evidence["native_exception_hresult"] == "80070005"
     assert evidence["native_exception_type"] == "UnauthorizedAccessException"
 
 
@@ -195,7 +202,7 @@ def test_broker_marks_phases_and_does_not_skip_cwd_validation():
     src = BROKER_PS1.read_text(encoding="utf-8")
     for phase in ("CWD_SETUP", "ENV_SETUP", "COMMAND_EXECUTE", "OUTPUT_CAPTURE"):
         assert phase in src
-    assert "Set-Location -LiteralPath '$cwdLiteral' -ErrorAction Stop" in src
+    assert "Set-Location -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop" in src
     assert "GIT63_NATIVE_TASK_CWD_MISMATCH" in src
     assert "native_last_running_evidence=$nativeRunningEvidence" in src
     assert "native_running_sample_count=$nativeRunningSamples" in src
