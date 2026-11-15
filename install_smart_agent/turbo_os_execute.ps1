@@ -519,23 +519,42 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
     # can produce arbitrary text, so the stage never grants permission or
     # upgrades failed/unknown task evidence to SUCCEEDED.
     $nativeFailureStage=''
+    $nativeFailureSubstage=''
     $nativeExceptionType=''
+    $nativeExceptionHresult=''
     $nativeFailureStageSource='NONE'
-    if ([int]$native.exit_code -eq 95) {
-        $nativeFailureStage='OUTPUT_CAPTURE'
-        $nativeFailureStageSource='WRAPPER_RESERVED_EXIT_CODE'
-    } elseif ([int]$native.exit_code -ne 0) {
-        try {
-            $text=[Text.Encoding]::UTF8.GetString(
-                [Convert]::FromBase64String([string]$native.stderr_base64))
+    $nativeCommandTrace=@()
+    try {
+        $text=[Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String([string]$native.stderr_base64))
+        # User process output is not authorization evidence. The allowlist
+        # contains ONLY known, code-owned setup steps, without input values.
+        $traceMatch=[regex]::Match($text,
+            '(?m)^SMARTAGENT_NATIVE_TRACE_V1=([A-Z0-9_.,]*)\r?$')
+        if ($traceMatch.Success -and $traceMatch.Groups[1].Value.Length -le 2048) {
+            foreach($token in $traceMatch.Groups[1].Value.Split(',')) {
+                if ($nativeCommandTrace.Count -ge 32) { break }
+                if ($token -cmatch '^(CWD_GET_LOCATION_INITIAL|CWD_SET_LOCATION|CWD_GET_LOCATION_VERIFY|CWD_GET_NATIVE_CURRENT_DIRECTORY|CWD_COMPARE|ENV_APPLY|COMMAND_DISPATCH)\.(START|PASS|SKIP|FINISH)$') {
+                    $nativeCommandTrace+=([string]$token)
+                }
+            }
+        }
+        if ([int]$native.exit_code -ne 0) {
             $match=[regex]::Match($text,
-                '^SMARTAGENT_NATIVE_FAILURE_STAGE=(CWD_SETUP|ENV_SETUP|COMMAND_EXECUTE);([A-Za-z][A-Za-z0-9.]*Exception):')
+                '^SMARTAGENT_NATIVE_FAILURE_STAGE=(CWD_SETUP|ENV_SETUP|COMMAND_EXECUTE);SMARTAGENT_NATIVE_FAILURE_SUBSTAGE=([A-Z_]{3,80});HRESULT=([0-9A-F]{8});([A-Za-z][A-Za-z0-9.]*Exception):')
             if ($match.Success) {
                 $nativeFailureStage=$match.Groups[1].Value
-                $nativeExceptionType=$match.Groups[2].Value
+                $nativeFailureSubstage=$match.Groups[2].Value
+                $nativeExceptionHresult=$match.Groups[3].Value
+                $nativeExceptionType=$match.Groups[4].Value
                 $nativeFailureStageSource='SANDBOX_WRAPPER_DIAGNOSTIC'
             }
-        } catch { }
+        }
+    } catch { }
+    if ([int]$native.exit_code -eq 95) {
+        $nativeFailureStage='OUTPUT_CAPTURE'
+        $nativeFailureSubstage='OUTPUT_CAPTURE_WRITE'
+        $nativeFailureStageSource='WRAPPER_RESERVED_EXIT_CODE'
     }
     if ($native.sandbox_identity_verified -ne $true -or
         $native.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
@@ -631,8 +650,11 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
         native_running_sample_count=$nativeRunningSamples
         native_last_running_evidence=$nativeRunningEvidence
         native_failure_stage=$nativeFailureStage
+        native_failure_substage=$nativeFailureSubstage
         native_exception_type=$nativeExceptionType
+        native_exception_hresult=$nativeExceptionHresult
         native_failure_stage_source=$nativeFailureStageSource
+        native_command_trace=@($nativeCommandTrace)
         process_started=$true
         executed=$true
         command_exit_code=[int64]$native.exit_code
