@@ -102,8 +102,11 @@ def build_runtime_software_inventory(
                if isinstance(row, Mapping)] if isinstance(env.get("managed_tools"), list) else []
     catalog = [dict(row) for row in (env.get("install_catalog") or [])[:64]
                if isinstance(row, Mapping)] if isinstance(env.get("install_catalog"), list) else []
+    external = [dict(row) for row in (env.get("external_tool_hints") or [])[:64]
+                if isinstance(row, Mapping)] if isinstance(env.get("external_tool_hints"), list) else []
     return {
         "schema": SCHEMA,
+        "global_external_tool_candidates": external,
         "global_managed_tool_candidates": managed,
         "managed_install_catalog": catalog,
         "managed_install_per_action_confirmation": False,
