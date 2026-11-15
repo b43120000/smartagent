@@ -571,13 +571,10 @@ def tool_run_command(
         from .tool_result_contract import attach_runtime_result
         rejected = bool(main.get('security_rejected'))
         execution = operation_result['execution_status']
+        from .process_liveness import verified_running_evidence
         witness = main.get('liveness_evidence') or {}
-        running = (
-            main.get('process_state') == 'RUNNING'
-            and isinstance(witness, dict)
-            and witness.get('liveness_verified') is True
-            and witness.get('process_identity_verified') is True
-        )
+        running = (main.get('process_state') == 'RUNNING'
+                   and verified_running_evidence(witness))
         status = 'REJECTED' if rejected else 'RUNNING' if running else execution
         executed = not rejected and (
             running or main.get('process_started') is True
@@ -680,13 +677,10 @@ def tool_run_command(
     # started and even produced an artifact.  Preserve UNKNOWN; do not
     # manufacture FAILED or run postconditions against an unknown mutation.
     if main.get("exit_code") is None and not main.get("security_rejected"):
+        from .process_liveness import verified_running_evidence
         witness = main.get("liveness_evidence") or {}
-        live = (
-            main.get("process_state") == "RUNNING"
-            and isinstance(witness, dict)
-            and witness.get("liveness_verified") is True
-            and witness.get("process_identity_verified") is True
-        )
+        live = (main.get("process_state") == "RUNNING"
+                and verified_running_evidence(witness))
         current_status = "RUNNING" if live else "UNKNOWN"
         lines.append("VERIFICATION_STATUS: UNVERIFIED")
         lines.append("EXECUTION_STATUS: " + current_status)
