@@ -59,6 +59,19 @@ def build_runtime_environment(
     ):
         if binary.is_file() and directory.is_dir():
             preferred.append(str(directory))
+    # Registry is shared by ACL/Turbo modes; it never grants execute authority.
+    from .managed_toolchains import managed_hints, store_root
+    managed = managed_hints(read_environment_ledger(root), root)
+    env["SMARTAGENT_TOOLCHAIN_ROOT"] = str(store_root(root))
+    for row in managed:
+        binary = Path(row["path"])
+        preferred.append(str(binary.parent))
+        if row["name"] == "java":
+            env["JAVA_HOME"] = str(binary.parent.parent)
+        elif row["name"] == "adb":
+            sdk = str(binary.parent.parent)
+            env["ANDROID_HOME"] = sdk
+            env["ANDROID_SDK_ROOT"] = sdk
     inherited = [part for part in str(env.get("PATH", "")).split(os.pathsep) if part]
     ordered: list[str] = []
     seen: set[str] = set()
@@ -151,7 +164,7 @@ def refresh_environment_ledger(
         except (OSError, ValueError):
             previous = {}
         if previous.get("schema") == ENVIRONMENT_LEDGER_SCHEMA:
-            for key in ("managed_tools", "external_tool_hints"):
+            for key in ("managed_tools", "managed_sources", "external_tool_hints"):
                 if isinstance(previous.get(key), dict):
                     payload[key] = previous[key]
         _write_atomic(ledger, payload)
@@ -180,7 +193,7 @@ def planner_environment_snapshot(root: str | Path | None = None) -> dict:
             "binary_sha256": str(fact.get("binary_sha256", ""))[:64],
             "probe_exit_code": fact.get("probe_exit_code"),
         }
-    from .managed_toolchains import managed_hints, read_catalog
+    from .managed_toolchains import managed_hints, read_catalog, store_root
     try:
         catalog = [{"tool": p["tool"],"version": p["version"]}
                    for p in read_catalog(root)["packages"]][:64]
@@ -192,6 +205,15 @@ def planner_environment_snapshot(root: str | Path | None = None) -> dict:
         "tools": compact,
         "managed_tools": managed_hints(payload,root),
         "install_catalog": catalog,
+        "on_demand_install": {
+            "tool": "install_toolchain",
+            "source_required_if_not_recorded": True,
+            "archive_type": "zip",
+            "source_fields": ["url", "archive_sha256", "checksum_url", "executables", "archive_type"],
+            "publisher_checksum_required": True,
+            "install_location": str(store_root(root)),
+            "per_task_install_confirmation": False,
+        },
         "records_grant_execution_authority": False,
     }
 
