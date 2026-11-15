@@ -178,6 +178,50 @@ class TestGateway(unittest.TestCase):
         self.assertEqual(identities[0][0], identities[1][0])
         self.assertNotEqual(identities[0][1], identities[1][1])
 
+    def test_real_broker_rejection_code_is_preserved_without_command_or_path(self):
+        # A pre-admission placeholder may say UNAVAILABLE_NO_OS_BROKER even
+        # when the actual problem was a broker-side digest or receipt error.
+        from agent_core.runtime_test_gateway import _safe_runtime_summary
+        record = {
+            "status": "REJECTED", "reason": "COMMAND_REJECTED",
+            "executed": False,
+            "data": {
+                "command_error": (
+                    "TURBO_OS_BROKER_BLOCKED:"
+                    "TURBO_OS_BROKER_SOURCE_CHANGED; "
+                    "sensitive C:\\secret\\path=PASSWORD"
+                ),
+                "command_rejection_stage": "TURBO_BROKER",
+                "sandbox_evidence": {
+                    "sandbox_backend": "UNAVAILABLE_NO_OS_BROKER",
+                    "sandbox_identity_verified": False,
+                },
+            },
+        }
+        summary = _safe_runtime_summary(record)
+        self.assertEqual(
+            summary["runtime_rejection_code"], "TURBO_OS_BROKER_SOURCE_CHANGED"
+        )
+        self.assertEqual(summary["command_rejection_stage"], "TURBO_BROKER")
+        self.assertIn("PREEXECUTION_POLICY_SNAPSHOT", summary["sandbox_backend_note"])
+        self.assertNotIn("PASSWORD", json.dumps(summary))
+        self.assertNotIn("C:\\\\secret", json.dumps(summary))
+
+    def test_rejection_code_does_not_echo_arbitrary_user_command(self):
+        from agent_core.runtime_test_gateway import _safe_runtime_summary
+        record = {
+            "status": "REJECTED", "reason": "COMMAND_REJECTED",
+            "executed": False,
+            "data": {
+                "command_error": "TURBO_OS_BROKER_BLOCKED:echo confidential",
+                "command_rejection_stage": "TURBO_BROKER",
+                "sandbox_evidence": {},
+            },
+        }
+        summary = _safe_runtime_summary(record)
+        self.assertEqual(summary["runtime_rejection_code"], "ERROR_CODE_REDACTED")
+        self.assertNotIn("confidential", json.dumps(summary))
+
     def test_raw_command_text_and_output_not_in_summary(self):
         result = run_case(
             self.spec, live_authorized=True,
