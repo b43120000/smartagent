@@ -539,6 +539,7 @@ def execute_turbo_command(
         "CWD_GET_LOCATION_INITIAL", "CWD_SET_LOCATION",
         "CWD_GET_LOCATION_VERIFY", "CWD_GET_NATIVE_CURRENT_DIRECTORY",
         "CWD_COMPARE", "ENV_APPLY", "COMMAND_DISPATCH",
+        "NATIVE_CWD_CHECK", "PSDRIVE_CHECK", "PROVIDER_PATH_CHECK",
     }
     if (not isinstance(native_command_trace, list)
             or len(native_command_trace) > 32
@@ -547,6 +548,32 @@ def execute_turbo_command(
                    or t.split(".", 1)[0] not in known_steps
                    for t in native_command_trace)):
         raise TurboOSBrokerUnavailable("GIT63_NATIVE_COMMAND_TRACE_INVALID")
+    # Sandbox-only diagnostics. These values are bounded and are never
+    # accepted as OS kernel authorization, root-scoping or success evidence.
+    native_cwd_probes = receipt.get("native_cwd_probes")
+    allowed_probe_statuses = {
+        "native_cwd_status": {"NOT_OBSERVED", "MATCH", "MISMATCH", "ERROR"},
+        "psdrive_status": {
+            "NOT_OBSERVED", "FILESYSTEM", "OTHER_PROVIDER", "NOT_FOUND", "ERROR"},
+        "provider_path_status": {"NOT_OBSERVED", "MATCH", "MISMATCH", "ERROR"},
+    }
+    if (not isinstance(native_cwd_probes, dict)
+            or set(native_cwd_probes) != {
+                "native_cwd_status", "native_cwd_hresult",
+                "psdrive_status", "psdrive_hresult",
+                "provider_path_status", "provider_path_hresult"}):
+        raise TurboOSBrokerUnavailable("GIT63_NATIVE_CWD_PROBES_INVALID")
+    for name, allowed in allowed_probe_statuses.items():
+        status = native_cwd_probes[name]
+        hresult = native_cwd_probes[name.replace("_status", "_hresult")]
+        if (not isinstance(status, str) or status not in allowed
+                or not isinstance(hresult, str)
+                or not re.fullmatch(r"(?:[0-9A-F]{8})?", hresult)
+                or (status == "NOT_OBSERVED") != (hresult == "")
+                or (status in {"MATCH", "MISMATCH", "FILESYSTEM",
+                               "OTHER_PROVIDER"} and hresult != "00000000")):
+            raise TurboOSBrokerUnavailable("GIT63_NATIVE_CWD_PROBES_INVALID")
+
     if (not isinstance(native_stage, str)
             or native_stage not in {
                 "", "CWD_SETUP", "ENV_SETUP", "COMMAND_EXECUTE", "OUTPUT_CAPTURE"}
@@ -610,6 +637,7 @@ def execute_turbo_command(
         "native_exception_hresult": native_exception_hresult,
         "native_failure_stage_source": native_stage_source,
         "native_command_trace": list(native_command_trace),
+        "native_cwd_probes": dict(native_cwd_probes),
         "native_process_pid": process_pid,
         "native_running_sample_count": native_samples,
         "stdout_capture_state": ("TRUNCATED" if out_cut else
