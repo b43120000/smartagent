@@ -7,6 +7,10 @@ on:
       - "source/agent_core/runtime_test_gateway.py"
       - "source/agent_core/tools.py"
       - "source/agent_core/bounded_process.py"
+      - "source/agent_core/turbo_os_broker_client.py"
+      - "install_smart_agent/turbo_os_execute.ps1"
+      - "collect.bat"
+      - "source/WebAgent/tests/test_git64_psdrive_cwd_fallback.py"
       - "source/agent_core/protocol_manifest.py"
       - "config/protocol_manifest.json"
       - "source/WebAgent/tests/test_git64_runtime_test_gateway.py"
@@ -30,12 +34,12 @@ jobs:
         with:
           python-version: "3.11"
       - name: Validate test gateway Python syntax
-        run: python -m py_compile source/agent_core/runtime_test_gateway.py source/WebAgent/tests/test_git64_runtime_test_gateway.py
+        run: python -m py_compile source/agent_core/runtime_test_gateway.py source/WebAgent/tests/test_git64_runtime_test_gateway.py source/WebAgent/tests/test_git64_psdrive_cwd_fallback.py
       - name: Run standalone Runtime gateway policy and dispatch unit tests
         shell: bash
         run: |
           export PYTHONPATH="$PWD/source"
-          python -m unittest discover -s source/WebAgent/tests -p "test_git64_runtime_test_gateway.py" -v
+          python -m unittest discover -s source/WebAgent/tests -p "test_git64*.py" -v
       - name: Validate integrity pins used by the test gateway
         shell: bash
         run: |
