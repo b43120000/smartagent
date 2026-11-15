@@ -156,7 +156,11 @@ def capture_command_result_rca(raw_result: object, receipt: object) -> dict:
         "turbo_effective_for_action", "executed",
         "internet_client_token_verified", "internet_client_capability_sid",
         "native_toolchain_status", "native_trusted_tools",
-        "native_error_class",
+        "native_error_class", "native_failure_stage",
+        "native_failure_substage", "native_exception_type",
+        "native_exception_hresult", "native_failure_stage_source",
+        "native_process_pid", "native_running_sample_count",
+        "native_command_trace",
     )
     return {
         "schema": SCHEMA,
