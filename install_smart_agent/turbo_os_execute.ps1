@@ -119,6 +119,1428 @@ function Get-Pinned-Native-Toolchain {
         $verified.Add([IO.Path]::GetDirectoryName($full))
         $toolNames.Add([IO.Path]::GetFileNameWithoutExtension($full).ToLowerInvariant())
     }
+    # Git63: shared managed store grants task AppContainers RX, NEVER write.
+    # Ledger is only an advisory pointer. Catalog digest and executable SHA256
+    # are independently verified on every command before adding to PATH.
+    $catalogPath=Join-Path $ProjectRoot 'config\managed_toolchains_catalog.json'
+    $manifestPath=Join-Path $ProjectRoot 'config\protocol_manifest.json'
+    $ledgerPath=Join-Path $ProjectRoot 'localdata\metadata\environment_ledger.json'
+    $managedBase=Join-Path $ProjectRoot 'localdata\toolchains'
+    if(Test-Path -LiteralPath $ledgerPath -PathType Leaf){
+        $manifest=Load-State $manifestPath
+        $catalogDigest=[string]$manifest.core_files.'config/managed_toolchains_catalog.json'
+        if($catalogDigest -notmatch '^[a-fA-F0-9]{64}
+        tools=@($toolNames.ToArray())
+        trusted_count=$verified.Count
+    }
+}
+
+function Assert-Trusted-State {
+    if (Test-Path -LiteralPath $pendingSwitchPath) {
+        throw 'GIT50_BROKER_SWITCH_INCOMPLETE_NO_NATIVE_ACTION'
+    }
+    $mode = Load-State $modePath
+    $policy = Load-State $policyPath
+    $activation = Load-State $journalPath
+    if ($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or
+        $mode.mode -ne 'on' -or
+        -not [IO.Path]::GetFullPath([string]$mode.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_ACL_NOT_ON'
+    }
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1' -or
+        $policy.turbo_requested -ne $true -or
+        [int]$policy.revision -ne $ExpectedRevision) {
+        throw 'GIT50_BROKER_POLICY_STALE_OR_DISABLED'
+    }
+    # Global revision is checked above as command CAS, not a sibling's grant.
+    $epoch=$ExpectedRevision
+    if($policy.PSObject.Properties.Name -contains 'turbo_root_epochs') {
+        $matching=@($policy.turbo_root_epochs | Where-Object {
+            $_.root -and [IO.Path]::GetFullPath([string]$_.root).TrimEnd('\').Equals(
+                [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\'),
+                [StringComparison]::OrdinalIgnoreCase)
+        })
+        if($matching.Count -ne 1 -or [int]$matching[0].epoch -lt 1){
+            throw 'GIT62_BROKER_ROOT_EPOCH_UNTRUSTED'
+        }
+        $epoch=[int]$matching[0].epoch
+    }
+    if ($activation.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+        $activation.status -ne 'ACTIVE_PROVISIONED' -or
+        [int]$activation.policy_revision -ne $epoch -or
+        -not [IO.Path]::GetFullPath([string]$activation.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_OS_ACTIVATION_STALE_OR_INVALID'
+    }
+    $workspace = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
+    $root = [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\')
+    $activatedWorkspace = [IO.Path]::GetFullPath([string]$activation.workspace_root).TrimEnd('\')
+    if ($activation.PSObject.Properties.Name -contains 'existing_root_import' -and
+        $activation.existing_root_import -eq $true -and
+        ($activation.PSObject.Properties.Name -notcontains 'existing_import_committed' -or
+         $activation.existing_import_committed -ne $true)) {
+        throw 'GIT62_BROKER_IMPORT_NOT_COMMITTED'
+    }
+    if (-not $activatedWorkspace.Equals($workspace,[StringComparison]::OrdinalIgnoreCase) -or
+        -not @($policy.writable_workspaces | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $workspace,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        -not @($policy.turbo_roots | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $root,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        ($SelectedTurboRoot -and
+         -not [IO.Path]::GetFullPath($SelectedTurboRoot).TrimEnd('\').Equals(
+             $root,[StringComparison]::OrdinalIgnoreCase))) {
+        throw 'GIT50_BROKER_SCOPE_POLICY_MISMATCH'
+    }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw 'GIT50_BROKER_ROOT_NOT_DIRECTORY'
+    }
+    $rawCwd = $WorkingDirectory.Replace('/','\')
+    if (@($rawCwd.Split('\') | Where-Object {$_ -eq '..'}).Count -gt 0) {
+        throw 'GIT50_BROKER_CWD_PARENT_TRAVERSAL'
+    }
+    $cwd = [IO.Path]::GetFullPath($WorkingDirectory).TrimEnd('\')
+    if (-not $cwd.Equals($root,[StringComparison]::OrdinalIgnoreCase) -and
+        -not $cwd.StartsWith($root + '\',[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CWD_OUTSIDE_ROOT'
+    }
+    if (-not (Test-Path -LiteralPath $cwd -PathType Container)) {
+        throw 'GIT50_BROKER_CWD_NOT_DIRECTORY'
+    }
+    $current = $root
+    foreach ($part in @('') + @($cwd.Substring($root.Length).TrimStart([char]92).Split('\'))) {
+        if (-not [string]::IsNullOrWhiteSpace($part)) {
+            $current = Join-Path $current $part
+        }
+        if ((Get-Item -LiteralPath $current -Force).Attributes -band
+            [IO.FileAttributes]::ReparsePoint) {
+            throw 'GIT50_BROKER_REPARSE_CWD_FORBIDDEN'
+        }
+    }
+    $sentinel = [IO.Path]::GetFullPath([string]$activation.negative_sentinel_path)
+    $parent = [IO.Path]::GetDirectoryName($root)
+    if (-not [IO.Path]::GetDirectoryName($sentinel).Equals(
+        $parent,[StringComparison]::OrdinalIgnoreCase) -or
+        -not [IO.Path]::GetFileName($sentinel).StartsWith('.git50-os-denial-') -or
+        -not (Test-Path -LiteralPath $sentinel -PathType Leaf) -or
+        [IO.File]::ReadAllText($sentinel) -cne 'OUTSIDE_SENTINEL') {
+        throw 'GIT50_BROKER_NEGATIVE_SENTINEL_UNVERIFIED'
+    }
+    if ([string]$activation.package_sid -notmatch '^S-1-15-2-') {
+        throw 'GIT50_BROKER_PACKAGE_SID_INVALID'
+    }
+    return @{
+        mode=$mode; policy=$policy; activation=$activation
+        workspace=$workspace; root=$root; cwd=$cwd; sentinel=$sentinel
+    }
+}
+# Broker execution and ACL OFF revocation use the same global mutex.
+$hash=[Security.Cryptography.SHA256]::Create()
+try {
+    $digest=[BitConverter]::ToString(
+        $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($ProjectRoot.ToUpperInvariant()))
+    ).Replace('-','')
+} finally { $hash.Dispose() }
+$mutex=New-Object Threading.Mutex($false,('Global\SmartAgentTurbo-'+$digest.Substring(0,32)))
+$held=$false
+try {
+    try { $held=$mutex.WaitOne([TimeSpan]::FromSeconds(305)) }
+    catch [Threading.AbandonedMutexException] { $held=$true }
+    if (-not $held) { throw 'GIT50_BROKER_MUTEX_TIMEOUT' }
+    $state=Assert-Trusted-State
+    if (-not ('SmartAgentGit47AppContainerProbe' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
+    }
+    $moniker=[string]$state.activation.moniker
+    $sid=[SmartAgentGit47AppContainerProbe]::DeriveSid($moniker)
+    if (-not $sid.Equals([string]$state.activation.package_sid,
+                         [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CHILD_SID_NOT_BOUND_TO_ACTIVATION'
+    }
+    # Independently confirm the *real* AppContainer cannot read the known
+    # outside sentinel, and can write a disposable marker inside. This is a
+    # kernel denial probe, NOT a text/Planner/JSON assertion.
+    $outsideLiteral=$state.sentinel.Replace("'","''")
+    # Git62: each OS process must be denied a write handle in EVERY other
+    # nominated Turbo Root, not just the parent sentinel.
+    $crossRootProof=''
+    foreach($other in @($state.policy.turbo_roots)){
+        $alternate=[IO.Path]::GetFullPath([string]$other).TrimEnd('\')
+        if($alternate.Equals([string]$state.root,[StringComparison]::OrdinalIgnoreCase)){
+            continue
+        }
+        if(-not (Test-Path -LiteralPath $alternate -PathType Container) -or
+           ((Get-Item -LiteralPath $alternate -Force).Attributes -band
+               [IO.FileAttributes]::ReparsePoint)){
+            throw 'GIT62_CROSS_ROOT_PROBE_TARGET_UNAVAILABLE'
+        }
+        $candidate=(Join-Path $alternate ('.git62-crossroot-denial-'+
+             [Guid]::NewGuid().ToString('N'))).Replace("'","''")
+        $block=@'
+try {
+    $crossHandle=[IO.File]::Open('__CROSS_ROOT_PATH__',
+        [IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    $crossHandle.Dispose()
+    [IO.File]::Delete('__CROSS_ROOT_PATH__')
+    exit 96
+} catch [System.UnauthorizedAccessException] {
+    # The distinct Root denies this SID.
+} catch {exit 97}
+'@
+        $crossRootProof+=$block.Replace('__CROSS_ROOT_PATH__',$candidate)
+    }
+    $proof=@"
+`$readDenied=`$false
+try { [void][IO.File]::ReadAllText('$outsideLiteral') }
+catch [System.UnauthorizedAccessException] { `$readDenied=`$true }
+if (-not `$readDenied) { exit 91 }
+# Open the existing outside sentinel for WRITE access, but NEVER write data.
+# A successful handle is a kernel escape even if no bytes were modified.
+try {
+    `$outsideHandle=[IO.File]::Open('$outsideLiteral',[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    `$outsideHandle.Dispose()
+    exit 92
+} catch [System.UnauthorizedAccessException] {
+$crossRootProof
+    [IO.File]::WriteAllText('git50_scope_proof.tmp','OS_DENIED')
+    exit 0
+}
+"@
+    $os=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+        $moniker,$proof,$state.root,[uint32]30000) | ConvertFrom-Json
+    if ($os.sandbox_identity_verified -ne $true -or
+        $os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $os.internet_client_token_verified -ne $true -or
+        [int]$os.exit_code -ne 0 -or
+        [IO.File]::ReadAllText((Join-Path $state.root 'git50_scope_proof.tmp')) -cne 'OS_DENIED') {
+        throw 'GIT50_BROKER_KERNEL_NEGATIVE_PROBE_FAILED'
+    }
+    Remove-Item -LiteralPath (Join-Path $state.root 'git50_scope_proof.tmp') -Force
+    $state=Assert-Trusted-State
+    try {
+        $script=[Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String($CommandBase64))
+    } catch { throw 'GIT50_BROKER_COMMAND_BASE64_INVALID' }
+    if ([string]::IsNullOrWhiteSpace($script) -or $script.Length -gt 8192) {
+        throw 'GIT50_BROKER_SCRIPT_LENGTH_INVALID'
+    }
+    $toolchain=Get-Pinned-Native-Toolchain
+    # Git59: a native child-token probe is only permitted for a literal
+    # --version invocation of the operator-pinned and hash-checked executable.
+    # All other scripts retain their existing behavior. This host-side code
+    # NEVER executes a child without the AppContainer CreateProcess launcher.
+    $git59ProbeExecutable=''
+    if ($NativeVersionProbe -ne '') {
+        if (@($toolchain.tools | Where-Object {$_ -ceq $NativeVersionProbe}).Count -ne 1) {
+            throw 'GIT59_PINNED_VERSION_EXECUTABLE_NOT_ENROLLED'
+        }
+        $relative = if ($NativeVersionProbe -ceq 'git') {
+            '.venv\git\cmd\git.exe'
+        } else {
+            '.venv\Scripts\python.exe'
+        }
+        $git59ProbeExecutable=[IO.Path]::GetFullPath((Join-Path $ProjectRoot $relative))
+        $literalCommand="& '" + $git59ProbeExecutable + "' --version"
+        if (-not $script.Trim().Equals($literalCommand,
+                      [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'GIT59_NATIVE_VERSION_COMMAND_NOT_EXACT_PINNED_LITERAL'
+        }
+    }
+    # The native command is the *only* path that receives untrusted script.
+    # The elevated/setup PowerShell code must never invoke the command.
+    $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
+        $moniker,$script,$state.cwd,[uint32]($TimeoutSeconds*1000),
+        [int]$MaxOutputBytes,[string]$toolchain.path)
+    $native=$nativeRaw | ConvertFrom-Json -ErrorAction Stop
+    if ($native.sandbox_identity_verified -ne $true -or
+        $native.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+        $native.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $native.os_process_started -ne $true -or
+        $native.output_is_authoritative -ne $false -or
+        $native.internet_client_token_verified -ne $true -or
+        $native.internet_client_capability_sid -ne 'S-1-15-3-1') {
+        throw 'GIT50_BROKER_KERNEL_PROCESS_RECEIPT_INVALID'
+    }
+    # The Git/Python executable is launched a SECOND TIME, directly by
+    # CreateProcessW with explicit AppContainer security capabilities. Unlike
+    # the first PowerShell-wrapped version command, the returned kernel token
+    # receipt proves the executable process identity itself, independently.
+    $git59Child=@{}
+    $git59Verified=$false
+    if ($NativeVersionProbe -ne '') {
+        try {
+            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchVersionCaptured(
+                $moniker,$git59ProbeExecutable,$state.cwd,
+                [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
+            $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
+                $git59Os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+                $git59Os.sandbox_identity_verified -ne $true -or
+                $git59Os.internet_client_token_verified -ne $true -or
+                $git59Os.internet_client_capability_sid -ne 'S-1-15-3-1' -or
+                $git59Os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+                $git59Os.os_process_started -ne $true -or
+                [int64]$git59Os.pid -le 0) {
+                throw 'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Verified=$true
+            $git59Child=[ordered]@{
+                schema='SMARTAGENT_GIT59_DIRECT_NATIVE_CHILD_V1'
+                status='OS_TOKEN_VERIFIED'
+                executable_name=$NativeVersionProbe
+                executable_path=$git59ProbeExecutable
+                sandbox_backend='WIN32_APPCONTAINER'
+                sandbox_identity_verified=$true
+                internet_client_token_verified=$true
+                internet_client_capability_sid='S-1-15-3-1'
+                child_process_policy='JOB_KILL_ON_CLOSE'
+                os_process_started=$true
+                pid=[int64]$git59Os.pid
+                exit_code=[int64]$git59Os.exit_code
+                git60_child_stdout_base64=[string]$git59Os.git60_child_stdout_base64
+                git60_child_stderr_base64=[string]$git59Os.git60_child_stderr_base64
+                git60_child_stdout_bytes=[int64]$git59Os.git60_child_stdout_bytes
+                git60_child_stderr_bytes=[int64]$git59Os.git60_child_stderr_bytes
+                git60_child_capture_complete=[bool]$git59Os.git60_child_capture_complete
+            }
+        } catch {
+            # Preserve the first shell result; an independently unverifiable
+            # native process never receives a success token attestation.
+            $reason='GIT59_NATIVE_CHILD_CREATEPROCESS_FAILED'
+            if ($_.Exception -is [TimeoutException]) {
+                $reason='GIT59_NATIVE_CHILD_EXECUTION_TIMEOUT'
+            } elseif ([string]$_.Exception.Message -eq
+                       'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED') {
+                $reason='GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Child=[ordered]@{
+                status='UNVERIFIED'
+                reason_code=$reason
+            }
+        }
+    }
+    $fresh=Assert-Trusted-State
+    $response=[ordered]@{
+        schema='SMARTAGENT_TURBO_OS_EXECUTION_RECEIPT_V1'
+        task_id=$TaskId
+        action_id=$ActionId
+        policy_revision=$ExpectedRevision
+        workspace_root=[string]$state.workspace
+        turbo_root=[string]$state.root
+        working_directory=[string]$state.cwd
+        acl_mode='on'
+        sandbox_backend='WIN32_APPCONTAINER'
+        sandbox_identity_verified=$true
+        child_process_policy='JOB_KILL_ON_CLOSE'
+        kernel_outside_read_denied=$true
+        kernel_outside_write_denied=$true
+        internet_client_token_verified=$true
+        internet_client_capability_sid='S-1-15-3-1'
+        native_toolchain_status=$(if($toolchain.trusted_count -gt 0){'PINNED'}else{'NOT_ENROLLED'})
+        native_trusted_tool_count=[int]$toolchain.trusted_count
+        native_trusted_tools=@($toolchain.tools)
+        native_direct_child_probe_kind=[string]$NativeVersionProbe
+        native_direct_child_attestation=$git59Child
+        native_executable_identity_verified=[bool]$git59Verified
+        process_started=$true
+        executed=$true
+        command_exit_code=[int64]$native.exit_code
+        stdout_base64=[string]$native.stdout_base64
+        stderr_base64=[string]$native.stderr_base64
+        stdout_bytes=[int64]$native.stdout_bytes
+        stderr_bytes=[int64]$native.stderr_bytes
+        stdout_truncated=[bool]$native.stdout_truncated
+        stderr_truncated=[bool]$native.stderr_truncated
+        output_is_authoritative=$false
+        authorization_scope='THIS_SINGLE_APP_CONTAINER_ACTION'
+        production_turbo_full_access_attested=$false
+        status='EXECUTED_IN_OS_APPCONTAINER'
+    }
+    # Only a direct OS-spawn receipt can mark *this action* executed; the
+    # global Turbo setting is not promoted by this JSON response.
+    $response | ConvertTo-Json -Compress -Depth 8
+}
+finally {
+    if ($held) { try { $mutex.ReleaseMutex() } catch {} }
+    $mutex.Dispose()
+}
+ -or
+           (Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash -ine $catalogDigest){
+           throw 'GIT63_NATIVE_CATALOG_UNPINNED'
+        }
+        $catalog=Load-State $catalogPath
+        $ledger=Load-State $ledgerPath
+        if($catalog.schema -ne 'SMARTAGENT_GIT63_CATALOG_V1' -or
+           $ledger.schema -ne 'SMARTAGENT_ENVIRONMENT_LEDGER_V1'){
+           throw 'GIT63_NATIVE_LEDGER_SCHEMA_INVALID'
+        }
+        if($ledger.PSObject.Properties.Name -contains 'managed_tools'){
+            foreach($prop in @($ledger.managed_tools.PSObject.Properties)){
+                $item=$prop.Value
+                $tool=[string]$item.tool
+                $version=[string]$item.version
+                $alias=[string]$item.alias
+                $full=[IO.Path]::GetFullPath([string]$item.executable)
+                $home=[IO.Path]::GetFullPath((Join-Path (Join-Path $managedBase $tool) $version)).TrimEnd('\')
+                if($tool -cnotmatch '^[a-z][a-z0-9_-]{0,31}
+        tools=@($toolNames.ToArray())
+        trusted_count=$verified.Count
+    }
+}
+
+function Assert-Trusted-State {
+    if (Test-Path -LiteralPath $pendingSwitchPath) {
+        throw 'GIT50_BROKER_SWITCH_INCOMPLETE_NO_NATIVE_ACTION'
+    }
+    $mode = Load-State $modePath
+    $policy = Load-State $policyPath
+    $activation = Load-State $journalPath
+    if ($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or
+        $mode.mode -ne 'on' -or
+        -not [IO.Path]::GetFullPath([string]$mode.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_ACL_NOT_ON'
+    }
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1' -or
+        $policy.turbo_requested -ne $true -or
+        [int]$policy.revision -ne $ExpectedRevision) {
+        throw 'GIT50_BROKER_POLICY_STALE_OR_DISABLED'
+    }
+    # Global revision is checked above as command CAS, not a sibling's grant.
+    $epoch=$ExpectedRevision
+    if($policy.PSObject.Properties.Name -contains 'turbo_root_epochs') {
+        $matching=@($policy.turbo_root_epochs | Where-Object {
+            $_.root -and [IO.Path]::GetFullPath([string]$_.root).TrimEnd('\').Equals(
+                [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\'),
+                [StringComparison]::OrdinalIgnoreCase)
+        })
+        if($matching.Count -ne 1 -or [int]$matching[0].epoch -lt 1){
+            throw 'GIT62_BROKER_ROOT_EPOCH_UNTRUSTED'
+        }
+        $epoch=[int]$matching[0].epoch
+    }
+    if ($activation.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+        $activation.status -ne 'ACTIVE_PROVISIONED' -or
+        [int]$activation.policy_revision -ne $epoch -or
+        -not [IO.Path]::GetFullPath([string]$activation.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_OS_ACTIVATION_STALE_OR_INVALID'
+    }
+    $workspace = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
+    $root = [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\')
+    $activatedWorkspace = [IO.Path]::GetFullPath([string]$activation.workspace_root).TrimEnd('\')
+    if ($activation.PSObject.Properties.Name -contains 'existing_root_import' -and
+        $activation.existing_root_import -eq $true -and
+        ($activation.PSObject.Properties.Name -notcontains 'existing_import_committed' -or
+         $activation.existing_import_committed -ne $true)) {
+        throw 'GIT62_BROKER_IMPORT_NOT_COMMITTED'
+    }
+    if (-not $activatedWorkspace.Equals($workspace,[StringComparison]::OrdinalIgnoreCase) -or
+        -not @($policy.writable_workspaces | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $workspace,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        -not @($policy.turbo_roots | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $root,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        ($SelectedTurboRoot -and
+         -not [IO.Path]::GetFullPath($SelectedTurboRoot).TrimEnd('\').Equals(
+             $root,[StringComparison]::OrdinalIgnoreCase))) {
+        throw 'GIT50_BROKER_SCOPE_POLICY_MISMATCH'
+    }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw 'GIT50_BROKER_ROOT_NOT_DIRECTORY'
+    }
+    $rawCwd = $WorkingDirectory.Replace('/','\')
+    if (@($rawCwd.Split('\') | Where-Object {$_ -eq '..'}).Count -gt 0) {
+        throw 'GIT50_BROKER_CWD_PARENT_TRAVERSAL'
+    }
+    $cwd = [IO.Path]::GetFullPath($WorkingDirectory).TrimEnd('\')
+    if (-not $cwd.Equals($root,[StringComparison]::OrdinalIgnoreCase) -and
+        -not $cwd.StartsWith($root + '\',[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CWD_OUTSIDE_ROOT'
+    }
+    if (-not (Test-Path -LiteralPath $cwd -PathType Container)) {
+        throw 'GIT50_BROKER_CWD_NOT_DIRECTORY'
+    }
+    $current = $root
+    foreach ($part in @('') + @($cwd.Substring($root.Length).TrimStart([char]92).Split('\'))) {
+        if (-not [string]::IsNullOrWhiteSpace($part)) {
+            $current = Join-Path $current $part
+        }
+        if ((Get-Item -LiteralPath $current -Force).Attributes -band
+            [IO.FileAttributes]::ReparsePoint) {
+            throw 'GIT50_BROKER_REPARSE_CWD_FORBIDDEN'
+        }
+    }
+    $sentinel = [IO.Path]::GetFullPath([string]$activation.negative_sentinel_path)
+    $parent = [IO.Path]::GetDirectoryName($root)
+    if (-not [IO.Path]::GetDirectoryName($sentinel).Equals(
+        $parent,[StringComparison]::OrdinalIgnoreCase) -or
+        -not [IO.Path]::GetFileName($sentinel).StartsWith('.git50-os-denial-') -or
+        -not (Test-Path -LiteralPath $sentinel -PathType Leaf) -or
+        [IO.File]::ReadAllText($sentinel) -cne 'OUTSIDE_SENTINEL') {
+        throw 'GIT50_BROKER_NEGATIVE_SENTINEL_UNVERIFIED'
+    }
+    if ([string]$activation.package_sid -notmatch '^S-1-15-2-') {
+        throw 'GIT50_BROKER_PACKAGE_SID_INVALID'
+    }
+    return @{
+        mode=$mode; policy=$policy; activation=$activation
+        workspace=$workspace; root=$root; cwd=$cwd; sentinel=$sentinel
+    }
+}
+# Broker execution and ACL OFF revocation use the same global mutex.
+$hash=[Security.Cryptography.SHA256]::Create()
+try {
+    $digest=[BitConverter]::ToString(
+        $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($ProjectRoot.ToUpperInvariant()))
+    ).Replace('-','')
+} finally { $hash.Dispose() }
+$mutex=New-Object Threading.Mutex($false,('Global\SmartAgentTurbo-'+$digest.Substring(0,32)))
+$held=$false
+try {
+    try { $held=$mutex.WaitOne([TimeSpan]::FromSeconds(305)) }
+    catch [Threading.AbandonedMutexException] { $held=$true }
+    if (-not $held) { throw 'GIT50_BROKER_MUTEX_TIMEOUT' }
+    $state=Assert-Trusted-State
+    if (-not ('SmartAgentGit47AppContainerProbe' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
+    }
+    $moniker=[string]$state.activation.moniker
+    $sid=[SmartAgentGit47AppContainerProbe]::DeriveSid($moniker)
+    if (-not $sid.Equals([string]$state.activation.package_sid,
+                         [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CHILD_SID_NOT_BOUND_TO_ACTIVATION'
+    }
+    # Independently confirm the *real* AppContainer cannot read the known
+    # outside sentinel, and can write a disposable marker inside. This is a
+    # kernel denial probe, NOT a text/Planner/JSON assertion.
+    $outsideLiteral=$state.sentinel.Replace("'","''")
+    # Git62: each OS process must be denied a write handle in EVERY other
+    # nominated Turbo Root, not just the parent sentinel.
+    $crossRootProof=''
+    foreach($other in @($state.policy.turbo_roots)){
+        $alternate=[IO.Path]::GetFullPath([string]$other).TrimEnd('\')
+        if($alternate.Equals([string]$state.root,[StringComparison]::OrdinalIgnoreCase)){
+            continue
+        }
+        if(-not (Test-Path -LiteralPath $alternate -PathType Container) -or
+           ((Get-Item -LiteralPath $alternate -Force).Attributes -band
+               [IO.FileAttributes]::ReparsePoint)){
+            throw 'GIT62_CROSS_ROOT_PROBE_TARGET_UNAVAILABLE'
+        }
+        $candidate=(Join-Path $alternate ('.git62-crossroot-denial-'+
+             [Guid]::NewGuid().ToString('N'))).Replace("'","''")
+        $block=@'
+try {
+    $crossHandle=[IO.File]::Open('__CROSS_ROOT_PATH__',
+        [IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    $crossHandle.Dispose()
+    [IO.File]::Delete('__CROSS_ROOT_PATH__')
+    exit 96
+} catch [System.UnauthorizedAccessException] {
+    # The distinct Root denies this SID.
+} catch {exit 97}
+'@
+        $crossRootProof+=$block.Replace('__CROSS_ROOT_PATH__',$candidate)
+    }
+    $proof=@"
+`$readDenied=`$false
+try { [void][IO.File]::ReadAllText('$outsideLiteral') }
+catch [System.UnauthorizedAccessException] { `$readDenied=`$true }
+if (-not `$readDenied) { exit 91 }
+# Open the existing outside sentinel for WRITE access, but NEVER write data.
+# A successful handle is a kernel escape even if no bytes were modified.
+try {
+    `$outsideHandle=[IO.File]::Open('$outsideLiteral',[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    `$outsideHandle.Dispose()
+    exit 92
+} catch [System.UnauthorizedAccessException] {
+$crossRootProof
+    [IO.File]::WriteAllText('git50_scope_proof.tmp','OS_DENIED')
+    exit 0
+}
+"@
+    $os=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+        $moniker,$proof,$state.root,[uint32]30000) | ConvertFrom-Json
+    if ($os.sandbox_identity_verified -ne $true -or
+        $os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $os.internet_client_token_verified -ne $true -or
+        [int]$os.exit_code -ne 0 -or
+        [IO.File]::ReadAllText((Join-Path $state.root 'git50_scope_proof.tmp')) -cne 'OS_DENIED') {
+        throw 'GIT50_BROKER_KERNEL_NEGATIVE_PROBE_FAILED'
+    }
+    Remove-Item -LiteralPath (Join-Path $state.root 'git50_scope_proof.tmp') -Force
+    $state=Assert-Trusted-State
+    try {
+        $script=[Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String($CommandBase64))
+    } catch { throw 'GIT50_BROKER_COMMAND_BASE64_INVALID' }
+    if ([string]::IsNullOrWhiteSpace($script) -or $script.Length -gt 8192) {
+        throw 'GIT50_BROKER_SCRIPT_LENGTH_INVALID'
+    }
+    $toolchain=Get-Pinned-Native-Toolchain
+    # Git59: a native child-token probe is only permitted for a literal
+    # --version invocation of the operator-pinned and hash-checked executable.
+    # All other scripts retain their existing behavior. This host-side code
+    # NEVER executes a child without the AppContainer CreateProcess launcher.
+    $git59ProbeExecutable=''
+    if ($NativeVersionProbe -ne '') {
+        if (@($toolchain.tools | Where-Object {$_ -ceq $NativeVersionProbe}).Count -ne 1) {
+            throw 'GIT59_PINNED_VERSION_EXECUTABLE_NOT_ENROLLED'
+        }
+        $relative = if ($NativeVersionProbe -ceq 'git') {
+            '.venv\git\cmd\git.exe'
+        } else {
+            '.venv\Scripts\python.exe'
+        }
+        $git59ProbeExecutable=[IO.Path]::GetFullPath((Join-Path $ProjectRoot $relative))
+        $literalCommand="& '" + $git59ProbeExecutable + "' --version"
+        if (-not $script.Trim().Equals($literalCommand,
+                      [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'GIT59_NATIVE_VERSION_COMMAND_NOT_EXACT_PINNED_LITERAL'
+        }
+    }
+    # The native command is the *only* path that receives untrusted script.
+    # The elevated/setup PowerShell code must never invoke the command.
+    $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
+        $moniker,$script,$state.cwd,[uint32]($TimeoutSeconds*1000),
+        [int]$MaxOutputBytes,[string]$toolchain.path)
+    $native=$nativeRaw | ConvertFrom-Json -ErrorAction Stop
+    if ($native.sandbox_identity_verified -ne $true -or
+        $native.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+        $native.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $native.os_process_started -ne $true -or
+        $native.output_is_authoritative -ne $false -or
+        $native.internet_client_token_verified -ne $true -or
+        $native.internet_client_capability_sid -ne 'S-1-15-3-1') {
+        throw 'GIT50_BROKER_KERNEL_PROCESS_RECEIPT_INVALID'
+    }
+    # The Git/Python executable is launched a SECOND TIME, directly by
+    # CreateProcessW with explicit AppContainer security capabilities. Unlike
+    # the first PowerShell-wrapped version command, the returned kernel token
+    # receipt proves the executable process identity itself, independently.
+    $git59Child=@{}
+    $git59Verified=$false
+    if ($NativeVersionProbe -ne '') {
+        try {
+            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchVersionCaptured(
+                $moniker,$git59ProbeExecutable,$state.cwd,
+                [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
+            $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
+                $git59Os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+                $git59Os.sandbox_identity_verified -ne $true -or
+                $git59Os.internet_client_token_verified -ne $true -or
+                $git59Os.internet_client_capability_sid -ne 'S-1-15-3-1' -or
+                $git59Os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+                $git59Os.os_process_started -ne $true -or
+                [int64]$git59Os.pid -le 0) {
+                throw 'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Verified=$true
+            $git59Child=[ordered]@{
+                schema='SMARTAGENT_GIT59_DIRECT_NATIVE_CHILD_V1'
+                status='OS_TOKEN_VERIFIED'
+                executable_name=$NativeVersionProbe
+                executable_path=$git59ProbeExecutable
+                sandbox_backend='WIN32_APPCONTAINER'
+                sandbox_identity_verified=$true
+                internet_client_token_verified=$true
+                internet_client_capability_sid='S-1-15-3-1'
+                child_process_policy='JOB_KILL_ON_CLOSE'
+                os_process_started=$true
+                pid=[int64]$git59Os.pid
+                exit_code=[int64]$git59Os.exit_code
+                git60_child_stdout_base64=[string]$git59Os.git60_child_stdout_base64
+                git60_child_stderr_base64=[string]$git59Os.git60_child_stderr_base64
+                git60_child_stdout_bytes=[int64]$git59Os.git60_child_stdout_bytes
+                git60_child_stderr_bytes=[int64]$git59Os.git60_child_stderr_bytes
+                git60_child_capture_complete=[bool]$git59Os.git60_child_capture_complete
+            }
+        } catch {
+            # Preserve the first shell result; an independently unverifiable
+            # native process never receives a success token attestation.
+            $reason='GIT59_NATIVE_CHILD_CREATEPROCESS_FAILED'
+            if ($_.Exception -is [TimeoutException]) {
+                $reason='GIT59_NATIVE_CHILD_EXECUTION_TIMEOUT'
+            } elseif ([string]$_.Exception.Message -eq
+                       'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED') {
+                $reason='GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Child=[ordered]@{
+                status='UNVERIFIED'
+                reason_code=$reason
+            }
+        }
+    }
+    $fresh=Assert-Trusted-State
+    $response=[ordered]@{
+        schema='SMARTAGENT_TURBO_OS_EXECUTION_RECEIPT_V1'
+        task_id=$TaskId
+        action_id=$ActionId
+        policy_revision=$ExpectedRevision
+        workspace_root=[string]$state.workspace
+        turbo_root=[string]$state.root
+        working_directory=[string]$state.cwd
+        acl_mode='on'
+        sandbox_backend='WIN32_APPCONTAINER'
+        sandbox_identity_verified=$true
+        child_process_policy='JOB_KILL_ON_CLOSE'
+        kernel_outside_read_denied=$true
+        kernel_outside_write_denied=$true
+        internet_client_token_verified=$true
+        internet_client_capability_sid='S-1-15-3-1'
+        native_toolchain_status=$(if($toolchain.trusted_count -gt 0){'PINNED'}else{'NOT_ENROLLED'})
+        native_trusted_tool_count=[int]$toolchain.trusted_count
+        native_trusted_tools=@($toolchain.tools)
+        native_direct_child_probe_kind=[string]$NativeVersionProbe
+        native_direct_child_attestation=$git59Child
+        native_executable_identity_verified=[bool]$git59Verified
+        process_started=$true
+        executed=$true
+        command_exit_code=[int64]$native.exit_code
+        stdout_base64=[string]$native.stdout_base64
+        stderr_base64=[string]$native.stderr_base64
+        stdout_bytes=[int64]$native.stdout_bytes
+        stderr_bytes=[int64]$native.stderr_bytes
+        stdout_truncated=[bool]$native.stdout_truncated
+        stderr_truncated=[bool]$native.stderr_truncated
+        output_is_authoritative=$false
+        authorization_scope='THIS_SINGLE_APP_CONTAINER_ACTION'
+        production_turbo_full_access_attested=$false
+        status='EXECUTED_IN_OS_APPCONTAINER'
+    }
+    # Only a direct OS-spawn receipt can mark *this action* executed; the
+    # global Turbo setting is not promoted by this JSON response.
+    $response | ConvertTo-Json -Compress -Depth 8
+}
+finally {
+    if ($held) { try { $mutex.ReleaseMutex() } catch {} }
+    $mutex.Dispose()
+}
+ -or
+                   $version -cnotmatch '^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}
+        tools=@($toolNames.ToArray())
+        trusted_count=$verified.Count
+    }
+}
+
+function Assert-Trusted-State {
+    if (Test-Path -LiteralPath $pendingSwitchPath) {
+        throw 'GIT50_BROKER_SWITCH_INCOMPLETE_NO_NATIVE_ACTION'
+    }
+    $mode = Load-State $modePath
+    $policy = Load-State $policyPath
+    $activation = Load-State $journalPath
+    if ($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or
+        $mode.mode -ne 'on' -or
+        -not [IO.Path]::GetFullPath([string]$mode.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_ACL_NOT_ON'
+    }
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1' -or
+        $policy.turbo_requested -ne $true -or
+        [int]$policy.revision -ne $ExpectedRevision) {
+        throw 'GIT50_BROKER_POLICY_STALE_OR_DISABLED'
+    }
+    # Global revision is checked above as command CAS, not a sibling's grant.
+    $epoch=$ExpectedRevision
+    if($policy.PSObject.Properties.Name -contains 'turbo_root_epochs') {
+        $matching=@($policy.turbo_root_epochs | Where-Object {
+            $_.root -and [IO.Path]::GetFullPath([string]$_.root).TrimEnd('\').Equals(
+                [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\'),
+                [StringComparison]::OrdinalIgnoreCase)
+        })
+        if($matching.Count -ne 1 -or [int]$matching[0].epoch -lt 1){
+            throw 'GIT62_BROKER_ROOT_EPOCH_UNTRUSTED'
+        }
+        $epoch=[int]$matching[0].epoch
+    }
+    if ($activation.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+        $activation.status -ne 'ACTIVE_PROVISIONED' -or
+        [int]$activation.policy_revision -ne $epoch -or
+        -not [IO.Path]::GetFullPath([string]$activation.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_OS_ACTIVATION_STALE_OR_INVALID'
+    }
+    $workspace = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
+    $root = [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\')
+    $activatedWorkspace = [IO.Path]::GetFullPath([string]$activation.workspace_root).TrimEnd('\')
+    if ($activation.PSObject.Properties.Name -contains 'existing_root_import' -and
+        $activation.existing_root_import -eq $true -and
+        ($activation.PSObject.Properties.Name -notcontains 'existing_import_committed' -or
+         $activation.existing_import_committed -ne $true)) {
+        throw 'GIT62_BROKER_IMPORT_NOT_COMMITTED'
+    }
+    if (-not $activatedWorkspace.Equals($workspace,[StringComparison]::OrdinalIgnoreCase) -or
+        -not @($policy.writable_workspaces | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $workspace,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        -not @($policy.turbo_roots | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $root,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        ($SelectedTurboRoot -and
+         -not [IO.Path]::GetFullPath($SelectedTurboRoot).TrimEnd('\').Equals(
+             $root,[StringComparison]::OrdinalIgnoreCase))) {
+        throw 'GIT50_BROKER_SCOPE_POLICY_MISMATCH'
+    }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw 'GIT50_BROKER_ROOT_NOT_DIRECTORY'
+    }
+    $rawCwd = $WorkingDirectory.Replace('/','\')
+    if (@($rawCwd.Split('\') | Where-Object {$_ -eq '..'}).Count -gt 0) {
+        throw 'GIT50_BROKER_CWD_PARENT_TRAVERSAL'
+    }
+    $cwd = [IO.Path]::GetFullPath($WorkingDirectory).TrimEnd('\')
+    if (-not $cwd.Equals($root,[StringComparison]::OrdinalIgnoreCase) -and
+        -not $cwd.StartsWith($root + '\',[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CWD_OUTSIDE_ROOT'
+    }
+    if (-not (Test-Path -LiteralPath $cwd -PathType Container)) {
+        throw 'GIT50_BROKER_CWD_NOT_DIRECTORY'
+    }
+    $current = $root
+    foreach ($part in @('') + @($cwd.Substring($root.Length).TrimStart([char]92).Split('\'))) {
+        if (-not [string]::IsNullOrWhiteSpace($part)) {
+            $current = Join-Path $current $part
+        }
+        if ((Get-Item -LiteralPath $current -Force).Attributes -band
+            [IO.FileAttributes]::ReparsePoint) {
+            throw 'GIT50_BROKER_REPARSE_CWD_FORBIDDEN'
+        }
+    }
+    $sentinel = [IO.Path]::GetFullPath([string]$activation.negative_sentinel_path)
+    $parent = [IO.Path]::GetDirectoryName($root)
+    if (-not [IO.Path]::GetDirectoryName($sentinel).Equals(
+        $parent,[StringComparison]::OrdinalIgnoreCase) -or
+        -not [IO.Path]::GetFileName($sentinel).StartsWith('.git50-os-denial-') -or
+        -not (Test-Path -LiteralPath $sentinel -PathType Leaf) -or
+        [IO.File]::ReadAllText($sentinel) -cne 'OUTSIDE_SENTINEL') {
+        throw 'GIT50_BROKER_NEGATIVE_SENTINEL_UNVERIFIED'
+    }
+    if ([string]$activation.package_sid -notmatch '^S-1-15-2-') {
+        throw 'GIT50_BROKER_PACKAGE_SID_INVALID'
+    }
+    return @{
+        mode=$mode; policy=$policy; activation=$activation
+        workspace=$workspace; root=$root; cwd=$cwd; sentinel=$sentinel
+    }
+}
+# Broker execution and ACL OFF revocation use the same global mutex.
+$hash=[Security.Cryptography.SHA256]::Create()
+try {
+    $digest=[BitConverter]::ToString(
+        $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($ProjectRoot.ToUpperInvariant()))
+    ).Replace('-','')
+} finally { $hash.Dispose() }
+$mutex=New-Object Threading.Mutex($false,('Global\SmartAgentTurbo-'+$digest.Substring(0,32)))
+$held=$false
+try {
+    try { $held=$mutex.WaitOne([TimeSpan]::FromSeconds(305)) }
+    catch [Threading.AbandonedMutexException] { $held=$true }
+    if (-not $held) { throw 'GIT50_BROKER_MUTEX_TIMEOUT' }
+    $state=Assert-Trusted-State
+    if (-not ('SmartAgentGit47AppContainerProbe' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
+    }
+    $moniker=[string]$state.activation.moniker
+    $sid=[SmartAgentGit47AppContainerProbe]::DeriveSid($moniker)
+    if (-not $sid.Equals([string]$state.activation.package_sid,
+                         [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CHILD_SID_NOT_BOUND_TO_ACTIVATION'
+    }
+    # Independently confirm the *real* AppContainer cannot read the known
+    # outside sentinel, and can write a disposable marker inside. This is a
+    # kernel denial probe, NOT a text/Planner/JSON assertion.
+    $outsideLiteral=$state.sentinel.Replace("'","''")
+    # Git62: each OS process must be denied a write handle in EVERY other
+    # nominated Turbo Root, not just the parent sentinel.
+    $crossRootProof=''
+    foreach($other in @($state.policy.turbo_roots)){
+        $alternate=[IO.Path]::GetFullPath([string]$other).TrimEnd('\')
+        if($alternate.Equals([string]$state.root,[StringComparison]::OrdinalIgnoreCase)){
+            continue
+        }
+        if(-not (Test-Path -LiteralPath $alternate -PathType Container) -or
+           ((Get-Item -LiteralPath $alternate -Force).Attributes -band
+               [IO.FileAttributes]::ReparsePoint)){
+            throw 'GIT62_CROSS_ROOT_PROBE_TARGET_UNAVAILABLE'
+        }
+        $candidate=(Join-Path $alternate ('.git62-crossroot-denial-'+
+             [Guid]::NewGuid().ToString('N'))).Replace("'","''")
+        $block=@'
+try {
+    $crossHandle=[IO.File]::Open('__CROSS_ROOT_PATH__',
+        [IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    $crossHandle.Dispose()
+    [IO.File]::Delete('__CROSS_ROOT_PATH__')
+    exit 96
+} catch [System.UnauthorizedAccessException] {
+    # The distinct Root denies this SID.
+} catch {exit 97}
+'@
+        $crossRootProof+=$block.Replace('__CROSS_ROOT_PATH__',$candidate)
+    }
+    $proof=@"
+`$readDenied=`$false
+try { [void][IO.File]::ReadAllText('$outsideLiteral') }
+catch [System.UnauthorizedAccessException] { `$readDenied=`$true }
+if (-not `$readDenied) { exit 91 }
+# Open the existing outside sentinel for WRITE access, but NEVER write data.
+# A successful handle is a kernel escape even if no bytes were modified.
+try {
+    `$outsideHandle=[IO.File]::Open('$outsideLiteral',[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    `$outsideHandle.Dispose()
+    exit 92
+} catch [System.UnauthorizedAccessException] {
+$crossRootProof
+    [IO.File]::WriteAllText('git50_scope_proof.tmp','OS_DENIED')
+    exit 0
+}
+"@
+    $os=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+        $moniker,$proof,$state.root,[uint32]30000) | ConvertFrom-Json
+    if ($os.sandbox_identity_verified -ne $true -or
+        $os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $os.internet_client_token_verified -ne $true -or
+        [int]$os.exit_code -ne 0 -or
+        [IO.File]::ReadAllText((Join-Path $state.root 'git50_scope_proof.tmp')) -cne 'OS_DENIED') {
+        throw 'GIT50_BROKER_KERNEL_NEGATIVE_PROBE_FAILED'
+    }
+    Remove-Item -LiteralPath (Join-Path $state.root 'git50_scope_proof.tmp') -Force
+    $state=Assert-Trusted-State
+    try {
+        $script=[Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String($CommandBase64))
+    } catch { throw 'GIT50_BROKER_COMMAND_BASE64_INVALID' }
+    if ([string]::IsNullOrWhiteSpace($script) -or $script.Length -gt 8192) {
+        throw 'GIT50_BROKER_SCRIPT_LENGTH_INVALID'
+    }
+    $toolchain=Get-Pinned-Native-Toolchain
+    # Git59: a native child-token probe is only permitted for a literal
+    # --version invocation of the operator-pinned and hash-checked executable.
+    # All other scripts retain their existing behavior. This host-side code
+    # NEVER executes a child without the AppContainer CreateProcess launcher.
+    $git59ProbeExecutable=''
+    if ($NativeVersionProbe -ne '') {
+        if (@($toolchain.tools | Where-Object {$_ -ceq $NativeVersionProbe}).Count -ne 1) {
+            throw 'GIT59_PINNED_VERSION_EXECUTABLE_NOT_ENROLLED'
+        }
+        $relative = if ($NativeVersionProbe -ceq 'git') {
+            '.venv\git\cmd\git.exe'
+        } else {
+            '.venv\Scripts\python.exe'
+        }
+        $git59ProbeExecutable=[IO.Path]::GetFullPath((Join-Path $ProjectRoot $relative))
+        $literalCommand="& '" + $git59ProbeExecutable + "' --version"
+        if (-not $script.Trim().Equals($literalCommand,
+                      [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'GIT59_NATIVE_VERSION_COMMAND_NOT_EXACT_PINNED_LITERAL'
+        }
+    }
+    # The native command is the *only* path that receives untrusted script.
+    # The elevated/setup PowerShell code must never invoke the command.
+    $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
+        $moniker,$script,$state.cwd,[uint32]($TimeoutSeconds*1000),
+        [int]$MaxOutputBytes,[string]$toolchain.path)
+    $native=$nativeRaw | ConvertFrom-Json -ErrorAction Stop
+    if ($native.sandbox_identity_verified -ne $true -or
+        $native.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+        $native.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $native.os_process_started -ne $true -or
+        $native.output_is_authoritative -ne $false -or
+        $native.internet_client_token_verified -ne $true -or
+        $native.internet_client_capability_sid -ne 'S-1-15-3-1') {
+        throw 'GIT50_BROKER_KERNEL_PROCESS_RECEIPT_INVALID'
+    }
+    # The Git/Python executable is launched a SECOND TIME, directly by
+    # CreateProcessW with explicit AppContainer security capabilities. Unlike
+    # the first PowerShell-wrapped version command, the returned kernel token
+    # receipt proves the executable process identity itself, independently.
+    $git59Child=@{}
+    $git59Verified=$false
+    if ($NativeVersionProbe -ne '') {
+        try {
+            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchVersionCaptured(
+                $moniker,$git59ProbeExecutable,$state.cwd,
+                [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
+            $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
+                $git59Os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+                $git59Os.sandbox_identity_verified -ne $true -or
+                $git59Os.internet_client_token_verified -ne $true -or
+                $git59Os.internet_client_capability_sid -ne 'S-1-15-3-1' -or
+                $git59Os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+                $git59Os.os_process_started -ne $true -or
+                [int64]$git59Os.pid -le 0) {
+                throw 'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Verified=$true
+            $git59Child=[ordered]@{
+                schema='SMARTAGENT_GIT59_DIRECT_NATIVE_CHILD_V1'
+                status='OS_TOKEN_VERIFIED'
+                executable_name=$NativeVersionProbe
+                executable_path=$git59ProbeExecutable
+                sandbox_backend='WIN32_APPCONTAINER'
+                sandbox_identity_verified=$true
+                internet_client_token_verified=$true
+                internet_client_capability_sid='S-1-15-3-1'
+                child_process_policy='JOB_KILL_ON_CLOSE'
+                os_process_started=$true
+                pid=[int64]$git59Os.pid
+                exit_code=[int64]$git59Os.exit_code
+                git60_child_stdout_base64=[string]$git59Os.git60_child_stdout_base64
+                git60_child_stderr_base64=[string]$git59Os.git60_child_stderr_base64
+                git60_child_stdout_bytes=[int64]$git59Os.git60_child_stdout_bytes
+                git60_child_stderr_bytes=[int64]$git59Os.git60_child_stderr_bytes
+                git60_child_capture_complete=[bool]$git59Os.git60_child_capture_complete
+            }
+        } catch {
+            # Preserve the first shell result; an independently unverifiable
+            # native process never receives a success token attestation.
+            $reason='GIT59_NATIVE_CHILD_CREATEPROCESS_FAILED'
+            if ($_.Exception -is [TimeoutException]) {
+                $reason='GIT59_NATIVE_CHILD_EXECUTION_TIMEOUT'
+            } elseif ([string]$_.Exception.Message -eq
+                       'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED') {
+                $reason='GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Child=[ordered]@{
+                status='UNVERIFIED'
+                reason_code=$reason
+            }
+        }
+    }
+    $fresh=Assert-Trusted-State
+    $response=[ordered]@{
+        schema='SMARTAGENT_TURBO_OS_EXECUTION_RECEIPT_V1'
+        task_id=$TaskId
+        action_id=$ActionId
+        policy_revision=$ExpectedRevision
+        workspace_root=[string]$state.workspace
+        turbo_root=[string]$state.root
+        working_directory=[string]$state.cwd
+        acl_mode='on'
+        sandbox_backend='WIN32_APPCONTAINER'
+        sandbox_identity_verified=$true
+        child_process_policy='JOB_KILL_ON_CLOSE'
+        kernel_outside_read_denied=$true
+        kernel_outside_write_denied=$true
+        internet_client_token_verified=$true
+        internet_client_capability_sid='S-1-15-3-1'
+        native_toolchain_status=$(if($toolchain.trusted_count -gt 0){'PINNED'}else{'NOT_ENROLLED'})
+        native_trusted_tool_count=[int]$toolchain.trusted_count
+        native_trusted_tools=@($toolchain.tools)
+        native_direct_child_probe_kind=[string]$NativeVersionProbe
+        native_direct_child_attestation=$git59Child
+        native_executable_identity_verified=[bool]$git59Verified
+        process_started=$true
+        executed=$true
+        command_exit_code=[int64]$native.exit_code
+        stdout_base64=[string]$native.stdout_base64
+        stderr_base64=[string]$native.stderr_base64
+        stdout_bytes=[int64]$native.stdout_bytes
+        stderr_bytes=[int64]$native.stderr_bytes
+        stdout_truncated=[bool]$native.stdout_truncated
+        stderr_truncated=[bool]$native.stderr_truncated
+        output_is_authoritative=$false
+        authorization_scope='THIS_SINGLE_APP_CONTAINER_ACTION'
+        production_turbo_full_access_attested=$false
+        status='EXECUTED_IN_OS_APPCONTAINER'
+    }
+    # Only a direct OS-spawn receipt can mark *this action* executed; the
+    # global Turbo setting is not promoted by this JSON response.
+    $response | ConvertTo-Json -Compress -Depth 8
+}
+finally {
+    if ($held) { try { $mutex.ReleaseMutex() } catch {} }
+    $mutex.Dispose()
+}
+ -or
+                   -not $full.StartsWith($home+'\', [StringComparison]::OrdinalIgnoreCase)){
+                   throw 'GIT63_NATIVE_MANAGED_TOOL_PATH_UNTRUSTED'
+                }
+                $match=@($catalog.packages | Where-Object {
+                    $_.tool -ceq $tool -and $_.version -ceq $version -and
+                    [string]$_.archive_sha256 -ieq [string]$item.archive_sha256
+                })
+                if($match.Count -ne 1 -or
+                   $match[0].executables.PSObject.Properties.Name -cnotcontains $alias){
+                   throw 'GIT63_NATIVE_CATALOG_MATCH_FAILED'
+                }
+                $relative=[string]$match[0].executables.$alias
+                if(-not $full.Equals([IO.Path]::GetFullPath((Join-Path $home $relative)),
+                                    [StringComparison]::OrdinalIgnoreCase)){
+                   throw 'GIT63_NATIVE_CATALOG_PATH_MISMATCH'
+                }
+                $walk=$managedBase
+                $relativeWalk=$full.Substring($managedBase.Length).TrimStart([char]92)
+                foreach($part in $relativeWalk.Split([char]92)){
+                    if(-not $part){continue}
+                    $walk=Join-Path $walk $part
+                    if((Get-Item -LiteralPath $walk -Force -ErrorAction Stop).Attributes -band
+                        [IO.FileAttributes]::ReparsePoint){
+                       throw 'GIT63_NATIVE_REPARSE_FORBIDDEN'
+                    }
+                }
+                if([string]$item.executable_sha256 -notmatch '^[a-fA-F0-9]{64}
+        tools=@($toolNames.ToArray())
+        trusted_count=$verified.Count
+    }
+}
+
+function Assert-Trusted-State {
+    if (Test-Path -LiteralPath $pendingSwitchPath) {
+        throw 'GIT50_BROKER_SWITCH_INCOMPLETE_NO_NATIVE_ACTION'
+    }
+    $mode = Load-State $modePath
+    $policy = Load-State $policyPath
+    $activation = Load-State $journalPath
+    if ($mode.schema -ne 'SMARTAGENT_ACL_MODE_V1' -or
+        $mode.mode -ne 'on' -or
+        -not [IO.Path]::GetFullPath([string]$mode.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_ACL_NOT_ON'
+    }
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1' -or
+        $policy.turbo_requested -ne $true -or
+        [int]$policy.revision -ne $ExpectedRevision) {
+        throw 'GIT50_BROKER_POLICY_STALE_OR_DISABLED'
+    }
+    # Global revision is checked above as command CAS, not a sibling's grant.
+    $epoch=$ExpectedRevision
+    if($policy.PSObject.Properties.Name -contains 'turbo_root_epochs') {
+        $matching=@($policy.turbo_root_epochs | Where-Object {
+            $_.root -and [IO.Path]::GetFullPath([string]$_.root).TrimEnd('\').Equals(
+                [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\'),
+                [StringComparison]::OrdinalIgnoreCase)
+        })
+        if($matching.Count -ne 1 -or [int]$matching[0].epoch -lt 1){
+            throw 'GIT62_BROKER_ROOT_EPOCH_UNTRUSTED'
+        }
+        $epoch=[int]$matching[0].epoch
+    }
+    if ($activation.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+        $activation.status -ne 'ACTIVE_PROVISIONED' -or
+        [int]$activation.policy_revision -ne $epoch -or
+        -not [IO.Path]::GetFullPath([string]$activation.install_root).TrimEnd('\').Equals(
+            $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_OS_ACTIVATION_STALE_OR_INVALID'
+    }
+    $workspace = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
+    $root = [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\')
+    $activatedWorkspace = [IO.Path]::GetFullPath([string]$activation.workspace_root).TrimEnd('\')
+    if ($activation.PSObject.Properties.Name -contains 'existing_root_import' -and
+        $activation.existing_root_import -eq $true -and
+        ($activation.PSObject.Properties.Name -notcontains 'existing_import_committed' -or
+         $activation.existing_import_committed -ne $true)) {
+        throw 'GIT62_BROKER_IMPORT_NOT_COMMITTED'
+    }
+    if (-not $activatedWorkspace.Equals($workspace,[StringComparison]::OrdinalIgnoreCase) -or
+        -not @($policy.writable_workspaces | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $workspace,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        -not @($policy.turbo_roots | Where-Object {
+            [IO.Path]::GetFullPath([string]$_).TrimEnd('\').Equals(
+                $root,[StringComparison]::OrdinalIgnoreCase)
+        }).Count -or
+        ($SelectedTurboRoot -and
+         -not [IO.Path]::GetFullPath($SelectedTurboRoot).TrimEnd('\').Equals(
+             $root,[StringComparison]::OrdinalIgnoreCase))) {
+        throw 'GIT50_BROKER_SCOPE_POLICY_MISMATCH'
+    }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw 'GIT50_BROKER_ROOT_NOT_DIRECTORY'
+    }
+    $rawCwd = $WorkingDirectory.Replace('/','\')
+    if (@($rawCwd.Split('\') | Where-Object {$_ -eq '..'}).Count -gt 0) {
+        throw 'GIT50_BROKER_CWD_PARENT_TRAVERSAL'
+    }
+    $cwd = [IO.Path]::GetFullPath($WorkingDirectory).TrimEnd('\')
+    if (-not $cwd.Equals($root,[StringComparison]::OrdinalIgnoreCase) -and
+        -not $cwd.StartsWith($root + '\',[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CWD_OUTSIDE_ROOT'
+    }
+    if (-not (Test-Path -LiteralPath $cwd -PathType Container)) {
+        throw 'GIT50_BROKER_CWD_NOT_DIRECTORY'
+    }
+    $current = $root
+    foreach ($part in @('') + @($cwd.Substring($root.Length).TrimStart([char]92).Split('\'))) {
+        if (-not [string]::IsNullOrWhiteSpace($part)) {
+            $current = Join-Path $current $part
+        }
+        if ((Get-Item -LiteralPath $current -Force).Attributes -band
+            [IO.FileAttributes]::ReparsePoint) {
+            throw 'GIT50_BROKER_REPARSE_CWD_FORBIDDEN'
+        }
+    }
+    $sentinel = [IO.Path]::GetFullPath([string]$activation.negative_sentinel_path)
+    $parent = [IO.Path]::GetDirectoryName($root)
+    if (-not [IO.Path]::GetDirectoryName($sentinel).Equals(
+        $parent,[StringComparison]::OrdinalIgnoreCase) -or
+        -not [IO.Path]::GetFileName($sentinel).StartsWith('.git50-os-denial-') -or
+        -not (Test-Path -LiteralPath $sentinel -PathType Leaf) -or
+        [IO.File]::ReadAllText($sentinel) -cne 'OUTSIDE_SENTINEL') {
+        throw 'GIT50_BROKER_NEGATIVE_SENTINEL_UNVERIFIED'
+    }
+    if ([string]$activation.package_sid -notmatch '^S-1-15-2-') {
+        throw 'GIT50_BROKER_PACKAGE_SID_INVALID'
+    }
+    return @{
+        mode=$mode; policy=$policy; activation=$activation
+        workspace=$workspace; root=$root; cwd=$cwd; sentinel=$sentinel
+    }
+}
+# Broker execution and ACL OFF revocation use the same global mutex.
+$hash=[Security.Cryptography.SHA256]::Create()
+try {
+    $digest=[BitConverter]::ToString(
+        $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($ProjectRoot.ToUpperInvariant()))
+    ).Replace('-','')
+} finally { $hash.Dispose() }
+$mutex=New-Object Threading.Mutex($false,('Global\SmartAgentTurbo-'+$digest.Substring(0,32)))
+$held=$false
+try {
+    try { $held=$mutex.WaitOne([TimeSpan]::FromSeconds(305)) }
+    catch [Threading.AbandonedMutexException] { $held=$true }
+    if (-not $held) { throw 'GIT50_BROKER_MUTEX_TIMEOUT' }
+    $state=Assert-Trusted-State
+    if (-not ('SmartAgentGit47AppContainerProbe' -as [type])) {
+        Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
+    }
+    $moniker=[string]$state.activation.moniker
+    $sid=[SmartAgentGit47AppContainerProbe]::DeriveSid($moniker)
+    if (-not $sid.Equals([string]$state.activation.package_sid,
+                         [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GIT50_BROKER_CHILD_SID_NOT_BOUND_TO_ACTIVATION'
+    }
+    # Independently confirm the *real* AppContainer cannot read the known
+    # outside sentinel, and can write a disposable marker inside. This is a
+    # kernel denial probe, NOT a text/Planner/JSON assertion.
+    $outsideLiteral=$state.sentinel.Replace("'","''")
+    # Git62: each OS process must be denied a write handle in EVERY other
+    # nominated Turbo Root, not just the parent sentinel.
+    $crossRootProof=''
+    foreach($other in @($state.policy.turbo_roots)){
+        $alternate=[IO.Path]::GetFullPath([string]$other).TrimEnd('\')
+        if($alternate.Equals([string]$state.root,[StringComparison]::OrdinalIgnoreCase)){
+            continue
+        }
+        if(-not (Test-Path -LiteralPath $alternate -PathType Container) -or
+           ((Get-Item -LiteralPath $alternate -Force).Attributes -band
+               [IO.FileAttributes]::ReparsePoint)){
+            throw 'GIT62_CROSS_ROOT_PROBE_TARGET_UNAVAILABLE'
+        }
+        $candidate=(Join-Path $alternate ('.git62-crossroot-denial-'+
+             [Guid]::NewGuid().ToString('N'))).Replace("'","''")
+        $block=@'
+try {
+    $crossHandle=[IO.File]::Open('__CROSS_ROOT_PATH__',
+        [IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    $crossHandle.Dispose()
+    [IO.File]::Delete('__CROSS_ROOT_PATH__')
+    exit 96
+} catch [System.UnauthorizedAccessException] {
+    # The distinct Root denies this SID.
+} catch {exit 97}
+'@
+        $crossRootProof+=$block.Replace('__CROSS_ROOT_PATH__',$candidate)
+    }
+    $proof=@"
+`$readDenied=`$false
+try { [void][IO.File]::ReadAllText('$outsideLiteral') }
+catch [System.UnauthorizedAccessException] { `$readDenied=`$true }
+if (-not `$readDenied) { exit 91 }
+# Open the existing outside sentinel for WRITE access, but NEVER write data.
+# A successful handle is a kernel escape even if no bytes were modified.
+try {
+    `$outsideHandle=[IO.File]::Open('$outsideLiteral',[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    `$outsideHandle.Dispose()
+    exit 92
+} catch [System.UnauthorizedAccessException] {
+$crossRootProof
+    [IO.File]::WriteAllText('git50_scope_proof.tmp','OS_DENIED')
+    exit 0
+}
+"@
+    $os=[SmartAgentGit47AppContainerProbe]::LaunchPowerShell(
+        $moniker,$proof,$state.root,[uint32]30000) | ConvertFrom-Json
+    if ($os.sandbox_identity_verified -ne $true -or
+        $os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $os.internet_client_token_verified -ne $true -or
+        [int]$os.exit_code -ne 0 -or
+        [IO.File]::ReadAllText((Join-Path $state.root 'git50_scope_proof.tmp')) -cne 'OS_DENIED') {
+        throw 'GIT50_BROKER_KERNEL_NEGATIVE_PROBE_FAILED'
+    }
+    Remove-Item -LiteralPath (Join-Path $state.root 'git50_scope_proof.tmp') -Force
+    $state=Assert-Trusted-State
+    try {
+        $script=[Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String($CommandBase64))
+    } catch { throw 'GIT50_BROKER_COMMAND_BASE64_INVALID' }
+    if ([string]::IsNullOrWhiteSpace($script) -or $script.Length -gt 8192) {
+        throw 'GIT50_BROKER_SCRIPT_LENGTH_INVALID'
+    }
+    $toolchain=Get-Pinned-Native-Toolchain
+    # Git59: a native child-token probe is only permitted for a literal
+    # --version invocation of the operator-pinned and hash-checked executable.
+    # All other scripts retain their existing behavior. This host-side code
+    # NEVER executes a child without the AppContainer CreateProcess launcher.
+    $git59ProbeExecutable=''
+    if ($NativeVersionProbe -ne '') {
+        if (@($toolchain.tools | Where-Object {$_ -ceq $NativeVersionProbe}).Count -ne 1) {
+            throw 'GIT59_PINNED_VERSION_EXECUTABLE_NOT_ENROLLED'
+        }
+        $relative = if ($NativeVersionProbe -ceq 'git') {
+            '.venv\git\cmd\git.exe'
+        } else {
+            '.venv\Scripts\python.exe'
+        }
+        $git59ProbeExecutable=[IO.Path]::GetFullPath((Join-Path $ProjectRoot $relative))
+        $literalCommand="& '" + $git59ProbeExecutable + "' --version"
+        if (-not $script.Trim().Equals($literalCommand,
+                      [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'GIT59_NATIVE_VERSION_COMMAND_NOT_EXACT_PINNED_LITERAL'
+        }
+    }
+    # The native command is the *only* path that receives untrusted script.
+    # The elevated/setup PowerShell code must never invoke the command.
+    $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
+        $moniker,$script,$state.cwd,[uint32]($TimeoutSeconds*1000),
+        [int]$MaxOutputBytes,[string]$toolchain.path)
+    $native=$nativeRaw | ConvertFrom-Json -ErrorAction Stop
+    if ($native.sandbox_identity_verified -ne $true -or
+        $native.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+        $native.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+        $native.os_process_started -ne $true -or
+        $native.output_is_authoritative -ne $false -or
+        $native.internet_client_token_verified -ne $true -or
+        $native.internet_client_capability_sid -ne 'S-1-15-3-1') {
+        throw 'GIT50_BROKER_KERNEL_PROCESS_RECEIPT_INVALID'
+    }
+    # The Git/Python executable is launched a SECOND TIME, directly by
+    # CreateProcessW with explicit AppContainer security capabilities. Unlike
+    # the first PowerShell-wrapped version command, the returned kernel token
+    # receipt proves the executable process identity itself, independently.
+    $git59Child=@{}
+    $git59Verified=$false
+    if ($NativeVersionProbe -ne '') {
+        try {
+            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchVersionCaptured(
+                $moniker,$git59ProbeExecutable,$state.cwd,
+                [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
+            $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
+            if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
+                $git59Os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
+                $git59Os.sandbox_identity_verified -ne $true -or
+                $git59Os.internet_client_token_verified -ne $true -or
+                $git59Os.internet_client_capability_sid -ne 'S-1-15-3-1' -or
+                $git59Os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
+                $git59Os.os_process_started -ne $true -or
+                [int64]$git59Os.pid -le 0) {
+                throw 'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Verified=$true
+            $git59Child=[ordered]@{
+                schema='SMARTAGENT_GIT59_DIRECT_NATIVE_CHILD_V1'
+                status='OS_TOKEN_VERIFIED'
+                executable_name=$NativeVersionProbe
+                executable_path=$git59ProbeExecutable
+                sandbox_backend='WIN32_APPCONTAINER'
+                sandbox_identity_verified=$true
+                internet_client_token_verified=$true
+                internet_client_capability_sid='S-1-15-3-1'
+                child_process_policy='JOB_KILL_ON_CLOSE'
+                os_process_started=$true
+                pid=[int64]$git59Os.pid
+                exit_code=[int64]$git59Os.exit_code
+                git60_child_stdout_base64=[string]$git59Os.git60_child_stdout_base64
+                git60_child_stderr_base64=[string]$git59Os.git60_child_stderr_base64
+                git60_child_stdout_bytes=[int64]$git59Os.git60_child_stdout_bytes
+                git60_child_stderr_bytes=[int64]$git59Os.git60_child_stderr_bytes
+                git60_child_capture_complete=[bool]$git59Os.git60_child_capture_complete
+            }
+        } catch {
+            # Preserve the first shell result; an independently unverifiable
+            # native process never receives a success token attestation.
+            $reason='GIT59_NATIVE_CHILD_CREATEPROCESS_FAILED'
+            if ($_.Exception -is [TimeoutException]) {
+                $reason='GIT59_NATIVE_CHILD_EXECUTION_TIMEOUT'
+            } elseif ([string]$_.Exception.Message -eq
+                       'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED') {
+                $reason='GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
+            }
+            $git59Child=[ordered]@{
+                status='UNVERIFIED'
+                reason_code=$reason
+            }
+        }
+    }
+    $fresh=Assert-Trusted-State
+    $response=[ordered]@{
+        schema='SMARTAGENT_TURBO_OS_EXECUTION_RECEIPT_V1'
+        task_id=$TaskId
+        action_id=$ActionId
+        policy_revision=$ExpectedRevision
+        workspace_root=[string]$state.workspace
+        turbo_root=[string]$state.root
+        working_directory=[string]$state.cwd
+        acl_mode='on'
+        sandbox_backend='WIN32_APPCONTAINER'
+        sandbox_identity_verified=$true
+        child_process_policy='JOB_KILL_ON_CLOSE'
+        kernel_outside_read_denied=$true
+        kernel_outside_write_denied=$true
+        internet_client_token_verified=$true
+        internet_client_capability_sid='S-1-15-3-1'
+        native_toolchain_status=$(if($toolchain.trusted_count -gt 0){'PINNED'}else{'NOT_ENROLLED'})
+        native_trusted_tool_count=[int]$toolchain.trusted_count
+        native_trusted_tools=@($toolchain.tools)
+        native_direct_child_probe_kind=[string]$NativeVersionProbe
+        native_direct_child_attestation=$git59Child
+        native_executable_identity_verified=[bool]$git59Verified
+        process_started=$true
+        executed=$true
+        command_exit_code=[int64]$native.exit_code
+        stdout_base64=[string]$native.stdout_base64
+        stderr_base64=[string]$native.stderr_base64
+        stdout_bytes=[int64]$native.stdout_bytes
+        stderr_bytes=[int64]$native.stderr_bytes
+        stdout_truncated=[bool]$native.stdout_truncated
+        stderr_truncated=[bool]$native.stderr_truncated
+        output_is_authoritative=$false
+        authorization_scope='THIS_SINGLE_APP_CONTAINER_ACTION'
+        production_turbo_full_access_attested=$false
+        status='EXECUTED_IN_OS_APPCONTAINER'
+    }
+    # Only a direct OS-spawn receipt can mark *this action* executed; the
+    # global Turbo setting is not promoted by this JSON response.
+    $response | ConvertTo-Json -Compress -Depth 8
+}
+finally {
+    if ($held) { try { $mutex.ReleaseMutex() } catch {} }
+    $mutex.Dispose()
+}
+ -or
+                   (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -ine
+                   [string]$item.executable_sha256){
+                   throw 'GIT63_NATIVE_EXECUTABLE_HASH_MISMATCH'
+                }
+                $verified.Add([IO.Path]::GetDirectoryName($full))
+                $toolNames.Add($alias)
+            }
+        }
+    }
     return @{
         path=([string]::Join(';',[string[]]$verified.ToArray()))
         tools=@($toolNames.ToArray())
