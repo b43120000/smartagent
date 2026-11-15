@@ -33,7 +33,12 @@ def install_toolchain_action(action: dict, *, root=None) -> str:
         return encode_result("REJECTED", reason,
             tool="install_toolchain", executed=False, data={"terminal_eligible":False})
     from .runtime_environment import read_environment_ledger
-    for row in managed_hints(read_environment_ledger(root), root):
+    ledger = read_environment_ledger(root)
+    installed_source = (ledger.get("managed_sources") or {}).get(f"{tool}:{version}")
+    if source is not None and installed_source is not None and package != installed_source:
+        return encode_result("REJECTED", "GIT63_MANAGED_VERSION_SOURCE_CONFLICT",
+            tool="install_toolchain", executed=False, data={"terminal_eligible":False})
+    for row in managed_hints(ledger, root):
         if row["tool"] == tool and row["version"] == version:
             return encode_result("SUCCEEDED", "GIT63_TOOL_ALREADY_DISCOVERABLE",
                 tool="install_toolchain", executed=False,
