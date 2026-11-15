@@ -54,8 +54,14 @@ try {
    [System.Management.Automation.Language.Parser]::ParseFile(
       $scriptFile,[ref]$syntaxTokens,[ref]$syntaxErrors) | Out-Null
    if($null -ne $syntaxErrors -and $syntaxErrors.Count -gt 0){
-     $detail=[string]$syntaxErrors[0].Message
-     throw ('UPDATE_SCRIPT_SYNTAX_INVALID:'+ $relativeScript + ':' + $detail)
+     $firstSyntaxError=$syntaxErrors[0]
+     $syntaxLine=[string]$firstSyntaxError.Extent.StartLineNumber
+     $syntaxColumn=[string]$firstSyntaxError.Extent.StartColumnNumber
+     $syntaxCode=[string]$firstSyntaxError.ErrorId
+     $syntaxDetail=[string]$firstSyntaxError.Message
+     throw ('UPDATE_SCRIPT_SYNTAX_INVALID:'+ $relativeScript +
+            ':line='+$syntaxLine+':column='+$syntaxColumn+
+            ':code='+$syntaxCode+':'+$syntaxDetail)
    }
  }
  Say ('POWERSHELL_SYNTAX_PASS scripts='+$scriptsToParse.Count)
