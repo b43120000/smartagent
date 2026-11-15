@@ -189,6 +189,30 @@ class TestGateway(unittest.TestCase):
         self.assertIn("80070005", serialized)
         self.assertIn("runtime_receipt_sha256", serialized)
 
+    def test_gateway_exposes_fixed_psdrive_fallback_trace(self):
+        from agent_core.tool_result_contract import decode_result
+
+        def dispatch(action, *, agent):
+            receipt = decode_result(self.native_receipt())
+            receipt["data"]["sandbox_evidence"]["native_command_trace"] = [
+                "CWD_GET_LOCATION_INITIAL.PASS",
+                "CWD_SET_LOCATION.START",
+                "CWD_SET_LOCATION.FAIL",
+                "CWD_PSDRIVE_FALLBACK.START",
+                "CWD_PSDRIVE_FALLBACK.PASS",
+            ]
+            return "[TOOL_RESULT] " + json.dumps(receipt)
+
+        result = run_case(
+            self.spec, live_authorized=True,
+            policy_loader=self.policy, admission=self.native_gate,
+            dispatch=dispatch,
+        )
+        self.assertEqual(result["status"], "PASS")
+        native = result["cases"][0]["runtime"]
+        self.assertEqual(native["cwd_binding_method"], "PSDRIVE_ROOT_FALLBACK")
+        self.assertIn("CWD_PSDRIVE_FALLBACK.PASS", native["native_setup_trace"])
+
     def test_typed_write_still_requires_native_broker(self):
         spec = {
             "schema": SCHEMA, "workspace": self.workspace, "actions": [
