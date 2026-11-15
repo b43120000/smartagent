@@ -754,6 +754,7 @@ public static class SmartAgentGit47AppContainerProbe
                     "$ErrorActionPreference='Stop'; " +
                     "$global:LASTEXITCODE=$null; $text=''; $errText=''; $rc=1; " +
                     "$script:smartagentTrace=New-Object 'System.Collections.Generic.List[string]'; " +
+                    "$script:smartagentCwdProbes=New-Object 'System.Collections.Generic.List[string]'; " +
                     "$script:smartagentStage='ENV_SETUP'; " +
                     "$script:smartagentSubstage='WRAPPER_INIT'; " +
                     "try { " + trustedAliases +
@@ -782,8 +783,12 @@ public static class SmartAgentGit47AppContainerProbe
                     "$trace=if($null -ne $script:smartagentTrace){" +
                     "[string]::Join(',', $script:smartagentTrace.ToArray())" +
                     "}else{''}; " +
+                    "$probes=if($null -ne $script:smartagentCwdProbes){" +
+                    "[string]::Join(',', $script:smartagentCwdProbes.ToArray())" +
+                    "}else{''}; " +
                     "$errText=([string]$errText + [Environment]::NewLine + " +
-                    "'SMARTAGENT_NATIVE_TRACE_V1=' + $trace).TrimStart(" +
+                    "'SMARTAGENT_NATIVE_TRACE_V1=' + $trace + [Environment]::NewLine + " +
+                    "'SMARTAGENT_NATIVE_CWD_PROBES_V1=' + $probes).TrimStart(" +
                     "[char]10,[char]13); " +
                     putOut + putErr +
                     " } catch { exit 95 } " +
