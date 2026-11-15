@@ -57,10 +57,10 @@ def test_elevated_update_refreshes_protected_launcher_and_broker_together():
     updater = (ROOT / "install_smart_agent" / "git62_transaction_update.ps1"
                ).read_text(encoding="utf-8")
     assert "& $rebind -ProjectRoot $root -RefreshBrokerSource" in updater
-    assert "foreach($file in @('turbo_os_execute.ps1','turbo_appcontainer_probe.cs'))" in rebind
+    assert "$fileNames=@('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')" in rebind
     assert "$manifest.core_files.PSObject.Properties[$pinName]" in rebind
     assert "GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH" in rebind
-    assert "Copy-Item -LiteralPath $record.source -Destination $record.protected" in rebind
+    assert "Copy-Item -LiteralPath $record.source -Destination $record.target" in rebind
     assert "GIT63_BROKER_REFRESH_HASH_FAILED" in rebind
 
 
@@ -70,7 +70,8 @@ def test_rebind_refresh_has_single_complete_power_shell_block():
     assert rebind.count("# Phase 2: independent, protected, replace-atomic journal writes.") == 1
     assert rebind.count("foreach($item in $verified){") == 1
     assert rebind.count("if($null -eq $pin") == 1
-    assert "if($null -eq $pin -or [string]$pin.Value -notmatch '^[0-9a-fA-F]{64}$' -or" in rebind
+    assert "if($null -eq $pin){" in rebind
+    assert "if($expectedHash -notmatch '^[0-9a-fA-F]{64}$'){" in rebind
     assert "GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH" in rebind
     assert rebind.count("GIT62_PROTECTED_BROKER_REFRESH_PASS") == 1
 
@@ -87,7 +88,7 @@ def test_rebind_windows_powershell_parser_reports_no_syntax_errors():
         "$tokens=$null; $parseErrors=$null; "
         "[System.Management.Automation.Language.Parser]::ParseFile('" + literal + "',"
         "[ref]$tokens,[ref]$parseErrors) | Out-Null; "
-        "if($parseErrors.Count -ne 0){"
+        "if($null -ne $parseErrors -and $parseErrors.Count -gt 0){"
         "$parseErrors | ForEach-Object { Write-Error $_.Message }; exit 1 }; "
         "Write-Output 'GIT63_REBIND_PARSER_PASS'"
     )
