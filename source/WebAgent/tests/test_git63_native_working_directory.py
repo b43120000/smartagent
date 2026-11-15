@@ -49,3 +49,16 @@ def test_native_cwd_fix_does_not_spawn_host_fallback_or_mutate_host_pwd():
     assert "LaunchWithTrustedPath(" in function
     assert "Process.Start(" not in function
     assert "Environment.CurrentDirectory =" not in function
+
+
+def test_elevated_update_refreshes_protected_launcher_and_broker_together():
+    rebind = (ROOT / "install_smart_agent" / "turbo_multi_root_rebind.ps1"
+              ).read_text(encoding="utf-8")
+    updater = (ROOT / "install_smart_agent" / "git62_transaction_update.ps1"
+               ).read_text(encoding="utf-8")
+    assert "& $rebind -ProjectRoot $root -RefreshBrokerSource" in updater
+    assert "foreach($file in @('turbo_os_execute.ps1','turbo_appcontainer_probe.cs'))" in rebind
+    assert "$manifest.core_files.PSObject.Properties[$pinName]" in rebind
+    assert "GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH" in rebind
+    assert "Copy-Item -LiteralPath $record.source -Destination $record.protected" in rebind
+    assert "GIT63_BROKER_REFRESH_HASH_FAILED" in rebind
