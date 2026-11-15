@@ -572,6 +572,22 @@ def execute_turbo_command(
         "output_complete": not (out_cut or err_cut),
         "timed_out": False,
         "process_started": True,
+        "process_state": "EXITED",
+        "execution_id": request_action,
+        # The protected Native Broker has already waited for its
+        # AppContainer child and attested the final OS exit code.
+        # This is an EXIT receipt, never a fabricated live RUNNING sample.
+        "liveness_evidence": {
+            "schema": "SMARTAGENT_PROCESS_LIVENESS_V1",
+            "execution_id": request_action,
+            "process_state": "EXITED",
+            "liveness_verified": False,
+            "process_identity_verified": True,
+            "evidence_source": "NATIVE_APPCONTAINER_ATTESTED_PROCESS_EXIT",
+            "observed_at": __import__("time").time(),
+            "exit_code": exit_code,
+            "terminal_eligible": False,
+        },
         "security_rejected": False,
         "sandbox_evidence": evidence,
     }
