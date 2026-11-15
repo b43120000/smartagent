@@ -2080,7 +2080,7 @@ try {
         'Git52: native confirmation blocks, safe command-security classifier codes, detail hashes, and decision linkage.',
         'Git52 P1: bounded preexecution replans export rejected Action IDs/digests; no ToolResult or Host CMD fallback.',
         'Git52 RCA: executor_run_commands.json/.txt exports bounded, redacted Planner and dispatched commands, exit codes, stderr/stdout excerpts, and OS evidence.',
-        'Git63: native_execution_trace.json/.txt contains fixed native CWD instruction names, ordered START/PASS/SKIP/FINISH, failing substep and HRESULT.',
+        'Git63: native_execution_trace.json/.txt contains bounded fixed CWD step traces, failing substeps/HRESULT, native CWD comparison, PSDrive provider status and Resolve-Path status.',
         'Command capture is runtime-persisted only in new tasks. Existing legacy task commands cannot be recovered from old Blackboard events.',
         'Credential masking is best effort; review filenames, paths, URLs and text carefully before sharing.',
         'Git45: Finish status-only repair diagnostics retain typed REJECTED/FAILED differences; no raw model Finish.',
