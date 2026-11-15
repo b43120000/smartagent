@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from agent_core.managed_toolchains import (
     CATALOG_SCHEMA, RECEIPT_SCHEMA, read_catalog, select_package,
-    register_install_receipt, managed_hints, register_external_hint,
+    register_install_receipt, managed_hints, register_external_hint, validate_source,
 )
 from agent_core import runtime_environment
 from agent_core.tool_capabilities import get_allowed_tools
@@ -98,3 +98,61 @@ def test_unconfigured_catalog_cannot_trigger_untrusted_host_command(monkeypatch,
     # Format may be encoded with a Runtime envelope; inspect the text for
     # the deterministic catalog rejection, never accept arbitrary URLs.
     assert "GIT63_TOOL_NOT_IN_TRUSTED_CATALOG" in json.dumps(result)
+
+def test_repository_catalog_does_not_preinstall_jdk_or_any_other_tool():
+    # Task demand, not installation-time defaults, chooses the tool/version.
+    root = Path(__file__).resolve().parents[3]
+    assert read_catalog(root)["packages"] == []
+
+
+def test_planner_can_resolve_dynamic_zip_source_without_hardcoded_jdk(tmp_path):
+    _catalog(tmp_path)
+    source = {
+        "archive_type": "zip", "archive_sha256": "a" * 64,
+        "url": "https://services.gradle.org/distributions/tool-8.0.zip",
+        "checksum_url": "https://services.gradle.org/distributions/tool-8.0.zip.sha256",
+        "executables": {"gradle": "tool-8.0/bin/gradle.bat"},
+    }
+    pkg = select_package("gradle", "8.0", tmp_path, source=source)
+    assert pkg["tool"] == "gradle"
+    assert pkg["executables"]["gradle"].endswith(".bat")
+    assert TOOL_ENVELOPE_SCHEMAS["install_toolchain"]["optional"]["source"] is dict
+    with pytest.raises(ValueError, match="CHECKSUM_ORIGIN"):
+        validate_source("gradle", "8.0", {
+            **source, "checksum_url": "https://github.com/unknown/checksum.txt"
+        })
+    with pytest.raises(ValueError, match="EXECUTABLE_PATH"):
+        validate_source("gradle", "8.0", {
+            **source, "executables": {"gradle": "../../escape.bat"}
+        })
+
+
+def test_dynamic_install_requires_native_checksum_evidence_and_reuse(tmp_path):
+    _catalog(tmp_path)
+    source = {
+        "archive_type": "zip", "archive_sha256": "c" * 64,
+        "url": "https://services.gradle.org/distributions/gradle-8.0-bin.zip",
+        "checksum_url": "https://services.gradle.org/distributions/gradle-8.0-bin.zip.sha256",
+        "executables": {"gradle": "gradle-8.0/bin/gradle.bat"},
+    }
+    exe = tmp_path / "localdata" / "toolchains" / "gradle" / "8.0" / "gradle-8.0" / "bin" / "gradle.bat"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"dummy-content-for-test")
+    receipt = {
+        "schema": RECEIPT_SCHEMA, "tool": "gradle", "version": "8.0",
+        "status": "INSTALLED", "archive_sha256": "c" * 64,
+        "sandbox_backend": "WIN32_APPCONTAINER",
+        "sandbox_identity_verified": True,
+        "kernel_outside_write_denied": True,
+    }
+    with pytest.raises(ValueError, match="CHECKSUM_ATTESTATION"):
+        register_install_receipt(receipt, root=tmp_path, source=source)
+    receipt["publisher_checksum_verified"] = True
+    register_install_receipt(receipt, root=tmp_path, source=source)
+    assert select_package("gradle", "8.0", tmp_path)["url"] == source["url"]
+    ledger = json.loads((tmp_path / "localdata" / "metadata" / "environment_ledger.json").read_text())
+    assert len(managed_hints(ledger, tmp_path)) == 1
+    with pytest.raises(ValueError, match="SOURCE_CONFLICT"):
+        register_install_receipt(receipt, root=tmp_path, source={
+            **source, "url": "https://services.gradle.org/distributions/evil.zip"
+        })
