@@ -146,7 +146,7 @@ def install_toolchain_action(action: dict, *, root=None, telemetry: dict | None 
     witness = {
         "execution_id": execution_id,
         "process_role": "TOOLCHAIN_INSTALLER_WRAPPER",
-        "process_state": final_proof["process_state"],
+        "process_state": "EXITED" if exit_code is not None else final_proof["process_state"],
         "exit_code": exit_code,
         "liveness_evidence": final_proof,
         "last_running_evidence": last_running_evidence,
