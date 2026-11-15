@@ -6,6 +6,7 @@ from pathlib import Path
 from .json_state_io import read_json_retry,write_json_atomic
 from .windows_security import load_security_profile
 from .protocol_v8 import sha256_digest
+from .process_liveness import verified_running_evidence
 
 class RestrictedExecutorUnavailable(RuntimeError):pass
 
@@ -38,14 +39,8 @@ def execute_restricted(command,*,cwd=None,timeout=30,shell=False,max_stream_byte
     if (progress.get('schema')=='SMARTAGENT_EXECUTOR_PROGRESS_V1'
         and progress.get('request_id')==request_id
         and progress.get('state')=='RUNNING'
-        and proof.get('schema')=='SMARTAGENT_PROCESS_LIVENESS_V1'
-        and proof.get('liveness_verified') is True
-        and proof.get('process_identity_verified') is True
-        and proof.get('process_state')=='RUNNING'
-        and proof.get('execution_id')==request_id
-        and proof.get('evidence_source') in {'WIN32_WAIT_FOR_SINGLE_OBJECT','OWNED_POPEN_WAITPID'}
-        and last_observed < observed <= time.time()+1
-        and time.time()-observed < 10):
+        and last_observed < observed
+        and verified_running_evidence(proof,execution_id=request_id)):
      last_observed=observed
      on_running(proof)
    except (OSError,ValueError,TypeError,KeyError):
