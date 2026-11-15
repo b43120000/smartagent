@@ -421,6 +421,8 @@ $crossRootProof
         $envSetup+="[Environment]::SetEnvironmentVariable('ANDROID_HOME','$literal');"
         $envSetup+="[Environment]::SetEnvironmentVariable('ANDROID_SDK_ROOT','$literal');"
     }
+    $managedRoot=(Join-Path $ProjectRoot 'localdata\toolchains').Replace("'","''")
+    $envSetup+="[Environment]::SetEnvironmentVariable('SMARTAGENT_TOOLCHAIN_ROOT','$managedRoot');"
     $gradleHome=(Join-Path $state.root '.gradle').Replace("'","''")
     $envSetup+="[Environment]::SetEnvironmentVariable('GRADLE_USER_HOME','$gradleHome');"
     $nativeScript=$envSetup+[Environment]::NewLine+$script
