@@ -169,6 +169,13 @@ try {
  $stage='POSTCHECK_NATIVE_ROOTS'
  & $rebind -ProjectRoot $root -VerifyOnly
  Require ($?) 'UPDATE_NATIVE_POSTCHECK_FAILED'
+ $stage='GIT63_INSTALLER_OS_PROVISION'
+ # One-time privilege setup is part of the existing elevated Update, not a
+ # Planner-triggered UAC prompt. Installer SID can modify ONLY toolchains.
+ $provision=Join-Path $root 'install_smart_agent\git63_toolchain_provision.ps1'
+ Require (Test-Path -LiteralPath $provision -PathType Leaf) 'GIT63_PROVISION_SCRIPT_MISSING'
+ & $provision -ProjectRoot $root
+ Require ($?) 'GIT63_INSTALLER_PROVISION_FAILED'
  $stage='POSTCHECK_REMOTE'
  & $python -m agent_core.security_preflight --interface remote
  Require ($LASTEXITCODE -eq 0) 'UPDATE_REMOTE_PREFLIGHT_FAILED'
