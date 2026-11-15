@@ -115,6 +115,21 @@ def _field(receipt: Mapping[str, Any], field: str) -> Any:
     return current
 
 
+def _safe_runtime_rejection_code(data: Mapping[str, Any]) -> str:
+    """Extract only a fixed-form Runtime error code, never raw shell output."""
+    reason = data.get("command_error")
+    if not isinstance(reason, str) or not reason:
+        return ""
+    # This is already in the existing ToolResult, but earlier gateway
+    # summaries discarded it and concealed the actual broker failure.
+    for prefix in ("TURBO_OS_BROKER_BLOCKED:", "SECURITY_COMMAND_REJECTED:"):
+        if reason.startswith(prefix):
+            suffix = reason[len(prefix):]
+            match = re.match(r"^[A-Z][A-Z0-9_]{3,119}", suffix)
+            return match.group(0) if match else "ERROR_CODE_REDACTED"
+    return "OTHER_RUNTIME_ERROR_REDACTED"
+
+
 def _safe_runtime_summary(receipt: Mapping[str, Any]) -> dict[str, Any]:
     data = receipt.get("data")
     data = data if isinstance(data, dict) else {}
@@ -145,6 +160,17 @@ def _safe_runtime_summary(receipt: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "tool_status": receipt.get("status"),
         "tool_reason": receipt.get("reason"),
+        "command_rejection_stage": (
+            data.get("command_rejection_stage")
+            if data.get("command_rejection_stage") in
+            {"TURBO_BROKER", "COMMAND_SECURITY", "UNCLASSIFIED", ""} else "OTHER"
+        ),
+        "runtime_rejection_code": _safe_runtime_rejection_code(data),
+        "sandbox_backend_note": (
+            "PREEXECUTION_POLICY_SNAPSHOT_NOT_NATIVE_LAUNCH_PROOF"
+            if sandbox.get("sandbox_backend") == "UNAVAILABLE_NO_OS_BROKER"
+            else "RUNTIME_RECEIPT"
+        ),
         "executed": receipt.get("executed") is True,
         "exit_code": data.get("exit_code"),
         "process_state": data.get("process_state"),
