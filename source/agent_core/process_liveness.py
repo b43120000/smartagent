@@ -79,9 +79,9 @@ def wait_with_liveness(
         observation = observe_owned_process(process, execution_id=execution_id)
         if observation["process_state"] == "EXITED":
             return observation
-        if observation["process_state"] == "UNKNOWN":
-            raise OSError("OWNED_PROCESS_LIVENESS_UNKNOWN")
-        if on_running is not None:
+        # If an OS probe is inconclusive, continue the bounded wait without
+        # emitting RUNNING. Never abandon a started child on probe failure.
+        if observation["liveness_verified"] and on_running is not None:
             on_running(observation)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -105,9 +105,8 @@ def communicate_with_liveness(
     deadline = time.monotonic() + float(timeout)
     while True:
         observation = observe_owned_process(process, execution_id=execution_id)
-        if observation["process_state"] == "UNKNOWN":
-            raise OSError("OWNED_PROCESS_LIVENESS_UNKNOWN")
-        if observation["process_state"] == "RUNNING" and on_running:
+        # No RUNNING claim without OS proof; pipe draining still continues.
+        if observation["liveness_verified"] and on_running:
             on_running(observation)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
