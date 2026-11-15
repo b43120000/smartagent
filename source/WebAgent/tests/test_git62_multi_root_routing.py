@@ -192,3 +192,46 @@ def test_runtime_multi_root_parent_and_missing_cwd_block_without_host_fallback(
         assert result["exit_code"] is None
         assert result["error"].startswith("TURBO_OS_BROKER_BLOCKED:")
         assert result["sandbox_evidence"].get("executed") is False
+
+
+
+def test_root_epoch_legacy_migration_add_preserves_unchanged_roots(installed):
+    from agent_core.workspace_access import _retained_epochs, turbo_root_epoch
+
+    ws, a, b, legacy = installed
+    c = ws / "gamma"
+    c.mkdir()
+    epochs = _retained_epochs(legacy, [str(a), str(b), str(c)], 30)
+    assert epochs == [
+        {"root": str(a), "epoch": 29},
+        {"root": str(b), "epoch": 29},
+        {"root": str(c), "epoch": 30},
+    ]
+    policy = {**legacy, "revision": 30, "turbo_root_epochs": epochs,
+              "turbo_roots": [str(a), str(b), str(c)]}
+    assert turbo_root_epoch(policy, a) == 29
+    assert turbo_root_epoch(policy, b) == 29
+    assert turbo_root_epoch(policy, c) == 30
+    # Remove A, then add it back: its previous epoch must NOT be reusable.
+    without_a = {**policy, "revision": 31,
+                 "turbo_root_epochs": _retained_epochs(policy, [str(b), str(c)], 31),
+                 "turbo_roots": [str(b), str(c)]}
+    readded = _retained_epochs(without_a, [str(b), str(c), str(a)], 32)
+    assert readded[-1] == {"root": str(a), "epoch": 32}
+    assert readded[:2] == without_a["turbo_root_epochs"]
+
+
+def test_root_epochs_reject_partial_or_duplicate_map(installed):
+    from agent_core.workspace_access import turbo_root_epoch
+
+    ws, a, b, policy = installed
+    missing = {**policy, "turbo_root_epochs": [{"root": str(b), "epoch": 29}]}
+    with pytest.raises(ValueError, match="turbo_root_epoch_untrusted"):
+        turbo_root_epoch(missing, a)
+    duplicate = {**policy, "turbo_root_epochs": [
+        {"root": str(a), "epoch": 29}, {"root": str(a), "epoch": 28}]}
+    with pytest.raises(ValueError, match="turbo_root_epoch_untrusted"):
+        turbo_root_epoch(duplicate, a)
+    invalid = {**policy, "turbo_root_epochs": [{"root": str(a), "epoch": "29"}]}
+    with pytest.raises(ValueError, match="turbo_root_epoch_untrusted"):
+        turbo_root_epoch(invalid, a)
