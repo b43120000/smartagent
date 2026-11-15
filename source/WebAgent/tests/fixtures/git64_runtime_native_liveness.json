@@ -1,0 +1,23 @@
+{
+  "schema": "SMARTAGENT_RUNTIME_TEST_GATEWAY_V1",
+  "workspace": "E:\\AIspace",
+  "actions": [
+    {
+      "action": {
+        "tool": "run_command",
+        "operation": "TEST",
+        "working_directory": "E:\\AIspace\\SmartAgent_Turbo_Live_01",
+        "timeout": 30,
+        "command": "Start-Sleep -Seconds 12"
+      },
+      "expect": {
+        "status": "SUCCEEDED",
+        "data.exit_code": 0,
+        "data.process_state": "EXITED",
+        "data.sandbox_evidence.sandbox_backend": "WIN32_APPCONTAINER",
+        "data.sandbox_evidence.sandbox_identity_verified": true,
+        "data.last_running_evidence.liveness_verified": true
+      }
+    }
+  ]
+}
