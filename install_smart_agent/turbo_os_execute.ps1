@@ -347,7 +347,6 @@ $crossRootProof
     }
     $gradlePath=(Join-Path $state.root '.gradle').Replace("'","''")
     $setup+="[Environment]::SetEnvironmentVariable('GRADLE_USER_HOME','$gradlePath');"
-    if($setup){$script=$setup+[Environment]::NewLine+$script}
     # Git59: a native child-token probe is only permitted for a literal
     # --version invocation of the operator-pinned and hash-checked executable.
     # All other scripts retain their existing behavior. This host-side code
@@ -369,6 +368,7 @@ $crossRootProof
             throw 'GIT59_NATIVE_VERSION_COMMAND_NOT_EXACT_PINNED_LITERAL'
         }
     }
+    if($setup){$script=$setup+[Environment]::NewLine+$script}
     # The native command is the *only* path that receives untrusted script.
     # The elevated/setup PowerShell code must never invoke the command.
     $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
