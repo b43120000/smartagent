@@ -4,6 +4,7 @@ These tests validate source invariants and broker receipt parsing; they DO NOT
 claim a real AppContainer CWD or kernel ACL result on CI runners.
 """
 from pathlib import Path
+import unittest
 
 from agent_core.turbo_os_broker_client import TurboOSBrokerUnavailable
 
@@ -64,3 +65,11 @@ def test_native_tool_result_and_collector_trace_fallback():
     assert "native_execution_trace.json" in collector
     assert "native_execution_trace.txt" in collector
     assert "CWD_PSDRIVE_FALLBACK" in _script()
+
+
+def load_tests(loader, tests, pattern):
+    suite = unittest.TestSuite()
+    for name, entry in sorted(globals().items()):
+        if name.startswith("test_") and callable(entry):
+            suite.addTest(unittest.FunctionTestCase(entry))
+    return suite
