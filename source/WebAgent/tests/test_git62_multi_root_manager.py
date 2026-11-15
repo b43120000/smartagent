@@ -142,7 +142,8 @@ def test_revoke_only_removed_root_before_registry_commit(env):
     commit = next(i for i, row in enumerate(env.events)
                   if i > revoke and row[0] == "policy_commit")
     assert preflight < revoke < commit
-    assert env.events[preflight][2] < env.events[commit][1]
+    assert env.events[preflight][2] == env.events[commit][1]
+    assert env.policy["revision"] == env.events[commit][1] + 1
 
 
 def test_failed_retained_precheck_keeps_policy_and_existing_roots(env, monkeypatch):
