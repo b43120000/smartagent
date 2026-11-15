@@ -98,8 +98,16 @@ def build_runtime_software_inventory(
                     "availability": "RECORDED_REPROBE_REQUIRED",
                     "execution_authorized": False,
                 })
+    managed = [dict(row) for row in (env.get("managed_tools") or [])[:64]
+               if isinstance(row, Mapping)] if isinstance(env.get("managed_tools"), list) else []
+    catalog = [dict(row) for row in (env.get("install_catalog") or [])[:64]
+               if isinstance(row, Mapping)] if isinstance(env.get("install_catalog"), list) else []
     return {
         "schema": SCHEMA,
+        "global_managed_tool_candidates": managed,
+        "managed_install_catalog": catalog,
+        "managed_install_per_action_confirmation": False,
+        "managed_execution_reprobe_required": True,
         "installation_source": "CANONICAL_INSTALLATION_ROOT",
         "bundled_environment_path": str(venv),
         "bundled_tool_probes": bundled,

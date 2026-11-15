@@ -115,7 +115,9 @@ def register_verified_software_probe(action: Mapping, receipt: Mapping,
                    "records": records}
         file.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(file, payload)
-        return row
+    from .managed_toolchains import register_external_hint
+    register_external_hint(row, root)
+    return row
 
 
 def software_registry_snapshot(root: str | Path | None = None) -> dict:
