@@ -683,6 +683,9 @@ Write-Json (Join-Path $stage 'executor_run_commands.json') @($executorCommandRow
 # Git63 Native instruction trace, sourced from Runtime's bounded RCA
 # fields (not raw task input or credentials).
 $nativeCommands=[ordered]@{
+  NATIVE_CWD_CHECK='[Environment]::CurrentDirectory and compare with authorized CWD'
+  PSDRIVE_CHECK='Get-PSDrive -Name <AUTHORIZED_DRIVE>; verify FileSystem provider'
+  PROVIDER_PATH_CHECK='Resolve-Path -LiteralPath <AUTHORIZED_CWD>; verify ProviderPath'
   CWD_GET_LOCATION_INITIAL='(Get-Location).Path'
   CWD_SET_LOCATION="Set-Location -LiteralPath '<AUTHORIZED_CWD>' -ErrorAction Stop"
   CWD_GET_LOCATION_VERIFY='(Get-Location).Path'
@@ -718,6 +721,18 @@ foreach($item in @($executorCommandRows)) {
   $nativeLines.Add('  exception_hresult: '+(Safe-Code $ev.native_exception_hresult))
   $nativeLines.Add('  native_error_class: '+(Safe-Code $ev.native_error_class))
   $nativeLines.Add('  exit_code: '+[string]$item.command_exit_code)
+  $probe=$ev.native_cwd_probes
+  $nativeProbeResult=[ordered]@{
+    native_cwd_status=(Safe-Code $probe.native_cwd_status)
+    native_cwd_hresult=(Safe-Code $probe.native_cwd_hresult)
+    psdrive_status=(Safe-Code $probe.psdrive_status)
+    psdrive_hresult=(Safe-Code $probe.psdrive_hresult)
+    provider_path_status=(Safe-Code $probe.provider_path_status)
+    provider_path_hresult=(Safe-Code $probe.provider_path_hresult)
+  }
+  foreach($probeKey in $nativeProbeResult.Keys){
+    $nativeLines.Add('  '+$probeKey+': '+[string]$nativeProbeResult[$probeKey])
+  }
   $nativeTraceRows+=([ordered]@{
     schema='SMARTAGENT_NATIVE_STEP_TRACE_RCA_V1'
     task_id=(Safe-Code $task)
@@ -733,6 +748,7 @@ foreach($item in @($executorCommandRows)) {
     native_process_pid=$(if($null -ne $ev.native_process_pid){[int]$ev.native_process_pid}else{0})
     native_running_sample_count=$(if($null -ne $ev.native_running_sample_count){[int]$ev.native_running_sample_count}else{0})
     steps=@($steps)
+    native_cwd_probes=$nativeProbeResult
     command_values_redacted=$true
   })
 }
@@ -759,6 +775,7 @@ foreach ($entry in @($executorCommandRows)) {
     $commandLines.Add('native_failure_substage: ' + (Safe-Code $entry.sandbox_evidence.native_failure_substage))
     $commandLines.Add('native_exception_hresult: ' + (Safe-Code $entry.sandbox_evidence.native_exception_hresult))
     $commandLines.Add('native_command_trace: native_execution_trace.txt')
+    $commandLines.Add('native_cwd_probes: native_execution_trace.json')
     $commandLines.Add('capture_status: ' + $entry.command_capture_status + '; ' + $entry.result_capture_status)
 }
 [IO.File]::WriteAllLines((Join-Path $stage 'executor_run_commands.txt'),
