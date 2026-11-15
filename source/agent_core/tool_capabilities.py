@@ -81,7 +81,7 @@ _TOOL_PURPOSES = MappingProxyType({
     "inspect_project_ledger": "Inspect compact project sync and semantic-history provenance without uploading files.",
     "query_project_history": "Query bounded Project Ledger events by type, snapshot, path, or time.",
     "project_sync": "Create or refresh Runtime project context using the smallest selected strategy.",
-    "install_toolchain": "Automatically install a catalog-pinned tool into the isolated managed Toolchain AppContainer, never arbitrary host commands.",
+    "install_toolchain": "Install only a checksum-verified on-demand tool ZIP in an isolated AppContainer, then register globally for reuse across ACL/Turbo modes.",
     "run_command": "Run an explicitly selected command inside the authorized workspace.",
     "create_directory": "Create exactly one new, authorized directory without shell execution, recursive parent creation or overwrites.",
 })
