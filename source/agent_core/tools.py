@@ -571,11 +571,26 @@ def tool_run_command(
         from .tool_result_contract import attach_runtime_result
         rejected = bool(main.get('security_rejected'))
         execution = operation_result['execution_status']
-        running = main.get('process_state') == 'RUNNING'
+        witness = main.get('liveness_evidence') or {}
+        running = (
+            main.get('process_state') == 'RUNNING'
+            and isinstance(witness, dict)
+            and witness.get('liveness_verified') is True
+            and witness.get('process_identity_verified') is True
+        )
         status = 'REJECTED' if rejected else 'RUNNING' if running else execution
-        executed = not rejected and (running or main.get('exit_code') is not None)
-        return attach_runtime_result('\n'.join(lines), status,
-            'COMMAND_REJECTED' if rejected else 'COMMAND_RUNNING' if running else 'COMMAND_EXITED' if executed else 'PROCESS_NOT_STARTED', tool='run_command',
+        executed = not rejected and (
+            running or main.get('process_started') is True
+            or main.get('exit_code') is not None
+        )
+        reason = (
+            'COMMAND_REJECTED' if rejected
+            else 'COMMAND_RUNNING_OS_VERIFIED' if running
+            else 'COMMAND_OUTCOME_UNKNOWN' if status == 'UNKNOWN'
+            else 'COMMAND_EXITED' if main.get('exit_code') is not None
+            else 'PROCESS_NOT_STARTED'
+        )
+        return attach_runtime_result('\n'.join(lines), status, reason, tool='run_command',
             executed=executed, data={**operation_result,
                 # Full captured streams are Runtime evidence. The Planner
                 # receives inline small data or a task-bound evidence pointer;
@@ -601,7 +616,16 @@ def tool_run_command(
                         'TURBO_OS_BROKER_BLOCKED:')
                     else 'UNCLASSIFIED' if rejected else ''
                 ),
-                'process_state':'RUNNING' if running else 'EXITED' if executed else 'NOT_STARTED', 'pid':main.get('pid')})
+                'process_state':('RUNNING' if running else
+                    main.get('process_state') if main.get('process_state') in {'EXITED', 'UNKNOWN', 'NOT_STARTED'}
+                    else 'EXITED' if main.get('exit_code') is not None
+                    else 'UNKNOWN' if executed or main.get('possible_partial_execution')
+                    else 'NOT_STARTED'),
+                'pid':main.get('pid'),
+                'execution_id':main.get('execution_id'),
+                'liveness_evidence':witness,
+                'last_running_evidence':main.get('last_running_evidence'),
+                'possible_partial_execution':bool(main.get('possible_partial_execution'))})
     telemetry = None
     if security_context:
         # Propagate the real Action and Task identities to the native OS
@@ -649,6 +673,39 @@ def tool_run_command(
         # evidence, distinct from arbitrary text in command stdout.
         lines.append("[TURBO_OS_SANDBOX_EVIDENCE] " +
                      json.dumps(main["sandbox_evidence"], ensure_ascii=False, default=str))
+
+    # A missing exit code is not an observed nonzero exit code.  In
+    # particular, a Broker/controller timeout may occur after the child
+    # started and even produced an artifact.  Preserve UNKNOWN; do not
+    # manufacture FAILED or run postconditions against an unknown mutation.
+    if main.get("exit_code") is None and not main.get("security_rejected"):
+        witness = main.get("liveness_evidence") or {}
+        live = (
+            main.get("process_state") == "RUNNING"
+            and isinstance(witness, dict)
+            and witness.get("liveness_verified") is True
+            and witness.get("process_identity_verified") is True
+        )
+        current_status = "RUNNING" if live else "UNKNOWN"
+        lines.append("VERIFICATION_STATUS: UNVERIFIED")
+        lines.append("EXECUTION_STATUS: " + current_status)
+        lines.append("TERMINAL_ELIGIBLE: false")
+        operation_result = build_operation_result(
+            operation, command=command, execution_status=current_status,
+            verification_status="UNVERIFIED", stdout=main.get("stdout", ""),
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""),
+            verifies_action_id=verifies_action_id, condition_id=condition_id,
+        )
+        lines.append("[OPERATION_RESULT] " + json.dumps(
+            operation_result, ensure_ascii=False, default=str,
+        ))
+        return finish(operation_result)
 
     if expected_failure is not None:
         spec_valid = isinstance(expected_failure, dict) and bool(expected_failure)
@@ -1908,7 +1965,13 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
                   "terminal_eligible": False})
     if tool == "install_toolchain":
         from .managed_toolchain_install import install_toolchain_action
-        return install_toolchain_action(tool_call)
+        telemetry = {
+            "root": (getattr(agent, "workspace_root", None)
+                     or getattr(agent, "workspace", None)) if agent else None,
+            "task_id": str(getattr(agent, "current_task_id", "") or "") if agent else "",
+            "action_id": str(tool_call.get("action_id", "") or ""),
+        }
+        return install_toolchain_action(tool_call, telemetry=telemetry)
     if tool == "run_command" and not scope["allowed"]:
         from .tool_result_contract import encode_result
         return encode_result('REJECTED', 'COMMAND_SCOPE_REJECTED', tool=tool,
