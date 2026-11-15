@@ -41,6 +41,14 @@ def _receipt(root, *, token=True, pins=True, code=0, stderr=""):
         "status": "EXECUTED_IN_OS_APPCONTAINER",
         "turbo_root": str(root),
         "command_exit_code": code,
+        # Git63: synthetic attested native child that exited before a
+        # two-second RUNNING interval; no fabricated live process sample.
+        "native_process_pid": 4182,
+        "native_running_sample_count": 0,
+        "native_last_running_evidence": {},
+        "native_failure_stage": "",
+        "native_exception_type": "",
+        "native_failure_stage_source": "NONE",
         "stdout_base64": base64.b64encode(b"Git version 2.56.0").decode(),
         "stderr_base64": base64.b64encode(stderr.encode()).decode(),
         "stdout_bytes": 18,
