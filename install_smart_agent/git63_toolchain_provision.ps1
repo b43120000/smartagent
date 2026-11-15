@@ -52,7 +52,8 @@ if($sid -notmatch '^S-1-15-2-[0-9-]+$'){throw 'GIT63_PROVISION_SID_INVALID'}
 # Task AppContainers get RX only; the distinct installer SID gets Modify.
 # Operator (current user) can create pinned I/O capture handles, not arbitrary
 # task-root AppContainer processes. No grants to SmartAgent .venv or secure.
-& icacls.exe $store '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' ('*'+$sid+':(OI)(CI)M') '*S-1-15-2-1:(OI)(CI)RX' | Out-Null
+$userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+& icacls.exe $store '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' ('*'+$userSid+':(OI)(CI)RX') ('*'+$sid+':(OI)(CI)M') '*S-1-15-2-1:(OI)(CI)RX' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'GIT63_PROVISION_STORE_ACL_FAILED'}
 $userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 & icacls.exe $capture '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' ('*'+$userSid+':(OI)(CI)M') ('*'+$sid+':(OI)(CI)M') | Out-Null
