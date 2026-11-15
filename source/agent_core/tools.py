@@ -1779,7 +1779,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             action_id=tool_call.get('action_id',''),
             request_id=getattr(agent,'current_request_id','') if agent else '',
             task_id=getattr(agent,'current_task_id','') if agent else '')
-    if tool not in {'read_file','write_file','create_directory','list_directory','find_file','run_command','install_toolchain','upload_file','upload_files','return_artifact',
+    if tool not in {'read_file','write_file','create_directory','list_directory','find_file','run_command','install_toolchain','inspect_toolchain_environment','upload_file','upload_files','return_artifact',
                     'download_artifact','web_edit_file','execute_artifact_bundle',
                     'web_search','save_session_summary','google_drive_upload','ask_executor'} | P1_TOOLS:
         return result
