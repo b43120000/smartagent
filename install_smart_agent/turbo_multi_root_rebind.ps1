@@ -295,34 +295,7 @@ catch [System.UnauthorizedAccessException] { exit 0 }
      $pinName='install_smart_agent/'+$file
      $pin=$manifest.core_files.PSObject.Properties[$pinName]
      $sourceHash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
-     if($null -eq $pin -or [string]$pin.Value -notmatch '^[0-9a-fA-F]{64} # Phase 2: independent, protected, replace-atomic journal writes.
- foreach($item in $verified){
-   $a=$item.record
-   $key=[IO.Path]::GetFullPath([string]$a.turbo_root).TrimEnd('\').ToUpperInvariant()
-   $epoch=if($epochMap.Count){[int]$epochMap[$key]}else{[int]$policy.revision}
-   $newDigest=if($RefreshBrokerSource){$newBrokerHash}else{[string]$a.broker_source_sha256}
-   if([int]$a.policy_revision -eq $epoch -and
-      [string]$a.broker_source_sha256 -ieq $newDigest){continue}
-   $a.policy_revision=$epoch
-   if($RefreshBrokerSource){$a.broker_source_sha256=$newDigest}
-   $tmp=[string]$item.path+'.tmp'
-   try{
-     $data=[Text.Encoding]::UTF8.GetBytes(($a | ConvertTo-Json -Depth 18))
-     $stream=[IO.FileStream]::new($tmp,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::None)
-     try{$stream.Write($data,0,$data.Length);$stream.Flush($true)}
-     finally{$stream.Dispose()}
-     & icacls.exe $tmp '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
-     if($LASTEXITCODE -ne 0){throw 'GIT62_REBIND_PROTECTION_FAILED'}
-     Move-Item -LiteralPath $tmp -Destination $item.path -Force -ErrorAction Stop
-   } finally {Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue}
- }
- Write-Host ('GIT62_PER_ROOT_REBIND_PASS roots='+$verified.Count)
- if($RefreshBrokerSource){Write-Host ('GIT62_PROTECTED_BROKER_REFRESH_PASS roots='+$verified.Count)}
-} finally{
- if($held){try{$mutex.ReleaseMutex()}catch{}}
- $mutex.Dispose()
-}
- -or
+     if($null -eq $pin -or [string]$pin.Value -notmatch '^[0-9a-fA-F]{64}$' -or
         $sourceHash -ine [string]$pin.Value){
        throw 'GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH'
      }
