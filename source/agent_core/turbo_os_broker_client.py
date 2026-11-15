@@ -132,7 +132,10 @@ def _git59_validate_direct_child(receipt: dict, requested: str, project: Path) -
 
 # Classify *known* native broker stderr without exposing a full PowerShell
 # exception, command text, paths or potentially sensitive process output.
-_NATIVE_BROKER_REASON = re.compile(r"\bGIT50_[A-Z0-9_]{3,120}\b")
+# Report only bounded native error codes, not raw stderr or paths.
+_NATIVE_BROKER_REASON = re.compile(
+    r"\b(?:GIT50|GIT59|GIT62|TURBO_D3)_[A-Z0-9_]{3,120}\b"
+)
 _NATIVE_OS_OPERATIONS = (
     ("CreateProcessW(AppContainer)", "WIN32_CREATEPROCESS_APP_CONTAINER"),
     ("InitializeProcThreadAttributeList", "WIN32_ATTRIBUTE_LIST"),
@@ -175,6 +178,9 @@ def _native_broker_rejection_reason(stderr: str) -> str:
         ("ParserError", "POWERSHELL_PARSER_ERROR"),
         ("ParameterBindingException", "POWERSHELL_PARAMETER_BINDING"),
         ("NamedParameterNotFound", "POWERSHELL_PARAMETER_BINDING"),
+        ("UnauthorizedAccessException", "POWERSHELL_ACCESS_DENIED"),
+        ("Access is denied", "POWERSHELL_ACCESS_DENIED"),
+        ("拒絕存取", "POWERSHELL_ACCESS_DENIED"),
         ("Add-Type", "POWERSHELL_NATIVE_TYPE_COMPILATION"),
     ):
         if phrase.casefold() in output.casefold():

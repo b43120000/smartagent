@@ -235,3 +235,28 @@ def test_root_epochs_reject_partial_or_duplicate_map(installed):
     invalid = {**policy, "turbo_root_epochs": [{"root": str(a), "epoch": "29"}]}
     with pytest.raises(ValueError, match="turbo_root_epoch_untrusted"):
         turbo_root_epoch(invalid, a)
+
+
+def test_telegram_native_broker_rejection_preserves_safe_git62_code():
+    # Real user paths or raw stderr must not be included in Runtime evidence.
+    from agent_core.turbo_os_broker_client import _native_broker_rejection_reason
+    prefix = "TURBO_OS_BROKER_NATIVE_EXECUTOR_REJECTED:"
+    raw = r"C:\secret\user.ps1:12 GIT62_BROKER_ROOT_EPOCH_UNTRUSTED"
+    assert _native_broker_rejection_reason(raw) == (
+        prefix + "GIT62_BROKER_ROOT_EPOCH_UNTRUSTED"
+    )
+    assert _native_broker_rejection_reason(
+        "GIT50_BROKER_NEGATIVE_SENTINEL_UNVERIFIED"
+    ) == prefix + "GIT50_BROKER_NEGATIVE_SENTINEL_UNVERIFIED"
+    assert _native_broker_rejection_reason(
+        "GIT59_PINNED_VERSION_EXECUTABLE_NOT_ENROLLED"
+    ) == prefix + "GIT59_PINNED_VERSION_EXECUTABLE_NOT_ENROLLED"
+    assert _native_broker_rejection_reason(
+        "TURBO_D3_RECOVERY_REQUIRED"
+    ) == prefix + "TURBO_D3_RECOVERY_REQUIRED"
+    assert _native_broker_rejection_reason(
+        r"generic error C:\secret\user.ps1"
+    ) == "TURBO_OS_BROKER_NATIVE_EXECUTOR_REJECTED"
+    assert _native_broker_rejection_reason(
+        "UnauthorizedAccessException"
+    ) == prefix + "POWERSHELL_ACCESS_DENIED"

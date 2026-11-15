@@ -216,7 +216,7 @@
     "source/agent_core/tri_one_runtime_terminal.py": "83865fb88d3d5a5710c4c474685732a5c80b9f26db1ef765b8406b6140f4d92e",
     "source/agent_core/tri_one_shared_worker.py": "bddb403263eee2d1f2f5ec3675b873dd91f24d3158a7d5f77db21fe0e30c4c86",
     "source/agent_core/tri_one_task_result.py": "4039d909aa6f63e6f7bb921282006ada93e43f1ce212ca1b54c7284a7d0116d6",
-    "source/agent_core/turbo_os_broker_client.py": "113a934bcffc0ba21adb46d42a3739c40e6b415a89538183fbc052a390d72218",
+    "source/agent_core/turbo_os_broker_client.py": "d04490c977faede9fee5356aa6ce9ad57fd7fe68ac1944c6b00bd7359e960390",
     "source/agent_core/typed_field_values.py": "afea71946afe45888279c54829c4f337b1b3d9914ce6aa1167a9c7353c9ce3e5",
     "source/agent_core/ui_calibration.py": "5069f742bd8027c67163cab80171316e583ad6b1ac1bcba6ddaab80c91be1e16",
     "source/agent_core/unified_contract_transaction.py": "1eff7bb092a02d699ae7e496baacd9ddd251b1595096857493da40ed7012a29f",
