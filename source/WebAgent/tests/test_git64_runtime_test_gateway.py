@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from agent_core.runtime_test_gateway import GatewayError, SCHEMA, run_case
 from agent_core.tool_result_contract import encode_result
@@ -207,6 +207,63 @@ class TestGateway(unittest.TestCase):
         )
         self.assertEqual(result["cases"][0]["status"], "BLOCKED")
         dispatch.assert_not_called()
+
+
+    def test_policy_flips_to_normal_at_real_execute_tool_no_host_fallback(self):
+        # Gate looked native at fixture admission, but the actual shared
+        # Runtime observes a changed policy and must NOT launch a host process.
+        with patch("agent_core.turbo_broker_admission.assess",
+                   return_value={
+                       "decision": "NORMAL",
+                       "reason_code": "TURBO_SUPPRESSED_ACL_OFF",
+                       "evidence": {},
+                   }), patch(
+                       "agent_core.tools.resolve_command_working_directory",
+                       return_value=Path(self.directory),
+                   ), patch(
+                       "agent_core.security_context._configured_access_roots",
+                       return_value=((Path(self.workspace),), (), ()),
+                   ), patch(
+                       "agent_core.tools._run_powershell_capture"
+                   ) as host_capture:
+            report = run_case(
+                self.spec, live_authorized=True,
+                policy_loader=self.policy,
+                admission=self.native_gate,
+            )
+        host_capture.assert_not_called()
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(
+            report["cases"][0]["runtime"]["tool_reason"],
+            "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+        )
+
+    def test_bounded_process_rechecks_native_under_context(self):
+        from agent_core.bounded_process import (
+            native_only_runtime_test, native_only_runtime_test_active,
+            run_bounded_process,
+        )
+        self.assertFalse(native_only_runtime_test_active())
+        with patch("agent_core.turbo_broker_admission.assess",
+                   return_value={
+                       "decision": "NORMAL", "reason_code": "TURBO_DISABLED",
+                       "evidence": {},
+                   }), patch(
+                       "agent_core.workspace_access.resolve_turbo_authorization_workspace",
+                       return_value=None,
+                   ), patch("agent_core.bounded_process.subprocess.Popen") as launch:
+            with native_only_runtime_test():
+                self.assertTrue(native_only_runtime_test_active())
+                result = run_bounded_process(
+                    "Write-Output simulated",
+                    cwd=Path(self.directory), timeout=5,
+                    security_command="Write-Output simulated",
+                )
+            self.assertFalse(native_only_runtime_test_active())
+        launch.assert_not_called()
+        self.assertTrue(result["security_rejected"])
+        self.assertFalse(result["process_started"])
+        self.assertIn("RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK", result["error"])
 
 
 if __name__ == "__main__":
