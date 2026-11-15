@@ -498,6 +498,50 @@ def execute_turbo_command(
     direct_child = _git59_validate_direct_child(
         receipt, native_version_probe, _install_root(),
     )
+
+    # P2: Validate historical RUNNING samples from the protected native
+    # Win32 WaitForSingleObject loop, never from a user-supplied stdout line.
+    process_pid = receipt.get("native_process_pid")
+    native_samples = receipt.get("native_running_sample_count")
+    native_last = receipt.get("native_last_running_evidence")
+    if (type(process_pid) is not int or process_pid <= 0
+            or type(native_samples) is not int
+            or not 0 <= native_samples <= 150
+            or not isinstance(native_last, dict)
+            or bool(native_last) != (native_samples > 0)):
+        raise TurboOSBrokerUnavailable("GIT63_NATIVE_RUNNING_EVIDENCE_INVALID")
+    if native_samples:
+        now = __import__("time").time()
+        observed = native_last.get("observed_at")
+        if (native_last.get("schema") != "SMARTAGENT_PROCESS_LIVENESS_V1"
+                or native_last.get("execution_id") != request_action
+                or native_last.get("process_state") != "RUNNING"
+                or native_last.get("liveness_verified") is not True
+                or native_last.get("process_identity_verified") is not True
+                or native_last.get("evidence_source") !=
+                   "NATIVE_WIN32_WAIT_FOR_SINGLE_OBJECT"
+                or native_last.get("child_process_policy") != "JOB_KILL_ON_CLOSE"
+                or native_last.get("pid") != process_pid
+                or native_last.get("running_sample_count") != native_samples
+                or type(observed) not in (int, float)
+                or not 0 <= now - float(observed) <= timeout + 75
+                or native_last.get("terminal_eligible") is not False):
+            raise TurboOSBrokerUnavailable("GIT63_NATIVE_RUNNING_EVIDENCE_INVALID")
+
+    # P0: diagnostic stage is not a kernel security attestation.
+    native_stage = receipt.get("native_failure_stage")
+    native_exception_type = receipt.get("native_exception_type")
+    native_stage_source = receipt.get("native_failure_stage_source")
+    if (not isinstance(native_stage, str)
+            or native_stage not in {
+                "", "CWD_SETUP", "ENV_SETUP", "COMMAND_EXECUTE", "OUTPUT_CAPTURE"}
+            or not isinstance(native_exception_type, str)
+            or not re.fullmatch(r"[A-Za-z0-9.]{0,100}", native_exception_type)
+            or native_stage_source not in {
+                "NONE", "WRAPPER_RESERVED_EXIT_CODE",
+                "SANDBOX_WRAPPER_DIAGNOSTIC"}):
+        raise TurboOSBrokerUnavailable("GIT63_NATIVE_FAILURE_STAGE_INVALID")
+
     # Process exit 1 is distinct from not starting, DNS/TLS failures, and
     # from native command-policy denials. Keep native output and typed hint.
     stderr_text = stderr.decode("utf-8", errors="replace")
@@ -528,6 +572,11 @@ def execute_turbo_command(
         "native_toolchain_status": receipt["native_toolchain_status"],
         "native_trusted_tools": tools,
         "native_error_class": error_class,
+        "native_failure_stage": native_stage,
+        "native_exception_type": native_exception_type,
+        "native_failure_stage_source": native_stage_source,
+        "native_process_pid": process_pid,
+        "native_running_sample_count": native_samples,
         "stdout_capture_state": ("TRUNCATED" if out_cut else
                                  "COMPLETE_NONEMPTY" if out_size else "COMPLETE_EMPTY"),
         "stderr_capture_state": ("TRUNCATED" if err_cut else
@@ -574,6 +623,8 @@ def execute_turbo_command(
         "process_started": True,
         "process_state": "EXITED",
         "execution_id": request_action,
+        "pid": process_pid,
+        "last_running_evidence": native_last if native_samples else None,
         # The protected Native Broker has already waited for its
         # AppContainer child and attested the final OS exit code.
         # This is an EXIT receipt, never a fabricated live RUNNING sample.
@@ -583,6 +634,7 @@ def execute_turbo_command(
             "process_state": "EXITED",
             "liveness_verified": False,
             "process_identity_verified": True,
+            "pid": process_pid,
             "evidence_source": "NATIVE_APPCONTAINER_ATTESTED_PROCESS_EXIT",
             "observed_at": __import__("time").time(),
             "exit_code": exit_code,
