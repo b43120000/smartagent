@@ -44,6 +44,31 @@ Every Action runs through the shared Runtime. On an unexpected outcome,
 execution stops; failed mutations are **never automatically retried**.
 Expected values are limited to safe, typed Runtime status/evidence fields.
 
+## Git64 CWD Set-Location workaround candidate
+
+A local Live trace showed exact OS CWD = authorized Turbo Root,
+`Get-PSDrive E` = FileSystem, `Resolve-Path` = target match, but
+`Set-Location -LiteralPath <AUTHORIZED_CWD>` raised
+`UnauthorizedAccessException (0x80070005)`.
+
+The Native Child now first attempts the original `Set-Location`.
+**Only if** that attempt raises UnauthorizedAccessException, the wrapper
+reconfirms OS CWD and resolved FileSystem ProviderPath against the
+already authorized root. It then attempts a **task-scope temporary
+FileSystem PSDrive rooted at that exact directory**, followed by
+`Set-Location SARTCWD:\`.
+
+This does not change Windows ACL, broaden Turbo Root, call Host CMD, or
+skip CWD verification. The wrapper still requires both the final
+PowerShell FileSystem ProviderPath and OS CurrentDirectory to match the
+original authorized CWD before executing the requested command.
+Failure at any step remains a failed action; the original task is
+never retried automatically.
+
+`native_setup_trace` and `cwd_binding_method` in the Gateway report
+show whether `CWD_PSDRIVE_FALLBACK` was attempted and succeeded.
+This is a **repair candidate**, not proof of an AppContainer Live PASS.
+
 ## CI scope
 
 GitHub Actions `.github/workflows/git64-runtime-test-gateway.yml`
