@@ -4,6 +4,8 @@ $ErrorActionPreference='Stop'
 $Target=Join-Path (Join-Path $StoreRoot $Tool) $Version
 $Stage=Join-Path $StoreRoot ('.stage-'+[Guid]::NewGuid().ToString('N'))
 $Zip=$Stage+'.zip'
+$ChecksumFile=$Stage+'.sha256'
+$PublisherChecksumVerified=$false
 $SourceAlias=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($AliasesJsonBase64))
 $Aliases=@($SourceAlias | ConvertFrom-Json)
 $Denied=$false
@@ -21,6 +23,16 @@ try {
  Invoke-WebRequest -Uri $SourceUrl -OutFile $Zip -UseBasicParsing -MaximumRedirection 5 -ErrorAction Stop | Out-Null
  if((Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash -ine $ArchiveSHA256){
   throw 'GIT63_ARCHIVE_SHA256_MISMATCH'
+ }
+ if($ChecksumUrl){
+  Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumFile -UseBasicParsing -MaximumRedirection 5 -ErrorAction Stop | Out-Null
+  if((Get-Item -LiteralPath $ChecksumFile).Length -gt 65536){throw 'GIT63_PUBLISHER_CHECKSUM_OVERSIZED'}
+  $checksumText=Get-Content -LiteralPath $ChecksumFile -Raw -Encoding UTF8 -ErrorAction Stop
+  $matches64=[regex]::Matches($checksumText,'(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])')
+  if($matches64.Count -ne 1 -or $matches64[0].Value -ine $ArchiveSHA256){
+   throw 'GIT63_PUBLISHER_CHECKSUM_MISMATCH'
+  }
+  $PublisherChecksumVerified=$true
  }
  Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
  Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
@@ -63,9 +75,11 @@ try {
   schema='SMARTAGENT_GIT63_INSTALL_RECEIPT_V1';status='INSTALLED'
   tool=$Tool;version=$Version;archive_sha256=$ArchiveSHA256
   kernel_outside_write_denied=$true
+  publisher_checksum_verified=$PublisherChecksumVerified
  }|ConvertTo-Json -Compress
 } finally {
  try{Remove-Item -LiteralPath $Zip -Force -ErrorAction Stop}catch{}
+ try{Remove-Item -LiteralPath $ChecksumFile -Force -ErrorAction Stop}catch{}
  if(Test-Path -LiteralPath $Stage){
   try{Remove-Item -LiteralPath $Stage -Recurse -Force -ErrorAction Stop}catch{}
  }
