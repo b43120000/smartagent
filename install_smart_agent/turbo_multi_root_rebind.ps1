@@ -8,6 +8,7 @@ param(
  [switch]$RepairMissingSentinels,
  [switch]$AllowPendingEnrollments,
  [switch]$MigrateRootEpochs,
+ [switch]$RefreshBrokerSource,
  [string]$SelectedTurboRoot=''
 )
 Set-StrictMode -Version Latest
@@ -29,8 +30,9 @@ $mutex=[Threading.Mutex]::new($false,('Global\SmartAgentTurbo-'+$digest.Substrin
 $held=$false
 $restored=0
 # VerifyOnly must remain read-only; explicit repair never publishes a revision.
-if(($VerifyOnly -and ($RepairMissingSentinels -or $MigrateRootEpochs)) -or
-   ($RepairMissingSentinels -and $MigrateRootEpochs)){
+if(($VerifyOnly -and ($RepairMissingSentinels -or $MigrateRootEpochs -or $RefreshBrokerSource)) -or
+   ($RepairMissingSentinels -and ($MigrateRootEpochs -or $RefreshBrokerSource)) -or
+   ($MigrateRootEpochs -and $RefreshBrokerSource)){
  throw 'GIT62_REBIND_REPAIR_AND_VERIFY_CONFLICT'
 }
 if($SelectedTurboRoot -and -not ($VerifyOnly -or $RepairMissingSentinels)){
@@ -116,9 +118,13 @@ try{
    # Protected Broker hash and recorded SID must be trusted BEFORE repair.
    $entry=[IO.Path]::GetFullPath([string]$a.broker_entry).TrimEnd('\')
    $protectedEntry=Join-Path $sec 'turbo_broker_code\turbo_os_execute.ps1'
+   $protectedHash=(Get-FileHash -LiteralPath $entry -Algorithm SHA256).Hash
+   $sourceHash=if($RefreshBrokerSource){
+     (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'turbo_os_execute.ps1') -Algorithm SHA256).Hash
+   }else{''}
    if(-not (Equal $entry $protectedEntry) -or
-      (Get-FileHash -LiteralPath $entry -Algorithm SHA256).Hash -ine
-       [string]$a.broker_source_sha256){
+      ($protectedHash -ine [string]$a.broker_source_sha256 -and
+       (-not $RefreshBrokerSource -or $protectedHash -ine $sourceHash))){
      throw 'GIT62_REBIND_BROKER_HASH_CHANGED'
    }
    $sentinel=[IO.Path]::GetFullPath([string]$a.negative_sentinel_path).TrimEnd('\')
@@ -243,14 +249,30 @@ catch [System.UnauthorizedAccessException] { exit 0 }
      ' restored='+$restored)
    return
  }
- # Phase 2: independent, protected, replace-atomic journal writes. A crash
- # before every Root is rebased leaves that Root fail-closed (stale revision).
+ if($RefreshBrokerSource){
+   if($SelectedTurboRoot -or $verified.Count -lt 1){
+     throw 'GIT62_BROKER_REFRESH_SCOPE_INVALID'
+   }
+   $source=Join-Path $PSScriptRoot 'turbo_os_execute.ps1'
+   $protected=Join-Path $sec 'turbo_broker_code\turbo_os_execute.ps1'
+   Copy-Item -LiteralPath $source -Destination $protected -Force -ErrorAction Stop
+   & icacls.exe $protected '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
+   if($LASTEXITCODE -ne 0){throw 'GIT62_BROKER_REFRESH_ACL_FAILED'}
+   $newBrokerHash=(Get-FileHash -LiteralPath $protected -Algorithm SHA256).Hash
+   if($newBrokerHash -ine (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash){
+     throw 'GIT62_BROKER_REFRESH_HASH_FAILED'
+   }
+ }
+ # Phase 2: independent, protected, replace-atomic journal writes.
  foreach($item in $verified){
    $a=$item.record
    $key=[IO.Path]::GetFullPath([string]$a.turbo_root).TrimEnd('\').ToUpperInvariant()
    $epoch=if($epochMap.Count){[int]$epochMap[$key]}else{[int]$policy.revision}
-   if([int]$a.policy_revision -eq $epoch){continue}
+   $newDigest=if($RefreshBrokerSource){$newBrokerHash}else{[string]$a.broker_source_sha256}
+   if([int]$a.policy_revision -eq $epoch -and
+      [string]$a.broker_source_sha256 -ieq $newDigest){continue}
    $a.policy_revision=$epoch
+   if($RefreshBrokerSource){$a.broker_source_sha256=$newDigest}
    $tmp=[string]$item.path+'.tmp'
    try{
      $data=[Text.Encoding]::UTF8.GetBytes(($a | ConvertTo-Json -Depth 18))
@@ -263,6 +285,7 @@ catch [System.UnauthorizedAccessException] { exit 0 }
    } finally {Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue}
  }
  Write-Host ('GIT62_PER_ROOT_REBIND_PASS roots='+$verified.Count)
+ if($RefreshBrokerSource){Write-Host ('GIT62_PROTECTED_BROKER_REFRESH_PASS roots='+$verified.Count)}
 } finally{
  if($held){try{$mutex.ReleaseMutex()}catch{}}
  $mutex.Dispose()
