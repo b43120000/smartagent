@@ -66,7 +66,7 @@ foreach($property in $entry.executables.PSObject.Properties){
  $alias=[string]$property.Name
  $relative=[string]$property.Value
  if($alias -cnotmatch '^[a-z][a-z0-9_-]{0,31}$' -or
-   $relative -notmatch '^[A-Za-z0-9_.+-]+(?:[\\/][A-Za-z0-9_.+-]+)*\(?:exe|bat|cmd)$' -or
+   $relative -notmatch '^[A-Za-z0-9_.+-]+(?:[\\/][A-Za-z0-9_.+-]+)*\.(?:exe|bat|cmd)$' -or
    $relative -match '(?:^|[\\/])\.\.(?:[\\/]|$)'){
   throw 'GIT63_CATALOG_EXECUTABLE_UNTRUSTED'
  }
