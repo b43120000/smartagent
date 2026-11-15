@@ -112,7 +112,7 @@ INLINE_EXECUTOR_SPECS = (
 TOOL_ENVELOPE_SCHEMAS = {
     "install_toolchain": {
         "required": {"name": str, "version": str},
-        "optional": {},
+        "optional": {"source": dict},
     },
     "run_command": {
         "required": {"command": str, "operation": str},
