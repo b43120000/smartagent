@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
 import tempfile
 import uuid
 from pathlib import Path
@@ -32,6 +34,27 @@ def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
         + tail.decode("utf-8", errors="replace")
     ).strip()
     return preview, size, True, str(path.resolve())
+
+
+# Internal, tightening-only context. It is NOT read from tool_call,
+# Planner JSON or an environment variable. A test cannot silently fall
+# back to the host if ACL/Turbo changes between admission and dispatch.
+_NATIVE_ONLY_RUNTIME_TEST = ContextVar(
+    "smartagent_native_only_runtime_test", default=False
+)
+
+
+@contextmanager
+def native_only_runtime_test():
+    token = _NATIVE_ONLY_RUNTIME_TEST.set(True)
+    try:
+        yield
+    finally:
+        _NATIVE_ONLY_RUNTIME_TEST.reset(token)
+
+
+def native_only_runtime_test_active() -> bool:
+    return _NATIVE_ONLY_RUNTIME_TEST.get() is True
 
 
 def run_bounded_process(
@@ -78,6 +101,8 @@ def run_bounded_process(
             "sandbox_evidence": broker["evidence"],
         }
 
+    if native_only_runtime_test_active() and broker["decision"] != "BROKER_REQUIRED":
+        return reject_broker("RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK")
     if broker["decision"] == "BLOCKED":
         return reject_broker(str(broker["reason_code"]))
     if broker["decision"] != "BROKER_REQUIRED":
