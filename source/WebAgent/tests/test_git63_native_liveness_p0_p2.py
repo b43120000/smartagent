@@ -73,6 +73,14 @@ def _mock_receipt(tmp_path, code=0, stderr="", samples=4):
         "native_exception_hresult": "",
         "native_failure_stage_source": "NONE",
         "native_command_trace": ["CWD_GET_LOCATION_INITIAL.START", "CWD_GET_LOCATION_INITIAL.PASS"],
+        "native_cwd_probes": {
+            "native_cwd_status": "MATCH",
+            "native_cwd_hresult": "00000000",
+            "psdrive_status": "FILESYSTEM",
+            "psdrive_hresult": "00000000",
+            "provider_path_status": "MATCH",
+            "provider_path_hresult": "00000000",
+        },
     }
 
 
