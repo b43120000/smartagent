@@ -431,8 +431,15 @@ $crossRootProof
     # not to every AppContainer verification / installer probe.
     # The broker has already verified state.cwd is the exact authorized root.
     $cwdLiteral=([string]$state.cwd).Replace("'","''")
+    # The native CreateProcessW call has already bound its OS CWD to the
+    # exact admitted directory. Avoid a redundant PowerShell provider rebind
+    # if Get-Location already agrees: re-entering a root can need parent
+    # traversal rights that an AppContainer intentionally does not possess.
+    # If it does NOT agree, Set-Location is still mandatory and fail-closed.
     $taskCwdSetup='$script:smartagentStage=''CWD_SETUP''; '+
-        "Set-Location -LiteralPath '$cwdLiteral' -ErrorAction Stop; "
+        "if(-not [string]::Equals((Get-Location).Path,'$cwdLiteral',"+
+        "[StringComparison]::OrdinalIgnoreCase))"+
+        "{Set-Location -LiteralPath '$cwdLiteral' -ErrorAction Stop}; "
     $taskCwdSetup+="if(-not [string]::Equals((Get-Location).Path,'$cwdLiteral',"+
         "[StringComparison]::OrdinalIgnoreCase) -or "+
         "-not [string]::Equals([Environment]::CurrentDirectory,'$cwdLiteral',"+
