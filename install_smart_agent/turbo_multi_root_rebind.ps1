@@ -165,6 +165,9 @@ catch [System.UnauthorizedAccessException] { exit 0 }
    }
    $verified+=,[pscustomobject]@{path=$file.FullName;record=$a}
  }
+ if($SelectedTurboRoot -and $verified.Count -ne 1){
+   throw 'GIT62_REBIND_SELECTED_JOURNAL_MISSING'
+ }
  if($VerifyOnly){
    Write-Host ('GIT62_PER_ROOT_PRECHECK_PASS roots='+$verified.Count)
    return

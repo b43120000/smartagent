@@ -188,6 +188,28 @@ catch { exit 95 }
  $policy.revision=63
  [IO.File]::WriteAllText((Join-Path $sec 'workspace_access_policy.json'),
      ($policy | ConvertTo-Json -Depth 10))
+ # Real Windows fixture for the user incident: old Rev 62 journal,
+ # new Rev 63 policy, missing sibling negative sentinel.
+ $sentinelB=[string]$b.negative_sentinel_path
+ Check (Test-Path -LiteralPath $sentinelB -PathType Leaf) 'GIT62_CI_SENTINEL_ORIGIN_MISSING'
+ [IO.File]::WriteAllText($sentinelB,'TAMPERED')
+ $tamperBlocked=$false
+ try{& $rebind -ProjectRoot $project -RepairMissingSentinels -SelectedTurboRoot $rootB | Out-Null}
+ catch{$tamperBlocked=$true}
+ Check $tamperBlocked 'GIT62_CI_TAMPERED_SENTINEL_WAS_OVERWRITTEN'
+ Check ([IO.File]::ReadAllText($sentinelB) -ceq 'TAMPERED') 'GIT62_CI_UNTRUSTED_PROBE_MODIFIED'
+ Remove-Item -LiteralPath $sentinelB -Force -ErrorAction Stop
+ $missingBlocked=$false
+ try{& $rebind -ProjectRoot $project -VerifyOnly | Out-Null}
+ catch{$missingBlocked=$true}
+ Check $missingBlocked 'GIT62_CI_VERIFY_ONLY_RECREATED_SENTINEL'
+ Check (-not (Test-Path -LiteralPath $sentinelB)) 'GIT62_CI_VERIFY_ONLY_MUTATED_FILES'
+ & $rebind -ProjectRoot $project -RepairMissingSentinels -SelectedTurboRoot $rootB
+ Check (Test-Path -LiteralPath $sentinelB -PathType Leaf) 'GIT62_CI_RECOVERY_DID_NOT_CREATE_SENTINEL'
+ Check ([IO.File]::ReadAllText($sentinelB) -ceq 'OUTSIDE_SENTINEL') 'GIT62_CI_RECOVERY_SENTINEL_BAD_CONTENT'
+ $stillOld=Get-Content -LiteralPath $jb.activation -Raw -Encoding UTF8 | ConvertFrom-Json
+ Check ([int]$stillOld.policy_revision -eq 62) 'GIT62_CI_RECOVERY_BYPASSED_REVISION_COMMIT'
+ Write-Host 'GIT62_MISSING_SENTINEL_NATIVE_RECOVERY_PRECHECK_PASS'
  & $rebind -ProjectRoot $project
  $script:revision=63
  foreach($f in @($ja.activation,$jb.activation)){
