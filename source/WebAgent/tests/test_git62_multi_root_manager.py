@@ -71,7 +71,8 @@ def env(tmp_path, monkeypatch):
             j.parent.mkdir(parents=True, exist_ok=True)
             j.write_text(json.dumps({
                 "schema": "SMARTAGENT_TURBO_OS_ACTIVATION_V1",
-                "turbo_root": root, "status": "ACTIVE_PROVISIONED",
+                "turbo_root": root, "workspace_root": str(ws),
+                "status": "ACTIVE_PROVISIONED",
                 "policy_revision": policy["revision"],
             }), encoding="utf-8")
         if script == "turbo_os_activation.ps1":
