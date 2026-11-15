@@ -89,14 +89,19 @@ try {
  if(-not $VerifyOnly){
    $stage='NATIVE_SENTINEL_RECOVERY'
    Say 'Checking missing Native negative sentinels through admin-only recovery.'
-   & $rebind -ProjectRoot $root -RepairMissingSentinels
+   & $rebind -ProjectRoot $root -RepairMissingSentinels -AllowPendingEnrollments
    Require ($?) 'UPDATE_NATIVE_SENTINEL_RECOVERY_FAILED'
  }
  $stage='NATIVE_ROOT_PRECHECK'
  Say ('PRECHECK_ROOTS count='+$roots.Count)
- & $rebind -ProjectRoot $root -VerifyOnly
+ & $rebind -ProjectRoot $root -VerifyOnly -AllowPendingEnrollments
  Require ($?) 'UPDATE_NATIVE_ROOT_PRECHECK_FAILED'
  if($VerifyOnly){
+   . (Join-Path $root 'install_smart_agent\turbo_multi_root_paths.ps1')
+   foreach($registered in $roots){
+     $j=Get-TurboRootJournalPaths $security ([string]$registered)
+     Require (Test-Path -LiteralPath $j.activation -PathType Leaf) 'UPDATE_VERIFY_PENDING_ENROLLMENT'
+   }
    Say ('UPDATE_VERIFY_PASS manifest_match='+[string]($previousHash -eq $expectedHash)+'; roots='+$roots.Count)
    $updateSucceeded=$true
    exit 0
@@ -109,6 +114,40 @@ try {
  & $python -c $validate $root $Commit
  Require ($LASTEXITCODE -eq 0) 'UPDATE_COMMIT_CHANGED_DURING_STOP'
  Require ((Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant() -eq $expectedHash) 'UPDATE_MANIFEST_CHANGED_DURING_STOP'
+ # The global revision may already be ahead of the old two Journals.
+ # Migrate only after the agents are stopped and the OS attests each SID.
+ $stage='MIGRATE_NATIVE_ROOT_EPOCHS'
+ & $rebind -ProjectRoot $root -MigrateRootEpochs -AllowPendingEnrollments
+ Require ($?) 'UPDATE_ROOT_EPOCH_MIGRATION_FAILED'
+
+ $stage='REFRESH_PROTECTED_BROKER'
+ & $rebind -ProjectRoot $root -RefreshBrokerSource -AllowPendingEnrollments
+ Require ($?) 'UPDATE_PROTECTED_BROKER_REFRESH_FAILED'
+
+ # Recover incomplete enrollment after a Root was added to the policy.
+ $stage='ENROLL_PENDING_NATIVE_ROOTS'
+ . (Join-Path $root 'install_smart_agent\turbo_multi_root_paths.ps1')
+ foreach($registered in $roots){
+   $target=[IO.Path]::GetFullPath([string]$registered).TrimEnd('\')
+   $j=Get-TurboRootJournalPaths $security $target
+   if(Test-Path -LiteralPath $j.activation -PathType Leaf){continue}
+   $owners=@($policy.writable_workspaces | Where-Object {
+     $ws=[IO.Path]::GetFullPath([string]$_).TrimEnd('\')
+     $target.StartsWith($ws+'\',[StringComparison]::OrdinalIgnoreCase)
+   })
+   Require ($owners.Count -eq 1) ('UPDATE_PENDING_ROOT_OWNER_AMBIGUOUS:'+ $target)
+   $owner=[string]$owners[0]
+   if(Test-Path -LiteralPath $target -PathType Container){
+     & (Join-Path $root 'install_smart_agent\turbo_existing_root_preflight.ps1') -ProjectRoot $root -Workspace $owner -TurboRoot $target
+     Require ($?) ('UPDATE_PENDING_ROOT_PREFLIGHT_FAILED:'+ $target)
+     & (Join-Path $root 'install_smart_agent\turbo_existing_root_activate.ps1') -Action Activate -ProjectRoot $root -Workspace $owner -TurboRoot $target -ConfirmTarget $target
+   }else{
+     Require (-not (Test-Path -LiteralPath $target)) ('UPDATE_PENDING_ROOT_NOT_DIRECTORY:'+ $target)
+     & (Join-Path $root 'install_smart_agent\turbo_auto_activate.ps1') -Action Apply -ProjectRoot $root -TurboRoot $target
+   }
+   Require ($?) ('UPDATE_PENDING_ROOT_ACTIVATION_FAILED:'+ $target)
+   Require (Test-Path -LiteralPath $j.activation -PathType Leaf) ('UPDATE_PENDING_ROOT_JOURNAL_MISSING:'+ $target)
+ }
  $stage='REBIND_MACHINE_AUTHORIZATION'
  if($previousHash -ne $expectedHash){
    Say 'Running existing protected-updater/SID-verified admin manifest rebind.'
