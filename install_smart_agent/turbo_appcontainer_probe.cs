@@ -492,7 +492,34 @@ public static class SmartAgentGit47AppContainerProbe
             VerifyChildToken(pi.hProcess, sidString);
             if (ResumeThread(pi.hThread) == 0xFFFFFFFFu)
                 throw Last("ResumeThread");
-            uint wait = WaitForSingleObject(pi.hProcess, timeoutMilliseconds);
+            // Git63 P2: sample the SAME verified kernel process handle while
+            // retaining job ownership. Quiet stdout/stderr is not failure.
+            System.Diagnostics.Stopwatch runningClock =
+                System.Diagnostics.Stopwatch.StartNew();
+            uint wait = WAIT_TIMEOUT;
+            int runningSampleCount = 0;
+            double lastRunningObservedAt = 0;
+            while (true)
+            {
+                long remaining = (long)timeoutMilliseconds -
+                    runningClock.ElapsedMilliseconds;
+                if (remaining <= 0)
+                {
+                    wait = WAIT_TIMEOUT;
+                    break;
+                }
+                uint interval = (uint)Math.Min(2000L, remaining);
+                wait = WaitForSingleObject(pi.hProcess, interval);
+                if (wait == WAIT_TIMEOUT)
+                {
+                    runningSampleCount++;
+                    lastRunningObservedAt = (DateTime.UtcNow -
+                        new DateTime(1970, 1, 1, 0, 0, 0,
+                            DateTimeKind.Utc)).TotalSeconds;
+                    continue;
+                }
+                break;
+            }
             if (wait == WAIT_TIMEOUT)
             {
                 TerminateJobObject(job, 124);
@@ -512,6 +539,11 @@ public static class SmartAgentGit47AppContainerProbe
                 + "\"os_process_started\":true,"
                 + "\"exit_code\":" + exitCode + ","
                 + "\"pid\":" + pi.dwProcessId
+                + ",\"native_running_sample_count\":" + runningSampleCount
+                + ",\"native_last_running_observed_at\":" +
+                    lastRunningObservedAt.ToString("R",
+                        System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"native_running_evidence_source\":\"NATIVE_WIN32_WAIT_FOR_SINGLE_OBJECT\""
                 + (captureVersion
                     ? (",\"git60_child_stdout_base64\":\""
                        + Convert.ToBase64String(ReadPinned(stdout, 32768))
@@ -599,6 +631,26 @@ public static class SmartAgentGit47AppContainerProbe
             cwd, timeoutMilliseconds, trustedToolPath);
     }
 
+    // Host-created capture files have an owner DACL which need not authorize
+    // the sandboxed SID. Grant read/write to this exact package SID ONLY on
+    // these disposable files inside the already-admitted Turbo Root.
+    // No Turbo Root directory or unrelated file ACL is changed.
+    static void AllowAppContainerCapture(string path, string moniker)
+    {
+        var packageSid = new System.Security.Principal.SecurityIdentifier(
+            DeriveSid(moniker));
+        System.Security.AccessControl.FileSecurity acl =
+            System.IO.File.GetAccessControl(path);
+        var rights = System.Security.AccessControl.FileSystemRights.ReadData |
+                     System.Security.AccessControl.FileSystemRights.WriteData |
+                     System.Security.AccessControl.FileSystemRights.AppendData |
+                     System.Security.AccessControl.FileSystemRights.ReadAttributes |
+                     System.Security.AccessControl.FileSystemRights.ReadPermissions;
+        acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+            packageSid, rights, System.Security.AccessControl.AccessControlType.Allow));
+        System.IO.File.SetAccessControl(path, acl);
+    }
+
     /// <summary>
     /// Capture process output through GUID-named files pinned by host handles.
     /// This is OUTPUT DATA, not an authorization/evidence receipt. Do not
@@ -635,6 +687,10 @@ public static class SmartAgentGit47AppContainerProbe
                        System.IO.FileMode.CreateNew, System.IO.FileAccess.ReadWrite,
                        System.IO.FileShare.ReadWrite))
             {
+                // Fail closed before launch if the precise package SID could
+                // not be granted access to the host-pinned capture handles.
+                AllowAppContainerCapture(stdoutPath, moniker);
+                AllowAppContainerCapture(stderrPath, moniker);
                 // The child can write to these two pre-opened, pinned files,
                 // but cannot replace their paths while the parent holds them.
                 string quoteOut = stdoutPath.Replace("'", "''");
@@ -684,6 +740,7 @@ public static class SmartAgentGit47AppContainerProbe
                 string wrapped =
                     "$ErrorActionPreference='Stop'; " +
                     "$global:LASTEXITCODE=$null; $text=''; $errText=''; $rc=1; " +
+                    "$script:smartagentStage='ENV_SETUP'; " +
                     "try { " + trustedAliases +
                     "$items=@(& {\n" + script + "\n} 2>&1); " +
                     "$commandSucceeded=$?; $nativeExit=$global:LASTEXITCODE; " +
@@ -698,9 +755,13 @@ public static class SmartAgentGit47AppContainerProbe
                     "$rc=if($null -ne $nativeExit){[int]$nativeExit}" +
                     "elseif($commandSucceeded){0}else{1}; " +
                     "} catch { " +
-                    "$rc=1; $errText=($_.Exception.GetType().Name+':'+$_.Exception.Message); " +
-                    "} finally { " + putOut + putErr + " } " +
-                    "exit [int]$rc;";
+                    "$rc=1; $errText=('SMARTAGENT_NATIVE_FAILURE_STAGE=' + " +
+                    "[string]$script:smartagentStage + ';' + " +
+                    "$_.Exception.GetType().Name + ':' + $_.Exception.Message); " +
+                    "} finally { " +
+                    "$script:smartagentStage='OUTPUT_CAPTURE'; " +
+                    "try { " + putOut + putErr + " } catch { exit 95 } " +
+                    "} exit [int]$rc;";
                 string raw = LaunchPowerShell(moniker, wrapped, root,
                                                timeoutMilliseconds, trustedToolPath);
                 byte[] outBytes = ReadPinned(stdout, maximumBytes);
