@@ -56,6 +56,14 @@ def test_command_rca_retains_only_named_safe_native_fields():
                 "native_exception_hresult": "80070005",
                 "native_exception_type": "UnauthorizedAccessException",
                 "native_command_trace": ["CWD_GET_LOCATION_INITIAL.START"],
+                "native_cwd_probes": {
+                    "native_cwd_status": "MATCH",
+                    "native_cwd_hresult": "00000000",
+                    "psdrive_status": "FILESYSTEM",
+                    "psdrive_hresult": "00000000",
+                    "provider_path_status": "ERROR",
+                    "provider_path_hresult": "80070005",
+                },
                 "native_process_pid": 1456,
                 "native_running_sample_count": 0,
                 "unsafe_extra": "NEVER_EXPORT",
@@ -70,6 +78,8 @@ def test_command_rca_retains_only_named_safe_native_fields():
     assert sandbox["native_failure_substage"] == "CWD_GET_LOCATION_INITIAL"
     assert sandbox["native_exception_hresult"] == "80070005"
     assert sandbox["native_command_trace"] == ["CWD_GET_LOCATION_INITIAL.START"]
+    assert sandbox["native_cwd_probes"]["native_cwd_status"] == "MATCH"
+    assert sandbox["native_cwd_probes"]["provider_path_hresult"] == "80070005"
     assert "unsafe_extra" not in sandbox
 
 
@@ -87,3 +97,17 @@ def test_collector_exports_readable_native_trace_into_rca_zip():
     assert "stage_diagnostic_not_authorization" not in source or "diagnostic" in source
     assert "$failureStage=Safe-Code $ev.native_failure_stage" in source
     assert "$stage=Safe-Code $ev.native_failure_stage" not in source
+
+
+
+def test_collector_includes_native_probe_status_and_hresult():
+    source = COLLECT.read_text(encoding="utf-8")
+    for status in ("native_cwd_status", "native_cwd_hresult",
+                   "psdrive_status", "psdrive_hresult",
+                   "provider_path_status", "provider_path_hresult"):
+        assert status in source
+    assert "native_cwd_probes=$nativeProbeResult" in source
+    assert "<AUTHORIZED_CWD>" in source
+    assert "<AUTHORIZED_DRIVE>" in source
+    assert "native_execution_trace.json" in source
+    assert "Get-PSDrive -Name <AUTHORIZED_DRIVE>" in source
