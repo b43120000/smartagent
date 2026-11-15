@@ -30,7 +30,7 @@ def install_toolchain_action(action: dict, *, root=None) -> str:
             tool="install_toolchain", executed=False, data={"terminal_eligible":False})
     from .runtime_environment import read_environment_ledger
     for row in managed_hints(read_environment_ledger(root), root):
-        if row["name"] == tool and row["version"] == version:
+        if row["tool"] == tool and row["version"] == version:
             return encode_result("SUCCEEDED", "GIT63_TOOL_ALREADY_DISCOVERABLE",
                 tool="install_toolchain", executed=False,
                 data={"installation_status":"RECORDED_REPROBE_REQUIRED",
