@@ -539,7 +539,17 @@ def execute_turbo_command(
             or not re.fullmatch(r"[A-Za-z0-9.]{0,100}", native_exception_type)
             or native_stage_source not in {
                 "NONE", "WRAPPER_RESERVED_EXIT_CODE",
-                "SANDBOX_WRAPPER_DIAGNOSTIC"}):
+                "SANDBOX_WRAPPER_DIAGNOSTIC"}
+            or (native_stage_source == "NONE" and
+                (native_stage != "" or native_exception_type != ""))
+            or (native_stage_source == "WRAPPER_RESERVED_EXIT_CODE" and
+                (native_stage != "OUTPUT_CAPTURE" or
+                 native_exception_type != "" or exit_code != 95))
+            or (native_stage_source == "SANDBOX_WRAPPER_DIAGNOSTIC" and
+                (native_stage not in {
+                    "CWD_SETUP", "ENV_SETUP", "COMMAND_EXECUTE"}
+                 or not native_exception_type or exit_code == 0))
+            or (exit_code == 0 and native_stage != "")):
         raise TurboOSBrokerUnavailable("GIT63_NATIVE_FAILURE_STAGE_INVALID")
 
     # Process exit 1 is distinct from not starting, DNS/TLS failures, and
