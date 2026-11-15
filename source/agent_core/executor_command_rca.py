@@ -160,7 +160,7 @@ def capture_command_result_rca(raw_result: object, receipt: object) -> dict:
         "native_failure_substage", "native_exception_type",
         "native_exception_hresult", "native_failure_stage_source",
         "native_process_pid", "native_running_sample_count",
-        "native_command_trace",
+        "native_command_trace", "native_cwd_probes",
     )
     return {
         "schema": SCHEMA,
