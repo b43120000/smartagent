@@ -1644,6 +1644,16 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
                 )
         broker = assess(action_workspace, tool=tool,
                         action_id=str(tool_call.get("action_id", "") or ""))
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and broker["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"os_execution_result": "NOT_EXECUTED",
+                      "sandbox_evidence": broker["evidence"],
+                      "terminal_eligible": False},
+            )
         if (broker["decision"] == "BLOCKED" or
                 (broker["decision"] == "BROKER_REQUIRED" and
                  tool not in {"run_command", "create_directory", "write_file",
@@ -2008,6 +2018,17 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         except (PathSecurityError, ValueError, OSError, TypeError):
             native_scope = security_context.workspace_root
         native = assess(native_scope, tool=tool)
+        # A native-only test request cannot downgrade after initial admission.
+        # This check only tightens dispatch; a Planner cannot set the flag.
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and native["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"terminal_eligible": False,
+                      "sandbox_evidence": native["evidence"]},
+            )
         if native["decision"] == "BROKER_REQUIRED":
             from .turbo_os_typed_mutations import create_directory_in_broker
             return create_directory_in_broker(
@@ -2211,6 +2232,17 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         except (PathSecurityError, ValueError, OSError, TypeError):
             native_scope = security_context.workspace_root
         native = assess(native_scope, tool=tool)
+        # A native-only test request cannot downgrade after initial admission.
+        # This check only tightens dispatch; a Planner cannot set the flag.
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and native["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"terminal_eligible": False,
+                      "sandbox_evidence": native["evidence"]},
+            )
         if native["decision"] == "BROKER_REQUIRED":
             from .turbo_os_typed_mutations import write_file_in_broker
             return write_file_in_broker(
@@ -2619,6 +2651,17 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         except (PathSecurityError, ValueError, OSError, TypeError):
             native_scope = security_context.workspace_root
         native = assess(native_scope, tool=tool)
+        # A native-only test request cannot downgrade after initial admission.
+        # This check only tightens dispatch; a Planner cannot set the flag.
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and native["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"terminal_eligible": False,
+                      "sandbox_evidence": native["evidence"]},
+            )
         if native["decision"] == "BROKER_REQUIRED":
             from .turbo_os_typed_mutations import delete_path_in_broker
             return delete_path_in_broker(
