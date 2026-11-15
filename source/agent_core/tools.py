@@ -603,7 +603,7 @@ def tool_run_command(
                 'stderr_truncated':bool(main.get('stderr_truncated')),
                 'output_complete':not (main.get('stdout_truncated') or main.get('stderr_truncated')),
                 'execution_status':status, 'verification_status':'UNVERIFIED' if running else operation_result['verification_status'],
-                'terminal_eligible':False if running or rejected else operation_result['terminal_eligible'],
+                'terminal_eligible':False if running or rejected or status == 'UNKNOWN' else operation_result['terminal_eligible'],
                 'working_directory':str(cwd),
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
@@ -634,11 +634,12 @@ def tool_run_command(
             "task_id": str(security_context.task_id or ""),
             "action_id": str(action_id or ""),
         }
-        if security_context.interface_name == "remote":
-            telemetry.update({
-                "root": security_context.workspace_root,
-                "request_id": security_context.request_id,
-            })
+        # Progress telemetry is a Runtime-owned observation for any gateway,
+        # not just Telegram. It is optional and grants no extra Task scope.
+        telemetry.update({
+            "root": security_context.workspace_root,
+            "request_id": security_context.request_id,
+        })
     main = _run_powershell_capture(
         command, timeout, capture_root,
         cwd=cwd,
