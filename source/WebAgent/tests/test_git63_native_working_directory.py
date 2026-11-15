@@ -62,3 +62,38 @@ def test_elevated_update_refreshes_protected_launcher_and_broker_together():
     assert "GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH" in rebind
     assert "Copy-Item -LiteralPath $record.source -Destination $record.protected" in rebind
     assert "GIT63_BROKER_REFRESH_HASH_FAILED" in rebind
+
+
+def test_rebind_refresh_has_single_complete_power_shell_block():
+    rebind = (ROOT / "install_smart_agent" / "turbo_multi_root_rebind.ps1"
+              ).read_text(encoding="utf-8")
+    assert rebind.count("# Phase 2: independent, protected, replace-atomic journal writes.") == 1
+    assert rebind.count("foreach($item in $verified){") == 1
+    assert rebind.count("if($null -eq $pin") == 1
+    assert "if($null -eq $pin -or [string]$pin.Value -notmatch '^[0-9a-fA-F]{64}$' -or" in rebind
+    assert "GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH" in rebind
+    assert rebind.count("GIT62_PROTECTED_BROKER_REFRESH_PASS") == 1
+
+
+def test_rebind_windows_powershell_parser_reports_no_syntax_errors():
+    import os
+    import subprocess
+    import pytest
+    if os.name != "nt":
+        pytest.skip("Windows PowerShell parser requires Windows; covered in Live testing")
+    path = (ROOT / "install_smart_agent" / "turbo_multi_root_rebind.ps1").resolve()
+    literal = str(path).replace("'", "''")
+    command = (
+        "$tokens=$null; $parseErrors=$null; "
+        "[System.Management.Automation.Language.Parser]::ParseFile('" + literal + "',"
+        "[ref]$tokens,[ref]$parseErrors) | Out-Null; "
+        "if($parseErrors.Count -ne 0){"
+        "$parseErrors | ForEach-Object { Write-Error $_.Message }; exit 1 }; "
+        "Write-Output 'GIT63_REBIND_PARSER_PASS'"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True, text=True, timeout=30, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert "GIT63_REBIND_PARSER_PASS" in result.stdout
