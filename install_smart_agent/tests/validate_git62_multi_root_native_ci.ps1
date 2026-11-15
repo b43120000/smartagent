@@ -229,13 +229,16 @@ catch { exit 95 }
  $jc=Get-TurboRootJournalPaths $sec $rootC
  $policy.revision=64
  $policy.turbo_roots=@($rootA,$rootB,$rootC)
- $policy | Add-Member -Force -NotePropertyName turbo_root_epochs -NotePropertyValue @(
-   [ordered]@{root=$rootA;epoch=63},
-   [ordered]@{root=$rootB;epoch=63},
-   [ordered]@{root=$rootC;epoch=64}
- )
+ # Intentionally NO epoch map: this is the user's Rev 34 / Rev 33
+ # interrupted edit reproduced against disposable Windows AppContainers.
  [IO.File]::WriteAllText((Join-Path $sec 'workspace_access_policy.json'),
     ($policy | ConvertTo-Json -Depth 10))
+ & $rebind -ProjectRoot $project -MigrateRootEpochs -AllowPendingEnrollments
+ $policy=Get-Content -LiteralPath (Join-Path $sec 'workspace_access_policy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+ Check (@($policy.turbo_root_epochs).Count -eq 3) 'GIT62_CI_ROOT_EPOCH_MIGRATION_INCOMPLETE'
+ Check ([int]@($policy.turbo_root_epochs | Where-Object {$_.root -eq $rootA})[0].epoch -eq 63) 'GIT62_CI_OLD_ROOT_A_EPOCH_CHANGED'
+ Check ([int]@($policy.turbo_root_epochs | Where-Object {$_.root -eq $rootB})[0].epoch -eq 63) 'GIT62_CI_OLD_ROOT_B_EPOCH_CHANGED'
+ Check ([int]@($policy.turbo_root_epochs | Where-Object {$_.root -eq $rootC})[0].epoch -eq 64) 'GIT62_CI_NEW_ROOT_C_EPOCH_WRONG'
  $script:revision=64
  & $rebind -ProjectRoot $project -VerifyOnly -AllowPendingEnrollments
  Check (-not (Test-Path -LiteralPath $jc.activation)) 'GIT62_CI_UNENROLLED_ROOT_PREMATURELY_ACTIVE'
