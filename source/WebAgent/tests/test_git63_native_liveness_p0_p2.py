@@ -107,7 +107,16 @@ def _execute(monkeypatch, tmp_path, receipt):
 
 def test_silent_native_command_returns_genuine_historical_running_receipt(monkeypatch, tmp_path):
     receipt = _mock_receipt(tmp_path, samples=5)
+    receipt["native_command_trace"] = [
+        "CWD_SET_LOCATION.START",
+        "CWD_SET_LOCATION.FAIL",
+        "CWD_PSDRIVE_FALLBACK.START",
+        "CWD_PSDRIVE_FALLBACK.PASS",
+        "COMMAND_DISPATCH.START",
+        "COMMAND_DISPATCH.FINISH",
+    ]
     result = _execute(monkeypatch, tmp_path, receipt)
+    assert result["sandbox_evidence"]["native_command_trace"] == receipt["native_command_trace"]
     assert result["exit_code"] == 0
     assert result["stdout"] == ""
     assert result["process_state"] == "EXITED"
@@ -119,6 +128,14 @@ def test_silent_native_command_returns_genuine_historical_running_receipt(monkey
     assert last["liveness_verified"] is True
     assert last["evidence_source"] == "NATIVE_WIN32_WAIT_FOR_SINGLE_OBJECT"
     assert last["running_sample_count"] == 5
+
+
+@pytest.mark.parametrize("token", ["UNRECOGNIZED_STEP.FAIL", "CWD_SET_LOCATION.UNKNOWN"])
+def test_native_trace_still_rejects_unknown_steps_and_outcomes(monkeypatch, tmp_path, token):
+    receipt = _mock_receipt(tmp_path)
+    receipt["native_command_trace"] = [token]
+    with pytest.raises(client.TurboOSBrokerUnavailable, match="GIT63_NATIVE_COMMAND_TRACE_INVALID"):
+        _execute(monkeypatch, tmp_path, receipt)
 
 
 @pytest.mark.parametrize("field,value", [

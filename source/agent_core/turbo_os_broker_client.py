@@ -544,7 +544,7 @@ def execute_turbo_command(
     if (not isinstance(native_command_trace, list)
             or len(native_command_trace) > 32
             or any(not isinstance(t, str) or len(t) > 80
-                   or not re.fullmatch(r"[A-Z_]+\.(START|PASS|SKIP|FINISH)", t)
+                   or not re.fullmatch(r"[A-Z_]+\.(START|PASS|SKIP|FINISH|FAIL)", t)
                    or t.split(".", 1)[0] not in known_steps
                    for t in native_command_trace)):
         raise TurboOSBrokerUnavailable("GIT63_NATIVE_COMMAND_TRACE_INVALID")
