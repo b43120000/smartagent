@@ -443,17 +443,16 @@ $crossRootProof
     # Every step records START before the potentially failing operation.
     $taskCwdSetup=@'
 $script:smartagentStage='CWD_SETUP'
-# Read-only observations before the previously failing Set-Location.
-# Only status enums and HRESULT are exported, never path/drive contents.
+# Independent read-only OS/Provider probes; no path or environment values exported.
 $script:smartagentSubstage='NATIVE_CWD_CHECK'
 [void]$script:smartagentTrace.Add('NATIVE_CWD_CHECK.START')
 try {
-    $probeNativeCwd=[Environment]::CurrentDirectory
-    $probeNormalizedCwd=[IO.Path]::GetFullPath($probeNativeCwd).TrimEnd([char]92)
-    $probeMatch=[string]::Equals($probeNormalizedCwd,'__CWD_LITERAL__',
+    $probeCwd=[Environment]::CurrentDirectory
+    $probeCwdNorm=[IO.Path]::GetFullPath($probeCwd).TrimEnd([char]92)
+    $matchCwd=[string]::Equals($probeCwdNorm,'__CWD_LITERAL__',
         [StringComparison]::OrdinalIgnoreCase)
-    $probeStatus=if($probeMatch){'MATCH'}else{'MISMATCH'}
-    [void]$script:smartagentCwdProbes.Add(('NATIVE_CWD_CHECK={0}:00000000' -f $probeStatus))
+    $resultCwd=if($matchCwd){'MATCH'}else{'MISMATCH'}
+    [void]$script:smartagentCwdProbes.Add(('NATIVE_CWD_CHECK={0}:00000000' -f $resultCwd))
     [void]$script:smartagentTrace.Add('NATIVE_CWD_CHECK.PASS')
 } catch {
     [void]$script:smartagentCwdProbes.Add(
@@ -463,37 +462,35 @@ try {
 $script:smartagentSubstage='PSDRIVE_CHECK'
 [void]$script:smartagentTrace.Add('PSDRIVE_CHECK.START')
 try {
-    $driveLetter=[IO.Path]::GetPathRoot('__CWD_LITERAL__').Substring(0,1)
-    $probeDrive=Get-PSDrive -Name $driveLetter -ErrorAction Stop
-    $probeStatus=if($probeDrive.Provider.Name -ceq 'FileSystem'){'FILESYSTEM'}else{'OTHER_PROVIDER'}
-    [void]$script:smartagentCwdProbes.Add(('PSDRIVE_CHECK={0}:00000000' -f $probeStatus))
+    $driveName=[IO.Path]::GetPathRoot('__CWD_LITERAL__').Substring(0,1)
+    $probeDrive=Get-PSDrive -Name $driveName -ErrorAction Stop
+    $resultDrive=if($probeDrive.Provider.Name -ceq 'FileSystem'){'FILESYSTEM'}else{'OTHER_PROVIDER'}
+    [void]$script:smartagentCwdProbes.Add(('PSDRIVE_CHECK={0}:00000000' -f $resultDrive))
     [void]$script:smartagentTrace.Add('PSDRIVE_CHECK.PASS')
 } catch {
-    $probeStatus=if($_.Exception -is [System.Management.Automation.DriveNotFoundException] -or
-                    $_.Exception -is [System.Management.Automation.ItemNotFoundException]){
-        'NOT_FOUND'
-    }else{'ERROR'}
+    $resultDrive=if($_.Exception -is [System.Management.Automation.DriveNotFoundException] -or
+        $_.Exception -is [System.Management.Automation.ItemNotFoundException]){'NOT_FOUND'}else{'ERROR'}
     [void]$script:smartagentCwdProbes.Add(
-        ('PSDRIVE_CHECK={0}:{1}' -f $probeStatus,$_.Exception.HResult.ToString('X8')))
+        ('PSDRIVE_CHECK={0}:{1}' -f $resultDrive,$_.Exception.HResult.ToString('X8')))
     [void]$script:smartagentTrace.Add('PSDRIVE_CHECK.FAIL')
 }
 $script:smartagentSubstage='PROVIDER_PATH_CHECK'
 [void]$script:smartagentTrace.Add('PROVIDER_PATH_CHECK.START')
 try {
-    $probeResolved=Resolve-Path -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop
-    $probePathMatch=($probeResolved.Provider.Name -ceq 'FileSystem' -and
+    $probePath=Resolve-Path -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop
+    $matchProvider=($probePath.Provider.Name -ceq 'FileSystem' -and
         [string]::Equals(
-            ([IO.Path]::GetFullPath($probeResolved.ProviderPath).TrimEnd([char]92)),
+            ([IO.Path]::GetFullPath($probePath.ProviderPath).TrimEnd([char]92)),
             '__CWD_LITERAL__',[StringComparison]::OrdinalIgnoreCase))
-    $probeStatus=if($probePathMatch){'MATCH'}else{'MISMATCH'}
-    [void]$script:smartagentCwdProbes.Add(('PROVIDER_PATH_CHECK={0}:00000000' -f $probeStatus))
+    $resultProvider=if($matchProvider){'MATCH'}else{'MISMATCH'}
+    [void]$script:smartagentCwdProbes.Add(('PROVIDER_PATH_CHECK={0}:00000000' -f $resultProvider))
     [void]$script:smartagentTrace.Add('PROVIDER_PATH_CHECK.PASS')
 } catch {
     [void]$script:smartagentCwdProbes.Add(
         ('PROVIDER_PATH_CHECK=ERROR:{0}' -f $_.Exception.HResult.ToString('X8')))
     [void]$script:smartagentTrace.Add('PROVIDER_PATH_CHECK.FAIL')
 }
-# Diagnostic errors do not override mandatory fail-closed CWD verification.
+# Probe outcomes do not grant permission or bypass the existing CWD checks.
 $script:smartagentSubstage='CWD_GET_LOCATION_INITIAL'
 [void]$script:smartagentTrace.Add('CWD_GET_LOCATION_INITIAL.START')
 $script:initialProviderCwd=(Get-Location).Path
@@ -576,6 +573,14 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
     $nativeExceptionHresult=''
     $nativeFailureStageSource='NONE'
     $nativeCommandTrace=@()
+    $nativeCwdProbes=[ordered]@{
+        native_cwd_status='NOT_OBSERVED'
+        native_cwd_hresult=''
+        psdrive_status='NOT_OBSERVED'
+        psdrive_hresult=''
+        provider_path_status='NOT_OBSERVED'
+        provider_path_hresult=''
+    }
     try {
         $text=[Text.Encoding]::UTF8.GetString(
             [Convert]::FromBase64String([string]$native.stderr_base64))
@@ -586,8 +591,37 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
         if ($traceMatch.Success -and $traceMatch.Groups[1].Value.Length -le 2048) {
             foreach($token in $traceMatch.Groups[1].Value.Split(',')) {
                 if ($nativeCommandTrace.Count -ge 32) { break }
-                if ($token -cmatch '^(NATIVE_CWD_CHECK|PSDRIVE_CHECK|PROVIDER_PATH_CHECK|CWD_GET_LOCATION_INITIAL|CWD_SET_LOCATION|CWD_GET_LOCATION_VERIFY|CWD_GET_NATIVE_CURRENT_DIRECTORY|CWD_COMPARE|ENV_APPLY|COMMAND_DISPATCH)\.(START|PASS|SKIP|FINISH|FAIL) {
+                if ($token -cmatch '^(NATIVE_CWD_CHECK|PSDRIVE_CHECK|PROVIDER_PATH_CHECK|CWD_GET_LOCATION_INITIAL|CWD_SET_LOCATION|CWD_GET_LOCATION_VERIFY|CWD_GET_NATIVE_CURRENT_DIRECTORY|CWD_COMPARE|ENV_APPLY|COMMAND_DISPATCH)\.(START|PASS|SKIP|FINISH|FAIL)$') {
                     $nativeCommandTrace+=([string]$token)
+                }
+            }
+        }
+        # Parse only fixed statuses / HRESULTs from the sandboxed wrapper.
+        $probeMatch=[regex]::Match($text,
+            '(?m)^SMARTAGENT_NATIVE_CWD_PROBES_V1=([A-Z0-9_=,:]*)\r?$')
+        if($probeMatch.Success -and $probeMatch.Groups[1].Value.Length -le 256){
+            $seen=@{}
+            foreach($piece in $probeMatch.Groups[1].Value.Split(',')){
+                $pieceMatch=[regex]::Match($piece,
+                    '^(NATIVE_CWD_CHECK|PSDRIVE_CHECK|PROVIDER_PATH_CHECK)=(MATCH|MISMATCH|FILESYSTEM|OTHER_PROVIDER|NOT_FOUND|ERROR):([0-9A-F]{8})$')
+                if(-not $pieceMatch.Success){continue}
+                $name=$pieceMatch.Groups[1].Value
+                $status=$pieceMatch.Groups[2].Value
+                $hresult=$pieceMatch.Groups[3].Value
+                if($seen.ContainsKey($name)){continue}
+                if($name -eq 'NATIVE_CWD_CHECK' -and $status -notin @('MATCH','MISMATCH','ERROR')){continue}
+                if($name -eq 'PSDRIVE_CHECK' -and $status -notin @('FILESYSTEM','OTHER_PROVIDER','NOT_FOUND','ERROR')){continue}
+                if($name -eq 'PROVIDER_PATH_CHECK' -and $status -notin @('MATCH','MISMATCH','ERROR')){continue}
+                $seen[$name]=$true
+                if($name -eq 'NATIVE_CWD_CHECK'){
+                    $nativeCwdProbes.native_cwd_status=$status
+                    $nativeCwdProbes.native_cwd_hresult=$hresult
+                }elseif($name -eq 'PSDRIVE_CHECK'){
+                    $nativeCwdProbes.psdrive_status=$status
+                    $nativeCwdProbes.psdrive_hresult=$hresult
+                }else{
+                    $nativeCwdProbes.provider_path_status=$status
+                    $nativeCwdProbes.provider_path_hresult=$hresult
                 }
             }
         }
@@ -707,149 +741,7 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
         native_exception_hresult=$nativeExceptionHresult
         native_failure_stage_source=$nativeFailureStageSource
         native_command_trace=@($nativeCommandTrace)
-        process_started=$true
-        executed=$true
-        command_exit_code=[int64]$native.exit_code
-        stdout_base64=[string]$native.stdout_base64
-        stderr_base64=[string]$native.stderr_base64
-        stdout_bytes=[int64]$native.stdout_bytes
-        stderr_bytes=[int64]$native.stderr_bytes
-        stdout_truncated=[bool]$native.stdout_truncated
-        stderr_truncated=[bool]$native.stderr_truncated
-        output_is_authoritative=$false
-        authorization_scope='THIS_SINGLE_APP_CONTAINER_ACTION'
-        production_turbo_full_access_attested=$false
-        status='EXECUTED_IN_OS_APPCONTAINER'
-    }
-    # Only a direct OS-spawn receipt can mark *this action* executed; the
-    # global Turbo setting is not promoted by this JSON response.
-    $response | ConvertTo-Json -Compress -Depth 8
-}
-finally {
-    if ($held) { try { $mutex.ReleaseMutex() } catch {} }
-    $mutex.Dispose()
-}
-) {
-                    $nativeCommandTrace+=([string]$token)
-                }
-            }
-        }
-        if ([int]$native.exit_code -ne 0) {
-            $match=[regex]::Match($text,
-                '^SMARTAGENT_NATIVE_FAILURE_STAGE=(CWD_SETUP|ENV_SETUP|COMMAND_EXECUTE);SMARTAGENT_NATIVE_FAILURE_SUBSTAGE=([A-Z_]{3,80});HRESULT=([0-9A-F]{8});([A-Za-z][A-Za-z0-9.]*Exception):')
-            if ($match.Success) {
-                $nativeFailureStage=$match.Groups[1].Value
-                $nativeFailureSubstage=$match.Groups[2].Value
-                $nativeExceptionHresult=$match.Groups[3].Value
-                $nativeExceptionType=$match.Groups[4].Value
-                $nativeFailureStageSource='SANDBOX_WRAPPER_DIAGNOSTIC'
-            }
-        }
-    } catch { }
-    if ([int]$native.exit_code -eq 95) {
-        $nativeFailureStage='OUTPUT_CAPTURE'
-        $nativeFailureSubstage='OUTPUT_CAPTURE_WRITE'
-        $nativeFailureStageSource='WRAPPER_RESERVED_EXIT_CODE'
-    }
-    if ($native.sandbox_identity_verified -ne $true -or
-        $native.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
-        $native.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
-        $native.os_process_started -ne $true -or
-        $native.output_is_authoritative -ne $false -or
-        $native.internet_client_token_verified -ne $true -or
-        $native.internet_client_capability_sid -ne 'S-1-15-3-1') {
-        throw 'GIT50_BROKER_KERNEL_PROCESS_RECEIPT_INVALID'
-    }
-    # The Git/Python executable is launched a SECOND TIME, directly by
-    # CreateProcessW with explicit AppContainer security capabilities. Unlike
-    # the first PowerShell-wrapped version command, the returned kernel token
-    # receipt proves the executable process identity itself, independently.
-    $git59Child=@{}
-    $git59Verified=$false
-    if ($NativeVersionProbe -ne '') {
-        try {
-            $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchVersionCaptured(
-                $moniker,$git59ProbeExecutable,$state.cwd,
-                [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
-            $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
-            if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
-                $git59Os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
-                $git59Os.sandbox_identity_verified -ne $true -or
-                $git59Os.internet_client_token_verified -ne $true -or
-                $git59Os.internet_client_capability_sid -ne 'S-1-15-3-1' -or
-                $git59Os.child_process_policy -ne 'JOB_KILL_ON_CLOSE' -or
-                $git59Os.os_process_started -ne $true -or
-                [int64]$git59Os.pid -le 0) {
-                throw 'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
-            }
-            $git59Verified=$true
-            $git59Child=[ordered]@{
-                schema='SMARTAGENT_GIT59_DIRECT_NATIVE_CHILD_V1'
-                status='OS_TOKEN_VERIFIED'
-                executable_name=$NativeVersionProbe
-                executable_path=$git59ProbeExecutable
-                sandbox_backend='WIN32_APPCONTAINER'
-                sandbox_identity_verified=$true
-                internet_client_token_verified=$true
-                internet_client_capability_sid='S-1-15-3-1'
-                child_process_policy='JOB_KILL_ON_CLOSE'
-                os_process_started=$true
-                pid=[int64]$git59Os.pid
-                exit_code=[int64]$git59Os.exit_code
-                git60_child_stdout_base64=[string]$git59Os.git60_child_stdout_base64
-                git60_child_stderr_base64=[string]$git59Os.git60_child_stderr_base64
-                git60_child_stdout_bytes=[int64]$git59Os.git60_child_stdout_bytes
-                git60_child_stderr_bytes=[int64]$git59Os.git60_child_stderr_bytes
-                git60_child_capture_complete=[bool]$git59Os.git60_child_capture_complete
-            }
-        } catch {
-            # Preserve the first shell result; an independently unverifiable
-            # native process never receives a success token attestation.
-            $reason='GIT59_NATIVE_CHILD_CREATEPROCESS_FAILED'
-            if ($_.Exception -is [TimeoutException]) {
-                $reason='GIT59_NATIVE_CHILD_EXECUTION_TIMEOUT'
-            } elseif ([string]$_.Exception.Message -eq
-                       'GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED') {
-                $reason='GIT59_NATIVE_CHILD_TOKEN_UNVERIFIED'
-            }
-            $git59Child=[ordered]@{
-                status='UNVERIFIED'
-                reason_code=$reason
-            }
-        }
-    }
-    $fresh=Assert-Trusted-State
-    $response=[ordered]@{
-        schema='SMARTAGENT_TURBO_OS_EXECUTION_RECEIPT_V1'
-        task_id=$TaskId
-        action_id=$ActionId
-        policy_revision=$ExpectedRevision
-        workspace_root=[string]$state.workspace
-        turbo_root=[string]$state.root
-        working_directory=[string]$state.cwd
-        acl_mode='on'
-        sandbox_backend='WIN32_APPCONTAINER'
-        sandbox_identity_verified=$true
-        child_process_policy='JOB_KILL_ON_CLOSE'
-        kernel_outside_read_denied=$true
-        kernel_outside_write_denied=$true
-        internet_client_token_verified=$true
-        internet_client_capability_sid='S-1-15-3-1'
-        native_toolchain_status=$(if($toolchain.trusted_count -gt 0){'PINNED'}else{'NOT_ENROLLED'})
-        native_trusted_tool_count=[int]$toolchain.trusted_count
-        native_trusted_tools=@($toolchain.tools)
-        native_direct_child_probe_kind=[string]$NativeVersionProbe
-        native_direct_child_attestation=$git59Child
-        native_executable_identity_verified=[bool]$git59Verified
-        native_process_pid=$nativePid
-        native_running_sample_count=$nativeRunningSamples
-        native_last_running_evidence=$nativeRunningEvidence
-        native_failure_stage=$nativeFailureStage
-        native_failure_substage=$nativeFailureSubstage
-        native_exception_type=$nativeExceptionType
-        native_exception_hresult=$nativeExceptionHresult
-        native_failure_stage_source=$nativeFailureStageSource
-        native_command_trace=@($nativeCommandTrace)
+        native_cwd_probes=$nativeCwdProbes
         process_started=$true
         executed=$true
         command_exit_code=[int64]$native.exit_code
