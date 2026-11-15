@@ -219,6 +219,55 @@ catch { exit 95 }
  Scoped $a $rootA 'A'
  Scoped $b $rootB 'B'
  Write-Host 'GIT62_NATIVE_PER_ROOT_POLICY_REVISION_REBIND_PASS'
+ # Three-Root regression: an unfinished new enrollment must not invalidate
+ # the two existing AppContainer grants. The global CAS advances to 64 but
+ # their immutable Root epochs stay 63, without any sibling Rebind.
+ $rootC=Join-Path $ws 'gamma'
+ New-Item -ItemType Directory -Path $rootC -Force | Out-Null
+ [IO.File]::WriteAllText((Join-Path $rootC 'keep.txt'),'THIRD_ROOT_USER_DATA')
+ $beforeC=(Get-Acl -LiteralPath $rootC -Audit).Sddl
+ $jc=Get-TurboRootJournalPaths $sec $rootC
+ $policy.revision=64
+ $policy.turbo_roots=@($rootA,$rootB,$rootC)
+ $policy | Add-Member -Force -NotePropertyName turbo_root_epochs -NotePropertyValue @(
+   [ordered]@{root=$rootA;epoch=63},
+   [ordered]@{root=$rootB;epoch=63},
+   [ordered]@{root=$rootC;epoch=64}
+ )
+ [IO.File]::WriteAllText((Join-Path $sec 'workspace_access_policy.json'),
+    ($policy | ConvertTo-Json -Depth 10))
+ $script:revision=64
+ & $rebind -ProjectRoot $project -VerifyOnly -AllowPendingEnrollments
+ Check (-not (Test-Path -LiteralPath $jc.activation)) 'GIT62_CI_UNENROLLED_ROOT_PREMATURELY_ACTIVE'
+ Scoped $a $rootA 'A'
+ Scoped $b $rootB 'B'
+ foreach($j in @($ja.activation,$jb.activation)){
+    $kept=Get-Content -LiteralPath $j -Raw -Encoding UTF8 | ConvertFrom-Json
+    Check ([int]$kept.policy_revision -eq 63) 'GIT62_CI_SIBLING_EPOCH_CHANGED_BY_ADD'
+ }
+ Write-Host 'GIT62_PENDING_THIRD_ROOT_PRESERVES_EXISTING_NATIVE_BROKERS_PASS'
+ & $activate -Action Activate -ProjectRoot $project -Workspace $ws -TurboRoot $rootC -ConfirmTarget $rootC
+ $c=Get-Content -LiteralPath $jc.activation -Raw -Encoding UTF8 | ConvertFrom-Json
+ Check ([int]$c.policy_revision -eq 64) 'GIT62_CI_THIRD_ROOT_EPOCH_WRONG'
+ Scoped $c $rootC 'C'
+ Scoped $a $rootA 'A'
+ Scoped $b $rootB 'B'
+ Write-Host 'GIT62_THREE_INDEPENDENT_NATIVE_BROKERS_PASS'
+ & $revoke -Action Revoke -ProjectRoot $project -TurboRoot $rootC
+ Check (-not (Test-Path -LiteralPath $jc.activation)) 'GIT62_CI_THIRD_ROOT_NOT_REVOKED'
+ Check ([IO.File]::ReadAllText((Join-Path $rootC 'keep.txt')) -ceq 'THIRD_ROOT_USER_DATA') 'GIT62_CI_THIRD_ROOT_USER_DATA_LOST'
+ $policy.revision=65
+ $policy.turbo_roots=@($rootA,$rootB)
+ $policy.turbo_root_epochs=@(
+   [ordered]@{root=$rootA;epoch=63},
+   [ordered]@{root=$rootB;epoch=63}
+ )
+ [IO.File]::WriteAllText((Join-Path $sec 'workspace_access_policy.json'),
+   ($policy | ConvertTo-Json -Depth 10))
+ $script:revision=65
+ Scoped $a $rootA 'A'
+ Scoped $b $rootB 'B'
+ Write-Host 'GIT62_REMOVE_THIRD_ROOT_NO_SIBLING_REBIND_PASS'
  & $revoke -Action Revoke -ProjectRoot $project -TurboRoot $rootA
  Check (-not (Test-Path -LiteralPath $ja.activation)) 'GIT62_A_REVOKE_FAILED'
  Check (Test-Path -LiteralPath $jb.activation) 'GIT62_B_REVOKED_WITH_A'
