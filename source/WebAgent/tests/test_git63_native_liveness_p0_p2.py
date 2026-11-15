@@ -216,3 +216,72 @@ def test_broker_marks_phases_and_does_not_skip_cwd_validation():
     assert "native_last_running_evidence=$nativeRunningEvidence" in src
     assert "native_running_sample_count=$nativeRunningSamples" in src
     assert "native_failure_stage=$nativeFailureStage" in src
+
+
+def test_native_cwd_probes_reach_runtime_evidence_without_authority(monkeypatch, tmp_path):
+    receipt = _mock_receipt(tmp_path, code=1, samples=0)
+    receipt["native_cwd_probes"] = {
+        "native_cwd_status": "MATCH",
+        "native_cwd_hresult": "00000000",
+        "psdrive_status": "FILESYSTEM",
+        "psdrive_hresult": "00000000",
+        "provider_path_status": "ERROR",
+        "provider_path_hresult": "80070005",
+    }
+    result = _execute(monkeypatch, tmp_path, receipt)
+    assert result["exit_code"] == 1
+    probes = result["sandbox_evidence"]["native_cwd_probes"]
+    assert probes["native_cwd_status"] == "MATCH"
+    assert probes["psdrive_status"] == "FILESYSTEM"
+    assert probes["provider_path_status"] == "ERROR"
+    assert probes["provider_path_hresult"] == "80070005"
+    assert result["process_state"] == "EXITED"
+    assert result["last_running_evidence"] is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("native_cwd_status", r"E:\\private\\path"),
+    ("native_cwd_hresult", "INVALID"),
+    ("psdrive_status", "WRITABLE"),
+    ("provider_path_hresult", "800700050000"),
+    ("provider_path_status", "NOT_FOUND"),
+])
+def test_invalid_native_probe_fields_fail_closed(monkeypatch, tmp_path, field, value):
+    receipt = _mock_receipt(tmp_path)
+    receipt["native_cwd_probes"][field] = value
+    with pytest.raises(client.TurboOSBrokerUnavailable,
+                       match="GIT63_NATIVE_CWD_PROBES_INVALID"):
+        _execute(monkeypatch, tmp_path, receipt)
+
+
+def test_native_probe_missing_and_extra_fields_rejected(monkeypatch, tmp_path):
+    receipt = _mock_receipt(tmp_path)
+    del receipt["native_cwd_probes"]["psdrive_status"]
+    with pytest.raises(client.TurboOSBrokerUnavailable,
+                       match="GIT63_NATIVE_CWD_PROBES_INVALID"):
+        _execute(monkeypatch, tmp_path, receipt)
+    receipt = _mock_receipt(tmp_path)
+    receipt["native_cwd_probes"]["raw_resolved_path"] = r"E:\\secret"
+    with pytest.raises(client.TurboOSBrokerUnavailable,
+                       match="GIT63_NATIVE_CWD_PROBES_INVALID"):
+        _execute(monkeypatch, tmp_path, receipt)
+
+
+def test_independent_native_probes_precede_cwd_set_location():
+    script = BROKER_PS1.read_text(encoding="utf-8")
+    required = [
+        "$probeCwd=[Environment]::CurrentDirectory",
+        "Get-PSDrive -Name $driveName -ErrorAction Stop",
+        "Resolve-Path -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop",
+    ]
+    cwd_switch = script.index("Set-Location -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop")
+    for token in required:
+        assert token in script
+        assert script.index(token) < cwd_switch
+    assert script.count("NATIVE_CWD_CHECK.START") == 1
+    assert script.count("PSDRIVE_CHECK.START") == 1
+    assert script.count("PROVIDER_PATH_CHECK.START") == 1
+    assert "native_cwd_probes=$nativeCwdProbes" in script
+    native = NATIVE.read_text(encoding="utf-8")
+    assert "SMARTAGENT_NATIVE_CWD_PROBES_V1=" in native
+    assert "$script:smartagentCwdProbes=New-Object" in native
