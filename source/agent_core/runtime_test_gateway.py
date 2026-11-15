@@ -207,7 +207,12 @@ def run_case(
             })
             break
 
-        raw = dispatch(action, agent=agent)
+        # This tightening-only context reaches the existing Runtime
+        # admission, typed mutations and bounded-process dispatch. A policy
+        # transition cannot silently launch an ordinary host executor.
+        from agent_core.bounded_process import native_only_runtime_test
+        with native_only_runtime_test():
+            raw = dispatch(action, agent=agent)
         receipt = result_decoder(raw)
         if not isinstance(receipt, dict):
             cases.append({
