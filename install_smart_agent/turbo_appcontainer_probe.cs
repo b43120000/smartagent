@@ -689,8 +689,21 @@ public static class SmartAgentGit47AppContainerProbe
             {
                 // Fail closed before launch if the precise package SID could
                 // not be granted access to the host-pinned capture handles.
-                AllowAppContainerCapture(stdoutPath, moniker);
-                AllowAppContainerCapture(stderrPath, moniker);
+                try
+                {
+                    AllowAppContainerCapture(stdoutPath, moniker);
+                    AllowAppContainerCapture(stderrPath, moniker);
+                }
+                catch (System.UnauthorizedAccessException ex)
+                {
+                    throw new InvalidOperationException(
+                        "GIT63_NATIVE_CAPTURE_ACL_SETUP_DENIED", ex);
+                }
+                catch (System.Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "GIT63_NATIVE_CAPTURE_ACL_SETUP_FAILED", ex);
+                }
                 // The child can write to these two pre-opened, pinned files,
                 // but cannot replace their paths while the parent holds them.
                 string quoteOut = stdoutPath.Replace("'", "''");
