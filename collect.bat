@@ -725,10 +725,10 @@ foreach($item in @($executorCommandRows)) {
     action_id=(Safe-Code $item.action_id)
     evidence_ref=(Safe-Code $item.evidence_ref)
     round=[int]$item.round
-    failure_stage=$failureStage
-    failure_substage=$substage
-    exception_type=(Safe-Code $ev.native_exception_type)
-    exception_hresult=(Safe-Code $ev.native_exception_hresult)
+    native_failure_stage=$failureStage
+    native_failure_substage=$substage
+    native_exception_type=(Safe-Code $ev.native_exception_type)
+    native_exception_hresult=(Safe-Code $ev.native_exception_hresult)
     native_error_class=(Safe-Code $ev.native_error_class)
     native_process_pid=$(if($null -ne $ev.native_process_pid){[int]$ev.native_process_pid}else{0})
     native_running_sample_count=$(if($null -ne $ev.native_running_sample_count){[int]$ev.native_running_sample_count}else{0})
