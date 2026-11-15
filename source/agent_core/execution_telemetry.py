@@ -45,4 +45,25 @@ def refresh_snapshot(root, task_id):
             except Exception:
                 pass
     data['last_output_at']=newest
+    # Persisted RUNNING is historical; require a fresh OS-owned handle sample.
+    if data.get('state')=='RUNNING':
+        proof=data.get('liveness_evidence')
+        try:
+            observed=float(proof.get('observed_at') or 0) if isinstance(proof,dict) else 0
+        except (TypeError,ValueError):
+            observed=0
+        now=time.time()
+        fresh=(isinstance(proof,dict)
+               and proof.get('schema')=='SMARTAGENT_PROCESS_LIVENESS_V1'
+               and proof.get('liveness_verified') is True
+               and proof.get('process_identity_verified') is True
+               and proof.get('process_state')=='RUNNING'
+               and proof.get('evidence_source') in {
+                   'WIN32_WAIT_FOR_SINGLE_OBJECT','OWNED_POPEN_WAITPID'}
+               and 0<=now-observed<=10)
+        data['liveness_freshness']='FRESH' if fresh else 'STALE'
+        if not fresh:
+            data['state']='UNKNOWN'
+            data['liveness_verified']=False
+            data['liveness_uncertain_reason']='OS_OBSERVATION_EXPIRED'
     return data
