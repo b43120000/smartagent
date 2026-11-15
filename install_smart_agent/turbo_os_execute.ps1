@@ -498,14 +498,50 @@ $script:initialProviderCwd=(Get-Location).Path
 $script:smartagentSubstage='CWD_SET_LOCATION'
 if(-not [string]::Equals($script:initialProviderCwd,'__CWD_LITERAL__',[StringComparison]::OrdinalIgnoreCase)) {
     [void]$script:smartagentTrace.Add('CWD_SET_LOCATION.START')
-    Set-Location -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop
-    [void]$script:smartagentTrace.Add('CWD_SET_LOCATION.PASS')
+    try {
+        Set-Location -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop
+        [void]$script:smartagentTrace.Add('CWD_SET_LOCATION.PASS')
+    } catch [System.UnauthorizedAccessException] {
+        # Git64: Provider may reject inaccessible intermediate ancestors
+        # even when the exact OS process CWD and target Root are accessible.
+        # No ACL changes, alternate physical CWD or privileged fallback.
+        [void]$script:smartagentTrace.Add('CWD_SET_LOCATION.FAIL')
+        $script:smartagentSubstage='CWD_PSDRIVE_FALLBACK'
+        [void]$script:smartagentTrace.Add('CWD_PSDRIVE_FALLBACK.START')
+        $osDirectory=[IO.Path]::GetFullPath(
+            [Environment]::CurrentDirectory).TrimEnd([char]92)
+        if(-not [string]::Equals($osDirectory,'__CWD_LITERAL__',
+                [StringComparison]::OrdinalIgnoreCase)){
+            throw 'GIT64_NATIVE_CWD_FALLBACK_OS_CWD_MISMATCH'
+        }
+        $targetLocation=Resolve-Path -LiteralPath '__CWD_LITERAL__' -ErrorAction Stop
+        $targetPath=[IO.Path]::GetFullPath(
+            $targetLocation.ProviderPath).TrimEnd([char]92)
+        if($targetLocation.Provider.Name -cne 'FileSystem' -or
+            -not [string]::Equals($targetPath,'__CWD_LITERAL__',
+                [StringComparison]::OrdinalIgnoreCase)){
+            throw 'GIT64_NATIVE_CWD_FALLBACK_PROVIDER_MISMATCH'
+        }
+        # A temporary FileSystem PSDrive rooted AT the previously authorized
+        # directory avoids provider traversal through protected parents.
+        # Scope is this Native Task PowerShell scriptblock only.
+        New-PSDrive -Name 'SARTCWD' -PSProvider FileSystem -Root '__CWD_LITERAL__' -Scope Local -ErrorAction Stop | Out-Null
+        Set-Location -LiteralPath 'SARTCWD:\' -ErrorAction Stop
+        [void]$script:smartagentTrace.Add('CWD_PSDRIVE_FALLBACK.PASS')
+    }
 } else {
     [void]$script:smartagentTrace.Add('CWD_SET_LOCATION.SKIP')
 }
 $script:smartagentSubstage='CWD_GET_LOCATION_VERIFY'
 [void]$script:smartagentTrace.Add('CWD_GET_LOCATION_VERIFY.START')
-$script:verifiedProviderCwd=(Get-Location).Path
+$script:verifiedLocation=(Get-Location)
+if($script:verifiedLocation.Provider.Name -cne 'FileSystem'){
+    throw 'GIT64_NATIVE_TASK_PROVIDER_NOT_FILESYSTEM'
+}
+# ProviderPath is the real filesystem location, even when a temporary
+# PSDrive presents a different logical PowerShell drive name.
+$script:verifiedProviderCwd=[IO.Path]::GetFullPath(
+    $script:verifiedLocation.ProviderPath).TrimEnd([char]92)
 [void]$script:smartagentTrace.Add('CWD_GET_LOCATION_VERIFY.PASS')
 $script:smartagentSubstage='CWD_GET_NATIVE_CURRENT_DIRECTORY'
 [void]$script:smartagentTrace.Add('CWD_GET_NATIVE_CURRENT_DIRECTORY.START')
@@ -591,7 +627,7 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
         if ($traceMatch.Success -and $traceMatch.Groups[1].Value.Length -le 2048) {
             foreach($token in $traceMatch.Groups[1].Value.Split(',')) {
                 if ($nativeCommandTrace.Count -ge 32) { break }
-                if ($token -cmatch '^(NATIVE_CWD_CHECK|PSDRIVE_CHECK|PROVIDER_PATH_CHECK|CWD_GET_LOCATION_INITIAL|CWD_SET_LOCATION|CWD_GET_LOCATION_VERIFY|CWD_GET_NATIVE_CURRENT_DIRECTORY|CWD_COMPARE|ENV_APPLY|COMMAND_DISPATCH)\.(START|PASS|SKIP|FINISH|FAIL)$') {
+                if ($token -cmatch '^(NATIVE_CWD_CHECK|PSDRIVE_CHECK|PROVIDER_PATH_CHECK|CWD_GET_LOCATION_INITIAL|CWD_SET_LOCATION|CWD_PSDRIVE_FALLBACK|CWD_GET_LOCATION_VERIFY|CWD_GET_NATIVE_CURRENT_DIRECTORY|CWD_COMPARE|ENV_APPLY|COMMAND_DISPATCH)\.(START|PASS|SKIP|FINISH|FAIL)$') {
                     $nativeCommandTrace+=([string]$token)
                 }
             }
