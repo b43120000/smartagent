@@ -116,7 +116,7 @@ def load_workspace_access_policy(*, profile: dict | None = None) -> dict:
             raise RuntimeError(f"workspace_access_policy_invalid:{path}") from exc
         if not isinstance(value, dict) or value.get("schema") != ACCESS_POLICY_SCHEMA:
             raise RuntimeError(f"workspace_access_policy_invalid:{path}")
-        return {
+        result = {
             "schema": ACCESS_POLICY_SCHEMA,
             "revision": int(value.get("revision", 0) or 0),
             "updated_at": int(value.get("updated_at", 0) or 0),
@@ -133,7 +133,42 @@ def load_workspace_access_policy(*, profile: dict | None = None) -> dict:
             # Git45 roots do not silently migrate to an enabled Git46 sandbox.
             "turbo_requested": value.get("turbo_requested") is True,
         }
+        if "turbo_root_epochs" in value:
+            if not isinstance(value["turbo_root_epochs"], list):
+                raise RuntimeError("turbo_root_epochs_invalid")
+            result["turbo_root_epochs"] = value["turbo_root_epochs"]
+        return result
     return _policy_from_profile(profile if profile is not None else _load_local_profile())
+
+
+def turbo_root_epoch(policy: dict, root: str | Path) -> int:
+    """Per-root immutable authorization epoch, independent of the global CAS."""
+    if "turbo_root_epochs" not in policy:
+        return int(policy.get("revision", 0) or 0)  # legacy until attested migration
+    rows = policy["turbo_root_epochs"]
+    if not isinstance(rows, list):
+        raise ValueError("turbo_root_epochs_invalid")
+    found = [
+        row for row in rows
+        if isinstance(row, dict) and isinstance(row.get("root"), str)
+        and _key(row["root"]) == _key(root)
+    ]
+    if (len(found) != 1 or type(found[0].get("epoch")) is not int
+            or found[0]["epoch"] < 1):
+        raise ValueError("turbo_root_epoch_untrusted")
+    return found[0]["epoch"]
+
+
+def _retained_epochs(previous: dict, roots: list[str], new_revision: int) -> list[dict]:
+    old = {_key(root) for root in previous.get("turbo_roots") or ()}
+    result = []
+    for root in roots:
+        epoch = (turbo_root_epoch(previous, root)
+                 if _key(root) in old else new_revision)
+        if epoch < 1:
+            raise ValueError("turbo_root_epoch_invalid")
+        result.append({"root": root, "epoch": epoch})
+    return result
 
 
 def save_workspace_access_policy(
@@ -160,8 +195,10 @@ def save_workspace_access_policy(
         "read_only_roots": list(read_only),
         "denied_write_roots": list(denied),
         "turbo_roots": list(turbo),
-        # Changing workspace authority revokes any previous Turbo request.
-        "turbo_requested": False,
+        "turbo_requested": bool(turbo) and previous.get("turbo_requested") is True,
+        "turbo_root_epochs": _retained_epochs(
+            previous, list(turbo), int(previous.get("revision", 0) or 0) + 1
+        ),
     }
     path = workspace_access_policy_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -394,6 +431,9 @@ def save_turbo_roots(turbo_roots, *, workspace: str | Path | None = None,
             return current
         payload = dict(current)
         payload["turbo_roots"] = requested
+        payload["turbo_root_epochs"] = _retained_epochs(
+            current, requested, int(current.get("revision", 0) or 0) + 1
+        )
         # ON is only a requested preference, NEVER an OS execution grant.
         payload["turbo_requested"] = bool(requested)
         payload["revision"] = int(current.get("revision", 0) or 0) + 1
@@ -448,5 +488,5 @@ __all__ = [
     "software_only_mode_enabled",
     "workspace_access_policy_path",
     "is_valid_turbo_root", "resolve_turbo_authorization_workspace",
-    "save_turbo_roots", "set_turbo_root",
+    "save_turbo_roots", "set_turbo_root", "turbo_root_epoch",
 ]

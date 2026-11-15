@@ -6,6 +6,8 @@ param(
  [Parameter(Mandatory=$true)][string]$ProjectRoot,
  [switch]$VerifyOnly,
  [switch]$RepairMissingSentinels,
+ [switch]$AllowPendingEnrollments,
+ [switch]$MigrateRootEpochs,
  [string]$SelectedTurboRoot=''
 )
 Set-StrictMode -Version Latest
@@ -27,7 +29,8 @@ $mutex=[Threading.Mutex]::new($false,('Global\SmartAgentTurbo-'+$digest.Substrin
 $held=$false
 $restored=0
 # VerifyOnly must remain read-only; explicit repair never publishes a revision.
-if($VerifyOnly -and $RepairMissingSentinels){
+if(($VerifyOnly -and ($RepairMissingSentinels -or $MigrateRootEpochs)) -or
+   ($RepairMissingSentinels -and $MigrateRootEpochs)){
  throw 'GIT62_REBIND_REPAIR_AND_VERIFY_CONFLICT'
 }
 if($SelectedTurboRoot -and -not ($VerifyOnly -or $RepairMissingSentinels)){
@@ -66,7 +69,10 @@ try{
    Add-Type -Path (Join-Path $PSScriptRoot 'turbo_appcontainer_probe.cs') -ErrorAction Stop
  }
  $entries=@(Get-ChildItem -LiteralPath $dir -File -Filter 'activation-*.json' -ErrorAction Stop)
- if($entries.Count -ne @($policy.turbo_roots).Count){throw 'GIT62_REBIND_JOURNAL_COUNT_MISMATCH'}
+ if(($AllowPendingEnrollments -and $entries.Count -gt @($policy.turbo_roots).Count) -or
+    (-not $AllowPendingEnrollments -and $entries.Count -ne @($policy.turbo_roots).Count)){
+   throw 'GIT62_REBIND_JOURNAL_COUNT_MISMATCH'
+ }
  if($SelectedTurboRoot){
    $selected=[IO.Path]::GetFullPath($SelectedTurboRoot).TrimEnd('\')
    if(@($policy.turbo_roots | Where-Object { Equal ([string]$_) $selected }).Count -ne 1){
@@ -76,6 +82,7 @@ try{
  # Phase 1: verify ALL active journals and their OS child-token isolation
  # BEFORE modifying any journal revisions.
  $verified=@()
+ $seenRoots=@{}
  foreach($file in $entries){
    $a=Read-Json $file.FullName
    if($SelectedTurboRoot -and -not (Equal ([string]$a.turbo_root) $selected)){continue}
@@ -95,6 +102,9 @@ try{
       throw 'GIT62_REBIND_ROOT_NOT_AUTHORIZED'
    }
    $root=[IO.Path]::GetFullPath([string]$a.turbo_root).TrimEnd('\')
+   $rootKey=$root.ToUpperInvariant()
+   if($seenRoots.ContainsKey($rootKey)){throw 'GIT62_REBIND_DUPLICATE_ROOT'}
+   $seenRoots[$rootKey]=$true
    $ws=[IO.Path]::GetFullPath([string]$a.workspace_root).TrimEnd('\')
    if(-not $root.StartsWith($ws+'\',[StringComparison]::OrdinalIgnoreCase)){
       throw 'GIT62_REBIND_ROOT_OUTSIDE_WORKSPACE'
@@ -168,6 +178,60 @@ catch [System.UnauthorizedAccessException] { exit 0 }
  if($SelectedTurboRoot -and $verified.Count -ne 1){
    throw 'GIT62_REBIND_SELECTED_JOURNAL_MISSING'
  }
+ $epochMap=@{}
+ if($policy.PSObject.Properties.Name -contains 'turbo_root_epochs'){
+   foreach($row in @($policy.turbo_root_epochs)){
+     $key=[IO.Path]::GetFullPath([string]$row.root).TrimEnd('\').ToUpperInvariant()
+     if($epochMap.ContainsKey($key) -or [int]$row.epoch -lt 1){
+       throw 'GIT62_REBIND_ROOT_EPOCH_UNTRUSTED'
+     }
+     $epochMap[$key]=[int]$row.epoch
+   }
+   if($epochMap.Count -ne @($policy.turbo_roots).Count){
+     throw 'GIT62_REBIND_ROOT_EPOCH_COUNT_MISMATCH'
+   }
+   foreach($rootItem in @($policy.turbo_roots)){
+     if(-not $epochMap.ContainsKey(([IO.Path]::GetFullPath([string]$rootItem).TrimEnd('\').ToUpperInvariant()))){
+       throw 'GIT62_REBIND_ROOT_EPOCH_MISSING'
+     }
+   }
+ }
+ if($MigrateRootEpochs){
+   # Explicit admin-only, OS-attested legacy recovery; partial registrations
+   # remain pending and get the current policy epoch when enrolled.
+   if($epochMap.Count -eq 0){
+     if($SelectedTurboRoot){throw 'GIT62_ROOT_EPOCH_PARTIAL_MIGRATION_FORBIDDEN'}
+     $rows=@()
+     foreach($rootItem in @($policy.turbo_roots)){
+       $key=[IO.Path]::GetFullPath([string]$rootItem).TrimEnd('\').ToUpperInvariant()
+       $record=@($verified | Where-Object {
+         ([IO.Path]::GetFullPath([string]$_.record.turbo_root).TrimEnd('\').ToUpperInvariant()) -eq $key
+       })
+       $epoch=if($record.Count -eq 1){[int]$record[0].record.policy_revision}else{[int]$policy.revision}
+       if($epoch -lt 1 -or $epoch -gt [int]$policy.revision){throw 'GIT62_ROOT_EPOCH_MIGRATION_INVALID'}
+       $rows+=,[ordered]@{root=[string]$rootItem;epoch=$epoch}
+     }
+     $policy | Add-Member -NotePropertyName turbo_root_epochs -NotePropertyValue $rows -Force
+     $policyPath=Join-Path $sec 'workspace_access_policy.json'
+     $before=Get-FileHash -LiteralPath $policyPath -Algorithm SHA256
+     $tmp=Join-Path $sec ('workspace_access_policy.git62-'+[Guid]::NewGuid().ToString('N')+'.tmp')
+     try {
+       $bytes=[Text.Encoding]::UTF8.GetBytes(($policy | ConvertTo-Json -Depth 18))
+       $stream=[IO.FileStream]::new($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+       try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}
+       finally{$stream.Dispose()}
+       Set-Acl -LiteralPath $tmp -AclObject (Get-Acl -LiteralPath $policyPath) -ErrorAction Stop
+       if((Get-FileHash -LiteralPath $policyPath -Algorithm SHA256).Hash -ne $before.Hash){
+         throw 'GIT62_ROOT_EPOCH_POLICY_CONCURRENT_UPDATE'
+       }
+       Move-Item -LiteralPath $tmp -Destination $policyPath -Force -ErrorAction Stop
+     } finally {Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue}
+     Write-Host ('GIT62_ROOT_EPOCH_MIGRATION_PASS roots='+$rows.Count+' enrolled='+$verified.Count)
+   } else {
+     Write-Host ('GIT62_ROOT_EPOCH_ALREADY_MIGRATED roots='+$epochMap.Count)
+   }
+   return
+ }
  if($VerifyOnly){
    Write-Host ('GIT62_PER_ROOT_PRECHECK_PASS roots='+$verified.Count)
    return
@@ -183,8 +247,10 @@ catch [System.UnauthorizedAccessException] { exit 0 }
  # before every Root is rebased leaves that Root fail-closed (stale revision).
  foreach($item in $verified){
    $a=$item.record
-   if([int]$a.policy_revision -eq [int]$policy.revision){continue}
-   $a.policy_revision=[int]$policy.revision
+   $key=[IO.Path]::GetFullPath([string]$a.turbo_root).TrimEnd('\').ToUpperInvariant()
+   $epoch=if($epochMap.Count){[int]$epochMap[$key]}else{[int]$policy.revision}
+   if([int]$a.policy_revision -eq $epoch){continue}
+   $a.policy_revision=$epoch
    $tmp=[string]$item.path+'.tmp'
    try{
      $data=[Text.Encoding]::UTF8.GetBytes(($a | ConvertTo-Json -Depth 18))

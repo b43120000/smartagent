@@ -266,13 +266,18 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
     if (activation.get("existing_root_import") is True and
             activation.get("existing_import_committed") is not True):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_IMPORT_NOT_COMMITTED")
+    from .workspace_access import turbo_root_epoch
+    try:
+        expected_epoch = turbo_root_epoch(policy, root)
+    except (ValueError, RuntimeError, TypeError) as exc:
+        raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_ROOT_EPOCH_INVALID") from exc
     project = _install_root()
     workspace_path = Path(workspace).absolute()
     if (
         activation.get("schema") != ACTIVATION_SCHEMA
         or activation.get("status") != "ACTIVE_PROVISIONED"
         or type(activation.get("policy_revision")) is not int
-        or activation["policy_revision"] != int(state["policy_revision"])
+        or activation["policy_revision"] != expected_epoch
         or str(project).casefold() != str(activation.get("install_root", "")).casefold()
         or str(workspace_path).casefold() != str(activation.get("workspace_root", "")).casefold()
         or str(root).casefold() != str(activation.get("turbo_root", "")).casefold()
@@ -296,7 +301,7 @@ def _load_activation(workspace: str | Path) -> tuple[dict, dict, Path]:
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_SOURCE_UNREADABLE") from exc
     if current != digest:
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_SOURCE_CHANGED")
-    if type(policy.get("revision")) is not int or policy["revision"] != activation["policy_revision"]:
+    if type(policy.get("revision")) is not int or policy["revision"] != int(state["policy_revision"]):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_POLICY_REVISION_STALE")
     return activation, state, broker
 

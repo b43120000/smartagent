@@ -144,9 +144,22 @@ function Assert-Trusted-State {
         [int]$policy.revision -ne $ExpectedRevision) {
         throw 'GIT50_BROKER_POLICY_STALE_OR_DISABLED'
     }
+    # Global revision is checked above as command CAS, not a sibling's grant.
+    $epoch=$ExpectedRevision
+    if($policy.PSObject.Properties.Name -contains 'turbo_root_epochs') {
+        $matching=@($policy.turbo_root_epochs | Where-Object {
+            $_.root -and [IO.Path]::GetFullPath([string]$_.root).TrimEnd('\').Equals(
+                [IO.Path]::GetFullPath([string]$activation.turbo_root).TrimEnd('\'),
+                [StringComparison]::OrdinalIgnoreCase)
+        })
+        if($matching.Count -ne 1 -or [int]$matching[0].epoch -lt 1){
+            throw 'GIT62_BROKER_ROOT_EPOCH_UNTRUSTED'
+        }
+        $epoch=[int]$matching[0].epoch
+    }
     if ($activation.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
         $activation.status -ne 'ACTIVE_PROVISIONED' -or
-        [int]$activation.policy_revision -ne $ExpectedRevision -or
+        [int]$activation.policy_revision -ne $epoch -or
         -not [IO.Path]::GetFullPath([string]$activation.install_root).TrimEnd('\').Equals(
             $ProjectRoot,[StringComparison]::OrdinalIgnoreCase)) {
         throw 'GIT50_BROKER_OS_ACTIVATION_STALE_OR_INVALID'
