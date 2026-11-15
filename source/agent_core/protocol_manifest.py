@@ -24,6 +24,7 @@ CORE_FILES = (
     # Git63 security-critical managed toolchain components.
     'source/agent_core/managed_toolchains.py',
     'source/agent_core/managed_toolchain_install.py',
+    'source/agent_core/toolchain_environment_reader.py',
     'config/managed_toolchains_catalog.json',
     'install_smart_agent/git63_toolchain_provision.ps1',
     'install_smart_agent/git63_toolchain_install.ps1',
