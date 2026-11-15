@@ -82,6 +82,8 @@ function Get-Pinned-Native-Toolchain {
         'SMARTAGENT_WINDOWS_SECURITY_V1','SMARTAGENT_WINDOWS_SECURITY_V2')) {
         throw 'GIT52_NATIVE_TOOLCHAIN_PROFILE_INVALID'
     }
+    $javaHome=''
+    $androidSdkHome=''
     $verified=New-Object 'System.Collections.Generic.List[string]'
     $toolNames=New-Object 'System.Collections.Generic.List[string]'
     foreach ($candidate in @(
@@ -132,6 +134,8 @@ function Get-Pinned-Native-Toolchain {
         if($catalogDigest -notmatch '^[a-fA-F0-9]{64}
         tools=@($toolNames.ToArray())
         trusted_count=$verified.Count
+        java_home=$javaHome
+        android_sdk_root=$androidSdkHome
     }
 }
 
@@ -329,6 +333,21 @@ $crossRootProof
         throw 'GIT50_BROKER_SCRIPT_LENGTH_INVALID'
     }
     $toolchain=Get-Pinned-Native-Toolchain
+    # Child-only deterministic environment; all paths derive from SHA-pinned
+    # localdata tool records. The host/Controller environment is NOT inherited.
+    $setup=''
+    if([string]$toolchain.java_home){
+        $literal=([string]$toolchain.java_home).Replace("'","''")
+        $setup+="[Environment]::SetEnvironmentVariable('JAVA_HOME','$literal');"
+    }
+    if([string]$toolchain.android_sdk_root){
+        $literal=([string]$toolchain.android_sdk_root).Replace("'","''")
+        $setup+="[Environment]::SetEnvironmentVariable('ANDROID_HOME','$literal');"
+        $setup+="[Environment]::SetEnvironmentVariable('ANDROID_SDK_ROOT','$literal');"
+    }
+    $gradlePath=(Join-Path $state.root '.gradle').Replace("'","''")
+    $setup+="[Environment]::SetEnvironmentVariable('GRADLE_USER_HOME','$gradlePath');"
+    if($setup){$script=$setup+[Environment]::NewLine+$script}
     # Git59: a native child-token probe is only permitted for a literal
     # --version invocation of the operator-pinned and hash-checked executable.
     # All other scripts retain their existing behavior. This host-side code
@@ -1538,6 +1557,8 @@ finally {
                 }
                 $verified.Add([IO.Path]::GetDirectoryName($full))
                 $toolNames.Add($alias)
+                if($alias -ceq 'java'){$javaHome=[IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($full))}
+                if($alias -ceq 'adb'){$androidSdkHome=[IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($full))}
             }
         }
     }
