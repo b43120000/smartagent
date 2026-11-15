@@ -36,6 +36,29 @@ try {
  Require ($LASTEXITCODE -eq 0) 'UPDATE_COMMIT_OR_PROTOCOL_MANIFEST_INVALID'
  $expectedHash=(Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
  Say ('CHECKOUT_VERIFIED commit='+$Commit+' manifest_sha256='+$expectedHash)
+ # Git63: reject malformed PowerShell source BEFORE requesting elevation or
+ # touching protected Native Broker state. ParseFile does not execute scripts.
+ $stage='VERIFY_POWERSHELL_SYNTAX'
+ $scriptsToParse=@(
+   'install_smart_agent\turbo_multi_root_rebind.ps1',
+   'install_smart_agent\turbo_os_execute.ps1',
+   'install_smart_agent\git63_toolchain_install.ps1',
+   'install_smart_agent\git63_toolchain_install_child.ps1',
+   'install_smart_agent\git63_toolchain_provision.ps1'
+ )
+ foreach($relativeScript in $scriptsToParse){
+   $scriptFile=Join-Path $root $relativeScript
+   Require (Test-Path -LiteralPath $scriptFile -PathType Leaf) ('UPDATE_SCRIPT_MISSING:'+ $relativeScript)
+   $syntaxTokens=$null
+   $syntaxErrors=$null
+   [System.Management.Automation.Language.Parser]::ParseFile(
+      $scriptFile,[ref]$syntaxTokens,[ref]$syntaxErrors) | Out-Null
+   if(@($syntaxErrors).Count -ne 0){
+     $detail=[string]$syntaxErrors[0].Message
+     throw ('UPDATE_SCRIPT_SYNTAX_INVALID:'+ $relativeScript + ':' + $detail)
+   }
+ }
+ Say ('POWERSHELL_SYNTAX_PASS scripts='+$scriptsToParse.Count)
  $stage='ELEVATION'
  $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
  $principal=[Security.Principal.WindowsPrincipal]::new($identity)
