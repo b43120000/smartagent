@@ -142,6 +142,10 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"section": str},
         "optional": {"sequence": int, "offset": int, "max_chars": int},
     },
+    "inspect_toolchain_environment": {
+        "required": {},
+        "optional": {},
+    },
     "write_file": {
         "required": {"path": str, "content": str},
         "optional": {},
