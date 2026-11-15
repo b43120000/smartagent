@@ -537,7 +537,7 @@ def execute_turbo_command(
     native_command_trace = receipt.get("native_command_trace")
     known_steps = {
         "CWD_GET_LOCATION_INITIAL", "CWD_SET_LOCATION",
-        "CWD_GET_LOCATION_VERIFY", "CWD_GET_NATIVE_CURRENT_DIRECTORY",
+        "CWD_PSDRIVE_FALLBACK", "CWD_GET_LOCATION_VERIFY", "CWD_GET_NATIVE_CURRENT_DIRECTORY",
         "CWD_COMPARE", "ENV_APPLY", "COMMAND_DISPATCH",
         "NATIVE_CWD_CHECK", "PSDRIVE_CHECK", "PROVIDER_PATH_CHECK",
     }
