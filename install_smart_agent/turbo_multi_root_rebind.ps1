@@ -274,42 +274,65 @@ catch [System.UnauthorizedAccessException] { exit 0 }
    if($SelectedTurboRoot -or $verified.Count -lt 1){
      throw 'GIT62_BROKER_REFRESH_SCOPE_INVALID'
    }
-   # Git63: the Broker executable is the PowerShell entry AND its C# lowbox
-   # launcher. They must be refreshed together; updating only the .ps1 leaves
-   # the protected AppContainer launcher running stale code.
+   # Refresh both files together. A protected broker with stale C# code
+   # would keep the old PowerShell PWD behavior after an update.
    $codeRoot=Join-Path $sec 'turbo_broker_code'
-   if((Get-Item -LiteralPath $codeRoot -Force -ErrorAction Stop).Attributes -band
-      [IO.FileAttributes]::ReparsePoint){throw 'GIT63_BROKER_REFRESH_CODE_ROOT_REPARSE'}
-   $manifest=Read-Json (Join-Path $project 'config\protocol_manifest.json')
+   if(-not (Test-Path -LiteralPath $codeRoot -PathType Container)){
+     throw 'GIT63_BROKER_REFRESH_CODE_ROOT_MISSING'
+   }
+   $codeRootItem=Get-Item -LiteralPath $codeRoot -Force -ErrorAction Stop
+   if($codeRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint){
+     throw 'GIT63_BROKER_REFRESH_CODE_ROOT_REPARSE'
+   }
+   $manifestFile=Join-Path $project 'config\protocol_manifest.json'
+   $manifest=Read-Json $manifestFile
    $verifiedSources=@()
-   foreach($file in @('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')){
-     $source=Join-Path $PSScriptRoot $file
-     $protected=Join-Path $codeRoot $file
-     foreach($candidate in @($source,$protected)){
-       if(-not (Test-Path -LiteralPath $candidate -PathType Leaf) -or
-          ((Get-Item -LiteralPath $candidate -Force -ErrorAction Stop).Attributes -band
-           [IO.FileAttributes]::ReparsePoint)){
-         throw 'GIT63_BROKER_REFRESH_SOURCE_OR_TARGET_INVALID'
-       }
+   $fileNames=@('turbo_os_execute.ps1','turbo_appcontainer_probe.cs')
+   foreach($fileName in $fileNames){
+     $source=Join-Path $PSScriptRoot $fileName
+     $target=Join-Path $codeRoot $fileName
+     if(-not (Test-Path -LiteralPath $source -PathType Leaf)){
+       throw 'GIT63_BROKER_REFRESH_SOURCE_MISSING'
      }
-     $pinName='install_smart_agent/'+$file
+     if(-not (Test-Path -LiteralPath $target -PathType Leaf)){
+       throw 'GIT63_BROKER_REFRESH_TARGET_MISSING'
+     }
+     $sourceItem=Get-Item -LiteralPath $source -Force -ErrorAction Stop
+     $targetItem=Get-Item -LiteralPath $target -Force -ErrorAction Stop
+     if($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint){
+       throw 'GIT63_BROKER_REFRESH_SOURCE_REPARSE'
+     }
+     if($targetItem.Attributes -band [IO.FileAttributes]::ReparsePoint){
+       throw 'GIT63_BROKER_REFRESH_TARGET_REPARSE'
+     }
+     $pinName='install_smart_agent/'+$fileName
      $pin=$manifest.core_files.PSObject.Properties[$pinName]
-     $sourceHash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
-     if($null -eq $pin -or [string]$pin.Value -notmatch '^[0-9a-fA-F]{64}$' -or
-        $sourceHash -ine [string]$pin.Value){
+     if($null -eq $pin){
+       throw 'GIT63_BROKER_REFRESH_MANIFEST_PIN_MISSING'
+     }
+     $expectedHash=[string]$pin.Value
+     if($expectedHash -notmatch '^[0-9a-fA-F]{64}$'){
+       throw 'GIT63_BROKER_REFRESH_MANIFEST_PIN_INVALID'
+     }
+     $actualHash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+     if($actualHash -ine $expectedHash){
        throw 'GIT63_BROKER_REFRESH_MANIFEST_PIN_MISMATCH'
      }
-     $verifiedSources+=@{source=$source;protected=$protected;hash=$sourceHash}
+     $verifiedSources+=@{source=$source;target=$target;hash=$actualHash}
    }
    foreach($record in $verifiedSources){
-     Copy-Item -LiteralPath $record.source -Destination $record.protected -Force -ErrorAction Stop
-     & icacls.exe $record.protected '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
-     if($LASTEXITCODE -ne 0){throw 'GIT62_BROKER_REFRESH_ACL_FAILED'}
-     if((Get-FileHash -LiteralPath $record.protected -Algorithm SHA256).Hash -ine
-        [string]$record.hash){throw 'GIT63_BROKER_REFRESH_HASH_FAILED'}
+     Copy-Item -LiteralPath $record.source -Destination $record.target -Force -ErrorAction Stop
+     & icacls.exe $record.target '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
+     if($LASTEXITCODE -ne 0){
+       throw 'GIT63_BROKER_REFRESH_ACL_FAILED'
+     }
+     $copiedHash=(Get-FileHash -LiteralPath $record.target -Algorithm SHA256).Hash
+     if($copiedHash -ine [string]$record.hash){
+       throw 'GIT63_BROKER_REFRESH_HASH_FAILED'
+     }
    }
-   $newBrokerHash=(Get-FileHash -LiteralPath
-       (Join-Path $codeRoot 'turbo_os_execute.ps1') -Algorithm SHA256).Hash
+   $protectedBroker=Join-Path $codeRoot 'turbo_os_execute.ps1'
+   $newBrokerHash=(Get-FileHash -LiteralPath $protectedBroker -Algorithm SHA256).Hash
  }
  # Phase 2: independent, protected, replace-atomic journal writes.
  foreach($item in $verified){
