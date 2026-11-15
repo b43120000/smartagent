@@ -22,7 +22,7 @@ _METADATA = re.compile(
 )
 _READ_TOOLS = frozenset({
     "list_directory", "inspect_directory", "find_file",
-    "read_file", "observe_fact", "inspect_project_scope",
+    "read_file", "observe_fact", "inspect_toolchain_environment", "inspect_project_scope",
     "inspect_project_working_set", "extract_project_dependencies",
     "compare_project_snapshot",
 })
