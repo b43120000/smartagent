@@ -302,4 +302,8 @@ def test_native_wrapper_source_separates_streams_and_snapshots_status():
         "$text=[string]::Join([Environment]::NewLine,$outList.ToArray());")
     assert "System.Management.Automation.ErrorRecord" in source
     assert "string wrapped =" in source
-    assert "} finally { \" + putOut + putErr + \" }" in source
+    # Git63+ adds a protected trace flush and catch/exit-95 around the
+    # originally adjacent putOut/putErr expressions; preserve both guarantees.
+    assert '"} finally { " +' in source
+    assert "putOut + putErr +" in source
+    assert '" } catch { exit 95 } " +' in source
