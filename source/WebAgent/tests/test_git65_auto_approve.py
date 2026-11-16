@@ -1,7 +1,11 @@
 """Git65 Auto Approve regression: all 8 settings, hard gates, and Windows process IT."""
 from __future__ import annotations
 
+import json
 import os
+import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -75,6 +79,21 @@ class AutoApproveRegression(unittest.TestCase):
                                 self.workspace, "Write-Output GIT65_TEST", working_directory=self.workspace,
                             )
                             self.assertEqual(decision["approved"], acl == "off" and auto)
+
+    def test_unbound_workspace_cannot_advertise_effective_on(self):
+        with self.policy_patches(acl="off", auto=True):
+            state = auto_approve_snapshot()
+            self.assertEqual(state["auto_approve_requested"], "ON")
+            self.assertEqual(state["auto_approve_effective"], "OFF")
+            self.assertEqual(state["reason_code"], "WORKSPACE_NOT_BOUND")
+
+    def test_acl_on_cannot_rearm_latent_auto_approve(self):
+        with patch("agent_core.auto_approve_mode.acl_mode", return_value="on"):
+            with self.assertRaisesRegex(ValueError, "auto_approve_requires_acl_off"):
+                set_auto_approve_requested(True)
+        with patch("agent_core.auto_approve_mode.acl_mode", return_value="unknown"):
+            with self.assertRaisesRegex(ValueError, "auto_approve_requires_acl_off"):
+                set_auto_approve_requested(True)
 
     def test_unknown_acl_and_missing_policy_fail_closed(self):
         with self.policy_patches(acl="unknown", auto=True):
@@ -172,13 +191,92 @@ class AutoApproveRegression(unittest.TestCase):
                    return_value=path), patch(
             "agent_core.auto_approve_mode.load_workspace_access_policy",
             return_value=policy,
-        ):
+        ), patch("agent_core.auto_approve_mode.acl_mode", return_value="off"):
             result = set_auto_approve_requested(True, expected_revision=6)
             self.assertTrue(result["auto_approve_requested"])
             self.assertEqual(result["revision"], 7)
             self.assertTrue(path.is_file())
             with self.assertRaises(RuntimeError):
                 set_auto_approve_requested(True, expected_revision=99)
+
+
+class EditWorkspaceStatusContract(unittest.TestCase):
+    def test_edit_workspace_shows_both_states_and_readonly_effective(self):
+        root = Path(__file__).resolve().parents[3]
+        source = (root / "source" / "agent_core" / "workspace_manager.py").read_text(encoding="utf-8")
+        self.assertIn('Auto Approve Requested: ', source)
+        self.assertIn('Auto Approve Effective: ', source)
+        self.assertIn('[Runtime/read-only]', source)
+        self.assertIn('auto_approve_snapshot(active_workspace)', source)
+
+    def test_acl_mode_on_and_off_both_clear_requested_without_turbo_reset_on_on(self):
+        root = Path(__file__).resolve().parents[3]
+        source = (root / "install_smart_agent" / "acl_status.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Clear-AutoApproveOnAclOn", source)
+        self.assertIn("function Clear-TurboPolicyOnAclOff", source)
+        self.assertIn("        Clear-AutoApproveOnAclOn", source)
+        self.assertIn("$policy.auto_approve_requested = $false", source)
+        on_body = source.split("function Clear-AutoApproveOnAclOn", 1)[1].split(
+            "function Clear-TurboPolicyOnAclOff", 1)[0]
+        self.assertNotIn("$policy.turbo_roots =", on_body)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows PowerShell ACL policy transition integration")
+class WindowsAclAutoApproveIntegration(unittest.TestCase):
+    def test_acl_on_and_off_policy_mutation_using_real_windows_powershell(self):
+        root = Path(__file__).resolve().parents[3]
+        source_path = root / "install_smart_agent" / "acl_status.ps1"
+        source = source_path.read_text(encoding="utf-8")
+        functions = {}
+        for name in ("Clear-AutoApproveOnAclOn", "Clear-TurboPolicyOnAclOff"):
+            match = re.search(r"(?ms)^function " + re.escape(name) + r" \{.*?^\}", source)
+            self.assertIsNotNone(match, name)
+            functions[name] = match.group(0)
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        self.assertIsNotNone(powershell)
+
+        with tempfile.TemporaryDirectory() as temp:
+            policy_path = Path(temp) / "workspace_access_policy.json"
+            test_script = Path(temp) / "invoke_policy.ps1"
+            for method in ("Clear-AutoApproveOnAclOn", "Clear-TurboPolicyOnAclOff"):
+                with self.subTest(method=method):
+                    previous = {
+                        "schema": "SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1",
+                        "revision": 91, "updated_at": 10,
+                        "writable_workspaces": [str(Path(temp))],
+                        "read_only_roots": [], "denied_write_roots": [],
+                        "turbo_roots": [str(Path(temp) / "rootA")],
+                        "turbo_requested": True,
+                        "turbo_root_epochs": [{"root": str(Path(temp) / "rootA"), "epoch": 60}],
+                        "auto_approve_requested": True,
+                    }
+                    policy_path.write_text(json.dumps(previous), encoding="utf-8")
+                    literal = str(policy_path).replace("'", "''")
+                    script = (
+                        "$ErrorActionPreference='Stop'\n"
+                        + "$AccessPolicyPath='" + literal + "'\n"
+                        + functions[method] + "\n"
+                        + method + "\n" + method + "\n"
+                    )
+                    test_script.write_text(script, encoding="utf-8")
+                    result = subprocess.run(
+                        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+                         "-File", str(test_script)],
+                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        timeout=30, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                    current = json.loads(policy_path.read_text(encoding="utf-8-sig"))
+                    self.assertIs(current["auto_approve_requested"], False)
+                    self.assertEqual(current["revision"], 92 if method ==
+                                     "Clear-AutoApproveOnAclOn" else 93)
+                    if method == "Clear-AutoApproveOnAclOn":
+                        self.assertEqual(current["turbo_roots"], previous["turbo_roots"])
+                        self.assertEqual(current["turbo_root_epochs"], previous["turbo_root_epochs"])
+                        self.assertIs(current["turbo_requested"], True)
+                    else:
+                        self.assertEqual(current["turbo_roots"], [])
+                        self.assertIs(current["turbo_requested"], False)
 
 
 @unittest.skipUnless(os.name == "nt", "Windows CMD/BAT process integration test")
