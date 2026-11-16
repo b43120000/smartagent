@@ -247,6 +247,7 @@ CORE_FILES = (
     'source/agent_core/security_config.py',
     'source/agent_core/security_context.py',
     'source/agent_core/workspace_access.py',
+    'source/agent_core/auto_approve_mode.py',
     'source/agent_core/workspace_manager.py',
     'source/agent_core/command_security.py',
     'source/agent_core/command_operation.py',
