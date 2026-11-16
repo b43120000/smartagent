@@ -24,7 +24,9 @@ _READ_ONLY_TOOLS = frozenset({
 
 def action_is_mutating(action: dict) -> bool:
     if action.get("tool") == "run_command":
-        return not command_is_proven_observation(action)
+        # Verify steps are separately dispatched in some Runtime modes.
+        # A safe command alone cannot prove a compound action is read-only.
+        return bool(action.get("verify")) or not command_is_proven_observation(action)
     return action.get("tool") not in _READ_ONLY_TOOLS
 
 

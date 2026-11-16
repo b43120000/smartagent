@@ -6217,7 +6217,11 @@ class WebAgentProtocolLoop:
         )
         return actions, []
 
-    def _execute_action(self, action: dict) -> str:
+    def _execute_runtime_action(self, action: dict) -> str:
+        """Dispatch for Runtime consumers that project their own Planner payload."""
+        return self._execute_action(action, runtime_receipt=True)
+
+    def _execute_action(self, action: dict, *, runtime_receipt: bool = False) -> str:
         if action.get('tool') == 'delete_path' and self.resolved_delete_target and str(action.get('path', '')).casefold() != self.resolved_delete_target.casefold():
             from agent_core.tool_result_contract import encode_result
             return encode_result('REJECTED', 'TARGET_MISMATCH', requested_path=action.get('path', ''), detail='Use only the exact target proven by Runtime discovery')
@@ -6235,7 +6239,25 @@ class WebAgentProtocolLoop:
         if cached:
             if cached["signature"] != signature:
                 raise RuntimeError(f"action_id payload mismatch: {action_id}")
-            return str(cached["result"])
+            cached_result = str(cached["result"])
+            if runtime_receipt and not cached.get("result_is_runtime_receipt"):
+                from agent_core.runtime_evidence_store import (
+                    RuntimeEvidenceError, read_runtime_action_result,
+                )
+                pointer = cached.get("runtime_evidence_store") or {}
+                if pointer.get("store_status") == "PERSISTED_AND_READBACK_VERIFIED":
+                    try:
+                        return read_runtime_action_result(
+                            self.progress_root if self.progress_root is not None else self.workspace,
+                            task_id=self.task_id, request_id=self.run_id,
+                            task_epoch=self.task_epoch, action_id=action_id,
+                            evidence_ref=pointer["evidence_ref"],
+                        )
+                    except RuntimeEvidenceError:
+                        pass  # Never replay an action to recover lost evidence.
+            if not runtime_receipt and cached.get("result_is_runtime_receipt"):
+                return prepare_tool_result(action, cached_result, self.tools)
+            return cached_result
         if self.continuation_source:
             from agent_core.task_continuation import guard_continuation_action
             guard_continuation_action(action, self._continuation_guard_source(), self.continuation_mode)
@@ -6322,7 +6344,11 @@ class WebAgentProtocolLoop:
                     state="PLAN_FROZEN",
                 )
         evidence = self._classify_action_evidence(action, str(raw_result))
-        result = prepare_tool_result(action, raw_result, self.tools)
+        # Planner transport can replace the full receipt with a local
+        # reference and a clipped preview. Runtime must keep the original.
+        result = str(raw_result) if runtime_receipt else prepare_tool_result(
+            action, raw_result, self.tools,
+        )
         from agent_core.progress_recovery import read_fact_digest
         from agent_core.runtime_fact_ledger import build_action_provenance
         provenance = build_action_provenance(
@@ -6369,6 +6395,7 @@ class WebAgentProtocolLoop:
             "provenance": provenance,
             "signature": signature,
             "result": result,
+            "result_is_runtime_receipt": runtime_receipt,
             'raw_result_digest': hashlib.sha256(str(raw_result).encode('utf-8')).hexdigest(),
             'read_fact_digest': read_fact_digest(action, raw_result),
             "action": dict(action),
@@ -6380,7 +6407,7 @@ class WebAgentProtocolLoop:
         # and evidence ref, so its later readback is strictly idempotent.
         from agent_core.runtime_evidence_store import persist_runtime_evidence
         from agent_core.tool_result_contract import decode_result as _decode_source_result
-        _final_result = str(result)
+        _final_result = str(raw_result)
         _final_receipt = _decode_source_result(_final_result)
         if isinstance(_final_receipt, dict) and action_id:
             _result_digest = hashlib.sha256(_final_result.encode("utf-8")).hexdigest()

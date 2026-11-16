@@ -42,6 +42,9 @@ def rejection_reason(detail):
 
 def decode_result(result):
     text = str(result or '').strip()
+    # A display reference or preview is never a Runtime receipt.
+    if text.startswith(('[SMARTAGENT_RESULT_LOCAL_REF]', '[SMARTAGENT_RESULT_ATTACHMENT]')):
+        return None
     body = re.sub(r'^\[(?:SECURITY_DELETE_(?:SUCCESS|REJECTED|FAILED)|CHUNKED_WRITE_(?:SUCCESS|FAILED)|TOOL_RESULT)\]\s*', '', text)
     try:
         payload = json.loads(body)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from collections.abc import Mapping
 
@@ -29,6 +30,19 @@ def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(
         value, sort_keys=True, ensure_ascii=False, default=str,
     ).encode("utf-8")).hexdigest()
+
+
+def _possibly_mutating(action: dict, broker_decision: str) -> bool:
+    if action_is_mutating(action):
+        return True
+    if broker_decision != "BROKER_REQUIRED" or action.get("tool") != "run_command":
+        return False
+    # Keep native commands conservative, including external executables.
+    # Relax replay only for already-proven direct PowerShell file reads.
+    return not re.match(
+        r"^(?:Get-Content|Get-Item|Test-Path)\s+-LiteralPath\s",
+        str(action.get("command", "")).strip(), re.IGNORECASE,
+    )
 
 
 def _tool_result(status: str, reason: str, payload: object = None, *, evidence_pointer: dict | None = None) -> dict:
@@ -112,6 +126,13 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             preexecution_rejections=None) -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
+    native_child_hint = (
+        "For native Windows child processes, use the attested physical working directory. "
+        "If CMD absolute cd fails but the physical CWD matches, use relative paths "
+        "or safe direct tool invocations; a BAT that repeats absolute cd can still fail. "
+        "Record child exit codes separately and never infer build success from a parent exit.\n"
+        if (turbo_planning_context or {}).get("turbo_requested") == "ON" else ""
+    )
     return (
         "[POKECLAW_EXECUTOR_LOOP_V1]\n"
         "You are the planning/decision brain. The local Runtime owns execution.\n"
@@ -173,7 +194,8 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "per-action OS attestation is pending, NOT that a tool call is forbidden. "
         "Propose an allowed tool_call; Runtime must attest or reject it. "
         "Never claim OS execution or isolation without actual ToolResult evidence.\n"
-        "Turbo configured scope (advisory only; every Action is independently "
+        + native_child_hint
+        + "Turbo configured scope (advisory only; every Action is independently "
         "readmitted, never assume this grants permission):\n"
         + json.dumps(turbo_planning_context or {}, ensure_ascii=False,
                      separators=(",", ":"))[:1600] + "\n"
@@ -1120,9 +1142,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "可在新接續任務重新發起一次性授權。"
                     )
                     continue
-        if action and (action_is_mutating(action) or (
-                broker_gate["decision"] == "BROKER_REQUIRED"
-                and action.get("tool") == "run_command")):
+        if action and _possibly_mutating(action, broker_gate["decision"]):
             fingerprint = _digest({
                 key: value for key, value in action.items() if key != "action_id"
             })
@@ -1268,10 +1288,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         loop._planner_original_actions[action["action_id"]] = {
             **proposed, "action_id": action["action_id"],
         }
-        mutating = action_is_mutating(action) or (
-            broker_gate["decision"] == "BROKER_REQUIRED"
-            and action.get("tool") == "run_command"
-        )
+        mutating = _possibly_mutating(action, broker_gate["decision"])
         append_executor_event(root, loop, {
             "round": turn, "kind": "ACTION_ADMITTED",
             "toolName": action["tool"], "action_id": action["action_id"],
@@ -1291,7 +1308,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         })
         loop.protocol_state = "EXECUTING"
         try:
-            raw_result = loop._execute_action(action)
+            dispatch = getattr(loop, "_execute_runtime_action", loop._execute_action)
+            raw_result = dispatch(action)
         except Exception as exc:
             # Never replay a possibly side-effecting command.
             from agent_core.tool_result_contract import encode_result
@@ -1302,7 +1320,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
         receipt = decode_result(raw_result) or {
             "status": "UNKNOWN", "reason": "UNPARSEABLE_TOOL_RESULT",
-            "executed": False, "data": {},
+            "executed": False, "data": {"possible_partial_execution": mutating},
         }
         runtime_status = str(receipt.get("status") or "UNKNOWN")
         runtime_reason = str(receipt.get("reason") or "UNCLASSIFIED_TOOL_RESULT")

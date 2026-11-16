@@ -250,7 +250,8 @@ def resolve_unknown_action(loop, *, original: dict, original_receipt: dict,
         loop._planner_original_actions[action["action_id"]] = dict(action)
         loop._canonical_action_proposals[action["action_id"]] = dict(action)
         try:
-            raw = loop._execute_action(action)
+            dispatch = getattr(loop, "_execute_runtime_action", loop._execute_action)
+            raw = dispatch(action)
         except BaseException as exc:
             last_reason = "RESOLUTION_TOOL_EXECUTION_INTERRUPTED"
             event("minimal_resolution_tool_interrupted", resolution_attempt=attempt,

@@ -135,6 +135,20 @@ def _load_record(path: Path) -> dict:
     return record
 
 
+def read_runtime_action_result(
+    root: str | Path, *, task_id: str, request_id: str, task_epoch: str,
+    action_id: str, evidence_ref: str,
+) -> str:
+    """Load the full producer result for an internal, bound action cache."""
+    record = _load_record(_record_path(root, task_id, evidence_ref))
+    if any(record.get(key) != expected for key, expected in (
+        ("task_id", task_id), ("request_id", request_id), ("task_epoch", task_epoch),
+        ("action_id", action_id), ("evidence_ref", evidence_ref),
+    )):
+        raise RuntimeEvidenceError("EVIDENCE_REQUEST_BINDING_MISMATCH")
+    return record["raw_result"]
+
+
 def read_runtime_evidence(
     root: str | Path, *, task_id: str, request_id: str, task_epoch: str,
     evidence_ref: str, section: str = "raw_result",

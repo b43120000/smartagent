@@ -606,7 +606,9 @@ def execute_turbo_command(
     stderr_text = stderr.decode("utf-8", errors="replace")
     stdout_text = stdout.decode("utf-8", errors="replace")
     error_text = (stderr_text + "\n" + stdout_text)[:32768].casefold()
-    if "git52_native_executable_not_visible" in error_text:
+    if exit_code == 0:
+        error_class = "NONE"
+    elif "git52_native_executable_not_visible" in error_text:
         error_class = "NATIVE_PINNED_EXECUTABLE_NOT_VISIBLE"
     elif "commandnotfoundexception" in error_text or "is not recognized" in error_text:
         error_class = "NATIVE_EXECUTABLE_NOT_FOUND"
@@ -619,7 +621,7 @@ def execute_turbo_command(
     elif "connect" in error_text or "network" in error_text:
         error_class = "NATIVE_NETWORK_FAILURE"
     else:
-        error_class = "NATIVE_EXIT_NONZERO" if exit_code else "NONE"
+        error_class = "NATIVE_EXIT_NONZERO"
     evidence = {
         "schema": "SMARTAGENT_TURBO_OS_ACTION_ATTESTATION_V1",
         "sandbox_backend": "WIN32_APPCONTAINER",

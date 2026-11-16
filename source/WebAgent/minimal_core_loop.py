@@ -1177,7 +1177,8 @@ def run_minimal_core(loop, request: str) -> str:
         loop._canonical_action_proposals[action["action_id"]] = dict(action)
         loop.protocol_state = "EXECUTING"
         try:
-            result = loop._execute_action(action)
+            dispatch = getattr(loop, "_execute_runtime_action", loop._execute_action)
+            result = dispatch(action)
         except Exception as exc:
             # The action could have mutated before the exception. The only
             # permitted next route is the read-only Resolution child loop.
