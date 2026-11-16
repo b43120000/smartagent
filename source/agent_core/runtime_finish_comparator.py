@@ -431,7 +431,7 @@ def finish_runtime_field_catalog(loop, *, max_records: int = 64) -> list[dict]:
     return catalog
 
 
-def _partial_inspection_missing_paths(item: dict) -> set[str] | None:
+def _partial_inspection_missing_paths(item: dict) -> dict[str, str] | None:
     action, receipt = item["action"], item["receipt"]
     if (action["tool"] != "inspect_directory" or action.get("recursive") is not False
             or receipt.get("executed") is not True
@@ -450,7 +450,7 @@ def _partial_inspection_missing_paths(item: dict) -> set[str] | None:
             or len(paths) != len(expected) or len(rows) != len(expected)
             or raw.get("tool") != action["tool"] or raw.get("recursive") is not False):
         return None
-    missing, observed = set(), set()
+    missing, observed = {}, set()
     for entry in rows:
         if not isinstance(entry, dict):
             return None
@@ -463,7 +463,7 @@ def _partial_inspection_missing_paths(item: dict) -> set[str] | None:
         if entry.get("exists") is False and entry.get("errors") in (
             ["path_not_found"], ["not_a_directory"],
         ):
-            missing.add(path)
+            missing[path] = entry["errors"][0]
         elif entry.get("exists") is not True or entry.get("errors") != []:
             return None
     return missing or None
@@ -476,10 +476,10 @@ _EXACT_SHA256_READ = re.compile(
 )
 
 
-def _observed_paths(item: dict) -> set[str]:
+def _observed_paths(item: dict) -> dict[str, str]:
     action, receipt = item["action"], item["receipt"]
     if receipt.get("status") != "SUCCEEDED" or receipt.get("executed") is not True:
-        return set()
+        return {}
     tool, data = action["tool"], receipt["data"]
     if tool == "list_directory" and receipt["reason"] == "DIRECTORY_LISTED":
         path = _path(action.get("path"))
@@ -488,9 +488,9 @@ def _observed_paths(item: dict) -> set[str]:
                 or _path(receipt.get("resolved_path")) != path
                 or data.get("recursive") is not False
                 or data.get("terminal_eligible") is not True or not isinstance(entries, list)):
-            return set()
-        return {path} | {
-            ntpath.join(path, name.casefold()) for row in entries
+            return {}
+        return {path: "DIRECTORY"} | {
+            ntpath.join(path, name.casefold()): row["kind"] for row in entries
             if isinstance(row, dict) and row.get("kind") in {"FILE", "DIRECTORY"}
             and isinstance((name := row.get("name")), str)
             and re.fullmatch(r"[^\\/:]+", name) and name not in {".", ".."}
@@ -501,9 +501,35 @@ def _observed_paths(item: dict) -> set[str]:
         paths = action.get("paths")
         path = _path(data.get("observed_path"))
         if (path and isinstance(paths, list) and len(paths) == 1
-                and _path(paths[0]) == path and data.get("observation_status") == "CONFIRMED"
-                and type(data.get("observed_exists")) is bool):
-            return {path}
+                and _path(paths[0]) == path and data.get("observation_status") == "CONFIRMED"):
+            if (receipt["reason"] == "DIRECTORY_INSPECTED" and data.get("observed_exists") is True
+                    and data.get("observed_is_directory") is True):
+                return {path: "DIRECTORY"}
+            if receipt["reason"] == "DIRECTORY_ABSENCE_OBSERVED" and data.get("observed_exists") is False:
+                return {path: "ABSENT"}
+    if tool == "observe_fact" and receipt["reason"] in {"FACT_OBSERVED", "FACT_PREDICATE_PASSED"}:
+        path = _path(action.get("path"))
+        facts = data.get("observations")
+        if (path and action.get("action_id") == receipt.get("action_id")
+                and _path(receipt.get("requested_path")) == path
+                and _path(receipt.get("resolved_path")) == path
+                and data.get("execution_finality") == "COMPLETED"
+                and data.get("terminal_eligible") is True
+                and data.get("observation_status") == "CONFIRMED"
+                and isinstance(facts, list) and len(facts) == 1):
+            fact = facts[0]
+            if (isinstance(fact, dict)
+                    and fact.get("schema") == "SMARTAGENT_EVIDENCE_V1"
+                    and fact.get("field") == "file.exists"
+                    and fact.get("source") == "filesystem.stat"
+                    and fact.get("observation_status") == "CONFIRMED"
+                    and fact.get("freshness") == "CURRENT"
+                    and fact.get("raw_evidence_ref") == action["action_id"]
+                    and _path(fact.get("scope")) == path):
+                if fact.get("value") is True and fact.get("path_kind") in ("FILE", "DIRECTORY", "OTHER"):
+                    return {path: fact["path_kind"]}
+                if fact.get("value") is False and "path_kind" not in fact:
+                    return {path: "ABSENT"}
     if tool == "run_command" and receipt["reason"] == "COMMAND_EXITED":
         command = str(action.get("command") or "").strip()
         if command.casefold().endswith(").hash.tolowerinvariant()") and command.startswith("("):
@@ -524,8 +550,8 @@ def _observed_paths(item: dict) -> set[str]:
                 and data.get("stdout_truncated") is False
                 and isinstance(data.get("stdout"), str)
                 and re.fullmatch(r"[0-9a-fA-F]{64}", data["stdout"].strip())):
-            return {path}
-    return set()
+            return {path: "FILE"}
+    return {}
 
 
 def _execution_uncertainty(history: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -536,19 +562,25 @@ def _execution_uncertainty(history: list[dict]) -> tuple[list[dict], list[dict]]
         ref, status = item["evidence_ref"], item["receipt"]["status"]
         if status in {"UNKNOWN", "RUNNING", "PARTIAL"}:
             missing = _partial_inspection_missing_paths(item) if status == "PARTIAL" else None
-            if missing and missing <= observations.keys():
+            unresolved = {
+                path for path, reason in (missing or {}).items()
+                if path not in observations
+                or observations[path][0] not in ("FILE", "DIRECTORY")
+                or (reason == "not_a_directory" and observations[path][0] != "FILE")
+            }
+            if missing and not unresolved:
                 recovered.append({"evidence_ref": ref, "resolved_by": sorted({
-                    observations[path] for path in missing
+                    observations[path][1] for path in missing
                 })})
             else:
                 blocked.append({
                     "evidence_ref": ref, "status": status, "tool": item["action"]["tool"],
                     "reason_code": "FOLLOWUP_SCOPE_NOT_OBSERVED" if missing
                                    else "UNCERTAINTY_NOT_RECOVERABLE_AS_READ",
-                    "unobserved_path_count": len(missing - observations.keys()) if missing else 0,
+                    "unobserved_path_count": len(unresolved),
                 })
-        for path in _observed_paths(item):
-            observations.setdefault(path, ref)
+        for path, kind in _observed_paths(item).items():
+            observations.setdefault(path, (kind, ref))
     return blocked[::-1], recovered[::-1]
 
 

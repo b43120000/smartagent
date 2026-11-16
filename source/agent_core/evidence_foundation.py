@@ -101,7 +101,7 @@ def probe_file_exists(path: Path, *, raw_ref: str = "") -> dict:
         if not stat.S_ISDIR(parent_info.st_mode):
             return observation("file.exists", source="filesystem.stat", scope=str(path),
                                status="UNKNOWN", raw_ref=raw_ref)
-        path.stat()
+        info = path.stat()
     except (FileNotFoundError, NotADirectoryError):
         # A missing final path is confirmed only if its parent was stat-able.
         if not path.parent.is_dir():
@@ -111,7 +111,12 @@ def probe_file_exists(path: Path, *, raw_ref: str = "") -> dict:
     except (PermissionError, OSError):
         return observation("file.exists", source="filesystem.stat", scope=str(path),
                            status="UNKNOWN", raw_ref=raw_ref)
-    return observation("file.exists", True, source="filesystem.stat", scope=str(path), raw_ref=raw_ref)
+    fact = observation("file.exists", True, source="filesystem.stat", scope=str(path), raw_ref=raw_ref)
+    fact["path_kind"] = (
+        "FILE" if stat.S_ISREG(info.st_mode) else
+        "DIRECTORY" if stat.S_ISDIR(info.st_mode) else "OTHER"
+    )
+    return fact
 
 
 def validate_observe_fact_action(action: Mapping[str, object]) -> dict | None:

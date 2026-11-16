@@ -51,13 +51,13 @@ class MinimalCoreJournal:
 
 _ATOMIC_TOOL_HINTS = {
     "create_directory": "Create one exact new folder; parent must exist, no overwrite; postcondition checked.",
-    "inspect_directory": "Observe exact path existence/type, including confirmed directory absence.",
+    "inspect_directory": "Inspect directory contents or absence. Use observe_fact for files.",
     "list_directory": "List existing directory; result may be truncated; no mutation.",
     "read_file": "Read an authorized text file; result may be truncated.",
     "write_file": "Write only in requested scope; check actual postcondition.",
     "run_command": "PowerShell 5.1; only for genuine local OS commands; mutations require success_criteria and verify. Do not use for web research.",
     "web_search": "Non-command web lookup for news, English sources and current information; no Turbo Sandbox or shell required.",
-    "observe_fact": "Read a scoped filesystem fact, never grant write or global completion.",
+    "observe_fact": "Stat one exact file or directory for structured existence and type.",
 }
 
 

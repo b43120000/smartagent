@@ -144,6 +144,8 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "No Markdown fences, no invented observations, no claimed success without results.\n"
         "Observe first; decide from actual ToolResult. If missing, a permitted "
         "tool may create the requested target. Independently inspect after mutation. "
+        "Use observe_fact for exact file existence and type. For an inspect_directory "
+        "PARTIAL with not_a_directory, obtain a fresh observe_fact on each affected file. "
         "Do not repeat potentially executed mutations without new evidence. "
         "ToolResult.isSuccess means the tool succeeded, NOT that an observed "
         "boolean was true or that the whole user task is verified.\n"

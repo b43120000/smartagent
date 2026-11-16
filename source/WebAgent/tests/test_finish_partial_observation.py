@@ -153,3 +153,87 @@ def test_followup_does_not_satisfy_unrelated_frozen_goal(tmp_path):
                         goal=r"請確保資料夾存在 C:\isolated\other")
     assert result["reason_code"] == "FROZEN_GOAL_STATE_NOT_SATISFIED", result
     assert result["goal_contract_sha256"]
+
+
+@pytest.mark.parametrize("case", [
+    "complete", "missing_receipt", "different_path", "absent", "directory",
+    "untrusted_source", "wrong_action", "stdout_only", "unknown", "running", "write_partial",
+])
+def test_runtime_file_observations_reconcile_only_complete_bound_scope(tmp_path, monkeypatch, case):
+    """Dispatch real stat and directory tools against a disposable workspace."""
+    from agent_core.tools import execute_tool
+    from agent_core.tool_result_contract import attach_runtime_result
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    a, b, sibling = (workspace / name for name in ("a.json", "b.py", "other.py"))
+    for path in (a, b, sibling):
+        path.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr("agent_core.security_context._configured_access_roots",
+                        lambda: ((workspace,), (), ()))
+    agent = SimpleNamespace(workspace_root=workspace, interface_name="remote",
+                            current_request_id="RR-TEST", current_task_id="TASK-TEST")
+
+    def dispatch(tool, index, **args):
+        action = {"tool": tool, "action_id": f"ACT-{index}", **args}
+        return action, execute_tool(action, agent=agent)
+
+    original = dispatch("inspect_directory", 0, paths=[str(workspace), str(a), str(b)],
+                        recursive=False)
+    receipt = decode_result(original[1])
+    assert receipt["status"] == "PARTIAL", receipt
+    assert json.loads(original[1])["paths"][2]["errors"] == ["not_a_directory"]
+    actions = [original, dispatch("observe_fact", 1, path=str(a))]
+    if case == "absent":
+        b.unlink()
+    elif case == "directory":
+        b.unlink()
+        b.mkdir()
+    if case == "stdout_only":
+        actions.append(({"tool": "run_command", "operation": "INSPECT",
+                         "command": f"Test-Path -LiteralPath '{b}' -PathType Leaf"},
+                        encode_result("SUCCEEDED", "COMMAND_EXITED", executed=True,
+                                      tool="run_command",
+                                      data={"exit_code": 0, "stdout": "True", "terminal_eligible": True})))
+    elif case != "missing_receipt":
+        action, raw = dispatch("observe_fact", 2, path=str(sibling if case == "different_path" else b))
+        observation = decode_result(raw)["data"]["observations"][0]
+        assert observation["value"] is (case != "absent")
+        if case in {"untrusted_source", "wrong_action"}:
+            original_receipt = decode_result(raw)
+            fact = original_receipt["data"]["observations"][0]
+            if case == "untrusted_source":
+                fact["source"] = "planner"
+            else:
+                fact["raw_evidence_ref"] = "ACT-1"
+            raw = attach_runtime_result(
+                "{}", "SUCCEEDED", "FACT_OBSERVED", tool="observe_fact", executed=True,
+                action_id=action["action_id"], requested_path=action["path"],
+                resolved_path=action["path"], data=original_receipt["data"],
+            )
+        actions.append((action, raw))
+    if case in {"unknown", "running", "write_partial"}:
+        status = "PARTIAL" if case == "write_partial" else case.upper()
+        actions.append(({"tool": "write_file"},
+                        encode_result(status, "WRITE_INCOMPLETE", tool="write_file", executed=True)))
+
+    def check_file_types(checks, claims):
+        for index in (1, 2):
+            for field, expected in (
+                ("data.observations.0.value", True),
+                ("data.observations.0.path_kind", "FILE"),
+            ):
+                claims[index]["fields"][field] = expected
+                checks.append({
+                    "criterion": f"file {index} {field}", "field": field, "operator": "eq",
+                    "evidence_ref": claims[index]["evidence_ref"], "expected": expected,
+                })
+
+    result = run_finish(tmp_path, actions,
+                        check_override=check_file_types if case == "complete" else None)
+    if case == "complete":
+        assert result["verdict"] == "PASS", result
+        assert result["tool_results"][0]["execution_status"] == "PARTIAL"
+        assert result["reconciled_observations"][0]["resolved_by"] == result["evidence_refs"][1:]
+    else:
+        assert result["reason_code"] == "RUNTIME_EXECUTION_NOT_CONFIRMED", result
