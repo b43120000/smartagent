@@ -964,6 +964,32 @@ class TelegramReceiver:
                         update_id=update_id,
                     )
                 continue
+            # Operator-only Auto Approve switch, intercepted before Planner.
+            from agent_core.auto_approve_mode import (
+                parse_auto_approve_control, apply_auto_approve_control,
+                format_auto_approve_status,
+            )
+            if parse_auto_approve_control(message.text) is not None:
+                self.offset_store.commit(update_id)
+                try:
+                    if message.attachments:
+                        raise ValueError("auto_approve_control_attachments_not_allowed")
+                    outcome = apply_auto_approve_control(
+                        message.text, workspace=self.config.workspace,
+                    )
+                    reply = format_auto_approve_status(outcome)
+                    self._log("CONNECT", stage="CONTROL_AUTO_APPROVE",
+                              update_id=update_id,
+                              revision=outcome["policy_revision"])
+                except (ValueError, OSError, RuntimeError) as exc:
+                    reply = "Auto Approve setting rejected: " + str(exc)[:400]
+                    self._log("ERROR", stage="CONTROL_AUTO_APPROVE_REJECTED",
+                              update_id=update_id, error=str(exc)[:300])
+                self._send_message(
+                    int(message.reply_context["chat_id"]), reply,
+                    reply_to_message_id=int(message.reply_context["message_id"]),
+                )
+                continue
             # Explicit Turbo configuration is a software-owned human control.
             # Process in the authenticated Telegram ingress before any Planner,
             # WebGPT DOM submission or Agent task creation.
