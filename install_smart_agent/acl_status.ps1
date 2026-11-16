@@ -66,6 +66,38 @@ function Write-ModeState([string]$Value, [string]$ExecutorSid, [string]$Controll
     Invoke-Icacls $modeAcl
 }
 
+function Clear-AutoApproveOnAclOn {
+    # A completed ACL OFF -> ON transition must not retain latent host
+    # auto-confirmation for the next ACL OFF session. Do not touch Turbo roots.
+    # Run only inside a transitioning_on transaction, before native enrollment.
+    if (-not (Test-Path -LiteralPath $AccessPolicyPath -PathType Leaf)) { return }
+    $policy = Get-Content -LiteralPath $AccessPolicyPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json -ErrorAction Stop
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1') {
+        throw 'AUTO_APPROVE_POLICY_INVALID_DURING_ACL_ON'
+    }
+    if (-not $policy.PSObject.Properties['auto_approve_requested'] -or
+        $policy.auto_approve_requested -ne $true) { return }
+    $policy.auto_approve_requested = $false
+    $policy.revision = [long]$policy.revision + 1
+    $policy.updated_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $temp = "$AccessPolicyPath.git65-auto-approve-off.tmp"
+    try {
+        [IO.File]::WriteAllText($temp, ($policy | ConvertTo-Json -Depth 16),
+            (New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temp -Destination $AccessPolicyPath -Force -ErrorAction Stop
+    } finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    }
+    $post = Get-Content -LiteralPath $AccessPolicyPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json -ErrorAction Stop
+    if ($post.auto_approve_requested -ne $false -or
+        [long]$post.revision -ne [long]$policy.revision) {
+        throw 'AUTO_APPROVE_POLICY_RESET_POSTCONDITION_FAILED'
+    }
+    Write-Host '[SmartAgent ACL] AUTO_APPROVE_REQUESTED=OFF; Effective=OFF (ACL ON transition)' -ForegroundColor Cyan
+}
+
 function Clear-TurboPolicyOnAclOff {
     # ACL OFF revokes Turbo roots and intent. ACL ON never restores this state.
     if (-not (Test-Path -LiteralPath $AccessPolicyPath -PathType Leaf)) { return }
@@ -75,6 +107,13 @@ function Clear-TurboPolicyOnAclOff {
         throw 'TURBO_POLICY_INVALID_DURING_ACL_OFF'
     }
     $policy.turbo_roots = @()
+    # Reset latent auto-confirmation whenever ACL is revoked. A later ACL
+    # OFF session must require an explicit fresh human opt-in.
+    if ($policy.PSObject.Properties['auto_approve_requested']) {
+        $policy.auto_approve_requested = $false
+    } else {
+        $policy | Add-Member -NotePropertyName 'auto_approve_requested' -NotePropertyValue $false
+    }
     if (-not $policy.PSObject.Properties['turbo_requested']) {
         $policy | Add-Member -NotePropertyName 'turbo_requested' -NotePropertyValue $false
     } else {
@@ -944,6 +983,7 @@ if ($Mode -eq 'on') {
     $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
     Write-ModeState 'transitioning_on' $executorSid $callerSid
     try {
+        Clear-AutoApproveOnAclOn
         if ($profileStructurallyValid) {
             $writeRoots = if ($accessPolicy) {
                 @($accessPolicy.writable_workspaces)
