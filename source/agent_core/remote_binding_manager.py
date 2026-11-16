@@ -172,6 +172,12 @@ class RemoteBindingManager:
             if auto_raw.strip().lower() not in {"on", "off"}:
                 raise ValueError("remote_binding_auto_approve_value_invalid")
             auto_requested = auto_raw.strip().lower() == "on"
+            # Validate before consuming the binding transaction or touching
+            # WebGPT/Workspace configuration. ACL ON cannot stage latent ON.
+            if auto_requested:
+                from .windows_security import acl_mode
+                if acl_mode() != "off":
+                    raise ValueError("auto_approve_requires_acl_off")
         # A global inventory is not an authorization form. It cannot edit the
         # policy or implicitly remove other roots when the WebGPT binding moves.
         # Old 'turbomode=' transactions remain supported for compatibility,
