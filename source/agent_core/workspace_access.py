@@ -103,6 +103,7 @@ def _policy_from_profile(profile: dict) -> dict:
         ),
         "turbo_roots": [],
         "turbo_requested": False,
+        "auto_approve_requested": False,
     }
 
 
@@ -132,6 +133,7 @@ def load_workspace_access_policy(*, profile: dict | None = None) -> dict:
             "turbo_roots": list(_normalized_roots(value.get("turbo_roots") or ())),
             # Git45 roots do not silently migrate to an enabled Git46 sandbox.
             "turbo_requested": value.get("turbo_requested") is True,
+            "auto_approve_requested": value.get("auto_approve_requested") is True,
         }
         if "turbo_root_epochs" in value:
             if not isinstance(value["turbo_root_epochs"], list):
@@ -196,6 +198,7 @@ def save_workspace_access_policy(
         "denied_write_roots": list(denied),
         "turbo_roots": list(turbo),
         "turbo_requested": bool(turbo) and previous.get("turbo_requested") is True,
+        "auto_approve_requested": previous.get("auto_approve_requested") is True,
         "turbo_root_epochs": _retained_epochs(
             previous, list(turbo), int(previous.get("revision", 0) or 0) + 1
         ),
@@ -267,6 +270,7 @@ def access_snapshot() -> dict:
         "builtin_toolchain_read_roots": builtins,
         "turbo_roots": tuple(policy.get("turbo_roots") or ()),
         "turbo_requested": policy.get("turbo_requested") is True,
+        "auto_approve_requested": policy.get("auto_approve_requested") is True,
     }
 
 
