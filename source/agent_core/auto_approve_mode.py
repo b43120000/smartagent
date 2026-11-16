@@ -56,6 +56,11 @@ def auto_approve_snapshot(workspace=None, working_directory=None) -> dict:
         if not requested:
             state["reason_code"] = "AUTO_APPROVE_DISABLED"
             return state
+        if workspace is None:
+            # A global setting is not a bound execution context. Never
+            # advertise Effective ON without a real writable Workspace.
+            state["reason_code"] = "WORKSPACE_NOT_BOUND"
+            return state
         if workspace is not None:
             target = Path(workspace).expanduser().absolute()
             cwd = Path(working_directory or target).expanduser().absolute()
@@ -121,6 +126,14 @@ def evaluate_auto_approve(workspace, command: str, *, working_directory=None) ->
 def set_auto_approve_requested(enabled: bool, *, expected_revision=None) -> dict:
     if type(enabled) is not bool:
         raise ValueError("auto_approve_boolean_required")
+    if enabled:
+        # Only an explicit ACL OFF operator may arm the preference. ACL ON
+        # and transitional/unknown states can never stage a latent ON.
+        try:
+            if acl_mode() != "off":
+                raise ValueError("auto_approve_requires_acl_off")
+        except (OSError, RuntimeError, TypeError) as exc:
+            raise ValueError("auto_approve_acl_mode_unverified") from exc
     from .process_file_lock import exclusive_process_lock
     path = workspace_access_policy_path()
     lock = path.with_name("workspace_access_policy.lock")
