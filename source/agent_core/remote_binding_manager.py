@@ -72,6 +72,8 @@ class RemoteBindingManager:
         from .turbo_sandbox import global_turbo_snapshot
         sandbox_state = global_turbo_snapshot(access=access)
         global_roots = ";".join(sandbox_state["configured_roots"]) or "off"
+        from .auto_approve_mode import auto_approve_snapshot
+        auto_state = auto_approve_snapshot(binding["workspace"])
         root_lines = "\n".join(
             "  - " + record["path"] + " [" + record["native_enrollment"] + "]"
             for record in sandbox_state["roots"]
@@ -91,10 +93,14 @@ class RemoteBindingManager:
             f"workspace={binding['workspace']}",
             f"global_turbo_roots={global_roots}",
             f"skill_path={binding['skill_path']}",
+            f"auto_approve={auto_state['auto_approve_requested'].lower()}",
             UPDATE_CLOSE,
             "",
             "ACL: " + sandbox_state["acl_mode"] + " | Requested: " + sandbox_state["turbo_requested"] + " | Effective: " + sandbox_state["turbo_effective"],
             "Sandbox: " + sandbox_state["sandbox_status"] + " | Reason: " + sandbox_state["reason_code"],
+            "Auto Approve Requested: " + auto_state["auto_approve_requested"]
+              + " | Effective: " + auto_state["auto_approve_effective"]
+              + " | Executor: " + auto_state["executor_backend"],
             "Native enrollment: " + str(sandbox_state["enrolled_root_count"]) + "/" + str(sandbox_state["configured_root_count"]) + " (advisory)",
             "有效時間：10 分鐘。更新期間若有任務執行中，設定不會被切換。",
         ))
@@ -131,7 +137,7 @@ class RemoteBindingManager:
                            not fenced_fields[0].startswith("turbomode="))):
             raise ValueError("remote_binding_update_turbo_fence_invalid")
         expected = {"transaction_id", "webgpt_url", "workspace", "skill_path"}
-        allowed = expected | {"turbomode", "global_turbo_roots"}
+        allowed = expected | {"turbomode", "global_turbo_roots", "auto_approve"}
         if "turbomode" in fields and "global_turbo_roots" in fields:
             raise ValueError("remote_binding_turbo_fields_mutually_exclusive")
         if not expected.issubset(fields) or set(fields) - allowed:
@@ -160,6 +166,12 @@ class RemoteBindingManager:
         })
         candidate["workspace"] = require_writable_workspace(candidate["workspace"])
         global_roots = fields.get("global_turbo_roots")
+        auto_raw = fields.get("auto_approve")
+        auto_requested = None
+        if auto_raw is not None:
+            if auto_raw.strip().lower() not in {"on", "off"}:
+                raise ValueError("remote_binding_auto_approve_value_invalid")
+            auto_requested = auto_raw.strip().lower() == "on"
         # A global inventory is not an authorization form. It cannot edit the
         # policy or implicitly remove other roots when the WebGPT binding moves.
         # Old 'turbomode=' transactions remain supported for compatibility,
@@ -188,7 +200,8 @@ class RemoteBindingManager:
             # Both global-inventory and legacy local-root forms require a
             # fresh policy snapshot; do not accept a stale or forged list.
             revision = int((access_snapshot().get("policy") or {}).get("revision", 0) or 0)
-            if (global_roots is not None or turbo_prepared is not None) and (
+            if (global_roots is not None or turbo_prepared is not None
+                    or auto_requested is not None) and (
                 int(transaction.get("workspace_policy_revision", -1)) != revision
                 or (turbo_prepared is not None
                     and int(turbo_prepared["expected_revision"]) != revision)
@@ -208,7 +221,15 @@ class RemoteBindingManager:
             if turbo_prepared is not None:
                 candidate["_turbo_prepared"] = turbo_prepared
             runtime_apply(candidate)
+            if auto_requested is not None:
+                from .auto_approve_mode import set_auto_approve_requested
+                set_auto_approve_requested(auto_requested)
         actual_turbo = turbo_mode_for_workspace(candidate["workspace"])
+        from .auto_approve_mode import auto_approve_snapshot
+        auto_state = auto_approve_snapshot(candidate["workspace"])
+        if (auto_requested is not None and
+                (auto_state["auto_approve_requested"] == "ON") != auto_requested):
+            raise RuntimeError("remote_binding_auto_approve_postcondition_failed")
         from .turbo_sandbox import global_turbo_snapshot
         sandbox_state = global_turbo_snapshot(access=access_snapshot())
         if turbo_prepared is not None and actual_turbo.casefold() != turbo_prepared["mode"].casefold():
@@ -226,6 +247,9 @@ class RemoteBindingManager:
             f"ACL Mode：{sandbox_state['acl_mode']}",
             f"Turbo Requested：{sandbox_state['turbo_requested']}",
             f"Turbo Effective：{sandbox_state['turbo_effective']}",
+            f"Auto Approve Requested：{auto_state['auto_approve_requested']}",
+            f"Auto Approve Effective：{auto_state['auto_approve_effective']}",
+            f"Executor Backend：{auto_state['executor_backend']}",
             f"Sandbox Status：{sandbox_state['sandbox_status']}",
             f"Reason Code：{sandbox_state['reason_code']}",
             f"Skill Path：{candidate['skill_path']}",
