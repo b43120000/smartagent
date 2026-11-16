@@ -288,6 +288,11 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
             "failure_origin": comparison.get("failure_origin", ""),
             "mismatches": list(comparison["mismatches"]),
             "tool_results": list(comparison["tool_results"]),
+            **{
+                key: board["terminal"]["finish_comparison"][key]
+                for key in ("unconfirmed_evidence", "reconciled_observations")
+                if key in board["terminal"]["finish_comparison"]
+            },
         },
         "handoff_id": board["handoff_id"],
         "blackboard_event_count": len(board["events"]),
@@ -353,6 +358,11 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         mismatch_lines = "\n不一致欄位：" + json.dumps(
             comparison["mismatches"], ensure_ascii=False, separators=(",", ":"),
         )[:3000]
+    unconfirmed = (comparison.get("finish_diagnostic") or {}).get("unconfirmed_evidence") if comparison else None
+    if unconfirmed:
+        mismatch_lines += "\n未確認的 Runtime Evidence：" + json.dumps(
+            unconfirmed, ensure_ascii=False, separators=(",", ":"),
+        )[:2000]
     state_report = ""
     if comparison and comparison.get("goal_state_table"):
         table = [{

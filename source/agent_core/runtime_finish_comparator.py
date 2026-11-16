@@ -193,7 +193,8 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
             "tool": action["tool"], "execution_status": receipt["status"],
             "executed": receipt["executed"],
         })
-        history.append({"action": action, "receipt": receipt, "evidence_ref": ref})
+        history.append({"action": action, "receipt": receipt,
+                        "evidence_ref": ref, "raw_result": raw})
     if set(actions) != {row["action_id"] for row in results} or set(ledger) != set(actions):
         return [], [], None, "ACTION_COVERAGE_INCOMPLETE"
     if not allow_open and list(board["terminal"].get("tool_evidence_refs", [])) != refs:
@@ -430,6 +431,127 @@ def finish_runtime_field_catalog(loop, *, max_records: int = 64) -> list[dict]:
     return catalog
 
 
+def _partial_inspection_missing_paths(item: dict) -> set[str] | None:
+    action, receipt = item["action"], item["receipt"]
+    if (action["tool"] != "inspect_directory" or action.get("recursive") is not False
+            or receipt.get("executed") is not True
+            or receipt.get("reason") != "DIRECTORY_INSPECTION_INCOMPLETE"):
+        return None
+    try:
+        raw = json.loads(item["raw_result"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    paths = action.get("paths")
+    if not isinstance(paths, list):
+        return None
+    expected = {_path(path) for path in paths}
+    rows = raw.get("paths") if isinstance(raw, dict) else None
+    if (not isinstance(rows, list) or not expected or "" in expected
+            or len(paths) != len(expected) or len(rows) != len(expected)
+            or raw.get("tool") != action["tool"] or raw.get("recursive") is not False):
+        return None
+    missing, observed = set(), set()
+    for entry in rows:
+        if not isinstance(entry, dict):
+            return None
+        path = _path(entry.get("path"))
+        if (path not in expected or path in observed or entry.get("authorized") is not True
+                or type(entry.get("inaccessible_count")) is not int
+                or entry["inaccessible_count"] != 0):
+            return None
+        observed.add(path)
+        if entry.get("exists") is False and entry.get("errors") in (
+            ["path_not_found"], ["not_a_directory"],
+        ):
+            missing.add(path)
+        elif entry.get("exists") is not True or entry.get("errors") != []:
+            return None
+    return missing or None
+
+
+_EXACT_SHA256_READ = re.compile(
+    r"Get-FileHash\s+-LiteralPath\s+'(?P<path>[^'\r\n]+)'\s+-Algorithm\s+SHA256"
+    r"(?:\s*\|\s*Select-Object\s+-ExpandProperty\s+Hash)?",
+    re.IGNORECASE,
+)
+
+
+def _observed_paths(item: dict) -> set[str]:
+    action, receipt = item["action"], item["receipt"]
+    if receipt.get("status") != "SUCCEEDED" or receipt.get("executed") is not True:
+        return set()
+    tool, data = action["tool"], receipt["data"]
+    if tool == "list_directory" and receipt["reason"] == "DIRECTORY_LISTED":
+        path = _path(action.get("path"))
+        entries = data.get("entries")
+        if (not path or _path(receipt.get("requested_path")) != path
+                or _path(receipt.get("resolved_path")) != path
+                or data.get("recursive") is not False
+                or data.get("terminal_eligible") is not True or not isinstance(entries, list)):
+            return set()
+        return {path} | {
+            ntpath.join(path, name.casefold()) for row in entries
+            if isinstance(row, dict) and row.get("kind") in {"FILE", "DIRECTORY"}
+            and isinstance((name := row.get("name")), str)
+            and re.fullmatch(r"[^\\/:]+", name) and name not in {".", ".."}
+        }
+    if tool == "inspect_directory" and receipt["reason"] in {
+        "DIRECTORY_INSPECTED", "DIRECTORY_ABSENCE_OBSERVED",
+    }:
+        paths = action.get("paths")
+        path = _path(data.get("observed_path"))
+        if (path and isinstance(paths, list) and len(paths) == 1
+                and _path(paths[0]) == path and data.get("observation_status") == "CONFIRMED"
+                and type(data.get("observed_exists")) is bool):
+            return {path}
+    if tool == "run_command" and receipt["reason"] == "COMMAND_EXITED":
+        command = str(action.get("command") or "").strip()
+        if command.casefold().endswith(").hash.tolowerinvariant()") and command.startswith("("):
+            command = command[1:-len(").Hash.ToLowerInvariant()")]
+        match = _EXACT_SHA256_READ.fullmatch(command)
+        path = _path(match["path"]) if match else ""
+        verify = action.get("verify")
+        safe_verify = verify is None or verify == [] or (
+            isinstance(verify, list) and len(verify) == 1 and isinstance(verify[0], dict)
+            and set(verify[0]) == {"action", "path", "expect"}
+            and verify[0]["action"] == "file_exists" and verify[0]["expect"] is True
+            and _path(verify[0]["path"]) == path
+        )
+        if (path and action.get("operation") == data.get("operation") == "INSPECT"
+                and safe_verify and data.get("process_state") == "EXITED"
+                and type(data.get("exit_code")) is int and data["exit_code"] == 0
+                and data.get("timed_out") is False and data.get("output_complete") is True
+                and data.get("stdout_truncated") is False
+                and isinstance(data.get("stdout"), str)
+                and re.fullmatch(r"[0-9a-fA-F]{64}", data["stdout"].strip())):
+            return {path}
+    return set()
+
+
+def _execution_uncertainty(history: list[dict]) -> tuple[list[dict], list[dict]]:
+    # Walk newest first, so each observation can only resolve an older one.
+    observations = {}
+    blocked, recovered = [], []
+    for item in reversed(history):
+        ref, status = item["evidence_ref"], item["receipt"]["status"]
+        if status in {"UNKNOWN", "RUNNING", "PARTIAL"}:
+            missing = _partial_inspection_missing_paths(item) if status == "PARTIAL" else None
+            if missing and missing <= observations.keys():
+                recovered.append({"evidence_ref": ref, "resolved_by": sorted({
+                    observations[path] for path in missing
+                })})
+            else:
+                blocked.append({
+                    "evidence_ref": ref, "status": status, "tool": item["action"]["tool"],
+                    "reason_code": "FOLLOWUP_SCOPE_NOT_OBSERVED" if missing
+                                   else "UNCERTAINTY_NOT_RECOVERABLE_AS_READ",
+                    "unobserved_path_count": len(missing - observations.keys()) if missing else 0,
+                })
+        for path in _observed_paths(item):
+            observations.setdefault(path, ref)
+    return blocked[::-1], recovered[::-1]
+
+
 def compare_runtime_finish(loop, root: str | Path, goal: str,
                            expected_runtime: object, goal_checks: object = None,
                            *, allow_open: bool = False,
@@ -522,9 +644,11 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     # set (never omitted or rewritten), but cannot veto later independent
     # successful evidence for the original goal. Uncertain execution is still
     # fail-closed and cannot be silently treated as a previous rejection.
-    if any(item["receipt"]["status"] in {"UNKNOWN", "RUNNING", "PARTIAL"}
-           for item in history):
-        return _fail("RUNTIME_EXECUTION_NOT_CONFIRMED", refs, tool_results=results)
+    blocked, recovered = _execution_uncertainty(history)
+    if blocked:
+        return _fail("RUNTIME_EXECUTION_NOT_CONFIRMED", refs, tool_results=results,
+                     finish_diagnostic={"unconfirmed_evidence": blocked,
+                                        "authorization_granted": False})
     # An executed FAILED command can be valid evidence of an explicitly
     # requested negative test. Unexecuted REJECTED operations are NOT facts
     # about execution and never satisfy completion requirements.
@@ -535,7 +659,12 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     ]
     if not valid_goal_history:
         return _fail("NO_EXECUTED_GOAL_EVIDENCE", refs, tool_results=results)
-    if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED"}
+    partial_refs = {item["evidence_ref"] for item in recovered}
+    good_refs = {item["evidence_ref"] for item in valid_goal_history}
+    model_declares_goal_fact = any(
+        field.startswith("data.") for ref in good_refs for field in claimed[ref]
+    )
+    if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED", "PARTIAL"}
            for item in history):
         return _fail("RUNTIME_RESULT_STATUS_UNSUPPORTED", refs, tool_results=results)
     # The same source-grounded contract is fixed before execution. For a
@@ -543,7 +672,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     # those checks have no authority to rewrite desired conditions.
     if contract["status"] == "COMPILED":
         state = evaluate_frozen_goal_contract(
-            contract, history, answer,
+            contract, [item for item in history if item["receipt"]["status"] != "PARTIAL"], answer,
             admission_denials=(
                 list(context.get("native_denials") or [])
                 + list(context.get("admission_denials") or [])
@@ -559,9 +688,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
                 "mismatches": check_mismatch[:12],
                 "authoritative": False,
             }
-        if not any(
-            field.startswith("data.") for fields in claimed.values() for field in fields
-        ):
+        if not model_declares_goal_fact:
             return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs,
                          tool_results=results, goal_state_table=state["state_table"],
                          goal_contract_sha256=contract["contract_sha256"],
@@ -592,20 +719,24 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
             "goal_state_table": state["state_table"],
             "model_goal_checks_advisory": advisory,
             "evidence_refs": refs, "mismatches": [], "tool_results": results,
+            **({"reconciled_observations": recovered} if recovered else {}),
         }
     proof = _goal_proof(goal, valid_goal_history)
     if proof is None and _recognized_but_unsatisfied(goal, valid_goal_history):
         return _fail("KNOWN_GOAL_POSTCONDITION_NOT_SATISFIED", refs, tool_results=results)
     # For uncompiled requirements preserve legacy checks but never claim that
     # a universal natural-language state contract was verified.
-    if not any(
-        field.startswith("data.") for fields in claimed.values() for field in fields
-    ):
+    if not model_declares_goal_fact:
         return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs, tool_results=results)
     if goal_checks is not None:
         # A rejected/unexecuted tool may be faithfully reported, but may
         # not satisfy goal checks; an executed negative-test failure can.
-        good_refs = {item["evidence_ref"] for item in valid_goal_history}
+        if isinstance(goal_checks, list) and any(
+            isinstance(check, dict) and isinstance(check.get("evidence_ref"), str)
+            and check["evidence_ref"] in partial_refs for check in goal_checks
+        ):
+            return _fail("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", refs,
+                         tool_results=results)
         if not any(isinstance(check, dict)
                    and isinstance(check.get("evidence_ref"), str)
                    and check.get("evidence_ref") in good_refs
@@ -639,6 +770,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         "coverage_basis": basis,
         "evidence_refs": refs, "mismatches": [],
         "tool_results": results,
+        **({"reconciled_observations": recovered} if recovered else {}),
     }
 
 

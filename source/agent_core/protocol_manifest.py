@@ -125,6 +125,7 @@ CORE_FILES = (
     'source/agent_core/progress_reply_contract.py',
     'source/agent_core/protocol_repair_transaction.py',
     'source/agent_core/tool_result_contract.py',
+    'source/agent_core/runtime_finish_comparator.py',
     'source/agent_core/runtime_evidence_store.py',
     'source/agent_core/tool_result_policy.py',
     'source/agent_core/query_expected_outcome.py',

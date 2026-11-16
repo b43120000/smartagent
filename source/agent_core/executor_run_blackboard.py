@@ -279,6 +279,11 @@ def record_finish_comparison(root: str | Path, loop, comparison: Mapping) -> dic
         "goal_state_table": list(comparison.get("goal_state_table") or [])[:32],
         "model_goal_checks_advisory": comparison.get("model_goal_checks_advisory"),
     }
+    unconfirmed = (comparison.get("finish_diagnostic") or {}).get("unconfirmed_evidence")
+    if unconfirmed:
+        record["unconfirmed_evidence"] = list(unconfirmed)[:64]
+    if comparison.get("reconciled_observations"):
+        record["reconciled_observations"] = list(comparison["reconciled_observations"])[:64]
     value["terminal"]["finish_comparison"] = record
     value["terminal"]["goal_verified"] = verdict == "PASS"
     value["terminal"]["outcome"] = verdict
