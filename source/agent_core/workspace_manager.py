@@ -617,6 +617,11 @@ def _security_menu(*, verify_from_parent: bool = False) -> int:
               + " effective=" + state["turbo_effective"]
               + " sandbox=" + state["sandbox_status"]
               + " reason=" + state["reason_code"])
+        from .auto_approve_mode import auto_approve_snapshot
+        auto_state = auto_approve_snapshot()
+        print("Auto Approve requested=" + auto_state["auto_approve_requested"]
+              + " effective=" + auto_state["auto_approve_effective"]
+              + " executor=" + auto_state["executor_backend"])
         print("Turbo mode roots (strict writable Workspace descendants):")
         for i, value in enumerate(turbo, 1):
             print(f"  T{i}. {value}")
@@ -624,6 +629,7 @@ def _security_menu(*, verify_from_parent: bool = False) -> int:
             print("    enrollment: " + record["path"] + " = " + record["native_enrollment"])
         print("\n[1] Add writable  [2] Remove writable  [3] Add read-only  [4] Remove read-only")
         print("[5] Add turbo mode  [6] Remove turbo mode  [7] Apply  [8] Back")
+        print("[9] Auto Approve ON/OFF (independent operator setting)")
         choice = input("Select: ").strip()
         if choice in {"1", "3"}:
             path = str(Path(input("Path: ").strip().strip('\"')).expanduser().resolve())
@@ -653,6 +659,21 @@ def _security_menu(*, verify_from_parent: bool = False) -> int:
                 del turbo[int(input("Turbo index: ").strip()) - 1]
             except (ValueError, IndexError):
                 print("[!] Invalid Turbo index.")
+        elif choice == "9":
+            value = input("Auto Approve [ON/OFF]: ").strip().upper()
+            if value not in {"ON", "OFF"}:
+                print("[!] Expected ON or OFF.")
+                continue
+            try:
+                from .auto_approve_mode import (
+                    set_auto_approve_requested, auto_approve_snapshot,
+                    format_auto_approve_status,
+                )
+                set_auto_approve_requested(value == "ON")
+                print(format_auto_approve_status(auto_approve_snapshot()))
+            except (OSError, RuntimeError, ValueError) as exc:
+                print("[!] Auto Approve setting rejected: " + str(exc))
+            continue
         elif choice == "7":
             try:
                 from .turbo_root_registry import (
