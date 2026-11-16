@@ -1064,30 +1064,59 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
                 from agent_core.resume_command_approval import ResumeCommandGate
                 from agent_core.command_family_approval import TaskCommandFamilyGrants
+                from agent_core.auto_approve_mode import evaluate_auto_approve
+                auto_approval = evaluate_auto_approve(
+                    loop.workspace, str(action.get("command") or ""),
+                    working_directory=action.get("working_directory") or loop.workspace,
+                )
                 family_gate = TaskCommandFamilyGrants(root)
-                family_match = family_gate.match(loop=loop, action=action)
+                family_match = (
+                    None if auto_approval["approved"]
+                    else family_gate.match(loop=loop, action=action)
+                )
                 preapproval = (
-                    None if family_match is not None
+                    None if auto_approval["approved"] or family_match is not None
                     else ResumeCommandGate(root).consume_for_action(loop=loop, action=action)
                 )
                 append_executor_event(root, loop, {
                     "round": turn, "kind": (
-                        "HUMAN_APPROVAL_REUSED" if family_match is not None
+                        "AUTO_APPROVAL_EVALUATED" if auto_approval["approved"]
+                        else "HUMAN_APPROVAL_REUSED" if family_match is not None
                         else "HUMAN_APPROVAL_REQUESTED"
                     ),
                     "toolName": "run_command",
                     "action_id": action["action_id"],
                     "arguments_sha256": _digest(decision.arguments),
                     "risk_class": "UNKNOWN", "executed": False,
+                    "auto_approval": {
+                        "approved": auto_approval["approved"],
+                        "reason_code": auto_approval["reason_code"],
+                        "acl": auto_approval["acl"],
+                        "turbo_requested": auto_approval["turbo_requested"],
+                        "turbo_effective": auto_approval["turbo_effective"],
+                        "auto_approve_requested": auto_approval["auto_approve_requested"],
+                        "auto_approve_effective": auto_approval["auto_approve_effective"],
+                        "authorization_scope": auto_approval["authorization_scope"],
+                        "policy_revision": auto_approval["policy_revision"],
+                        "executor_backend": auto_approval["executor_backend"],
+                        "command_sha256": auto_approval["command_sha256"],
+                        "executed": False,
+                    },
                 })
                 approval = (
+                    {
+                        "state": "APPROVED", "reason": "auto_approve_policy",
+                        "approval_id": "", "command_sha256": auto_approval["command_sha256"],
+                    } if auto_approval["approved"] else
                     family_match if family_match is not None
                     else preapproval if preapproval is not None
                     else request_unknown_command_approval(loop, action)
                 )
                 unknown_approval = approval
                 append_executor_event(root, loop, {
-                    "round": turn, "kind": "HUMAN_APPROVAL_DECIDED",
+                    "round": turn,
+                    "kind": "AUTO_APPROVAL_DECIDED" if auto_approval["approved"]
+                            else "HUMAN_APPROVAL_DECIDED",
                     "toolName": "run_command",
                     "action_id": action["action_id"],
                     "state": approval["state"],
@@ -1436,7 +1465,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             })
         if (unknown_approval is not None
                 and unknown_approval.get("state") == "APPROVED"
-                and unknown_approval.get("reason") != "same_task_command_family_reused"
+                and unknown_approval.get("reason") not in {
+                    "same_task_command_family_reused", "auto_approve_policy",
+                }
                 and runtime_status == "SUCCEEDED"
                 and receipt.get("executed") is True):
             from agent_core.command_family_approval import TaskCommandFamilyGrants
