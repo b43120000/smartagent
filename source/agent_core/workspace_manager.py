@@ -618,10 +618,15 @@ def _security_menu(*, verify_from_parent: bool = False) -> int:
               + " sandbox=" + state["sandbox_status"]
               + " reason=" + state["reason_code"])
         from .auto_approve_mode import auto_approve_snapshot
-        auto_state = auto_approve_snapshot()
-        print("Auto Approve requested=" + auto_state["auto_approve_requested"]
-              + " effective=" + auto_state["auto_approve_effective"]
-              + " executor=" + auto_state["executor_backend"])
+        # Effective is derived from the CURRENT ACL state and the authorized
+        # active Workspace, never an editable security grant.
+        active_workspace = writable[0] if writable else None
+        auto_state = auto_approve_snapshot(active_workspace)
+        print("Auto Approve Requested: " + auto_state["auto_approve_requested"] + "  [editable]")
+        print("Auto Approve Effective: " + auto_state["auto_approve_effective"] + "  [Runtime/read-only]")
+        print("Executor Backend: " + auto_state["executor_backend"])
+        print("Auto Approve Reason: " + auto_state["reason_code"])
+        print("Auto Approve Workspace: " + (str(active_workspace) if active_workspace else "(none)"))
         print("Turbo mode roots (strict writable Workspace descendants):")
         for i, value in enumerate(turbo, 1):
             print(f"  T{i}. {value}")
@@ -629,7 +634,7 @@ def _security_menu(*, verify_from_parent: bool = False) -> int:
             print("    enrollment: " + record["path"] + " = " + record["native_enrollment"])
         print("\n[1] Add writable  [2] Remove writable  [3] Add read-only  [4] Remove read-only")
         print("[5] Add turbo mode  [6] Remove turbo mode  [7] Apply  [8] Back")
-        print("[9] Auto Approve ON/OFF (independent operator setting)")
+        print("[9] Set Auto Approve Requested ON/OFF (Effective is read-only)")
         choice = input("Select: ").strip()
         if choice in {"1", "3"}:
             path = str(Path(input("Path: ").strip().strip('\"')).expanduser().resolve())
@@ -660,7 +665,7 @@ def _security_menu(*, verify_from_parent: bool = False) -> int:
             except (ValueError, IndexError):
                 print("[!] Invalid Turbo index.")
         elif choice == "9":
-            value = input("Auto Approve [ON/OFF]: ").strip().upper()
+            value = input("Auto Approve Requested [ON/OFF]: ").strip().upper()
             if value not in {"ON", "OFF"}:
                 print("[!] Expected ON or OFF.")
                 continue
@@ -670,7 +675,8 @@ def _security_menu(*, verify_from_parent: bool = False) -> int:
                     format_auto_approve_status,
                 )
                 set_auto_approve_requested(value == "ON")
-                print(format_auto_approve_status(auto_approve_snapshot()))
+                print(format_auto_approve_status(
+                    auto_approve_snapshot(writable[0] if writable else None)))
             except (OSError, RuntimeError, ValueError) as exc:
                 print("[!] Auto Approve setting rejected: " + str(exc))
             continue
@@ -1621,6 +1627,14 @@ def _interactive() -> int:
     print("ACL=" + state["acl_mode"] + " requested=" + state["turbo_requested"]
           + " effective=" + state["turbo_effective"] + " sandbox=" + state["sandbox_status"])
     print("Turbo reason=" + state["reason_code"])
+    from .auto_approve_mode import auto_approve_snapshot
+    active_workspace = (snapshot["writable_workspaces"][0]
+                        if snapshot["writable_workspaces"] else None)
+    auto_state = auto_approve_snapshot(active_workspace)
+    print("Auto Approve Requested: " + auto_state["auto_approve_requested"]
+          + " | Effective: " + auto_state["auto_approve_effective"]
+          + " | Executor: " + auto_state["executor_backend"])
+    print("Auto Approve Reason: " + auto_state["reason_code"])
     print("Turbo roots: " + str(state["configured_root_count"])
           + " registered; " + str(state["enrolled_root_count"])
           + " enrolled (advisory; per-action OS verification required)")
