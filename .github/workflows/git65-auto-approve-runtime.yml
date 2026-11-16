@@ -48,6 +48,17 @@ jobs:
           assert result["hash_verification"] == "PASS", result
           print("GIT65_PROTOCOL_INTEGRITY_PASS")
           PY
+      - name: Validate ACL transition PowerShell 5.1 syntax
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'install_smart_agent/acl_status.ps1'),
+            [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+          Write-Host 'GIT65_ACL_TRANSITION_POWERSHELL_PARSE_PASS'
       - name: Eight-mode regression and actual CMD/BAT process IT on Windows
         run: python -B -m unittest source.WebAgent.tests.test_git65_auto_approve -v
       - name: Existing Turbo, admission and Tool Result regressions
