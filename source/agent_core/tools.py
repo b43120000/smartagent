@@ -605,6 +605,7 @@ def tool_run_command(
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
                 'sandbox_evidence':main.get('sandbox_evidence', {}),
+                'auto_approval': dict((approval_manifest or {}).get('_auto_approval') or {}),
                 'command_error':str(main.get('error') or '')[:512],
                 'command_rejection_stage': (
                     'COMMAND_SECURITY' if str(main.get('error') or '').startswith(
@@ -1534,6 +1535,23 @@ def _execution_approval_manifest(tool_call: dict, agent, security_context: Secur
     if not admission.approval_eligible:
         raise CommandSecurityError(admission.code, admission.detail)
     manifest = build_command_approval_manifest(command, workspace=working_directory or security_context.workspace_root)
+    from .auto_approve_mode import evaluate_auto_approve
+    auto = evaluate_auto_approve(
+        security_context.workspace_root, command,
+        working_directory=working_directory or security_context.workspace_root,
+    )
+    if auto["approved"]:
+        approved = dict(manifest)
+        approved["_auto_approval"] = {
+            "decision": "AUTO_APPROVED",
+            "reason_code": auto["reason_code"],
+            "authorization_scope": auto["authorization_scope"],
+            "policy_revision": auto["policy_revision"],
+            "executor_backend": auto["executor_backend"],
+            "command_sha256": auto["command_sha256"],
+            "executed": False,
+        }
+        return approved
     from .protocol_v8 import action_digest as v8_action_digest
     action_id = str(tool_call.get("action_id", "") or "")
     admitted = dict(getattr(agent, "_v8_admitted_actions", {}).get(action_id, {}) or {}) if agent else {}
