@@ -86,7 +86,8 @@ def _finish_case(tmp_path, monkeypatch, *, mode: str):
         ref = actual[-1]["evidence_ref"]
         bad = (mode == "invalid" or round_no == 2)
         if round_no >= 3:
-            assert "FIELD_NOT_DECLARED_IN_EXPECTED_RUNTIME" in prompt
+            assert ("EVIDENCE_REF_UNKNOWN_OR_INVALID" if mode == "binding"
+                    else "FIELD_NOT_DECLARED_IN_EXPECTED_RUNTIME") in prompt
             assert "check_index" in prompt
             assert "Runtime available Finish fields" in prompt
         data = {
@@ -97,8 +98,8 @@ def _finish_case(tmp_path, monkeypatch, *, mode: str):
             }],
             "goal_checks": [{
                 "criterion": "實際可觀測檢查",
-                "evidence_ref": ref,
-                "field": "data.observed_is_directory" if bad else "data.observed_exists",
+                "evidence_ref": "MIN-EV-" + "0" * 24 if mode == "binding" and bad else ref,
+                "field": "data.observed_is_directory" if bad and mode != "binding" else "data.observed_exists",
                 "operator": "eq", "expected": True,
             }],
         }
@@ -146,3 +147,20 @@ def test_repair_only_grace_refuses_tool_call_without_side_effect(tmp_path, monke
     invalid = [row for row in board["events"] if row["kind"] == "MODEL_FINISH_CONTRACT_INVALID"]
     assert invalid[-1]["reason_code"] == "REPAIR_ONLY_TOOLCALL_PROHIBITED"
     assert len([x for x in board["events"] if x["kind"] == "TOOL_RESULT"]) == 1
+
+
+def test_unknown_goal_reference_retries_finish_only_with_projected_audit(tmp_path, monkeypatch):
+    loop, board, calls, _ = _finish_case(tmp_path, monkeypatch, mode="binding")
+    assert len(calls) == 1 and loop.terminal_outcome == "SUCCESS"
+    repairs = [row for row in board["events"] if row["kind"] == "MODEL_FINISH_EVIDENCE_BINDING_REPAIR"]
+    assert len(repairs) == 1 and repairs[0]["repair_only"] is True
+    diagnostic = repairs[0]["finish_diagnostic"]
+    assert diagnostic["good_refs"] == board["terminal"]["tool_evidence_refs"]
+    assert diagnostic["invalid_checks"][0]["field_candidates"] == [
+        {"evidence_ref": diagnostic["good_refs"][0], "actual_type": "bool"},
+    ]
+    proposals = [row for row in board["events"] if row["kind"] == "MODEL_FINISH_PROPOSAL"]
+    assert [row["comparator_reason_code"] for row in proposals] == [
+        "GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", "MODEL_RUNTIME_AND_GOAL_MATCH",
+    ]
+    assert proposals[0]["finish_input"]["values_included"] is False

@@ -55,6 +55,72 @@ def _lookup(receipt: Mapping, field: str) -> tuple[bool, object]:
     return True, cursor
 
 
+def _safe_finish_ref(value: object) -> str:
+    if isinstance(value, str) and re.fullmatch(r"MIN-EV-[a-f0-9]{24}", value):
+        return value
+    return "[INVALID_OR_MISSING_REF]"
+
+
+def _safe_finish_field(value: object) -> str:
+    return value if isinstance(value, str) and len(value) <= 96 and _FIELD.fullmatch(value) else ""
+
+
+def finish_input_projection(expected_runtime: object, goal_checks: object) -> dict:
+    """Record Finish JSON structure with user text and values omitted."""
+    claims = []
+    for row in expected_runtime[:_MAX_CLAIMS] if isinstance(expected_runtime, list) else ():
+        if not isinstance(row, dict):
+            continue
+        fields = row.get("fields")
+        claims.append({
+            "evidence_ref": _safe_finish_ref(row.get("evidence_ref")),
+            "fields": [
+                {"field": _safe_finish_field(field), "value_type": type(value).__name__}
+                for field, value in list(fields.items())[:_MAX_FIELDS]
+            ] if isinstance(fields, dict) else [],
+        })
+    checks = [
+        {"evidence_ref": _safe_finish_ref(row.get("evidence_ref")),
+         "field": _safe_finish_field(row.get("field")),
+         "operator": row["operator"] if row.get("operator") in ("eq", "ne", "ge", "le") else "",
+         "expected_type": type(row.get("expected")).__name__ if "expected" in row else "MISSING"}
+        for row in (goal_checks[:_MAX_CLAIMS] if isinstance(goal_checks, list) else ())
+        if isinstance(row, dict)
+    ]
+    return {"expected_runtime": claims, "goal_checks": checks, "values_included": False}
+
+
+def _goal_binding_diagnostic(history, good_refs, goal_checks):
+    by_ref = {item["evidence_ref"]: item["receipt"] for item in history}
+    issues = []
+    for index, check in enumerate(goal_checks[:_MAX_CLAIMS] if isinstance(goal_checks, list) else ()):
+        if not isinstance(check, dict):
+            continue
+        ref = check.get("evidence_ref")
+        if isinstance(ref, str) and ref in good_refs:
+            continue
+        field = _safe_finish_field(check.get("field"))
+        candidates = []
+        for eligible in sorted(good_refs):
+            present, value = _lookup(by_ref[eligible], field)
+            if present and field.startswith("data.") and type(value) in (str, int, float, bool, type(None)):
+                candidates.append({"evidence_ref": eligible, "actual_type": type(value).__name__})
+        issues.append({
+            "check_index": index, "evidence_ref": _safe_finish_ref(ref),
+            "field": field, "expected_type": type(check.get("expected")).__name__,
+            "reason_code": (
+                "EVIDENCE_EXECUTION_NOT_ELIGIBLE" if isinstance(ref, str) and ref in by_ref
+                else "EVIDENCE_REF_UNKNOWN_OR_INVALID"
+            ),
+            "field_candidates": candidates[:4],
+        })
+    return {
+        "repair_class": "MODEL_GOAL_EVIDENCE_BINDING_REPAIR", "repair_only": True,
+        "good_refs": sorted(good_refs), "invalid_checks": issues,
+        "authorization_granted": False,
+    }
+
+
 def _fail(reason: str, refs: list[str] | None = None, *,
           mismatches: list[dict] | None = None, tool_results: list[dict] | None = None,
           finish_diagnostic: dict | None = None,
@@ -691,7 +757,6 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     ]
     if not valid_goal_history:
         return _fail("NO_EXECUTED_GOAL_EVIDENCE", refs, tool_results=results)
-    partial_refs = {item["evidence_ref"] for item in recovered}
     good_refs = {item["evidence_ref"] for item in valid_goal_history}
     model_declares_goal_fact = any(
         field.startswith("data.") for ref in good_refs for field in claimed[ref]
@@ -763,18 +828,10 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if goal_checks is not None:
         # A rejected/unexecuted tool may be faithfully reported, but may
         # not satisfy goal checks; an executed negative-test failure can.
-        if isinstance(goal_checks, list) and any(
-            isinstance(check, dict) and isinstance(check.get("evidence_ref"), str)
-            and check["evidence_ref"] in partial_refs for check in goal_checks
-        ):
+        binding = _goal_binding_diagnostic(history, good_refs, goal_checks)
+        if binding["invalid_checks"] or not goal_checks:
             return _fail("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", refs,
-                         tool_results=results)
-        if not any(isinstance(check, dict)
-                   and isinstance(check.get("evidence_ref"), str)
-                   and check.get("evidence_ref") in good_refs
-                   for check in goal_checks if isinstance(goal_checks, list)):
-            return _fail("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", refs,
-                         tool_results=results)
+                         tool_results=results, finish_diagnostic=binding)
         ok, reason, deviations = _evaluate_model_goal_checks(
             history, refs, claimed, goal_checks,
         )

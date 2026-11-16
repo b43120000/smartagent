@@ -19,7 +19,9 @@ from agent_core.executor_run_blackboard import (
 )
 from agent_core.task_progress import set_runtime_state
 from agent_core.tool_result_contract import decode_result
-from agent_core.runtime_finish_comparator import compare_runtime_finish, finish_runtime_field_catalog
+from agent_core.runtime_finish_comparator import (
+    compare_runtime_finish, finish_input_projection, finish_runtime_field_catalog,
+)
 from agent_core.finish_evidence_requirement import assess_finish_evidence_requirement
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
@@ -613,19 +615,41 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 complete=False,
             )
         if decision.kind == "finish":
-            # Each Finish is checked against read-back Runtime evidence before
-            # terminalization. Repairable schema failures get precise, bounded
-            # diagnostics; the Runtime never modifies claims on the model's behalf.
-            if decision.expected_runtime:
-                preview = compare_runtime_finish(
+            preview = (
+                compare_runtime_finish(
                     loop, root, request, decision.expected_runtime,
                     goal_checks=decision.goal_checks, allow_open=True,
                     answer=decision.message,
                 )
+                if decision.expected_runtime else None
+            )
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "MODEL_FINISH_PROPOSAL",
+                "expected_runtime_sha256": _digest(decision.expected_runtime),
+                "goal_checks_sha256": _digest(decision.goal_checks),
+                "finish_input": finish_input_projection(
+                    decision.expected_runtime, decision.goal_checks,
+                ),
+                "comparator_reason_code": preview["reason_code"] if preview else "",
+                "good_refs": [
+                    row["evidence_ref"] for row in preview.get("tool_results", ())
+                    if row["executed"] is True
+                    and row["execution_status"] in {"SUCCEEDED", "FAILED"}
+                ] if preview else [],
+            })
+            # Each Finish is checked against read-back Runtime evidence before
+            # terminalization. Repairable schema failures get precise, bounded
+            # diagnostics; the Runtime never modifies claims on the model's behalf.
+            if preview is not None:
                 from agent_core.runtime_finish_status_repair import diagnose_finish_status_mismatch
                 status_repair_diagnostic = diagnose_finish_status_mismatch(preview)
                 from agent_core.runtime_finish_status_repair import diagnose_missing_postrun_evidence
                 postrun_gap = diagnose_missing_postrun_evidence(preview)
+                binding_gap = (
+                    preview.get("finish_diagnostic")
+                    if preview["reason_code"] == "GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE"
+                    else None
+                )
                 from agent_core.finish_semantic_repair import diagnose_finish_semantic_mismatch
                 semantic_repair = diagnose_finish_semantic_mismatch(preview, request)
                 if semantic_repair and not semantic_repair.get("repair_only"):
@@ -657,6 +681,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
                 if contract_gap is not None:
                     repairable.add("FROZEN_GOAL_STATE_NOT_SATISFIED")
+                if binding_gap and binding_gap.get("good_refs"):
+                    repairable.add("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE")
                 # A repeatedly malformed or semantically incorrect Finish is
                 # a Planner contract failure, NOT evidence the user's desired
                 # environment state failed. Keep that distinction at the
@@ -664,7 +690,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 if preview["reason_code"] in repairable:
                     last_finish_reason = str(preview["reason_code"])
                     last_finish_diagnostic = (
-                        status_repair_diagnostic or postrun_gap or semantic_repair
+                        binding_gap or status_repair_diagnostic or postrun_gap or semantic_repair
                         or contract_gap or preview.get("finish_diagnostic")
                     )
                     if (finish_repairs >= max_finish_repairs
@@ -686,7 +712,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     # Status-only Finish repair can never authorize another
                     # tool, even when ordinary Action rounds remain available.
                     if (turn >= max_rounds or status_repair_diagnostic is not None
-                            or semantic_repair is not None):
+                            or semantic_repair is not None or binding_gap is not None):
                         finish_repair_only = True
                     if contract_gap:
                         unsatisfied = contract_gap.get("state_table") or []
@@ -697,7 +723,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                             finish_repair_only = True
                     append_executor_event(root, loop, {
                         "round": turn, "kind": (
-                            "MODEL_FINISH_STATUS_REPAIR" if status_repair_diagnostic
+                            "MODEL_FINISH_EVIDENCE_BINDING_REPAIR" if binding_gap
+                            else "MODEL_FINISH_STATUS_REPAIR" if status_repair_diagnostic
                             else "MODEL_FINISH_SEMANTIC_REPAIR" if semantic_repair
                             else "MODEL_FINISH_SCHEMA_REPAIR"
                         ),
@@ -731,6 +758,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
                         "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
                         "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
+                        + (
+                            "請保留全部 expected_runtime（含原始 PARTIAL）和使用者驗收條件。"
+                            "逐項修正 Goal Check 引用與欄位，使用 good_refs 並確認路徑相符。"
+                            "多個目標請分別引用各自的觀察，禁止新增 ToolCall。"
+                            if binding_gap else ""
+                        )
                         + (
                             "Git56 Planner Semantic Repair：僅能修正對 Runtime "
                             "實際欄位的聲明，不得把未完成的原始 Goal 改寫成已完成。"

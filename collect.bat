@@ -347,7 +347,8 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                 foreach ($ev in @($executorBoard.events)) {
                     if ($null -eq $ev -or [string]$ev.kind -notin @(
                         'MODEL_DECISION_REJECTED', 'MODEL_FINISH_SCHEMA_REPAIR',
-                        'MODEL_FINISH_STATUS_REPAIR', 'MODEL_FINISH_CONTRACT_INVALID'
+                        'MODEL_FINISH_STATUS_REPAIR', 'MODEL_FINISH_CONTRACT_INVALID',
+                        'MODEL_FINISH_PROPOSAL', 'MODEL_FINISH_EVIDENCE_BINDING_REPAIR'
                     )) { continue }
                     $diag = $ev.finish_diagnostic
                     $diagnosticFields = @()
@@ -379,6 +380,13 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         actual_type=$(if ($null -ne $diag) { Safe-Code $diag.actual_type } else { '' })
                         allowed_values=@($diagnosticFields)
                         status_corrections=@($statusCorrections)
+                        expected_runtime_sha256=(Safe-Code $ev.expected_runtime_sha256)
+                        goal_checks_sha256=(Safe-Code $ev.goal_checks_sha256)
+                        finish_input=$(if ($ev.finish_input) { $ev.finish_input } else { $null })
+                        comparator_reason_code=(Safe-Code $ev.comparator_reason_code)
+                        good_refs=@($(if ($diag.good_refs) { $diag.good_refs } else { $ev.good_refs }) |
+                            Select-Object -First 64 | ForEach-Object { Safe-Code $_ })
+                        invalid_checks=@($diag.invalid_checks | Where-Object { $null -ne $_ } | Select-Object -First 64)
                         executed=$false
                         raw_model_response_included=$false
                     }

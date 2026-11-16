@@ -156,7 +156,7 @@ def test_followup_does_not_satisfy_unrelated_frozen_goal(tmp_path):
 
 
 @pytest.mark.parametrize("case", [
-    "complete", "missing_receipt", "different_path", "absent", "directory",
+    "complete", "wrong_goal_ref", "partial_goal_ref", "missing_receipt", "different_path", "absent", "directory",
     "untrusted_source", "wrong_action", "stdout_only", "unknown", "running", "write_partial",
 ])
 def test_runtime_file_observations_reconcile_only_complete_bound_scope(tmp_path, monkeypatch, case):
@@ -228,12 +228,22 @@ def test_runtime_file_observations_reconcile_only_complete_bound_scope(tmp_path,
                     "criterion": f"file {index} {field}", "field": field, "operator": "eq",
                     "evidence_ref": claims[index]["evidence_ref"], "expected": expected,
                 })
+        if case == "wrong_goal_ref":
+            checks[-1]["evidence_ref"] = "MIN-EV-" + "f" * 24
+        if case == "partial_goal_ref":
+            checks[-1]["evidence_ref"] = claims[0]["evidence_ref"]
 
+    binding_cases = {"complete", "wrong_goal_ref", "partial_goal_ref"}
     result = run_finish(tmp_path, actions,
-                        check_override=check_file_types if case == "complete" else None)
+                        check_override=check_file_types if case in binding_cases else None)
     if case == "complete":
         assert result["verdict"] == "PASS", result
         assert result["tool_results"][0]["execution_status"] == "PARTIAL"
         assert result["reconciled_observations"][0]["resolved_by"] == result["evidence_refs"][1:]
+    elif case in binding_cases:
+        assert result["reason_code"] == "GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", result
+        diagnostic = result["finish_diagnostic"]
+        assert diagnostic["good_refs"] == result["evidence_refs"][1:]
+        assert diagnostic["invalid_checks"][0]["field"] == "data.observations.0.path_kind"
     else:
         assert result["reason_code"] == "RUNTIME_EXECUTION_NOT_CONFIRMED", result
