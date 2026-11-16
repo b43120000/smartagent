@@ -9,6 +9,7 @@ from agent_core.tool_capabilities import get_allowed_tools
 from agent_core.action_dependencies import command_is_proven_observation
 from agent_core.command_risk import classify_command
 from agent_core.tool_contract_metadata import enum_issue
+from agent_core.protocol_v8 import ProtocolV8Error, validate_model_action
 
 
 _READ_ONLY_TOOLS = frozenset({
@@ -153,6 +154,28 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
     valid, diag = validate_tool_envelope(
         action, native_broker=native_broker and decision.tool == "run_command"
     )
+    if valid and native_broker and decision.tool == "run_command":
+        # Native admission intentionally skips host command grammar. The V8
+        # action ledger still requires a valid operation and verification link.
+        try:
+            validate_model_action(action)
+        except ProtocolV8Error as exc:
+            issue = {
+                "field": "operation", "reason": exc.code,
+                "expected": "canonical operation consistent with the command",
+                "actual": "str",
+            }
+            if (exc.code == "RUN_COMMAND_OPERATION_MISMATCH"
+                    and str(action.get("operation", "")).strip().upper() == "VERIFY"
+                    and not any(str(action.get(key) or "").strip()
+                                for key in ("verifies_action_id", "condition_id"))):
+                issue = {
+                    "field": "verifies_action_id", "reason": "missing_required_field",
+                    "expected": "prior action ID or condition_id; use INSPECT for standalone reads",
+                    "actual": "MISSING",
+                }
+            valid = False
+            diag = {"reason": "run_command_operation_mismatch", "field_issues": [issue]}
     if not valid:
         # Preserve the typed contract failure; never echo raw model arguments
         # (commands may contain credentials). This receipt is NOT permission.
@@ -179,6 +202,7 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
         repairable = (
             code in {"wrong_field_type", "missing_required_field"}
             or enum_problem is not None
+            or any(issue["reason"] == "missing_required_field" for issue in issues)
         )
         diagnostic = {
             "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",

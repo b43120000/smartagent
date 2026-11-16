@@ -6222,7 +6222,15 @@ class WebAgentProtocolLoop:
             from agent_core.tool_result_contract import encode_result
             return encode_result('REJECTED', 'TARGET_MISMATCH', requested_path=action.get('path', ''), detail='Use only the exact target proven by Runtime discovery')
         action_id = str(action.get("action_id", "") or "")
-        signature = action_signature(action)
+        try:
+            signature = action_signature(action)
+        except ProtocolV8Error as exc:
+            from agent_core.tool_result_contract import encode_result
+            return encode_result(
+                "REJECTED", "ACTION_CONTRACT_REJECTED_BEFORE_DISPATCH",
+                tool=action.get("tool", ""), executed=False,
+                data={"protocol_error_code": exc.code},
+            )
         cached = self.action_ledger.get(action_id)
         if cached:
             if cached["signature"] != signature:

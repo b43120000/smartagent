@@ -111,6 +111,55 @@ def test_legacy_admission_still_needs_postcondition(monkeypatch, tmp_path):
     assert error == "mutation_success_criteria_required"
 
 
+def test_native_verify_without_link_is_repairable_before_dispatch(monkeypatch, tmp_path):
+    from WebAgent.protocol_loop import WebAgentProtocolLoop
+    from agent_core.tool_result_contract import decode_result
+
+    monkeypatch.setattr(
+        turbo_broker_admission, "assess",
+        lambda workspace, *, tool, action_id="": _gate(tmp_path, tmp_path),
+    )
+    scope_calls = []
+    context = SimpleNamespace(
+        workspace_root=tmp_path, interface_name="remote",
+        preview_tool_scope=lambda action: (
+            scope_calls.append(action) or {"allowed": True}
+        ),
+    )
+    args = {
+        "operation": "VERIFY",
+        "command": (
+            "$content = Get-Content -LiteralPath 'scratch.txt' -Raw -ErrorAction Stop; "
+            "if ($content.Trim() -cne 'EXPECTED') { throw 'CONTENT_MISMATCH' }; "
+            "Write-Output 'CONTENT_MATCH=EXPECTED'"
+        ),
+    }
+    action, error = admit_minimal_action(MinimalDecision("tool_call", "run_command", args), context)
+    assert action is None and error == "run_command_operation_mismatch"
+    diagnostic = context._last_minimal_admission_diagnostic
+    assert diagnostic["repair_class"] == "MODEL_SCHEMA_REPAIR"
+    assert diagnostic["field_issues"][0]["field"] == "verifies_action_id"
+    assert diagnostic["executed"] is False
+    assert scope_calls == []
+
+    # An entry point that missed admission still cannot fabricate an
+    # unknown execution or reach tool dispatch on a signature failure.
+    receipt = decode_result(WebAgentProtocolLoop._execute_action(
+        SimpleNamespace(), {"tool": "run_command", "action_id": "A1", **args}
+    ))
+    assert receipt["status"] == "REJECTED"
+    assert receipt["reason"] == "ACTION_CONTRACT_REJECTED_BEFORE_DISPATCH"
+    assert receipt["executed"] is False
+    assert receipt["data"] == {"protocol_error_code": "RUN_COMMAND_OPERATION_MISMATCH"}
+
+    for repaired in ({**args, "verifies_action_id": "A0"}, {**args, "operation": "INSPECT"}):
+        action, error = admit_minimal_action(
+            MinimalDecision("tool_call", "run_command", repaired), context,
+        )
+        assert action is not None, error
+    assert len(scope_calls) == 2
+
+
 @pytest.mark.parametrize("command", [
     "Remove-Item -LiteralPath 'scratch' -Recurse -Force",
     "diskpart",
