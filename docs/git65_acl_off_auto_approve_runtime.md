@@ -6,7 +6,7 @@ Branch: `git65/acl-off-auto-approve-runtime`
 
 ## Mode contract
 
-Auto Approve is **OFF by default**, with explicit authenticated human opt-in. The toggle is stored in the **existing** `localdata/secure/windows_security/workspace_access_policy.json` (`auto_approve_requested`), preserving all Workspace and Turbo records. The intended behavior is:
+Auto Approve is **OFF by default**, with explicit authenticated human opt-in. **On every ACL OFF → ON transition, the ACL controller clears the stored Auto Approve preference before OS enrollment. On ACL ON → OFF, it also clears the preference.** Hence returning to ACL OFF requires a new human opt-in. The Runtime always computes Effective from ACL and the actual authorized working directory, never from the UI setting alone. The toggle is stored in the **existing** `localdata/secure/windows_security/workspace_access_policy.json` (`auto_approve_requested`), preserving all Workspace and Turbo records. The intended behavior is:
 
 | ACL | Turbo requested | Auto Approve requested | Auto Approve effective | Execution routing |
 | --- | --- | --- | --- | --- |
@@ -33,9 +33,9 @@ autoapprove=status
 autoapprove=off
 ```
 
-**Edit Workspace:** select **Security / Workspace Access → [9] Auto Approve ON/OFF**. The existing **WebGPT 與 workspace 管理器** form also accepts `auto_approve=on` or `auto_approve=off` in its transaction block. An absent field in an old form does not change the setting. Runtime status displays ACL, Turbo Requested/Effective, Auto Approve Requested/Effective, Executor Backend, reason code and revision.
+**Edit Workspace:** the main page and **Security / Workspace Access** show **Auto Approve Requested** (editable), **Auto Approve Effective** (Runtime-derived, read-only), Executor Backend, reason and active Workspace. Select **[9] Set Auto Approve Requested ON/OFF**. Enabling Requested ON while ACL is ON or unverified is denied; disabling always remains available. The existing **WebGPT 與 workspace 管理器** form also accepts `auto_approve=on` or `auto_approve=off` in its transaction block. An absent field in an old form does not change the setting. Runtime status displays ACL, Turbo Requested/Effective, Auto Approve Requested/Effective, Executor Backend, reason code and revision.
 
-ACL selection remains controlled by existing `ACLstatus.bat`; Turbo remains controlled by the existing Turbo/Workspace controls. These are three independent user settings. In ACL OFF, Turbo effective is OFF even when the requested preference is ON.
+ACL selection remains controlled by existing `ACLstatus.bat`; Turbo remains controlled by the existing Turbo/Workspace controls. These are three operator settings but Auto Approve is effective only in ACL OFF and automatically disarmed at ACL mode transitions. In ACL OFF, Turbo effective is OFF even when the requested preference is ON.
 
 ## Deploy and preflight (Windows)
 
@@ -64,6 +64,23 @@ Executor Backend: WINDOWS_EXECUTOR
 ```
 
 Auto Approve skips eligible **secondary human approvals** only: the original Planner tool Action admission, command blacklist, per-executable SHA256 manifest, scoped path checks, original Tool Result, Evidence Recorder, uncertain-outcome prevention and Finish Comparator are retained.
+
+
+## Returning to ACL ON and Native AppContainer
+
+The normal **ACL OFF → ACL ON** path is `ACLstatus.bat on`; its PowerShell controller validates `config/protocol_manifest.json` **before** privileged provisioning, clears any latent Auto Approve Requested preference while the ACL state is `transitioning_on`, and only then activates the restricted executor / Native Root. When returning to ACL OFF, `ACLstatus.bat off` likewise disarms Auto Approve. Do not manually set the derived Effective value.
+
+The existing `update.bat FULL_40_CHARACTER_COMMIT_SHA` is **not** an ACL OFF → ON toggle. Its Git62 transaction currently requires an already active **ACL ON + Turbo ON + multiple Native Roots** environment. It validates the exact checkout commit and protected file hashes, then performs verified machine authorization and Native Root rebind if needed:
+
+```bat
+cd /d C:\\smartagent
+update.bat FULL_40_CHARACTER_COMMIT_SHA --verify
+update.bat FULL_40_CHARACTER_COMMIT_SHA
+```
+
+Use the second command only in its documented existing multi-root upgrade situation, after a successful commit checkout. `--verify` may report `manifest_match=False` as a pre-upgrade observation; it is **not** a declaration that the Machine Authorization hash already matches. Require post-upgrade `UPDATE_STATUS=PASS`, `manifest_sha256`, OS Broker verification and `security_preflight` evidence. For a first native enrollment or only one root, follow the existing verified enrollment/migration flow instead.
+
+The real ACL transition PowerShell function and both transition-time disarm paths are covered by isolated Windows PowerShell policy-file integration tests. No live local ACL reconfiguration is performed by GitHub CI.
 
 ## Live Telegram → Planner → Runtime acceptance
 
