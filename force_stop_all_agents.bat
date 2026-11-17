@@ -115,7 +115,7 @@ if defined RECOVER_TURBO_ROOT set "REQUIRE_STARTUP_ARGS=--require-startup-contra
 set "STOP_EXIT=%errorlevel%"
 if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
-    if defined INIT_ARGS echo [SmartAgent] INIT verified: Runtime IDLE. Start RemoteAgent, then reopen the Workspace manager for a new update.
+    echo [SmartAgent] INIT verified: Runtime IDLE. Start RemoteAgent, then reopen the Workspace manager for a new update.
 ) else (
     echo [SmartAgent] Force stop completed with errors. exit_code=%STOP_EXIT%
 )

@@ -32,7 +32,8 @@ def form_env(tmp_path, monkeypatch):
     # These historical Turbo mutation tests require a synthetic ACL=ON.
     # Do not alter production admission or grant OS rights on the CI host.
     monkeypatch.setattr(workspace_access, "acl_mode", lambda: "on")
-    monkeypatch.setattr("agent_core.windows_security.acl_mode", lambda: "on")
+    monkeypatch.setattr("agent_core.windows_security.acl_mode", lambda *a, **kw: "on")
+    monkeypatch.setattr("agent_core.turbo_sandbox.acl_mode", lambda: "on")
     workspace_access.save_workspace_access_policy([ws, ws2], [outside])
     binding = {
         "workspace": str(ws),

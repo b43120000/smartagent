@@ -14,6 +14,55 @@ SOURCE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SOURCE))
 from RemoteAgent import remote_restart as rr
 
+
+def test_reconnect_uses_default_force_stop_initialization(tmp_path, monkeypatch):
+    """Real restart orchestration and task cleanup, isolated process/Telegram I/O."""
+    from agent_core import force_stop_all_agents as stop
+    from agent_core.force_stop_cleanup import cleanup_stopped_work, INCOMPLETE
+    from agent_core.paths import remote_tasks_path
+    from agent_core.task_state import TaskRecord, TaskStateStore
+
+    (tmp_path / "force_stop_all_agents.bat").write_text("@echo off")
+    store = TaskStateStore(remote_tasks_path(tmp_path))
+    task = TaskRecord(task_id="TASK-RESTART", request_id="RR-RESTART",
+                      state="PAUSED", task_epoch="epoch",
+                      workspace=str(tmp_path), metadata={"transport": "LOCAL_TEST"})
+    store.put(task)
+    order = []
+    monkeypatch.setattr(stop, "_verified_install_root", lambda root: Path(root))
+    monkeypatch.setattr(stop, "_verify_startup_contract", lambda root: {})
+
+    def stopped(root, **kwargs):
+        cleaned = cleanup_stopped_work(Path(root), [], inventory_provider=lambda: [],
+                                       _barrier_held=True)
+        return {"success": cleaned["success"], "work_cleanup": cleaned}
+
+    monkeypatch.setattr(stop, "_force_stop_all_locked", stopped)
+    def run_stopper(argv, **kwargs):
+        assert "--init" not in argv  # The ordinary reconnect command is sufficient.
+        order.append("stop")
+        code = stop.main(["--root", str(tmp_path), *argv[5:]])
+        return NS(returncode=code, stdout="", stderr="")
+
+    monkeypatch.setattr(rr.subprocess, "run", run_stopper)
+    monkeypatch.setattr(rr, "wait_for_old_exit", lambda *_: order.append("old-exited"))
+    def launch(root):
+        current = TaskStateStore(remote_tasks_path(root))
+        current.load()
+        assert not current.list_by_state(INCOMPLETE)
+        assert current.get(task.task_id).state == "CANCELLED"
+        assert current.get(task.task_id).metadata["force_stop"]["archive"]
+        order.append("launch")
+    monkeypatch.setattr(rr, "launch_remote_agent", launch)
+    monkeypatch.setattr(rr, "wait_until_reconnected",
+                        lambda *_: order.append("ready"))
+    monkeypatch.setattr(rr, "send_result",
+                        lambda *_: order.append("notified"))
+    assert rr.main(["--root", str(tmp_path), "--old-pid", "99999",
+                    "--old-generation", "old", "--chat-id", "1"]) == 0
+    assert order == ["old-exited", "stop", "launch", "ready", "notified"]
+
+
 @unittest.skipUnless(os.name == "nt", "Windows process creation policy")
 class RestartJobTests(unittest.TestCase):
     def error(self, code=5):

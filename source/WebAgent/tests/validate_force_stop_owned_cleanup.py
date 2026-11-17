@@ -135,7 +135,7 @@ class OwnedCleanup(unittest.TestCase):
         self.assertFalse(failed["success"])
         self.assertEqual(failed["initialization"]["status"], "FAIL")
 
-    def test_force_stop_init_runs_after_cleanup_and_is_repeatable(self):
+    def test_force_stop_default_init_runs_after_cleanup_and_is_repeatable(self):
         task = self.task(state="RUNNING")
         def stopped(root, **kwargs):
             cleaned = cleanup.cleanup_stopped_work(
@@ -144,8 +144,8 @@ class OwnedCleanup(unittest.TestCase):
             return {"success": cleaned["success"], "work_cleanup": cleaned}
         with patch.object(stop, "_force_stop_all_locked", side_effect=stopped), \
              patch.object(stop, "_verify_startup_contract", return_value={}):
-            first = stop.force_stop_all(self.root, initialize=True)
-            second = stop.force_stop_all(self.root, initialize=True)
+            first = stop.force_stop_all(self.root)
+            second = stop.force_stop_all(self.root)
         self.assertTrue(first["success"], first)
         self.assertTrue(second["success"], second)
         self.assertEqual(first["initialization"]["tasks_cancelled"], [task.task_id])

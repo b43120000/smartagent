@@ -405,7 +405,7 @@ def _apply_git_upgrade(
 
 def force_stop_all(
     root: str | Path, *, dry_run: bool = False, exclude_pids: set[int] | None = None,
-    initialize: bool = False,
+    initialize: bool = True,
 ) -> dict[str, Any]:
     if dry_run:
         return _force_stop_all_locked(root, dry_run=True, exclude_pids=exclude_pids)
@@ -586,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--git-source-root", metavar="CHECKOUT")
     parser.add_argument("--require-startup-contract", action="store_true")
     parser.add_argument("--init", action="store_true",
-                        help="Archive/cancel unfinished work and verify an idle clean runtime")
+                        help="Compatibility flag; idle initialization is performed by default")
     args = parser.parse_args(argv)
     if args.after_git_update is not None and (
         args.dry_run or not re.fullmatch(r"[0-9a-fA-F]{40}", args.after_git_update)
@@ -598,8 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         _verified_install_root(args.root)
         exclusions = set(args.exclude_pid)
         if args.after_git_update is None:
-            result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions,
-                                    initialize=args.init)
+            result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions)
             if args.require_startup_contract and result.get("startup_contract", {}).get("status") != "PASS":
                 result["success"] = False
                 result["recovery_admission"] = {"status": "BLOCKED", "reason": "startup_contract_not_verified"}
@@ -622,8 +621,7 @@ def main(argv: list[str] | None = None) -> int:
                         result["success"] = False
                 else:
                     result["git_upgrade"] = {"status": "SKIPPED", "reason": "force_stop_or_startup_contract_failed"}
-                if args.init:
-                    _record_initialization(root, result)
+                _record_initialization(root, result)
     except Exception as exc:
         print(json.dumps({"success": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
         return 1
