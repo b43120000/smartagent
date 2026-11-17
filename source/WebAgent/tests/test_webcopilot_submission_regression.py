@@ -30,6 +30,36 @@ def test_historical_three_to_one_projection_still_fails_closed():
     assert co._snapshot_difference(before, after)["same_turns"] is False
 
 
+@pytest.mark.parametrize("count,allowed", [(1, True), (2, True), (3, True),
+                                         (4, True), (5, True), (6, False)])
+def test_write_count_tolerance_is_two(count, allowed):
+    assert co.WRITE_TURN_COUNT_TOLERANCE == 2
+    expected = "VERIFIED_SAFE_TO_SUBMIT" if allowed else "TURN_CHANGED_OR_SUBMIT_UNCERTAIN"
+    assert co.classify_observation(snapshot(), snapshot(count, matched=True),
+        turn_count_tolerance=co.WRITE_TURN_COUNT_TOLERANCE) == expected
+
+
+def test_two_count_contraction_aligns_same_tail_in_both_directions():
+    for before, after in ((snapshot(), snapshot(1, matched=True)),
+                          (snapshot(1), snapshot(3, matched=True))):
+        assert co.classify_observation(before, after,
+            turn_count_tolerance=co.WRITE_TURN_COUNT_TOLERANCE) == "VERIFIED_SAFE_TO_SUBMIT"
+
+
+@pytest.mark.parametrize("change", [
+    {"url": "https://chatgpt.com/c/other"},
+    {"generation_active": True},
+    {"assistant_native_ids": ["replacement"]},
+    {"user_anchors": [["u2", "changed"]]},
+    {"last_turn_status": "LAST_USER"},
+    {"user_count": 0, "assistant_count": 0},
+])
+def test_two_count_tolerance_preserves_identity_guards(change):
+    after = {**snapshot(1, matched=True), **change}
+    assert co.classify_observation(snapshot(), after,
+        turn_count_tolerance=co.WRITE_TURN_COUNT_TOLERANCE) == "TURN_CHANGED_OR_SUBMIT_UNCERTAIN"
+
+
 @pytest.mark.parametrize("change", [
     {"url": "https://chatgpt.com/c/other"},
     {"generation_active": True},

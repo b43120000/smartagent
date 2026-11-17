@@ -15,6 +15,8 @@ import uuid
 
 from .json_state_io import read_json_retry, write_json_atomic
 
+WRITE_TURN_COUNT_TOLERANCE = 2
+
 
 class ComposerOperationError(RuntimeError):
     def __init__(self, reason, evidence=None):
@@ -532,11 +534,14 @@ def _same_turns(before,after,*,check_turn_counts=True,turn_count_tolerance=0):
             # Only align when an older visible row was added or removed.
             # Losing all shared anchors cannot establish turn identity.
             if (not a or not b or type(old_count) is not int or type(new_count) is not int
-                    or new_count - old_count != len(b) - len(a)
+                    or old_count < len(a) or new_count < len(b)
+                    or (new_count > old_count) != (len(b) > len(a))
                     or old is None or new is None
                     or len(old) != len(a) or len(new) != len(b)):
                 return False
             overlap = min(len(a), len(b))
+            # Snapshots retain only two tail rows. A count change of two
+            # can therefore shrink the retained tail by just one row.
             a, b = a[-overlap:], b[-overlap:]
             old, new = old[-overlap:], new[-overlap:]
         if [v[1] for v in a]!=[v[1] for v in b]:return False
@@ -1439,7 +1444,8 @@ def helper_main():
         # Legacy journals without an explicit setting retain strict behavior.
         count_policy = dict(
             check_turn_counts=record.get('check_turn_counts') is not False,
-            turn_count_tolerance=1 if record.get('check_turn_counts') is True else 0,
+            turn_count_tolerance=WRITE_TURN_COUNT_TOLERANCE
+                if record.get('check_turn_counts') is True else 0,
         )
         status=classify_observation(before,after,**count_policy)
         result=dict(status=status,observation=after)
