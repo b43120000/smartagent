@@ -29,6 +29,7 @@ def deployed_repo(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q"], cwd=source, check=True)
     subprocess.run(["git", "config", "user.name", "Git62 Test"], cwd=source, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=source, check=True)
+    subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=source, check=True)
     manifest = source / "config" / "protocol_manifest.json"
     manifest.parent.mkdir()
     manifest.write_text('{"schema":"GIT62_FIXTURE","core_files":{}}\n', encoding="utf-8")

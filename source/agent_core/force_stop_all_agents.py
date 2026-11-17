@@ -404,7 +404,8 @@ def _apply_git_upgrade(
 
 
 def force_stop_all(
-    root: str | Path, *, dry_run: bool = False, exclude_pids: set[int] | None = None
+    root: str | Path, *, dry_run: bool = False, exclude_pids: set[int] | None = None,
+    initialize: bool = False,
 ) -> dict[str, Any]:
     if dry_run:
         return _force_stop_all_locked(root, dry_run=True, exclude_pids=exclude_pids)
@@ -412,7 +413,48 @@ def force_stop_all(
         runtime_root(root) / "force_stop_cleanup.lock",
         timeout_sec=5.0, label="force-stop/startup barrier",
     ):
-        return _force_stop_all_locked(root, exclude_pids=exclude_pids)
+        result = _force_stop_all_locked(root, exclude_pids=exclude_pids)
+        if initialize:
+            _record_initialization(root, result)
+        return result
+
+
+def _record_initialization(root: str | Path, result: dict[str, Any]) -> None:
+    """Confirm the archive/cancel/clean-start transaction left no old task."""
+    from .paths import remote_tasks_path
+    from .task_state import TaskStateStore
+    from .force_stop_cleanup import INCOMPLETE
+
+    if not result.get("success"):
+        result["initialization"] = {"status": "SKIPPED", "reason": "force_stop_failed"}
+        return
+    try:
+        store = TaskStateStore(remote_tasks_path(root))
+        with store.process_lock():
+            store.load()
+            pending = store.list_by_state(INCOMPLETE)
+            if pending:
+                result["initialization"] = {
+                    "status": "FAIL", "reason": "remote_binding_update_requires_idle_runtime",
+                    "blocking_tasks": [
+                        {"task_id": task.task_id, "state": task.state}
+                        for task in pending
+                    ],
+                }
+                result["success"] = False
+                return
+        _verify_startup_contract(Path(root))
+        result["initialization"] = {
+            "status": "PASS", "state": "IDLE",
+            "binding_update_ready": True,
+            "tasks_cancelled": result.get("work_cleanup", {}).get("tasks_cancelled", []),
+            "archive": result.get("work_cleanup", {}).get("archive"),
+        }
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        result["initialization"] = {
+            "status": "FAIL", "reason": f"{type(exc).__name__}: {exc}",
+        }
+        result["success"] = False
 
 
 def _force_stop_all_locked(
@@ -543,6 +585,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--after-git-update", metavar="COMMIT")
     parser.add_argument("--git-source-root", metavar="CHECKOUT")
     parser.add_argument("--require-startup-contract", action="store_true")
+    parser.add_argument("--init", action="store_true",
+                        help="Archive/cancel unfinished work and verify an idle clean runtime")
     args = parser.parse_args(argv)
     if args.after_git_update is not None and (
         args.dry_run or not re.fullmatch(r"[0-9a-fA-F]{40}", args.after_git_update)
@@ -554,7 +598,8 @@ def main(argv: list[str] | None = None) -> int:
         _verified_install_root(args.root)
         exclusions = set(args.exclude_pid)
         if args.after_git_update is None:
-            result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions)
+            result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions,
+                                    initialize=args.init)
             if args.require_startup_contract and result.get("startup_contract", {}).get("status") != "PASS":
                 result["success"] = False
                 result["recovery_admission"] = {"status": "BLOCKED", "reason": "startup_contract_not_verified"}
@@ -577,6 +622,8 @@ def main(argv: list[str] | None = None) -> int:
                         result["success"] = False
                 else:
                     result["git_upgrade"] = {"status": "SKIPPED", "reason": "force_stop_or_startup_contract_failed"}
+                if args.init:
+                    _record_initialization(root, result)
     except Exception as exc:
         print(json.dumps({"success": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
         return 1

@@ -33,8 +33,14 @@ set "AFTER_UPDATE_ARGS="
 set "GIT_SOURCE_ARGS="
 set "RECOVER_TURBO_ROOT="
 set "LAUNCHER_SELF_TEST="
+set "INIT_ARGS="
 :parse_args
 if "%~1"=="" goto args_parsed
+if /I "%~1"=="--init" (
+    set "INIT_ARGS=--init"
+    shift /1
+    goto parse_args
+)
 if /I "%~1"=="--launcher-self-test" (
     set "LAUNCHER_SELF_TEST=1"
     shift /1
@@ -98,16 +104,18 @@ if defined LAUNCHER_SELF_TEST (
     )
     echo FORCE_STOP_ALL_AGENTS_LAUNCHER_PARSE_OK %EXCLUDE_PID_ARGS%
     echo FORCE_STOP_RECOVERY_SCRIPT=%SMARTAGENT_INSTALL_ROOT%\install_smart_agent\turbo_pending_import_recovery.ps1
+    echo FORCE_STOP_INIT_ARGS=%INIT_ARGS%
     endlocal & exit /b 0
 )
 echo [SmartAgent] Stopping LocalAgent, WebAgent, RemoteAgent, monitors and workers...
 echo [SmartAgent] Install Root: "%SMARTAGENT_INSTALL_ROOT%"
 set "REQUIRE_STARTUP_ARGS="
 if defined RECOVER_TURBO_ROOT set "REQUIRE_STARTUP_ARGS=--require-startup-contract"
-"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%SMARTAGENT_INSTALL_ROOT%" %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS% %GIT_SOURCE_ARGS% %REQUIRE_STARTUP_ARGS%
+"%SMARTAGENT_PYTHON%" -m agent_core.force_stop_all_agents --root "%SMARTAGENT_INSTALL_ROOT%" %EXCLUDE_PID_ARGS% %AFTER_UPDATE_ARGS% %GIT_SOURCE_ARGS% %REQUIRE_STARTUP_ARGS% %INIT_ARGS%
 set "STOP_EXIT=%errorlevel%"
 if "%STOP_EXIT%"=="0" (
     echo [SmartAgent] All Agent processes stopped; owned pending work archived and cancelled.
+    if defined INIT_ARGS echo [SmartAgent] INIT verified: Runtime IDLE. Start RemoteAgent, then reopen the Workspace manager for a new update.
 ) else (
     echo [SmartAgent] Force stop completed with errors. exit_code=%STOP_EXIT%
 )

@@ -103,6 +103,55 @@ class OwnedCleanup(unittest.TestCase):
             remote_clean_start(self.root)
         self.assertEqual(remote_tasks_path(self.root).read_bytes(),before)
 
+    def test_init_requires_paused_task_to_be_archived_and_cancelled(self):
+        task = self.task()
+        original = remote_tasks_path(self.root).read_bytes()
+        result = {"success": True}
+        stop._record_initialization(self.root, result)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["initialization"]["blocking_tasks"],
+                         [{"task_id": task.task_id, "state": "PAUSED"}])
+        self.assertEqual(remote_tasks_path(self.root).read_bytes(), original)
+        cleaned = self.clean()
+        result = {"success": True, "work_cleanup": cleaned}
+        with patch.object(stop, "_verify_startup_contract", return_value={}):
+            stop._record_initialization(self.root, result)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["initialization"]["state"], "IDLE")
+        self.assertTrue(result["initialization"]["binding_update_ready"])
+        self.assertEqual(result["initialization"]["tasks_cancelled"], [task.task_id])
+        self.assertEqual(TaskStateStore(remote_tasks_path(self.root)).load()[task.task_id].state,
+                         "CANCELLED")
+
+    def test_init_fails_closed_after_stop_or_startup_failure(self):
+        failed = {"success": False}
+        stop._record_initialization(self.root, failed)
+        self.assertEqual(failed["initialization"]["status"], "SKIPPED")
+        self.task(state="COMPLETED")
+        failed = {"success": True}
+        with patch.object(stop, "_verify_startup_contract",
+                          side_effect=RuntimeError("source_unverified")):
+            stop._record_initialization(self.root, failed)
+        self.assertFalse(failed["success"])
+        self.assertEqual(failed["initialization"]["status"], "FAIL")
+
+    def test_force_stop_init_runs_after_cleanup_and_is_repeatable(self):
+        task = self.task(state="RUNNING")
+        def stopped(root, **kwargs):
+            cleaned = cleanup.cleanup_stopped_work(
+                self.root, [], inventory_provider=lambda: [], _barrier_held=True,
+            )
+            return {"success": cleaned["success"], "work_cleanup": cleaned}
+        with patch.object(stop, "_force_stop_all_locked", side_effect=stopped), \
+             patch.object(stop, "_verify_startup_contract", return_value={}):
+            first = stop.force_stop_all(self.root, initialize=True)
+            second = stop.force_stop_all(self.root, initialize=True)
+        self.assertTrue(first["success"], first)
+        self.assertTrue(second["success"], second)
+        self.assertEqual(first["initialization"]["tasks_cancelled"], [task.task_id])
+        self.assertEqual(second["initialization"]["tasks_cancelled"], [])
+        self.assertEqual(second["initialization"]["state"], "IDLE")
+
     def test_archive_failure_changes_no_task_or_writer(self):
         task=self.task();manifest,stage=self.writer(task);before=data_tree(self.root)
         with patch.object(cleanup,'_archive',side_effect=OSError('archive-disk-full')):
