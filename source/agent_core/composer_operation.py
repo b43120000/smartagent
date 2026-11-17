@@ -647,6 +647,38 @@ def _wait_for_prewrite_stability(
                 reason_code=last_reason)
 
 
+def _prepare_write_baseline(scraper, prompt):
+    """Settle writer focus/viewport before capturing immutable turn evidence."""
+    try:
+        editor = scraper._composer_locator()
+        if (editor is None or not editor.is_visible()
+                or not editor.is_enabled() or not editor.is_editable()):
+            raise ComposerOperationError('composer_not_interactive')
+        scraper._focus_composer_dom()
+        # Focus can scroll and remount virtualized history. Sample only after
+        # the same caret positioning used by the writer has happened.
+        editor.evaluate("""el => {
+            el.focus();
+            if (typeof el.setSelectionRange === 'function') {
+                el.setSelectionRange(el.value.length, el.value.length);
+            } else {
+                const r = document.createRange();
+                r.selectNodeContents(el); r.collapse(false);
+                const s = window.getSelection();
+                s.removeAllRanges(); s.addRange(r);
+            }
+        }""")
+        scraper._page.keyboard.press('Control+End')
+        scroll = _scroll_conversation_to_bottom(scraper)
+        if scroll.get('status') not in {'AT_BOTTOM', 'NO_TURNS', 'NO_SCROLL_RANGE'}:
+            raise ComposerOperationError('conversation_scroll_not_ready')
+    except Exception as exc:
+        return dict(status='PREWRITE_UNSTABLE', mutation_possible=False,
+                    reason_code='WRITER_FOCUS_NOT_READY',
+                    error_type=type(exc).__name__, samples_observed=0)
+    return _wait_for_prewrite_stability(scraper, prompt)
+
+
 
 def _scroll_conversation_to_bottom(scraper):
     """Settle the conversation viewport before taking a writable baseline."""
@@ -1378,7 +1410,7 @@ def helper_main():
                     or hashlib.sha256(prompt.encode()).hexdigest()
                        != record.get('prompt_sha256')):
                 raise ComposerOperationError('composer_frozen_prompt_mismatch')
-            prewrite=_wait_for_prewrite_stability(scraper,prompt)
+            prewrite=_prepare_write_baseline(scraper,prompt)
             if prewrite['status']!='READY':
                 print('COMPOSER_RESULT '+json.dumps({
                     'status':prewrite['status'],
