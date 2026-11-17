@@ -171,3 +171,126 @@ def test_scope_rejection_remains_independent_of_valid_schema(tmp_path, monkeypat
     assert d["repair_class"] == "AUTHORITY_OR_SCOPE_REASSESSMENT"
     assert d["scope_failure_stage"] == "AUTHORIZATION"
     assert d["authorization_granted"] is False
+
+
+@pytest.mark.parametrize("operation", ["BUILD", "MUTATE", "TEST", "PROCESS", "INSPECT"])
+def test_unproven_command_diagnoses_both_postconditions(tmp_path, monkeypatch, operation):
+    loop, _ = _loop(tmp_path, monkeypatch, [])
+    args = {"command": "where.exe g++", "operation": operation}
+    assert admit_minimal_action(proposed(args), loop.tools)[1] == "mutation_success_criteria_required"
+    diag = loop.tools._last_minimal_admission_diagnostic
+    assert diag["command_read_only_proven"] is False
+    assert [(x["field"], x["expected_type"], x["actual_type"]) for x in diag["field_issues"]] == [
+        ("success_criteria", "str", "MISSING"),
+        ("verify", "list | dict", "MISSING"),
+    ]
+    args["success_criteria"] = "Compiler path is reported"
+    args["verify"] = []
+    assert admit_minimal_action(proposed(args), loop.tools)[1] == "mutation_verification_required"
+    issue, = loop.tools._last_minimal_admission_diagnostic["field_issues"]
+    assert (issue["field"], issue["actual_type"]) == ("verify", "list")
+
+
+def test_verify_cannot_relabel_unproven_compiler_lookup(tmp_path, monkeypatch):
+    loop, _ = _loop(tmp_path, monkeypatch, [])
+    args = {"command": "where.exe g++", "operation": "VERIFY"}
+    assert admit_minimal_action(proposed(args), loop.tools)[1] == "run_command_operation_mismatch"
+
+
+def test_historical_compiler_lookup_sidecar(tmp_path, monkeypatch):
+    # The Case C Blackboard retained identical arguments in rounds 59–61.
+    args = {"command": "where.exe g++", "operation": "INSPECT", "timeout": 15000,
+            "working_directory": r"E:\AIspace\case_c"}
+    reply = json.dumps({"type": "tool_call", "name": "run_command", "arguments": args})
+    request = "Discover the C++ compiler available for the build."
+    loop, _ = _loop(tmp_path, monkeypatch, [], request=request)
+    prompts = []
+
+    def planner(prompt, *_):
+        prompts.append(prompt)
+        return reply
+
+    loop.planner = planner
+    run_minimal_core(loop, request)
+    board = read_executor_run(tmp_path, task_id=loop.task_id)
+    rejected = [row for row in board["events"] if row.get("kind") == "ADMISSION_REJECTED"]
+    assert [row["admission_repair_attempt"] for row in rejected] == [1, 2, 3]
+    for row, prompt in zip(rejected, prompts[1:]):
+        assert row["runtimeEvidence"]["reason_code"] == "mutation_success_criteria_required"
+        hint = prompt.split("Runtime repair information: ", 1)[1]
+        assert '"command_risk_class":"UNKNOWN"' in hint
+        assert '"field":"success_criteria"' in hint
+        assert '"field":"verify"' in hint
+    assert board["executor_state"] == "BLOCKED"
+    assert not loop.executed
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_executor_repairs_build_contract_before_deterministic_dispatch(
+    tmp_path, monkeypatch, repair,
+):
+    request = "Build the requested project and verify its output."
+    bad = {"command": "g++ -std=c++20 main.cpp -o goal.exe", "operation": "BUILD"}
+    fixed = dict(
+        bad, success_criteria="The compiler produces goal.exe",
+        verify=[{"action": "file_exists", "path": str(tmp_path / "goal.exe"), "expect": True}],
+    )
+    loop, _ = _loop(tmp_path, monkeypatch, [], request=request)
+    # Simulate an eligible ACL OFF / Auto Approve ON policy in isolation.
+    approvals = []
+    def approve(workspace, command, *, working_directory):
+        approvals.append(command)
+        return {
+            "approved": True, "reason_code": "AUTO_APPROVE_SECONDARY_CONFIRMATION",
+            "acl": "OFF", "turbo_requested": "OFF", "turbo_effective": "OFF",
+            "auto_approve_requested": "ON", "auto_approve_effective": "ON",
+            "authorization_scope": str(workspace), "policy_revision": 1,
+            "executor_backend": "WINDOWS_EXECUTOR", "command_sha256": "a" * 64,
+        }
+
+    monkeypatch.setattr("agent_core.auto_approve_mode.evaluate_auto_approve", approve)
+
+    def planner(prompt, *_):
+        loop.prompts.append(prompt)
+        turn = len(loop.prompts)
+        if turn == 3 and repair:
+            recent = json.loads(prompt.split("Recent actual PokeClaw ToolResults:\n", 1)[1]
+                                .split("\n", 1)[0])
+            ref = recent[-1]["evidence_ref"]
+            return json.dumps({
+                "type": "finish", "summary": "Build exit verified",
+                "expected_runtime": [{"evidence_ref": ref, "fields": {
+                    "status": "SUCCEEDED", "data.exit_code": 0,
+                }}],
+                "goal_checks": [{"criterion": "Build exited successfully",
+                                 "evidence_ref": ref, "field": "data.exit_code",
+                                 "operator": "eq", "expected": 0}],
+            })
+        if turn > 1:
+            hint = prompt.split("Runtime repair information: ", 1)[1]
+            assert '"field":"success_criteria"' in hint
+            assert '"field":"verify"' in hint
+            assert '"operation":"BUILD"' in hint
+            assert "Keep BUILD" in hint
+        # Keep success_criteria missing while changing the secondary issue.
+        arguments = fixed if repair and turn == 2 else (
+            dict(bad, verify=fixed["verify"]) if turn == 3 else bad)
+        return json.dumps({"type": "tool_call", "name": "run_command",
+                           "arguments": arguments})
+
+    loop.planner = planner
+    run_minimal_core(loop, request)
+    board = read_executor_run(tmp_path, task_id=loop.task_id)
+    attempts = [e["admission_repair_attempt"] for e in board["events"]
+                if e.get("kind") == "ADMISSION_REJECTED"]
+    if repair:
+        assert attempts == [1]
+        assert len(loop.executed) == 1
+        assert loop.executed[0]["operation"] == "BUILD"
+        assert board["terminal"]["finish_comparison"]["verdict"] == "PASS"
+        assert len(approvals) == 1
+    else:
+        assert attempts == [1, 2, 3]
+        assert loop.executed == []
+        assert board["executor_state"] == "BLOCKED"
+        assert not approvals

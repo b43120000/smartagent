@@ -154,8 +154,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Each ToolResult uses EXACT PokeClaw fields: isSuccess, data, error. "
         "Admission rejection is a separate REJECTED event, never an executed "
         "ToolResult. A rejected proposal cannot prove filesystem absence. "
-        "When the Admission diagnostic contains field_issues, use its "
-        "actual_value and allowed_values to choose a new legal declaration; "
+        "Resolve all Admission field_issues before resubmitting; "
         "Runtime never rewrites the command or grants authority. "
         "Incomplete outputs cannot prove missing content. "
         "Runtime security and precise path authorization always apply.\n"
@@ -1253,9 +1252,18 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "scope_failure_stage": str(diagnosis.get("scope_failure_stage") or "")[:80],
                 "scope_cause_digest": str(diagnosis.get("scope_cause_digest") or "")[:64],
             }
+            postcondition_repair = diagnostic["stage"] == "POSTCONDITION_CONTRACT"
+            if postcondition_repair:
+                diagnostic.update({
+                    "operation": str((decision.arguments or {}).get("operation") or "")[:40],
+                    "command_risk_class": str(diagnosis.get("command_risk_class") or "")[:40],
+                    "command_read_only_proven": diagnosis.get("command_read_only_proven"),
+                })
             # Scope by literal command for run_command. Distinct commands
             # must not share the same issue counter. A separate consecutive
             # bound prevents endless command changes from evading repair.
+            # Secondary postcondition diagnostics do not reset the counter
+            # while the primary rejection is still unresolved.
             proposal_identity = (
                 str((decision.arguments or {}).get("command", ""))
                 if decision.tool == "run_command"
@@ -1270,7 +1278,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "issue_fields": [
                     {"field": item.get("field"), "reason": item.get("reason"),
                      "constraint_code": item.get("constraint_code", "")}
-                    for item in diagnostic["field_issues"] if isinstance(item, Mapping)
+                    for item in (diagnostic["field_issues"][:1] if postcondition_repair
+                                 else diagnostic["field_issues"])
+                    if isinstance(item, Mapping)
                 ],
             })
             admission_repair_counts[repair_key] = (
@@ -1340,6 +1350,19 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "需要權限的 Action 不能藉改名為唯讀或改 operation 繞過。"
                 "修正後重新提交完整 ToolCall；不要重送既有執行成功的 Action。"
             )
+            if postcondition_repair:
+                hint += (
+                    " This command is not proven read-only, even when operation is INSPECT "
+                    "or VERIFY. Correct all missing fields in one proposal. Provide a "
+                    "nonempty success_criteria string describing the intended observable "
+                    "result and a nonempty verify object or array of allowed checks from "
+                    "the tool catalog. For an expected output file, use file_exists with "
+                    "its authorized literal path. For observation-only work, use an "
+                    "appropriate structured observation tool if available. Keep BUILD, "
+                    "MUTATE or other actual operation semantics. If no valid check or "
+                    "safe observation is possible, report that blocker instead of "
+                    "resubmitting the rejected proposal."
+                )
             if (repairs_for_same_issue >= 3
                     or consecutive_admission_rejections >= max_consecutive_admission_rejections):
                 budget_reason = (

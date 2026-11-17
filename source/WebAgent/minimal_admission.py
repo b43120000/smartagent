@@ -244,25 +244,34 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
                 pass
             return None, "command_not_proven_read_only"
         if not read_proven:
-            code = ""
-            if not str(action.get("success_criteria", "")).strip():
-                code = "mutation_success_criteria_required"
+            criteria = action.get("success_criteria", "")
             verification = action.get("verify")
-            if not code and (not isinstance(verification, (list, dict)) or not verification):
-                code = "mutation_verification_required"
-            if code:
-                missing = "success_criteria" if code.startswith("mutation_success") else "verify"
+            issues = []
+            for field, value, missing, expected in (
+                ("success_criteria", criteria, not str(criteria).strip(), "str"),
+                ("verify", verification,
+                 not isinstance(verification, (list, dict)) or not verification,
+                 "list | dict"),
+            ):
+                if missing:
+                    issues.append({
+                        "field": field,
+                        "reason": "missing_or_empty",
+                        "expected_type": expected,
+                        "actual_type": type(value).__name__ if field in action else "MISSING",
+                    })
+            if issues:
+                code = ("mutation_success_criteria_required"
+                        if issues[0]["field"] == "success_criteria"
+                        else "mutation_verification_required")
                 try:
                     tool_context._last_minimal_admission_diagnostic = {
                         "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",
                         "stage": "POSTCONDITION_CONTRACT", "tool": decision.tool,
                         "reason_code": code, "repair_class": "MODEL_SCHEMA_REPAIR",
-                        "field_issues": [{
-                            "field": missing, "reason": "missing_or_empty",
-                            "expected_type": "str" if missing == "success_criteria"
-                                else "list | dict",
-                            "actual_type": "MISSING_OR_EMPTY",
-                        }],
+                        "field_issues": issues,
+                        "command_risk_class": risk,
+                        "command_read_only_proven": False,
                         "executed": False, "authorization_granted": False,
                     }
                 except (AttributeError, TypeError):
