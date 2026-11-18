@@ -103,7 +103,12 @@ def run_helper(payload, timeout_sec, cancel_check=None):
     command=[sys.executable,'-B','-m','agent_core.composer_operation']
     process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,creationflags=(subprocess.CREATE_NO_WINDOW | 0x4) if os.name=='nt' else 0)
-    deadline=time.monotonic()+timeout_sec
+    started_at=time.monotonic()
+    deadline=started_at+timeout_sec
+    # Finite progress-aware extension for the writer only. Read-only observers
+    # and all submit gates retain their existing fixed deadlines.
+    hard_deadline=started_at+max(timeout_sec,min(900.0,timeout_sec*3.0))
+    last_extended_progress=0
     first=True
     job=None
     try:
@@ -115,9 +120,25 @@ def run_helper(payload, timeout_sec, cancel_check=None):
         while True:
             if cancel_check:
                 cancel_check()
-            remaining=deadline-time.monotonic()
+            now=time.monotonic()
+            remaining=deadline-now
             if remaining<=0:
-                raise subprocess.TimeoutExpired(command,timeout_sec)
+                advanced=False
+                if payload.get('mode')=='write' and now<hard_deadline:
+                    try:
+                        progress=read_json_retry(Path(payload['journal']))
+                        chars=int(progress.get('write_progress_chars') or 0)
+                        progress_at=float(progress.get('write_progress_monotonic') or 0)
+                        advanced=(chars>last_extended_progress
+                                  and 0<=now-progress_at<=45.0)
+                    except (OSError, ValueError, TypeError):
+                        advanced=False
+                    if advanced:
+                        last_extended_progress=chars
+                        deadline=min(hard_deadline, now+max(30.0,min(90.0,timeout_sec/2.0)))
+                        remaining=deadline-now
+                if not advanced:
+                    raise subprocess.TimeoutExpired(command,timeout_sec)
             try:
                 output,error=process.communicate(json.dumps(payload).encode() if first else None,
                     timeout=min(0.25,remaining))
@@ -1265,6 +1286,93 @@ def _attempt_bounded_composer_repair(scraper, prompt, record, journal, *,
     return "RESET_CONFIRMED"
 
 
+def _write_continuous_prompt(scraper, prompt, record, journal, *, max_chars=1024):
+    """Write once, then verify the complete composer twice before any submit.
+
+    In-flight DOM history virtualization and transient editor readback lag must
+    not interrupt the input stream. This writer never submits, clears a draft,
+    replays a batch, or treats dispatched character counts as verified content.
+    """
+    PIT.record('09_helper_input', prompt)
+    total = len(prompt)
+    if not scraper._composer_matches_prompt(prompt):
+        loc = scraper._focus_composer_dom()
+        if loc is not None:
+            loc.evaluate("""el => {
+                el.focus();
+                if (typeof el.setSelectionRange === 'function') {
+                    el.setSelectionRange(el.value.length, el.value.length);
+                } else {
+                    const r = document.createRange();
+                    r.selectNodeContents(el);
+                    r.collapse(false);
+                    const s = window.getSelection();
+                    s.removeAllRanges();
+                    s.addRange(r);
+                }
+            }""")
+        scraper._page.keyboard.press('Control+End')
+        for start, end, units in _composer_write_batches(prompt, max_chars=max_chars):
+            # This inexpensive page binding check is not a historical Turn
+            # count/digest check. Never continue writing on another conversation.
+            expected_url = str(record.get('url') or '')
+            if expected_url and str(scraper._page.url) != expected_url:
+                raise ComposerOperationError('composer_operation_identity_changed')
+            record['pending_prefix'] = {
+                'chars': end,
+                'sha256': hashlib.sha256(prompt[:end].encode()).hexdigest(),
+                'normalized_sha256': hashlib.sha256(
+                    scraper._normalize_composer_text(prompt[:end]).encode()).hexdigest(),
+            }
+            write_json_atomic(journal, record)
+            for _, _, value, soft_break in units:
+                scraper._check_cancel_requested('composer_chunk')
+                if soft_break:
+                    scraper._page.keyboard.press('Shift+Enter')
+                else:
+                    PIT.record('09_keyboard_insert_text', value,
+                               extra={'chunk_start': start, 'chunk_end': end})
+                    scraper._page.keyboard.insert_text(value)
+            # Progress means physical input was dispatched, NOT DOM verified.
+            record['write_progress_chars'] = end
+            record['write_progress_monotonic'] = time.monotonic()
+            write_json_atomic(journal, record)
+            scraper._log_stage(
+                'composer_batch_written',
+                f'chars={end}/{total} units={len(units)} verified=false',
+            )
+
+    # One authoritative, full-content readback. The two stable observations
+    # are the only source of write success; partial input never reaches Send.
+    try:
+        verified = _await_chunk_readback(
+            scraper, prompt,
+            timeout_sec=max(12.0, min(40.0, 12.0 + total / 4096.0 * 2.0)),
+        )
+    except ComposerOperationError as exc:
+        record['readback_failure'] = {
+            'stage': 'final_full_content', 'expected_chars': total,
+            **exc.evidence,
+        }
+        write_json_atomic(journal, record)
+        scraper._log_stage('composer_final_readback_failed',
+                           json.dumps(record['readback_failure'],
+                                      ensure_ascii=True, separators=(',', ':')))
+        raise
+
+    record['confirmed_prefix'] = {
+        'chars': total,
+        'sha256': hashlib.sha256(prompt.encode()).hexdigest(),
+        'normalized_sha256': hashlib.sha256(
+            scraper._normalize_composer_text(prompt).encode()).hexdigest(),
+    }
+    write_json_atomic(journal, record)
+    scraper._log_stage(
+        'composer_final_readback_verified',
+        f'chars={total} matches={verified["consecutive_matches"]}',
+    )
+
+
 def _write_staged_prompt(scraper,prompt,record,journal, *,
                          _restart_used=False, max_chars=1024):
     PIT.record('09_helper_input', prompt)
@@ -1434,7 +1542,7 @@ def helper_main():
             # The experimental bulk-tail writer cannot prove every prefix.
             # Git23 deliberately routes even hybrid requests through staged
             # checkpoints until that experiment offers equivalent guarantees.
-            _write_staged_prompt(scraper,prompt,record,journal)
+            _write_continuous_prompt(scraper,prompt,record,journal)
             after=_page_snapshot(scraper,payload['prompt'])
         else:
             before=record.get('baseline')
@@ -1447,7 +1555,22 @@ def helper_main():
             turn_count_tolerance=WRITE_TURN_COUNT_TOLERANCE
                 if record.get('check_turn_counts') is True else 0,
         )
-        status=classify_observation(before,after,**count_policy)
+        # During the write/observer phase, DOM history can virtualize.
+        # Judge the writer by full content and the pinned page only. The
+        # separate pre-Send verify_prepared_composer() still applies the strict
+        # historical Turn identity and generation safety contract.
+        if payload['mode'] in {'write', 'observe'} and record.get('state') == 'IN_FLIGHT':
+            if not isinstance(before, dict) or not isinstance(after, dict):
+                status = 'UNKNOWN'
+            elif (before.get('url') != after.get('url')
+                  or before.get('generation_active')
+                  or after.get('generation_active')):
+                status = 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+            else:
+                status = ('VERIFIED_SAFE_TO_SUBMIT' if after.get('composer_matches') is True
+                          else 'PARTIAL_OR_EMPTY')
+        else:
+            status=classify_observation(before,after,**count_policy)
         result=dict(status=status,observation=after)
         if status=='TURN_CHANGED_OR_SUBMIT_UNCERTAIN':
             result['comparison']=_snapshot_difference(before,after,**count_policy)
