@@ -167,13 +167,20 @@ def test_init_bat_persists_environment_and_protects_private_acl(tmp_path):
     gh.write_text("@echo off\nif /I \"%~1\"==\"api\" echo true\n", encoding="ascii")
     env = os.environ.copy()
     env["PATH"] = str(tmp_path) + os.pathsep + env["PATH"]
-    command = (
-        'call "' + str(root / "init.bat") + '"'
-        ' && echo GIT67_AFTER_CALL=%SMARTAGENT_IT10_AUTO_PUBLISH%'
-        ' && echo GIT67_TRACE=%SMARTAGENT_IT10_PATH_TRACE_RAW%'
-        ' && echo GIT67_ID=%SMARTAGENT_IT10_PATH_TRACE_RUN_ID%'
+    # Use an actual parent CMD script, not subprocess.list2cmdline quoting
+    # of a nested /c string. Windows may re-quote the entire command and
+    # return "'<path>init.bat' not recognized" without invoking init.
+    caller = tmp_path / "invoke_init_and_check_environment.cmd"
+    caller.write_text(
+        '@echo off\n'
+        'call "' + str(root / "init.bat") + '"\n'
+        'if errorlevel 1 exit /b 4\n'
+        'echo GIT67_AFTER_CALL=%SMARTAGENT_IT10_AUTO_PUBLISH%\n'
+        'echo GIT67_TRACE=%SMARTAGENT_IT10_PATH_TRACE_RAW%\n'
+        'echo GIT67_ID=%SMARTAGENT_IT10_PATH_TRACE_RUN_ID%\n',
+        encoding="ascii",
     )
-    result = subprocess.run(["cmd.exe", "/d", "/c", command], cwd=root, env=env,
+    result = subprocess.run(["cmd.exe", "/d", "/c", str(caller)], cwd=root, env=env,
                             capture_output=True, text=True, errors="replace", timeout=120)
     assert result.returncode == 0, result.stdout[-2800:] + result.stderr[-2800:]
     assert "GIT67_AFTER_CALL=YES" in result.stdout
