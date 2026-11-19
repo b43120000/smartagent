@@ -14,6 +14,7 @@ from agent_core import path_integrity_trace as PIT
 from agent_core.it10_raw_collector import collect
 from agent_core.request_context import RequestContextStore
 from agent_core.web_ui.providers.chatgpt.composer import read_composer_snapshot
+from agent_core.web_ui.message_text import read_message_text
 from RemoteAgent.telegram_transport import TelegramBotClient, TelegramReceiverConfig, TelegramUpdateAdapter
 
 
@@ -114,6 +115,51 @@ class RawCollectorTests(unittest.TestCase):
             self.assertEqual(observed[stage]["evidence_status"], "DOM_SERIALIZATION")
             blob = self.private / observed[stage]["raw_blob_ref"]
             self.assertEqual(blob.read_bytes(), exact.encode("utf-8"))
+
+    def test_submitted_user_dom_matches_unique_it10_subcase_not_request_id(self):
+        request = ("NLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\n"
+                   "IT10_SUBCASE_ID=GIT67-USER-SUBMIT-001\n"
+                   "E:\\AIspace\\.case_d_backups\n")
+        PIT.begin(request, task_id=TASK, request_id=RID, transport="LOCAL_TEST")
+        class Turn:
+            def __init__(self, message):
+                self.message = message
+            def evaluate(self, script):
+                if "const excluded" in script:
+                    return self.message
+                if "innerText:el.innerText" in script:
+                    return {"innerText": self.message, "textContent": self.message}
+                if "el.innerHTML" in script:
+                    return "<p>" + self.message.replace("\n", "</p><p>") + "</p>"
+                raise AssertionError("unexpected JS evaluation")
+        # No RR-... Request ID in user-visible turn, as with actual ChatGPT.
+        self.assertNotIn(RID, request)
+        self.assertEqual(read_message_text(Turn(request)), request.strip())
+        got = {r["stage"]: r for r in self._rows()}
+        self.assertIn("10_submitted_innerText", got)
+        self.assertIn("10_submitted_textContent", got)
+        self.assertIn("10_submitted_innerHTML", got)
+        for stage in ("10_submitted_innerText", "10_submitted_textContent"):
+            self.assertEqual((self.private / got[stage]["raw_blob_ref"]).read_bytes(), request.encode("utf-8"))
+        before = len(self._rows())
+        foreign = request.replace("GIT67-USER-SUBMIT-001", "GIT67-USER-SUBMIT-FOREIGN")
+        read_message_text(Turn(foreign))
+        self.assertEqual(len(self._rows()), before)
+        # A cross-helper context restoration must carry the same subcase ID.
+        token = PIT.context()
+        PIT.restore(token)
+        self.assertEqual(PIT.context()["subcase_id"], "GIT67-USER-SUBMIT-001")
+
+    def test_minimal_stage_index_reports_missing_live_boundaries(self):
+        PIT.record("08_minimal_prompt", REQUEST)
+        PIT.record("11_minimal_planner_response", '{"type":"blocked","reason":"demo"}')
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["execution_path"], "MINIMAL_EXECUTOR")
+        self.assertIn("11_minimal_parser_input", result["missing_stages"])
+        self.assertIn("10_submitted_innerText", result["missing_stages"])
+        self.assertIn("MODEL_SERVICE_SERVER_RAW_OUTPUT_NOT_CAPTURED_BY_BROWSER_UI",
+                      result["unobserved_external_boundaries"])
+        self.assertEqual(result["status"], "PARTIAL")
 
     def test_unarmed_raw_is_not_persisted(self):
         with patch.dict(os.environ, {"SMARTAGENT_IT10_PATH_TRACE_RAW": "NO"}):
