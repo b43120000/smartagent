@@ -123,8 +123,48 @@ def _tool_result(status: str, reason: str, payload: object = None, *, evidence_p
     }
 
 
-def _blocking_runtime_evidence(loop) -> dict:
-    """Bound a Blocked terminal to the last actual failed/uncertain result."""
+def _blocking_runtime_evidence(loop, board=None) -> dict:
+    """Choose the latest relevant Runtime failure or *unexecuted* admission denial.
+
+    An Admission Rejection is a Blackboard event, not a ToolResult or MIN-EV.
+    Never turn its proposed command into an executed failure.
+    """
+    if isinstance(board, Mapping):
+        for event in reversed(board.get("events") or []):
+            if not isinstance(event, Mapping):
+                continue
+            if event.get("kind") == "ADMISSION_REJECTED":
+                diagnostic = event.get("admission_diagnostic") or {}
+                runtime = event.get("runtimeEvidence") or {}
+                return {
+                    "status": "OBSERVED_ADMISSION_REJECTION",
+                    "evidence_ref": "",
+                    "blackboard_sequence": event.get("sequence"),
+                    "tool": event.get("toolName"),
+                    "execution_status": "REJECTED",
+                    "reason_code": str(runtime.get("reason_code") or
+                                       diagnostic.get("reason_code") or "")[:160],
+                    "admission_stage": str(diagnostic.get("stage") or "")[:80],
+                    "executed": False,
+                    "authorization_granted": False,
+                    "exit_code": None,
+                }
+            if event.get("kind") == "TOOL_RESULT":
+                ev = event.get("runtimeEvidence") or {}
+                if ev.get("status") in {"FAILED", "REJECTED", "UNKNOWN", "PARTIAL"}:
+                    return {
+                        "status": "OBSERVED_RUNTIME_BLOCKER",
+                        "evidence_ref": ev.get("evidence_ref") or "",
+                        "blackboard_sequence": event.get("sequence"),
+                        "tool": event.get("toolName"),
+                        "execution_status": ev.get("status"),
+                        "reason_code": str(ev.get("reason_code") or "")[:160],
+                        "exit_code": (
+                            (ev.get("process") or {}).get("exit_code")
+                            if type((ev.get("process") or {}).get("exit_code")) is int
+                            else None
+                        ),
+                    }
     ledger = getattr(loop, "action_result_ledger", None) or {}
     if not isinstance(ledger, Mapping):
         return {"status": "NO_RUNTIME_BLOCKER"}
@@ -358,7 +398,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
                                             canonical_finish=canonical_finish)
         board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
-    blocking_evidence = _blocking_runtime_evidence(loop) if not complete else None
+    blocking_evidence = _blocking_runtime_evidence(loop, board) if not complete else None
     loop.executor_result = {
         "schema": "SMARTAGENT_POKECLAW_EXECUTOR_RESULT_V1",
         "outcome": kind, "executor_state": board["executor_state"],
@@ -395,7 +435,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         if comparison else "尚未進入 Runtime 最終驗收。"
     )
     mismatch_lines = ""
-    if blocking_evidence and blocking_evidence["status"] == "OBSERVED_RUNTIME_BLOCKER":
+    if blocking_evidence and blocking_evidence["status"] in {"OBSERVED_RUNTIME_BLOCKER", "OBSERVED_ADMISSION_REJECTION"}:
         mismatch_lines += "\n阻塞 Runtime Evidence：" + json.dumps(
             blocking_evidence, ensure_ascii=False, separators=(",", ":"),
         )
@@ -919,7 +959,15 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_BLOCKED",
                 "reason_sha256": _digest(decision.message),
-                "blocking_runtime_evidence": _blocking_runtime_evidence(loop),
+                "blocking_runtime_evidence": _blocking_runtime_evidence(
+                    loop, __import__(
+                        "agent_core.executor_run_blackboard",
+                        fromlist=["read_executor_run"],
+                    ).read_executor_run(
+                        root, task_id=loop.task_id, request_id=loop.run_id,
+                        task_epoch=loop.task_epoch,
+                    )
+                ),
                 "executed": False, "authorization_granted": False,
             })
             return _finish(
