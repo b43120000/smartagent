@@ -10,6 +10,8 @@ on:
       - 'docs/git67_sidecar_reproduction.md'
       - 'docs/git67_raw_evidence_capture.md'
       - 'source/WebAgent/tests/test_git67_raw_evidence_collector.py'
+      - 'source/WebAgent/tests/test_git67_collect_bat_windows.py'
+      - 'source/agent_core/request_context.py'
       - 'source/agent_core/path_integrity_trace.py'
       - 'source/agent_core/it10_raw_collector.py'
       - 'source/RemoteAgent/telegram_transport.py'
@@ -45,6 +47,8 @@ jobs:
           source/WebAgent/tests/sidecar_git67_reproduction.py
           source/WebAgent/tests/test_git67_sidecar_reproduction.py
           source/WebAgent/tests/test_git67_raw_evidence_collector.py
+          source/WebAgent/tests/test_git67_collect_bat_windows.py
+          source/agent_core/request_context.py
           source/agent_core/path_integrity_trace.py
           source/agent_core/it10_raw_collector.py
           source/RemoteAgent/telegram_transport.py
@@ -56,6 +60,15 @@ jobs:
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git67_raw_evidence_collector.py
+      - name: Windows PowerShell 5.1 collector ZIP smoke
+        if: runner.os == 'Windows'
+        run: >-
+          python -m venv .venv
+      - name: Windows Collector ZIP integration regression
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_collect_bat_windows.py
       - name: Emit sidecar diagnosis in logs (not a Live transport claim)
         run: >-
           python -B -m WebAgent.tests.sidecar_git67_reproduction
