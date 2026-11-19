@@ -15,6 +15,9 @@ on:
       - 'docs/git67_raw_evidence_capture.md'
       - 'source/WebAgent/tests/test_git67_raw_evidence_collector.py'
       - 'source/WebAgent/tests/test_git67_collect_bat_windows.py'
+      - 'source/WebAgent/tests/test_git67_minimal_trace.py'
+      - 'source/WebAgent/pokeclaw_executor_loop.py'
+      - 'source/agent_core/web_runtime.py'
       - 'source/agent_core/request_context.py'
       - 'source/agent_core/path_integrity_trace.py'
       - 'source/agent_core/it10_raw_collector.py'
@@ -54,6 +57,9 @@ jobs:
           source/WebAgent/tests/test_git67_path_localization.py
           source/WebAgent/tests/test_git67_raw_evidence_collector.py
           source/WebAgent/tests/test_git67_collect_bat_windows.py
+          source/WebAgent/tests/test_git67_minimal_trace.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/agent_core/web_runtime.py
           source/agent_core/request_context.py
           source/agent_core/path_integrity_trace.py
           source/agent_core/it10_raw_collector.py
@@ -67,6 +73,7 @@ jobs:
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git67_raw_evidence_collector.py
+          source/WebAgent/tests/test_git67_minimal_trace.py
       - name: Windows PowerShell 5.1 collector ZIP smoke
         if: runner.os == 'Windows'
         run: >-
