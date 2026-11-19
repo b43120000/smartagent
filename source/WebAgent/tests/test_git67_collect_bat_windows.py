@@ -42,7 +42,7 @@ class CollectBatWindowsTests(unittest.TestCase):
             "SMARTAGENT_IT10_PATH_TRACE_RUN_ID": run,
             "SMARTAGENT_IT10_PATH_TRACE_ROOT": str(private),
         }
-        archive = None
+        archives = []
         try:
             with patch.dict(os.environ, env):
                 PIT.begin(REQUEST, task_id=task, request_id=request, transport="LOCAL_TEST")
@@ -58,11 +58,18 @@ class CollectBatWindowsTests(unittest.TestCase):
             match = re.search(r"^\[COLLECT\] ZIP:\s*(.+)$", result.stdout, flags=re.MULTILINE)
             self.assertIsNotNone(match, result.stdout[-3500:])
             archive = Path(match.group(1).strip())
+            archives.append(archive)
             self.assertTrue(archive.is_file())
             with zipfile.ZipFile(archive) as zf:
                 self.assertIsNone(zf.testzip())
                 manifest = json.loads(zf.read("manifest.json"))
                 index = json.loads(zf.read("it10_raw_evidence_index.json"))
+                boundary = json.loads(zf.read("it10_boundary_matrix.json"))
+                self.assertEqual(boundary["task_id"], task)
+                self.assertEqual(boundary["request_id"], request)
+                self.assertEqual(len(boundary["stage_records"]), 1)
+                self.assertEqual(boundary["stage_records"][0]["stage"], "06_worker_input")
+                self.assertTrue(boundary["stage_records"][0]["pointer_verified_and_copied"])
                 self.assertEqual(manifest["it10_raw_evidence_status"], "PARTIAL")
                 self.assertEqual(index["trace_file_count"], 1)
                 self.assertEqual(index["raw_blob_count"], 1)
@@ -75,9 +82,29 @@ class CollectBatWindowsTests(unittest.TestCase):
                 actual = zf.read("it10/raw/" + target)
                 self.assertEqual(actual, REQUEST.encode("utf-8"))
                 self.assertEqual(hashlib.sha256(actual).hexdigest(), rows[0]["raw_blob_sha256"])
+            # A second invocation with the same IDs inside the same second
+            # must NEVER overwrite the previously generated original/raw ZIP.
+            with patch.dict(os.environ, env):
+                again = subprocess.run(
+                    ["cmd.exe", "/d", "/c", str(ROOT / "collect.bat"),
+                     task, request, "--it10-raw"],
+                    cwd=ROOT, env=os.environ.copy(), text=True, errors="replace",
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180,
+                )
+            self.assertEqual(again.returncode, 0, again.stdout[-2500:] + again.stderr[-2500:])
+            match2 = re.search(r"^\[COLLECT\] ZIP:\s*(.+)$", again.stdout, flags=re.MULTILINE)
+            self.assertIsNotNone(match2, again.stdout[-2500:])
+            other = Path(match2.group(1).strip())
+            archives.append(other)
+            self.assertTrue(other.is_file())
+            self.assertNotEqual(other.resolve(), archive.resolve())
+            self.assertTrue(archive.is_file())
+            with zipfile.ZipFile(other) as zf:
+                self.assertIsNone(zf.testzip())
+                self.assertEqual(json.loads(zf.read("it10_raw_evidence_index.json"))["missing_refs"], [])
         finally:
             PIT.begin("")
-            if archive is not None:
+            for archive in archives:
                 archive.unlink(missing_ok=True)
             for file in private.iterdir():
                 file.unlink()
