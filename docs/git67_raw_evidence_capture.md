@@ -174,3 +174,60 @@ target path changes from correct to incorrect can identify a first mutation
 boundary. Missing stages, absent submitted turn, renderer changes and model
 response divergences are NEVER retroactively proof of the old Task A/B
 historical root cause. Keep Historical Continuation KeyError separate.
+
+
+## Git67 session initializer and private evidence auto-upload
+
+After updating Git67, execute the following once in the **same CMD** used
+later for evidence collection:
+
+    cd /d C:\smartagent
+    init.bat
+
+The initializer deliberately has no setlocal. Its environment stays active
+in the current command prompt. It checks Git67 branch and clean worktree,
+the exact installed Python and official Protocol Manifest verification,
+GitHub CLI access to the private b43120000/test repository with push permission,
+then creates a fresh Windows private diagnostics directory. It removes inherited
+ACL permissions and verifies access is restricted to current user, SYSTEM and
+Administrators before setting the private-ACL-confirmed diagnostic flag.
+
+Because the launchers block, start their windows from the initialized CMD:
+
+    start "Git67 WebCopilot" cmd /k "call launch_webcopilot.bat"
+    start "Git67 RemoteAgent" cmd /k "call launch_remote_agent.bat"
+
+Only a Telegram request with both IT10 marker lines activates the raw trace.
+After the Telegram Task and Request IDs are issued, return to the *original*
+CMD and run:
+
+    collect.bat TASK-... RR-...
+
+In an initialized session, this automatically activates the IT10 raw collector
+(equivalent to --it10-raw), saves a unique complete **local** ZIP and invokes
+the Git Test automatic publishing client. Without init, two-argument collect.bat
+remains the old sanitized mode. The existing terminal RCA auto-uploader explicitly
+disables the new manual raw/publish opt-in so the flows cannot recursively trigger.
+
+After a successful upload:
+
+    [COLLECT] ZIP: <original local ZIP path>
+    [GITTEST] STATUS=SUCCESS
+    [GITTEST] COMMIT=<verified Git Test commit SHA>
+    [GITTEST] EVIDENCE=<Git Test directory URL>
+    [GITTEST] INDEX=<readable Git Test safe_evidence.json URL>
+    [GITTEST] ZIP=<redacted-derivative Git Test ZIP URL>
+
+Although Git Test is private, the complete raw ZIP stays **local**. The
+automatically uploaded ZIP is explicitly marked REDACTED_DERIVATIVE and
+includes only byte-exact substrings of the controlled Golden Path family,
+plus their original offsets, original binary-blob SHA256, excerpt SHA256,
+stage/round labels and missing-stage accounting. Full model prompts,
+Telegram HTTP JSON, user identity, cookies, sessions and unrelated raw bytes
+remain on the local host. Derivative snippets are not full original raw
+payloads and cannot verify the original blob hash without local raw evidence.
+
+If the remote upload fails, collect.bat exits nonzero and the original local
+ZIP remains available. The actual GitHub CLI push with the user's account is
+not exercised by CI; CI instead runs the real Windows initializer/ACL and
+Collector ZIP smoke plus mock private GitHub API receipt/hash verification.
