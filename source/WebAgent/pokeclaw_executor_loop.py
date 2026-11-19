@@ -18,6 +18,7 @@ from agent_core.executor_run_blackboard import (
     finish_executor_run, record_finish_comparison, projection,
 )
 from agent_core.task_progress import set_runtime_state
+from agent_core import path_integrity_trace as PIT
 from agent_core.tool_result_contract import decode_result
 from agent_core.runtime_finish_comparator import (
     compare_runtime_finish, finish_input_projection, finish_runtime_field_catalog,
@@ -568,14 +569,32 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         hint = ""
         attachments = loop.tools.take_pending_attachments()
         loop.protocol_state = "DECIDING"
+        # Diagnostic-only observations. The exact selected Minimal path is
+        # different from the legacy protocol_loop planner/parser branch.
+        # A browser-extracted model response is NOT server/network raw bytes.
+        PIT.record("08_minimal_prompt", prompt, evidence_status="PLANNER_PROMPT_STRING", extra={"round": turn})
         # Model DOM transport interruption may have sent a turn. Do not retry
         # the transport without its established correlation protocol.
         response = loop.planner(prompt, None, attachments)
+        PIT.record("11_minimal_planner_response", response, evidence_status="BROWSER_EXTRACTED_MODEL_RESPONSE", extra={"round": turn})
+        PIT.record("11_minimal_parser_input", response, evidence_status="PARSER_INPUT_STRING", extra={"round": turn})
         try:
             decision, metadata = parse_minimal_decision_with_diagnostics(
                 response, original_goal=request,
             )
+            PIT.record("12_minimal_decision", {
+                "kind": decision.kind, "tool": decision.tool,
+                "arguments": decision.arguments, "message": decision.message,
+                "expected_runtime": decision.expected_runtime,
+                "goal_checks": decision.goal_checks,
+                "normalization": metadata.get("normalization") if isinstance(metadata, dict) else None,
+            }, evidence_status="PARSED_DECISION_VALUE", extra={"round": turn})
         except MinimalDecisionError as exc:
+            PIT.record("12_minimal_parse_error", {
+                "error_code": exc.code, "raw_response_sha256": hashlib.sha256(
+                    str(response).encode("utf-8")
+                ).hexdigest(),
+            }, evidence_status="PARSE_REJECTED", extra={"round": turn})
             invalids += 1
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_DECISION_REJECTED",
@@ -822,10 +841,15 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 complete=False,
             )
         proposed = {"tool": decision.tool, **dict(decision.arguments or {})}
+        PIT.record("13_minimal_admission_input", proposed, evidence_status="PROPOSED_ACTION_VALUE", extra={"round": turn})
         signature = _digest(proposed)
         repeated = repeated + 1 if signature == last_fingerprint else 0
         last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
+        PIT.record("13_minimal_admission_output", {
+            "admitted_action": action, "rejection_reason": str(rejected or ""),
+            "original_proposed_action": proposed,
+        }, evidence_status="ACTION_ADMISSION_RESULT", extra={"round": turn})
         # Git51: admission is ACTION-scoped, never task/global-scoped.
         # News, ordinary prose, web research and read-only observations must
         # behave like ACL OFF even if Turbo is requested or unavailable.
@@ -1403,6 +1427,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             ),
             "command_risk_class": risk_class,
         })
+        PIT.record("13_minimal_pre_dispatch_action", action, evidence_status="PRE_DISPATCH_ACTION_VALUE", extra={"round": turn})
         loop.protocol_state = "EXECUTING"
         try:
             dispatch = getattr(loop, "_execute_runtime_action", loop._execute_action)
