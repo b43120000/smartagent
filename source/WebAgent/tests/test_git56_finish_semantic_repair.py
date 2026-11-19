@@ -159,21 +159,19 @@ def _exercise_loop(tmp_path, monkeypatch, *, wrong_kind, stuck=False):
         tail = prompt.split("Recent actual PokeClaw ToolResults:\n", 1)[1].split("\n", 1)[0]
         ref = json.loads(tail)[-1]["evidence_ref"]
         wrong = len(loop.prompts) == 2 or stuck
-        fields = {"status": "SUCCEEDED", "data.exit_code": 1}
         checks = [{
             "criterion": "回報真實的退出碼",
             "evidence_ref": ref, "field": "data.exit_code",
             "operator": "eq", "expected": 0 if wrong else 1,
         }]
         if wrong_kind == "fact" and wrong:
-            fields["data.exit_code"] = 0
-            checks[0]["expected"] = 1
+            # V2 must repair a false typed Runtime claim via goal_checks;
+            # it never copies or edits the immutable V1 expected_runtime.
+            checks[0]["field"] = "data.verification_status"
+            checks[0]["expected"] = "PASS"
         return json.dumps({
-            "type": "finish",
+            "type": "finish", "contract_version": 2,
             "summary": "已依 Runtime Evidence 檢查實際 Exit Code",
-            "expected_runtime": [{
-                "evidence_ref": ref, "fields": fields,
-            }],
             "goal_checks": checks,
         }, ensure_ascii=False)
     loop.planner = planner
