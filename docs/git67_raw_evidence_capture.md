@@ -91,3 +91,80 @@ validated on GitHub source inspection alone. Do not claim those PASS yet.
 
 Do not fix the backslash-corruption origin or Continuation KeyError in this
 round. Historical T5 already bad is NOT a known first corruption function.
+
+
+## Git67 follow-up: Minimal Executor and submitted-turn observation
+
+The 2026-11-19 Git Test baseline (commit
+668b7421eaa40fded53179adb38f9a8bf0841651) proves that Telegram
+input/Task Store/Worker were correct in one controlled Live request, but
+previously missed the actual Minimal Executor planner/parser code path.
+
+The observed Minimal Executor is source/WebAgent/pokeclaw_executor_loop.py,
+NOT the legacy protocol_loop.py planner/parser. Added opt-in stages:
+
+- 08_minimal_prompt: exact Python prompt sent into loop.planner
+- 10_submitted_innerText / 10_submitted_textContent /
+  10_submitted_innerHTML: the chosen actual submitted USER turn, selected
+  by the unique IT10_SUBCASE_ID line; not a random history turn
+- 10d_provider_response_return: extracted answer string returned from
+  WebScraper._wait_for_response_complete; browser-derived, NOT server raw
+- 11_minimal_planner_response: exact str returned by loop.planner
+- 11_minimal_parser_input: exact str at Minimal parser boundary
+- 12_minimal_decision / 12_minimal_parse_error: structured parsed
+  decision or error, separately labelled as a derived JSON value
+- 13_minimal_admission_input: original proposed action and its path
+- 13_minimal_admission_output: unchanged admission decision and any
+  actual admitted action; no authority granted by this trace
+- 13_minimal_pre_dispatch_action: final action immediately BEFORE the
+  existing real Runtime dispatcher
+
+The opt-in stage collector now detects MINIMAL_EXECUTOR vs
+LEGACY_OR_UNKNOWN and provides counts, missing stages, and exact pointer
+closure. It always lists phone-side transport bytes and the raw model-service
+server output as unobserved external boundaries: a browser DOM extraction is
+not access to those upstream bytes.
+
+### Required Telegram sender for local Codex Live tests
+
+Use the existing local script without changing it:
+
+    C:\Users\user\Desktop\remoteagent\smartagentSupport\TelegramBatchRunner\sendTGmessage.py
+
+First inspect this exact Python script and its existing invocation interface;
+do not guess command flags, recipient, account/session, or send format.
+Use its established Telegram USER-session-to-SmartAgent-Bot send mechanism.
+Do NOT replace it with a fabricated Bot API sender or simulated Telegram call.
+Do not log Telegram API credentials, user-account session strings or cookies.
+
+Record the source file SHA256, interpreter, actual invocation, exit code,
+user-session send receipt/message ID, destination Bot identity (nonsecret),
+parse_mode, and **sender message bytes immediately before the script passes
+them to Telegram**. A sender-side input file can be independently hashed.
+If the script does not expose a pre-send byte capture, record that gap and
+use an independently hashed Golden file; do not assert phone-side bytes.
+
+At least one real Telegram IT10 request must carry a fresh, unique
+IT10_SUBCASE_ID=... marker and exactly the expected literal Windows path
+with two backslashes in the Python string value:
+
+    E:\AIspace\.case_d_backups
+
+Send as plain text, without Markdown parse mode or escape processing.
+Use the ordinary Runtime observe_fact only. Reject side-effecting proposed
+actions in the test harness, without weakening the real ACL/Admission policy.
+
+Collection for the real IDs:
+
+    collect.bat TASK-... RR-... --it10-raw
+
+Review the private ZIP for secrets before publication. Publish the reviewed
+ZIP AND readable stage index/trace summary/manifest to b43120000/test under
+a fresh evidence path. Preserve both source and publication hashes when
+redacting bytes; do not describe a derivative as original raw HTTP.
+
+Comparison decision rule: only an adjacent observed pair where the same
+target path changes from correct to incorrect can identify a first mutation
+boundary. Missing stages, absent submitted turn, renderer changes and model
+response divergences are NEVER retroactively proof of the old Task A/B
+historical root cause. Keep Historical Continuation KeyError separate.
