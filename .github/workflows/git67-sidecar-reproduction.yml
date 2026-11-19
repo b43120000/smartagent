@@ -12,6 +12,15 @@ on:
       - 'docs/git67_sidecar_reproduction.md'
       - 'docs/git67_path_localization_report.md'
       - 'docs/evidence/**'
+      - 'docs/git67_raw_evidence_capture.md'
+      - 'source/WebAgent/tests/test_git67_raw_evidence_collector.py'
+      - 'source/WebAgent/tests/test_git67_collect_bat_windows.py'
+      - 'source/agent_core/request_context.py'
+      - 'source/agent_core/path_integrity_trace.py'
+      - 'source/agent_core/it10_raw_collector.py'
+      - 'source/RemoteAgent/telegram_transport.py'
+      - 'source/WebAgent/protocol_loop.py'
+      - 'collect.bat'
   workflow_dispatch:
 
 permissions:
@@ -43,11 +52,30 @@ jobs:
           source/WebAgent/tests/test_git67_sidecar_reproduction.py
           source/WebAgent/tests/sidecar_git67_path_localization.py
           source/WebAgent/tests/test_git67_path_localization.py
+          source/WebAgent/tests/test_git67_raw_evidence_collector.py
+          source/WebAgent/tests/test_git67_collect_bat_windows.py
+          source/agent_core/request_context.py
+          source/agent_core/path_integrity_trace.py
+          source/agent_core/it10_raw_collector.py
+          source/RemoteAgent/telegram_transport.py
       - name: Reproduce Git67 with production functions (no code edits)
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git67_sidecar_reproduction.py
           source/WebAgent/tests/test_git67_path_localization.py
+      - name: Verify exact IT10 raw-byte and pointer-closure behavior (offline)
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_raw_evidence_collector.py
+      - name: Windows PowerShell 5.1 collector ZIP smoke
+        if: runner.os == 'Windows'
+        run: >-
+          python -m venv .venv
+      - name: Windows Collector ZIP integration regression
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_collect_bat_windows.py
       - name: Emit sidecar diagnosis in logs (not a Live transport claim)
         run: >-
           python -B -m WebAgent.tests.sidecar_git67_reproduction

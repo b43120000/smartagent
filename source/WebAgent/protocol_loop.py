@@ -7487,6 +7487,7 @@ class WebAgentProtocolLoop:
                 ),
             )
             action_id_seed = f"{expected.get('run_id', '')}:{expected.get('turn_id', '')}"
+            PIT.record("11_parser_input", response, evidence_status="PARSER_BOUNDARY", extra={"round": self.turn_id})
             parsed_transport = parse_v9_tool_transport_detailed(
                 response,
                 action_id_seed=action_id_seed,

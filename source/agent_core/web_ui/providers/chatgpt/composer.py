@@ -145,6 +145,20 @@ def read_composer_snapshot(locator) -> ComposerSnapshot:
     if not isinstance(value, dict):
         text = str(value or "")
         return ComposerSnapshot(primary_text=text, semantic_text=text)
+    if PIT.raw_capture_enabled():
+        # Separate read-only DOM serialization from semantic Composer inversion.
+        # Neither innerHTML nor textContent is mislabelled as network raw bytes.
+        try:
+            dom = locator.evaluate(
+                "el => ({innerHTML: el.innerHTML || '', textContent: el.textContent || ''})"
+            ) or {}
+            if isinstance(dom, dict):
+                PIT.record("09_composer_dom_innerHTML", str(dom.get("innerHTML") or ""),
+                           evidence_status="DOM_SERIALIZATION")
+                PIT.record("09_composer_dom_textContent", str(dom.get("textContent") or ""),
+                           evidence_status="DOM_SERIALIZATION")
+        except Exception:
+            pass  # Diagnostic failures cannot alter the send gate.
     PIT.record("09_composer_primary", str(value.get("primary") or ""), evidence_status="RENDERED_DOM")
     PIT.record("09_composer_semantic", str(value.get("semantic") or ""), evidence_status="RENDERED_DOM")
     return ComposerSnapshot(
