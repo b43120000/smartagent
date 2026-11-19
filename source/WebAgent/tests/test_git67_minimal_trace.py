@@ -43,6 +43,15 @@ def test_real_minimal_planner_parser_admission_and_dispatch_boundaries(tmp_path,
         [model_reply, '{"type":"blocked","reason":"offline test complete"}'],
         request=REQUEST,
     )
+    # The legacy FakeLoop fixture caps all prompts at 24k characters;
+    # these extra IT10 markers exceed that fixture-only bound by ~100 chars.
+    # Keep exactly the fixture's reply iterator, without changing production
+    # prompt length, decision grammar or Runtime semantics.
+    def fixture_planner_without_legacy_size_cap(prompt, expected, attachments):
+        loop.expected_protocols.append(expected)
+        loop.prompts.append(prompt)
+        return next(loop.replies)
+    loop.planner = fixture_planner_without_legacy_size_cap
     PIT.begin(REQUEST, task_id=loop.task_id, request_id=loop.run_id, transport="LOCAL_TEST")
     run_minimal_core(loop, REQUEST)
     assert state["mutations"] == 0
