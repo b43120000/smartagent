@@ -51,7 +51,21 @@ def _looks_like_git_mutation(command: str) -> bool:
 
 
 def _looks_like_git(command: str) -> bool:
-    return bool(re.search(r"(?i)(?:^|[;&|]\s*)git(?:\.exe)?(?:\s|$)", command))
+    """Recognize an invoked Git binary, not a Git word in arguments.
+
+    Semantic classification only: executable trust, workspace authority and
+    command policy remain separate gates. Support absolute Windows toolchains
+    and the PowerShell call operator as well as a bare git command.
+    """
+    token = (
+        r'(?:git(?:\.exe)?|'
+        r"'[A-Za-z]:[\\/](?:[^'\r\n]*[\\/])?git\.exe'|"
+        r'"[A-Za-z]:[\\/](?:[^"\r\n]*[\\/])?git\.exe"|'
+        r'[A-Za-z]:[\\/](?:[^\s;&|"]*[\\/])?git\.exe)'
+    )
+    return bool(re.match(r'(?i)^\s*(?:&\s*)?' + token + r'(?=\s|$)', command))
+
+
 
 
 def _looks_like_build(command: str) -> bool:
