@@ -198,7 +198,7 @@ def test_init_bat_persists_environment_and_protects_private_acl(tmp_path):
     assert raw_root.is_dir()
     # The current Windows user has FullControl on this newly restricted dir.
     status = subprocess.run(["powershell.exe", "-NoProfile", "-Command",
-                             "(Get-Acl -LiteralPath '" + str(raw_root) + "').AreAccessRulesProtected"],
+                             "[System.IO.Directory]::GetAccessControl('" + str(raw_root) + "').AreAccessRulesProtected"],
                             capture_output=True, text=True, timeout=25)
     assert status.returncode == 0 and status.stdout.strip() == "True"
     raw_root.rmdir()
