@@ -65,7 +65,8 @@ def test_real_minimal_planner_parser_admission_and_dispatch_boundaries(tmp_path,
         "08_minimal_prompt", "11_minimal_planner_response",
         "11_minimal_parser_input", "12_minimal_decision",
         "13_minimal_admission_input", "13_minimal_admission_output",
-        "13_minimal_pre_dispatch_action",
+        "13_minimal_broker_gate", "13_minimal_pre_dispatch_action",
+        "15_minimal_tool_result_raw", "15_minimal_tool_result_decoded",
     )
     assert set(expected).issubset(stages)
     def raw(stage):
@@ -86,6 +87,13 @@ def test_real_minimal_planner_parser_admission_and_dispatch_boundaries(tmp_path,
     assert admission["admitted_action"]["path"] == PATH
     dispatch = json.loads(raw("13_minimal_pre_dispatch_action").decode("utf-8"))
     assert dispatch["path"] == PATH
+    # The broker decision and actual module output are separate from the
+    # model's proposed JSON and are verified by their own raw Blob pointers.
+    gate = json.loads(raw("13_minimal_broker_gate").decode("utf-8"))
+    assert gate["action"]["path"] == PATH
+    assert raw("15_minimal_tool_result_raw")
+    tool_decoded = json.loads(raw("15_minimal_tool_result_decoded").decode("utf-8"))
+    assert tool_decoded["status"] == "SUCCEEDED"
     stage = tmp_path / "collector_stage"
     stage.mkdir()
     index = collect(loop.task_id, loop.run_id, private, stage)
