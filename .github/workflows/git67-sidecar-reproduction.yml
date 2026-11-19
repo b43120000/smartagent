@@ -1,0 +1,46 @@
+name: Git67 Sidecar Reproduction (No Fix)
+
+on:
+  push:
+    branches: [git67/case-c-action-contract-repair]
+    paths:
+      - 'source/WebAgent/tests/sidecar_git67_reproduction.py'
+      - 'source/WebAgent/tests/test_git67_sidecar_reproduction.py'
+      - '.github/workflows/git67-sidecar-reproduction.yml'
+      - 'docs/git67_sidecar_reproduction.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sidecar:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install offline test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile sidecar only
+        run: >-
+          python -B -m compileall -q
+          source/WebAgent/tests/sidecar_git67_reproduction.py
+          source/WebAgent/tests/test_git67_sidecar_reproduction.py
+      - name: Reproduce Git67 with production functions (no code edits)
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_sidecar_reproduction.py
+      - name: Emit sidecar diagnosis in logs (not a Live transport claim)
+        run: >-
+          python -B -m WebAgent.tests.sidecar_git67_reproduction
