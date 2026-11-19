@@ -20,7 +20,8 @@ from .tri_one_runtime_terminal import (
 )
 
 _FIELD = re.compile(r"^[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*$")
-_MAX_CLAIMS = 64
+_MAX_CLAIMS = 64  # Legacy V1 claims and task-goal check count
+_MAX_CANONICAL_ACTIONS = 1000  # V2 Runtime-owned full ledger
 _MAX_FIELDS = 24
 
 
@@ -156,7 +157,8 @@ def _fail(reason: str, refs: list[str] | None = None, *,
     return result
 
 
-def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list[dict], list[str], dict | None, str]:
+def _readback(loop, root: str | Path, *, allow_open: bool = False,
+              max_actions: int = _MAX_CLAIMS) -> tuple[list[dict], list[str], dict | None, str]:
     """Replay all current-request actions, not model-selected evidence alone."""
     board = read_executor_run(
         root, task_id=loop.task_id, request_id=loop.run_id,
@@ -215,7 +217,7 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False) -> tuple[list
                 board["terminal"].get("tool_evidence_refs") != []):
             return [], [], None, "BLACKBOARD_EVIDENCE_SET_MISMATCH"
         return [], [], {"board": board, "results": []}, ""
-    if len(events) > _MAX_CLAIMS:
+    if len(events) > max_actions:
         return [], [], None, "EVIDENCE_MISSING_OR_EXCESSIVE"
     results, refs, history = [], [], []
     for row in events:
@@ -428,7 +430,7 @@ def _evaluate_model_goal_checks(history: list[dict], refs: list[str],
                 or not _FIELD.fullmatch(field)
                 or not isinstance(op, str) or op not in {"eq", "ne", "ge", "le"}
                 or type(expected) not in (str, int, float, bool, type(None))
-                or field not in claimed[ref]):
+                or (claimed is not None and field not in claimed.get(ref, {}))):
             return False, "MODEL_GOAL_CHECK_SCHEMA_INVALID", []
         observed_criteria.add(criterion)
         used_refs.add(ref)
@@ -653,11 +655,27 @@ def _execution_uncertainty(history: list[dict]) -> tuple[list[dict], list[dict]]
 def compare_runtime_finish(loop, root: str | Path, goal: str,
                            expected_runtime: object, goal_checks: object = None,
                            *, allow_open: bool = False,
-                           answer: str = "") -> dict:
+                           answer: str = "", canonical_finish: object = None) -> dict:
     """Binary verdict. Dynamic model fields, Runtime facts and goal validation."""
-    history, refs, context, error = _readback(loop, root, allow_open=allow_open)
+    v2 = canonical_finish is not None
+    history, refs, context, error = _readback(
+        loop, root, allow_open=allow_open,
+        max_actions=_MAX_CANONICAL_ACTIONS if v2 else _MAX_CLAIMS,
+    )
     if error:
         return _fail(error)
+    if v2:
+        from .finish_contract_adapter_v2 import validate_finish_contract_v2
+        if not validate_finish_contract_v2(canonical_finish, loop, context["board"]):
+            return _fail("CANONICAL_FINISH_BINDING_INVALID", refs,
+                         tool_results=context["results"])
+        if expected_runtime not in (None, []):
+            return _fail("V2_LEGACY_CLAIMS_FORBIDDEN", refs,
+                         tool_results=context["results"])
+        intent = canonical_finish["planner_intent"]
+        if intent["summary"] != answer or intent["goal_checks"] != goal_checks:
+            return _fail("CANONICAL_FINISH_PROPOSAL_MISMATCH", refs,
+                         tool_results=context["results"])
     if context["board"].get("request_sha256") != hashlib.sha256(
         str(goal).encode("utf-8")
     ).hexdigest():
@@ -704,40 +722,44 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
             "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
             "evidence_refs": [], "mismatches": [], "tool_results": [],
         }
-    if (not isinstance(expected_runtime, list) or
-            len(expected_runtime) != len(history) or
-            len(expected_runtime) > _MAX_CLAIMS):
-        return _fail("EXPECTED_RUNTIME_COVERAGE_MISMATCH", refs, tool_results=results)
-    claimed = {}
-    for claim in expected_runtime:
-        if not isinstance(claim, dict) or set(claim) != {"evidence_ref", "fields"}:
-            return _fail("EXPECTED_RUNTIME_SCHEMA_INVALID", refs, tool_results=results)
-        ref, fields = claim["evidence_ref"], claim["fields"]
-        if (not isinstance(ref, str) or ref in claimed
-                or not isinstance(fields, dict) or not (1 <= len(fields) <= _MAX_FIELDS)
-                or "status" not in fields):
-            return _fail("EXPECTED_RUNTIME_FIELDS_INVALID", refs, tool_results=results)
-        if any(not isinstance(key, str) or not _FIELD.fullmatch(key)
-               or type(value) not in (str, int, float, bool, type(None))
-               for key, value in fields.items()):
-            return _fail("EXPECTED_RUNTIME_FIELD_TYPE_INVALID", refs, tool_results=results)
-        claimed[ref] = fields
-    if set(claimed) != set(refs):
-        return _fail("EXPECTED_RUNTIME_EVIDENCE_SET_MISMATCH", refs, tool_results=results)
-    mismatches = []
-    for item in history:
-        ref, actual = item["evidence_ref"], item["receipt"]
-        for field, expected in claimed[ref].items():
-            present, observed = _lookup(actual, field)
-            if not present or type(expected) is not type(observed) or expected != observed:
-                mismatches.append({
-                    "evidence_ref": ref, "field": field,
-                    "expected": _shown(expected),
-                    "actual": _shown(observed) if present else "[MISSING]",
-                })
-    if mismatches:
-        return _fail("MODEL_RUNTIME_MISMATCH", refs,
-                     mismatches=mismatches, tool_results=results)
+    # V2 never asks the Planner to reproduce the Runtime's own receipts.
+    # V1 remains byte-for-byte compatible, including its 64-claim safeguard.
+    claimed = {} if v2 else None
+    if not v2:
+        if (not isinstance(expected_runtime, list) or
+                len(expected_runtime) != len(history) or
+                len(expected_runtime) > _MAX_CLAIMS):
+            return _fail("EXPECTED_RUNTIME_COVERAGE_MISMATCH", refs, tool_results=results)
+        claimed = {}
+        for claim in expected_runtime:
+            if not isinstance(claim, dict) or set(claim) != {"evidence_ref", "fields"}:
+                return _fail("EXPECTED_RUNTIME_SCHEMA_INVALID", refs, tool_results=results)
+            ref, fields = claim["evidence_ref"], claim["fields"]
+            if (not isinstance(ref, str) or ref in claimed
+                    or not isinstance(fields, dict) or not (1 <= len(fields) <= _MAX_FIELDS)
+                    or "status" not in fields):
+                return _fail("EXPECTED_RUNTIME_FIELDS_INVALID", refs, tool_results=results)
+            if any(not isinstance(key, str) or not _FIELD.fullmatch(key)
+                   or type(value) not in (str, int, float, bool, type(None))
+                   for key, value in fields.items()):
+                return _fail("EXPECTED_RUNTIME_FIELD_TYPE_INVALID", refs, tool_results=results)
+            claimed[ref] = fields
+        if set(claimed) != set(refs):
+            return _fail("EXPECTED_RUNTIME_EVIDENCE_SET_MISMATCH", refs, tool_results=results)
+        mismatches = []
+        for item in history:
+            ref, actual = item["evidence_ref"], item["receipt"]
+            for field, expected in claimed[ref].items():
+                present, observed = _lookup(actual, field)
+                if not present or type(expected) is not type(observed) or expected != observed:
+                    mismatches.append({
+                        "evidence_ref": ref, "field": field,
+                        "expected": _shown(expected),
+                        "actual": _shown(observed) if present else "[MISSING]",
+                    })
+        if mismatches:
+            return _fail("MODEL_RUNTIME_MISMATCH", refs,
+                         mismatches=mismatches, tool_results=results)
     # Historical REJECTED/FAILED operations remain in the claimed evidence
     # set (never omitted or rewritten), but cannot veto later independent
     # successful evidence for the original goal. Uncertain execution is still
@@ -758,8 +780,10 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if not valid_goal_history:
         return _fail("NO_EXECUTED_GOAL_EVIDENCE", refs, tool_results=results)
     good_refs = {item["evidence_ref"] for item in valid_goal_history}
-    model_declares_goal_fact = any(
-        field.startswith("data.") for ref in good_refs for field in claimed[ref]
+    model_declares_goal_fact = (
+        bool(goal_checks) if v2 else any(
+            field.startswith("data.") for ref in good_refs for field in claimed[ref]
+        )
     )
     if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED", "PARTIAL"}
            for item in history):
@@ -778,14 +802,14 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         advisory = None
         if goal_checks is not None:
             check_ok, check_reason, check_mismatch = _evaluate_model_goal_checks(
-                history, refs, claimed, goal_checks)
+                history, refs, None if v2 else claimed, goal_checks)
             advisory = {
                 "model_checks_match_actual_values": bool(check_ok),
                 "reason_code": check_reason,
                 "mismatches": check_mismatch[:12],
                 "authoritative": False,
             }
-        if not model_declares_goal_fact:
+        if not model_declares_goal_fact and not v2:
             return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs,
                          tool_results=results, goal_state_table=state["state_table"],
                          goal_contract_sha256=contract["contract_sha256"],
@@ -823,7 +847,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         return _fail("KNOWN_GOAL_POSTCONDITION_NOT_SATISFIED", refs, tool_results=results)
     # For uncompiled requirements preserve legacy checks but never claim that
     # a universal natural-language state contract was verified.
-    if not model_declares_goal_fact:
+    if not model_declares_goal_fact and not (v2 and proof is not None):
         return _fail("MODEL_FINISH_GOAL_FACT_NOT_DECLARED", refs, tool_results=results)
     if goal_checks is not None:
         # A rejected/unexecuted tool may be faithfully reported, but may
@@ -833,7 +857,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
             return _fail("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE", refs,
                          tool_results=results, finish_diagnostic=binding)
         ok, reason, deviations = _evaluate_model_goal_checks(
-            history, refs, claimed, goal_checks,
+            history, refs, None if v2 else claimed, goal_checks,
         )
         if not ok:
             diagnostic = None

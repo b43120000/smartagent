@@ -27,6 +27,7 @@ class MinimalDecision:
     message: str = ""
     expected_runtime: list[dict] | None = None
     goal_checks: list[dict] | None = None
+    contract_version: int = 1
 
 
 def _unique_keys(pairs):
@@ -134,12 +135,17 @@ def _to_decision(data: dict, meta: dict) -> MinimalDecision:
             meta["normalization"] = "POKECLAW_TYPE_ALIAS"
         return MinimalDecision("tool_call", tool=name.strip(), arguments=args)
     if kind in {"finish", "final"}:
-        if not set(data).issubset({"type", "summary", "answer", "text", "expected_runtime", "goal_checks"}):
+        if not set(data).issubset({"type", "summary", "answer", "text", "expected_runtime", "goal_checks", "contract_version"}):
             raise MinimalDecisionError("decision_fields_invalid", meta)
+        version = data.get("contract_version", 1)
+        if type(version) is not int or version not in (1, 2):
+            raise MinimalDecisionError("finish_contract_version_invalid", meta)
         value = _field(data, ("summary", "answer", "text"), meta)
         if not isinstance(value, str) or not value.strip() or len(value) > 3000:
             raise MinimalDecisionError("decision_message_invalid", meta)
         expectations = data.get("expected_runtime")
+        if version == 2 and expectations not in (None, []):
+            raise MinimalDecisionError("finish_v2_legacy_claims_forbidden", meta)
         if expectations is not None and (
             not isinstance(expectations, list) or len(expectations) > 64
             or any(not isinstance(row, dict) for row in expectations)
@@ -153,7 +159,7 @@ def _to_decision(data: dict, meta: dict) -> MinimalDecision:
             raise MinimalDecisionError("finish_goal_checks_invalid", meta)
         return MinimalDecision(
             "finish", message=value.strip(), expected_runtime=expectations,
-            goal_checks=goal_checks,
+            goal_checks=goal_checks, contract_version=version,
         )
     if kind == "blocked":
         if set(data) != {"type", "reason"}:
