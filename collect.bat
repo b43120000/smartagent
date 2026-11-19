@@ -4,6 +4,7 @@ set "SA_COLLECT_SCRIPT=%~f0"
 set "SA_COLLECT_ROOT=%~dp0"
 set "SA_COLLECT_TASK=%~1"
 set "SA_COLLECT_REQUEST=%~2"
+set "SA_COLLECT_MODE=%~3"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$s = [IO.File]::ReadAllText($env:SA_COLLECT_SCRIPT); $m = '# POWERSHELL_BEGIN'; $p = $s.LastIndexOf($m, [StringComparison]::Ordinal); if ($p -lt 0) { throw 'Collector script marker missing' }; & ([ScriptBlock]::Create($s.Substring($p + $m.Length)))"
 set "SA_COLLECT_EXIT=%ERRORLEVEL%"
 if not "%SA_COLLECT_EXIT%"=="0" echo [COLLECT] Failed. Run: collect.bat TASK-... RR-...
@@ -13,6 +14,8 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($env:SA_COLLECT_ROOT)
 $task = [string]$env:SA_COLLECT_TASK
 $request = [string]$env:SA_COLLECT_REQUEST
+$collectIt10Raw = ([string]$env:SA_COLLECT_MODE -ceq '--it10-raw')
+if ($env:SA_COLLECT_MODE -and -not $collectIt10Raw) { throw 'Unknown mode; expected --it10-raw' }
 $baseSha = 'e25bea7aa2d540cb77aead61babeaacaf3f19154'
 
 function Assert-Id([string]$id, [string]$kind) {
@@ -2011,6 +2014,45 @@ try {
         [string]$telegramMessage, (New-Object Text.UTF8Encoding $false)
     )
 
+
+    # Auto uploader's two-argument invocation cannot activate this mode.
+    $it10 = [ordered]@{
+        schema='SMARTAGENT_IT10_RAW_COLLECT_V1'
+        status='NOT_REQUESTED'
+        trace_file_count=0
+        raw_blob_count=0
+        source_files=@()
+        missing_stages=@()
+        missing_refs=@()
+    }
+    $it10Index = Join-Path $stage 'it10_raw_evidence_index.json'
+    if ($collectIt10Raw) {
+        $it10.status = 'PYTHON_MISSING'
+        $pythonExe = Join-Path $root '.venv\Scripts\python.exe'
+        if (Test-Path -LiteralPath $pythonExe -PathType Leaf) {
+            $oldPythonPath = [string]$env:PYTHONPATH
+            try {
+                $env:PYTHONPATH = Join-Path $root 'source'
+                $privateRoot = [string]$env:SMARTAGENT_IT10_PATH_TRACE_ROOT
+                if ([string]::IsNullOrWhiteSpace($privateRoot)) { $privateRoot = $root }
+                & $pythonExe -B -m agent_core.it10_raw_collector --task $task --request $request --root $privateRoot --stage $stage | Out-Null
+                if ($LASTEXITCODE -ne 0) { $it10.status = 'COLLECTOR_EXIT_NONZERO' }
+                $actualIndex = Read-Json $it10Index
+                if ($null -ne $actualIndex) { $it10 = $actualIndex }
+            } catch {
+                $it10.status = 'COLLECTOR_EXCEPTION'
+            } finally {
+                $env:PYTHONPATH = $oldPythonPath
+            }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $it10Index -PathType Leaf)) {
+        Write-Json $it10Index $it10
+    }
+    if ($collectIt10Raw -and [string]$it10.status -cne 'CAPTURED_WITH_EXPECTED_STAGES') {
+        $warnings.Add('IT10 raw evidence incomplete: ' + [string]$it10.status)
+    }
+
     $head = ''
     $branch = ''
     try {
@@ -2071,6 +2113,9 @@ try {
         collector_process_l4_enabled=(@('0','false','no','off') -notcontains [string]$env:SMARTAGENT_GAR_L4_ENABLED)
         log_sources=$sourceInfo.ToArray()
         source_sha256=$fingerprints
+        it10_raw_evidence_status=[string]$it10.status
+        it10_raw_blob_count=[int]$it10.raw_blob_count
+        it10_trace_file_count=[int]$it10.trace_file_count
         warnings=$warnings.ToArray()
     }
     Write-Json (Join-Path $stage 'manifest.json') $metadata
@@ -2102,6 +2147,7 @@ try {
         'Scan: stream entire available JSONL source <=128MiB; fallback to last 25000 lines for larger files.',
         'Task/Request match and 3500-row timeline cap apply; coverage flags any truncated source.',
         'If the wrong task was auto-selected, rerun collect.bat TASK-... RR-... .',
+        'Git67 manual --it10-raw: exact bytes and pointer targets are included; review locally before Git upload.',
         'Review ZIP contents before sharing.'
     )
     [IO.File]::WriteAllLines((Join-Path $stage 'README.txt'), [string[]]$notes)
@@ -2112,6 +2158,7 @@ try {
     Write-Host ('[COLLECT] Request: ' + $request)
     Write-Host ('[COLLECT] Matched events: ' + $timeline.Count)
     Write-Host ('[COLLECT] GAR snapshots: ' + @($snapshots).Count)
+    Write-Host ('[COLLECT] IT10 raw: ' + [string]$it10.status + '; blobs=' + [string]$it10.raw_blob_count)
     Write-Host ('[COLLECT] Telegram terminal found: ' + [bool]$telegramSummary.found + '; delivery confirmed: ' + [bool]$telegramSummary.delivery_confirmed)
     Write-Host ('[COLLECT] ZIP: ' + $zip)
     if ($timeline.Count -eq 0) {
