@@ -36,7 +36,8 @@ MINIMAL_REQUIRED = (
     "10d_provider_response_return", "11_minimal_planner_response",
     "11_minimal_parser_input", "12_minimal_decision",
     "13_minimal_admission_input", "13_minimal_admission_output",
-    "13_minimal_pre_dispatch_action",
+    "13_minimal_broker_gate", "13_minimal_pre_dispatch_action",
+    "15_minimal_tool_result_raw", "15_minimal_tool_result_decoded",
 )
 
 
