@@ -274,3 +274,164 @@ def test_p0_blocked_does_not_trigger_delete_or_deployment(tmp_path, monkeypatch)
     blocked_events = [e for e in board["events"] if e["kind"] == "MODEL_BLOCKED"]
     assert len(blocked_events) == 1
     assert blocked_events[0]["blocking_runtime_evidence"]["exit_code"] == 128
+
+
+def test_git_mutate_recognizes_absolute_git_binary_without_readonly_bypass():
+    from agent_core.command_operation import (
+        _looks_like_git, operation_mismatch_detail,
+    )
+    from agent_core.action_dependencies import command_is_proven_observation
+
+    sha = "6b0d680185e40ae654acef03d0eeb9074536fb8e"
+    invocation = (
+        r"& 'C:\smartagent\.venv\git\cmd\git.exe' fetch "
+        "https://github.com/b43120000/test.git " + sha
+    )
+    assert _looks_like_git(invocation)
+    assert operation_mismatch_detail({
+        "operation": "GIT_MUTATE", "command": invocation,
+    }) == ""
+    assert not command_is_proven_observation({
+        "operation": "GIT_INSPECT", "command": invocation,
+    })
+    assert not _looks_like_git("Write-Output 'C:\\tools\\git.exe fetch'")
+    assert operation_mismatch_detail({
+        "operation": "GIT_INSPECT",
+        "command": "git fetch https://github.com/b43120000/test.git " + sha,
+    }).find("INSPECT_contains_explicit_mutation") >= 0
+
+
+def test_positive_readonly_git_merge_base_ancestry_grammar_is_exact():
+    from agent_core.action_dependencies import command_is_proven_observation
+    from agent_core.command_operation import operation_mismatch_detail
+
+    target = "6b0d680185e40ae654acef03d0eeb9074536fb8e"
+    head = "61bbcc24080a7c5b106116a132663ede2844af53"
+    command = "git merge-base --is-ancestor " + target + " " + head
+    assert command_is_proven_observation({
+        "operation": "GIT_INSPECT", "command": command,
+    })
+    assert operation_mismatch_detail({
+        "operation": "GIT_INSPECT", "command": command,
+    }) == ""
+    assert command_is_proven_observation({
+        "operation": "GIT_INSPECT",
+        "command": "git -C 'E:\\AIspace\\cloned_test' merge-base --is-ancestor "
+                   + target + " " + head,
+    })
+    for invalid in [
+        command + "; Remove-Item -Recurse E:\\AIspace",
+        command + " --extra",
+        "git fetch https://github.com/b43120000/test.git " + target,
+        "git merge-base --is-ancestor " + target + " xyz",
+    ]:
+        assert not command_is_proven_observation({
+            "operation": "GIT_INSPECT", "command": invalid,
+        })
+
+
+def test_remote_head_local_graph_ancestry_binds_two_real_runtime_evidence_refs():
+    head = "61bbcc24080a7c5b106116a132663ede2844af53"
+    pin = "6b0d680185e40ae654acef03d0eeb9074536fb8e"
+    head_ref = "MIN-EV-" + "b" * 24
+    ancestry_ref = "MIN-EV-" + "c" * 24
+    remote = github_source_stage_evidence(
+        {
+            "tool": "run_command",
+            "command": "git ls-remote https://github.com/b43120000/test.git HEAD",
+        },
+        _receipt(stdout=head + "\tHEAD\n"), head_ref,
+    )
+    assert remote["remote_head_sha"] == head
+    assert remote["repository"] == "b43120000/test"
+    check = github_source_stage_evidence(
+        {
+            "tool": "run_command",
+            "command": "git merge-base --is-ancestor " + pin + " " + head,
+        },
+        _receipt(stdout=""), ancestry_ref, prior_stages=[remote],
+    )
+    assert check["stage_verified"]
+    assert check["pinned_commit_status"] == "REMOTE_HEAD_ANCESTOR_PROVED"
+    proof = check["source_provenance"]
+    assert proof["repository"] == "b43120000/test"
+    assert proof["pinned_commit"] == pin
+    assert proof["remote_head_sha"] == head
+    assert proof["remote_head_evidence_ref"] == head_ref
+    assert proof["local_ancestry_evidence_ref"] == ancestry_ref
+    assert not proof["credential_identity_verified"]
+
+
+def test_remote_ancestry_cannot_use_unmatched_or_unverified_remote_head():
+    pin = "6b0d680185e40ae654acef03d0eeb9074536fb8e"
+    head = "61bbcc24080a7c5b106116a132663ede2844af53"
+    wrong = "f" * 40
+    source = github_source_stage_evidence(
+        {"tool": "run_command",
+         "command": "git ls-remote https://github.com/b43120000/test.git HEAD"},
+        _receipt(stdout=wrong + "\tHEAD\n"), "MIN-EV-" + "d" * 24,
+    )
+    command = {"tool": "run_command",
+               "command": "git merge-base --is-ancestor " + pin + " " + head}
+    mismatch = github_source_stage_evidence(
+        command, _receipt(stdout=""), "MIN-EV-" + "e" * 24,
+        prior_stages=[source],
+    )
+    assert mismatch["pinned_commit_status"] == "LOCAL_ANCESTRY_ONLY"
+    assert "source_provenance" not in mismatch
+    failed = github_source_stage_evidence(
+        command, _receipt(status="FAILED", stderr="", exit_code=1),
+        "MIN-EV-" + "f" * 24, prior_stages=[source],
+    )
+    assert not failed["stage_verified"]
+    assert "source_provenance" not in failed
+
+
+def test_latest_admission_denial_is_not_reported_as_stale_partial_tool_result():
+    source = SimpleNamespace(action_result_ledger={})
+    events = [
+        {
+            "sequence": 8, "kind": "TOOL_RESULT",
+            "toolName": "inspect_directory",
+            "runtimeEvidence": {
+                "status": "PARTIAL",
+                "reason_code": "DIRECTORY_INSPECTION_INCOMPLETE",
+                "evidence_ref": "MIN-EV-" + "7" * 24,
+                "process": {},
+            },
+        },
+        {
+            "sequence": 14, "kind": "ADMISSION_REJECTED",
+            "toolName": "run_command",
+            "admission_diagnostic": {
+                "stage": "COMMAND_CLASSIFICATION",
+                "reason_code": "GIT_MUTATE_requires_git_command",
+            },
+            "runtimeEvidence": {
+                "status": "REJECTED", "executed": False,
+                "reason_code": "GIT_MUTATE_requires_git_command",
+                "evidence_ref": "",
+            },
+        },
+        {
+            "sequence": 15, "kind": "ADMISSION_REJECTED",
+            "toolName": "run_command",
+            "admission_diagnostic": {
+                "stage": "COMMAND_CLASSIFICATION",
+                "reason_code": "command_not_proven_read_only",
+            },
+            "runtimeEvidence": {
+                "status": "REJECTED", "executed": False,
+                "reason_code": "command_not_proven_read_only",
+                "evidence_ref": "",
+            },
+        },
+    ]
+    result = _blocking_runtime_evidence(source, {"events": events})
+    assert result["status"] == "OBSERVED_ADMISSION_REJECTION"
+    assert result["blackboard_sequence"] == 15
+    assert result["reason_code"] == "command_not_proven_read_only"
+    assert result["evidence_ref"] == ""
+    assert result["executed"] is False
+    assert result["authorization_granted"] is False
+    assert result["exit_code"] is None
