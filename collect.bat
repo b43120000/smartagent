@@ -2061,6 +2061,9 @@ try {
     } catch { $warnings.Add('Git version inspection unavailable.') }
     $fingerprints = [ordered]@{}
     foreach ($relative in @('source\WebAgent\protocol_loop.py',
+                             'source\WebAgent\pokeclaw_executor_loop.py',
+                             'source\agent_core\web_runtime.py',
+                             'source\agent_core\web_ui\message_text.py',
                              'source\agent_core\bounded_repair.py',
                              'source\agent_core\goal_anchored_recovery.py',
                              'source\agent_core\planner_context_snapshot.py',
@@ -2087,6 +2090,7 @@ try {
                              'source\agent_core\web_ui\providers\chatgpt\composer.py',
                              'source\WebAgent\tests\test_git67_raw_evidence_collector.py',
                              'source\WebAgent\tests\test_git67_collect_bat_windows.py',
+                             'source\WebAgent\tests\test_git67_minimal_trace.py',
                              'collect.bat',
                              'config\protocol_manifest.json')) {
         $fp = Join-Path $root $relative
