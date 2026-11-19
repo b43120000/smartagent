@@ -2080,6 +2080,13 @@ try {
                              'source\agent_core\pr_bcd_request_scope.py',
                              'source\agent_core\dependency_adapters.py',
                              'source\agent_core\bp1_observation_terminal.py',
+                             'source\agent_core\path_integrity_trace.py',
+                             'source\agent_core\it10_raw_collector.py',
+                             'source\agent_core\request_context.py',
+                             'source\RemoteAgent\telegram_transport.py',
+                             'source\agent_core\web_ui\providers\chatgpt\composer.py',
+                             'source\WebAgent\tests\test_git67_raw_evidence_collector.py',
+                             'source\WebAgent\tests\test_git67_collect_bat_windows.py',
                              'collect.bat',
                              'config\protocol_manifest.json')) {
         $fp = Join-Path $root $relative
