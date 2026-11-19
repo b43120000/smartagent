@@ -2085,6 +2085,8 @@ try {
                              'source\agent_core\bp1_observation_terminal.py',
                              'source\agent_core\path_integrity_trace.py',
                              'source\agent_core\it10_raw_collector.py',
+                             'source\WebAgent\minimal_decision.py',
+                             'source\RemoteAgent\telegram_webagent_worker.py',
                              'source\agent_core\request_context.py',
                              'source\RemoteAgent\telegram_transport.py',
                              'source\agent_core\web_ui\providers\chatgpt\composer.py',
@@ -2163,13 +2165,22 @@ try {
     )
     [IO.File]::WriteAllLines((Join-Path $stage 'README.txt'), [string[]]$notes)
     $shortId = if ($task) { $task } elseif ($request) { $request } else { 'UNKNOWN' }
-    $zip = Join-Path $outputDir ('GAR_LIVE_RCA_' + $stamp + '_' + $shortId + '.zip')
-    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
+    # Unique output on EVERY invocation. Do not overwrite a same-second
+    # automatic sanitized ZIP with a manual raw evidence ZIP (or vice versa).
+    $zipNonce = [guid]::NewGuid().ToString('N').Substring(0, 12)
+    $zip = Join-Path $outputDir ('GAR_LIVE_RCA_' + $stamp + '_' + $shortId + '_' + $zipNonce + '.zip')
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
     Write-Host ('[COLLECT] Task: ' + $task)
     Write-Host ('[COLLECT] Request: ' + $request)
     Write-Host ('[COLLECT] Matched events: ' + $timeline.Count)
     Write-Host ('[COLLECT] GAR snapshots: ' + @($snapshots).Count)
     Write-Host ('[COLLECT] IT10 raw: ' + [string]$it10.status + '; blobs=' + [string]$it10.raw_blob_count)
+    if ($collectIt10Raw) {
+        Write-Host ('[COLLECT] IT10 missing stages: ' + @($it10.missing_stages).Count)
+        Write-Host ('[COLLECT] IT10 missing raw stages: ' + @($it10.missing_raw_stages).Count)
+        Write-Host ('[COLLECT] IT10 pointer errors: ' + @($it10.missing_refs).Count)
+        Write-Host '[COLLECT] IT10 boundary matrix: it10_boundary_matrix.json (inside ZIP)'
+    }
     Write-Host ('[COLLECT] Telegram terminal found: ' + [bool]$telegramSummary.found + '; delivery confirmed: ' + [bool]$telegramSummary.delivery_confirmed)
     Write-Host ('[COLLECT] ZIP: ' + $zip)
     if ($timeline.Count -eq 0) {
