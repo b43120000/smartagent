@@ -102,7 +102,12 @@ class TelegramBotClient:
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
         try:
             with self._opener(request, timeout=timeout) as response:
-                body = json.loads(response.read().decode("utf-8"))
+                raw_http_body = response.read()
+                # Preserve the original response-body bytes before UTF-8 / JSON decode.
+                # Only a locally armed IT10 request may later persist them.
+                if method == "getUpdates":
+                    PIT.note_telegram_http_body(raw_http_body)
+                body = json.loads(raw_http_body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             description = ""
             try:
@@ -296,6 +301,10 @@ class TelegramUpdateAdapter:
         is_admin_cmd = is_direct_cmd_request(raw_text)
         visible_trace = "[TG_DIRECT_CMD_REDACTED]" if is_admin_cmd else raw_text
         PIT.begin(visible_trace, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
+        if not is_admin_cmd:
+            # Called only after the adapter has authorized this sender.
+            # Mixed Telegram updates intentionally remain UNOBSERVED.
+            PIT.capture_telegram_http_body(update_id, raw_text)
         PIT.record("02_telegram_message_text", visible_trace, extra={
             "update_id": update_id, "message_id": message.get("message_id"),
             "direct_cmd_redacted": is_admin_cmd,
