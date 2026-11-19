@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from agent_core import path_integrity_trace as PIT
 from agent_core.it10_raw_collector import collect
+from agent_core.request_context import RequestContextStore
 from RemoteAgent.telegram_transport import TelegramBotClient, TelegramReceiverConfig, TelegramUpdateAdapter
 
 
@@ -80,6 +81,20 @@ class RawCollectorTests(unittest.TestCase):
         self.assertTrue((self.stage / "it10/raw" / row["raw_blob_ref"]).is_file())
         self.assertEqual((self.stage / "it10/raw" / row["raw_blob_ref"]).read_bytes(), original)
         self.assertEqual(len(result["missing_refs"]), 0)
+
+    def test_request_context_pointer_resolves_original_file_bytes(self):
+        store = RequestContextStore(self.root / "contexts", RID, "epoch", REQUEST)
+        path = str(self.root / "probe.txt")
+        reference = store.remember("path", path, "USER_REQUEST")
+        original = store.path.read_bytes()
+        self.assertEqual(store.resolve("path", reference), path)
+        rows = [row for row in self._rows() if row["stage"] == "12a_request_context_file_bytes"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["raw_origin"], "REQUEST_CONTEXT_FILE_BYTES")
+        self.assertEqual((self.private / rows[0]["raw_blob_ref"]).read_bytes(), original)
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["raw_blob_count"], 1)
+        self.assertEqual((self.stage / "it10/raw" / rows[0]["raw_blob_ref"]).read_bytes(), original)
 
     def test_unarmed_raw_is_not_persisted(self):
         with patch.dict(os.environ, {"SMARTAGENT_IT10_PATH_TRACE_RAW": "NO"}):
