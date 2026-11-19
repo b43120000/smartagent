@@ -11,7 +11,7 @@ from collections.abc import Mapping
 
 
 def github_source_stage_evidence(action: Mapping, receipt: Mapping,
-                                 evidence_ref: str) -> dict | None:
+                                 evidence_ref: str, *, prior_stages=()) -> dict | None:
     if action.get("tool") != "run_command":
         return None
     command = str(action.get("command") or "")
@@ -22,7 +22,14 @@ def github_source_stage_evidence(action: Mapping, receipt: Mapping,
     is_hash = bool(re.search(r"(?i)\bGet-FileHash\b", command))
     if not is_git and not is_hash:
         return None
-    if is_git and re.search(r"(?i)\bls-remote\b", command):
+    ancestry = re.fullmatch(
+        r"(?i)git\s+(?:-C\s+(?:'[^'\r\n]+'|\"[^\"\r\n]+\")\s+)?"
+        r"merge-base\s+--is-ancestor\s+([0-9a-f]{40})\s+([0-9a-f]{40})",
+        command.strip(),
+    )
+    if is_git and ancestry:
+        stage = "LOCAL_COMMIT_ANCESTRY"
+    elif is_git and re.search(r"(?i)\bls-remote\b", command):
         stage = "REMOTE_REFS"
     elif is_git and re.search(r"(?i)\bfetch\b", command):
         stage = "REMOTE_FETCH"
@@ -83,6 +90,50 @@ def github_source_stage_evidence(action: Mapping, receipt: Mapping,
             result["dns_status"] = "RESOLVED_THIS_REQUEST"
             result["repo_read_status"] = "REMOTE_REFS_READ"
             result["ref_count"] = len(refs)
+            # Only the positively classified exact HTTPS HEAD read may
+            # anchor a later local ancestry result to a remote repository.
+            from agent_core.action_resolution_trace import (
+                exact_remote_git_read_repository,
+            )
+            repository = exact_remote_git_read_repository(command)
+            heads = [
+                line.split()[0].lower()
+                for line in refs if line.split()[-1] == "HEAD"
+            ]
+            if repository and len(heads) == 1:
+                result["repository"] = repository
+                result["remote_head_sha"] = heads[0]
+    elif stage == "LOCAL_COMMIT_ANCESTRY":
+        # Exit 0 from Git's --is-ancestor verifies the local commit DAG.
+        # Remote attribution additionally requires a prior real GitHub HEAD
+        # receipt in the same task, with the exact descendant hash.
+        verified = bool(ancestry)
+        if verified:
+            ancestor, descendant = (x.lower() for x in ancestry.groups())
+            result["ancestor_sha"] = ancestor
+            result["descendant_sha"] = descendant
+            result["pinned_commit_status"] = "LOCAL_ANCESTRY_ONLY"
+            for earlier in reversed(list(prior_stages or ())):
+                if not isinstance(earlier, Mapping):
+                    continue
+                if (earlier.get("schema") != result["schema"]
+                        or earlier.get("stage") != "REMOTE_REFS"
+                        or earlier.get("stage_verified") is not True
+                        or earlier.get("remote_head_sha") != descendant
+                        or not earlier.get("repository")
+                        or not earlier.get("evidence_ref")):
+                    continue
+                result["pinned_commit_status"] = "REMOTE_HEAD_ANCESTOR_PROVED"
+                result["source_provenance"] = {
+                    "repository": earlier["repository"],
+                    "pinned_commit": ancestor,
+                    "remote_head_sha": descendant,
+                    "remote_head_evidence_ref": earlier["evidence_ref"],
+                    "local_ancestry_evidence_ref": evidence_ref,
+                    "proof_kind": "GIT_HASH_CHAIN_FROM_AUTHENTICATED_REMOTE_REF",
+                    "credential_identity_verified": False,
+                }
+                break
     elif stage == "REMOTE_FETCH":
         # Exit 0 does not establish which object was fetched.
         result["status"] = "FETCH_EXIT_ZERO_OBJECT_UNVERIFIED"
