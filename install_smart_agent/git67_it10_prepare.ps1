@@ -40,7 +40,7 @@ try {
     $allowedSids = @($current.Value, $system.Value, $admins.Value)
     $phase = 'REBUILD_ACL'
     $phase = 'REBUILD_GET_ACL'
-    $acl = Get-Acl -LiteralPath $root
+    $acl = [System.IO.Directory]::GetAccessControl($root)
     # Do not inherit permissions from the general-purpose diagnostics dir.
     $phase = 'REBUILD_PROTECT'
     $acl.SetAccessRuleProtection($true, $false)
@@ -62,9 +62,9 @@ try {
         $phase = 'REBUILD_CREATE_RULES'
     }
     $phase = 'APPLY_ACL'
-    Set-Acl -LiteralPath $root -AclObject $acl
+    [System.IO.Directory]::SetAccessControl($root, $acl)
     $phase = 'VERIFY_ACL'
-    $checked = Get-Acl -LiteralPath $root
+    $checked = [System.IO.Directory]::GetAccessControl($root)
     if (-not $checked.AreAccessRulesProtected) {
         throw 'PRIVATE_ACL_INHERITANCE_NOT_DISABLED'
     }
