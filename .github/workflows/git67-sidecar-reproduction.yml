@@ -17,6 +17,11 @@ on:
       - 'source/WebAgent/tests/test_git67_collect_bat_windows.py'
       - 'source/WebAgent/tests/test_git67_minimal_trace.py'
       - 'source/WebAgent/tests/test_git67_missing_slash_guard.py'
+      - 'source/WebAgent/tests/test_git67_init_publish.py'
+      - 'source/agent_core/it10_auto_publish.py'
+      - 'source/agent_core/auto_rca_upload.py'
+      - 'init.bat'
+      - 'install_smart_agent/git67_it10_prepare.ps1'
       - 'source/WebAgent/minimal_decision.py'
       - 'source/WebAgent/pokeclaw_executor_loop.py'
       - 'source/agent_core/web_runtime.py'
@@ -70,6 +75,9 @@ jobs:
           source/WebAgent/tests/test_git67_collect_bat_windows.py
           source/WebAgent/tests/test_git67_minimal_trace.py
           source/WebAgent/tests/test_git67_missing_slash_guard.py
+          source/WebAgent/tests/test_git67_init_publish.py
+          source/agent_core/it10_auto_publish.py
+          source/agent_core/auto_rca_upload.py
           source/WebAgent/minimal_decision.py
           source/WebAgent/pokeclaw_executor_loop.py
           source/agent_core/web_runtime.py
@@ -90,6 +98,8 @@ jobs:
           source/WebAgent/tests/test_git67_raw_evidence_collector.py
           source/WebAgent/tests/test_git67_minimal_trace.py
           source/WebAgent/tests/test_git67_missing_slash_guard.py
+          source/WebAgent/tests/test_git67_init_publish.py
+          source/WebAgent/tests/test_auto_rca_upload.py
       - name: Windows PowerShell 5.1 collector ZIP smoke
         if: runner.os == 'Windows'
         run: >-
