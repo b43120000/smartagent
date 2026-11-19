@@ -75,9 +75,17 @@ def test_real_minimal_planner_parser_admission_and_dispatch_boundaries(tmp_path,
         return blob
     assert raw("11_minimal_planner_response") == model_reply.encode("utf-8")
     assert raw("11_minimal_parser_input") == raw("11_minimal_planner_response")
-    for stage in ("12_minimal_decision", "13_minimal_admission_input",
-                  "13_minimal_admission_output", "13_minimal_pre_dispatch_action"):
-        assert PATH in raw(stage).decode("utf-8")
+    # JSON serialized values escape backslashes; decode first before making
+    # a character-fidelity assertion (never compare a JSON escape as a literal).
+    parsed = json.loads(raw("12_minimal_decision").decode("utf-8"))
+    assert parsed["arguments"]["path"] == PATH
+    proposal = json.loads(raw("13_minimal_admission_input").decode("utf-8"))
+    assert proposal["path"] == PATH
+    admission = json.loads(raw("13_minimal_admission_output").decode("utf-8"))
+    assert admission["original_proposed_action"]["path"] == PATH
+    assert admission["admitted_action"]["path"] == PATH
+    dispatch = json.loads(raw("13_minimal_pre_dispatch_action").decode("utf-8"))
+    assert dispatch["path"] == PATH
     stage = tmp_path / "collector_stage"
     stage.mkdir()
     index = collect(loop.task_id, loop.run_id, private, stage)
