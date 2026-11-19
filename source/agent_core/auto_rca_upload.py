@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import subprocess
 import uuid
@@ -44,8 +45,16 @@ def collect_and_upload(task_id: str, request_id: str, *, collector: Path = COLLE
         if not collector.is_file():
             raise ValueError("HARDCODED_COLLECTOR_NOT_FOUND")
         result["phase"] = "COLLECT"
+        # This automatic worker-terminal upload is intentionally the legacy
+        # *sanitized* two-argument collector, even if the worker inherited an
+        # operator's IT10 initialized CMD session. Manual collect.bat separately
+        # activates derived IT10 publication; never recursively auto-upload raw.
+        safe_env = os.environ.copy()
+        safe_env["SMARTAGENT_IT10_AUTO_PUBLISH"] = "OFF"
+        safe_env["SMARTAGENT_IT10_PATH_TRACE_RAW"] = "NO"
         completed = run(["cmd.exe", "/d", "/c", str(collector), task_id, request_id],
-                        capture_output=True, text=True, errors="replace", timeout=180)
+                        capture_output=True, text=True, errors="replace",
+                        timeout=180, env=safe_env)
         if completed.returncode != 0:
             raise ValueError("COLLECTOR_EXIT_NONZERO")
         matches = _ZIP_LINE.findall(completed.stdout or "")
