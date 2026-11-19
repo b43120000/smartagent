@@ -115,6 +115,8 @@ def test_legacy_v1_still_rejects_history_beyond_64(tmp_path, monkeypatch):
 
 def test_v2_does_not_accept_missing_goal_checks(tmp_path, monkeypatch):
     loop, goal, board, canonical, checks, refs = _fixture(monkeypatch)
+    # Proposal and comparator arguments must represent the SAME submitted Finish.
+    canonical["planner_intent"]["goal_checks"] = None
     result = compare_runtime_finish(
         loop, tmp_path, goal, None, allow_open=True,
         canonical_finish=canonical,
@@ -128,6 +130,7 @@ def test_v2_does_not_accept_missing_goal_checks(tmp_path, monkeypatch):
 def test_v2_never_overrides_runtime_mismatch(tmp_path, monkeypatch):
     loop, goal, board, canonical, checks, refs = _fixture(monkeypatch)
     wrong = [dict(checks[0], expected=False)]
+    canonical["planner_intent"]["goal_checks"] = wrong
     result = compare_runtime_finish(
         loop, tmp_path, goal, None, goal_checks=wrong,
         allow_open=True, canonical_finish=canonical,
@@ -176,3 +179,48 @@ def test_v2_parser_and_legacy_parser_fails_closed():
         }))
     with pytest.raises(MinimalDecisionError, match="finish_contract_version_invalid"):
         parse_minimal_decision('{"type":"finish","contract_version":3,"summary":"done"}')
+
+
+def test_v2_rejects_mismatched_proposal_arguments(tmp_path, monkeypatch):
+    loop, goal, board, canonical, checks, refs = _fixture(monkeypatch)
+    wrong = [dict(checks[0], expected=False)]
+    result = compare_runtime_finish(
+        loop, tmp_path, goal, None, goal_checks=wrong,
+        allow_open=True, canonical_finish=canonical,
+    )
+    assert result["verdict"] == "FAIL"
+    assert result["reason_code"] == "CANONICAL_FINISH_PROPOSAL_MISMATCH"
+
+
+def test_v1_small_finish_still_passes_with_exact_claims(tmp_path, monkeypatch):
+    loop, goal, board, canonical, checks, refs = _fixture(monkeypatch, 1)
+    expected_runtime = [{
+        "evidence_ref": refs[0],
+        "fields": {
+            "status": "SUCCEEDED",
+            "data.observed_exists": True,
+        },
+    }]
+    result = compare_runtime_finish(
+        loop, tmp_path, goal, expected_runtime,
+        goal_checks=checks, allow_open=True,
+    )
+    assert result["verdict"] == "PASS", result
+    assert result["evidence_refs"] == refs
+
+
+def test_v1_small_finish_wrong_claim_fails(tmp_path, monkeypatch):
+    loop, goal, board, canonical, checks, refs = _fixture(monkeypatch, 1)
+    expected_runtime = [{
+        "evidence_ref": refs[0],
+        "fields": {
+            "status": "SUCCEEDED",
+            "data.observed_exists": False,
+        },
+    }]
+    result = compare_runtime_finish(
+        loop, tmp_path, goal, expected_runtime,
+        goal_checks=checks, allow_open=True,
+    )
+    assert result["verdict"] == "FAIL"
+    assert result["reason_code"] == "MODEL_RUNTIME_MISMATCH"
