@@ -116,12 +116,18 @@ NOT the legacy protocol_loop.py planner/parser. Added opt-in stages:
 - 13_minimal_admission_input: original proposed action and its path
 - 13_minimal_admission_output: unchanged admission decision and any
   actual admitted action; no authority granted by this trace
+- 13_minimal_broker_gate: the actual OS broker admission outcome
 - 13_minimal_pre_dispatch_action: final action immediately BEFORE the
   existing real Runtime dispatcher
+- 15_minimal_tool_result_raw: the exact return value from the Runtime
+  dispatch function (pre-decode; not an OS wire packet)
+- 15_minimal_tool_result_decoded: decoded Runtime ToolResult semantics;
+  do not mix this JSON serialization with the raw dispatcher output
 
 The opt-in stage collector now detects MINIMAL_EXECUTOR vs
-LEGACY_OR_UNKNOWN and provides counts, missing stages, and exact pointer
-closure. It always lists phone-side transport bytes and the raw model-service
+LEGACY_OR_UNKNOWN and provides counts, missing stages, missing raw blobs
+(including a logged stage whose blob is empty or unavailable), and verified
+pointer closure. A stage name alone never establishes byte-exact evidence. It always lists phone-side transport bytes and the raw model-service
 server output as unobserved external boundaries: a browser DOM extraction is
 not access to those upstream bytes.
 
