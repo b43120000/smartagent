@@ -36,6 +36,9 @@ jobs:
           source/WebAgent/minimal_decision.py
           source/WebAgent/pokeclaw_executor_loop.py
           source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
+      - name: Validate source protocol manifest with new adapter
+        run: >-
+          python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; from pathlib import Path; print(validate_protocol_manifest(Path.cwd()))"
       - name: Git68 and inherited Finish regressions
         run: >-
           python -B -m pytest -q
