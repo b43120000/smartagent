@@ -23,14 +23,20 @@ _telegram_http_pending = threading.local()
 _MAX_RAW_BYTES = 2 * 1024 * 1024
 _RAW_STAGES = frozenset({
     "01_sender_input", "02_telegram_message_text", "03_receiver_normalized",
+    "06a_worker_protocol_manifest_result", "06b_worker_loaded_source_attestation",
+    "06c_worker_writer_attestation_gate",
     "04_gateway_input", "05_task_store", "06_worker_input", "07_loop_input",
     "08_user_request_block", "08_minimal_prompt", "09_composer_input", "09_composer_primary",
     "09_composer_semantic", "09_composer_dom_textContent",
     "09_composer_dom_innerHTML", "10_submitted_innerText", "10_submitted_textContent",
     "10_submitted_innerHTML",
     "10d_provider_response_return",
+    "10c_answer_content_innerHTML", "10c_answer_content_textContent",
+    "10c_answer_content_innerText", "10c_answer_adapter_value",
     "11_planner_response", "11_parser_input",
     "11_minimal_planner_response", "11_minimal_parser_input",
+    "11_minimal_json_candidate_raw", "11_minimal_candidate_before_json_decode",
+    "11_minimal_json_decoded", "11_minimal_path_integrity_rejected",
     "12_minimal_decision", "12_minimal_parse_error",
     "13_minimal_admission_input", "13_minimal_admission_output",
     "13_minimal_pre_dispatch_action", "13_minimal_broker_gate",
@@ -354,7 +360,7 @@ def record(stage, value, *, evidence_status="RAW_INPUT", paths=None, extra=None)
             row["fragment_truncated"] = len(text) > 8000
         if extra:
             # Callers supply only selected Update identity/entities, never tokens.
-            row["extra"] = {k: extra[k] for k in ("update_id", "message_id", "entities", "caption_entities", "action_id", "round", "chunk_start", "chunk_end", "field") if k in extra}
+            row["extra"] = {k: extra[k] for k in ("update_id", "message_id", "entities", "caption_entities", "action_id", "round", "candidate_index", "chunk_start", "chunk_end", "field") if k in extra}
             for key in ("entities", "caption_entities"):
                 if key in row["extra"]:
                     entities = row["extra"][key]
