@@ -209,7 +209,8 @@ def record_bytes(stage: str, original: bytes, *, origin: str, extra=None):
         active, settings = _scope.get(), _settings()
         if not active or not settings or not _raw_enabled() or not isinstance(original, bytes):
             return
-        if origin not in {"TELEGRAM_GETUPDATES_HTTP_RESPONSE_BODY"}:
+        if origin not in {"TELEGRAM_GETUPDATES_HTTP_RESPONSE_BODY",
+                          "REQUEST_CONTEXT_FILE_BYTES"}:
             return
         frame = sys._getframe(1)
         row = {
