@@ -33,7 +33,9 @@ _RAW_STAGES = frozenset({
     "11_minimal_planner_response", "11_minimal_parser_input",
     "12_minimal_decision", "12_minimal_parse_error",
     "13_minimal_admission_input", "13_minimal_admission_output",
-    "13_minimal_pre_dispatch_action", "12_request_context",
+    "13_minimal_pre_dispatch_action", "13_minimal_broker_gate",
+    "15_minimal_tool_result_raw", "15_minimal_tool_result_decoded",
+    "12_request_context",
     "13_field_refs_expanded",
 })
 
