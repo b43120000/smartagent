@@ -15,7 +15,7 @@ from collections.abc import Mapping
 
 from agent_core.executor_run_blackboard import (
     _safe_arguments, begin_executor_run, append_executor_event,
-    finish_executor_run, record_finish_comparison, projection,
+    finish_executor_run, record_finish_comparison, projection, read_executor_run,
 )
 from agent_core.task_progress import set_runtime_state
 from agent_core import path_integrity_trace as PIT
@@ -960,10 +960,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "round": turn, "kind": "MODEL_BLOCKED",
                 "reason_sha256": _digest(decision.message),
                 "blocking_runtime_evidence": _blocking_runtime_evidence(
-                    loop, __import__(
-                        "agent_core.executor_run_blackboard",
-                        fromlist=["read_executor_run"],
-                    ).read_executor_run(
+                    loop, read_executor_run(
                         root, task_id=loop.task_id, request_id=loop.run_id,
                         task_epoch=loop.task_epoch,
                     )
@@ -1631,7 +1628,22 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "evidence_status": "ACTIVE",
             "evidence_ref": evidence_ref,
         }
-        github_stage = github_source_stage_evidence(action, receipt, evidence_ref)
+        # Link only to previously persisted ToolResult stages for this exact
+        # Task / Request / Epoch. Model summaries carry no provenance.
+        prior_board = read_executor_run(
+            root, task_id=loop.task_id, request_id=loop.run_id,
+            task_epoch=loop.task_epoch,
+        ) or {}
+        prior_stages = [
+            row["github_source_stage_evidence"]
+            for row in prior_board.get("events", ())
+            if isinstance(row, Mapping)
+            and row.get("kind") == "TOOL_RESULT"
+            and isinstance(row.get("github_source_stage_evidence"), Mapping)
+        ]
+        github_stage = github_source_stage_evidence(
+            action, receipt, evidence_ref, prior_stages=prior_stages,
+        )
         row = append_executor_event(root, loop, {
             "round": turn, "kind": "TOOL_RESULT",
             "toolName": action["tool"], "action_id": action["action_id"],
