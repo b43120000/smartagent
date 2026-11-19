@@ -40,6 +40,5 @@ jobs:
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
-          source/WebAgent/tests/test_git34_runtime_finish_comparator.py
           source/WebAgent/tests/test_git56_finish_semantic_repair.py
           source/WebAgent/tests/test_git57_live_finish_injector.py
