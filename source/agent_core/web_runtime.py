@@ -5303,6 +5303,8 @@ class WebLLMScraper:
             print(f"  [WebScraper] 等待 {self.service} 回應...", flush=True)
             stage = "generation"
             response = self._wait_for_response_complete(snapshot, protocol_expected=protocol_expected)
+            PIT.record("10d_provider_response_return", response,
+                       evidence_status="BROWSER_EXTRACTED_PROVIDER_RESULT")
             for record in attachment_records:
                 attachment_transaction.transition(
                     record.attachment_id, "CONSUMED",
