@@ -13,6 +13,7 @@ from unittest.mock import patch
 from agent_core import path_integrity_trace as PIT
 from agent_core.it10_raw_collector import collect
 from agent_core.request_context import RequestContextStore
+from agent_core.web_ui.providers.chatgpt.composer import read_composer_snapshot
 from RemoteAgent.telegram_transport import TelegramBotClient, TelegramReceiverConfig, TelegramUpdateAdapter
 
 
@@ -95,6 +96,24 @@ class RawCollectorTests(unittest.TestCase):
         result = collect(TASK, RID, self.private, self.stage)
         self.assertEqual(result["raw_blob_count"], 1)
         self.assertEqual((self.stage / "it10/raw" / rows[0]["raw_blob_ref"]).read_bytes(), original)
+
+    def test_composer_raw_dom_and_semantic_views_remain_separate(self):
+        inner_html = "<p>E:\\AIspace\\.case_d_backups</p><p>下一行</p>"
+        text_content = "E:\\AIspace\\.case_d_backups下一行"
+        class Locator:
+            def evaluate(self, script):
+                if "innerHTML:" in script:
+                    return {"innerHTML": inner_html, "textContent": text_content}
+                return {"primary": "E:\\AIspace\\.case_d_backups\n下一行",
+                        "semantic": "E:\\AIspace\\.case_d_backups\n下一行"}
+        snapshot = read_composer_snapshot(Locator())
+        self.assertIn(".case_d_backups", snapshot.primary_text)
+        observed = {row["stage"]: row for row in self._rows()}
+        for stage, exact in (("09_composer_dom_innerHTML", inner_html),
+                             ("09_composer_dom_textContent", text_content)):
+            self.assertEqual(observed[stage]["evidence_status"], "DOM_SERIALIZATION")
+            blob = self.private / observed[stage]["raw_blob_ref"]
+            self.assertEqual(blob.read_bytes(), exact.encode("utf-8"))
 
     def test_unarmed_raw_is_not_persisted(self):
         with patch.dict(os.environ, {"SMARTAGENT_IT10_PATH_TRACE_RAW": "NO"}):
