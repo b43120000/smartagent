@@ -28,6 +28,7 @@ from agent_core.finish_contract_adapter_v2 import adapt_finish_contract_v2
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
+from .github_stage_diagnostics import github_source_stage_evidence
 
 
 def _digest(value: object) -> str:
@@ -172,6 +173,14 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         'Finish for eligible text: {"type":"finish","summary":"the complete answer","expected_runtime":[]}\n'
         'Blocked: {"type":"blocked","reason":"specific tool/error blocker"}\n'
         "No Markdown fences, no invented observations, no claimed success without results.\n"
+        "For pinned GitHub fixture deployment, verify source preconditions before "
+        "any deletion: GitHub DNS/reachability, repository read access, the exact "
+        "commit object, commit-tree archive blob, and local archive Git blob/SHA256 "
+        "must have separate real Evidence references. A successful ls-remote "
+        "only proves remote refs were read, NOT that an arbitrary commit or ZIP "
+        "was verified. A local Git object/hash only proves local identity; "
+        "match it explicitly to the pinned remote tree and requested checksum. "
+        "Treat failed required preflight as blocked; never delete or deploy.\n"
         "Observe first; decide from actual ToolResult. If missing, a permitted "
         "tool may create the requested target. Independently inspect after mutation. "
         "Use observe_fact for exact file existence and type. For an inspect_directory "
@@ -1574,11 +1583,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "evidence_status": "ACTIVE",
             "evidence_ref": evidence_ref,
         }
+        github_stage = github_source_stage_evidence(action, receipt, evidence_ref)
         row = append_executor_event(root, loop, {
             "round": turn, "kind": "TOOL_RESULT",
             "toolName": action["tool"], "action_id": action["action_id"],
             "toolResult": tool_result,
             "evidence_store": dict(evidence_pointer),
+            **({"github_source_stage_evidence": github_stage} if github_stage else {}),
             **({"command_execution_rca": capture_command_result_rca(
                 raw_result, receipt,
             )} if action["tool"] == "run_command" else {}),
@@ -1666,6 +1677,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "action_id": action["action_id"],
             "toolResult": tool_result, "evidence_ref": evidence_ref,
             "evidence_store_status": evidence_pointer.get("store_status"),
+            **({"github_source_stage_evidence": github_stage} if github_stage else {}),
         })
         loop.protocol_state = "OBSERVED"
         loop.executor_result = {
