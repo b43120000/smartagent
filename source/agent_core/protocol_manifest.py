@@ -37,6 +37,8 @@ CORE_FILES = (
 
     # Minimal Core v10 and Tri-One terminal admission are security-critical.
     'source/WebAgent/minimal_decision.py',
+    'source/WebAgent/pokeclaw_executor_loop.py',
+    'source/WebAgent/github_stage_diagnostics.py',
     'source/WebAgent/minimal_admission.py',
     'source/WebAgent/minimal_core_loop.py',
     'source/WebAgent/minimal_goal_driver.py',
