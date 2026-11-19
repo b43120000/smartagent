@@ -1,0 +1,241 @@
+{
+  "schema": "GIT67_PATH_LOCALIZATION_V1",
+  "git_head": "9e370d46052dcc3e9d6e6902a0fe6bc37fcf43f0",
+  "harness_source_sha256": "39babd348dbf77a5bb4bb003085d97a16f585512b952c03a4910bc542207962c",
+  "test_run_id": "git67_path_localization_20261119_04",
+  "browser": "PASS_ISOLATED_DOM",
+  "counts": {
+    "HISTORICAL_PASS": 14,
+    "LIVE_INCONCLUSIVE": 15,
+    "SIMULATED_INCONCLUSIVE": 7,
+    "SIMULATED_PASS": 129
+  },
+  "live_executed_count": 0,
+  "simulated_form_cases": 7,
+  "synthetic_response_cases": 18,
+  "historical_task_cases": 2,
+  "PATH_CORRUPTION_FIRST_CONFIRMED_STAGE": "T5_source_user_command_ALREADY_BAD",
+  "PATH_CORRUPTION_FIRST_MISMATCH_INTERVAL": "UNOBSERVED_SENDER_INPUT_TO_T5; no paired correct-to-bad historical transition",
+  "PATH_CORRUPTION_ROOT_CAUSE_CLASS": "UNKNOWN_INSUFFICIENT_EVIDENCE",
+  "CONTINUATION_KEYERROR_REPRODUCTION": "REAL_HISTORICAL_LEDGER_REPRODUCED",
+  "RCA_CONCLUSION_CONSISTENCY": "CONSISTENT_WITH_PRIOR_UNKNOWN_AND_INDEPENDENT_RESTORE_FAILURE",
+  "it10": {
+    "controlled_offline_probe": "PASS",
+    "source": {
+      "file": "source\\agent_core\\path_integrity_trace.py",
+      "function": "record",
+      "line": 201
+    },
+    "controlled_trace_sample": {
+      "schema": "SMARTAGENT_IT10_PATH_TRACE_V1",
+      "trace_id": "SIDECAR-IT10-CONTROL-3af02ae4a2fc8802e8cdd68d",
+      "request_id": "RR-SIDECAR-TRACE",
+      "task_id": "TASK-SIDECAR-TRACE",
+      "transport": "",
+      "event_id": "5a244801a321437a97c33ecc6f2294be",
+      "pid": 33396,
+      "stage": "02_telegram_message_text",
+      "timestamp": 1795067973.202638,
+      "evidence_status": "RAW_INPUT",
+      "raw_utf8_sha256": "3af02ae4a2fc8802e8cdd68db36410f54cb2a35f20c73ece2b67eaedb46aa1f8",
+      "raw_utf8_byte_length": 81,
+      "unicode_codepoint_length": 81,
+      "normalized_comparison_sha256": "ed0445fb1ad4903a4bbb273af330414149a733e9862ec3deaab6442e9c27ebd7",
+      "source_file": "C:\\smartagent\\source\\WebAgent\\tests\\sidecar_git67_path_localization.py",
+      "source_function": "trace_probe",
+      "path_values": [
+        {
+          "value": "E:\\AIspace\\.case_d_backups",
+          "path_value_sha256": "15824c0b99e164dd97180ef8b6605463378fa06c2ec17722baf1dbe345687577",
+          "path_codepoints": [
+            "U+0045",
+            "U+003A",
+            "U+005C",
+            "U+0041",
+            "U+0049",
+            "U+0073",
+            "U+0070",
+            "U+0061",
+            "U+0063",
+            "U+0065",
+            "U+005C",
+            "U+002E",
+            "U+0063",
+            "U+0061",
+            "U+0073",
+            "U+0065",
+            "U+005F",
+            "U+0064",
+            "U+005F",
+            "U+0062",
+            "U+0061",
+            "U+0063",
+            "U+006B",
+            "U+0075",
+            "U+0070",
+            "U+0073"
+          ]
+        }
+      ],
+      "path_value_sha256": "15824c0b99e164dd97180ef8b6605463378fa06c2ec17722baf1dbe345687577",
+      "path_codepoints": [
+        "U+0045",
+        "U+003A",
+        "U+005C",
+        "U+0041",
+        "U+0049",
+        "U+0073",
+        "U+0070",
+        "U+0061",
+        "U+0063",
+        "U+0065",
+        "U+005C",
+        "U+002E",
+        "U+0063",
+        "U+0061",
+        "U+0073",
+        "U+0065",
+        "U+005F",
+        "U+0064",
+        "U+005F",
+        "U+0062",
+        "U+0061",
+        "U+0063",
+        "U+006B",
+        "U+0075",
+        "U+0070",
+        "U+0073"
+      ],
+      "test_input_fragment": "NLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\nE:\\AIspace\\.case_d_backups",
+      "fragment_truncated": false,
+      "extra": {
+        "update_id": 111,
+        "message_id": 222
+      }
+    },
+    "production_settings_changed": false,
+    "acl_changed": false,
+    "acknowledgement": "Synthetic diagnostic fixture only, not a live ACL attestation",
+    "live_T1_hook": "OBSERVATION_GAP",
+    "reason": "TelegramBotClient._call reads body inside JSON decode; IT10 begins at decoded message.text.",
+    "minimum_hook": "Select opted-in update inside _call and retain its original HTTP-body evidence in a private controlled collector. Record message/update/case identity. Do not retain unrelated batch messages."
+  },
+  "history": {
+    "A": {
+      "status": "HISTORICAL_REPLAY_COMPLETED",
+      "request_sha256": "01ba6338d521f40c25e8f56c274a73562d6f1147273d32fdbd0c721914db741a",
+      "request_sha_matches": true,
+      "source_file_sha256": "c647eb70f4f7743bf23c90770421e0236495c8d065c34e851c5673589ffca73c",
+      "continuation_file_sha256": "51ee4dc6d8749ed86f5d61ab866dad1f4381a6e0b3721b0da33b20044530d9d9",
+      "source_result_count": 12,
+      "missing_action_digest_count": 12,
+      "restore_result": {
+        "status": "KEYERROR_ACTION_DIGEST_REPRODUCED",
+        "exception_type": "KeyError",
+        "exception_value": "'action_digest'",
+        "traceback": "Traceback (most recent call last):\n  File \"C:\\smartagent\\source\\WebAgent\\tests\\sidecar_git67_reproduction.py\", line 86, in restore_once\n    WebAgentProtocolLoop._restore_continuation(loop)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\smartagent\\source\\WebAgent\\protocol_loop.py\", line 1110, in _restore_continuation\n    'signature': record['action_digest'], 'result': json.dumps(record, ensure_ascii=False),\n                 ~~~~~~^^^^^^^^^^^^^^^^^\nKeyError: 'action_digest'\n",
+        "executed_tools": 0,
+        "source_ledger_unchanged": true
+      },
+      "relevant_frames": [
+        "    WebAgentProtocolLoop._restore_continuation(loop)",
+        "  File \"C:\\smartagent\\source\\WebAgent\\protocol_loop.py\", line 1110, in _restore_continuation",
+        "    'signature': record['action_digest'], 'result': json.dumps(record, ensure_ascii=False),",
+        "KeyError: 'action_digest'"
+      ],
+      "parser_normalization": "NONE",
+      "browser_extracted_create_directory_json": "{\"type\":\"tool_call\",\"name\":\"create_directory\",\"arguments\":{\"path\":\"E:\\\\AIspace.case_d_backups\"}}",
+      "browser_response_sha256": "9ca381b8c523ef81a7b46737de8a9c0858baba6f844ebe4be553dd38ff44a182",
+      "browser_response_log_line": 213,
+      "admission_round": 14,
+      "admission_arguments": {
+        "path": "E:\\AIspace.case_d_backups"
+      },
+      "admission_reason": "scope_rejected:PATH_OUTSIDE_AUTHORIZED_ROOTS",
+      "executed": false,
+      "original_file_references": [
+        "localdata\\runtime\\remote_tasks.json",
+        "localdata\\runtime\\task_continuations.json",
+        "localdata\\runtime\\remote_workers\\TASK-6362942614ED21147E5C\\runtime.jsonl",
+        "localdata\\runtime\\executor_run_blackboard\\TASK-6362942614ED21147E5C.json"
+      ],
+      "followup_revisions": [
+        {
+          "task_id": "TASK-EEE38F629A537B490B88",
+          "state": "INTERRUPTED",
+          "goal_changed": true,
+          "effective_goal_has_correct_path": false,
+          "effective_goal_has_wrong_path": true,
+          "error": "KeyError: 'action_digest'"
+        }
+      ]
+    },
+    "B": {
+      "status": "HISTORICAL_REPLAY_COMPLETED",
+      "request_sha256": "01ba6338d521f40c25e8f56c274a73562d6f1147273d32fdbd0c721914db741a",
+      "request_sha_matches": true,
+      "source_file_sha256": "c647eb70f4f7743bf23c90770421e0236495c8d065c34e851c5673589ffca73c",
+      "continuation_file_sha256": "51ee4dc6d8749ed86f5d61ab866dad1f4381a6e0b3721b0da33b20044530d9d9",
+      "source_result_count": 2,
+      "missing_action_digest_count": 2,
+      "restore_result": {
+        "status": "KEYERROR_ACTION_DIGEST_REPRODUCED",
+        "exception_type": "KeyError",
+        "exception_value": "'action_digest'",
+        "traceback": "Traceback (most recent call last):\n  File \"C:\\smartagent\\source\\WebAgent\\tests\\sidecar_git67_reproduction.py\", line 86, in restore_once\n    WebAgentProtocolLoop._restore_continuation(loop)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"C:\\smartagent\\source\\WebAgent\\protocol_loop.py\", line 1110, in _restore_continuation\n    'signature': record['action_digest'], 'result': json.dumps(record, ensure_ascii=False),\n                 ~~~~~~^^^^^^^^^^^^^^^^^\nKeyError: 'action_digest'\n",
+        "executed_tools": 0,
+        "source_ledger_unchanged": true
+      },
+      "relevant_frames": [
+        "    WebAgentProtocolLoop._restore_continuation(loop)",
+        "  File \"C:\\smartagent\\source\\WebAgent\\protocol_loop.py\", line 1110, in _restore_continuation",
+        "    'signature': record['action_digest'], 'result': json.dumps(record, ensure_ascii=False),",
+        "KeyError: 'action_digest'"
+      ],
+      "parser_normalization": "NONE",
+      "browser_extracted_create_directory_json": "{\"type\":\"tool_call\",\"name\":\"create_directory\",\"arguments\":{\"path\":\"E:\\\\AIspace.case_d_backups\"}}",
+      "browser_response_sha256": "9ca381b8c523ef81a7b46737de8a9c0858baba6f844ebe4be553dd38ff44a182",
+      "browser_response_log_line": 58,
+      "admission_round": 3,
+      "admission_arguments": {
+        "path": "E:\\AIspace.case_d_backups"
+      },
+      "admission_reason": "scope_rejected:PATH_OUTSIDE_AUTHORIZED_ROOTS",
+      "executed": false,
+      "original_file_references": [
+        "localdata\\runtime\\remote_tasks.json",
+        "localdata\\runtime\\task_continuations.json",
+        "localdata\\runtime\\remote_workers\\TASK-8DD4841172C1D3FDACD5\\runtime.jsonl",
+        "localdata\\runtime\\executor_run_blackboard\\TASK-8DD4841172C1D3FDACD5.json"
+      ],
+      "followup_revisions": [
+        {
+          "task_id": "TASK-3C6786ECAF745E0273A9",
+          "state": "INTERRUPTED",
+          "goal_changed": true,
+          "effective_goal_has_correct_path": true,
+          "effective_goal_has_wrong_path": false,
+          "error": "KeyError: 'action_digest'"
+        }
+      ]
+    }
+  },
+  "production_functions_modified": false,
+  "production_ledgers_modified": false,
+  "browser_control": "Isolated native textarea; provider-specific editor behavior is unverified",
+  "harness_setup_notes": [
+    "An initial legacy staged-writer/generic-contenteditable fixture failed chunk readback before evidence publication. It was replaced with the actual default continuous writer and a supported native textarea. That setup failure is not a localized backslash-loss finding."
+  ],
+  "dispatch_count": 0,
+  "network_calls": 0,
+  "stage_summary": {
+    "S0": "PASS",
+    "S1": "SIMULATED_PASS / LIVE_INCONCLUSIVE",
+    "S2": "SIMULATED_T2_T6_PASS / LIVE_INCONCLUSIVE",
+    "S3": "ISOLATED_DOM_PASS / LIVE_INCONCLUSIVE",
+    "S4": "INCONCLUSIVE_NO_LIVE_MODEL; synthetic responses are controls only",
+    "S5": "PASS_PATH_FIDELITY; preflight capture only, no authorization assertion",
+    "S6": "OFFLINE_MATRIX_PASS / LIVE_NOT_EXECUTED",
+    "S7": "HISTORICAL_REPLAY_COMPLETED"
+  }
+}
