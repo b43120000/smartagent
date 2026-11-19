@@ -14,7 +14,11 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($env:SA_COLLECT_ROOT)
 $task = [string]$env:SA_COLLECT_TASK
 $request = [string]$env:SA_COLLECT_REQUEST
-$collectIt10Raw = ([string]$env:SA_COLLECT_MODE -ceq '--it10-raw')
+# init.bat explicitly arms manual two-argument collecting; the automatic
+# task-terminal sanitized collector opts out via SMARTAGENT_IT10_AUTO_PUBLISH=OFF.
+$collectIt10Raw = (([string]$env:SA_COLLECT_MODE -ceq '--it10-raw') -or
+                   ((-not [string]$env:SA_COLLECT_MODE) -and
+                    ([string]$env:SMARTAGENT_IT10_AUTO_PUBLISH -ceq 'YES')))
 if ($env:SA_COLLECT_MODE -and -not $collectIt10Raw) { throw 'Unknown mode; expected --it10-raw' }
 $baseSha = 'e25bea7aa2d540cb77aead61babeaacaf3f19154'
 
@@ -2085,6 +2089,9 @@ try {
                              'source\agent_core\bp1_observation_terminal.py',
                              'source\agent_core\path_integrity_trace.py',
                              'source\agent_core\it10_raw_collector.py',
+                             'source\agent_core\it10_auto_publish.py',
+                             'init.bat',
+                             'install_smart_agent\git67_it10_prepare.ps1',
                              'source\WebAgent\minimal_decision.py',
                              'source\RemoteAgent\telegram_webagent_worker.py',
                              'source\agent_core\request_context.py',
@@ -2185,6 +2192,24 @@ try {
     Write-Host ('[COLLECT] ZIP: ' + $zip)
     if ($timeline.Count -eq 0) {
         Write-Warning 'No matching events found. Confirm that this is the checkout actually used for Live, or pass Task/Request IDs.'
+    }
+    if ($collectIt10Raw -and [string]$env:SMARTAGENT_IT10_AUTO_PUBLISH -ceq 'YES') {
+        Write-Host '[GITTEST] Starting automatic safe-derivative publication...'
+        if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
+            throw 'GITTEST_PYTHON_NOT_FOUND; original ZIP preserved'
+        }
+        $previousPythonPath = [string]$env:PYTHONPATH
+        try {
+            $env:PYTHONPATH = Join-Path $root 'source'
+            & $pythonExe -B -m agent_core.it10_auto_publish --zip $zip --task $task --request $request
+            $uploadExit = $LASTEXITCODE
+        } finally {
+            $env:PYTHONPATH = $previousPythonPath
+        }
+        if ($uploadExit -ne 0) {
+            Write-Warning ('Git Test auto-publish failed. Original local ZIP preserved: ' + $zip)
+            throw 'GITTEST_AUTO_PUBLISH_FAILED'
+        }
     }
 } finally {
     if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
