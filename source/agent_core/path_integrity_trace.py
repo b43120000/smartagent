@@ -389,6 +389,67 @@ def record(stage, value, *, evidence_status="RAW_INPUT", paths=None, extra=None)
         # No diagnostic failure may change admission, execution or delivery.
         return
 
+def record_scoped_submitted_user_dom(scope, adapter):
+    """Read only the confirmed request-bound submitted USER content.
+
+    The existing RequestScope reconciles the actual fresh User Turn. Require
+    its per-submit WUS nonce in both the bound turn and pinned content node;
+    never scan or copy unrelated history. Observations are diagnostic only.
+    """
+    if not raw_capture_enabled():
+        return "NOT_ARMED"
+    active = context()
+    if not active or not active.get("request_id"):
+        return "NO_REQUEST_ID"
+    try:
+        prompt = str(getattr(scope, "prompt_text", "") or "")
+        if not ("NLIT_CASE_ID=IT10" in prompt and
+                "NLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E" in prompt):
+            return "REQUEST_MARKERS_NOT_IN_PROMPT"
+        subcase_id = str(active.get("subcase_id") or "")
+        if not subcase_id or ("IT10_SUBCASE_ID=" + subcase_id) not in prompt:
+            return "SUBCASE_NOT_IN_PROMPT"
+        all_markers = tuple(getattr(scope, "request_markers", ()) or ())
+        markers = tuple(s for s in all_markers
+                        if isinstance(s, str) and re.fullmatch(r"WUS-[A-F0-9]{32}", s))
+        if len(markers) != 1 or len(all_markers) != 1:
+            return "SUBMIT_NONCE_NOT_UNIQUE"
+        marker = markers[0]
+        bound = getattr(scope, "user_turn", None)
+        if bound is None:
+            return "USER_TURN_UNBOUND"
+        if marker not in str(getattr(bound, "raw_text", "") or ""):
+            return "BOUND_NONCE_NOT_VISIBLE"
+        root = getattr(bound, "element", None)
+        if root is None:
+            return "BOUND_ELEMENT_MISSING"
+        selector = str(getattr(getattr(adapter, "profile", None),
+                               "user_content_selector", "") or "")
+        if not selector:
+            return "PROFILE_CONTENT_SELECTOR_MISSING"
+        candidates = [root] if selector == ":scope" else list(root.query_selector_all(selector))
+        matched = []
+        for element in candidates:
+            pair = element.evaluate("el => ({innerText:el.innerText||'',textContent:el.textContent||''})")
+            if (not isinstance(pair, dict) or
+                    not isinstance(pair.get("innerText"), str) or
+                    not isinstance(pair.get("textContent"), str)):
+                continue
+            if marker in pair["innerText"] or marker in pair["textContent"]:
+                matched.append((element, pair))
+        if len(matched) != 1:
+            return "CONTENT_NOT_FOUND" if not matched else "CONTENT_AMBIGUOUS"
+        element, pair = matched[0]
+        # Do not canonicalize Windows paths or conflate native DOM properties.
+        record("10_submitted_innerText", pair["innerText"], evidence_status="RENDERED_DOM")
+        record("10_submitted_textContent", pair["textContent"], evidence_status="RENDERED_DOM")
+        html = element.evaluate("el => el.innerHTML || ''")
+        if isinstance(html, str):
+            record("10_submitted_innerHTML", html, evidence_status="DOM_SERIALIZATION")
+        return "CAPTURED"
+    except Exception:
+        return "DOM_EVALUATION_FAILED"
+
 
 def record_user_dom(element, semantic_text):
     """Observe only this request's marked user turn; never historical traffic."""

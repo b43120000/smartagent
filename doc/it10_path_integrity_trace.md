@@ -58,6 +58,22 @@ Trace I/O errors are best effort and never change execution or admission.
 Missing stages must be reported as missing; they are not a PASS. A Renderer
 observation must not be substituted for the original Telegram message text.
 
+## Post-submit User DOM observation (Git67)
+After the normal Web UI RequestScope confirms this submit's USER turn, the
+browser worker captures its pinned user-content node's native `innerText`
+and `textContent` separately (and `innerHTML` when available). A unique
+`WEBUI_SUBMIT_ID` WUS nonce must be visible in the bound turn and in the
+selected provider content node; re-used IT10 subcases, historical turns,
+unbound or ambiguously matched nodes cannot produce accepted DOM stages.
+Every emitted DOM view has a distinct local-only Raw Blob, SHA256 and length.
+If a generation fallback delays User Turn binding, capture is retried only
+after a RequestScope-owned assistant becomes visible and the User Turn is
+confirmed. Best-effort diagnostics never affect Send, retry or ACK.
+The reason-only `it10_submitted_dom_capture` UI event distinguishes
+`CAPTURED` from `NOT_ARMED`, `USER_TURN_UNBOUND`,
+`CONTENT_NOT_FOUND`, `CONTENT_AMBIGUOUS`, etc. Real browser evidence
+is required to certify these DOM stages; offline mock tests are not proof.
+
 Offline tests:
 
 ```text

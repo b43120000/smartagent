@@ -2438,6 +2438,22 @@ class WebLLMScraper:
         self._log_user_binding_diagnostic(snapshot, 'generation_fallback')
         return True
 
+    def _observe_scoped_it10_user_dom(self, snapshot: dict) -> None:
+        """Best-effort post-submit DOM evidence from a confirmed RequestScope."""
+        if not PIT.raw_capture_enabled() or snapshot.get("_it10_submitted_dom_status") == "CAPTURED":
+            return
+        try:
+            adapter = self._web_ui_adapter()
+            scope = snapshot.get("_web_ui_scope")
+            status = PIT.record_scoped_submitted_user_dom(scope, adapter)
+        except Exception:
+            status = "OBSERVATION_FAILED"
+        snapshot["_it10_submitted_dom_status"] = status
+        try:
+            self._log_stage("it10_submitted_dom_capture", f"status={status}")
+        except Exception:
+            pass
+
     def _wait_for_user_sent(self, snapshot: dict, timeout_sec: float = 45.0) -> None:
         """Require a genuinely new user turn before looking at assistant content.
 
@@ -2466,6 +2482,7 @@ class WebLLMScraper:
             if scope is not None:
                 user_turn, binding_state = self._web_ui_adapter().reconcile_user_turn(scope)
                 if user_turn is not None:
+                    self._observe_scoped_it10_user_dom(snapshot)
                     snapshot['_submit_delivery_confirmed'] = True
                     self._record_composer_delivery()
                     self._log_stage(
@@ -2647,6 +2664,9 @@ class WebLLMScraper:
             if scope is not None:
                 owned_assistant = self._web_ui_adapter().latest_owned_assistant(scope)
                 if owned_assistant is not None:
+                    # User Turn may mount after provisional transport delivery.
+                    # Retry only with the same request-bound semantic scope.
+                    self._observe_scoped_it10_user_dom(snapshot)
                     if snapshot.pop('_generation_delivery_pending_scope', False):
                         self._log_stage('user_scope_restored_after_generation_fallback',
                                         'assistant_ownership_confirmed=true')
