@@ -104,6 +104,11 @@ jobs:
         if: runner.os == 'Windows'
         run: >-
           python -m venv .venv
+      - name: Windows real init.bat CMD to PowerShell parameter and private ACL regression
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_init_publish.py::test_init_bat_persists_environment_and_protects_private_acl
       - name: Windows Collector ZIP integration regression
         if: runner.os == 'Windows'
         run: >-
