@@ -122,6 +122,31 @@ def _tool_result(status: str, reason: str, payload: object = None, *, evidence_p
     }
 
 
+def _blocking_runtime_evidence(loop) -> dict:
+    """Bound a Blocked terminal to the last actual failed/uncertain result."""
+    ledger = getattr(loop, "action_result_ledger", None) or {}
+    if not isinstance(ledger, Mapping):
+        return {"status": "NO_RUNTIME_BLOCKER"}
+    rows = sorted(
+        (x for x in ledger.values() if isinstance(x, Mapping)),
+        key=lambda x: int(x.get("produced_round") or 0), reverse=True,
+    )
+    for row in rows:
+        if row.get("result_status") not in {"FAILED", "REJECTED", "UNKNOWN", "PARTIAL"}:
+            continue
+        receipt = decode_result(row.get("result")) or {}
+        data = receipt.get("data") if isinstance(receipt.get("data"), Mapping) else {}
+        return {
+            "status": "OBSERVED_RUNTIME_BLOCKER",
+            "evidence_ref": row.get("evidence_ref") or row.get("result_id"),
+            "tool": row.get("tool"),
+            "execution_status": row.get("result_status"),
+            "reason_code": str(row.get("result_reason") or "")[:160],
+            "exit_code": data.get("exit_code") if type(data.get("exit_code")) is int else None,
+        }
+    return {"status": "NO_RUNTIME_BLOCKER"}
+
+
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
             evidence_requirement=None, goal_state_contract=None,
@@ -142,8 +167,8 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "You are the planning/decision brain. The local Runtime owns execution.\n"
         "Respond with exactly ONE JSON object per round:\n"
         'Tool call: {"type":"tool_call","name":"observe_fact","arguments":{"path":"C:\\\\example"}}\n'
-        'Finish V2 (preferred for tool tasks): {"type":"finish","contract_version":2,"summary":"brief factual completion report","goal_checks":[{"criterion":"<requirement>","evidence_ref":"<actual MIN-EV reference>","field":"data.<observed scalar>","operator":"eq","expected":"<typed actual value>"}]}\n'
-        'For V2, omit expected_runtime: Runtime automatically verifies its complete action/evidence ledger. For UNCOMPILED multi-step goals include evidence-backed goal_checks; concise summary <=3000 characters. Legacy V1 Finish is still accepted.\n'
+        'Finish V2 (required for tool tasks): {"type":"finish","contract_version":2,"summary":"brief factual completion report","goal_checks":[{"criterion":"<requirement>","evidence_ref":"<actual MIN-EV reference>","field":"data.<observed scalar>","operator":"eq","expected":"<typed actual value>"}]}\n'
+        'For V2, omit expected_runtime: Runtime automatically verifies its complete action/evidence ledger. For UNCOMPILED multi-step goals include evidence-backed goal_checks; concise summary <=3000 characters. Legacy V1 Finish is reserved for eligible answer-only tasks; no tool-task fallback.\n'
         'Finish for eligible text: {"type":"finish","summary":"the complete answer","expected_runtime":[]}\n'
         'Blocked: {"type":"blocked","reason":"specific tool/error blocker"}\n'
         "No Markdown fences, no invented observations, no claimed success without results.\n"
@@ -175,11 +200,11 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "There is no fixed task-specific sequence gate. "
         "Shared Blackboard records each round automatically; never ask a tool "
         "to write its own evidence record. At Finish report the actual status "
-        "of every requested step. Prefer contract_version=2 with a concise "
+        "of every requested step. For tool tasks REQUIRE contract_version=2 with a concise "
         "summary and task-relevant goal_checks from real MIN-EV refs. "
         "Do NOT copy all ToolResults into expected_runtime for V2; the Runtime "
         "loads and validates every action itself, including failed and rejected "
-        "operations. Legacy V1 still requires one expected_runtime entry for "
+        "operations. Legacy V1 is only accepted for answer-only responses; the historical V1 comparator requires one expected_runtime entry for "
         "EACH ToolResult. For an uncompiled multi-step goal, include typed "
         "data.* predicates for all essential completion criteria, using "
         "actual observed scalar values, never fabricated evidence. The "
@@ -324,6 +349,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
                                             canonical_finish=canonical_finish)
         board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
+    blocking_evidence = _blocking_runtime_evidence(loop) if not complete else None
     loop.executor_result = {
         "schema": "SMARTAGENT_POKECLAW_EXECUTOR_RESULT_V1",
         "outcome": kind, "executor_state": board["executor_state"],
@@ -331,6 +357,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         "goal_verified": bool(comparison and comparison["verdict"] == "PASS"),
         "handoff_id": board["handoff_id"],
         "tool_evidence_refs": list(board["terminal"]["tool_evidence_refs"]),
+        **({"blocked_runtime_evidence": blocking_evidence} if blocking_evidence else {}),
     }
     if complete:
         loop.terminal_acceptance = _terminal_receipt(loop, summary, board, comparison)
@@ -339,7 +366,7 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         set_runtime_state(loop.task_id, "COMPLETED", root=loop.progress_root)
     else:
         loop.terminal_acceptance = {}
-        loop.terminal_outcome = "UNKNOWN"
+        loop.terminal_outcome = "BLOCKED" if kind == "BLOCKED" else "UNKNOWN"
         loop.protocol_state = "BLOCKED"
         set_runtime_state(
             loop.task_id, "PAUSED", reason=kind, root=loop.progress_root,
@@ -359,6 +386,10 @@ def _finish(loop, root: Path, request: str, *, kind: str,
         if comparison else "尚未進入 Runtime 最終驗收。"
     )
     mismatch_lines = ""
+    if blocking_evidence and blocking_evidence["status"] == "OBSERVED_RUNTIME_BLOCKER":
+        mismatch_lines += "\n阻塞 Runtime Evidence：" + json.dumps(
+            blocking_evidence, ensure_ascii=False, separators=(",", ":"),
+        )
     if comparison and comparison["mismatches"]:
         mismatch_lines = "\n不一致欄位：" + json.dumps(
             comparison["mismatches"], ensure_ascii=False, separators=(",", ":"),
@@ -638,6 +669,34 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         " approval_id=" + pending_unknown_timeout["approval_id"],
                 complete=False,
             )
+        if decision.kind == "finish" and decision.contract_version != 2 and (
+            bool(getattr(loop, "action_result_ledger", None))
+            or bool(getattr(loop, "_canonical_action_proposals", None))
+            or not requirement.get("answer_only_eligible", False)
+        ):
+            # No silent V1 -> V2 conversion: existing claims are not evidence.
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "MODEL_FINISH_V2_REQUIRED",
+                "reason_code": "LEGACY_FINISH_TOOL_TASK_FORBIDDEN",
+                "submitted_contract_version": decision.contract_version,
+                "executed": False, "authorization_granted": False,
+            })
+            finish_repairs += 1
+            if finish_repairs > max_finish_repairs:
+                return _finish(
+                    loop, root, request, kind="FINISH_CONTRACT_INVALID",
+                    summary="工具型任務禁止 Legacy V1 Finish，且修復次數已耗盡。",
+                    complete=False,
+                )
+            finish_repair_only = True
+            hint = (
+                "工具型任務的 V1 Finish 已拒絕，原始工具結果不變。"
+                "請改成 contract_version=2 的 finish，完全省略 expected_runtime；"
+                "goal_checks 僅引用確實觀測的 data.* scalar。"
+                "若必要前置條件失敗，請回覆 blocked 而非 finish。"
+                "禁止新的 ToolCall、刪除或其他副作用。"
+            )
+            continue
         if decision.kind == "finish":
             canonical_finish = (
                 adapt_finish_contract_v2(
@@ -851,6 +910,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_BLOCKED",
                 "reason_sha256": _digest(decision.message),
+                "blocking_runtime_evidence": _blocking_runtime_evidence(loop),
+                "executed": False, "authorization_granted": False,
             })
             return _finish(
                 loop, root, request, kind="BLOCKED",
