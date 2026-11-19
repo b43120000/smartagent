@@ -24,6 +24,7 @@ on:
       - 'source/RemoteAgent/telegram_transport.py'
       - 'source/WebAgent/protocol_loop.py'
       - 'collect.bat'
+      - 'config/protocol_manifest.json'
   workflow_dispatch:
 
 permissions:
@@ -48,6 +49,9 @@ jobs:
           python-version: '3.13'
       - name: Install offline test dependencies
         run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Verify packaged protocol manifest without bypass (read only)
+        run: >-
+          python -B -c "import json; from pathlib import Path; from agent_core.protocol_manifest import require_protocol_manifest, build_protocol_manifest; r = require_protocol_manifest(Path('.')); missing = build_protocol_manifest(Path('.'))['missing_files']; assert r['status'] == 'PASS' and r['hash_verification'] == 'PASS' and r['hash_mismatches'] == [] and missing == [], r; print(json.dumps(dict(r, missing_files=missing)))"
       - name: Compile sidecar only
         run: >-
           python -B -m compileall -q
