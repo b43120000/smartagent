@@ -89,10 +89,9 @@ try {
     $code = ''
     if ($_.Exception -is [System.Management.Automation.CommandNotFoundException]) {
         $name = [string]$_.Exception.CommandName
-        if ($name -match '^[A-Za-z][A-Za-z0-9-]{0,55}
-    exit 4
-}
-) { $code = ':' + $name }
+        if ($name -match '^[A-Za-z][A-Za-z0-9-]{0,55}$') {
+            $code = ':' + $name
+        }
     }
     Write-Error ('GIT67_INIT_ACL_FAILED:' + $phase + ':' + $_.Exception.GetType().Name + $code)
     exit 4
