@@ -42,7 +42,7 @@ try {
         $acl.RemoveAccessRuleSpecific($rule)
     }
     foreach ($sid in @($current, $system, $admins)) {
-        $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
             $sid, [Security.AccessControl.FileSystemRights]::FullControl,
             ([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
              [Security.AccessControl.InheritanceFlags]::ObjectInherit),
