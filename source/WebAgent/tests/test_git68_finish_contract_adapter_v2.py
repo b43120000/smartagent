@@ -266,7 +266,7 @@ def test_real_executor_loop_v2_produces_comparator_receipt(tmp_path, monkeypatch
                 operation="GIT_INSPECT",
             )
         recent = json.loads(
-            prompt.split("Recent actual PokeClaw ToolResults:\\n", 1)[1].split("\\n", 1)[0]
+            prompt.split("Recent actual PokeClaw ToolResults:\n", 1)[1].split("\n", 1)[0]
         )
         ref = recent[-1]["evidence_ref"]
         return json.dumps({
