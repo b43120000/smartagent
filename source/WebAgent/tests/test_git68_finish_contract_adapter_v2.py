@@ -226,3 +226,74 @@ def test_v1_small_finish_wrong_claim_fails(tmp_path, monkeypatch):
     )
     assert result["verdict"] == "FAIL"
     assert result["reason_code"] == "MODEL_RUNTIME_MISMATCH"
+
+
+def test_real_executor_loop_v2_produces_comparator_receipt(tmp_path, monkeypatch):
+    """Real Planner -> Executor -> Adapter -> Comparator -> Terminal; fake OS only."""
+    from WebAgent.pokeclaw_executor_loop import run_pokeclaw_executor
+    from WebAgent.tests.test_git33_pokeclaw_executor_loop import _loop
+    from WebAgent.tests.test_minimal_core_v10 import tool_json
+    from agent_core.executor_run_blackboard import read_executor_run
+
+    request = "檢視執行紀錄，依實際程序退出碼確認是否符合本次檢查目標"
+    loop, _ = _loop(tmp_path, monkeypatch, [], request=request)
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.assess",
+        lambda *a, **kw: {"decision": "NORMAL", "reason_code": "TEST_ACL_OFF"},
+    )
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.admit_action",
+        lambda *a, **kw: {"decision": "NORMAL", "reason_code": "TEST_ACL_OFF"},
+    )
+    actions = []
+
+    def execute(action):
+        actions.append(dict(action))
+        return encode_result(
+            "SUCCEEDED", "COMMAND_EXITED", tool="run_command", executed=True,
+            data={"process_state": "EXITED", "exit_code": 0,
+                  "stdout": "", "stderr": "", "timed_out": False,
+                  "verification_status": "PASS"},
+        )
+
+    loop._execute_action = execute
+
+    def planner(prompt, *_):
+        loop.prompts.append(prompt)
+        if len(loop.prompts) == 1:
+            return tool_json(
+                "run_command", command="git status --short",
+                operation="GIT_INSPECT",
+            )
+        recent = json.loads(
+            prompt.split("Recent actual PokeClaw ToolResults:\\n", 1)[1].split("\\n", 1)[0]
+        )
+        ref = recent[-1]["evidence_ref"]
+        return json.dumps({
+            "type": "finish", "contract_version": 2,
+            "summary": "已由 Runtime 確認 exit_code 為 0",
+            "goal_checks": [{
+                "criterion": "實際程序已正常退出",
+                "evidence_ref": ref, "field": "data.exit_code",
+                "operator": "eq", "expected": 0,
+            }],
+        }, ensure_ascii=False)
+
+    loop.planner = planner
+    reply = run_pokeclaw_executor(loop, request)
+    board = read_executor_run(
+        tmp_path, task_id=loop.task_id,
+        request_id=loop.run_id, task_epoch=loop.task_epoch,
+    )
+    assert len(actions) == 1
+    assert loop.terminal_outcome == "SUCCESS", reply
+    assert loop.terminal_acceptance["final_verdict"] == "PASS"
+    assert loop.terminal_acceptance["receipt_id"].startswith("TERM-")
+    assert board["terminal"]["finish_comparison"]["verdict"] == "PASS"
+    proposals = [event for event in board["events"]
+                 if event["kind"] == "MODEL_FINISH_PROPOSAL"]
+    assert len(proposals) == 1
+    assert proposals[0]["contract_version"] == 2
+    assert proposals[0]["canonical_finish_schema"] == (
+        "SMARTAGENT_CANONICAL_FINISH_CONTRACT_V2"
+    )
