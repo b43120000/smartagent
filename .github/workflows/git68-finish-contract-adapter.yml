@@ -35,7 +35,9 @@ jobs:
           source/agent_core/runtime_finish_comparator.py
           source/WebAgent/minimal_decision.py
           source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/github_stage_diagnostics.py
           source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
+          source/WebAgent/tests/test_git68_hardening.py
       - name: Validate source protocol manifest with new adapter
         run: >-
           python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; from pathlib import Path; print(validate_protocol_manifest(Path.cwd()))"
@@ -43,5 +45,8 @@ jobs:
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
+          source/WebAgent/tests/test_git68_hardening.py
+          source/WebAgent/tests/test_git67_missing_slash_guard.py
+          source/WebAgent/tests/test_git67_path_localization.py
           source/WebAgent/tests/test_git56_finish_semantic_repair.py
           source/WebAgent/tests/test_git57_live_finish_injector.py
