@@ -182,7 +182,14 @@ def test_init_bat_persists_environment_and_protects_private_acl(tmp_path):
     )
     result = subprocess.run(["cmd.exe", "/d", "/c", str(caller)], cwd=root, env=env,
                             capture_output=True, text=True, errors="replace", timeout=120)
-    assert result.returncode == 0, result.stdout[-2800:] + result.stderr[-2800:]
+    git_dirty = subprocess.run(
+        ["git", "status", "--short", "--untracked-files=all"],
+        cwd=root, capture_output=True, text=True, errors="replace",
+    )
+    assert result.returncode == 0, (
+        result.stdout[-2800:] + result.stderr[-2800:]
+        + "\\nWORKTREE_BEFORE_INIT_FAILURE:\\n" + git_dirty.stdout[-2500:]
+    )
     assert "GIT67_AFTER_CALL=YES" in result.stdout
     assert "GIT67_TRACE=YES" in result.stdout
     found = re.search(r"GIT67_ID=(GIT67_[a-f0-9]{32})", result.stdout)
