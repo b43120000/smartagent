@@ -11,6 +11,7 @@ import argparse
 import base64
 import hashlib
 import io
+import ntpath
 import json
 import os
 from pathlib import Path
@@ -116,7 +117,7 @@ def build_derivative(archive: Path, task: str, request: str) -> tuple[bytes, dic
                 "round": row.get("round") if type(row.get("round")) is int else None,
                 "candidate_index": (row.get("candidate_index")
                                     if type(row.get("candidate_index")) is int else None),
-                "source_module": Path(str(row.get("source_file") or "")).name[:100],
+                "source_module": ntpath.basename(str(row.get("source_file") or "").replace("/", "\\"))[:100],
                 "source_function": str(row.get("source_function") or "")[:100],
                 "raw_origin": str(row.get("raw_origin") or "")[:75],
                 "evidence_status": str(row.get("evidence_status") or "")[:75],
