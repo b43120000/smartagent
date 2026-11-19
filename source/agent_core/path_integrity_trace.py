@@ -25,7 +25,8 @@ _RAW_STAGES = frozenset({
     "01_sender_input", "02_telegram_message_text", "03_receiver_normalized",
     "04_gateway_input", "05_task_store", "06_worker_input", "07_loop_input",
     "08_user_request_block", "09_composer_input", "09_composer_primary",
-    "09_composer_semantic", "10_submitted_innerText", "10_submitted_textContent",
+    "09_composer_semantic", "09_composer_dom_textContent",
+    "09_composer_dom_innerHTML", "10_submitted_innerText", "10_submitted_textContent",
     "11_planner_response", "11_parser_input", "12_request_context",
     "13_field_refs_expanded",
 })
@@ -177,6 +178,11 @@ def worker_env_from_handoff(task):
 def _raw_enabled():
     """Raw blobs are an additional explicit opt-in, never default telemetry."""
     return bool(_settings() and os.environ.get("SMARTAGENT_IT10_PATH_TRACE_RAW") == "YES")
+
+
+def raw_capture_enabled():
+    """A caller may take additional read-only observations only for marked IT10."""
+    return bool(context() and _raw_enabled())
 
 
 def _write_raw_blob(payload: bytes, active: dict) -> dict:
