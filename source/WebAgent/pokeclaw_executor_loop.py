@@ -24,6 +24,7 @@ from agent_core.runtime_finish_comparator import (
     compare_runtime_finish, finish_input_projection, finish_runtime_field_catalog,
 )
 from agent_core.finish_evidence_requirement import assess_finish_evidence_requirement
+from agent_core.finish_contract_adapter_v2 import adapt_finish_contract_v2
 
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
@@ -141,7 +142,8 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "You are the planning/decision brain. The local Runtime owns execution.\n"
         "Respond with exactly ONE JSON object per round:\n"
         'Tool call: {"type":"tool_call","name":"observe_fact","arguments":{"path":"C:\\\\example"}}\n'
-        'Finish: {"type":"finish","summary":"observations","expected_runtime":[{"evidence_ref":"<actual MIN-EV reference>","fields":{"status":"<actual Runtime status>","data.<task-relevant key>":"<typed observed value>"}}],"goal_checks":[{"criterion":"<requirement from original request>","evidence_ref":"<actual MIN-EV reference>","field":"data.<task-relevant key>","operator":"eq","expected":"<typed expected value>"}]}\n'
+        'Finish V2 (preferred for tool tasks): {"type":"finish","contract_version":2,"summary":"brief factual completion report","goal_checks":[{"criterion":"<requirement>","evidence_ref":"<actual MIN-EV reference>","field":"data.<observed scalar>","operator":"eq","expected":"<typed actual value>"}]}\n'
+        'For V2, omit expected_runtime: Runtime automatically verifies its complete action/evidence ledger. For UNCOMPILED multi-step goals include evidence-backed goal_checks; concise summary <=3000 characters. Legacy V1 Finish is still accepted.\n'
         'Finish for eligible text: {"type":"finish","summary":"the complete answer","expected_runtime":[]}\n'
         'Blocked: {"type":"blocked","reason":"specific tool/error blocker"}\n'
         "No Markdown fences, no invented observations, no claimed success without results.\n"
@@ -172,19 +174,17 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Goal Driver and Prerequisite decision engines are DISABLED. "
         "There is no fixed task-specific sequence gate. "
         "Shared Blackboard records each round automatically; never ask a tool "
-        "to write its own evidence record. At Finish include the actual status "
-        "of every requested step, not invented parent results. At Finish include "
-        "one expected_runtime entry for EACH actual ToolResult evidence_ref, "
-        "using full Runtime status and dotted typed data fields. Never omit failed "
-        "tools or invent evidence. Generate the Finish fields yourself from the "
-        "original user request and actual ToolResults; there is NO fixed "
-        "tool-specific Finish template. Use dotted scalar paths from the "
-        "Runtime field catalogue. For goals without independent Runtime "
-        "postcondition proof, add goal_checks expressing each requested "
-        "completion condition as an evidence-backed predicate. Use typed "
-        "boolean/number/string/null values, never strings for booleans. "
-        "Runtime compares claims AND checks the original Goal; model "
-        "cannot grant PASS merely by declaring it.\n"
+        "to write its own evidence record. At Finish report the actual status "
+        "of every requested step. Prefer contract_version=2 with a concise "
+        "summary and task-relevant goal_checks from real MIN-EV refs. "
+        "Do NOT copy all ToolResults into expected_runtime for V2; the Runtime "
+        "loads and validates every action itself, including failed and rejected "
+        "operations. Legacy V1 still requires one expected_runtime entry for "
+        "EACH ToolResult. For an uncompiled multi-step goal, include typed "
+        "data.* predicates for all essential completion criteria, using "
+        "actual observed scalar values, never fabricated evidence. The "
+        "Runtime alone decides PASS, based on its immutable history and "
+        "original goal.\n"
         f"Task working directory (NOT authorization workspace): {tools.workspace_root}\n"
         "Native preexecution denials are NOT executed ToolResults and cannot "
         "prove filesystem facts or permission. If an explicit external script "
@@ -311,7 +311,7 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
 
 def _finish(loop, root: Path, request: str, *, kind: str,
             summary: str, complete: bool, expected_runtime=None,
-            goal_checks=None) -> str:
+            goal_checks=None, canonical_finish=None) -> str:
     board = finish_executor_run(
         root, loop, terminal_kind=kind, summary=summary,
         reported_outcome="UNKNOWN",
@@ -320,7 +320,8 @@ def _finish(loop, root: Path, request: str, *, kind: str,
     if complete:
         comparison = compare_runtime_finish(loop, root, request, expected_runtime,
                                             goal_checks=goal_checks,
-                                            answer=summary)
+                                            answer=summary,
+                                            canonical_finish=canonical_finish)
         board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
     loop.executor_result = {
@@ -619,7 +620,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     summary="模型決策格式連續三次無效：" + exc.code,
                     complete=False,
                 )
-            hint = "上一輪 JSON 格式無效：" + exc.code
+            hint = (
+                "上一輪 Finish 訊息無效：summary 或 reason 必須為 1..3000 字元；"
+                "請使用 contract_version=2 的簡短 summary；不要抄錄所有 Runtime Evidence。"
+                if exc.code == "decision_message_invalid" else
+                "上一輪 JSON 格式無效：" + exc.code
+            )
             continue
         invalids = 0
         if decision.kind == "finish" and pending_unknown_timeout:
@@ -633,13 +639,19 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 complete=False,
             )
         if decision.kind == "finish":
+            canonical_finish = (
+                adapt_finish_contract_v2(
+                    decision, task_id=loop.task_id, request_id=loop.run_id,
+                    task_epoch=loop.task_epoch, frozen_goal_contract=goal_state_contract,
+                ) if decision.contract_version == 2 else None
+            )
             preview = (
                 compare_runtime_finish(
                     loop, root, request, decision.expected_runtime,
                     goal_checks=decision.goal_checks, allow_open=True,
-                    answer=decision.message,
+                    answer=decision.message, canonical_finish=canonical_finish,
                 )
-                if decision.expected_runtime else None
+                if decision.expected_runtime or canonical_finish else None
             )
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_FINISH_PROPOSAL",
@@ -647,6 +659,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "goal_checks_sha256": _digest(decision.goal_checks),
                 "finish_input": finish_input_projection(
                     decision.expected_runtime, decision.goal_checks,
+                ),
+                "contract_version": decision.contract_version,
+                "canonical_finish_schema": (
+                    canonical_finish["schema"] if canonical_finish else ""
                 ),
                 "comparator_reason_code": preview["reason_code"] if preview else "",
                 "good_refs": [
@@ -816,6 +832,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 summary=decision.message, complete=True,
                 expected_runtime=decision.expected_runtime,
                 goal_checks=decision.goal_checks,
+                canonical_finish=canonical_finish,
             )
         # No ToolCall is permitted in a Finish-only grace turn. Refusing to
         # execute is essential: repairs must never create new side effects.
