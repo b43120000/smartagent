@@ -161,6 +161,15 @@ class RawCollectorTests(unittest.TestCase):
                       result["unobserved_external_boundaries"])
         self.assertEqual(result["status"], "PARTIAL")
 
+    def test_stage_name_without_raw_blob_is_not_a_fidelity_pass(self):
+        PIT.record("08_minimal_prompt", REQUEST)
+        PIT.record("11_minimal_parser_input", "")
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertIn("11_minimal_parser_input", result["observed_stages"])
+        self.assertNotIn("11_minimal_parser_input", result["missing_stages"])
+        self.assertIn("11_minimal_parser_input", result["missing_raw_stages"])
+        self.assertEqual(result["status"], "PARTIAL")
+
     def test_unarmed_raw_is_not_persisted(self):
         with patch.dict(os.environ, {"SMARTAGENT_IT10_PATH_TRACE_RAW": "NO"}):
             PIT.record("06_worker_input", REQUEST)
