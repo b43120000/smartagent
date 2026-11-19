@@ -119,6 +119,7 @@ def test_v2_does_not_accept_missing_goal_checks(tmp_path, monkeypatch):
     canonical["planner_intent"]["goal_checks"] = None
     result = compare_runtime_finish(
         loop, tmp_path, goal, None, allow_open=True,
+        answer=canonical["planner_intent"]["summary"],
         canonical_finish=canonical,
     )
     assert result["verdict"] == "FAIL"
@@ -133,7 +134,8 @@ def test_v2_never_overrides_runtime_mismatch(tmp_path, monkeypatch):
     canonical["planner_intent"]["goal_checks"] = wrong
     result = compare_runtime_finish(
         loop, tmp_path, goal, None, goal_checks=wrong,
-        allow_open=True, canonical_finish=canonical,
+        allow_open=True, answer=canonical["planner_intent"]["summary"],
+        canonical_finish=canonical,
     )
     assert result["verdict"] == "FAIL"
     assert result["reason_code"] == "GOAL_CHECK_RUNTIME_MISMATCH"
