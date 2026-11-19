@@ -19,6 +19,16 @@ import uuid
 
 _scope = contextvars.ContextVar("it10_path_trace", default=None)
 _lock = threading.Lock()
+_telegram_http_pending = threading.local()
+_MAX_RAW_BYTES = 2 * 1024 * 1024
+_RAW_STAGES = frozenset({
+    "01_sender_input", "02_telegram_message_text", "03_receiver_normalized",
+    "04_gateway_input", "05_task_store", "06_worker_input", "07_loop_input",
+    "08_user_request_block", "09_composer_input", "09_composer_primary",
+    "09_composer_semantic", "10_submitted_innerText", "10_submitted_textContent",
+    "11_planner_response", "11_parser_input", "12_request_context",
+    "13_field_refs_expanded",
+})
 
 
 def _settings():
@@ -163,6 +173,95 @@ def worker_env_from_handoff(task):
 
 
 
+
+def _raw_enabled():
+    """Raw blobs are an additional explicit opt-in, never default telemetry."""
+    return bool(_settings() and os.environ.get("SMARTAGENT_IT10_PATH_TRACE_RAW") == "YES")
+
+
+def _write_raw_blob(payload: bytes, active: dict) -> dict:
+    """Write original bytes verbatim. The pointer is relative to the IT10 root."""
+    if not _raw_enabled():
+        return {"raw_blob_status": "DISABLED"}
+    if len(payload) > _MAX_RAW_BYTES:
+        return {"raw_blob_status": "OVERSIZED", "raw_blob_byte_length": len(payload)}
+    if not payload:
+        return {"raw_blob_status": "EMPTY"}
+    try:
+        root, _ = _settings()
+        name = "it10-raw-" + active["trace_id"] + "-" + str(os.getpid()) + "-" + uuid.uuid4().hex + ".bin"
+        # Unique names + exclusive create avoid rewriting previous evidence.
+        with (root / name).open("xb") as sink:
+            sink.write(payload)
+        return {
+            "raw_blob_status": "PERSISTED",
+            "raw_blob_ref": name,
+            "raw_blob_sha256": hashlib.sha256(payload).hexdigest(),
+            "raw_blob_byte_length": len(payload),
+        }
+    except (OSError, ValueError, KeyError):
+        return {"raw_blob_status": "WRITE_FAILED"}
+
+
+def record_bytes(stage: str, original: bytes, *, origin: str, extra=None):
+    """Retain exact boundary bytes, not a decoded/re-encoded reconstruction."""
+    try:
+        active, settings = _scope.get(), _settings()
+        if not active or not settings or not _raw_enabled() or not isinstance(original, bytes):
+            return
+        if origin not in {"TELEGRAM_GETUPDATES_HTTP_RESPONSE_BODY"}:
+            return
+        frame = sys._getframe(1)
+        row = {
+            "schema": "SMARTAGENT_IT10_PATH_TRACE_V1", **active,
+            "event_id": uuid.uuid4().hex, "pid": os.getpid(),
+            "stage": str(stage), "timestamp": time.time(),
+            "evidence_status": "ORIGINAL_BYTES",
+            "raw_origin": origin,
+            "source_file": frame.f_code.co_filename,
+            "source_function": frame.f_code.co_name,
+            **_write_raw_blob(original, active),
+        }
+        if extra:
+            row["extra"] = {k: extra[k] for k in ("update_id", "message_id") if k in extra}
+        target = settings[0] / f"it10-path-{active['trace_id']}-{os.getpid()}.jsonl"
+        with _lock, target.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception:
+        return
+
+
+def note_telegram_http_body(raw: bytes):
+    """Keep the exact urllib HTTP response body until authorized normalization."""
+    _telegram_http_pending.body = None
+    if _raw_enabled() and isinstance(raw, bytes) and 0 < len(raw) <= _MAX_RAW_BYTES:
+        _telegram_http_pending.body = raw
+
+
+def capture_telegram_http_body(update_id: int, text: str):
+    """Commit only a single authorized, marked update; never a mixed update batch."""
+    raw = getattr(_telegram_http_pending, "body", None)
+    _telegram_http_pending.body = None
+    if not raw or not context() or not is_it10_request(text):
+        return
+    try:
+        document = json.loads(raw.decode("utf-8"))
+        updates = document.get("result") if isinstance(document, dict) else None
+        if not isinstance(updates, list) or len(updates) != 1:
+            return
+        item = updates[0]
+        message = item.get("message") if isinstance(item, dict) else None
+        if not isinstance(message, dict) or int(item.get("update_id", -1)) != int(update_id):
+            return
+        if (message.get("text") or message.get("caption") or "") != text:
+            return
+        record_bytes("01b_telegram_http_body", raw,
+                     origin="TELEGRAM_GETUPDATES_HTTP_RESPONSE_BODY",
+                     extra={"update_id": int(update_id), "message_id": message.get("message_id")})
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError):
+        return
+
+
 def _paths(value):
     found = []
     def visit(item):
@@ -224,6 +323,10 @@ def record(stage, value, *, evidence_status="RAW_INPUT", paths=None, extra=None)
                "source_file": frame.f_code.co_filename, "source_function": frame.f_code.co_name,
                "path_values": [{"value": p, "path_value_sha256": hashlib.sha256(p.encode("utf-8")).hexdigest(),
                                 "path_codepoints": [f"U+{ord(c):04X}" for c in p]} for p in literals if isinstance(p, str)]}
+        if stage in _RAW_STAGES and _raw_enabled():
+            row.update(_write_raw_blob(raw, active))
+            row["raw_origin"] = ("UTF8_FROM_PYTHON_STR" if isinstance(value, str)
+                                 else "JSON_SERIALIZED_VALUE_UTF8")
         row["path_value_sha256"] = row["path_values"][0]["path_value_sha256"] if len(row["path_values"]) == 1 else None
         row["path_codepoints"] = row["path_values"][0]["path_codepoints"] if len(row["path_values"]) == 1 else []
         # Only the explicitly opted-in request fragment, never general chat,
