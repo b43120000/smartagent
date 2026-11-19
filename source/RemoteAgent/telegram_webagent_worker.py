@@ -595,6 +595,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             try:
                 from agent_core.source_attestation import capture
                 verified = require_protocol_manifest(install_root())
+                PIT.record("06a_worker_protocol_manifest_result", verified,
+                           evidence_status="MANIFEST_VERIFICATION_RESULT")
                 if strict_source_gate and (
                     verified.get("hash_verification") != "PASS"
                     or verified.get("hash_mismatches")
@@ -602,10 +604,20 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     raise RuntimeError("strict_observation_manifest_not_verified")
                 attestation = capture(role="telegram_webagent_worker", manifest_verified=
                                       verified.get("hash_verification") == "PASS")
+                PIT.record("06b_worker_loaded_source_attestation", attestation,
+                           evidence_status="IN_PROCESS_WORKER_SOURCE_ATTESTATION")
                 # Require the Worker process's own actual loaded code proof,
                 # not Git HEAD or an independently staged import.
                 from agent_core.source_attestation import require_writer_loaded_source_attestation
-                require_writer_loaded_source_attestation(attestation)
+                try:
+                    writer_proof = require_writer_loaded_source_attestation(attestation)
+                except RuntimeError as exc:
+                    PIT.record("06c_worker_writer_attestation_gate", {
+                        "result": "FAILED", "reason_code": str(exc),
+                    }, evidence_status="SOURCE_GATE_FAILURE")
+                    raise
+                PIT.record("06c_worker_writer_attestation_gate", writer_proof,
+                           evidence_status="SOURCE_GATE_PASS")
                 if strict_source_gate:
                     required = {
                         "WebAgent.protocol_loop": (
