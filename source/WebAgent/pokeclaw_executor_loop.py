@@ -857,6 +857,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # AppContainer Broker. Its per-action OS proof remains mandatory.
         from agent_core.turbo_broker_admission import admit_action
         broker_gate = admit_action(loop.workspace, action)
+        PIT.record("13_minimal_broker_gate", {
+            "action": action,
+            "decision": broker_gate.get("decision"),
+            "reason_code": broker_gate.get("reason_code"),
+        }, evidence_status="OS_BROKER_ADMISSION_RESULT", extra={"round": turn})
         if broker_gate["decision"] == "BLOCKED":
             receipt = dict(broker_gate["evidence"])
             reason = str(broker_gate["reason_code"] or "SANDBOX_UNAVAILABLE")
@@ -1440,10 +1445,14 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 tool=action["tool"], executed=True,
                 data={"exception_class": type(exc).__name__},
             )
+        PIT.record("15_minimal_tool_result_raw", raw_result,
+                   evidence_status="RUNTIME_TOOL_RESULT_RETURN", extra={"round": turn})
         receipt = decode_result(raw_result) or {
             "status": "UNKNOWN", "reason": "UNPARSEABLE_TOOL_RESULT",
             "executed": False, "data": {"possible_partial_execution": mutating},
         }
+        PIT.record("15_minimal_tool_result_decoded", receipt,
+                   evidence_status="DECODED_RUNTIME_TOOL_RESULT", extra={"round": turn})
         runtime_status = str(receipt.get("status") or "UNKNOWN")
         runtime_reason = str(receipt.get("reason") or "UNCLASSIFIED_TOOL_RESULT")
         after_approval_timeout = bool(pending_unknown_timeout)
