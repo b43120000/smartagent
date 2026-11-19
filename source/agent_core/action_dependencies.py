@@ -88,6 +88,10 @@ def command_is_proven_observation(action):
         r'git\s+(?:status(?:\s+--short)?|rev-parse\s+HEAD|branch\s+--show-current|log\s+-1\s+--oneline)',
         r'cmd(?:\.exe)?\s+/c\s+(?:dir|ver)',
         r'git\s+diff\s+--(?:stat|name-only)',
+        # Exact read-only Git-object ancestry check; status 0 means the first
+        # commit is an ancestor of the second. No object fetch is performed.
+        r'git\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}',
+        rf'git\s+-C\s+{native_literal}\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{{40}}\s+[0-9a-fA-F]{{40}}',
     )
     from .python_https_probe import is_bounded_python_https_probe
     if action.get('operation') in {'INSPECT', 'VERIFY'} and is_bounded_python_https_probe(command):

@@ -44,8 +44,8 @@ def normalize_command_operation(value: object) -> str:
 def _looks_like_git_mutation(command: str) -> bool:
     return bool(re.search(
         r"(?i)(?:^|[;&|]\s*)git(?:\.exe)?(?:\s+-C\s+[^;&|]+)?\s+"
-        r"(?:add|am|apply|checkout|cherry-pick|clean|commit|merge|mv|pull|push|"
-        r"rebase|reset|restore|revert|rm|stash|switch)\b",
+        r"(?:add|am|apply|checkout|cherry-pick|clean|commit|merge(?!-base)|mv|pull|push|"
+        r"rebase|reset|restore|revert|rm|stash|switch|fetch|clone|init)\b",
         command,
     ))
 
