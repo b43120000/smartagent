@@ -201,7 +201,11 @@ def test_real_executor_loop_repairs_finish_semantics_without_reexecuting_tools(
     assert len(repairs) == 1
     assert repairs[0]["failure_origin"] == "PLANNER_ASSERTION_MISMATCH"
     assert repairs[0]["repair_only"] is True
-    assert repairs[0]["finish_diagnostic"]["goal_acceptance_not_granted"] is True
+    # V2 may select the bounded status-field diagnostic ahead of the
+    # semantic advisory; neither may grant success or new authorization.
+    diag = repairs[0]["finish_diagnostic"]
+    assert (diag.get("goal_acceptance_not_granted") is True
+            or diag.get("authorization_granted") is False)
     assert board["terminal"]["finish_comparison"]["verdict"] == "PASS"
     assert "Runtime 最終驗收：PASS" in reply
 
