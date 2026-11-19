@@ -28,6 +28,7 @@ _RAW_STAGES = frozenset({
     "09_composer_semantic", "09_composer_dom_textContent",
     "09_composer_dom_innerHTML", "10_submitted_innerText", "10_submitted_textContent",
     "10_submitted_innerHTML",
+    "10d_provider_response_return",
     "11_planner_response", "11_parser_input",
     "11_minimal_planner_response", "11_minimal_parser_input",
     "12_minimal_decision", "12_minimal_parse_error",
