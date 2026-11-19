@@ -24,10 +24,15 @@ _MAX_RAW_BYTES = 2 * 1024 * 1024
 _RAW_STAGES = frozenset({
     "01_sender_input", "02_telegram_message_text", "03_receiver_normalized",
     "04_gateway_input", "05_task_store", "06_worker_input", "07_loop_input",
-    "08_user_request_block", "09_composer_input", "09_composer_primary",
+    "08_user_request_block", "08_minimal_prompt", "09_composer_input", "09_composer_primary",
     "09_composer_semantic", "09_composer_dom_textContent",
     "09_composer_dom_innerHTML", "10_submitted_innerText", "10_submitted_textContent",
-    "11_planner_response", "11_parser_input", "12_request_context",
+    "10_submitted_innerHTML",
+    "11_planner_response", "11_parser_input",
+    "11_minimal_planner_response", "11_minimal_parser_input",
+    "12_minimal_decision", "12_minimal_parse_error",
+    "13_minimal_admission_input", "13_minimal_admission_output",
+    "13_minimal_pre_dispatch_action", "12_request_context",
     "13_field_refs_expanded",
 })
 
@@ -65,6 +70,7 @@ def begin(request, *, request_id="", task_id="", transport=""):
         if not settings or not marked:
             _scope.set(None)
             return
+        subcase = re.search(r"(?m)^IT10_SUBCASE_ID=([A-Za-z0-9_-]{8,120})[ \t\r]*$", text)
         seed = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:24]
         trace_id = settings[1] + "-" + seed
         previous = _scope.get() or {}
@@ -72,7 +78,8 @@ def begin(request, *, request_id="", task_id="", transport=""):
             previous = {}
         _scope.set({"trace_id": trace_id, "request_id": str(request_id or previous.get("request_id", "")),
                     "task_id": str(task_id or previous.get("task_id", "")),
-                    "transport": str(transport or previous.get("transport", ""))})
+                    "transport": str(transport or previous.get("transport", "")),
+                    "subcase_id": str(subcase.group(1) if subcase else previous.get("subcase_id", ""))})
     except Exception:
         _scope.set(None)
 
@@ -89,7 +96,7 @@ def restore(value):
                 or not re.fullmatch(re.escape(settings[1]) + r"-[a-f0-9]{24}", str(value.get("trace_id", "")))):
             _scope.set(None)
             return
-        _scope.set({key: str(value.get(key, "")) for key in ("trace_id", "request_id", "task_id", "transport")})
+        _scope.set({key: str(value.get(key, "")) for key in ("trace_id", "request_id", "task_id", "transport", "subcase_id")})
     except Exception:
         _scope.set(None)
 
@@ -363,13 +370,23 @@ def record(stage, value, *, evidence_status="RAW_INPUT", paths=None, extra=None)
 def record_user_dom(element, semantic_text):
     """Observe only this request's marked user turn; never historical traffic."""
     active = context()
-    if (not active or not active.get("request_id")
-            or active["request_id"] not in semantic_text
-            or "NLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E" not in semantic_text):
+    if not active or "NLIT_CASE_ID=IT10" not in semantic_text or "NLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E" not in semantic_text:
+        return
+    # Request IDs are not necessarily present in the submitted ChatGPT turn.
+    # Match the unique sender-supplied subcase, not a previous IT10 message.
+    subcase = str(active.get("subcase_id") or "")
+    if subcase:
+        if not re.search(r"(?m)^IT10_SUBCASE_ID=" + re.escape(subcase) + r"[ \t\r]*$", semantic_text):
+            return
+    elif not (active.get("request_id") and active["request_id"] in semantic_text):
         return
     try:
         pair = element.evaluate("el => ({innerText:el.innerText||'',textContent:el.textContent||''})")
         record("10_submitted_innerText", pair["innerText"], evidence_status="RENDERED_DOM")
         record("10_submitted_textContent", pair["textContent"], evidence_status="RENDERED_DOM")
+        if raw_capture_enabled():
+            # Read the matched USER turn, not arbitrary conversation DOM.
+            html = element.evaluate("el => el.innerHTML || ''")
+            record("10_submitted_innerHTML", str(html), evidence_status="DOM_SERIALIZATION")
     except Exception:
         return
