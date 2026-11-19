@@ -108,7 +108,25 @@ def read_answer_text(element, *, copilot_code_ui=False, diagnostics=None) -> str
         const text=clone.textContent||'';
         return copilotCodeUI?{text,diagnostic:diagnostic.slice(0,10)}:text;
     }'''
+    if PIT.raw_capture_enabled():
+        # This is one content node being read, not necessarily an owned
+        # Goal answer. Save unmodified DOM representations separately from
+        # the adapter's derived text; never claim service-side model bytes.
+        try:
+            dom = element.evaluate(
+                "el => ({innerHTML:el.innerHTML||'',textContent:el.textContent||'',innerText:el.innerText||''})"
+            )
+            if isinstance(dom, dict):
+                for label, field in (("10c_answer_content_innerHTML", "innerHTML"),
+                                     ("10c_answer_content_textContent", "textContent"),
+                                     ("10c_answer_content_innerText", "innerText")):
+                    PIT.record(label, str(dom.get(field) or ""),
+                               evidence_status="BROWSER_CONTENT_DOM_UNSCOPED")
+        except Exception:
+            pass
     value=element.evaluate(script, True) if copilot_code_ui else element.evaluate(script)
+    PIT.record("10c_answer_adapter_value", value,
+               evidence_status="BROWSER_EXTRACTED_CONTENT_PRE_STRIP")
     if isinstance(value, dict):
         if diagnostics is not None:
             diagnostics.extend(value.get('diagnostic', []))
