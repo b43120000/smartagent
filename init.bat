@@ -63,7 +63,14 @@ if not defined GIT67_SESSION_UUID (
 )
 set "GIT67_SESSION_RUN_ID=GIT67_%GIT67_SESSION_UUID%"
 set "GIT67_SESSION_RAW_ROOT=%~dp0localdata\diagnostics\it10_GIT67_%GIT67_SESSION_UUID%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\git67_it10_prepare.ps1" -ProjectRoot "%~dp0" -PrivateRoot "%GIT67_SESSION_RAW_ROOT%"
+rem Avoid a quoted trailing backslash on -ProjectRoot: Windows native argv
+rem parsing can swallow the closing quote and the following -PrivateRoot.
+rem -NonInteractive fails instead of prompting for any missing mandatory arg.
+if not defined GIT67_SESSION_RAW_ROOT (
+    echo [INIT] FAIL: private Raw Evidence path was not generated.
+    goto :init_failed
+)
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0install_smart_agent\git67_it10_prepare.ps1" -ProjectRoot "%~dp0." -PrivateRoot "%GIT67_SESSION_RAW_ROOT%"
 if errorlevel 1 (
     echo [INIT] FAIL: private evidence folder ACL could not be verified.
     goto :init_failed
