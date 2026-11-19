@@ -5,6 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+$phase = 'INITIALIZE'
 try {
     $project = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
     $allowed = [IO.Path]::GetFullPath((Join-Path $project 'localdata\diagnostics')).TrimEnd('\')
@@ -17,6 +18,7 @@ try {
     if ($suffix -notmatch '^[A-Za-z0-9_-]{8,80}$' -or $suffix.Contains('\')) {
         throw 'PRIVATE_ROOT_NAME_INVALID'
     }
+    $phase = 'CHECK_REPARSE_PARENTS'
     foreach ($item in @($project, (Join-Path $project 'localdata'),
                         $allowed)) {
         if (Test-Path -LiteralPath $item) {
@@ -29,11 +31,14 @@ try {
     if (Test-Path -LiteralPath $root) {
         throw 'PRIVATE_ROOT_ALREADY_EXISTS_USE_FRESH_INIT'
     }
+    $phase = 'CREATE_PRIVATE_DIRECTORY'
     [IO.Directory]::CreateDirectory($root) | Out-Null
+    $phase = 'GET_IDENTITY'
     $current = [Security.Principal.WindowsIdentity]::GetCurrent().User
-    $system = New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'
-    $admins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+    $system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    $admins = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
     $allowedSids = @($current.Value, $system.Value, $admins.Value)
+    $phase = 'REBUILD_ACL'
     $acl = Get-Acl -LiteralPath $root
     # Do not inherit permissions from the general-purpose diagnostics dir.
     $acl.SetAccessRuleProtection($true, $false)
@@ -50,7 +55,9 @@ try {
             [Security.AccessControl.AccessControlType]::Allow)
         $acl.AddAccessRule($rule)
     }
+    $phase = 'APPLY_ACL'
     Set-Acl -LiteralPath $root -AclObject $acl
+    $phase = 'VERIFY_ACL'
     $checked = Get-Acl -LiteralPath $root
     if (-not $checked.AreAccessRulesProtected) {
         throw 'PRIVATE_ACL_INHERITANCE_NOT_DISABLED'
@@ -73,6 +80,6 @@ try {
     exit 0
 } catch {
     # Do not emit the user's absolute root, account SID or access rule details.
-    Write-Error ('GIT67_INIT_ACL_FAILED:' + $_.Exception.GetType().Name)
+    Write-Error ('GIT67_INIT_ACL_FAILED:' + $phase + ':' + $_.Exception.GetType().Name)
     exit 4
 }
