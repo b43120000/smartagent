@@ -17,9 +17,9 @@ import shutil
 TRACE_NAME = re.compile(r"^it10-path-([A-Za-z0-9_-]{8,80}-[a-f0-9]{24})-[0-9]+\.jsonl$")
 BLOB_NAME = re.compile(r"^it10-raw-([A-Za-z0-9_-]{8,80}-[a-f0-9]{24})-[0-9]+-[a-f0-9]{32}\.bin$")
 IDENTITY = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
-MAX_TRACE = 4 * 1024 * 1024
+MAX_TRACE = 12 * 1024 * 1024
 MAX_BLOB = 2 * 1024 * 1024
-MAX_BUNDLE = 8 * 1024 * 1024
+MAX_BUNDLE = 64 * 1024 * 1024
 LEGACY_REQUIRED = (
     "02_telegram_message_text", "03_receiver_normalized", "04_gateway_input",
     "06_worker_input", "07_loop_input", "08_user_request_block",
@@ -34,7 +34,9 @@ MINIMAL_REQUIRED = (
     "08_user_request_block", "08_minimal_prompt", "09_composer_input",
     "10_submitted_innerText", "10_submitted_textContent",
     "10d_provider_response_return", "11_minimal_planner_response",
-    "11_minimal_parser_input", "12_minimal_decision",
+    "11_minimal_parser_input", "11_minimal_json_candidate_raw",
+    "11_minimal_candidate_before_json_decode", "11_minimal_json_decoded",
+    "12_minimal_decision",
     "13_minimal_admission_input", "13_minimal_admission_output",
     "13_minimal_broker_gate", "13_minimal_pre_dispatch_action",
     "15_minimal_tool_result_raw", "15_minimal_tool_result_decoded",
@@ -70,6 +72,7 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
         "raw_bytes": 0, "source_files": [], "missing_refs": [],
         "missing_stages": [], "missing_raw_stages": [], "untouched_raw_bytes": True,
         "observed_stages": {}, "execution_path": "UNDETERMINED",
+        "boundary_records": [], "boundary_matrix_file": "it10_boundary_matrix.json",
         "unobserved_external_boundaries": [
             "PHONE_SIDE_BYTES_NOT_CAPTURED_BY_SMARTAGENT",
             "MODEL_SERVICE_SERVER_RAW_OUTPUT_NOT_CAPTURED_BY_BROWSER_UI",
@@ -110,6 +113,8 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
     seen_stages = set()
     stage_counts: dict[str, int] = {}
     transport_modes: set[str] = set()
+    boundary_rows: list[dict] = []
+    verified_pointers: set[str] = set()
     trace_out = stage / "it10" / "trace"
     blob_out = stage / "it10" / "raw"
     trace_out.mkdir(parents=True, exist_ok=True)
@@ -142,6 +147,23 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
             stage_counts[stage_key] = stage_counts.get(stage_key, 0) + 1
             if row.get("transport"):
                 transport_modes.add(str(row.get("transport")).upper())
+            # One row per original source emission, no derived normalization.
+            # The listed Pointer must still be checked before it can be trusted.
+            boundary_rows.append({
+                "event_id": row.get("event_id"), "trace_file": source.name,
+                "trace_id": trace_id, "stage": stage_key,
+                "round": (row.get("extra") or {}).get("round"),
+                "candidate_index": (row.get("extra") or {}).get("candidate_index"),
+                "source_file": row.get("source_file"),
+                "source_function": row.get("source_function"),
+                "raw_origin": row.get("raw_origin"),
+                "evidence_status": row.get("evidence_status"),
+                "raw_blob_ref": row.get("raw_blob_ref"),
+                "raw_blob_sha256": row.get("raw_blob_sha256"),
+                "raw_blob_byte_length": row.get("raw_blob_byte_length"),
+                "path_values": row.get("path_values") or [],
+                "raw_blob_capture_status": row.get("raw_blob_status", "NOT_RECORDED"),
+            })
             if row.get("raw_blob_status") != "PERSISTED":
                 if row.get("raw_blob_status") in ("OVERSIZED", "WRITE_FAILED"):
                     result["missing_refs"].append(
@@ -181,16 +203,24 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
             continue
         budget -= len(original)
         result["raw_blob_count"] += 1
+        verified_pointers.add(name)
         verified_raw_stages.update(ref_stage_map.get(name, set()))
         result["raw_bytes"] += len(original)
         result["source_files"].append({
             "path": "it10/raw/" + name, "sha256": expected_hash,
             "bytes": len(original), "kind": "BYTE_EXACT_RAW_BLOB",
         })
+    for row in boundary_rows:
+        ref = row.get("raw_blob_ref")
+        row["pointer_verified_and_copied"] = bool(ref and ref in verified_pointers)
+    result["boundary_records"] = boundary_rows
     minimal = "08_minimal_prompt" in seen_stages
     needed = MINIMAL_REQUIRED if minimal else LEGACY_REQUIRED
     if "TELEGRAM" in transport_modes:
-        needed = ("01b_telegram_http_body",) + needed
+        needed = ("01b_telegram_http_body",
+                  "06a_worker_protocol_manifest_result",
+                  "06b_worker_loaded_source_attestation",
+                  "06c_worker_writer_attestation_gate") + needed
     result["execution_path"] = "MINIMAL_EXECUTOR" if minimal else "LEGACY_OR_UNKNOWN"
     result["observed_stages"] = dict(sorted(stage_counts.items()))
     result["missing_stages"] = [stage for stage in needed if stage not in seen_stages]
@@ -215,6 +245,21 @@ def main() -> int:
         outcome = {"schema": "SMARTAGENT_IT10_RAW_COLLECT_V1",
                    "status": "COLLECTOR_ERROR", "error_type": type(error).__name__,
                    "source_files": [], "missing_refs": ["COLLECTOR_ERROR"], "missing_stages": []}
+    matrix = {
+        "schema": "SMARTAGENT_IT10_BOUNDARY_MATRIX_V1",
+        "task_id": args.task, "request_id": args.request,
+        "execution_path": outcome.get("execution_path"),
+        "stage_records": outcome.get("boundary_records") or [],
+        "missing_stages": outcome.get("missing_stages") or [],
+        "missing_raw_stages": outcome.get("missing_raw_stages") or [],
+        "missing_refs": outcome.get("missing_refs") or [],
+        "classification_warning": ("Raw bytes and JSON-decoded path values are different "
+                                   "representations. Never infer corruption from "
+                                   "different whole-document hashes or bootstrap DOM."),
+    }
+    (args.stage / "it10_boundary_matrix.json").write_text(
+        json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     destination = args.stage / "it10_raw_evidence_index.json"
     destination.write_text(json.dumps(outcome, ensure_ascii=False, indent=2), encoding="utf-8")
     print("IT10_RAW_STATUS=" + outcome["status"])
