@@ -104,6 +104,10 @@ jobs:
         if: runner.os == 'Windows'
         run: >-
           python -m venv .venv
+      - name: Restore tracked venv gitignore after synthetic CI venv creation
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -c "import subprocess; from pathlib import Path; p=Path('.venv/.gitignore'); p.write_bytes(subprocess.check_output(['git','show','HEAD:.venv/.gitignore'])); print('CI_VENV_TRACKED_GITIGNORE_RESTORED=YES')"
       - name: Windows real init.bat CMD to PowerShell parameter and private ACL regression
         if: runner.os == 'Windows'
         run: >-
