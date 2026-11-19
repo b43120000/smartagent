@@ -14,7 +14,8 @@ from agent_core import path_integrity_trace as PIT
 from agent_core.it10_raw_collector import collect
 from agent_core.request_context import RequestContextStore
 from agent_core.web_ui.providers.chatgpt.composer import read_composer_snapshot
-from agent_core.web_ui.message_text import read_message_text
+from agent_core.web_ui.message_text import read_message_text, read_answer_text
+from WebAgent.minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
 from RemoteAgent.telegram_transport import TelegramBotClient, TelegramReceiverConfig, TelegramUpdateAdapter
 
 
@@ -169,6 +170,60 @@ class RawCollectorTests(unittest.TestCase):
         self.assertNotIn("11_minimal_parser_input", result["missing_stages"])
         self.assertIn("11_minimal_parser_input", result["missing_raw_stages"])
         self.assertEqual(result["status"], "PARTIAL")
+
+    def test_parser_candidate_decode_and_rejected_path_have_all_raw_bytes(self):
+        good = r"E:\AIspace\.case_d_backups"
+        bad = r"E:\AIspace.case_d_backups"
+        goal = ("NLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\n" + good)
+        PIT.begin(goal, task_id=TASK, request_id=RID, transport="LOCAL_TEST")
+        response = json.dumps({"type": "tool_call", "name": "observe_fact",
+                               "arguments": {"path": bad}}, ensure_ascii=False)
+        with self.assertRaises(MinimalDecisionError) as error:
+            parse_minimal_decision_with_diagnostics(response, original_goal=goal)
+        self.assertEqual(error.exception.code, "model_explicit_path_separator_missing")
+        rows = self._rows()
+        needed = ("11_minimal_json_candidate_raw",
+                  "11_minimal_candidate_before_json_decode",
+                  "11_minimal_json_decoded", "11_minimal_path_integrity_rejected")
+        for key in needed:
+            row = next(row for row in rows if row["stage"] == key)
+            self.assertEqual(row["raw_blob_status"], "PERSISTED")
+            raw = (self.private / row["raw_blob_ref"]).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), row["raw_blob_sha256"])
+            self.assertEqual(row.get("extra", {}).get("candidate_index"), 0 if key != "11_minimal_path_integrity_rejected" else None)
+        result = collect(TASK, RID, self.private, self.stage)
+        stages = {row["stage"] for row in result["boundary_records"]}
+        self.assertTrue(set(needed).issubset(stages))
+        self.assertEqual(result["missing_refs"], [])
+        self.assertTrue(all(
+            row["pointer_verified_and_copied"] for row in result["boundary_records"]
+            if row["stage"] in needed
+        ))
+
+    def test_assistant_dom_and_adapter_value_are_stored_before_strip(self):
+        class Answer:
+            def evaluate(self, script, *args):
+                if "innerHTML:el.innerHTML" in script:
+                    return {
+                        "innerHTML": "<code>E:\\AIspace\\.case_d_backups</code>",
+                        "textContent": "E:\\AIspace\\.case_d_backups",
+                        "innerText": "E:\\AIspace\\.case_d_backups",
+                    }
+                return "  E:\\AIspace\\.case_d_backups  "
+        value = read_answer_text(Answer())
+        self.assertEqual(value, r"E:\AIspace\.case_d_backups")
+        names = {row["stage"] for row in self._rows()}
+        self.assertTrue({
+            "10c_answer_content_innerHTML", "10c_answer_content_textContent",
+            "10c_answer_content_innerText", "10c_answer_adapter_value",
+        }.issubset(names))
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["missing_refs"], [])
+        self.assertTrue(any(
+            row["stage"] == "10c_answer_adapter_value"
+            and row["pointer_verified_and_copied"]
+            for row in result["boundary_records"]
+        ))
 
     def test_unarmed_raw_is_not_persisted(self):
         with patch.dict(os.environ, {"SMARTAGENT_IT10_PATH_TRACE_RAW": "NO"}):
