@@ -67,7 +67,7 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
         "status": "NOT_ARMED", "task_id": task, "request_id": request,
         "selected_trace_ids": [], "trace_file_count": 0, "raw_blob_count": 0,
         "raw_bytes": 0, "source_files": [], "missing_refs": [],
-        "missing_stages": [], "untouched_raw_bytes": True,
+        "missing_stages": [], "missing_raw_stages": [], "untouched_raw_bytes": True,
         "observed_stages": {}, "execution_path": "UNDETERMINED",
         "unobserved_external_boundaries": [
             "PHONE_SIDE_BYTES_NOT_CAPTURED_BY_SMARTAGENT",
@@ -104,6 +104,8 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
 
     budget = MAX_BUNDLE
     references: dict[str, dict] = {}
+    ref_stage_map: dict[str, set[str]] = {}
+    verified_raw_stages: set[str] = set()
     seen_stages = set()
     stage_counts: dict[str, int] = {}
     transport_modes: set[str] = set()
@@ -159,6 +161,7 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
                 result["missing_refs"].append("RAW_POINTER_CONFLICT:" + ref)
                 continue
             references[ref] = fingerprint
+            ref_stage_map.setdefault(ref, set()).add(stage_key)
     for name, (expected_hash, expected_size) in sorted(references.items()):
         original_path = raw_root / name
         if (original_path.is_symlink() or not original_path.is_file() or
@@ -177,6 +180,7 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
             continue
         budget -= len(original)
         result["raw_blob_count"] += 1
+        verified_raw_stages.update(ref_stage_map.get(name, set()))
         result["raw_bytes"] += len(original)
         result["source_files"].append({
             "path": "it10/raw/" + name, "sha256": expected_hash,
@@ -189,8 +193,10 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
     result["execution_path"] = "MINIMAL_EXECUTOR" if minimal else "LEGACY_OR_UNKNOWN"
     result["observed_stages"] = dict(sorted(stage_counts.items()))
     result["missing_stages"] = [stage for stage in needed if stage not in seen_stages]
+    result["missing_raw_stages"] = [stage for stage in needed if stage not in verified_raw_stages]
     result["status"] = ("CAPTURED_WITH_EXPECTED_STAGES"
                         if not result["missing_refs"] and not result["missing_stages"]
+                        and not result["missing_raw_stages"]
                         else "PARTIAL")
     return result
 
