@@ -39,13 +39,17 @@ try {
     $admins = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
     $allowedSids = @($current.Value, $system.Value, $admins.Value)
     $phase = 'REBUILD_ACL'
+    $phase = 'REBUILD_GET_ACL'
     $acl = Get-Acl -LiteralPath $root
     # Do not inherit permissions from the general-purpose diagnostics dir.
+    $phase = 'REBUILD_PROTECT'
     $acl.SetAccessRuleProtection($true, $false)
+    $phase = 'REBUILD_LIST_RULES'
     foreach ($rule in @($acl.GetAccessRules($true, $true,
                     [Security.Principal.SecurityIdentifier]))) {
         $acl.RemoveAccessRuleSpecific($rule)
     }
+    $phase = 'REBUILD_CREATE_RULES'
     foreach ($sid in @($current, $system, $admins)) {
         $rule = [Security.AccessControl.FileSystemAccessRule]::new(
             $sid, [Security.AccessControl.FileSystemRights]::FullControl,
@@ -53,7 +57,9 @@ try {
              [Security.AccessControl.InheritanceFlags]::ObjectInherit),
             [Security.AccessControl.PropagationFlags]::None,
             [Security.AccessControl.AccessControlType]::Allow)
+        $phase = 'REBUILD_ADD_RULE'
         $acl.AddAccessRule($rule)
+        $phase = 'REBUILD_CREATE_RULES'
     }
     $phase = 'APPLY_ACL'
     Set-Acl -LiteralPath $root -AclObject $acl
@@ -80,6 +86,14 @@ try {
     exit 0
 } catch {
     # Do not emit the user's absolute root, account SID or access rule details.
-    Write-Error ('GIT67_INIT_ACL_FAILED:' + $phase + ':' + $_.Exception.GetType().Name)
+    $code = ''
+    if ($_.Exception -is [System.Management.Automation.CommandNotFoundException]) {
+        $name = [string]$_.Exception.CommandName
+        if ($name -match '^[A-Za-z][A-Za-z0-9-]{0,55}
+    exit 4
+}
+) { $code = ':' + $name }
+    }
+    Write-Error ('GIT67_INIT_ACL_FAILED:' + $phase + ':' + $_.Exception.GetType().Name + $code)
     exit 4
 }
