@@ -300,7 +300,16 @@ class TelegramUpdateAdapter:
         raw_text = str(message.get("text") or message.get("caption") or "")
         is_admin_cmd = is_direct_cmd_request(raw_text)
         visible_trace = "[TG_DIRECT_CMD_REDACTED]" if is_admin_cmd else raw_text
-        PIT.begin(visible_trace, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
+        # Use the exact Gateway idempotency key/Request ID BEFORE any raw
+        # ingress trace; repeating the same text in a new update is distinct.
+        idempotency_key = f"TELEGRAM|api.telegram.org|{chat_id}|{update_id}"
+        request_id = "RR-TELEGRAM-" + hashlib.sha256(
+            idempotency_key.encode("utf-8", errors="replace")
+        ).hexdigest()[:16].upper()
+        PIT.begin(
+            visible_trace, request_id=request_id,
+            transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM",
+        )
         if not is_admin_cmd:
             # Called only after the adapter has authorized this sender.
             # Mixed Telegram updates intentionally remain UNOBSERVED.
@@ -328,7 +337,7 @@ class TelegramUpdateAdapter:
             source_message_id=str(message_id),
             text=text,
             received_at=float(message.get("date", time.time()) or time.time()),
-            idempotency_key=f"TELEGRAM|api.telegram.org|{chat_id}|{update_id}",
+            idempotency_key=idempotency_key,
             reply_context={
                 "chat_id": chat_id,
                 "message_id": message_id,

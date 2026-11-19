@@ -29,10 +29,22 @@ package is permitted only under its ignored `localdata` directory. Private
 trace filenames and `it10_path_trace_private` directories are also ignored.
 Never stage raw traces or reports containing private conversation data.
 
-Each process appends its own `it10-path-<trace>-<pid>.jsonl` file. The trace ID
-joins records created before a Request/Task ID exists to later records with
-those IDs; empty early identity fields mean not yet assigned, not a fabricated
-identity. The Composer helper carries this diagnostic context explicitly.
+Each process appends its own `it10-path-<trace>-<pid>.jsonl` file.
+Since the Git67 identity-isolation repair, Telegram derives its deterministic
+Gateway Request ID **before** any 01b/02/03 trace emission. The trace identity
+is a SHA-256 prefix of the request ID and original request text, scoped to the
+fresh diagnostic Run ID. Repeating the same text in different Telegram updates
+therefore yields separate trace IDs; replaying the same update remains stable.
+The Composer helper carries this diagnostic context explicitly. A legacy
+unbound local-only caller may still use a text-only trace identity.
+
+The Collector includes only files positively bound to the selected Task or
+Request. Wholly foreign or identity-less files sharing an old text-only trace ID
+are excluded and counted as `foreign_trace_files_excluded` without copying
+their raw pointers or reporting them as missing. If a **single** JSONL mixes
+foreign and expected identities, it still fails closed as
+`TRACE_IDENTITY_MISMATCH`. The Collector never silently rewrites an old trace,
+and still reports all actual missing Stage/Raw Pointer evidence as PARTIAL.
 
 Raw UTF-8 hashes and lengths, comparison hashes, and literal path codepoints
 are distinct fields. Comparison hashes normalize whitespace and are not raw

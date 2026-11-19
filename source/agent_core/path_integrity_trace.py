@@ -65,6 +65,19 @@ def _settings():
     except (OSError, ValueError, IndexError, RuntimeError):
         return None
 
+def _trace_id(run_id: str, request: str, *, request_id: str = "") -> str:
+    """Separate identical request text by its trusted transport Request ID.
+
+    An unbound local-only diagnostic caller retains the legacy text-only ID.
+    Real Telegram binds its deterministic Request ID before recording 01b/02/03.
+    The filename contains only a hash prefix, never the source text or ID.
+    """
+    payload = str(request or "").strip().encode("utf-8")
+    identity = str(request_id or "").strip()
+    if identity:
+        payload = b"IT10_REQUEST_SCOPED_V2\x00" + identity.encode("utf-8") + b"\x00" + payload
+    return run_id + "-" + hashlib.sha256(payload).hexdigest()[:24]
+
 
 def begin(request, *, request_id="", task_id="", transport=""):
     """Activate only an explicitly marked diagnostic request; reset on others."""
@@ -80,8 +93,7 @@ def begin(request, *, request_id="", task_id="", transport=""):
             _scope.set(None)
             return
         subcase = re.search(r"(?m)^IT10_SUBCASE_ID=([A-Za-z0-9_-]{8,120})[ \t\r]*$", text)
-        seed = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:24]
-        trace_id = settings[1] + "-" + seed
+        trace_id = _trace_id(settings[1], text, request_id=request_id)
         previous = _scope.get() or {}
         if previous.get("trace_id") != trace_id:
             previous = {}
@@ -165,8 +177,10 @@ def worker_env_from_handoff(task):
     run_id = str(handoff.get("run_id") or "")
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", run_id):
         return {}
-    digest = hashlib.sha256(request.strip().encode("utf-8")).hexdigest()[:24]
-    if handoff.get("trace_id") != run_id + "-" + digest:
+    expected_trace_id = _trace_id(
+        run_id, request, request_id=str(getattr(task, "request_id", "") or "")
+    )
+    if handoff.get("trace_id") != expected_trace_id:
         return {}
     issued_at = handoff.get("issued_at")
     if not isinstance(issued_at, (float, int)) or not 0 <= time.time() - issued_at <= 1800:

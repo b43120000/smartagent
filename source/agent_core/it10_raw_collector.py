@@ -69,6 +69,7 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
         "schema": "SMARTAGENT_IT10_RAW_COLLECT_V1",
         "status": "NOT_ARMED", "task_id": task, "request_id": request,
         "selected_trace_ids": [], "trace_file_count": 0, "raw_blob_count": 0,
+        "foreign_trace_files_excluded": 0, "foreign_trace_rows_excluded": 0,
         "raw_bytes": 0, "source_files": [], "missing_refs": [],
         "missing_stages": [], "missing_raw_stages": [], "untouched_raw_bytes": True,
         "observed_stages": {}, "execution_path": "UNDETERMINED",
@@ -123,6 +124,21 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
         trace_id = TRACE_NAME.fullmatch(source.name).group(1)
         if trace_id not in selected:
             continue
+        # Legacy text-only Trace IDs can be shared across distinct Requests.
+        # Unbound-only or wholly foreign JSONL files are NOT missing evidence
+        # for this Request and must never leak pointers into its bundle.
+        # New Telegram ingress binds the Request before its first raw stage.
+        positively_bound = any(
+            (row.get("request_id") == request and row.get("task_id") in ("", None, task))
+            or (row.get("task_id") == task and row.get("request_id") in ("", None, request))
+            for row in rows
+        )
+        if not positively_bound:
+            result["foreign_trace_files_excluded"] += 1
+            result["foreign_trace_rows_excluded"] += len(rows)
+            continue
+        # A mixed-identity JSONL still fails closed; do not split its source
+        # and pretend the original evidence provenance was unambiguous.
         if any(row.get("trace_id") != trace_id or
                row.get("task_id") not in ("", None, task) or
                row.get("request_id") not in ("", None, request) for row in rows):
