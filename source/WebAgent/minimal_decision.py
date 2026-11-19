@@ -6,6 +6,8 @@ import hashlib
 import json
 import re
 
+from agent_core import path_integrity_trace as PIT
+
 
 MAX_RESPONSE_BYTES = 32 * 1024
 MAX_CANDIDATES = 48
@@ -176,6 +178,34 @@ def _json_error_code(exc: json.JSONDecodeError) -> str:
     return "json_syntax_invalid"
 
 
+
+
+def _model_dropped_explicit_dot_separator(decision: MinimalDecision, original_goal: str) -> bool:
+    """Recognize only an exact one-backslash deletion BEFORE a dot segment.
+
+    This is a fail-closed mismatch detector, not path inference, normalization
+    or an authorization grant. An explicitly present target is never rejected.
+    It cannot identify which upstream layer originally deleted that byte.
+    """
+    if not original_goal or decision.kind != "tool_call":
+        return False
+    args = decision.arguments or {}
+    for field in ("path", "paths", "working_directory"):
+        field_value = args.get(field)
+        paths = field_value if isinstance(field_value, list) else [field_value]
+        for proposed in paths:
+            if not isinstance(proposed, str) or not re.match(r"^[A-Za-z]:\\", proposed):
+                continue
+            if proposed in original_goal:
+                continue
+            for pos, char in enumerate(proposed):
+                if char != "." or pos < 3 or proposed[pos - 1] in "\\/":
+                    continue
+                original = proposed[:pos] + "\\" + proposed[pos:]
+                if original in original_goal:
+                    return True
+    return False
+
 def parse_minimal_decision_with_diagnostics(
     response: str, *, original_goal: str = "",
 ) -> tuple[MinimalDecision, dict]:
@@ -227,7 +257,11 @@ def parse_minimal_decision_with_diagnostics(
         # Explicit-path normalization runs before JSON decoding because
         # unescaped Windows sequences like backslash-n are syntactically
         # valid JSON but would otherwise silently change the target path.
+        PIT.record("11_minimal_json_candidate_raw", candidate,
+                   evidence_status="MODEL_JSON_CANDIDATE", extra={"candidate_index": index})
         fixed, path_repaired = _repair_explicit_path(candidate, original_goal)
+        PIT.record("11_minimal_candidate_before_json_decode", fixed,
+                   evidence_status="PARSER_PRE_DECODE_STRING", extra={"candidate_index": index})
         try:
             parsed = json.loads(fixed, object_pairs_hook=_unique_keys)
         except json.JSONDecodeError as exc:
@@ -241,12 +275,24 @@ def parse_minimal_decision_with_diagnostics(
         except MinimalDecisionError as exc:
             first_problem = first_problem or exc.code
             continue
+        PIT.record("11_minimal_json_decoded", parsed,
+                   evidence_status="JSON_DECODED_VALUE", extra={"candidate_index": index})
         if path_repaired:
             meta["normalization"] = "EXPLICIT_WINDOWS_PATH_BACKSLASH_ESCAPED"
         try:
             decision = _to_decision(parsed, meta)
         except MinimalDecisionError as exc:
             first_problem = first_problem or exc.code
+            continue
+        if _model_dropped_explicit_dot_separator(decision, original_goal):
+            # The raw candidate and decoded value were recorded separately.
+            # Refuse the mutated action; never guess/rewrite a filesystem path.
+            meta["path_integrity_reason_code"] = "EXPLICIT_DOT_SEGMENT_SEPARATOR_DROPPED"
+            PIT.record("11_minimal_path_integrity_rejected", {
+                "decision": parsed, "reason": meta["path_integrity_reason_code"],
+                "candidate_index": index,
+            }, evidence_status="PARSED_ACTION_REJECTED")
+            first_problem = first_problem or "model_explicit_path_separator_missing"
             continue
         valid.append((decision, index))
 
