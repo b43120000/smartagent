@@ -20,10 +20,23 @@ IDENTITY = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
 MAX_TRACE = 4 * 1024 * 1024
 MAX_BLOB = 2 * 1024 * 1024
 MAX_BUNDLE = 8 * 1024 * 1024
-REQUIRED = (
+LEGACY_REQUIRED = (
     "02_telegram_message_text", "03_receiver_normalized", "04_gateway_input",
     "06_worker_input", "07_loop_input", "08_user_request_block",
     "09_composer_input", "11_planner_response", "11_parser_input",
+)
+# These are the REAL Git67 Minimal Executor stages, not the legacy protocol loop.
+# Some stages can be legitimately UNOBSERVED on a blocked/no-tool task; the
+# collector must preserve that status instead of claiming a chain PASS.
+MINIMAL_REQUIRED = (
+    "02_telegram_message_text", "03_receiver_normalized", "04_gateway_input",
+    "05_task_store", "06_worker_input", "07_loop_input",
+    "08_user_request_block", "08_minimal_prompt", "09_composer_input",
+    "10_submitted_innerText", "10_submitted_textContent",
+    "10d_provider_response_return", "11_minimal_planner_response",
+    "11_minimal_parser_input", "12_minimal_decision",
+    "13_minimal_admission_input", "13_minimal_admission_output",
+    "13_minimal_pre_dispatch_action",
 )
 
 
@@ -55,6 +68,11 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
         "selected_trace_ids": [], "trace_file_count": 0, "raw_blob_count": 0,
         "raw_bytes": 0, "source_files": [], "missing_refs": [],
         "missing_stages": [], "untouched_raw_bytes": True,
+        "observed_stages": {}, "execution_path": "UNDETERMINED",
+        "unobserved_external_boundaries": [
+            "PHONE_SIDE_BYTES_NOT_CAPTURED_BY_SMARTAGENT",
+            "MODEL_SERVICE_SERVER_RAW_OUTPUT_NOT_CAPTURED_BY_BROWSER_UI",
+        ],
     }
     if not (os.environ.get("SMARTAGENT_IT10_PATH_TRACE") == "1"
             and os.environ.get("SMARTAGENT_IT10_PATH_TRACE_RAW") == "YES"
@@ -87,6 +105,8 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
     budget = MAX_BUNDLE
     references: dict[str, dict] = {}
     seen_stages = set()
+    stage_counts: dict[str, int] = {}
+    transport_modes: set[str] = set()
     trace_out = stage / "it10" / "trace"
     blob_out = stage / "it10" / "raw"
     trace_out.mkdir(parents=True, exist_ok=True)
@@ -115,6 +135,10 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
         })
         for row in rows:
             seen_stages.add(str(row.get("stage") or ""))
+            stage_key = str(row.get("stage") or "")
+            stage_counts[stage_key] = stage_counts.get(stage_key, 0) + 1
+            if row.get("transport"):
+                transport_modes.add(str(row.get("transport")).upper())
             if row.get("raw_blob_status") != "PERSISTED":
                 if row.get("raw_blob_status") in ("OVERSIZED", "WRITE_FAILED"):
                     result["missing_refs"].append(
@@ -158,7 +182,13 @@ def collect(task: str, request: str, raw_root: Path, stage: Path) -> dict:
             "path": "it10/raw/" + name, "sha256": expected_hash,
             "bytes": len(original), "kind": "BYTE_EXACT_RAW_BLOB",
         })
-    result["missing_stages"] = [stage for stage in REQUIRED if stage not in seen_stages]
+    minimal = "08_minimal_prompt" in seen_stages
+    needed = MINIMAL_REQUIRED if minimal else LEGACY_REQUIRED
+    if "TELEGRAM" in transport_modes:
+        needed = ("01b_telegram_http_body",) + needed
+    result["execution_path"] = "MINIMAL_EXECUTOR" if minimal else "LEGACY_OR_UNKNOWN"
+    result["observed_stages"] = dict(sorted(stage_counts.items()))
+    result["missing_stages"] = [stage for stage in needed if stage not in seen_stages]
     result["status"] = ("CAPTURED_WITH_EXPECTED_STAGES"
                         if not result["missing_refs"] and not result["missing_stages"]
                         else "PARTIAL")
