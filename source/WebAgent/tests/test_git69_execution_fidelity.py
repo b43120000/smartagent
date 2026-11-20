@@ -119,7 +119,7 @@ class RawStreamAndCollectorIT(unittest.TestCase):
         from agent_core.bounded_process import _read_capture, _stream_sha256
         with tempfile.TemporaryDirectory() as td:
             p=Path(td)/"raw.bin"
-            raw=b"  leading  \\r\\ntrailing \\n"
+            raw=b"  leading  \r\ntrailing \n"
             p.write_bytes(raw)
             digest=_stream_sha256(p)
             self.assertEqual(digest,hashlib.sha256(raw).hexdigest())
@@ -205,8 +205,8 @@ class FidelityAdditionalCases(unittest.TestCase):
             self.assertEqual(got["exit_code"],0,got)
             self.assertTrue(got["stdout_truncated"])
             self.assertTrue(got["stderr_truncated"])
-            expected_out=("Z"*20000+"\\n").encode()
-            expected_err=("Y"*20000+"\\n").encode()
+            expected_out=("Z"*20000+"\n").encode()
+            expected_err=("Y"*20000+"\n").encode()
             self.assertEqual(got["stdout_raw_sha256"],hashlib.sha256(expected_out).hexdigest())
             self.assertEqual(got["stderr_raw_sha256"],hashlib.sha256(expected_err).hexdigest())
             self.assertEqual(got["stdout_bytes"],len(expected_out))
