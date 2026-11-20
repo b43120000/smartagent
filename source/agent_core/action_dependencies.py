@@ -92,6 +92,10 @@ def command_is_proven_observation(action):
         # commit is an ancestor of the second. No object fetch is performed.
         r'git\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}',
         rf'git\s+-C\s+{native_literal}\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{{40}}\s+[0-9a-fA-F]{{40}}',
+        # Identical read-only ancestry check through a literal portable Git.
+        # Never accept interpolation, shell chains or extra arguments.
+        r'''&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe")\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}''',
+        r'''&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe")\s+-C\s+(?:'[^'\r\n]+'|"[^"$\x60\r\n]+")\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}''',
     )
     from .python_https_probe import is_bounded_python_https_probe
     if action.get('operation') in {'INSPECT', 'VERIFY'} and is_bounded_python_https_probe(command):

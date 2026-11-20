@@ -20,8 +20,16 @@ SCHEMA = "SMARTAGENT_ACTION_RESOLUTION_TRACE_V1"
 PREREQ_SCHEMA = "SMARTAGENT_DEPLOYMENT_PATH_PREREQUISITES_V1"
 MAX_RECENT = 16
 
+# Exactly one literal executable and one authenticated HTTPS HEAD query.
+# PowerShell-call-operator paths are only lexical proof of a Git invocation.
+# Executable trust, original request scope and network admission are separate.
+_GIT_REMOTE_BINARY = (
+    r"(?:git(?:\.exe)?|"
+    r"&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"
+    r'"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe"))'
+)
 _GIT_REMOTE_READ = re.compile(
-    r"git(?:\.exe)?\s+ls-remote\s+"
+    _GIT_REMOTE_BINARY + r"\s+ls-remote\s+"
     r"https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100})(?:\.git)?\s+HEAD",
     re.IGNORECASE,
 )
