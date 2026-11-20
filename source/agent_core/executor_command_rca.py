@@ -221,6 +221,8 @@ def capture_command_result_rca(raw_result: object, receipt: object) -> dict:
         "capture_encoding": str(data.get("capture_encoding") or "")[:20],
         "decode_error_policy": str(data.get("decode_error_policy") or "")[:20],
         "output_complete": data.get("output_complete") is True,
+        "capture_integrity": str(data.get("capture_integrity") or "")[:24],
+        "stream_capture_proven": data.get("stream_capture_proven") is True,
         "observed_post_timeout_exit_code": data.get("observed_post_timeout_exit_code"),
         "command_rejection_stage": str(data.get("command_rejection_stage") or "")[:80],
         "sandbox_evidence": {
