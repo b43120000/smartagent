@@ -501,6 +501,7 @@ def test_cross_writable_roots_unknown_build_never_requests_human_apr(
             prompt.split("Recent actual PokeClaw ToolResults:\n", 1)[1]
             .split("\n", 1)[0]
         )
+        assert "evidence_ref" in preview[-1], f"action_not_dispatched: {preview[-1]}"
         evidence = preview[-1]["evidence_ref"]
         return json.dumps({
             "type": "finish", "contract_version": 2,
