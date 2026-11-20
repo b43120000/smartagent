@@ -57,7 +57,8 @@ def registered_remote_git_read(action: Mapping, artifact_view: Mapping | None) -
     if (action.get("tool") != "run_command"
             or action.get("operation") != "GIT_INSPECT"):
         return False
-    repo = exact_remote_git_read_repository(action.get("command"))
+    from .shell_execution import execution_contract
+    repo = exact_remote_git_read_repository(execution_contract(action)["policy_command"])
     if not repo:
         return False
     refs = list((artifact_view or {}).get("artifact_references") or [])[:8]

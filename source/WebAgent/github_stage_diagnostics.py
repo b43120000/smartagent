@@ -14,7 +14,8 @@ def github_source_stage_evidence(action: Mapping, receipt: Mapping,
                                  evidence_ref: str, *, prior_stages=()) -> dict | None:
     if action.get("tool") != "run_command":
         return None
-    command = str(action.get("command") or "")
+    from agent_core.shell_execution import execution_contract
+    command = execution_contract(action)["policy_command"]
     data = receipt.get("data")
     if not isinstance(data, Mapping):
         return None

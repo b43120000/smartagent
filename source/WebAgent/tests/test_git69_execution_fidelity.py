@@ -64,7 +64,7 @@ class SidecarIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             s=execution_contract({"command":sys.executable,"shell_mode":"DIRECT",
                 "argv":["-c","import sys; print('F69_OUT'); print('F69_ERR',file=sys.stderr); sys.exit(7)"]})
-            with patch("agent_core.tools.require_command_allowed"),patch("agent_core.command_security.require_command_allowed"):
+            with patch("agent_core.tools.require_command_allowed"),patch("agent_core.command_security.require_command_allowed"),patch("agent_core.turbo_broker_admission.assess",return_value={"decision":"NORMAL"}):
                 r=tools._run_explicit_shell_capture(s,20,td,cwd=td,telemetry=None,approval_manifest=None)
             self.assertEqual(r["exit_code"],7,r)
             self.assertIn("F69_OUT",r["stdout"])
@@ -75,7 +75,7 @@ class SidecarIntegration(unittest.TestCase):
     def test_cmd_actual_child_exit_stderr_stdout(self):
         with tempfile.TemporaryDirectory() as td:
             s=execution_contract({"command":"echo F69_OUT & echo F69_ERR 1>&2 & exit /b 9","shell_mode":"CMD"})
-            with patch("agent_core.tools.require_command_allowed"),patch("agent_core.command_security.require_command_allowed"):
+            with patch("agent_core.tools.require_command_allowed"),patch("agent_core.command_security.require_command_allowed"),patch("agent_core.turbo_broker_admission.assess",return_value={"decision":"NORMAL"}):
                 r=tools._run_explicit_shell_capture(s,20,td,cwd=td,telemetry=None,approval_manifest=None)
             self.assertEqual(r["exit_code"],9,r)
             self.assertIn("F69_OUT",r["stdout"])

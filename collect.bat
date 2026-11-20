@@ -544,6 +544,7 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                             shell_mode='POWERSHELL'
                             launch_form=''
                             argv_count=0
+                            argv_integrity_matched=$null
                             argv_redacted=@()
                             risk_class=''
                             turbo_decision=''
@@ -589,6 +590,7 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         $row['operation'] = (Safe-Code $commandInfo.operation)
                         $row['shell_mode'] = (Safe-Code $commandInfo.shell_mode)
                         $row['argv_count'] = [int]$commandInfo.argv_count
+                        $row['argv_integrity_matched'] = $commandInfo.argv_integrity_matched
                         $row['argv_redacted'] = @($commandInfo.argv_redacted)
                         if ([bool]$commandInfo.dispatch_known) {
                             $row['dispatch_known'] = $true
@@ -730,6 +732,7 @@ $executorFidelityRows = @($executorCommandRows | ForEach-Object {
         shell_mode=$_.shell_mode
         launch_form=$_.launch_form
         argv_count=$_.argv_count
+        argv_integrity_matched=$_.argv_integrity_matched
         argv_redacted=@($_.argv_redacted)
         original_command_redacted=$_.original_command_redacted
         dispatched_command_redacted=$_.dispatched_command_redacted

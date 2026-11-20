@@ -71,6 +71,9 @@ def capture_command_rca(original: object, dispatched: object = None) -> dict:
         "operation": str(original.get("operation") or "")[:60],
         "shell_mode": str(original.get("shell_mode") or "POWERSHELL")[:20],
         "argv_count": (len(original.get("argv")) if isinstance(original.get("argv"),list) else 0),
+        "argv_integrity_matched": (
+            original.get("argv") == dispatched.get("argv")
+            if isinstance(dispatched, Mapping) else None),
         "argv_redacted": [redact_for_rca(item,limit=512)["text"]
                           for item in (original.get("argv") or [])[:64]
                           if isinstance(item,str)] if isinstance(original.get("argv"),list) else [],
@@ -78,7 +81,10 @@ def capture_command_rca(original: object, dispatched: object = None) -> dict:
         "sanitization_best_effort": True,
         "dispatch_known": dispatch_text is not None,
         "dispatch_matches_original": (
-            dispatch_text == command if dispatch_text is not None else None
+            dispatch_text == command
+            and original.get("argv") == dispatched.get("argv")
+            and (original.get("shell_mode") or "POWERSHELL") == (dispatched.get("shell_mode") or "POWERSHELL")
+            if dispatch_text is not None else None
         ),
     }
     if dispatch_text is not None:
