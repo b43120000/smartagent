@@ -15,8 +15,8 @@ permissions:
 
 jobs:
   full-offline-unit-suite:
-    name: Full offline UT / ${ matrix.os }
-    runs-on: ${ matrix.os }
+    name: Full offline UT / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -79,7 +79,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: git68-full-ut-${ matrix.os }
+          name: git68-full-ut-${{ matrix.os }}
           path: |
             git68-full-ut-results.xml
             git68-full-ut-coverage.json
