@@ -242,3 +242,54 @@ def test_open_mode_planner_runtime_blackboard_finish_and_taskresult_roundtrip(
             request_id="RR-FOREIGN", task_epoch=loop.task_epoch,
             evidence_ref=ref, section="stdout",
         )
+
+
+def test_open_mode_auto_approve_receipt_reaches_tool_confirmation_boundary(
+    tmp_path, monkeypatch,
+):
+    """Production approval decision; fake external binary, never executed."""
+    from agent_core.tools import _execution_approval_manifest
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state = _arm_open_mode(monkeypatch, workspace)
+    assert state["auto_approve_effective"] == "ON"
+    command = "Write-Output OPEN_MODE_SECONDARY_APPROVAL"
+    context = SimpleNamespace(
+        workspace_root=workspace,
+        task_id="TASK-GIT68-AUTO-ON",
+        request_id="RR-GIT68-AUTO-ON",
+    )
+
+    # Only simulate a tool that requires an approval manifest; production
+    # evaluate_auto_approve() and its actual workspace/safety checks still run.
+    monkeypatch.setattr(
+        "agent_core.tools._native_run_command_admitted",
+        lambda *a, **k: False,
+    )
+    monkeypatch.setattr(
+        "agent_core.tools.inspect_command",
+        lambda *a, **k: SimpleNamespace(
+            allowed=False, approval_eligible=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "agent_core.tools.build_command_approval_manifest",
+        lambda *a, **k: {
+            "schema": "COMMAND_ALLOW_ONCE_V1",
+            "target": str(workspace / "synthetic_tool.exe"),
+            "manifest_digest": "1" * 64,
+        },
+    )
+    receipt = _execution_approval_manifest(
+        {"command": command}, None, context, workspace,
+    )
+    assert receipt is not None
+    assert receipt["_auto_approval"]["decision"] == "AUTO_APPROVED"
+    assert receipt["_auto_approval"]["executed"] is False
+    assert receipt["_auto_approval"]["policy_revision"] == 68
+    assert receipt["_auto_approval"]["executor_backend"] == "WINDOWS_EXECUTOR"
+    assert receipt["_auto_approval"]["authorization_scope"] == str(workspace)
+    assert receipt["_auto_approval"]["command_sha256"] == hashlib.sha256(
+        command.encode("utf-8")
+    ).hexdigest()
