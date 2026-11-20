@@ -463,6 +463,7 @@ class TelegramReceiver:
                     prompt["approval_id"], approval_kind="RESUME_UNKNOWN_COMMAND",
                 ),
             )
+            self._resume_approval_gate().mark_notified(prompt["approval_id"])
             self._log("CONNECT", stage="PRE_RESUME_APPROVAL_PROMPT",
                       source_task_id=prompt["source_task_id"],
                       approval_id=prompt["approval_id"], update_id=update_id)
@@ -477,6 +478,68 @@ class TelegramReceiver:
             self._log("ERROR", stage="PRE_RESUME_APPROVAL_BLOCKED",
                       reason=str(exc)[:150], update_id=update_id)
             return True
+
+    def _process_timed_out_pre_resume(self) -> None:
+        """Only after handling actual callback updates, auto-handle no click."""
+        try:
+            outcomes = self._resume_approval_gate().take_timed_out_telegram(
+                workspace=self.config.workspace,
+            )
+        except Exception as exc:
+            self._log("ERROR", stage="PRE_RESUME_TIMEOUT_SCAN_FAILED",
+                      error=type(exc).__name__)
+            return
+        for outcome in outcomes:
+            approval_id = outcome["approval_id"]
+            try:
+                from agent_core.resume_command_approval import ResumeApprovalError
+                fields = outcome["incoming"]
+                original = NormalizedInboundMessage(
+                    transport=str(fields["transport"]),
+                    endpoint=str(fields["endpoint"]),
+                    conversation_key=str(fields["conversation_key"]),
+                    sender_id=str(fields["sender_id"]),
+                    source_message_id=str(fields["source_message_id"]),
+                    text=str(fields["text"]),
+                    received_at=float(fields["received_at"]),
+                    idempotency_key=str(fields["idempotency_key"]),
+                    reply_context=dict(fields["reply_context"]),
+                    metadata={**dict(fields.get("metadata") or {}),
+                              "resume_approval_id": approval_id},
+                )
+                if self.task_admission_guard is not None:
+                    check = self.task_admission_guard(original)
+                    allowed = bool(check[0]) if isinstance(check, tuple) else bool(check)
+                    if not allowed:
+                        raise ResumeApprovalError("resume_task_admission_denied")
+                accepted = self.ingress.accept(original, workspace=self.config.workspace)
+                task = accepted.task
+                if task is None:
+                    raise ResumeApprovalError("resume_ingress_task_missing")
+                self._resume_approval_gate().bind_child(
+                    approval_id, child_task_id=task.task_id,
+                    owner=self._resume_owner(original),
+                )
+                self._send_message(
+                    int(original.reply_context["chat_id"]),
+                    "10 分鐘沒有選擇，Auto Approve 已自動允許一次，開始接續任務 "
+                    + str(task.task_id)
+                    + "。後續仍會重新執行 Command Admission 與 Workspace 檢查。",
+                    reply_to_message_id=int(original.reply_context["message_id"]),
+                )
+                if bool(getattr(accepted, "created", True)) and self.accepted_handler:
+                    self.accepted_handler(task)
+                self._log(
+                    "CONNECT", stage="PRE_RESUME_TIMEOUT_AUTO_ENQUEUED",
+                    approval_id=approval_id,
+                    source_task_id=outcome["source_task_id"],
+                    task_id=task.task_id, decision="APPROVED",
+                )
+            except Exception as exc:
+                self._log(
+                    "ERROR", stage="PRE_RESUME_TIMEOUT_ENQUEUE_FAILED",
+                    approval_id=approval_id, error=type(exc).__name__,
+                )
 
     def _process_pre_resume_choice(self, message: NormalizedInboundMessage,
                                     *, update_id: int) -> bool:
@@ -858,7 +921,9 @@ class TelegramReceiver:
         )
         self._log("POLL", offset=self.offset_store.next_offset, update_count=len(updates))
         with self.binding_lock:
-            return self._process_updates(updates)
+            accepted = self._process_updates(updates)
+            self._process_timed_out_pre_resume()
+            return accepted
 
     def _process_updates(self, updates: list[dict[str, Any]]) -> list[Any]:
         accepted = []

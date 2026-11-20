@@ -56,6 +56,8 @@ jobs:
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git68_open_mode_pipeline.py
+          source/WebAgent/tests/test_git68_timeout_approval.py
+          source/WebAgent/tests/test_git68_pre_resume_timeout.py
           source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
           source/WebAgent/tests/test_git68_hardening.py
           --tb=short

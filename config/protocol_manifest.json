@@ -81,7 +81,7 @@
     "source/RemoteAgent/telegram_delivery.py": "f6b13fdda9c75abe024f75399f5516d385eaca1838df19c93b1a5dd713372506",
     "source/RemoteAgent/telegram_direct_cmd.py": "c223abad4c547ae084cd61f6538bc24a28614bdb1d98f5677acb092c65b67fc0",
     "source/RemoteAgent/telegram_listener.py": "4ae0c2e7f5b4bf2e1eaccbaef309076f7c488a7f37b4eec0085484a133d780ad",
-    "source/RemoteAgent/telegram_transport.py": "2796295f2f9a06deab8db484f0a943bdf293826a3a45dd7c3d8d77fda89a228e",
+    "source/RemoteAgent/telegram_transport.py": "bfe170086fa0b36e1b1cdccb539defc4634602dd16197bc2f3bfdc75756d9e93",
     "source/RemoteAgent/telegram_webagent_worker.py": "321e270a93043b652b1e295981cc970c878359d653ea208f1a4997fa8a8b6af4",
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/WebAgent/browser_bridge.py": "ecef818eb2552ac5307faaaba36773230fd04f3ed41110cf38f3ea40c2c8b1bd",
@@ -297,7 +297,8 @@
     "source/agent_core/workspace_manager.py": "aca76e543b7b8198c8a6277e37d951996927cadb9e335a57c23a0c74d9ec2cef",
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443",
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
-    "source/agent_core/unknown_command_approval.py": "85439187268eabba5890f19b7ef6734c153f6ab0378f43d14136af32f6ae6a8a"
+    "source/agent_core/unknown_command_approval.py": "85439187268eabba5890f19b7ef6734c153f6ab0378f43d14136af32f6ae6a8a",
+    "source/agent_core/resume_command_approval.py": "a76af0b6283364b3f9238829bbd423e94d62cab11139762f0789e9493d17955b"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
