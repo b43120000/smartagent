@@ -104,7 +104,7 @@
     "source/agent_core/agent_gateway.py": "7a951dc82030d7411f5451e6e4251a4dfb6414d27434760b8b1ada6825d8a37d",
     "source/agent_core/aggregated_verification.py": "c20e619d7e06784b783913ceaab9b309bafef56a24f0619614c5fa00ca5af98a",
     "source/agent_core/attachment_transaction.py": "bfb88a2feac1ba678dc360e8b6c9724c1d4d398968bc3434a95c8d65d6126720",
-    "source/agent_core/auto_approve_mode.py": "ca50361fabcbc15b6c37d1bb191d7d30c2cd487ccf03197fef893d36d9ebd2f6",
+    "source/agent_core/auto_approve_mode.py": "04833dbe246905b3b2d309eea6adfc5775292a1b01b117ad9a16edeed2710856",
     "source/agent_core/batch_apply.py": "3e16ad969477af9ceec3d56ff417706b21def08a2ff47b7adbb74d4b24c45118",
     "source/agent_core/bounded_process.py": "97ab5deada870931eaadc265a2a9e7e330e3b79441ebb38f926c9c9b7dac8093",
     "source/agent_core/bp1_observation_terminal.py": "c059bc55262f96d1ca7ca952a100376adf3faaac19ec27e0a98dcd16672a5abe",
