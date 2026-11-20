@@ -69,6 +69,11 @@ def capture_command_rca(original: object, dispatched: object = None) -> dict:
         "command_truncated": submitted["truncated"],
         "command_redaction_count": submitted["redaction_count"],
         "operation": str(original.get("operation") or "")[:60],
+        "shell_mode": str(original.get("shell_mode") or "POWERSHELL")[:20],
+        "argv_count": (len(original.get("argv")) if isinstance(original.get("argv"),list) else 0),
+        "argv_redacted": [redact_for_rca(item,limit=512)["text"]
+                          for item in (original.get("argv") or [])[:64]
+                          if isinstance(item,str)] if isinstance(original.get("argv"),list) else [],
         "raw_command_included": False,
         "sanitization_best_effort": True,
         "dispatch_known": dispatch_text is not None,
@@ -190,6 +195,18 @@ def capture_command_result_rca(raw_result: object, receipt: object) -> dict:
             and not isinstance(data.get("exit_code"), bool) else None
         ),
         "verification_status": str(data.get("verification_status") or "")[:48],
+        "execution_status": str(data.get("execution_status") or "")[:48],
+        "failure_origin": str(data.get("failure_origin") or "")[:48],
+        "shell_mode": str(data.get("shell_mode") or "")[:20],
+        "launch_form": str(data.get("launch_form") or "")[:50],
+        "process_started": data.get("process_started") is True,
+        "process_state": str(data.get("process_state") or "")[:30],
+        "timed_out": data.get("timed_out") is True,
+        "stdout_bytes": data.get("stdout_bytes") if type(data.get("stdout_bytes")) is int else None,
+        "stderr_bytes": data.get("stderr_bytes") if type(data.get("stderr_bytes")) is int else None,
+        "stdout_sha256": str(data.get("stdout_sha256") or "")[:64],
+        "stderr_sha256": str(data.get("stderr_sha256") or "")[:64],
+        "observed_post_timeout_exit_code": data.get("observed_post_timeout_exit_code"),
         "command_rejection_stage": str(data.get("command_rejection_stage") or "")[:80],
         "sandbox_evidence": {
             key: evidence[key] for key in os_fields if key in evidence

@@ -389,6 +389,28 @@ def _run_powershell_capture(
     return {"command": command, **payload}
 
 
+def _run_explicit_shell_capture(spec: dict, timeout: int, capture_root,
+                                *, cwd, telemetry, approval_manifest) -> dict:
+    """Run DIRECT/CMD with the same admission and bounded capture as PowerShell."""
+    from .command_security import CommandSecurityError, require_command_allowed
+    from .turbo_broker_admission import assess
+    if assess(cwd, tool="run_command")["decision"] == "BROKER_REQUIRED":
+        return {"exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
+                "process_started": False, "security_rejected": True,
+                "error": "TURBO_BROKER_UNSUPPORTED_LAUNCH_FORM"}
+    try:
+        require_command_allowed(spec["policy_command"], workspace=cwd,
+                                approval_manifest=approval_manifest)
+    except CommandSecurityError as exc:
+        return {"exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
+                "process_started": False, "security_rejected": True,
+                "error": "SECURITY_COMMAND_REJECTED:" + str(exc)}
+    return run_bounded_process(spec["launch_argv"], cwd=cwd, timeout=timeout,
+                               capture_root=capture_root, telemetry=telemetry,
+                               approval_manifest=approval_manifest,
+                               security_command=spec["policy_command"])
+
+
 def _evaluate_verification_step(
     step: dict,
     default_timeout: int = 30,
@@ -538,6 +560,8 @@ def tool_run_command(
     expected_failure: dict | None = None,
     expected_verification: dict | None = None,
     *,
+    shell_mode: str = "POWERSHELL",
+    argv: list | None = None,
     security_context: SecurityContext | None = None,
     approval_manifest: dict | None = None,
     working_directory: str | Path | None = None,
@@ -554,6 +578,15 @@ def tool_run_command(
         result_schema_for_operation,
     )
     operation = normalize_command_operation(operation)
+    from .shell_execution import execution_contract, ShellModeError
+    try:
+        spec = execution_contract({"command": command, "shell_mode": shell_mode,
+                                   **({"argv": argv} if argv is not None else {})})
+    except ShellModeError as exc:
+        from .tool_result_contract import encode_result
+        return encode_result("REJECTED", "SHELL_CONTRACT_INVALID", tool="run_command",
+                             executed=False, detail=str(exc))
+    policy_command = spec["policy_command"]
     if expected_verification is not None:
         from .verification_expectation import validate_expectation
         try:
@@ -564,9 +597,9 @@ def tool_run_command(
             from .tool_result_contract import encode_result
             return encode_result('REJECTED','EXPECTED_VERIFICATION_INVALID',tool='run_command',executed=False,detail=str(exc))
     cwd = resolve_command_working_directory(
-        working_directory, security_context, command=command, operation=operation)
+        working_directory, security_context, command=policy_command, operation=operation)
     from .action_dependencies import command_is_proven_observation
-    observation_confirmed = command_is_proven_observation({'operation':operation,'command':command})
+    observation_confirmed = command_is_proven_observation({'operation':operation,'command':policy_command})
     def finish(operation_result):
         from .tool_result_contract import attach_runtime_result
         rejected = bool(main.get('security_rejected'))
@@ -602,6 +635,20 @@ def tool_run_command(
                 'execution_status':status, 'verification_status':'UNVERIFIED' if running else operation_result['verification_status'],
                 'terminal_eligible':False if running or rejected or status == 'UNKNOWN' else operation_result['terminal_eligible'],
                 'working_directory':str(cwd),
+                'shell_mode':spec["shell_mode"],
+                'launch_form':spec["launch_form"],
+                'process_started':main.get("process_started"),
+                'stdout_sha256':__import__("hashlib").sha256(str(main.get("stdout") or "").encode("utf-8")).hexdigest(),
+                'stderr_sha256':__import__("hashlib").sha256(str(main.get("stderr") or "").encode("utf-8")).hexdigest(),
+                'observed_post_timeout_exit_code':main.get("observed_post_timeout_exit_code"),
+                'failure_origin':(
+                    "ADMISSION" if rejected else
+                    "TIMEOUT_OR_UNKNOWN" if main.get("timed_out") or status=="UNKNOWN" else
+                    "PROCESS_START" if main.get("exit_code") is None else
+                    "CHILD_PROCESS" if main.get("exit_code") != 0 else
+                    "VERIFICATION" if operation_result.get("verification_status") in {"FAIL","SPEC_INVALID"} else
+                    "NONE"
+                ),
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
                 'sandbox_evidence':main.get('sandbox_evidence', {}),
@@ -638,11 +685,22 @@ def tool_run_command(
             "root": security_context.workspace_root,
             "request_id": security_context.request_id,
         })
-    main = _run_powershell_capture(
-        command, timeout, capture_root,
-        cwd=cwd,
-        telemetry=telemetry, approval_manifest=approval_manifest,
+    main = (
+        _run_powershell_capture(
+            command, timeout, capture_root, cwd=cwd,
+            telemetry=telemetry, approval_manifest=approval_manifest)
+        if spec["shell_mode"] == "POWERSHELL" else
+        _run_explicit_shell_capture(
+            spec, timeout, capture_root, cwd=cwd,
+            telemetry=telemetry, approval_manifest=approval_manifest)
     )
+    if main.get("timed_out"):
+        # A killed child can return a nonzero *post-kill* exit status.
+        # Do not turn an uncertain side effect into an observed command failure.
+        main["observed_post_timeout_exit_code"] = main.get("exit_code")
+        main["exit_code"] = None
+        main["possible_partial_execution"] = bool(main.get("process_started"))
+        main["process_state"] = "UNKNOWN"
     lines = [
         "[COMMAND_RESULT]",
         f"result_schema: {COMMAND_RESULT_SCHEMA}",
@@ -650,6 +708,8 @@ def tool_run_command(
         "required_result_fields: " + ",".join(operation_result_contract(operation)),
         f"operation: {operation}",
         f"command: {command}",
+        f"shell_mode: {spec['shell_mode']}",
+        f"launch_form: {spec['launch_form']}",
         f"working_directory: {cwd}",
         'working_directory_source: ' + ('explicit' if working_directory else 'workspace_default'),
         f"exit_code: {main.get('exit_code')}",
@@ -1524,7 +1584,8 @@ def resolve_command_working_directory(
 
 
 def _execution_approval_manifest(tool_call: dict, agent, security_context: SecurityContext, working_directory=None) -> dict | None:
-    command = str(tool_call.get("command", "") or "")
+    from .shell_execution import execution_contract
+    command = execution_contract(tool_call)["policy_command"]
     # Native commands have already passed OS Broker admission; their grammar
     # does not require legacy one-shot/command-family human approval.
     if _native_run_command_admitted(working_directory or security_context.workspace_root):
@@ -2147,14 +2208,17 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
     if tool == "run_command":
         workspace = security_context.workspace_root
         try:
+            from .shell_execution import execution_contract, ShellModeError
+            shell_spec = execution_contract(tool_call)
             cwd = resolve_command_working_directory(
                 tool_call.get('working_directory'), security_context, agent,
-                command=tool_call.get('command', ''),
+                command=shell_spec["policy_command"],
                 operation=tool_call.get('operation', 'GENERAL'))
             approval_manifest = _execution_approval_manifest(tool_call, agent, security_context, cwd)
-        except PathSecurityError as exc:
+        except (PathSecurityError, ShellModeError) as exc:
             from .tool_result_contract import encode_result
-            return encode_result('REJECTED','WORKING_DIRECTORY_REJECTED',tool='run_command',executed=False,
+            return encode_result('REJECTED','WORKING_DIRECTORY_REJECTED' if isinstance(exc,PathSecurityError)
+                else 'SHELL_CONTRACT_INVALID',tool='run_command',executed=False,
                 requested_path=tool_call.get('working_directory',''),detail=str(exc))
         except (CommandSecurityError, SecurityApprovalError) as exc:
             if agent:
@@ -2164,6 +2228,8 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             tool_call.get("command", ""),
             tool_call.get("operation", ""),
             timeout=int(tool_call.get("timeout", 30)),
+            shell_mode=tool_call.get("shell_mode","POWERSHELL"),
+            argv=tool_call.get("argv"),
             verify=tool_call.get("verify") or [],
             success_criteria=tool_call.get("success_criteria", ""),
             capture_root=workspace / ".agents" / "results" / "command_capture",
