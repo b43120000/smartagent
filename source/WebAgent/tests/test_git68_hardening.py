@@ -435,3 +435,81 @@ def test_latest_admission_denial_is_not_reported_as_stale_partial_tool_result():
     assert result["executed"] is False
     assert result["authorization_granted"] is False
     assert result["exit_code"] is None
+
+
+def test_portable_git_full_path_remote_head_and_ancestry_are_readonly():
+    from agent_core.action_dependencies import command_is_proven_observation
+    from agent_core.action_resolution_trace import exact_remote_git_read_repository
+    from agent_core.command_operation import operation_mismatch_detail
+
+    executable = r'& "C:\smartagent\.venv\git\cmd\git.exe"'
+    remote_command = (
+        executable + " ls-remote https://github.com/b43120000/test.git HEAD"
+    )
+    head = "61bbcc24080a7c5b106116a132663ede2844af53"
+    target = "6b0d680185e40ae654acef03d0eeb9074536fb8e"
+    ancestry_command = (
+        executable + " merge-base --is-ancestor " + target + " " + head
+    )
+    assert exact_remote_git_read_repository(remote_command) == "b43120000/test"
+    assert command_is_proven_observation({
+        "operation": "GIT_INSPECT", "command": remote_command,
+    })
+    assert command_is_proven_observation({
+        "operation": "GIT_INSPECT", "command": ancestry_command,
+    })
+    assert operation_mismatch_detail({
+        "operation": "GIT_INSPECT", "command": ancestry_command,
+    }) == ""
+    remote = github_source_stage_evidence(
+        {"tool": "run_command", "command": remote_command},
+        _receipt(stdout=head + "\tHEAD\n"), "MIN-EV-" + "1" * 24,
+    )
+    assert remote["remote_head_sha"] == head
+    ancestry = github_source_stage_evidence(
+        {"tool": "run_command", "command": ancestry_command},
+        _receipt(), "MIN-EV-" + "2" * 24, prior_stages=[remote],
+    )
+    assert ancestry["stage_verified"]
+    assert ancestry["pinned_commit_status"] == "REMOTE_HEAD_ANCESTOR_PROVED"
+    assert ancestry["source_provenance"]["pinned_commit"] == target
+    assert ancestry["source_provenance"]["remote_head_evidence_ref"] == (
+        "MIN-EV-" + "1" * 24
+    )
+    fetch = executable + " fetch https://github.com/b43120000/test.git " + target
+    assert not command_is_proven_observation({
+        "operation": "GIT_INSPECT", "command": fetch,
+    })
+    assert "INSPECT_contains_explicit_mutation" in operation_mismatch_detail({
+        "operation": "GIT_INSPECT", "command": fetch,
+    })
+    assert operation_mismatch_detail({
+        "operation": "GIT_MUTATE", "command": fetch,
+    }) == ""
+
+
+def test_portable_git_readonly_scope_does_not_accept_shell_or_interpolation():
+    from agent_core.action_dependencies import command_is_proven_observation
+    from agent_core.action_resolution_trace import exact_remote_git_read_repository
+
+    head = "61bbcc24080a7c5b106116a132663ede2844af53"
+    target = "6b0d680185e40ae654acef03d0eeb9074536fb8e"
+    safe = (
+        r'& "C:\smartagent\.venv\git\cmd\git.exe"'
+        + " merge-base --is-ancestor " + target + " " + head
+    )
+    for command in [
+        safe + " ; Remove-Item -Recurse E:\\AIspace",
+        safe + " --also-run",
+        safe.replace("git.exe", "python.exe"),
+        safe.replace("git.exe", "$xgit.exe"),
+        safe.replace("git.exe", "gi" + chr(96) + "t.exe"),
+    ]:
+        assert not command_is_proven_observation({
+            "operation": "GIT_INSPECT", "command": command,
+        })
+    bad_remote = (
+        r'& "C:\smartagent\.venv\git\cmd\git.exe"'
+        + " ls-remote https://github.com/b43120000/test.git HEAD ; echo forged"
+    )
+    assert exact_remote_git_read_repository(bad_remote) == ""
