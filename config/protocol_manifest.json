@@ -298,7 +298,7 @@
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443",
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
     "source/agent_core/unknown_command_approval.py": "85439187268eabba5890f19b7ef6734c153f6ab0378f43d14136af32f6ae6a8a",
-    "source/agent_core/resume_command_approval.py": "a76af0b6283364b3f9238829bbd423e94d62cab11139762f0789e9493d17955b"
+    "source/agent_core/resume_command_approval.py": "971f89c78269785737f054eb6a78de48417e33b7a0d295322eb51ecf8f4b1368"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

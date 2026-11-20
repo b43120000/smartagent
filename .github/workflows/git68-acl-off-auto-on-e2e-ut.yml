@@ -9,6 +9,7 @@ on:
       - 'source/WebAgent/tests/test_git68_timeout_approval.py'
       - 'source/WebAgent/tests/test_git68_pre_resume_timeout.py'
       - 'source/agent_core/**'
+      - 'source/web_copilot.py'
       - 'source/WebAgent/pokeclaw_executor_loop.py'
       - 'source/WebAgent/minimal_decision.py'
       - 'source/WebAgent/github_stage_diagnostics.py'
@@ -54,6 +55,7 @@ jobs:
           source/agent_core/executor_run_blackboard.py
           source/agent_core/tri_one_task_result.py
           source/WebAgent/pokeclaw_executor_loop.py
+          source/web_copilot.py
       - name: Run open-mode end-to-end data lineage and V2 regressions
         run: >-
           python -B -m pytest -q

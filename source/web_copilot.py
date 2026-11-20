@@ -599,28 +599,37 @@ def main():
                 )
                 if pending_resume is not None:
                     approval_id = pending_resume["approval_id"]
-                    if time.time() >= float(pending_resume["expires_at"]):
-                        close_resume_dialog(page, approval_id)
-                        _present_webcopilot_notice(
-                            page,
-                            "接續授權等待已超過10分鐘；沒有執行指令。"
-                            "請重新輸入「接續工作 TASK-ID」開啟新確認。",
-                            "error",
-                        )
-                        pending_resume = None
-                        continue
                     show_resume_dialog(
                         page, pending_resume,
                         format_resume_approval_prompt(pending_resume),
                     )
+                    # Poll the actual trusted user click first. A late explicit
+                    # denial must not be overwritten by a timeout decision.
                     choice = poll_resume_dialog(page, approval_id)
+                    timeout_decision = None
+                    if choice is None and time.time() >= float(pending_resume["expires_at"]):
+                        timeout_decision = resume_gate.take_timed_out_webcopilot(
+                            approval_id, owner=resume_owner, workspace=workspace,
+                        )
+                        if timeout_decision is not None:
+                            choice = "APPROVED"
+                        else:
+                            close_resume_dialog(page, approval_id)
+                            _present_webcopilot_notice(
+                                page,
+                                "接續授權等待已超過10分鐘；目前未符合自動允許條件，"
+                                "沒有執行指令。請重新輸入「接續工作 TASK-ID」。",
+                                "error",
+                            )
+                            pending_resume = None
+                            continue
                     if choice is None:
                         time.sleep(0.3)
                         continue
-                    # Persist the human choice BEFORE enqueue. A denied
-                    # command is likewise bound and never executed.
+                    # A human choice is recorded BEFORE enqueue. A timed-out
+                    # grant is recorded in the software ledger, never the DOM.
                     try:
-                        decision = resume_gate.decide(
+                        decision = timeout_decision if timeout_decision is not None else resume_gate.decide(
                             approval_id, allowed=choice == "APPROVED",
                             owner=resume_owner, channel_id=resume_channel,
                         )
@@ -665,7 +674,8 @@ def main():
                     tracked_tasks[task.task_id] = str(task.state)
                     _present_webcopilot_notice(
                         page,
-                        ("已記錄允許一次" if choice == "APPROVED" else "已記錄拒絕")
+                        ("10 分鐘未選擇，Auto Approve 自動允許一次" if timeout_decision
+                         else "已記錄允許一次" if choice == "APPROVED" else "已記錄拒絕")
                         + f"，接續任務 {task.task_id} 開始。", "info",
                     )
                     if created:
@@ -717,10 +727,11 @@ def main():
                     if challenge is not None:
                         observer.acknowledge_user_turn(turn_index, raw_request)
                         pending_resume = challenge
-                        show_resume_dialog(
+                        if show_resume_dialog(
                             page, pending_resume,
                             format_resume_approval_prompt(pending_resume),
-                        )
+                        ):
+                            resume_gate.mark_notified(pending_resume["approval_id"])
                         _emit_webcopilot_event(
                             "PRE_RESUME_APPROVAL_PROMPT",
                             "[WebCopilot] 已顯示接續前授權選擇："

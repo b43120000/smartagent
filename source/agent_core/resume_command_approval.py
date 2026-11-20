@@ -228,11 +228,11 @@ class ResumeCommandGate:
         ) if k in challenge}
 
     def mark_notified(self, approval_id: str) -> None:
-        """A timer only begins after Telegram successfully sends the UI."""
+        """Record a successfully delivered Telegram or shown WebCopilot UI."""
         with exclusive_process_lock(self.lock, label="resume-command"):
             obj = self._load()
             ch = obj["challenges"].get(str(approval_id))
-            if (not ch or ch.get("transport") != "TELEGRAM"
+            if (not ch or ch.get("transport") not in {"TELEGRAM", "WEBGPT_COPILOT"}
                     or ch.get("state") != "PENDING"):
                 raise ResumeApprovalError("resume_notification_not_pending")
             ch["notification_sent_at"] = time.time()
@@ -281,6 +281,54 @@ class ResumeCommandGate:
             if chosen:
                 self._save(obj)
         return chosen
+
+    def take_timed_out_webcopilot(
+        self, approval_id: str, *, owner: str, workspace: str,
+    ) -> dict | None:
+        """Claim one unanswered, page-owned WebCopilot challenge after 600s.
+
+        The UI cannot grant permission; current Auto Approve and command
+        security must allow the exact command before claiming the timeout.
+        """
+        from .auto_approve_mode import evaluate_auto_approve
+        now = time.time()
+        with exclusive_process_lock(self.lock, label="resume-command"):
+            obj = self._load()
+            ch = obj["challenges"].get(str(approval_id))
+            if (not isinstance(ch, dict) or ch.get("state") != "PENDING"
+                    or ch.get("transport") != "WEBGPT_COPILOT"
+                    or ch.get("owner") != owner
+                    or not _same_path(ch.get("workspace", ""), workspace)
+                    or not ch.get("notification_sent_at")
+                    or now < float(ch.get("expires_at", 0) or 0)):
+                return None
+            source = self.continuations.get(ch["source_task_id"])
+            if (not source or source.get("owner") != owner
+                    or source.get("lease")
+                    or source.get("state") in {"RUNNING", "REGISTERED", "QUEUED", "DISPATCHED"}):
+                return None
+            action = ch.get("action") or {}
+            current = evaluate_auto_approve(
+                ch["workspace"], str(action.get("command") or ""),
+                working_directory=action.get("working_directory") or ch["workspace"],
+            )
+            if not current.get("approved"):
+                return None
+            try:
+                self.approvals.approve_unanswered_timeout(
+                    approval_id, ch["binding"], timeout_sec=TTL_SECONDS,
+                )
+            except SecurityApprovalError:
+                return None
+            ch.update(state="APPROVED", decided_at=now,
+                      timeout_auto_approved=True)
+            self._save(obj)
+            return {
+                "state": "APPROVED", "incoming": copy.deepcopy(ch["incoming"]),
+                "resume_text": ch["resume_text"],
+                "source_task_id": ch["source_task_id"],
+                "approval_id": approval_id,
+            }
 
     def decide(self, approval_id, *, allowed: bool, owner: str, channel_id: str):
         with exclusive_process_lock(self.lock, label="resume-command"):
