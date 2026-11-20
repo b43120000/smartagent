@@ -1,5 +1,11 @@
 """Git69 shell contract, process evidence and sidecar process integration."""
 import os
+import hashlib
+import json
+import re
+import subprocess
+import uuid
+import zipfile
 import sys
 import tempfile
 import unittest
@@ -107,3 +113,55 @@ class SidecarIntegration(unittest.TestCase):
             self.assertIsNone(receipt["data"]["exit_code"])
             self.assertEqual(receipt["data"]["observed_post_timeout_exit_code"],-9)
             self.assertTrue(receipt["data"]["possible_partial_execution"])
+
+class RawStreamAndCollectorIT(unittest.TestCase):
+    def test_full_capture_retains_whitespace_and_raw_sha256(self):
+        from agent_core.bounded_process import _read_capture, _stream_sha256
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/"raw.bin"
+            raw=b"  leading  \\r\\ntrailing \\n"
+            p.write_bytes(raw)
+            digest=_stream_sha256(p)
+            self.assertEqual(digest,hashlib.sha256(raw).hexdigest())
+            text,size,truncated,local_ref=_read_capture(p,4096)
+            self.assertEqual(text,raw.decode("utf-8"))
+            self.assertEqual(size,len(raw))
+            self.assertFalse(truncated)
+            self.assertFalse(local_ref)
+
+    def test_large_capture_retains_ref_and_raw_digest(self):
+        from agent_core.bounded_process import _read_capture, _stream_sha256
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/"large.bin"
+            raw=(b"F69_BLOCK_"*20000)
+            p.write_bytes(raw)
+            digest=_stream_sha256(p)
+            text,size,truncated,local_ref=_read_capture(p,512)
+            self.assertTrue(truncated)
+            self.assertEqual(size,len(raw))
+            self.assertEqual(digest,hashlib.sha256(raw).hexdigest())
+            self.assertTrue(Path(local_ref).is_file())
+            self.assertEqual(Path(local_ref).read_bytes(),raw)
+            self.assertIn("middle omitted",text)
+
+    @unittest.skipUnless(os.name=="nt","collect.bat ZIP integration needs Windows")
+    def test_collect_bat_includes_unencrypted_fidelity_file(self):
+        root=Path(__file__).resolve().parents[3]
+        task="TASK-G69"+uuid.uuid4().hex[:14].upper()
+        request="RR-G69"+uuid.uuid4().hex[:14].upper()
+        result=subprocess.run(["cmd.exe","/d","/c",str(root/"collect.bat"),task,request],
+            cwd=root,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+            text=True,errors="replace",timeout=120)
+        self.assertEqual(result.returncode,0,
+            result.stdout[-3500:]+result.stderr[-3500:])
+        m=re.search(r"(?m)^\[COLLECT\] ZIP:\s*(.+)$",result.stdout)
+        self.assertIsNotNone(m,result.stdout)
+        archive=Path(m.group(1).strip())
+        try:
+            with zipfile.ZipFile(archive) as zf:
+                self.assertIsNone(zf.testzip())
+                self.assertIn("executor_execution_fidelity.json",zf.namelist())
+                data=json.loads(zf.read("executor_execution_fidelity.json").decode("utf-8-sig"))
+                self.assertIsInstance(data,list)
+        finally:
+            archive.unlink(missing_ok=True)

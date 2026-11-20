@@ -212,6 +212,11 @@ def capture_command_result_rca(raw_result: object, receipt: object) -> dict:
         "stderr_bytes": data.get("stderr_bytes") if type(data.get("stderr_bytes")) is int else None,
         "stdout_sha256": str(data.get("stdout_sha256") or "")[:64],
         "stderr_sha256": str(data.get("stderr_sha256") or "")[:64],
+        "stdout_raw_sha256": str(data.get("stdout_raw_sha256") or "")[:64],
+        "stderr_raw_sha256": str(data.get("stderr_raw_sha256") or "")[:64],
+        "capture_encoding": str(data.get("capture_encoding") or "")[:20],
+        "decode_error_policy": str(data.get("decode_error_policy") or "")[:20],
+        "output_complete": data.get("output_complete") is True,
         "observed_post_timeout_exit_code": data.get("observed_post_timeout_exit_code"),
         "command_rejection_stage": str(data.get("command_rejection_stage") or "")[:80],
         "sandbox_evidence": {

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import subprocess
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -13,6 +14,15 @@ from .payload_budget import RESULT_ATTACHMENT_MAX_BYTES
 from .process_liveness import observe_owned_process, wait_with_liveness
 
 
+def _stream_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    if path.is_file():
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1048576), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
     size = path.stat().st_size if path.exists() else 0
     if size <= limit:
@@ -21,7 +31,7 @@ def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
             path.unlink()
         except OSError:
             pass
-        return raw.decode("utf-8", errors="replace").strip(), size, False, ""
+        return raw.decode("utf-8", errors="replace"), size, False, ""
 
     preview_bytes = 16 * 1024
     with path.open("rb") as handle:
@@ -32,7 +42,7 @@ def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
         head.decode("utf-8", errors="replace")
         + "\n...[command output retained locally; middle omitted]...\n"
         + tail.decode("utf-8", errors="replace")
-    ).strip()
+    )
     return preview, size, True, str(path.resolve())
 
 
@@ -352,6 +362,9 @@ def run_bounded_process(
                 process, execution_id=capture_id,
             )
 
+        # Hash original byte streams before any UTF-8 replacement/truncation/unlink.
+        stdout_raw_sha256 = _stream_sha256(stdout_path)
+        stderr_raw_sha256 = _stream_sha256(stderr_path)
         stdout, stdout_bytes, stdout_truncated, stdout_ref = _read_capture(stdout_path, max_stream_bytes)
         stderr, stderr_bytes, stderr_truncated, stderr_ref = _read_capture(stderr_path, max_stream_bytes)
         result = {
@@ -360,6 +373,10 @@ def run_bounded_process(
             "stderr": stderr,
             "stdout_bytes": stdout_bytes,
             "stderr_bytes": stderr_bytes,
+            "stdout_raw_sha256": stdout_raw_sha256,
+            "stderr_raw_sha256": stderr_raw_sha256,
+            "capture_encoding": "utf-8",
+            "decode_error_policy": "replace",
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
             "stdout_ref": stdout_ref,
