@@ -197,7 +197,7 @@ class FidelityAdditionalCases(unittest.TestCase):
     def test_true_raw_digest_when_output_truncated(self):
         from agent_core.bounded_process import run_bounded_process
         with tempfile.TemporaryDirectory() as td:
-            script="import sys; sys.stdout.write('Z'*20000+'\\n'); sys.stderr.write('Y'*20000+'\\n')"
+            script="import sys; sys.stdout.buffer.write(b'Z'*20000+b'\\n'); sys.stderr.buffer.write(b'Y'*20000+b'\\n')"
             with patch("agent_core.command_security.require_command_allowed"),patch(
                 "agent_core.turbo_broker_admission.assess",return_value={"decision":"NORMAL"}):
                 got=run_bounded_process([sys.executable,"-c",script],cwd=td,timeout=20,
