@@ -152,8 +152,23 @@ def _run(req:dict,profile:dict)->dict:
   stdout,stderr=cp.communicate(timeout=5)
  final_liveness=observe_owned_process(cp,execution_id=str(req['request_id']))
  limit=int(req.get('max_stream_bytes',5*1024*1024))
- out=_capture_restricted_stream(stdout,limit,temp,str(req['request_id']),'stdout')
- err=_capture_restricted_stream(stderr,limit,temp,str(req['request_id']),'stderr')
+ try:
+  out=_capture_restricted_stream(stdout,limit,temp,str(req['request_id']),'stdout')
+  err=_capture_restricted_stream(stderr,limit,temp,str(req['request_id']),'stderr')
+ except (OSError,RuntimeError,ValueError) as exc:
+  # Child was already started and may have produced irreversible effects.
+  # Capture persistence failure cannot be rewritten as preflight rejection,
+  # an empty successful stream, or a fabricated child exit.
+  return {'exit_code':None,'stdout':'','stderr':'',
+          'stdout_bytes':None,'stderr_bytes':None,
+          'stdout_truncated':None,'stderr_truncated':None,
+          'stdout_ref':'','stderr_ref':'',
+          'timed_out':timed_out,'process_started':True,
+          'possible_partial_execution':True,'process_state':'UNKNOWN',
+          'pid':cp.pid,'last_running_evidence':last_running_evidence,
+          'liveness_evidence':final_liveness,
+          'error_stage':'CAPTURE',
+          'error':'RESTRICTED_CAPTURE_PERSISTENCE_FAILED:'+type(exc).__name__}
  result={'exit_code':cp.returncode,**out,**err,
          'capture_encoding':'utf-8','decode_error_policy':'replace',
          'timed_out':timed_out,'process_started':True,
