@@ -620,6 +620,37 @@ def tool_run_command(
             else 'COMMAND_EXITED' if main.get('exit_code') is not None
             else 'PROCESS_NOT_STARTED'
         )
+
+        # Preserve evidence provenance independently of the status verdict.
+        if rejected:
+            failure_origin = "ADMISSION"
+        elif main.get("timed_out"):
+            failure_origin = "UNKNOWN"
+        elif main.get("error_stage") == "PROCESS_START" or (
+                main.get("error") and main.get("process_started") is False):
+            failure_origin = "PROCESS_START"
+        elif main.get("error_stage") == "CAPTURE":
+            failure_origin = "CAPTURE"
+        elif status == "UNKNOWN":
+            failure_origin = "UNKNOWN"
+        elif main.get("exit_code") not in (None, 0):
+            failure_origin = "CHILD_PROCESS"
+        elif operation_result.get("verification_status") in {"FAIL", "SPEC_INVALID"}:
+            failure_origin = "VERIFICATION"
+        else:
+            failure_origin = "NONE"
+        stream_capture_proven = (
+            type(main.get("stdout_bytes")) is int
+            and type(main.get("stderr_bytes")) is int
+            and type(main.get("stdout_truncated")) is bool
+            and type(main.get("stderr_truncated")) is bool
+        )
+        capture_integrity = (
+            "UNVERIFIED" if not stream_capture_proven or status == "UNKNOWN"
+            else "TRUNCATED" if main["stdout_truncated"] or main["stderr_truncated"]
+            else "COMPLETE" if main.get("exit_code") is not None
+            else "UNVERIFIED"
+        )
         return attach_runtime_result('\n'.join(lines), status, reason, tool='run_command',
             executed=executed, data={**operation_result,
                 # Full captured streams are Runtime evidence. The Planner
@@ -635,7 +666,9 @@ def tool_run_command(
                 'stderr_raw_sha256':main.get('stderr_raw_sha256'),
                 'capture_encoding':main.get('capture_encoding'),
                 'decode_error_policy':main.get('decode_error_policy'),
-                'output_complete':not (main.get('stdout_truncated') or main.get('stderr_truncated')),
+                'output_complete':capture_integrity == "COMPLETE",
+                'capture_integrity':capture_integrity,
+                'stream_capture_proven':stream_capture_proven,
                 'execution_status':status, 'verification_status':'UNVERIFIED' if running else operation_result['verification_status'],
                 'terminal_eligible':False if running or rejected or status == 'UNKNOWN' else operation_result['terminal_eligible'],
                 'working_directory':str(cwd),
@@ -645,14 +678,7 @@ def tool_run_command(
                 'stdout_sha256':__import__("hashlib").sha256(str(main.get("stdout") or "").encode("utf-8")).hexdigest(),
                 'stderr_sha256':__import__("hashlib").sha256(str(main.get("stderr") or "").encode("utf-8")).hexdigest(),
                 'observed_post_timeout_exit_code':main.get("observed_post_timeout_exit_code"),
-                'failure_origin':(
-                    "ADMISSION" if rejected else
-                    "TIMEOUT_OR_UNKNOWN" if main.get("timed_out") or status=="UNKNOWN" else
-                    "PROCESS_START" if main.get("exit_code") is None else
-                    "CHILD_PROCESS" if main.get("exit_code") != 0 else
-                    "VERIFICATION" if operation_result.get("verification_status") in {"FAIL","SPEC_INVALID"} else
-                    "NONE"
-                ),
+                'failure_origin':failure_origin,
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
                 'sandbox_evidence':main.get('sandbox_evidence', {}),
