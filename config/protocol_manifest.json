@@ -163,7 +163,7 @@
     "source/agent_core/request_ownership.py": "6bc49cc2da8cac6d712685079e976aa32036d14745b656aca3f41ce8e95030cc",
     "source/agent_core/requirement_goal_state.py": "4a864b1874b1225124f8962a357f77b934ec31c381d4495ca622874d2e366166",
     "source/agent_core/restricted_executor_client.py": "09dcb3afb55e756e67853d83e7f38b3f4fdf6e8fdce733f1062db973dc00ca46",
-    "source/agent_core/restricted_executor_service.py": "03289ed96d7984dd5d021a31e6a1c41d9e51f17aa92c66f34e94a1f1dc03dfbf",
+    "source/agent_core/restricted_executor_service.py": "7c9e38bae2813fc6354a3d07f3f5ae3cbc9adbcdd86fdcd2ab4fc7b923c77014",
     "source/agent_core/result_exchange.py": "c3f390f6b597ab7f8233ead278168b53b49d7838ada43defec52a0a70acde0fa",
     "source/agent_core/resume_command_approval.py": "971f89c78269785737f054eb6a78de48417e33b7a0d295322eb51ecf8f4b1368",
     "source/agent_core/runtime_cleanup.py": "e970f4ec4cc07412ea732662067dcc3b54b4fcd50f7103c20d9e5913630d953d",
