@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Queue worker that must be launched as the configured non-admin identity."""
 from __future__ import annotations
-import argparse,getpass,json,os,re,signal,subprocess,time,uuid
+import argparse,getpass,hashlib,json,os,re,signal,subprocess,time,uuid
 from pathlib import Path
 from .json_state_io import read_json_retry,write_json_atomic
 from .path_security import authorize_path
@@ -64,6 +64,32 @@ def _security_self_test(profile:dict)->dict:
  reasons=[reason for passed,reason in checks if not passed]
  return {'passed':not reasons,'reasons':reasons,'checked_at':time.time(),'mode':mode}
 
+def _capture_restricted_stream(raw: bytes, limit: int, root: Path,
+                               request_id: str, stream: str) -> dict:
+ """Preserve exact bytes; if preview truncates, retain full private raw data."""
+ if stream not in {"stdout", "stderr"} or not re.fullmatch(r"EXEC-[0-9A-F]{32}",request_id):
+  raise RuntimeError("restricted_capture_identity_invalid")
+ if type(limit) is not int or not 1 <= limit <= 32 * 1024 * 1024:
+  raise RuntimeError("restricted_capture_limit_invalid")
+ truncated=len(raw)>limit
+ ref=""
+ if truncated:
+  capture_dir=root/"command_capture"
+  capture_dir.mkdir(parents=True,exist_ok=True)
+  if capture_dir.is_symlink():
+   raise RuntimeError("restricted_capture_reparse_forbidden")
+  target=capture_dir/(request_id+"."+stream+".bin")
+  with target.open("xb") as handle:
+   handle.write(raw)
+   handle.flush()
+   os.fsync(handle.fileno())
+  if hashlib.sha256(target.read_bytes()).digest()!=hashlib.sha256(raw).digest():
+   raise RuntimeError("restricted_capture_readback_mismatch")
+  ref=str(target.resolve())
+ return {stream:raw[:limit].decode("utf-8",errors="replace"),
+         stream+"_bytes":len(raw),stream+"_truncated":truncated,
+         stream+"_ref":ref,stream+"_raw_sha256":hashlib.sha256(raw).hexdigest()}
+
 def _run(req:dict,profile:dict)->dict:
  # Defense in depth for direct queue clients, including Telegram workers.
  from .turbo_sandbox import resolve_turbo_state, require_turbo_backend
@@ -125,7 +151,15 @@ def _run(req:dict,profile:dict)->dict:
   else:os.killpg(os.getpgid(cp.pid),signal.SIGKILL)
   stdout,stderr=cp.communicate(timeout=5)
  final_liveness=observe_owned_process(cp,execution_id=str(req['request_id']))
- limit=int(req.get('max_stream_bytes',5*1024*1024));result={'exit_code':cp.returncode,'stdout':stdout[:limit].decode('utf-8',errors='replace').strip(),'stderr':stderr[:limit].decode('utf-8',errors='replace').strip(),'stdout_bytes':len(stdout),'stderr_bytes':len(stderr),'stdout_truncated':len(stdout)>limit,'stderr_truncated':len(stderr)>limit,'stdout_ref':'','stderr_ref':'','timed_out':timed_out,'process_started':True,'process_state':'EXITED' if cp.returncode is not None else final_liveness['process_state'],'pid':cp.pid,'liveness_evidence':final_liveness,'last_running_evidence':last_running_evidence}
+ limit=int(req.get('max_stream_bytes',5*1024*1024))
+ out=_capture_restricted_stream(stdout,limit,temp,str(req['request_id']),'stdout')
+ err=_capture_restricted_stream(stderr,limit,temp,str(req['request_id']),'stderr')
+ result={'exit_code':cp.returncode,**out,**err,
+         'capture_encoding':'utf-8','decode_error_policy':'replace',
+         'timed_out':timed_out,'process_started':True,
+         'process_state':'EXITED' if cp.returncode is not None else final_liveness['process_state'],
+         'pid':cp.pid,'liveness_evidence':final_liveness,
+         'last_running_evidence':last_running_evidence}
  if timed_out:result['error']=f'command exceeded {req.get("timeout",30)} seconds; process tree termination requested'
  try:status_path.unlink(missing_ok=True)
  except OSError:pass
