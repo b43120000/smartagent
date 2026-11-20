@@ -53,6 +53,7 @@ CORE_FILES = (
     'install_smart_agent/build_portable_git.py',
     'install_smart_agent/ensure_environment.ps1',
     'source/agent_core/runtime_environment.py',
+    'source/agent_core/shell_execution.py',
     'install_smart_agent/launchers/ensure_portable_runtime.bat',
     'install_smart_agent/ensure_python.ps1',
     'install_smart_agent/build_portable_runtime.py',
