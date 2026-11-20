@@ -41,31 +41,39 @@ def normalize_command_operation(value: object) -> str:
     return operation
 
 
+def _git_invocation_prefix(command: str):
+    """Only the executable token, not words embedded in command arguments."""
+    token = (
+        r'(?:git(?:\.exe)?|'
+        r"'[A-Za-z]:[\\/](?:[^'\r\n]*[\\/])?git\.exe'|"
+        r'"[A-Za-z]:[\\/](?:[^"$\x60\r\n]*[\\/])?git\.exe"|'
+        r'[A-Za-z]:[\\/](?:[^\s;&|"$\x60]*[\\/])?git\.exe)'
+    )
+    return re.match(r'(?i)^\s*(?:&\s*)?' + token + r'(?=\s|$)', command)
+
+
 def _looks_like_git_mutation(command: str) -> bool:
-    return bool(re.search(
-        r"(?i)(?:^|[;&|]\s*)git(?:\.exe)?(?:\s+-C\s+[^;&|]+)?\s+"
-        r"(?:add|am|apply|checkout|cherry-pick|clean|commit|merge(?!-base)|mv|pull|push|"
-        r"rebase|reset|restore|revert|rm|stash|switch|fetch|clone|init)\b",
-        command,
+    """Flag explicit Git mutations, including via absolute portable Git.exe."""
+    invoked = _git_invocation_prefix(command)
+    if invoked is None:
+        return False
+    tail = command[invoked.end():].strip()
+    cwd = re.match(
+        r'''(?i)^-C\s+(?:'[^'\r\n]+'|"[^"\r\n]+"|[^\s;&|]+)\s+''',
+        tail,
+    )
+    if cwd:
+        tail = tail[cwd.end():]
+    return bool(re.match(
+        r"(?i)^(?:add|am|apply|checkout|cherry-pick|clean|clone|commit|fetch|init|"
+        r"merge(?!-base)|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch)\b",
+        tail,
     ))
 
 
 def _looks_like_git(command: str) -> bool:
-    """Recognize an invoked Git binary, not a Git word in arguments.
-
-    Semantic classification only: executable trust, workspace authority and
-    command policy remain separate gates. Support absolute Windows toolchains
-    and the PowerShell call operator as well as a bare git command.
-    """
-    token = (
-        r'(?:git(?:\.exe)?|'
-        r"'[A-Za-z]:[\\/](?:[^'\r\n]*[\\/])?git\.exe'|"
-        r'"[A-Za-z]:[\\/](?:[^"\r\n]*[\\/])?git\.exe"|'
-        r'[A-Za-z]:[\\/](?:[^\s;&|"]*[\\/])?git\.exe)'
-    )
-    return bool(re.match(r'(?i)^\s*(?:&\s*)?' + token + r'(?=\s|$)', command))
-
-
+    """Recognize Git invocation without changing OS trust or command policy."""
+    return _git_invocation_prefix(command) is not None
 
 
 def _looks_like_build(command: str) -> bool:
