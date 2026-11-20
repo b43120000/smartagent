@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/git68-acl-off-auto-on-e2e-ut.yml'
       - 'source/WebAgent/tests/test_git68_open_mode_pipeline.py'
+      - 'source/WebAgent/tests/test_git68_timeout_approval.py'
+      - 'source/WebAgent/tests/test_git68_pre_resume_timeout.py'
       - 'source/agent_core/**'
       - 'source/WebAgent/pokeclaw_executor_loop.py'
       - 'source/WebAgent/minimal_decision.py'
