@@ -216,7 +216,11 @@ def validate_model_action(
     result["action_id"] = action_id
     if not transport_only and tool == "run_command" and "operation" in result:
         try:
-            mismatch = operation_mismatch_detail(result)
+            from .shell_execution import effective_action_for_policy, ShellModeError
+            try:
+                mismatch = operation_mismatch_detail(effective_action_for_policy(result))
+            except ShellModeError as exc:
+                raise ProtocolV8Error("RUN_COMMAND_SHELL_CONTRACT_INVALID", str(exc)) from exc
         except ValueError as exc:
             raise ProtocolV8Error("RUN_COMMAND_OPERATION_INVALID", str(exc)) from exc
         if mismatch:

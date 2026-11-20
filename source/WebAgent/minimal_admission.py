@@ -26,7 +26,8 @@ def action_is_mutating(action: dict) -> bool:
     if action.get("tool") == "run_command":
         # Verify steps are separately dispatched in some Runtime modes.
         # A safe command alone cannot prove a compound action is read-only.
-        return bool(action.get("verify")) or not command_is_proven_observation(action)
+        from agent_core.shell_execution import effective_action_for_policy
+        return bool(action.get("verify")) or not command_is_proven_observation(effective_action_for_policy(action))
     return action.get("tool") not in _READ_ONLY_TOOLS
 
 
@@ -223,8 +224,10 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
         return None, code
     if decision.tool == "run_command" and not native_broker:
         operation = str(action.get("operation", "")).upper()
-        read_proven = command_is_proven_observation(action)
-        risk = classify_command(action)
+        from agent_core.shell_execution import effective_action_for_policy
+        policy_action = effective_action_for_policy(action)
+        read_proven = command_is_proven_observation(policy_action)
+        risk = classify_command(policy_action)
         try:
             tool_context._last_command_risk_class = risk
         except (AttributeError, TypeError):

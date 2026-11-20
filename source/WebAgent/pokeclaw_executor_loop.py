@@ -1025,7 +1025,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 native_precheck_replan_eligible,
             )
             if action:
-                risk_class = classify_command(action)
+                from agent_core.shell_execution import effective_action_for_policy
+                risk_class = classify_command(effective_action_for_policy(action))
                 # Git52: only the verified Native Broker admission can remove
                 # Turbo's second human consent prompt for UNKNOWN commands.
                 # Execution remains OS-attested, per-action and fail-closed.
@@ -1271,7 +1272,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 from agent_core.command_family_approval import TaskCommandFamilyGrants
                 from agent_core.auto_approve_mode import evaluate_auto_approve
                 auto_approval = evaluate_auto_approve(
-                    loop.workspace, str(action.get("command") or ""),
+                    loop.workspace, __import__(
+                        "agent_core.shell_execution", fromlist=["execution_contract"]
+                    ).execution_contract(action)["policy_command"],
                     working_directory=action.get("working_directory") or loop.workspace,
                 )
                 family_gate = TaskCommandFamilyGrants(root)

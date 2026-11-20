@@ -118,6 +118,8 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"command": str, "operation": str},
         "optional": {
             "timeout": int,
+            "shell_mode": str,
+            "argv": list,
             "working_directory": str,
             "verify": (list, dict),
             "success_criteria": str,
@@ -1052,7 +1054,19 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
             )
 
     if tool == "run_command":
-        command = call.get("command", "")
+        from .shell_execution import execution_contract, ShellModeError
+        try:
+            shell_spec = execution_contract(call)
+        except ShellModeError as exc:
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "run_command_shell_contract_invalid", tool=tool,
+                detail=str(exc), block_index=block_index)
+        if native_broker and shell_spec["shell_mode"] != "POWERSHELL":
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "NATIVE_BROKER_SHELL_MODE_UNSUPPORTED", tool=tool,
+                detail="native broker only supports POWERSHELL; no host fallback",
+                block_index=block_index)
+        command = shell_spec["policy_command"]
         if native_broker:
             # Runtime-owned mode only; not selectable from the model envelope.
             # AppContainer, not a content blacklist, bounds native commands.
@@ -1085,7 +1099,7 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 normalize_command_operation(call.get("operation"))
                 mismatch = ""
             else:
-                mismatch = operation_mismatch_detail(call)
+                mismatch = operation_mismatch_detail({**call, "command":shell_spec["policy_command"]})
         except ValueError as exc:
             return False, _diagnostic(
                 "[TOOL_ENVELOPE_REJECTED]",
