@@ -405,7 +405,18 @@ def _run_explicit_shell_capture(spec: dict, timeout: int, capture_root,
         return {"exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
                 "process_started": False, "security_rejected": True,
                 "error": "SECURITY_COMMAND_REJECTED:" + str(exc)}
-    return run_bounded_process(spec["launch_argv"], cwd=cwd, timeout=timeout,
+    # On Windows Popen(list) applies list2cmdline quoting designed for argv,
+    # not for cmd.exe's /s /c script parser. A compound CMD script containing
+    # quoted BAT paths then acquires literal escape quotes and fails to launch.
+    # Use an OS-owned cmd.exe and a single Windows command line: /s removes
+    # only the enclosing quotes and preserves quotes within the CMD script.
+    # Normal command security still reviews both this wrapper and the actual
+    # user-supplied policy_command; never bypass the Native Broker gate.
+    launch = spec["launch_argv"]
+    if spec["shell_mode"] == "CMD" and os.name == "nt":
+        system_cmd = Path(os.environ.get("SystemRoot", r"C:\\Windows")) / "System32" / "cmd.exe"
+        launch = '"' + str(system_cmd) + '" /d /s /c "' + spec["policy_command"] + '"'
+    return run_bounded_process(launch, cwd=cwd, timeout=timeout,
                                capture_root=capture_root, telemetry=telemetry,
                                approval_manifest=approval_manifest,
                                security_command=spec["policy_command"])
