@@ -22,9 +22,17 @@ def github_source_stage_evidence(action: Mapping, receipt: Mapping,
     is_hash = bool(re.search(r"(?i)\bGet-FileHash\b", command))
     if not is_git and not is_hash:
         return None
+    # The executable grammar matches the read-only admission for portable
+    # Git; no PowerShell interpolation, shell chains or surprise arguments.
+    git_binary = (
+        r"(?:git(?:\.exe)?|"
+        r"&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"
+        r'"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe"))'
+    )
     ancestry = re.fullmatch(
-        r"(?i)git\s+(?:-C\s+(?:'[^'\r\n]+'|\"[^\"\r\n]+\")\s+)?"
-        r"merge-base\s+--is-ancestor\s+([0-9a-f]{40})\s+([0-9a-f]{40})",
+        r"(?i)" + git_binary
+        + r"\s+(?:-C\s+(?:'[^'\r\n]+'|\"[^\"$\x60\r\n]+\")\s+)?"
+        + r"merge-base\s+--is-ancestor\s+([0-9a-f]{40})\s+([0-9a-f]{40})",
         command.strip(),
     )
     if is_git and ancestry:
