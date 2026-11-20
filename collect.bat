@@ -541,12 +541,24 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                             dispatch_known=$false
                             dispatch_matches_original=$null
                             operation=''
+                            shell_mode='POWERSHELL'
+                            launch_form=''
+                            argv_count=0
+                            argv_redacted=@()
                             risk_class=''
                             turbo_decision=''
                             precheck_reason_code=''
                             admission_status='NOT_RECORDED'
                             runtime_status='NO_TOOL_RESULT'
                             runtime_reason_code=''
+                            execution_status=''
+                            failure_origin=''
+                            process_started=$false
+                            process_state=''
+                            timed_out=$false
+                            stdout_bytes=$null
+                            stderr_bytes=$null
+                            observed_post_timeout_exit_code=$null
                             executed=$false
                             command_exit_code=$null
                             verification_status=''
@@ -575,6 +587,9 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                         $row['command_truncated'] = [bool]$commandInfo.command_truncated
                         $row['command_redaction_count'] = [int]$commandInfo.command_redaction_count
                         $row['operation'] = (Safe-Code $commandInfo.operation)
+                        $row['shell_mode'] = (Safe-Code $commandInfo.shell_mode)
+                        $row['argv_count'] = [int]$commandInfo.argv_count
+                        $row['argv_redacted'] = @($commandInfo.argv_redacted)
                         if ([bool]$commandInfo.dispatch_known) {
                             $row['dispatch_known'] = $true
                             $row['dispatch_matches_original'] = [bool]$commandInfo.dispatch_matches_original
@@ -611,6 +626,16 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                                 $row['runtime_reason_code'] = (Safe-Code $details.runtime_reason_code)
                                 $row['command_exit_code'] = $details.command_exit_code
                                 $row['verification_status'] = (Safe-Code $details.verification_status)
+                                $row['execution_status'] = (Safe-Code $details.execution_status)
+                                $row['failure_origin'] = (Safe-Code $details.failure_origin)
+                                if ($details.shell_mode) { $row['shell_mode'] = (Safe-Code $details.shell_mode) }
+                                $row['launch_form'] = (Safe-Code $details.launch_form)
+                                $row['process_started'] = [bool]$details.process_started
+                                $row['process_state'] = (Safe-Code $details.process_state)
+                                $row['timed_out'] = [bool]$details.timed_out
+                                $row['stdout_bytes'] = $details.stdout_bytes
+                                $row['stderr_bytes'] = $details.stderr_bytes
+                                $row['observed_post_timeout_exit_code'] = $details.observed_post_timeout_exit_code
                                 $row['stdout_excerpt_redacted'] = [string]$details.stdout_excerpt_redacted
                                 $row['stderr_excerpt_redacted'] = [string]$details.stderr_excerpt_redacted
                                 $row['error_excerpt_redacted'] = [string]$details.error_excerpt_redacted
@@ -695,6 +720,45 @@ Write-Json (Join-Path $stage 'executor_sandbox_evidence.json') @($executorSandbo
 Write-Json (Join-Path $stage 'executor_native_confirmation_blocks.json') @($executorNativeConfirmationBlocks)
 Write-Json (Join-Path $stage 'executor_native_replans.json') @($executorNativeReplans)
 Write-Json (Join-Path $stage 'executor_run_commands.json') @($executorCommandRows)
+# Git69: decrypted/plaintext (not base64-only) diagnostics; still redact secrets.
+$executorFidelityRows = @($executorCommandRows | ForEach-Object {
+    [ordered]@{
+        schema='SMARTAGENT_EXECUTION_FIDELITY_V1'
+        round=$_.round
+        action_id=$_.action_id
+        evidence_ref=$_.evidence_ref
+        shell_mode=$_.shell_mode
+        launch_form=$_.launch_form
+        argv_count=$_.argv_count
+        argv_redacted=@($_.argv_redacted)
+        original_command_redacted=$_.original_command_redacted
+        dispatched_command_redacted=$_.dispatched_command_redacted
+        command_integrity_matched=$_.dispatch_matches_original
+        admission_status=$_.admission_status
+        runtime_status=$_.runtime_status
+        runtime_reason_code=$_.runtime_reason_code
+        execution_status=$_.execution_status
+        verification_status=$_.verification_status
+        failure_origin=$_.failure_origin
+        process_started=$_.process_started
+        process_state=$_.process_state
+        timed_out=$_.timed_out
+        command_exit_code=$_.command_exit_code
+        observed_post_timeout_exit_code=$_.observed_post_timeout_exit_code
+        stdout_bytes=$_.stdout_bytes
+        stderr_bytes=$_.stderr_bytes
+        stdout_excerpt_redacted=$_.stdout_excerpt_redacted
+        stderr_excerpt_redacted=$_.stderr_excerpt_redacted
+        stdout_excerpt_truncated=$_.stdout_excerpt_truncated
+        stderr_excerpt_truncated=$_.stderr_excerpt_truncated
+        network_failure_hint=$_.network_failure_hint
+        sandbox_evidence=$_.sandbox_evidence
+        output_redaction_count=$_.output_redaction_count
+        data_encrypted=$false
+        sanitized=$true
+    }
+})
+Write-Json (Join-Path $stage 'executor_execution_fidelity.json') @($executorFidelityRows)
 # Git63 Native instruction trace, sourced from Runtime's bounded RCA
 # fields (not raw task input or credentials).
 $nativeCommands=[ordered]@{
