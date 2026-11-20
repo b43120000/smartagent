@@ -165,3 +165,51 @@ class RawStreamAndCollectorIT(unittest.TestCase):
                 self.assertIsInstance(data,list)
         finally:
             archive.unlink(missing_ok=True)
+
+class FidelityAdditionalCases(unittest.TestCase):
+    @unittest.skipUnless(os.name=="nt","Windows process launch failure")
+    def test_start_failure_is_not_child_exit(self):
+        with tempfile.TemporaryDirectory() as td:
+            missing=str(Path(td)/"not_existing_git69_binary.exe")
+            spec=execution_contract({"command":missing,"shell_mode":"DIRECT","argv":["--version"]})
+            with patch("agent_core.tools.require_command_allowed"),patch(
+                "agent_core.command_security.require_command_allowed"),patch(
+                "agent_core.turbo_broker_admission.assess",return_value={"decision":"NORMAL"}):
+                got=tools._run_explicit_shell_capture(spec,10,td,cwd=td,
+                    telemetry=None,approval_manifest=None)
+            self.assertIsNone(got["exit_code"])
+            self.assertFalse(got["process_started"])
+            self.assertTrue(got["error"])
+
+    @unittest.skipUnless(os.name=="nt","Windows PowerShell behavior")
+    def test_powershell_stderr_does_not_override_exit_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            with patch("agent_core.tools.require_command_allowed"),patch(
+                "agent_core.command_security.require_command_allowed"),patch(
+                "agent_core.turbo_broker_admission.assess",return_value={"decision":"NORMAL"}):
+                got=tools._run_powershell_capture(
+                    "Write-Error 'F69_ERROR'; Write-Output 'F69_OK'",
+                    timeout=20,capture_root=td,cwd=td)
+            self.assertEqual(got["exit_code"],0,got)
+            self.assertIn("F69_OK",got["stdout"])
+            self.assertIn("F69_ERROR",got["stderr"])
+
+    def test_true_raw_digest_when_output_truncated(self):
+        from agent_core.bounded_process import run_bounded_process
+        with tempfile.TemporaryDirectory() as td:
+            script="import sys; sys.stdout.write('Z'*20000+'\\n'); sys.stderr.write('Y'*20000+'\\n')"
+            with patch("agent_core.command_security.require_command_allowed"),patch(
+                "agent_core.turbo_broker_admission.assess",return_value={"decision":"NORMAL"}):
+                got=run_bounded_process([sys.executable,"-c",script],cwd=td,timeout=20,
+                    capture_root=td,max_stream_bytes=512)
+            self.assertEqual(got["exit_code"],0,got)
+            self.assertTrue(got["stdout_truncated"])
+            self.assertTrue(got["stderr_truncated"])
+            expected_out=("Z"*20000+"\\n").encode()
+            expected_err=("Y"*20000+"\\n").encode()
+            self.assertEqual(got["stdout_raw_sha256"],hashlib.sha256(expected_out).hexdigest())
+            self.assertEqual(got["stderr_raw_sha256"],hashlib.sha256(expected_err).hexdigest())
+            self.assertEqual(got["stdout_bytes"],len(expected_out))
+            self.assertEqual(got["stderr_bytes"],len(expected_err))
+            self.assertEqual(Path(got["stdout_ref"]).read_bytes(),expected_out)
+            self.assertEqual(Path(got["stderr_ref"]).read_bytes(),expected_err)
