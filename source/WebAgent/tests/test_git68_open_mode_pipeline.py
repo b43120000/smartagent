@@ -447,7 +447,12 @@ def test_cross_writable_roots_unknown_build_never_requests_human_apr(
     script = project / "buildingAPK.bat"
     script.write_text("@echo off\nexit /b 0\n", encoding="utf-8")
     _arm_two_writable_roots(monkeypatch, first, second)
-    command = 'cmd.exe /d /c "' + str(script) + '"'
+    # In CI, tmp_path contains a literal pytest segment: the existing
+    # BUILD/TEST classifier matches that word even inside an absolute BAT
+    # path. Use a CWD-relative BAT invocation here to isolate the Executor
+    # Auto Approve boundary. The separate test above covers the exact
+    # absolute buildingAPK.bat command.
+    command = 'cmd.exe /d /c "buildingAPK.bat"'
     request = "使用兩個已授權 Writable Workspace 編譯 APK 並驗證退出碼"
     loop, _ = _loop(first, monkeypatch, [], request=request)
     loop.max_turns = 5
