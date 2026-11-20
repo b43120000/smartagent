@@ -406,22 +406,41 @@ def run_bounded_process(
             )
         return result
     except Exception as exc:
-        for path in (stdout_path, stderr_path):
+        # Process start versus a post-start capture failure must be distinguishable.
+        # In either case do not invent an exit code or replay this action.
+        if process_started and "process" in locals():
             try:
-                path.unlink()
-            except OSError:
+                if process.poll() is None and os.name == "nt":
+                    subprocess.run(
+                        [str(Path(os.environ.get("SystemRoot", r"C:\\Windows")) /
+                             "System32" / "taskkill.exe"),
+                         "/PID", str(process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=10, check=False,
+                    )
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
                 pass
+        if not process_started:
+            for path in (stdout_path, stderr_path):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
         return {
-            "exit_code": None,
-            "stdout": "",
-            "stderr": "",
-            "stdout_bytes": 0,
-            "stderr_bytes": 0,
-            "stdout_truncated": False,
-            "stderr_truncated": False,
-            "stdout_ref": "",
-            "stderr_ref": "",
+            "exit_code": None, "stdout": "", "stderr": "",
+            "stdout_bytes": None, "stderr_bytes": None,
+            "stdout_truncated": None, "stderr_truncated": None,
+            "stdout_ref": str(stdout_path.resolve()) if process_started and stdout_path.is_file() else "",
+            "stderr_ref": str(stderr_path.resolve()) if process_started and stderr_path.is_file() else "",
             "timed_out": False,
-            "error": str(exc),
+            "error": f"{type(exc).__name__}: {exc}",
+            "error_stage": "CAPTURE" if process_started else "PROCESS_START",
             "process_started": process_started,
+            "possible_partial_execution": process_started,
+            "process_state": "UNKNOWN" if process_started else "NOT_STARTED",
+            "pid": process.pid if process_started and "process" in locals() else None,
+            "execution_id": capture_id if process_started else None,
         }
