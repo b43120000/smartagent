@@ -213,3 +213,124 @@ class FidelityAdditionalCases(unittest.TestCase):
             self.assertEqual(got["stderr_bytes"],len(expected_err))
             self.assertEqual(Path(got["stdout_ref"]).read_bytes(),expected_out)
             self.assertEqual(Path(got["stderr_ref"]).read_bytes(),expected_err)
+
+
+class RestrictedStreamFidelityUT(unittest.TestCase):
+    def test_exact_crlf_whitespace_and_digest(self):
+        from agent_core.restricted_executor_service import _capture_restricted_stream
+        with tempfile.TemporaryDirectory() as td:
+            raw = b"  leading  \r\ntrailing  \n"
+            result = _capture_restricted_stream(raw, 1024, Path(td), "EXEC-" + "A"*32, "stdout")
+            self.assertEqual(result["stdout"], raw.decode("utf-8"))
+            self.assertEqual(result["stdout_bytes"], len(raw))
+            self.assertFalse(result["stdout_truncated"])
+            self.assertEqual(result["stdout_raw_sha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_truncated_stream_keeps_full_raw_file(self):
+        from agent_core.restricted_executor_service import _capture_restricted_stream
+        with tempfile.TemporaryDirectory() as td:
+            raw = b"  X\r\n" * 1500
+            result = _capture_restricted_stream(raw, 128, Path(td), "EXEC-" + "B"*32, "stderr")
+            self.assertTrue(result["stderr_truncated"])
+            self.assertEqual(result["stderr_bytes"], len(raw))
+            self.assertEqual(Path(result["stderr_ref"]).read_bytes(), raw)
+            self.assertEqual(result["stderr_raw_sha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_bad_request_id_does_not_write(self):
+        from agent_core.restricted_executor_service import _capture_restricted_stream
+        with tempfile.TemporaryDirectory() as td, self.assertRaises(RuntimeError):
+            _capture_restricted_stream(b"x", 1, Path(td), "../unsafe", "stdout")
+
+class FailureOriginUT(unittest.TestCase):
+    def observed(self, fake):
+        with tempfile.TemporaryDirectory() as td:
+            with patch("agent_core.tools.resolve_command_working_directory", return_value=Path(td)), patch(
+                    "agent_core.tools._run_explicit_shell_capture", return_value=fake):
+                return decode_result(tools.tool_run_command(
+                    r"C:\fixtures\missing.exe", "GENERAL", shell_mode="DIRECT", argv=[],
+                    working_directory=td))
+
+    def test_process_start_failed_does_not_claim_execution(self):
+        receipt = self.observed({"exit_code":None, "process_started":False,
+            "error_stage":"PROCESS_START", "error":"FileNotFoundError",
+            "process_state":"NOT_STARTED", "timed_out":False})
+        self.assertEqual(receipt["data"]["failure_origin"], "PROCESS_START")
+        self.assertFalse(receipt["executed"])
+        self.assertIsNone(receipt["data"]["exit_code"])
+        self.assertFalse(receipt["data"]["output_complete"])
+
+    def test_post_start_capture_error_is_unknown(self):
+        receipt = self.observed({"exit_code":None, "process_started":True,
+            "error_stage":"CAPTURE", "error":"OSError", "timed_out":False,
+            "process_state":"UNKNOWN", "possible_partial_execution":True})
+        self.assertEqual(receipt["status"], "UNKNOWN")
+        self.assertEqual(receipt["data"]["failure_origin"], "CAPTURE")
+        self.assertIsNone(receipt["data"]["exit_code"])
+
+    def test_admission_rejection_cannot_claim_execution(self):
+        receipt = self.observed({"exit_code":None, "process_started":False,
+            "security_rejected":True, "error":"SECURITY_COMMAND_REJECTED",
+            "timed_out":False})
+        self.assertEqual(receipt["status"], "REJECTED")
+        self.assertFalse(receipt["executed"])
+        self.assertEqual(receipt["data"]["failure_origin"], "ADMISSION")
+
+class RealWindowsAdditionalIT(unittest.TestCase):
+    @unittest.skipUnless(os.name=="nt", "Windows Git semantics")
+    def test_real_git_exit_0_and_128(self):
+        import shutil
+        executable = shutil.which("git")
+        if not executable:
+            self.skipTest("git unavailable")
+        with tempfile.TemporaryDirectory() as td:
+            with patch("agent_core.tools.require_command_allowed"), patch(
+                "agent_core.command_security.require_command_allowed"), patch(
+                "agent_core.turbo_broker_admission.assess", return_value={"decision":"NORMAL"}):
+                def invoke(args):
+                    return tools._run_explicit_shell_capture(
+                        execution_contract({"command":str(Path(executable).resolve()),
+                            "shell_mode":"DIRECT", "argv":args}),
+                        20, td, cwd=td, telemetry=None, approval_manifest=None)
+                ok = invoke(["--version"])
+                bad = invoke(["-C", td, "rev-parse", "HEAD"])
+            self.assertEqual(ok["exit_code"], 0, ok)
+            self.assertEqual(bad["exit_code"], 128, bad)
+            self.assertTrue(bad["stderr"], bad)
+
+    @unittest.skipUnless(os.name=="nt", "Windows BAT semantics")
+    def test_cmd_call_bat_exit_code_is_37(self):
+        with tempfile.TemporaryDirectory() as td:
+            bat = Path(td)/"f69_exit.bat"
+            bat.write_bytes(b"@echo off\r\necho F69_BAT_ERR 1>&2\r\nexit /b 37\r\n")
+            spec = execution_contract({"command":'call "'+str(bat)+'"', "shell_mode":"CMD"})
+            with patch("agent_core.tools.require_command_allowed"), patch(
+                "agent_core.command_security.require_command_allowed"), patch(
+                "agent_core.turbo_broker_admission.assess", return_value={"decision":"NORMAL"}):
+                got = tools._run_explicit_shell_capture(spec, 20, td, cwd=td,
+                    telemetry=None, approval_manifest=None)
+            self.assertEqual(got["exit_code"], 37, got)
+            self.assertIn("F69_BAT_ERR", got["stderr"])
+
+    @unittest.skipUnless(os.name=="nt", "Windows PowerShell exception")
+    def test_powershell_terminating_error_nonzero(self):
+        with tempfile.TemporaryDirectory() as td:
+            with patch("agent_core.tools.require_command_allowed"), patch(
+                "agent_core.command_security.require_command_allowed"), patch(
+                "agent_core.turbo_broker_admission.assess", return_value={"decision":"NORMAL"}):
+                got = tools._run_powershell_capture("throw 'G69_ABORT'",
+                    timeout=20, capture_root=td, cwd=td)
+            self.assertNotEqual(got["exit_code"], 0, got)
+            self.assertTrue(got["stderr"], got)
+
+    @unittest.skipUnless(os.name=="nt", "Windows timeout")
+    def test_real_timeout_does_not_create_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            with patch("agent_core.tools.require_command_allowed"), patch(
+                "agent_core.command_security.require_command_allowed"), patch(
+                "agent_core.turbo_broker_admission.assess", return_value={"decision":"NORMAL"}):
+                got = tools._run_explicit_shell_capture(
+                    execution_contract({"command":sys.executable,"shell_mode":"DIRECT",
+                        "argv":["-c", "import time; time.sleep(4)"]}),
+                    1, td, cwd=td, telemetry=None, approval_manifest=None)
+            self.assertTrue(got["timed_out"], got)
+            self.assertTrue(got["process_started"], got)
