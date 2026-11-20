@@ -114,6 +114,21 @@ def request_unknown_command_approval(loop, action: Mapping, *,
                 "approval_id": approval_id, "command_sha256": command_sha256,
             }
         sleep(min(POLL_INTERVAL_SECONDS, max(0., deadline - clock())))
+    # Recheck command_security AND effective writable Auto Approve before
+    # treating an unanswered timeout as one-shot consent.
+    from .auto_approve_mode import evaluate_auto_approve
+    current_auto = evaluate_auto_approve(root, command, working_directory=cwd)
+    if current_auto["approved"]:
+        try:
+            ledger.approve_unanswered_timeout(approval_id, binding,
+                                              timeout_sec=600.0)
+            ledger.consume(approval_id, binding)
+            return {
+                "state": "APPROVED", "reason": "auto_approve_timeout_600s",
+                "approval_id": approval_id, "command_sha256": command_sha256,
+            }
+        except SecurityApprovalError:
+            pass
     return {
         "state": "TIMEOUT", "reason": "human_approval_timeout_600s",
         "approval_id": approval_id, "command_sha256": command_sha256,

@@ -1568,7 +1568,16 @@ def _execution_approval_manifest(tool_call: dict, agent, security_context: Secur
         "approval_kind": "EXECUTION",
     }
     ledger = SecurityApprovalLedger(getattr(agent, "security_approval_ledger_root", security_context.workspace_root))
-    record = ledger.request(binding, ttl_sec=float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0))
+    from .auto_approve_mode import auto_approve_snapshot
+    timeout_auto_approve = auto_approve_snapshot(
+        security_context.workspace_root,
+        working_directory=working_directory or security_context.workspace_root,
+    ).get("auto_approve_effective") == "ON"
+    record = ledger.request(
+        binding,
+        ttl_sec=(600.0 if timeout_auto_approve else
+                 float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0)),
+    )
     notifier = getattr(agent, "notify_security_approval", None)
     if not callable(notifier) or getattr(agent, "_security_approval_notifier", None) is None:
         raise SecurityApprovalError(f"execution_confirmation_required:{record['approval_id']}")
@@ -1591,6 +1600,26 @@ def _execution_approval_manifest(tool_call: dict, agent, security_context: Secur
         if state in {"REJECTED", "CANCELLED", "EXPIRED", "CONSUMED"}:
             raise SecurityApprovalError(f"execution_approval_state={state}")
         time.sleep(0.5)
+    # A timeout does not waive the command classifier or workspace scope.
+    # A changed policy is checked again before granting a one-shot receipt.
+    from .auto_approve_mode import evaluate_auto_approve
+    current_auto = evaluate_auto_approve(
+        security_context.workspace_root, command,
+        working_directory=working_directory or security_context.workspace_root,
+    )
+    if timeout_auto_approve and current_auto["approved"]:
+        ledger.approve_unanswered_timeout(record["approval_id"], binding,
+                                          timeout_sec=600.0)
+        ledger.consume(record["approval_id"], binding)
+        approved = dict(manifest)
+        approved["_approval_consumed"] = True
+        approved["_auto_approval"] = {
+            "decision": "AUTO_APPROVED_AFTER_TIMEOUT",
+            "reason_code": "AUTO_APPROVE_TIMEOUT_600S",
+            "command_sha256": current_auto["command_sha256"],
+            "executed": False,
+        }
+        return approved
     raise SecurityApprovalError("execution_approval_expired")
 
 

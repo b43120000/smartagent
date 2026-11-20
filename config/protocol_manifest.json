@@ -231,7 +231,7 @@
     "source/agent_core/tool_result_contract.py": "2736be0515d2bee18ac870a935239f3cee067f2c8e26f157c21b3d879fd4e647",
     "source/agent_core/tool_result_policy.py": "3ed466ddacb9330b2ed2ed33eb55707112c96e5dc40d4e338184ff5e732f4c98",
     "source/agent_core/toolchain_environment_reader.py": "da58dc5bc4ccb2b5b57ec5799fa65b89885eb3d46e86310d65260126fb9e2139",
-    "source/agent_core/tools.py": "ea6eb54558d9aba1a8ce4d925a4a4dc65de46c7469f8575485989b5350c3c211",
+    "source/agent_core/tools.py": "aac17abd5fb5ea5aff94dcdb59431c5d5d2c97a40d644b8032800e273a304126",
     "source/agent_core/tri_one_answer_only.py": "13e18bdbeff61be87bf8635775e4013e04def3647e8671038bc5d68b3fe14f6c",
     "source/agent_core/tri_one_runtime_terminal.py": "83865fb88d3d5a5710c4c474685732a5c80b9f26db1ef765b8406b6140f4d92e",
     "source/agent_core/tri_one_shared_worker.py": "bddb403263eee2d1f2f5ec3675b873dd91f24d3158a7d5f77db21fe0e30c4c86",
@@ -296,7 +296,8 @@
     "source/agent_core/workspace_access.py": "74afe41980c0be5ed9b6a11b01de68be61d7b61c5e89a07a6b4a279a6688b4e0",
     "source/agent_core/workspace_manager.py": "aca76e543b7b8198c8a6277e37d951996927cadb9e335a57c23a0c74d9ec2cef",
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443",
-    "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651"
+    "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
+    "source/agent_core/unknown_command_approval.py": "85439187268eabba5890f19b7ef6734c153f6ab0378f43d14136af32f6ae6a8a"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
