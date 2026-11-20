@@ -293,3 +293,248 @@ def test_open_mode_auto_approve_receipt_reaches_tool_confirmation_boundary(
     assert receipt["_auto_approval"]["command_sha256"] == hashlib.sha256(
         command.encode("utf-8")
     ).hexdigest()
+
+
+def _arm_two_writable_roots(
+    monkeypatch, first, second, *, read_only=(), denied=(), acl="off",
+    enabled=True,
+):
+    """Both directories are created by the pytest temp fixture."""
+    access = {
+        "policy": {
+            "revision": 69, "turbo_requested": False,
+            "auto_approve_requested": enabled,
+            "denied_write_roots": [str(path) for path in denied],
+        },
+        "writable_workspaces": (str(first), str(second)),
+        "read_only_roots": tuple(str(path) for path in read_only),
+    }
+    monkeypatch.setattr(
+        "agent_core.auto_approve_mode.access_snapshot", lambda: access,
+    )
+    monkeypatch.setattr(
+        "agent_core.auto_approve_mode.acl_mode", lambda: acl,
+    )
+    return access
+
+
+def test_open_mode_cross_writable_roots_auto_approve_exact_build_bat(
+    tmp_path, monkeypatch,
+):
+    """Regression: E-workspace Planner -> different authorized C-workspace BAT."""
+    root_a = tmp_path / "E-AIspace"
+    root_b = tmp_path / "C-remoteagent"
+    project = root_b / "HDRViewer" / "sources" / "Androidviewer"
+    root_a.mkdir()
+    project.mkdir(parents=True)
+    script = project / "buildingAPK.bat"
+    script.write_text("@echo off\nexit /b 0\n", encoding="utf-8")
+    _arm_two_writable_roots(monkeypatch, root_a, root_b)
+    command = 'cmd.exe /d /c "' + str(script) + '"'
+
+    from agent_core.command_risk import classify_command
+    assert classify_command({
+        "tool": "run_command", "command": command, "operation": "BUILD",
+    }) == "UNKNOWN"  # Human consent would be required without Auto Approve.
+    decision = evaluate_auto_approve(
+        root_a, command, working_directory=project,
+    )
+    assert decision["acl"] == "OFF"
+    assert decision["turbo_effective"] == "OFF"
+    assert decision["auto_approve_requested"] == "ON"
+    assert decision["auto_approve_effective"] == "ON"
+    assert decision["approved"] is True
+    assert decision["reason_code"] == "AUTO_APPROVE_SECONDARY_CONFIRMATION"
+    assert decision["authorization_scope"] == str(root_a)
+    assert decision["command_sha256"] == hashlib.sha256(
+        command.encode("utf-8")
+    ).hexdigest()
+    assert decision["executed"] is False
+    # Authorization is symmetric, does not require either root to contain
+    # the other or the task's active root to match the command's root.
+    assert auto_approve_snapshot(project, working_directory=root_a)[
+        "auto_approve_effective"
+    ] == "ON"
+
+
+@pytest.mark.parametrize("restricted", [
+    "unregistered", "nested_read_only", "nested_denied",
+    "nonexistent_cwd", "readonly_same_depth", "workspace_unregistered",
+])
+def test_open_mode_cross_root_restricted_or_absent_endpoint_denied(
+    tmp_path, monkeypatch, restricted,
+):
+    root_a = tmp_path / "workspace_A"
+    root_b = tmp_path / "workspace_B"
+    project = root_b / "HDRViewer"
+    root_a.mkdir()
+    project.mkdir(parents=True)
+    excluded = tmp_path / "not_authorized"
+    excluded.mkdir()
+    readonly = ()
+    denied = ()
+    active = root_a
+    cwd = project
+    if restricted == "unregistered":
+        cwd = excluded
+    elif restricted == "nested_read_only":
+        readonly = (project,)
+    elif restricted == "nested_denied":
+        denied = (project,)
+    elif restricted == "nonexistent_cwd":
+        cwd = project / "does_not_exist"
+    elif restricted == "readonly_same_depth":
+        readonly = (root_b,)
+    elif restricted == "workspace_unregistered":
+        active = excluded
+
+    _arm_two_writable_roots(
+        monkeypatch, root_a, root_b, read_only=readonly, denied=denied,
+    )
+    decision = evaluate_auto_approve(
+        active, "Write-Output any", working_directory=cwd,
+    )
+    assert decision["approved"] is False
+    assert decision["auto_approve_effective"] == "OFF"
+    assert decision["reason_code"] == "WORKSPACE_NOT_AUTHORIZED_WRITABLE"
+
+
+def test_cross_writable_roots_keep_all_command_hard_denies(
+    tmp_path, monkeypatch,
+):
+    first, second = tmp_path / "writable_A", tmp_path / "writable_B"
+    first.mkdir()
+    second.mkdir()
+    _arm_two_writable_roots(monkeypatch, first, second)
+    assert evaluate_auto_approve(
+        first, "Write-Output healthy", working_directory=second,
+    )["approved"] is True
+    for dangerous in ("git clean -fdx", "icacls C:\\ /grant Everyone:F"):
+        decision = evaluate_auto_approve(
+            first, dangerous, working_directory=second,
+        )
+        assert decision["approved"] is False
+        assert decision["reason_code"].startswith(
+            "COMMAND_SECURITY_HARD_DENIED:"
+        )
+
+
+def test_cross_root_not_active_when_auto_requested_off_or_acl_on(
+    tmp_path, monkeypatch,
+):
+    first, second = tmp_path / "writable_A", tmp_path / "writable_B"
+    first.mkdir()
+    second.mkdir()
+    for acl, enabled in [("off", False), ("on", True)]:
+        _arm_two_writable_roots(
+            monkeypatch, first, second, acl=acl, enabled=enabled,
+        )
+        receipt = evaluate_auto_approve(
+            first, "Write-Output x", working_directory=second,
+        )
+        assert receipt["approved"] is False
+        assert receipt["auto_approve_effective"] == "OFF"
+
+
+def test_cross_writable_roots_unknown_build_never_requests_human_apr(
+    tmp_path, monkeypatch,
+):
+    """Executor decision and Blackboard, without running an actual BAT."""
+    first, second = tmp_path / "workspace_A", tmp_path / "workspace_B"
+    first.mkdir()
+    project = second / "HDRViewer"
+    project.mkdir(parents=True)
+    script = project / "buildingAPK.bat"
+    script.write_text("@echo off\nexit /b 0\n", encoding="utf-8")
+    _arm_two_writable_roots(monkeypatch, first, second)
+    command = 'cmd.exe /d /c "' + str(script) + '"'
+    request = "使用兩個已授權 Writable Workspace 編譯 APK 並驗證退出碼"
+    loop, _ = _loop(first, monkeypatch, [], request=request)
+    loop.max_turns = 5
+    loop.tools._security_approval_notifier = lambda *a: pytest.fail(
+        "Human APR notifier must not be called when Auto Approve is effective"
+    )
+
+    def prohibited_human_approval(*args, **kwargs):
+        pytest.fail("UNKNOWN approval requested despite two writable roots")
+
+    monkeypatch.setattr(
+        "agent_core.unknown_command_approval.request_unknown_command_approval",
+        prohibited_human_approval,
+    )
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.assess",
+        lambda *a, **kw: {"decision": "NORMAL", "reason_code": "TURBO_DISABLED"},
+    )
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.admit_action",
+        lambda *a, **kw: {"decision": "NORMAL", "reason_code": "TURBO_DISABLED"},
+    )
+    executed = []
+
+    def runtime_execute(action):
+        executed.append(dict(action))
+        return encode_result(
+            "SUCCEEDED", "COMMAND_EXITED", tool="run_command", executed=True,
+            data={
+                "exit_code": 0, "stdout": "BUILD SUCCESSFUL",
+                "stderr": "", "process_state": "EXITED", "timed_out": False,
+                "verification_status": "PASS",
+            },
+        )
+
+    loop._execute_action = runtime_execute
+
+    def planner(prompt, *_):
+        loop.prompts.append(prompt)
+        if len(loop.prompts) == 1:
+            return tool_json(
+                "run_command", command=command, operation="BUILD",
+                working_directory=str(project),
+                success_criteria="Build command exits with code zero",
+                verify=[{
+                    "action": "file_exists",
+                    "path": str(project / "app-debug.apk"), "expect": True,
+                }],
+            )
+        preview = json.loads(
+            prompt.split("Recent actual PokeClaw ToolResults:\n", 1)[1]
+            .split("\n", 1)[0]
+        )
+        evidence = preview[-1]["evidence_ref"]
+        return json.dumps({
+            "type": "finish", "contract_version": 2,
+            "summary": "BUILD SUCCESSFUL",
+            "goal_checks": [{
+                "criterion": "Build completed", "evidence_ref": evidence,
+                "field": "data.exit_code", "operator": "eq", "expected": 0,
+            }],
+        })
+
+    loop.planner = planner
+    answer = run_pokeclaw_executor(loop, request)
+    assert len(executed) == 1, answer
+    assert executed[0]["command"] == command
+    assert executed[0]["working_directory"] == str(project)
+    board = read_executor_run(
+        first, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    evaluations = [
+        event for event in board["events"]
+        if event.get("kind") == "AUTO_APPROVAL_EVALUATED"
+    ]
+    assert len(evaluations) == 1, board["events"]
+    assert evaluations[0]["auto_approval"]["approved"] is True
+    assert evaluations[0]["auto_approval"]["auto_approve_effective"] == "ON"
+    assert any(
+        event.get("kind") == "AUTO_APPROVAL_DECIDED"
+        and event.get("state") == "APPROVED"
+        for event in board["events"]
+    )
+    assert not any(
+        event.get("kind", "").startswith("HUMAN_APPROVAL")
+        for event in board["events"]
+    )
+    assert loop.terminal_outcome == "SUCCESS", answer
+    assert loop.terminal_acceptance["final_verdict"] == "PASS"

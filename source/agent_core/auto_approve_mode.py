@@ -70,22 +70,22 @@ def auto_approve_snapshot(workspace=None, working_directory=None) -> dict:
                               for p in access["read_only_roots"])
             denied = tuple(Path(p).expanduser().resolve(strict=False)
                            for p in policy.get("denied_write_roots") or ())
-            valid = False
-            for root in writable:
-                if not root.is_dir() or not is_within(target, root) or not is_within(cwd, root):
-                    continue
-                reject_reparse_components(target, root)
-                reject_reparse_components(cwd, root)
-                if not target.is_dir() or not cwd.is_dir():
-                    continue
-                if (workspace_path_mode(target, writable, read_only) != "writable"
-                        or workspace_path_mode(cwd, writable, read_only) != "writable"):
-                    continue
-                if any(is_within(target, p) or is_within(cwd, p) for p in denied):
-                    continue
-                valid = True
-                break
-            if not valid:
+            def authorized_writable(directory: Path) -> bool:
+                # ACL OFF can delegate work between independently authorized
+                # writable roots (for example E:\\AIspace -> C:\\HDRViewer).
+                # Each endpoint must qualify by itself. Auto Approve never
+                # makes a new root writable or bypasses path/command guards.
+                if (not directory.is_dir()
+                        or workspace_path_mode(directory, writable, read_only) != "writable"
+                        or any(is_within(directory, p) for p in denied)):
+                    return False
+                for root in writable:
+                    if root.is_dir() and is_within(directory, root):
+                        reject_reparse_components(directory, root)
+                        return True
+                return False
+
+            if not (authorized_writable(target) and authorized_writable(cwd)):
                 state["reason_code"] = "WORKSPACE_NOT_AUTHORIZED_WRITABLE"
                 return state
         state["auto_approve_effective"] = "ON"
