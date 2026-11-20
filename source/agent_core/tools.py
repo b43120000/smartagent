@@ -2737,6 +2737,7 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             "chat_id": str(getattr(agent, "security_approval_chat_id", "") or ""),
             "permanent_scope": permanent_scope,
             "workspace_root": str(security_context.workspace_root),
+            "approval_kind": "DELETE",
         }
         ledger = SecurityApprovalLedger(
             getattr(agent, "security_approval_ledger_root", security_context.workspace_root)
@@ -2751,9 +2752,23 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             deleted["authorization"] = "PERMANENT_WORKSPACE"
             deleted["workspace_scope"] = authorized_scope
             return delete_result('SUCCEEDED', 'DELETED', executed=True, data=deleted)
+        # Delete has a separate confirmation from run_command. An unanswered
+        # prompt may become a one-shot permit after ten minutes only if both
+        # the workspace and target parent remain independently writable.
+        from .auto_approve_mode import auto_approve_snapshot
+        target_dir = Path(manifest["target"])
+        if not target_dir.is_dir():
+            target_dir = target_dir.parent
+        def timeout_auto_approve_effective():
+            return auto_approve_snapshot(
+                security_context.workspace_root, working_directory=target_dir,
+            ).get("auto_approve_effective") == "ON"
+
+        timeout_auto_approve = timeout_auto_approve_effective()
         record = ledger.request(
             binding,
-            ttl_sec=float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0),
+            ttl_sec=(600.0 if timeout_auto_approve else
+                     float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0)),
         )
         notifier = getattr(agent, "notify_security_approval", None)
         if not callable(notifier) or getattr(agent, "_security_approval_notifier", None) is None:
@@ -2776,6 +2791,23 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             if state in {"REJECTED", "CANCELLED", "EXPIRED", "CONSUMED"}:
                 return delete_result('REJECTED', 'USER_APPROVAL_'+state)
             time.sleep(0.5)
+        # No click is only eligible if the *current* Auto Approve policy
+        # still applies; the ledger rejects races with human decisions.
+        if timeout_auto_approve and timeout_auto_approve_effective():
+            try:
+                ledger.approve_unanswered_timeout(
+                    record["approval_id"], binding, timeout_sec=600.0,
+                )
+                ledger.consume(record["approval_id"], binding)
+            except SecurityApprovalError as exc:
+                return delete_result('REJECTED', 'USER_APPROVAL_TIMEOUT_NOT_GRANTED',
+                                     detail=str(exc))
+            deleted, error = perform_delete(manifest)
+            if error:
+                return error
+            deleted["authorization"] = "AUTO_APPROVE_TIMEOUT_ONCE"
+            deleted["approval_id"] = record["approval_id"]
+            return delete_result('SUCCEEDED', 'DELETED', executed=True, data=deleted)
         return delete_result('REJECTED', 'USER_APPROVAL_EXPIRED')
     elif tool == "save_session_summary":
         return tool_save_session_summary(agent, tool_call)

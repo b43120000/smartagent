@@ -109,6 +109,38 @@ class SecurityApprovalLedger:
                 record["expires_at"] = now + 3600.0
             self._save(state); return dict(record)
 
+    def approve_unanswered_timeout(self, approval_id: str, binding: dict, *,
+                                  timeout_sec: float = 600.0) -> dict:
+        """Atomically approve an unanswered one-shot request after >=600s.
+
+        Caller must verify current ACL OFF / writable Auto Approve eligibility
+        and normal action admission. Explicit human reject/cancel always wins.
+        """
+        now = time.time()
+        keys = ("request_id", "task_id", "action_id", "action_digest",
+                "target", "manifest_digest", "chat_id", "permanent_scope",
+                "workspace_root", "approval_kind")
+        with exclusive_process_lock(self.lock_path, label="security approval"):
+            state = self._load()
+            row = state.setdefault("approvals", {}).get(str(approval_id))
+            if not isinstance(row, dict):
+                raise SecurityApprovalError("approval_not_found")
+            if row.get("state") != "PENDING":
+                raise SecurityApprovalError("approval_not_pending:" + str(row.get("state")))
+            if any(str(row.get(k, "") or "") != str(binding.get(k, "") or "")
+                   for k in keys):
+                raise SecurityApprovalError("approval_timeout_binding_mismatch")
+            created = float(row.get("created_at", 0) or 0)
+            if created <= 0 or now < created + max(600.0, float(timeout_sec)):
+                raise SecurityApprovalError("approval_timeout_not_elapsed")
+            # This approval is consumed exactly once; it cannot grant a
+            # permanent directory-delete scope.
+            row.update(state="APPROVED", approved_at=now, expires_at=now + 600.0,
+                       actor="AUTO_APPROVE_TIMEOUT_600S",
+                       auto_approved_on_timeout=True)
+            self._save(state)
+            return dict(row)
+
     def get(self, approval_id: str) -> dict | None:
         with exclusive_process_lock(self.lock_path, label="security approval"):
             record = self._load().get("approvals", {}).get(str(approval_id))
