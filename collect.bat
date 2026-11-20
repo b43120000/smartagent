@@ -568,6 +568,8 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                             capture_encoding=''
                             decode_error_policy=''
                             output_complete=$false
+                            capture_integrity=''
+                            stream_capture_proven=$false
                             observed_post_timeout_exit_code=$null
                             executed=$false
                             command_exit_code=$null
@@ -655,6 +657,8 @@ if ($task -and [IO.File]::Exists($executorBoardPath)) {
                                 $row['capture_encoding'] = (Safe-Code $details.capture_encoding)
                                 $row['decode_error_policy'] = (Safe-Code $details.decode_error_policy)
                                 $row['output_complete'] = [bool]$details.output_complete
+                                $row['capture_integrity'] = (Safe-Code $details.capture_integrity)
+                                $row['stream_capture_proven'] = [bool]$details.stream_capture_proven
                                 $row['observed_post_timeout_exit_code'] = $details.observed_post_timeout_exit_code
                                 $row['stdout_excerpt_redacted'] = [string]$details.stdout_excerpt_redacted
                                 $row['stderr_excerpt_redacted'] = [string]$details.stderr_excerpt_redacted
@@ -777,6 +781,8 @@ $executorFidelityRows = @($executorCommandRows | ForEach-Object {
         capture_encoding=$_.capture_encoding
         decode_error_policy=$_.decode_error_policy
         output_complete=$_.output_complete
+        capture_integrity=$_.capture_integrity
+        stream_capture_proven=$_.stream_capture_proven
         stdout_excerpt_redacted=$_.stdout_excerpt_redacted
         stderr_excerpt_redacted=$_.stderr_excerpt_redacted
         stdout_excerpt_truncated=$_.stdout_excerpt_truncated
