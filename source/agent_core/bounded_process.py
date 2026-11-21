@@ -291,6 +291,7 @@ def run_bounded_process(
         from .execution_telemetry import write_snapshot
         write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="STARTING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid(), stdout_path=str(stdout_path), stderr_path=str(stderr_path))
     process_started = False
+    process_spawn_attempted = False  # Distinguishes Popen rejection from preparation failures.
     last_running_evidence = None
     final_liveness_evidence = None
     try:
@@ -306,6 +307,7 @@ def run_bounded_process(
                 "GCM_INTERACTIVE": "Never",
             })
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+            process_spawn_attempted = True
             process = subprocess.Popen(
                 command,
                 cwd=str(Path(cwd).expanduser().resolve()) if cwd else None,
@@ -383,6 +385,9 @@ def run_bounded_process(
             "stderr_ref": stderr_ref,
             "timed_out": timed_out,
             "process_started": process_started,
+            "process_spawn_attempted": process_spawn_attempted,
+            "process_start_error_class": None,
+            "process_start_phase": "STARTED",
             "process_state": (
                 "EXITED" if process.returncode is not None
                 else final_liveness_evidence["process_state"]
@@ -438,6 +443,10 @@ def run_bounded_process(
             "timed_out": False,
             "error": f"{type(exc).__name__}: {exc}",
             "error_stage": "CAPTURE" if process_started else "PROCESS_START",
+            "process_start_phase": ("STARTED" if process_started else
+                                    "POPEN" if process_spawn_attempted else "PRELAUNCH"),
+            "process_spawn_attempted": process_spawn_attempted,
+            "process_start_error_class": type(exc).__name__ if not process_started else None,
             "process_started": process_started,
             "possible_partial_execution": process_started,
             "process_state": "UNKNOWN" if process_started else "NOT_STARTED",
