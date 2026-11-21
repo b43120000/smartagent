@@ -943,15 +943,133 @@ class TelegramReceiver:
         return True, "配對完成。現在可直接傳送自然語言工作指令。" if paired else "配對連結無效或已過期；請在電腦端重新產生 QR Code。"
 
     def poll_once(self) -> list[Any]:
+        # A pending long message needs short polling to flush after a quiet
+        # window even if Telegram sends no more updates.
+        poll_timeout = (
+            min(1, self.config.poll_timeout_sec)
+            if self._long_merge is not None and self._long_merge.has_pending
+            else self.config.poll_timeout_sec
+        )
         updates = self.client.get_updates(
             offset=self.offset_store.next_offset,
-            timeout=self.config.poll_timeout_sec,
+            timeout=poll_timeout,
         )
         self._log("POLL", offset=self.offset_store.next_offset, update_count=len(updates))
         with self.binding_lock:
             accepted = self._process_updates(updates)
             self._process_timed_out_pre_resume()
             return accepted
+
+    def _long_message_eligible(self, update: dict[str, Any]) -> bool:
+        """Only normal, authorized, unthreaded long text may be delayed."""
+        merger = self._long_merge
+        if merger is None:
+            return False
+        message = update.get("message")
+        if not isinstance(message, dict):
+            return False
+        identity = TelegramUpdateAdapter._private_non_bot(message)
+        if identity is None or not self.adapter.is_authorized(
+            user_id=identity[0], chat_id=identity[1]):
+            return False
+        text = message.get("text")
+        if not isinstance(text, str) or len(text) < merger.min_chunk_chars:
+            return False
+        if any(message.get(key) for key in (
+            "reply_to_message", "external_reply", "forward_origin",
+            "via_bot", "document", "photo", "video", "audio", "voice",
+            "media_group_id", "message_thread_id",
+        )):
+            return False
+        stripped = text.lstrip()
+        if stripped.startswith("/") or stripped.startswith(("接續工作 ", "/new")):
+            return False
+        if is_direct_cmd_request(text) or canonical_remote_control(text) != text.strip():
+            return False
+        if RemoteBindingManager.is_update(text) or RemoteSkillManager.looks_like_invocation(text):
+            return False
+        from agent_core.auto_approve_mode import parse_auto_approve_control
+        from agent_core.turbo_settings_command import parse_turbo_control
+        if parse_auto_approve_control(text) is not None or parse_turbo_control(text) is not None:
+            return False
+        try:
+            from RemoteAgent.telegram_long_message_merge import _identity
+            _identity(update)
+        except (ValueError, TypeError, KeyError):
+            return False
+        return True
+
+    def _flush_long_message_key(self, key: str) -> list[Any]:
+        merger = self._long_merge
+        if merger is None or not merger.has_key(key):
+            return []
+        dispatched = merger.compose(key)
+        accepted: list[Any] = []
+        # A queue or disk failure leaves the staged raw updates intact.
+        # Reattempts use the stable first-update idempotency key; gateway
+        # deduplication prevents a second Task for already accepted content.
+        for update, provenance in dispatched:
+            accepted.extend(self._process_ready_updates(
+                [update], merge_metadata=provenance))
+        merger.clear(key)
+        self._log(
+            "CONNECT", stage="LONG_MESSAGE_INGRESS_FLUSHED",
+            chat_sender_sha256=hashlib.sha256(key.encode()).hexdigest()[:16],
+            part_count=(provenance["part_count"] if len(dispatched) == 1
+                        and provenance is not None else len(dispatched)),
+            merged=len(dispatched) == 1 and provenance is not None,
+            accepted_task_count=len(accepted),
+        )
+        return accepted
+
+    def _process_updates(self, updates: list[dict[str, Any]]) -> list[Any]:
+        """Durable receive-before-enqueue coalescing. Controls never wait."""
+        merger = self._long_merge
+        if merger is None:
+            return self._process_ready_updates(updates)
+        accepted: list[Any] = []
+        for key in merger.due():
+            accepted.extend(self._flush_long_message_key(key))
+        for update in sorted(updates, key=lambda row: int(row.get("update_id", -1))):
+            message = update.get("message") if isinstance(update.get("message"), dict) else {}
+            chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+            chat_id = chat.get("id")
+            # A control/attachment from this chat is processed only after
+            # earlier buffered requests in that same chat are accepted.
+            same_chat = [
+                key for key in tuple(merger.groups)
+                if isinstance(chat_id, int) and key.startswith(str(chat_id) + ":")
+            ]
+            eligible = self._long_message_eligible(update)
+            if eligible:
+                key = merger.key_for(update)
+                for other in same_chat:
+                    if other != key:
+                        accepted.extend(self._flush_long_message_key(other))
+                if merger.has_key(key) and not merger.can_append(update):
+                    accepted.extend(self._flush_long_message_key(key))
+                status = merger.stage(update)
+                # Durable pending record precedes Telegram offset acknowledgement.
+                # A repeated update remains harmless even if a previous offset
+                # persistence failed between these steps.
+                self.offset_store.commit(int(update["update_id"]))
+                self._log(
+                    "CONNECT", stage="LONG_MESSAGE_PART_STAGED",
+                    update_id=int(update["update_id"]),
+                    message_id=int(update["message"]["message_id"]),
+                    status=status,
+                    char_count=len(update["message"]["text"]),
+                    content_sha256=hashlib.sha256(
+                        update["message"]["text"].encode("utf-8")).hexdigest(),
+                    pending_parts=len(merger.groups[key]["updates"]),
+                )
+                continue
+            for other in same_chat:
+                accepted.extend(self._flush_long_message_key(other))
+            accepted.extend(self._process_ready_updates([update]))
+        for key in merger.due():
+            accepted.extend(self._flush_long_message_key(key))
+        return accepted
 
     def _process_ready_updates(self, updates: list[dict[str, Any]],
                                *, merge_metadata: dict | None = None) -> list[Any]:
