@@ -7,6 +7,7 @@ import pytest
 from agent_core.goal_evidence_matching import (
     ExpectedContractError, append_match_report, frozen_expected_sha256,
     match_expected, safety_decision, terminal_goal_verdict, validate_expected,
+    negative_assertion_goal_evidence_eligible,
 )
 
 REF = "MIN-EV-" + "a"*24
@@ -170,3 +171,24 @@ def test_inaccessible_observation_is_not_fabricated_failure():
     assert r["match_state"]=="RECOLLECT_EVIDENCE"
     assert r["final_verdict"] is None
     assert not r["recovery"]["replay_original_action"]
+
+
+def test_only_predeclared_nonmutating_negative_test_is_goal_evidence():
+    receipt={"status":"FAILED","executed":False,"data":{
+        "process_spawn_attempted":True,"process_start_phase":"POPEN",
+        "process_start_error_class":"FileNotFoundError",
+        "process_started":False,"process_state":"NOT_STARTED",
+        "possible_partial_execution":False,"exit_code":None,
+    }}
+    contract=expected("data.process_start_error_class","FileNotFoundError")
+    report=match(contract,receipt)
+    action={"tool":"run_command","operation":"TEST"}
+    assert negative_assertion_goal_evidence_eligible(action,receipt,report)
+    assert not negative_assertion_goal_evidence_eligible(
+        {**action,"operation":"MUTATE"},receipt,report)
+    assert not negative_assertion_goal_evidence_eligible(
+        action,{**receipt,"data":{**receipt["data"],"possible_partial_execution":True}},report)
+    assert not negative_assertion_goal_evidence_eligible(
+        action,receipt,{**report,"observed_integrity":"UNVERIFIED"})
+    assert not negative_assertion_goal_evidence_eligible(
+        action,receipt,{**report,"match_state":"MISMATCH"})
