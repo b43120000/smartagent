@@ -120,7 +120,8 @@ class TelegramLongMessageCoalescer:
             row[1:3] == prior[1:3]
             and row[3] > prior[3]
             and row[4] == prior[4] + 1
-            and 0 <= update_message_date_only(items[-1], update)[0] <= self.window_sec
+            and 0 <= (int(update["message"]["date"]) -
+                      int(items[-1]["message"]["date"])) <= self.window_sec
             and 0 <= current - float(group["last_arrival"]) <= self.window_sec
             and len(items) < self.max_parts
             and sum(len(_identity(x)[5]) for x in items) + len(row[5])
@@ -141,8 +142,16 @@ class TelegramLongMessageCoalescer:
                      "last_arrival": current}
         else:
             group = {"updates": [update], "last_arrival": current}
+        previous = self.groups.get(key)
         self.groups[key] = group
-        self._write()
+        try:
+            self._write()
+        except Exception:
+            if previous is None:
+                self.groups.pop(key, None)
+            else:
+                self.groups[key] = previous
+            raise
         return "STAGED"
 
     def compose(self, key: str) -> list[tuple[dict, dict | None]]:
