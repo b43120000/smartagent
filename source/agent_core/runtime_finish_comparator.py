@@ -197,6 +197,12 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
         if row.get("kind") == "ACTION_ADMITTED"
         and row.get("expected_contract_present") is True
     }
+    admitted_reconciliations = {
+        row.get("action_id"): row.get("reconciliation_contract_sha256")
+        for row in source_events
+        if row.get("kind") == "ACTION_ADMITTED"
+        and row.get("reconciliation_contract_present") is True
+    }
     denied = [row for row in source_events if row.get("kind") == "ADMISSION_REJECTED"]
     native_denials = [
         row for row in source_events
@@ -300,8 +306,20 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
                 action["expected"], receipt, evidence_ref=ref,
                 evidence_store_status=store_status,
                 frozen_sha256=frozen, action_id=action_id)
+        if action.get("reconciliation") is not None:
+            from .timeout_reconciliation import (
+                reconciliation_digest, TimeoutReconciliationError,
+            )
+            try:
+                frozen_reconcile = reconciliation_digest(action)
+            except TimeoutReconciliationError:
+                return [], [], None, "RECONCILIATION_CONTRACT_INVALID_AT_FINISH"
+            if (admitted_reconciliations.get(action_id) != frozen_reconcile
+                    or entry.get("reconciliation_contract_sha256") != frozen_reconcile):
+                return [], [], None, "RECONCILIATION_CONTRACT_FROZEN_DIGEST_MISMATCH"
         history.append({"action": action, "receipt": receipt,
                         "evidence_ref": ref, "raw_result": raw,
+                        "sequence":len(history)+1,
                         "expected_match": expected_match})
     if set(actions) != {row["action_id"] for row in results} or set(ledger) != set(actions):
         return [], [], None, "ACTION_COVERAGE_INCOMPLETE"
@@ -311,6 +329,7 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
         "board": board, "results": results,
         "admission_denials": denied,
         "native_denials": native_denials,
+        "events": source_events,
     }, ""
 
 
@@ -662,13 +681,18 @@ def _observed_paths(item: dict) -> dict[str, str]:
     return {}
 
 
-def _execution_uncertainty(history: list[dict]) -> tuple[list[dict], list[dict]]:
+def _execution_uncertainty(history: list[dict],
+                           resolved_timeout_refs: set[str] | None = None) -> tuple[list[dict], list[dict]]:
     # Walk newest first, so each observation can only resolve an older one.
     observations = {}
     blocked, recovered = [], []
+    resolved_timeout_refs = resolved_timeout_refs or set()
     for item in reversed(history):
         ref, status = item["evidence_ref"], item["receipt"]["status"]
-        if status in {"UNKNOWN", "RUNNING", "PARTIAL"}:
+        if ref in resolved_timeout_refs and status == "UNKNOWN":
+            recovered.append({"evidence_ref":ref,
+                              "reason_code":"VERIFIED_SCOPED_TIMEOUT_RECONCILIATION"})
+        elif status in {"UNKNOWN", "RUNNING", "PARTIAL"}:
             missing = _partial_inspection_missing_paths(item) if status == "PARTIAL" else None
             unresolved = {
                 path for path, reason in (missing or {}).items()
@@ -804,7 +828,13 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     # set (never omitted or rewritten), but cannot veto later independent
     # successful evidence for the original goal. Uncertain execution is still
     # fail-closed and cannot be silently treated as a previous rejection.
-    blocked, recovered = _execution_uncertainty(history)
+    # Never accept a model-authored "resolved" flag. Reconstruct each
+    # timeout's original expected/MIN-EV/process proof and the later
+    # independent, contract-matched observe_fact receipts from Blackboard.
+    from .timeout_reconciliation import read_reconciliation_resolution
+    resolved_timeout_refs = read_reconciliation_resolution(
+        context.get("events", []), history)
+    blocked, recovered = _execution_uncertainty(history, resolved_timeout_refs)
     if blocked:
         return _fail("RUNTIME_EXECUTION_NOT_CONFIRMED", refs, tool_results=results,
                      finish_diagnostic={"unconfirmed_evidence": blocked,
@@ -829,6 +859,8 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
         )
     )
     if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED", "PARTIAL"}
+           and not (item["receipt"]["status"]=="UNKNOWN"
+                    and item["evidence_ref"] in resolved_timeout_refs)
            for item in history):
         return _fail("RUNTIME_RESULT_STATUS_UNSUPPORTED", refs, tool_results=results)
     # The same source-grounded contract is fixed before execution. For a
