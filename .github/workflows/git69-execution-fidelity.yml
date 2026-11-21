@@ -52,5 +52,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: git69-fidelity-${{ matrix.os }}
-          path: git69-fidelity.xml
+          path: |
+            git69-fidelity.xml
+            localdata/runtime/open_execution_fidelity_it/TASK-G69IT-*.json
+            git69-ci-evidence/*.json
           if-no-files-found: warn
