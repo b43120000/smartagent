@@ -982,7 +982,7 @@ class TelegramReceiver:
         )):
             return False
         stripped = text.lstrip()
-        if stripped.startswith("/") or stripped.startswith(("接續工作 ", "/new")):
+        if stripped.startswith(("/", "接續工作 ", "執行cmd ", "執行CMD ")):
             return False
         control_key = canonical_remote_control(text)
         software_controls = {
