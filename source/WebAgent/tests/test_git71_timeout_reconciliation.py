@@ -99,7 +99,7 @@ def test_missing_proof_never_claims_a_safe_continuation():
 
 def test_expected_timeout_required_before_dispatch():
     a=action()
-    a["expected"]["assertions"][0]["field"]="data.shell_mode"
+    a["expected"]["assertions"][0]["field"]="data.process_started"
     assert staged(a=a)["reason"]=="EXPECTED_TIMEOUT_NOT_PREDECLARED"
 
 
