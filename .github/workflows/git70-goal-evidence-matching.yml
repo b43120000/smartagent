@@ -37,7 +37,9 @@ jobs:
           generated=build(Path('.'));
           recorded=json.loads(Path('config/update_manifest.json').read_text(encoding='utf-8'));
           assert generated['files']==recorded['files'],
-          {'expected':len(generated['files']),'actual':len(recorded['files'])};
+          {'expected':len(generated['files']),'actual':len(recorded['files']),
+          'manifest_delta':{k:v for k,v in generated['files'].items() if recorded['files'].get(k)!=v},
+          'extra_pins':[k for k in recorded['files'] if k not in generated['files']]};
           assert generated['release_sequence']==recorded['release_sequence'],
           'RELEASE_SEQUENCE_MISMATCH'"
       - name: Pinned checkout upgrade preflight
