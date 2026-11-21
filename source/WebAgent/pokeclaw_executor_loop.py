@@ -1823,6 +1823,35 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         )
         if getattr(loop, "continuation_store", None):
             loop.continuation_store.snapshot(loop)
+        if match_report:
+            # Git70 recovery is a *new observation*, never an automatic retry
+            # of the command that produced this immutable MIN-EV.
+            if match_report["match_state"] == "RECOLLECT_EVIDENCE":
+                hint = (
+                    "GIT70_EVIDENCE_RECOVERY_REQUIRED: observed facts cannot be "
+                    "matched. First read_runtime_evidence for evidence_ref="
+                    + evidence_ref
+                    + "; then use a permitted read-only observation for fields "
+                    + json.dumps(match_report["unobserved_fields"][:24])
+                    + ". Do NOT replay the original Action; do not Finish yet."
+                )
+            elif match_report["match_state"] == "MISMATCH":
+                hint = (
+                    "GIT70_EXPECTED_OBSERVED_MISMATCH: verified observed facts "
+                    "contradict this action's predeclared Expected. Replan "
+                    "toward the FROZEN original user goal; do not relabel the "
+                    "observed facts or declare terminal FAIL solely because "
+                    "this attempt was unsuccessful. evidence_ref=" + evidence_ref
+                )
+        if (match_report
+                and match_report["safety_decision"] == "PAUSE_AND_RECONCILE"
+                and mutating):
+            return _finish(
+                loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
+                summary="GIT70_SAFETY_RECONCILIATION_REQUIRED; original command "
+                        "must not be replayed: " + evidence_ref,
+                complete=False,
+            )
         if after_approval_timeout:
             if runtime_status == "SUCCEEDED" and receipt.get("executed") is True:
                 pending_unknown_timeout = None
