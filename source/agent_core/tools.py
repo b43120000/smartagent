@@ -692,6 +692,7 @@ def tool_run_command(
                 'stdout_sha256':__import__("hashlib").sha256(str(main.get("stdout") or "").encode("utf-8")).hexdigest(),
                 'stderr_sha256':__import__("hashlib").sha256(str(main.get("stderr") or "").encode("utf-8")).hexdigest(),
                 'observed_post_timeout_exit_code':main.get("observed_post_timeout_exit_code"),
+                'timeout_termination':main.get("timeout_termination") if isinstance(main.get("timeout_termination"),dict) else {},
                 'failure_origin':failure_origin,
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
