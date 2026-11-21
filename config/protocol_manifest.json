@@ -285,7 +285,7 @@
     "source/RemoteAgent/telegram_delivery.py": "f6b13fdda9c75abe024f75399f5516d385eaca1838df19c93b1a5dd713372506",
     "source/RemoteAgent/telegram_direct_cmd.py": "c223abad4c547ae084cd61f6538bc24a28614bdb1d98f5677acb092c65b67fc0",
     "source/RemoteAgent/telegram_listener.py": "4ae0c2e7f5b4bf2e1eaccbaef309076f7c488a7f37b4eec0085484a133d780ad",
-    "source/RemoteAgent/telegram_transport.py": "f6ce6ce02b79fcbe357a68420468b18e3a1ddccd43377d460ef5121c1544f527",
+    "source/RemoteAgent/telegram_transport.py": "a331e830147cd7712d749b513f1491cf513e925df508d4d6b6a64a495bff87d5",
     "source/RemoteAgent/telegram_webagent_worker.py": "321e270a93043b652b1e295981cc970c878359d653ea208f1a4997fa8a8b6af4",
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443",

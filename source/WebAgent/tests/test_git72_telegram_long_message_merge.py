@@ -146,6 +146,29 @@ def test_three_parts_and_exact_text_order(tmp_path):
     assert ingress.messages[0].metadata["telegram_long_message_merge"]["part_count"]==3
 
 
+@pytest.mark.parametrize("prefix", ["Use /build-example for this task. ", "/build-example "])
+def test_skill_text_is_assembled_before_skill_selection(tmp_path, monkeypatch, prefix):
+    from agent_core import remote_binding
+
+    skill_root = tmp_path / "skills"
+    skill = skill_root / "build-example"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# Example\n", encoding="utf-8")
+    monkeypatch.setattr(remote_binding, "active", lambda: {"skill_path": str(skill_root)})
+    first = prefix.ljust(4008, "a")
+    second = "b" * 1170
+    rx, ingress, _, logs = receiver(tmp_path / "listener")
+
+    assert rx._process_updates([update(955, first, msgid=7872)]) == []
+    assert rx._process_updates([update(956, second, msgid=7873, date=1750000001)]) == []
+
+    assert len(force_quiet(rx)) == 1
+    assert len(ingress.tasks) == 1
+    assert ingress.messages[0].text == first + second
+    assert ingress.messages[0].metadata["selected_skill"] == "build-example"
+    assert [kw["skill"] for _, kw in logs if kw.get("stage") == "SKILL_SELECTED"] == ["build-example"]
+
+
 def test_near_messages_but_total_under_5000_remain_separate(tmp_path):
     rx,ingress,_,_=receiver(tmp_path)
     rx._process_updates([update(10,"a"*1200,msgid=2),

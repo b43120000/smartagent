@@ -982,7 +982,10 @@ class TelegramReceiver:
         )):
             return False
         stripped = text.lstrip()
-        if stripped.startswith(("/", "接續工作 ", "執行cmd ", "執行CMD ")):
+        # Skill tags belong to the task text. Resolve them only after the
+        # receiver has assembled the whole request.
+        if (stripped.rstrip() in {"/start", "/new"}
+                or stripped.startswith(("/start ", "/new ", "接續工作 ", "執行cmd ", "執行CMD "))):
             return False
         control_key = canonical_remote_control(text)
         software_controls = {
@@ -999,7 +1002,7 @@ class TelegramReceiver:
                     "查看任務進度 ",
                 ))):
             return False
-        if RemoteBindingManager.is_update(text) or RemoteSkillManager.looks_like_invocation(text):
+        if RemoteBindingManager.is_update(text):
             return False
         from agent_core.auto_approve_mode import parse_auto_approve_control
         from agent_core.turbo_settings_command import parse_turbo_control
