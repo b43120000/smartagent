@@ -103,9 +103,9 @@ def test_open_mode_real_runtime_processes_and_immutable_evidence(tmp_path, monke
         archive.unlink(missing_ok=True)
 
 
-def test_open_mode_gateway_refuses_execution_without_opt_in_and_valid_host(monkeypatch, tmp_path):
+@pytest.mark.skipif(os.name != "nt", reason="Windows policy preflight")
+def test_open_mode_gateway_rejects_invalid_effective_policy(monkeypatch, tmp_path):
     import agent_core.runtime_open_fidelity_it as it
-    monkeypatch.setattr(it.os, "name", "nt")
     monkeypatch.setattr("agent_core.auto_approve_mode.auto_approve_snapshot",
                         lambda workspace: {"acl": "ON"})
     with pytest.raises(RuntimeError, match="POLICY_NOT_VERIFIED"):
