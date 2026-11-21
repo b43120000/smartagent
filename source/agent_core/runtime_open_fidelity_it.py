@@ -78,7 +78,7 @@ def _cases(workspace: Path, fixture: Path) -> list[tuple[str, dict, dict]]:
              argv=["-c", "import time; time.sleep(4)"], timeout=1), {
              "exit_code": None, "timed_out": True, "possible_partial_execution": True}),
         ("DIRECT_TRUNCATED", _action("DIRECT_TRUNCATED", "DIRECT", exe, workspace,
-             argv=["-c", "import sys; sys.stdout.buffer.write(b'Z'*6500000)"]), {
+             argv=["-c", "import sys; sys.stdout.buffer.write(b'Z'*12000000)"]), {
              "exit_code": 0, "stdout_truncated": True, "output_complete": False,
              "capture_integrity": "TRUNCATED"}),
     ]
