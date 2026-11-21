@@ -1550,6 +1550,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             **proposed, "action_id": action["action_id"],
         }
         mutating = _possibly_mutating(action, broker_gate["decision"])
+        # Git70: freeze the Planner's action assertions before execution.
+        # The digest is recorded independently of subsequent ToolResults.
+        from agent_core.goal_evidence_matching import frozen_expected_sha256
+        expected_contract = action.get("expected")
+        expected_digest = (frozen_expected_sha256(expected_contract)
+                           if isinstance(expected_contract, dict) else "")
         append_executor_event(root, loop, {
             "round": turn, "kind": "ACTION_ADMITTED",
             "toolName": action["tool"], "action_id": action["action_id"],
@@ -1559,6 +1565,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 decision.arguments, action,
             )} if action["tool"] == "run_command" else {}),
             "mutating": mutating,
+            "expected_contract_sha256": expected_digest,
+            "expected_contract_present": bool(expected_digest),
             "turbo_decision": (
                 "NOT_APPLICABLE_TYPED_ACTION" if action["tool"] != "run_command"
                 else ("AUTO_CONFIRM" if auto_confirm
@@ -1611,6 +1619,46 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "evidence_ref": evidence_ref, "store_status": "PERSIST_FAILED",
                 "error_class": type(exc).__name__,
             }
+        # Git70: observed facts are obtained by reading the exact task-bound,
+        # immutable MIN-EV record, never from Planner prose or a truncated preview.
+        # An unavailable/invalid record drives evidence recollection, NOT replay.
+        match_report = None
+        if expected_digest:
+            from agent_core.goal_evidence_matching import (
+                match_expected, append_match_report,
+            )
+            from agent_core.runtime_evidence_store import (
+                read_runtime_action_result, RuntimeEvidenceError,
+            )
+            observed_receipt = None
+            if evidence_pointer.get("store_status") == "PERSISTED_AND_READBACK_VERIFIED":
+                try:
+                    observed_raw = read_runtime_action_result(
+                        root, task_id=loop.task_id, request_id=loop.run_id,
+                        task_epoch=loop.task_epoch, action_id=action["action_id"],
+                        evidence_ref=evidence_ref,
+                    )
+                    observed_receipt = decode_result(observed_raw)
+                except (RuntimeEvidenceError, ValueError, TypeError, OSError):
+                    observed_receipt = None
+            match_report = match_expected(
+                expected_contract, observed_receipt, evidence_ref=evidence_ref,
+                evidence_store_status=(
+                    evidence_pointer.get("store_status", "PERSIST_FAILED")
+                    if observed_receipt is not None else "READBACK_UNAVAILABLE"),
+                frozen_sha256=expected_digest, action_id=action["action_id"],
+            )
+            try:
+                append_match_report(root, loop.task_id, loop.run_id, match_report)
+            except (OSError, ValueError) as exc:
+                match_report["local_report_persist_error"] = type(exc).__name__
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "EXPECTED_OBSERVED_MATCH",
+                "action_id": action["action_id"], "toolName": action["tool"],
+                "evidence_ref": evidence_ref,
+                "expected_observed_match": match_report,
+                "authorization_granted": False,
+            })
         tool_result = _tool_result(
             runtime_status, runtime_reason, result_data,
             evidence_pointer=evidence_pointer,
@@ -1623,6 +1671,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "evidence_store": dict(evidence_pointer),
             "result_sha256": digest, "result_status": runtime_status,
             "result_reason": runtime_reason,
+            "expected_contract_sha256": expected_digest,
+            "expected_observed_match": match_report,
             "execution_status": runtime_status,
             "verification_status": str(
                 (result_data or {}).get("verification_status", "UNVERIFIED")
@@ -1652,6 +1702,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "toolName": action["tool"], "action_id": action["action_id"],
             "toolResult": tool_result,
             "evidence_store": dict(evidence_pointer),
+            **({"expected_observed_match": match_report} if match_report else {}),
             **({"github_source_stage_evidence": github_stage} if github_stage else {}),
             **({"command_execution_rca": capture_command_result_rca(
                 raw_result, receipt,
@@ -1740,6 +1791,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "action_id": action["action_id"],
             "toolResult": tool_result, "evidence_ref": evidence_ref,
             "evidence_store_status": evidence_pointer.get("store_status"),
+            **({"expected_observed_match": match_report} if match_report else {}),
             **({"github_source_stage_evidence": github_stage} if github_stage else {}),
         })
         loop.protocol_state = "OBSERVED"
