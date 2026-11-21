@@ -205,6 +205,87 @@ $outputDir = Join-Path $root 'localdata\diagnostics\gar_live_rca'
 [IO.Directory]::CreateDirectory($outputDir) | Out-Null
 $stage = Join-Path $outputDir ('stage_' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($stage) | Out-Null
+# Git72: Task-bound, plaintext Telegram *ingress* merge provenance.
+# Never publish original Telegram text, raw Updates, tokens or private chat ID.
+$telegramIngress = [ordered]@{
+    schema = 'SMARTAGENT_GIT72_TELEGRAM_INGRESS_MERGE_COLLECTOR_V1'
+    task_id = (Safe-Code $task)
+    request_id = (Safe-Code $request)
+    status = 'NOT_FOUND'
+    merged = $false
+    source_update_ids = @()
+    source_message_ids = @()
+    source_text_lengths = @()
+    source_text_sha256 = @()
+    combined_characters = 0
+    combined_sha256 = ''
+    task_request_sha256 = ''
+    task_request_hash_matches_merge = $false
+    text_included = $false
+}
+if ($task -and $request) {
+    $taskStatePath = Join-Path $root 'localdata\runtime\remote_tasks.json'
+    if ([IO.File]::Exists($taskStatePath)) {
+        try {
+            $taskStateItem = Get-Item -LiteralPath $taskStatePath -ErrorAction Stop
+            if ($taskStateItem.Length -gt 33554432 -or
+                ($taskStateItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                $telegramIngress.status = 'SOURCE_UNTRUSTED_OR_OVERSIZED'
+            } else {
+                $taskState = Read-Json $taskStatePath
+                $property = if ($null -ne $taskState -and
+                    $null -ne $taskState.tasks) {
+                    $taskState.tasks.PSObject.Properties[$task]
+                } else { $null }
+                if ($null -ne $property) {
+                    $taskRecord = $property.Value
+                    if ([string]$taskRecord.request_id -cne $request -or
+                        [string]$taskRecord.metadata.transport -cne 'TELEGRAM') {
+                        $telegramIngress.status = 'TASK_REQUEST_IDENTITY_MISMATCH'
+                    } else {
+                        $merge = $taskRecord.metadata.ingress_metadata.telegram_long_message_merge
+                        if ($null -eq $merge) {
+                            $telegramIngress.status = 'SINGLE_TELEGRAM_MESSAGE'
+                        } elseif ([string]$merge.schema -cne 'SMARTAGENT_TELEGRAM_LONG_MESSAGE_MERGE_V1') {
+                            $telegramIngress.status = 'SOURCE_SCHEMA_INVALID'
+                        } else {
+                            $telegramIngress.merged = $true
+                            $telegramIngress.status = 'MERGED_TASK_BOUND'
+                            $telegramIngress.source_update_ids = @(
+                                $merge.source_update_ids | Select-Object -First 32 |
+                                ForEach-Object { [int64]$_ })
+                            $telegramIngress.source_message_ids = @(
+                                $merge.source_message_ids | Select-Object -First 32 |
+                                ForEach-Object { [int64]$_ })
+                            $telegramIngress.source_text_lengths = @(
+                                $merge.source_text_lengths | Select-Object -First 32 |
+                                ForEach-Object { [int]$_ })
+                            $telegramIngress.source_text_sha256 = @(
+                                $merge.source_text_sha256 | Select-Object -First 32 |
+                                ForEach-Object { Safe-Code $_ })
+                            $telegramIngress.combined_characters = [int]$merge.combined_characters
+                            $telegramIngress.combined_sha256 = Safe-Code $merge.combined_sha256
+                            $telegramIngress.task_request_sha256 = Hash-Text ([string]$taskRecord.request)
+                            $telegramIngress.task_request_hash_matches_merge = (
+                                [string]$telegramIngress.task_request_sha256 -ceq
+                                [string]$telegramIngress.combined_sha256)
+                            if ($telegramIngress.source_update_ids.Count -lt 2 -or
+                                $telegramIngress.source_update_ids.Count -ne
+                                    $telegramIngress.source_message_ids.Count -or
+                                $telegramIngress.source_update_ids.Count -ne
+                                    $telegramIngress.source_text_lengths.Count) {
+                                $telegramIngress.status = 'SOURCE_PARTS_INVALID'
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            $telegramIngress.status = 'SOURCE_READ_ERROR'
+        }
+    }
+}
+Write-Json (Join-Path $stage 'telegram_ingress_merge.json') $telegramIngress
 # Git69 bypass IT: separate report, never spoof the Executor Blackboard.
 $openFidelity = [ordered]@{
     schema='SMARTAGENT_GIT69_OPEN_FIDELITY_COLLECTOR_V1'
