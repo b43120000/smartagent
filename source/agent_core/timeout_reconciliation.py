@@ -176,7 +176,9 @@ def check_reconciliation_observation(state: object, action: object,
         return result
     fact=observations[0]
     if (fact.get("observation_status")!="CONFIRMED" or
-            fact.get("evidence_source") not in (None,"filesystem.stat")):
+            fact.get("source")!="filesystem.stat" or
+            fact.get("field")!="file.exists" or
+            fact.get("freshness")!="CURRENT"):
         result["reason"]="OBSERVATION_PRODUCER_INVALID"
         return result
     if receipt.get("resolved_path") is None or not isinstance(action.get("path"),str):
@@ -190,6 +192,13 @@ def check_reconciliation_observation(state: object, action: object,
         return result
     if observed_path!=resolved_path:
         result["reason"]="OBSERVATION_PATH_CHANGED"
+        return result
+    try:
+        if _path(fact.get("scope")) != observed_path:
+            result["reason"]="OBSERVATION_SCOPE_CHANGED"
+            return result
+    except TimeoutReconciliationError:
+        result["reason"]="OBSERVATION_SCOPE_CHANGED"
         return result
     check=next((c for c in state.get("checks",())
                 if c.get("path")==observed_path and
@@ -206,7 +215,8 @@ def check_reconciliation_observation(state: object, action: object,
         return result
     completed=list(state.get("completed_check_paths",())) + [check["path"]]
     final=len(completed)==len(state["checks"])
-    return {**result,"state":"RECONCILED" if final else "OBSERVATION_REQUIRED",
+    return {**result,"action_id":state["action_id"],
+            "state":"RECONCILED" if final else "OBSERVATION_REQUIRED",
             "reason":"SCOPED_POSTCONDITIONS_VERIFIED" if final else "MORE_OBSERVATIONS_REQUIRED",
             "source_action_id":state["action_id"],
             "verification_action_id":action["action_id"],
