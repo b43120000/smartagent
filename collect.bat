@@ -274,6 +274,79 @@ if ($task -and $request) {
     }
 }
 Write-Json (Join-Path $stage 'open_execution_fidelity_it.json') $openFidelity
+# Git70: plain-JSONL, task/request bound Expected/Observed Match Matrix.
+# This archive is a sanitized RCA projection; full immutable ToolResults
+# remain retrievable from local MIN-EV storage. No encryption or opaque blob.
+$git70Matrix = [ordered]@{
+    schema='SMARTAGENT_GIT70_MATCH_COLLECTOR_V1'
+    task_id=(Safe-Code $task)
+    request_id=(Safe-Code $request)
+    status='NOT_FOUND'
+    record_count=0
+    records=@()
+    source_encrypted=$false
+    raw_tool_output_included=$false
+}
+if ($task -and $request) {
+    $matchPath = Join-Path $root ('localdata\\runtime\\goal_evidence_matching\\' + $task + '.jsonl')
+    if ([IO.File]::Exists($matchPath)) {
+        $matchItem = Get-Item -LiteralPath $matchPath -ErrorAction Stop
+        if ($matchItem.Length -gt 4194304 -or
+            ($matchItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            $git70Matrix.status = 'SOURCE_UNTRUSTED_OR_OVERSIZED'
+        } else {
+            $git70Matrix.status = 'IDENTITY_VERIFIED'
+            $rows70 = @()
+            foreach ($line70 in ([IO.File]::ReadAllLines($matchPath, [Text.Encoding]::UTF8) |
+                                   Select-Object -Last 256)) {
+                if ([string]::IsNullOrWhiteSpace($line70) -or $line70.Length -gt 32768) { continue }
+                try { $entry70 = $line70 | ConvertFrom-Json -ErrorAction Stop }
+                catch { $git70Matrix.status = 'PARTIAL_INVALID_JSON'; continue }
+                if ([string]$entry70.task_id -cne $task -or
+                    [string]$entry70.request_id -cne $request -or
+                    [string]$entry70.schema -cne 'SMARTAGENT_GIT70_EXPECTED_OBSERVED_V1') {
+                    $git70Matrix.status = 'PARTIAL_IDENTITY_OR_SCHEMA_MISMATCH'
+                    continue
+                }
+                $conditions70 = @()
+                foreach ($condition70 in @($entry70.assertions) | Select-Object -First 48) {
+                    if ($null -eq $condition70) { continue }
+                    $conditions70 += [ordered]@{
+                        index=$condition70.index
+                        field=(Safe-Code $condition70.field)
+                        operator=(Safe-Code $condition70.operator)
+                        observed_present=[bool]$condition70.observed_present
+                        match_state=(Safe-Code $condition70.match_state)
+                        expected_type=([string]$condition70.expected.GetType().Name)
+                        observed_type=if ($null -eq $condition70.observed) { 'NULL' } else { [string]$condition70.observed.GetType().Name }
+                        expected_sha256=(Hash-Text (ConvertTo-Json -InputObject $condition70.expected -Compress -Depth 4))
+                        observed_sha256=(Hash-Text (ConvertTo-Json -InputObject $condition70.observed -Compress -Depth 4))
+                    }
+                }
+                $rows70 += [ordered]@{
+                    action_id=(Safe-Code $entry70.action_id)
+                    evidence_ref=(Safe-Code $entry70.evidence_ref)
+                    frozen_expected_sha256=(Safe-Code $entry70.frozen_expected_sha256)
+                    evidence_store_status=(Safe-Code $entry70.evidence_store_status)
+                    observed_integrity=(Safe-Code $entry70.observed_integrity)
+                    match_state=(Safe-Code $entry70.match_state)
+                    action_assertion_verdict=(Safe-Code $entry70.action_assertion_verdict)
+                    safety_decision=(Safe-Code $entry70.safety_decision)
+                    safety_reason=(Safe-Code $entry70.safety_reason)
+                    next_action=(Safe-Code $entry70.next_action)
+                    recovery_needed=[bool]$entry70.recovery.recovery_needed
+                    replay_original_action=[bool]$entry70.recovery.replay_original_action
+                    unobserved_fields=@($entry70.unobserved_fields | ForEach-Object { Safe-Code $_ })
+                    assertions=@($conditions70)
+                }
+            }
+            $git70Matrix.record_count=@($rows70).Count
+            $git70Matrix.records=@($rows70)
+        }
+    }
+}
+Write-Json (Join-Path $stage 'git70_expected_observed_matrix.json') $git70Matrix
+
 $sources = @(
     @{ name = 'webagent_runtime'; path = (Join-Path $root 'localdata\logs\webagent_runtime.jsonl') },
     @{ name = 'remote_runtime'; path = (Join-Path $root 'localdata\logs\remote_runtime.jsonl') },
