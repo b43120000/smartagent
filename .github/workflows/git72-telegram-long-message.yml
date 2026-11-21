@@ -1,0 +1,65 @@
+name: Git72 Telegram Long Message SW Receiver UT + Real Ingress IT
+on:
+  push:
+    branches: [git72/telegram-long-message-merge]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fidelity:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Syntax compile
+        run: >-
+          python -B -m compileall -q source/agent_core/runtime_open_fidelity_it.py source/agent_core/runtime_goal_evidence_it.py source/agent_core/timeout_reconciliation.py source/agent_core/bounded_process.py source/agent_core/runtime_finish_comparator.py source/agent_core/goal_evidence_matching.py source/agent_core/shell_execution.py
+          source/agent_core/tools.py source/agent_core/smartagent_protocol.py
+          source/agent_core/executor_command_rca.py
+          source/WebAgent/minimal_admission.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/tests/test_git69_execution_fidelity.py
+          source/WebAgent/tests/test_git69_open_execution_it.py source/WebAgent/tests/test_git70_goal_evidence.py source/WebAgent/tests/test_git70_open_goal_evidence_it.py source/WebAgent/tests/test_git71_timeout_reconciliation.py source/WebAgent/tests/test_git71_timeout_pipeline_it.py source/RemoteAgent/telegram_long_message_merge.py source/RemoteAgent/telegram_transport.py source/WebAgent/tests/test_git72_telegram_long_message_merge.py
+      - name: UT and Windows sidecar process IT
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git69_execution_fidelity.py
+          source/WebAgent/tests/test_git69_open_execution_it.py
+          source/WebAgent/tests/test_git68_open_mode_pipeline.py
+          source/WebAgent/tests/test_git70_goal_evidence.py
+          source/WebAgent/tests/test_git70_open_goal_evidence_it.py
+          source/WebAgent/tests/test_git71_timeout_reconciliation.py
+          source/WebAgent/tests/test_git71_timeout_pipeline_it.py
+          source/WebAgent/tests/test_git52_telegram_poison_request.py
+          source/WebAgent/tests/test_git72_telegram_long_message_merge.py
+          --tb=short
+          --junitxml=git72-evidence.xml
+      - name: Publish CI test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git72-evidence-${{ matrix.os }}
+          path: |
+            git72-evidence.xml
+            localdata/runtime/open_execution_fidelity_it/TASK-G69IT-*.json
+            git69-ci-evidence/*.json
+            localdata/runtime/goal_evidence_matching/TASK-*.jsonl
+            localdata/runtime/goal_evidence_it/TASK-*.json
+            git70-ci-evidence/*.json
+            git71-ci-evidence/*.json
+            localdata/runtime/timeout_reconciliation/TASK-G71IT-*.jsonl
+          if-no-files-found: warn
