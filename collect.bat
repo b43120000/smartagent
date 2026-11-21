@@ -387,6 +387,72 @@ if ($task -and $request) {
     }
 }
 Write-Json (Join-Path $stage 'git70_expected_observed_matrix.json') $git70Matrix
+# Git71: safe, unencrypted, task-bound recovery lifecycle projection.
+# Full local JSONL retains exact declared paths; shared GAR hashes paths to
+# prevent accidental disclosure. All status/refs/verdicts remain readable.
+$git71Recovery = [ordered]@{
+    schema='SMARTAGENT_GIT71_RECOVERY_COLLECTOR_V1'
+    task_id=(Safe-Code $task)
+    request_id=(Safe-Code $request)
+    status='NOT_FOUND'
+    record_count=0
+    records=@()
+    source_encrypted=$false
+    replay_original_action=$false
+}
+if ($task -and $request) {
+    $recoverPath = Join-Path $root ('localdata\\runtime\\timeout_reconciliation\\' + $task + '.jsonl')
+    if ([IO.File]::Exists($recoverPath)) {
+        $item71 = Get-Item -LiteralPath $recoverPath -ErrorAction Stop
+        if ($item71.Length -gt 4194304 -or
+            ($item71.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            $git71Recovery.status='SOURCE_UNTRUSTED_OR_OVERSIZED'
+        } else {
+            $git71Recovery.status='IDENTITY_VERIFIED'
+            $rows71=@()
+            foreach ($line71 in ([IO.File]::ReadAllLines($recoverPath, [Text.Encoding]::UTF8) |
+                                   Select-Object -Last 256)) {
+                if ([string]::IsNullOrWhiteSpace($line71) -or $line71.Length -gt 32768) { continue }
+                try { $entry71=$line71 | ConvertFrom-Json -ErrorAction Stop }
+                catch { $git71Recovery.status='PARTIAL_INVALID_JSON'; continue }
+                if ([string]$entry71.task_id -cne $task -or
+                    [string]$entry71.request_id -cne $request -or
+                    [string]$entry71.schema -cne 'SMARTAGENT_GIT71_TIMEOUT_RECONCILIATION_V1') {
+                    $git71Recovery.status='PARTIAL_IDENTITY_OR_SCHEMA_MISMATCH'
+                    continue
+                }
+                $checks71=@()
+                foreach ($check71 in @($entry71.checks) | Select-Object -First 8) {
+                    if ($null -eq $check71) { continue }
+                    $checks71 += [ordered]@{
+                        tool=(Safe-Code $check71.tool)
+                        path_sha256=(Hash-Text ([string]$check71.path))
+                        expected_exists=if ($null -eq $check71.expected_exists) { $null } else { [bool]$check71.expected_exists }
+                    }
+                }
+                $rows71 += [ordered]@{
+                    state=(Safe-Code $entry71.state)
+                    reason=(Safe-Code $entry71.reason)
+                    source_action_id=(Safe-Code $entry71.action_id)
+                    source_evidence_ref=(Safe-Code $entry71.source_evidence_ref)
+                    verification_action_id=(Safe-Code $entry71.verification_action_id)
+                    verification_evidence_ref=(Safe-Code $entry71.verification_evidence_ref)
+                    reconciliation_sha256=(Safe-Code $entry71.reconciliation_sha256)
+                    process_finality_verified=[bool]$entry71.process_finality_verified
+                    side_effect_scope=(Safe-Code $entry71.side_effect_scope)
+                    replay_original_action=[bool]$entry71.replay_original_action
+                    completed_check_count=@($entry71.completed_check_paths).Count
+                    witness_action_ids=@($entry71.witness_action_ids | ForEach-Object { Safe-Code $_ })
+                    checks=@($checks71)
+                }
+            }
+            $git71Recovery.record_count=@($rows71).Count
+            $git71Recovery.records=@($rows71)
+        }
+    }
+}
+Write-Json (Join-Path $stage 'timeout_reconciliation.json') $git71Recovery
+
 
 $sources = @(
     @{ name = 'webagent_runtime'; path = (Join-Path $root 'localdata\logs\webagent_runtime.jsonl') },
