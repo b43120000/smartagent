@@ -114,7 +114,16 @@ def _run_real_sidecar(workspace:Path, monkeypatch, *, with_reconciliation:bool=T
                    "field":"data.observations.0.value",
                    "operator":"eq","expected":True}],
             },ensure_ascii=False)
-        pytest.fail("unexpected planner round "+str(round_no))
+        report=read_executor_run(install,task_id=loop.task_id,
+                                  request_id=loop.run_id,task_epoch=loop.task_epoch) or {}
+        proposals=[(v.get("kind"),v.get("comparator_reason_code"),
+                    v.get("reason_code"),v.get("finish_diagnostic"))
+                   for v in report.get("events",[]) if v.get("kind") in {
+                        "MODEL_FINISH_PROPOSAL","MODEL_FINISH_REPAIR",
+                        "MODEL_FINISH_CONTRACT_INVALID"}]
+        pytest.fail("unexpected planner round "+str(round_no)+
+                    " comparator="+repr(proposals[-4:])+
+                    " prompt_tail="+prompt[-1900:])
     loop.planner=planner
     reply=run_pokeclaw_executor(loop,request)
     board=read_executor_run(install,task_id=loop.task_id,
@@ -136,7 +145,7 @@ def test_git70_pause_reproduced_by_real_timeout_without_reconciliation(tmp_path,
     m=last["expected_observed_match"]
     assert m["match_state"]=="MATCH"
     assert m["safety_decision"]=="PAUSE_AND_RECONCILE"
-    assert board["terminal"]["terminal_kind"]=="EXECUTION_OUTCOME_UNKNOWN"
+    assert board["terminal"]["kind"]=="EXECUTION_OUTCOME_UNKNOWN"
 
 
 @pytest.mark.skipif(os.name!="nt",reason="Actual Windows Timeout to Finish V2 pipeline")
