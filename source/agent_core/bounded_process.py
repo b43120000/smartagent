@@ -79,6 +79,7 @@ def run_bounded_process(
     approval_manifest: dict | None = None,
     security_command: str | None = None,
     noninteractive: bool = False,
+    wait_policy: str = "BOUNDED",
 ) -> dict:
     """Capture process streams to disk so large output cannot exhaust agent memory."""
     from .command_security import CommandSecurityError, require_command_allowed
@@ -87,6 +88,8 @@ def run_bounded_process(
         else subprocess.list2cmdline([str(value) for value in command])
     )
     security_text = str(security_command if security_command is not None else command_text)
+    if wait_policy not in {"BOUNDED", "UNTIL_EXIT"}:
+        raise ValueError("RUN_COMMAND_WAIT_POLICY_INVALID")
     # Git49 OS Broker admission. This runs before selecting any executor,
     # so neither direct host subprocess nor a stale service can be a fallback.
     from .turbo_broker_admission import assess
@@ -111,6 +114,8 @@ def run_bounded_process(
             "sandbox_evidence": broker["evidence"],
         }
 
+    if wait_policy == "UNTIL_EXIT" and broker["decision"] != "HOST_EXECUTOR":
+        return reject_broker("LONG_EXECUTION_REQUIRES_ACL_OFF_HOST_BACKEND")
     if native_only_runtime_test_active() and broker["decision"] != "BROKER_REQUIRED":
         return reject_broker("RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK")
     if broker["decision"] == "BLOCKED":
@@ -337,13 +342,22 @@ def run_bounded_process(
                         # because a display snapshot could not be written.
                         pass
             timed_out = False
+            wait_result = None
             tree_kill_attempted = False
             tree_kill_exit_code = None
             try:
-                wait_with_liveness(
-                    process, timeout, on_running=record_running,
-                    execution_id=capture_id, interval=2.0,
-                )
+                if wait_policy == "UNTIL_EXIT":
+                    from .long_execution_supervisor import wait_until_exit
+                    _, wait_result = wait_until_exit(
+                        process, install=telemetry.get("install_root"),
+                        telemetry=telemetry, execution_id=capture_id,
+                        on_running=record_running,
+                    )
+                else:
+                    wait_with_liveness(
+                        process, timeout, on_running=record_running,
+                        execution_id=capture_id, interval=2.0,
+                    )
             except subprocess.TimeoutExpired:
                 timed_out = True
                 # On Windows shell=True owns cmd.exe, not just the actual child.
@@ -437,6 +451,11 @@ def run_bounded_process(
             "liveness_evidence": final_liveness_evidence,
             "last_running_evidence": last_running_evidence,
             "timeout_termination": timeout_termination,
+            "wait_policy": wait_policy,
+            "long_wait_id": wait_result.get("wait_id", "") if wait_result else "",
+            "long_wait_decision": wait_result.get("decision", "") if wait_result else "",
+            "long_wait_state": wait_result.get("state", "") if wait_result else "",
+            "long_wait_os_samples": wait_result.get("liveness_sample_count", 0) if wait_result else 0,
         }
         if timed_out:
             result["error"] = f"指令超過 {timeout} 秒"

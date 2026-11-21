@@ -247,6 +247,16 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "After observed Timeout, preserve UNKNOWN and use only frozen read-only "
         "reconciliation before any unrelated next action.\\n"
         
+        "Git74 long-running commands: for a process-owned Python, EXE or build launcher "
+        "whose completion is its own process exit, use run_command.wait_policy=UNTIL_EXIT "
+        "only with ACL OFF, Turbo OFF and Auto Approve Effective ON. The Runtime waits "
+        "on the actual OS-owned process handle, not a guessed number of seconds; "
+        "the Telegram wait prompt has a 600-second nonresponse auto-continue, NOT "
+        "a command approval. If the process exits earlier, resume immediately. "
+        "The process exit does not prove a detached child, GUI service or LLM server "
+        "request finished: verify separate postconditions. Keep wait_policy=BOUNDED "
+        "for intentional Git71 P7 one-second Timeout testing. Do not retry or bypass "
+        "security checks when UNTIL_EXIT is rejected.\\n"
         "Observe first; decide from actual ToolResult. If missing, a permitted "
         "tool may create the requested target. Independently inspect after mutation. "
         "Use observe_fact for exact file existence and type. For an inspect_directory "
@@ -1852,6 +1862,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # Git71: reconcile *after* ToolResult and MIN-EV have been persisted.
         # Never alter the original UNKNOWN receipt or declare a mutation
         # successful because the timeout assertion happened to match.
+        if (isinstance(receipt.get("data"), dict)
+                and receipt["data"].get("long_wait_decision") == "PAUSE_AFTER_EXIT"):
+            return _finish(loop, root, request, kind="BLOCKED",
+                summary="LONG_EXECUTION_USER_PAUSED_AFTER_EXIT: result is retained; "
+                        "no additional Planner actions are dispatched. Evidence="
+                        + evidence_ref, complete=False)
         from agent_core.timeout_reconciliation import (
             begin_timeout_reconciliation, check_reconciliation_observation,
             append_reconciliation_report,

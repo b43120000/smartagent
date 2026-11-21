@@ -369,6 +369,7 @@ def _run_powershell_capture(
     cwd: str | Path | None = None,
     telemetry: dict | None = None,
     approval_manifest: dict | None = None,
+    wait_policy: str = "BOUNDED",
 ) -> dict:
     """Execute PowerShell and return structured evidence instead of only text."""
     try:
@@ -385,12 +386,13 @@ def _run_powershell_capture(
         timeout=timeout,
         capture_root=capture_root,
         telemetry=telemetry, approval_manifest=approval_manifest, security_command=command,
+        wait_policy=wait_policy,
     )
     return {"command": command, **payload}
 
 
 def _run_explicit_shell_capture(spec: dict, timeout: int, capture_root,
-                                *, cwd, telemetry, approval_manifest) -> dict:
+                                *, cwd, telemetry, approval_manifest, wait_policy="BOUNDED") -> dict:
     """Run DIRECT/CMD with the same admission and bounded capture as PowerShell."""
     from .command_security import CommandSecurityError, require_command_allowed
     from .turbo_broker_admission import assess
@@ -419,7 +421,8 @@ def _run_explicit_shell_capture(spec: dict, timeout: int, capture_root,
     return run_bounded_process(launch, cwd=cwd, timeout=timeout,
                                capture_root=capture_root, telemetry=telemetry,
                                approval_manifest=approval_manifest,
-                               security_command=spec["policy_command"])
+                               security_command=spec["policy_command"],
+                               wait_policy=wait_policy)
 
 
 def _evaluate_verification_step(
@@ -577,6 +580,7 @@ def tool_run_command(
     approval_manifest: dict | None = None,
     working_directory: str | Path | None = None,
     action_id: str = "",
+    wait_policy: str = "BOUNDED",
 ) -> str:
     """Run an action and the Web Planner's explicit post-action verification plan.
 
@@ -609,6 +613,20 @@ def tool_run_command(
             return encode_result('REJECTED','EXPECTED_VERIFICATION_INVALID',tool='run_command',executed=False,detail=str(exc))
     cwd = resolve_command_working_directory(
         working_directory, security_context, command=policy_command, operation=operation)
+    if wait_policy not in {"BOUNDED", "UNTIL_EXIT"}:
+        return encode_result("REJECTED", "RUN_COMMAND_WAIT_POLICY_INVALID", tool="run_command", executed=False)
+    if wait_policy == "UNTIL_EXIT":
+        from .auto_approve_mode import auto_approve_snapshot
+        from .tool_result_contract import encode_result
+        from .turbo_broker_admission import assess
+        state = auto_approve_snapshot(
+            security_context.workspace_root if security_context else None,
+            working_directory=cwd,
+        )
+        if (state.get("acl") != "OFF" or state.get("turbo_effective") != "OFF"
+                or state.get("auto_approve_effective") != "ON"
+                or assess(cwd, tool="run_command").get("decision") == "BROKER_REQUIRED"):
+            return encode_result("REJECTED", "LONG_EXECUTION_MODE_NOT_AUTHORIZED", tool="run_command", executed=False)
     from .action_dependencies import command_is_proven_observation
     observation_confirmed = command_is_proven_observation({'operation':operation,'command':policy_command})
     def finish(operation_result):
@@ -715,7 +733,12 @@ def tool_run_command(
                 'execution_id':main.get('execution_id'),
                 'liveness_evidence':witness,
                 'last_running_evidence':main.get('last_running_evidence'),
-                'possible_partial_execution':bool(main.get('possible_partial_execution'))})
+                'possible_partial_execution':bool(main.get('possible_partial_execution')),
+                'wait_policy':main.get('wait_policy', "BOUNDED"),
+                'long_wait_id':main.get('long_wait_id', ""),
+                'long_wait_decision':main.get('long_wait_decision', ""),
+                'long_wait_state':main.get('long_wait_state', ""),
+                'long_wait_os_samples':main.get('long_wait_os_samples', 0)})
     telemetry = None
     if security_context:
         # Propagate the real Action and Task identities to the native OS
@@ -733,11 +756,13 @@ def tool_run_command(
     main = (
         _run_powershell_capture(
             command, timeout, capture_root, cwd=cwd,
-            telemetry=telemetry, approval_manifest=approval_manifest)
+            telemetry=telemetry, approval_manifest=approval_manifest,
+            wait_policy=wait_policy)
         if spec["shell_mode"] == "POWERSHELL" else
         _run_explicit_shell_capture(
             spec, timeout, capture_root, cwd=cwd,
-            telemetry=telemetry, approval_manifest=approval_manifest)
+            telemetry=telemetry, approval_manifest=approval_manifest,
+            wait_policy=wait_policy)
     )
     if main.get("timed_out"):
         # A killed child can return a nonzero *post-kill* exit status.
@@ -2295,6 +2320,7 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             security_context=security_context, approval_manifest=approval_manifest,
             working_directory=tool_call.get('working_directory'),
             action_id=str(tool_call.get('action_id', '') or ''),
+            wait_policy=str(tool_call.get('wait_policy', "BOUNDED")),
         )
         if agent:
             if "VERIFICATION_STATUS: PASS" in result:

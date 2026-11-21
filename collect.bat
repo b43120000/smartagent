@@ -533,6 +533,37 @@ if ($task -and $request) {
     }
 }
 Write-Json (Join-Path $stage 'timeout_reconciliation.json') $git71Recovery
+# Git74: non-encrypted, task-scoped process and wait-consent evidence.
+# The journal never stores raw commands, user tokens, or stdout secrets.
+$longRoot = Join-Path $root 'localdata\runtime\long_execution'
+$longRows = New-Object 'System.Collections.Generic.List[object]'
+$longEvents = New-Object 'System.Collections.Generic.List[object]'
+if (Test-Path -LiteralPath $longRoot -PathType Container) {
+    Get-ChildItem -LiteralPath $longRoot -Filter 'WAIT-*.json' -File -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try {
+                $rec = Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ([string]$rec.task_id -ceq [string]$task -and
+                    ((-not $request) -or [string]$rec.request_id -ceq [string]$request)) {
+                    $longRows.Add($rec)
+                }
+            } catch { }
+        }
+    $longLog = Join-Path $longRoot 'events.jsonl'
+    if (Test-Path -LiteralPath $longLog -PathType Leaf) {
+        Get-Content -LiteralPath $longLog -Encoding UTF8 | ForEach-Object {
+            try {
+                $ev = $_ | ConvertFrom-Json
+                if ([string]$ev.task_id -ceq [string]$task -and
+                    ((-not $request) -or [string]$ev.request_id -ceq [string]$request)) {
+                    $longEvents.Add($ev)
+                }
+            } catch { }
+        }
+    }
+}
+Write-Json (Join-Path $stage 'git74_long_execution_states.json') @($longRows.ToArray())
+Write-Json (Join-Path $stage 'git74_long_execution_events.json') @($longEvents.ToArray())
 
 
 $sources = @(

@@ -40,6 +40,7 @@ SECURITY_APPROVAL_CALLBACK_PREFIX = "security_approval:"
 SECURITY_REJECT_CALLBACK_PREFIX = "security_reject:"
 SECURITY_WORKSPACE_DELETE_CALLBACK_PREFIX = "security_delete_workspace:"
 TASK_PROGRESS_CALLBACK_PREFIX = "task_progress:"
+LONG_WAIT_CALLBACK_PREFIX = "long_wait:"
 REMOTE_CONTROL_BUTTONS = (
     (MANAGER_COMMAND, MANAGER_COMMAND, "binding_manager"),
     (LIST_SKILLS_COMMAND, LIST_SKILLS_COMMAND, "list_skills"),
@@ -91,8 +92,21 @@ def task_progress_inline_keyboard(task_id: str) -> dict:
     }
 
 
+def long_wait_inline_keyboard(wait_id: str) -> dict:
+    value = str(wait_id or "").upper()
+    if not __import__("re").fullmatch(r"WAIT-[0-9A-F]{20}", value):
+        raise ValueError("long_wait_callback_id_invalid")
+    return {"inline_keyboard": [[
+        {"text": "繼續等待", "callback_data": LONG_WAIT_CALLBACK_PREFIX + value + ":Y"},
+        {"text": "完成後安全暫停", "callback_data": LONG_WAIT_CALLBACK_PREFIX + value + ":N"},
+    ]]}
+
+
 def command_for_remote_callback(data: str) -> str | None:
     value = str(data or "").strip()
+    match = __import__("re").fullmatch(r"long_wait:(WAIT-[0-9A-F]{20}):([YN])", value)
+    if match:
+        return "long_wait_choice " + match.group(1) + " " + match.group(2)
     if value.startswith(SECURITY_APPROVAL_CALLBACK_PREFIX):
         return "security_approve_once " + value[len(SECURITY_APPROVAL_CALLBACK_PREFIX):]
     if value.startswith(SECURITY_REJECT_CALLBACK_PREFIX):
@@ -142,7 +156,7 @@ __all__ = [
     "REMOTE_CONTROL_CALLBACK_PREFIX", "REMOTE_FEATURES", "SNAPSHOT_COMMAND",
     "STATUS_COMMAND", "SECURITY_APPROVAL_CALLBACK_PREFIX", "SECURITY_REJECT_CALLBACK_PREFIX",
     "SECURITY_WORKSPACE_DELETE_CALLBACK_PREFIX",
-    "TASK_PROGRESS_CALLBACK_PREFIX",
+    "TASK_PROGRESS_CALLBACK_PREFIX", "LONG_WAIT_CALLBACK_PREFIX", "long_wait_inline_keyboard",
     "SNAPSHOT_COMMAND_ALIASES", "canonical_remote_control",
     "command_for_remote_callback", "remote_feature_inline_keyboard",
     "remote_feature_reply_keyboard", "render_remote_feature_list", "security_approval_inline_keyboard",

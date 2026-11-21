@@ -118,6 +118,7 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"command": str, "operation": str},
         "optional": {
             "timeout": int,
+            "wait_policy": str,
             "shell_mode": str,
             "argv": list,
             "working_directory": str,
@@ -1070,6 +1071,10 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 "[TOOL_ENVELOPE_REJECTED]", "expected_observed_contract_invalid",
                 tool=tool, detail=str(exc), block_index=block_index)
 
+    if tool == "run_command" and call.get("wait_policy", "BOUNDED") not in {"BOUNDED", "UNTIL_EXIT"}:
+        return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+            "RUN_COMMAND_WAIT_POLICY_INVALID", tool=tool,
+            detail="wait_policy must be BOUNDED or UNTIL_EXIT", block_index=block_index)
     if call.get("reconciliation") is not None:
         from .timeout_reconciliation import validate_reconciliation, TimeoutReconciliationError
         try:
