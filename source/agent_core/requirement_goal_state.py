@@ -225,11 +225,29 @@ def _observed_directory(item: Mapping, target: str):
             data.get("observed_is_directory") is True
         )
     if action.get("tool") == "observe_fact" and isinstance(data.get("observations"), list):
+        # The authoritative filesystem.stat producer emits field/path_kind,
+        # not a 'predicate' attribute. A file existing is NOT proof that
+        # the requested directory exists. Bind exact path, confirmed source
+        # and kind before satisfying a frozen DIRECTORY goal.
         for fact in data["observations"]:
-            if (isinstance(fact, Mapping)
-                    and fact.get("predicate") in {"file.exists", "directory.exists"}
+            if not isinstance(fact, Mapping):
+                continue
+            if (fact.get("field") == "file.exists"
+                    and fact.get("source") == "filesystem.stat"
+                    and fact.get("observation_status") == "CONFIRMED"
+                    and fact.get("freshness") == "CURRENT"
+                    and _path(fact.get("scope", "")) == target
                     and type(fact.get("value")) is bool):
-                return fact["value"], item["evidence_ref"], fact["value"]
+                return fact["value"], item["evidence_ref"], (
+                    fact["value"] is True and fact.get("path_kind") == "DIRECTORY")
+            # Legacy observations remain eligible only with a confirmed
+            # directory kind; arbitrary model text never supplies proof.
+            if (fact.get("predicate") in {"file.exists", "directory.exists"}
+                    and fact.get("observation_status") == "CONFIRMED"
+                    and type(fact.get("value")) is bool
+                    and _path(fact.get("scope", "")) == target):
+                return fact["value"], item["evidence_ref"], (
+                    fact["value"] is True and fact.get("path_kind") == "DIRECTORY")
     return None
 
 
