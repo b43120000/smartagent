@@ -297,3 +297,85 @@ def test_corrupt_pending_state_fails_closed(tmp_path):
     file.write_text('{"schema":"BAD","groups":{}}',encoding="utf-8")
     with pytest.raises(ValueError,match="PENDING_STATE_INVALID"):
         receiver(tmp_path)
+
+
+
+def test_actual_gateway_task_store_one_task_and_stable_request_id(tmp_path, monkeypatch):
+    """Actual TelegramReceiver → AgentIngressGateway → durable TaskStateStore."""
+    from agent_core.agent_gateway import AgentIngressGateway
+    from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+    from agent_core.transport_sessions import TransportSessionRouter
+
+    workspace=tmp_path/"workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(
+        "agent_core.task_workspace_resolver._policy_roots",
+        lambda: ((workspace.resolve(),), ()),
+    )
+    store=TaskStateStore(tmp_path/"actual_tasks.json")
+    queue=RemoteTaskQueue(store)
+    gateway=AgentIngressGateway(
+        task_queue=queue,
+        session_router=TransportSessionRouter(tmp_path/"actual_sessions.json"),
+    )
+    rx,_,_,_=receiver(workspace,ingress=gateway)
+    first="請執行完整測試：\n"+("甲"*3950)
+    second="\n繼續P2～P9："+("乙"*1300)
+    assert len(first)<4096 and len(second)<4096
+    assert rx._process_updates([
+        update(912,first,msgid=20),
+        update(913,second,msgid=21,date=1750000001),
+    ])==[]
+    results=force_quiet(rx)
+    assert len(results)==1
+    task=results[0]
+    assert task.request==first+second
+    assert task.request_id.startswith("RR-TELEGRAM-")
+    assert task.origin_turn_fingerprint=="TELEGRAM|api.telegram.org|200|912"
+    assert task.metadata["ingress_metadata"]["telegram_long_message_merge"][
+        "source_update_ids"]==[912,913]
+    assert task.metadata["source_user_command"]==first+second
+    store_reloaded=TaskStateStore(store.path)
+    store_reloaded.load()
+    assert len(store_reloaded.all())==1
+    assert store_reloaded.get(task.task_id).request==first+second
+    assert len(queue.queued())==1
+
+
+def test_replay_after_gateway_accept_before_pending_clear_has_one_task(tmp_path,monkeypatch):
+    from agent_core.agent_gateway import AgentIngressGateway
+    from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+    from agent_core.transport_sessions import TransportSessionRouter
+
+    workspace=tmp_path/"workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(
+        "agent_core.task_workspace_resolver._policy_roots",
+        lambda: ((workspace.resolve(),), ()),
+    )
+    store=TaskStateStore(tmp_path/"actual_tasks.json")
+    queue=RemoteTaskQueue(store)
+    gateway=AgentIngressGateway(
+        task_queue=queue,
+        session_router=TransportSessionRouter(tmp_path/"actual_sessions.json"),
+    )
+    rx,_,_,_=receiver(workspace,ingress=gateway)
+    rx._process_updates([update(91,"A"*3900,msgid=21),
+                         update(92,"B"*1400,msgid=22,date=1750000001)])
+    group=rx._long_merge.groups["200:100"]
+    group["last_arrival"]-=20
+    rx._long_merge._write()
+    old=rx._long_merge.clear
+    def fail_clear(_):
+        raise OSError("simulated pending clear failure")
+    monkeypatch.setattr(rx._long_merge,"clear",fail_clear)
+    with pytest.raises(OSError,match="pending clear failure"):
+        rx._process_updates([])
+    assert len(queue.queued())==1
+    # New receiver must re-submit the SAME idempotency key and not create
+    # a second durable task despite the crash after the first accept.
+    fresh,_,_,_=receiver(workspace,ingress=gateway)
+    tasks=fresh._process_updates([])
+    assert len(tasks)==1
+    assert len(queue.queued())==1
+    assert tasks[0].request_id==queue.queued()[0].request_id
