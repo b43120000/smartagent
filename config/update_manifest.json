@@ -1088,7 +1088,7 @@
     "source/WebAgent/tests/test_git73_timeout_admission_repair.py": "271c49467286b630f4b4d31f1694c705a1219fa038ffe0bbb82a9d88f4c28d85",
     ".github/workflows/git73-p7-timeout-admission.yml": "b01efc2ad5a91639d9d80be1b74fb072c9be6dfef23b13e04a3fe15c4d150803",
     "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df",
-    "source/WebAgent/tests/test_git74_long_execution_supervisor.py": "cd928ebbcf6c346243f7752e6baf380104fb07d7a87177cec0653c5ff4eae3a1",
+    "source/WebAgent/tests/test_git74_long_execution_supervisor.py": "2c4b441206d86b3bb148a4c96aa856c2c0d940047d6bab242b1e353c70442f94",
     ".github/workflows/git74-dynamic-execution-supervisor.yml": "8cb717e77b3a0753a4101bfe9a333b408f8edf3c70d796ee33d8d70c7e144f68"
   },
   "protocol_family": "SMARTAGENT_V9",

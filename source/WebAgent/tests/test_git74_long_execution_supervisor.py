@@ -188,3 +188,42 @@ def test_receiver_delivers_wait_prompt_and_accepts_bound_callback(tmp_path, monk
     assert receiver._process_long_wait_choice(callback)
     assert read_wait(tmp_path,row["wait_id"])["decision"] == "PAUSE_AFTER_EXIT"
     assert len(sent) == 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows collect.bat is PowerShell backed")
+def test_real_collect_bat_exports_git74_cleartext_task_evidence(tmp_path):
+    """Full real collector ZIP stage, not a mock of collect logic."""
+    import json
+    import re
+    import uuid
+    import zipfile
+    root = Path(__file__).resolve().parents[3]
+    tag = uuid.uuid4().hex[:14].upper()
+    task, request = "TASK-G74COL-" + tag, "RR-G74COL-" + tag
+    record = begin_wait(install=root, task_id=task, request_id=request,
+                        action_id="ACT-G74-COLLECT", execution_id="col-it", pid=471)
+    filename = root / "localdata" / "runtime" / "long_execution" / (record["wait_id"] + ".json")
+    archives = []
+    try:
+        response = subprocess.run(
+            ["cmd.exe", "/d", "/c", str(root / "collect.bat"), task, request],
+            cwd=root, capture_output=True, text=True, errors="replace", timeout=180)
+        assert response.returncode == 0, response.stdout[-4000:] + response.stderr[-4000:]
+        match = re.search(r"^\\[COLLECT\\] ZIP:\\s*(.+)$", response.stdout, flags=re.M)
+        assert match, response.stdout[-4000:]
+        archive = Path(match.group(1).strip())
+        archives.append(archive)
+        with zipfile.ZipFile(archive) as z:
+            assert z.testzip() is None
+            states = json.loads(z.read("git74_long_execution_states.json"))
+            events = json.loads(z.read("git74_long_execution_events.json"))
+            assert any(row["wait_id"] == record["wait_id"] for row in states)
+            assert any(row["event"] == "LONG_EXEC_STARTED" and
+                       row["wait_id"] == record["wait_id"] for row in events)
+            assert all(row["task_id"] == task for row in states)
+            assert all(row["request_id"] == request for row in events)
+    finally:
+        filename.unlink(missing_ok=True)
+        (filename.with_suffix(".lock")).unlink(missing_ok=True)
+        for archive in archives:
+            archive.unlink(missing_ok=True)
