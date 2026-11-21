@@ -984,7 +984,20 @@ class TelegramReceiver:
         stripped = text.lstrip()
         if stripped.startswith("/") or stripped.startswith(("接續工作 ", "/new")):
             return False
-        if is_direct_cmd_request(text) or canonical_remote_control(text) != text.strip():
+        control_key = canonical_remote_control(text)
+        software_controls = {
+            MANAGER_COMMAND.casefold(), LIST_SKILLS_COMMAND.casefold(),
+            "關閉任務", "snapshot webgpt", "refresh", "重新整理",
+            STATUS_COMMAND.casefold(), INTERRUPT_COMMAND.casefold(),
+            RECONNECT_COMMAND.casefold(), CMD_CONTROL_LABEL.casefold(),
+            FEATURE_QUERY_COMMAND.casefold(),
+        }
+        if (is_direct_cmd_request(text) or control_key in software_controls
+                or control_key.startswith((
+                    "確認刪除 ", "拒絕刪除 ", "security_approve_once ",
+                    "security_reject_once ", "security_workspace_delete ",
+                    "查看任務進度 ",
+                ))):
             return False
         if RemoteBindingManager.is_update(text) or RemoteSkillManager.looks_like_invocation(text):
             return False
