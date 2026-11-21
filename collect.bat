@@ -205,8 +205,7 @@ $outputDir = Join-Path $root 'localdata\diagnostics\gar_live_rca'
 [IO.Directory]::CreateDirectory($outputDir) | Out-Null
 $stage = Join-Path $outputDir ('stage_' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($stage) | Out-Null
-# Git69 open-mode bypass IT is separate from the Planner Blackboard. Only a
-# matching Task/Request pair is exported, with no raw commands or streams.
+# Git69 bypass IT: separate report, never spoof the Executor Blackboard.
 $openFidelity = [ordered]@{
     schema='SMARTAGENT_GIT69_OPEN_FIDELITY_COLLECTOR_V1'
     status='NOT_FOUND'
@@ -245,10 +244,37 @@ if ($task -and $request) {
                 $itRows = @()
                 foreach ($entry in @($itReport.cases) | Select-Object -First 64) {
                     if ($null -eq $entry) { continue }
-                    $safeChecks = [ordered]@{}
-                    if ($entry.checks -is [pscustomobject]) {
-                        foreach ($check in @($entry.checks.PSObject.Properties) | Select-Object -First 48) {
-                            if ($check.Name -match '^[A-Za-z0-9_]{1,64}
+                    $itRows += [ordered]@{
+                        case_id=(Safe-Code $entry.case_id)
+                        status=(Safe-Code $entry.status)
+                        action_id=(Safe-Code $entry.action_id)
+                        shell_mode=(Safe-Code $entry.shell_mode)
+                        launch_form=(Safe-Code $entry.launch_form)
+                        execution_status=(Safe-Code $entry.execution_status)
+                        failure_origin=(Safe-Code $entry.failure_origin)
+                        process_state=(Safe-Code $entry.process_state)
+                        exit_code=$entry.exit_code
+                        stdout_bytes=$entry.stdout_bytes
+                        stderr_bytes=$entry.stderr_bytes
+                        stdout_raw_sha256=(Safe-Code $entry.stdout_raw_sha256)
+                        stderr_raw_sha256=(Safe-Code $entry.stderr_raw_sha256)
+                        stdout_truncated=[bool]$entry.stdout_truncated
+                        stderr_truncated=[bool]$entry.stderr_truncated
+                        output_complete=[bool]$entry.output_complete
+                        capture_integrity=(Safe-Code $entry.capture_integrity)
+                        evidence_ref=(Safe-Code $entry.evidence_ref)
+                        raw_result_sha256=(Safe-Code $entry.raw_result_sha256)
+                        error_class=(Safe-Code $entry.error_class)
+                        error_code=(Safe-Code $entry.error_code)
+                    }
+                }
+                $openFidelity.cases = @($itRows)
+            }
+        }
+    }
+}
+Write-Json (Join-Path $stage 'open_execution_fidelity_it.json') $openFidelity
+$sources = @(
     @{ name = 'webagent_runtime'; path = (Join-Path $root 'localdata\logs\webagent_runtime.jsonl') },
     @{ name = 'remote_runtime'; path = (Join-Path $root 'localdata\logs\remote_runtime.jsonl') },
     @{ name = 'tri_one_runtime_events'; path = (Join-Path $root 'localdata\runtime\runtime_events.jsonl') },
