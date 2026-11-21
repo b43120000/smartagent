@@ -104,14 +104,26 @@ def _run_real_sidecar(workspace:Path, monkeypatch, *, with_reconciliation:bool=T
         if round_no==3:
             if not expected_exists:
                 pytest.fail("mismatched observation incorrectly accepted")
+            # A confirmed file.exists observation only proves presence.
+            # The frozen DIRECTORY Goal requires a separate type-aware
+            # inspect_directory receipt, not a model assertion.
+            return json.dumps({
+                "type":"tool_call","name":"inspect_directory",
+                "arguments":{"path":str(goal),
+                    "expected":{"contract_version":1,"aggregation":"ALL",
+                        "assertions":[
+                            {"field":"data.observed_exists","operator":"eq","value":True},
+                            {"field":"data.observed_is_directory","operator":"eq","value":True}]}}
+            },ensure_ascii=False)
+        if round_no==4:
             refs={a["tool"]:loop.action_result_ledger[a["action_id"]]["result_id"]
                   for a in loop.executed}
             return json.dumps({
                 "type":"finish","contract_version":2,
-                "summary":"已經由真實 Runtime 驗證目標資料夾存在；預期 Timeout 已完成安全補證。",
-                "goal_checks":[{"criterion":"目標資料夾確實存在",
-                   "evidence_ref":refs["observe_fact"],
-                   "field":"data.observations.0.value",
+                "summary":"已由真實 Runtime 驗證目標資料夾存在且類型正確；預期 Timeout 已安全補證。",
+                "goal_checks":[{"criterion":"目標資料夾確實存在而且是資料夾",
+                   "evidence_ref":refs["inspect_directory"],
+                   "field":"data.observed_is_directory",
                    "operator":"eq","expected":True}],
             },ensure_ascii=False)
         report=read_executor_run(install,task_id=loop.task_id,
@@ -153,11 +165,11 @@ def test_recovery_real_executor_next_action_finish_v2_collect(tmp_path,monkeypat
     ws=tmp_path/"full_pipeline_workspace"
     ws.mkdir()
     loop,board,reply,goal=_run_real_sidecar(ws,monkeypatch)
-    assert len(loop.executed)==2,loop.executed
+    assert len(loop.executed)==3,loop.executed
     assert loop.terminal_outcome=="SUCCESS",reply
     assert loop.terminal_acceptance["final_verdict"]=="PASS",reply
     originals=[e for e in board["events"] if e.get("kind")=="TOOL_RESULT"]
-    assert len(originals)==2
+    assert len(originals)==3
     timeout=originals[0]
     observed=originals[1]
     assert timeout["runtimeEvidence"]["status"]=="UNKNOWN"
@@ -166,6 +178,7 @@ def test_recovery_real_executor_next_action_finish_v2_collect(tmp_path,monkeypat
     assert timeout["expected_observed_match"]["match_state"]=="MATCH"
     assert timeout["expected_observed_match"]["safety_decision"]=="PAUSE_AND_RECONCILE"
     assert observed["expected_observed_match"]["match_state"]=="MATCH"
+    assert originals[2]["expected_observed_match"]["match_state"]=="MATCH"
     stages=[e for e in board["events"]
             if e.get("kind")=="TIMEOUT_RECONCILIATION_COMPLETED"]
     assert len(stages)==1
@@ -201,7 +214,7 @@ def test_recovery_real_executor_next_action_finish_v2_collect(tmp_path,monkeypat
             assert z.testzip() is None
             matrix=json.loads(z.read("git70_expected_observed_matrix.json"))
             recovery=json.loads(z.read("timeout_reconciliation.json"))
-            assert matrix["record_count"]==2,matrix
+            assert matrix["record_count"]==3,matrix
             assert recovery["status"]=="IDENTITY_VERIFIED",recovery
             assert recovery["record_count"]>=3,recovery
             assert recovery["task_id"]==loop.task_id
