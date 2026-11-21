@@ -124,7 +124,7 @@ class TelegramLongMessageCoalescer:
             and 0 <= current - float(group["last_arrival"]) <= self.window_sec
             and len(items) < self.max_parts
             and sum(len(_identity(x)[5]) for x in items) + len(row[5])
-                + 2 * len(items) <= self.max_chars
+                <= self.max_chars
         )
 
     def stage(self, update: dict, *, now: float | None = None) -> str:
@@ -150,7 +150,7 @@ class TelegramLongMessageCoalescer:
         group = self.groups[key]
         updates = group["updates"]
         texts = [_identity(x)[5] for x in updates]
-        joined = "\n\n".join(texts)
+        joined = "".join(texts)
         if len(updates) < 2 or len(joined) <= self.threshold_chars:
             return [(update, None) for update in updates]
         first, last = updates[0], updates[-1]
@@ -169,7 +169,7 @@ class TelegramLongMessageCoalescer:
             "source_text_lengths": [len(t) for t in texts],
             "combined_sha256": _digest(joined),
             "combined_characters": len(joined),
-            "separator": "TWO_LINE_BREAKS",
+            "separator": "NONE_EXACT_CONCATENATION",
             "part_count": len(updates),
             "software_merged": True,
         }
