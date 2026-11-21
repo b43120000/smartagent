@@ -91,14 +91,26 @@ def test_open_mode_real_runtime_processes_and_immutable_evidence(tmp_path, monke
         with zipfile.ZipFile(archive) as zf:
             assert zf.testzip() is None
             assert "open_execution_fidelity_it.json" in zf.namelist()
-            collected = json.loads(zf.read(
-                "open_execution_fidelity_it.json").decode("utf-8-sig"))
+            exported = zf.read("open_execution_fidelity_it.json")
+            collected = json.loads(exported.decode("utf-8-sig"))
+            # CI artifact: sanitized, task-bound data only; no raw commands,
+            # local file paths, tokens or unredacted shell output.
+            ci_evidence = root / "git69-ci-evidence"
+            ci_evidence.mkdir(parents=True, exist_ok=True)
+            (ci_evidence / (report["task_id"] + "_collected.json")).write_bytes(exported)
         assert collected["task_id"] == report["task_id"]
         assert collected["request_id"] == report["request_id"]
         assert collected["policy_source"] == "CI_INJECTED_POLICY"
         assert collected["passed"] == report["passed"]
         assert [r["case_id"] for r in collected["cases"]] == [
             r["case_id"] for r in report["cases"]]
+        for observed, original in zip(collected["cases"], report["cases"]):
+            for field in ("action_id", "shell_mode", "exit_code",
+                          "stdout_bytes", "stderr_bytes", "stdout_raw_sha256",
+                          "stderr_raw_sha256", "failure_origin",
+                          "process_state", "capture_integrity",
+                          "evidence_ref", "raw_result_sha256"):
+                assert observed[field] == original[field], (field, observed, original)
     finally:
         archive.unlink(missing_ok=True)
 
