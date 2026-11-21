@@ -162,7 +162,7 @@
     "source/agent_core/remote_skill_manager.py": "4985f448a8d55dae9d1c2de14db2ab8cd4a0d9b6606e624380c75846ff395f63",
     "source/agent_core/request_context.py": "ea1c1483f3f56446cfbeb56624f5dc9a480ea9033ecab8ad498b3bd8cedd6b7c",
     "source/agent_core/request_ownership.py": "6bc49cc2da8cac6d712685079e976aa32036d14745b656aca3f41ce8e95030cc",
-    "source/agent_core/requirement_goal_state.py": "4a864b1874b1225124f8962a357f77b934ec31c381d4495ca622874d2e366166",
+    "source/agent_core/requirement_goal_state.py": "7d685604f1d0cb9afd3a144e45b58dbb926ae3e21ca9444a93a6375d0474bf7b",
     "source/agent_core/restricted_executor_client.py": "09dcb3afb55e756e67853d83e7f38b3f4fdf6e8fdce733f1062db973dc00ca46",
     "source/agent_core/restricted_executor_service.py": "7c9e38bae2813fc6354a3d07f3f5ae3cbc9adbcdd86fdcd2ab4fc7b923c77014",
     "source/agent_core/result_exchange.py": "c3f390f6b597ab7f8233ead278168b53b49d7838ada43defec52a0a70acde0fa",
