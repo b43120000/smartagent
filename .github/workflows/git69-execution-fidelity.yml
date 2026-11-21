@@ -32,16 +32,18 @@ jobs:
           and x['hash_verification']=='PASS', x"
       - name: Syntax compile
         run: >-
-          python -B -m compileall -q source/agent_core/shell_execution.py
+          python -B -m compileall -q source/agent_core/runtime_open_fidelity_it.py source/agent_core/shell_execution.py
           source/agent_core/tools.py source/agent_core/smartagent_protocol.py
           source/agent_core/executor_command_rca.py
           source/WebAgent/minimal_admission.py
           source/WebAgent/pokeclaw_executor_loop.py
           source/WebAgent/tests/test_git69_execution_fidelity.py
+          source/WebAgent/tests/test_git69_open_execution_it.py
       - name: UT and Windows sidecar process IT
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git69_execution_fidelity.py
+          source/WebAgent/tests/test_git69_open_execution_it.py
           source/WebAgent/tests/test_git68_open_mode_pipeline.py
           --tb=short
           --junitxml=git69-fidelity.xml
