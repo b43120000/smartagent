@@ -104,26 +104,25 @@ def _run_real_sidecar(workspace:Path, monkeypatch, *, with_reconciliation:bool=T
         if round_no==3:
             if not expected_exists:
                 pytest.fail("mismatched observation incorrectly accepted")
-            # A confirmed file.exists observation only proves presence.
-            # The frozen DIRECTORY Goal requires a separate type-aware
-            # inspect_directory receipt, not a model assertion.
+            # An independent post-reconciliation Action proves the Executor
+            # can resume normal planning (not merely run a recovery helper).
+            # The Goal compiler independently checks path_kind=DIRECTORY.
             return json.dumps({
-                "type":"tool_call","name":"inspect_directory",
+                "type":"tool_call","name":"observe_fact",
                 "arguments":{"path":str(goal),
                     "expected":{"contract_version":1,"aggregation":"ALL",
                         "assertions":[
-                            {"field":"data.observed_exists","operator":"eq","value":True},
-                            {"field":"data.observed_is_directory","operator":"eq","value":True}]}}
+                            {"field":"data.observations.0.value","operator":"eq","value":True},
+                            {"field":"data.observations.0.path_kind","operator":"eq","value":"DIRECTORY"}]}}
             },ensure_ascii=False)
         if round_no==4:
-            refs={a["tool"]:loop.action_result_ledger[a["action_id"]]["result_id"]
-                  for a in loop.executed}
+            last_ref=loop.action_result_ledger[loop.executed[-1]["action_id"]]["result_id"]
             return json.dumps({
                 "type":"finish","contract_version":2,
                 "summary":"已由真實 Runtime 驗證目標資料夾存在且類型正確；預期 Timeout 已安全補證。",
-                "goal_checks":[{"criterion":"目標資料夾確實存在而且是資料夾",
-                   "evidence_ref":refs["inspect_directory"],
-                   "field":"data.observed_is_directory",
+                "goal_checks":[{"criterion":"目標資料夾存在",
+                   "evidence_ref":last_ref,
+                   "field":"data.observations.0.value",
                    "operator":"eq","expected":True}],
             },ensure_ascii=False)
         report=read_executor_run(install,task_id=loop.task_id,
