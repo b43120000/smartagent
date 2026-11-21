@@ -306,6 +306,7 @@ CORE_FILES = (
     'source/WebAgent/tool_context.py',
     'source/RemoteAgent/telegram_webagent_worker.py',
     'source/RemoteAgent/telegram_transport.py',
+    'source/RemoteAgent/telegram_long_message_merge.py',
     # Native executable token + Telegram test controls are security-critical.
     # Both the Receiver and Worker must load the exact tested implementation.
     'source/agent_core/git57_live_finish_injector.py',
