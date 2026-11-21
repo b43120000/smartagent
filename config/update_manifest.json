@@ -54,7 +54,7 @@
     ".github/workflows/git65-auto-approve-runtime.yml": "37f5f04b86cb8c27a6babab0e6b7b5d01450af1daa23f72dfa266dd3766b0eab",
     ".github/workflows/git65-manifest-snapshot.yml": "59b6df24ad268467585201708b0441df90bf05de5f20874db3b87f2af56fc7f3",
     ".github/workflows/git69-execution-fidelity.yml": "ca0ff2d912b2e3135af6ff115be598b34643afd9493cd3c193c866352b496e39",
-    ".github/workflows/git70-goal-evidence-matching.yml": "41cf61423ac4f838ee50b782e25f4502a0fe57edf8ffd2139a739b358e1852d7",
+    ".github/workflows/git70-goal-evidence-matching.yml": "bc5d988604016a4cfc2c723851dc609c5a0a0a157291aeb8eb9f7fe63cd0e5fa",
     ".github/workflows/goal-directed-prerequisite-resolution.yml": "5aab3338cc13fe838b3b71d58853eb6fc1e2cf04b09529325f02ad793ef43956",
     ".github/workflows/goal-grounded-gap-p0-p3-regression.yml": "868a2b632abeb937cde2919704543cca1ae7f294756697181b0a469cf5c5041c",
     ".github/workflows/historical-source-bootstrap-recovery.yml": "807e33a629e3de70a31bc5022db4b7dfce217a66639c721035bcdb4e76e36d30",
