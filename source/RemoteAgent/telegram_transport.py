@@ -56,6 +56,12 @@ class TelegramReceiverConfig:
     api_base: str = "https://api.telegram.org"
     pairing_enabled: bool = False
     pairing_ttl_sec: int = 300
+    # Enabled in the installed Telegram configuration, not the other
+    # transports or disabled unit-test receivers.
+    long_message_merge_enabled: bool = False
+    long_message_merge_window_sec: float = 2.5
+    long_message_merge_threshold_chars: int = 5000
+    long_message_merge_min_part_chars: int = 900
 
     @classmethod
     def from_env(cls) -> "TelegramReceiverConfig":
@@ -69,6 +75,15 @@ class TelegramReceiverConfig:
             poll_timeout_sec=max(1, min(50, int(os.environ.get("SMARTAGENT_TELEGRAM_POLL_TIMEOUT_SEC", "25")))),
             pairing_enabled=os.environ.get("SMARTAGENT_TELEGRAM_PAIRING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},
             pairing_ttl_sec=max(60, min(900, int(os.environ.get("SMARTAGENT_TELEGRAM_PAIR_TTL_SEC", "300")))),
+            long_message_merge_enabled=os.environ.get(
+                "SMARTAGENT_TELEGRAM_LONG_MESSAGE_MERGE", "1"
+            ).strip().lower() in {"1", "true", "yes", "on"},
+            long_message_merge_window_sec=max(0.5, min(
+                8.0, float(os.environ.get("SMARTAGENT_TELEGRAM_LONG_MESSAGE_WINDOW_SEC", "2.5")))),
+            long_message_merge_threshold_chars=max(4096, min(
+                25000, int(os.environ.get("SMARTAGENT_TELEGRAM_LONG_MESSAGE_THRESHOLD", "5000")))),
+            long_message_merge_min_part_chars=max(1, min(
+                4096, int(os.environ.get("SMARTAGENT_TELEGRAM_LONG_MESSAGE_MIN_PART", "900")))),
         )
 
     def validate(self) -> None:
@@ -280,7 +295,8 @@ class TelegramUpdateAdapter:
             ))
         return tuple(rows)
 
-    def normalize(self, update: dict[str, Any]) -> tuple[NormalizedInboundMessage | None, str]:
+    def normalize(self, update: dict[str, Any], *,
+                  software_merged: bool = False) -> tuple[NormalizedInboundMessage | None, str]:
         try:
             update_id = int(update["update_id"])
         except Exception:
@@ -310,10 +326,13 @@ class TelegramUpdateAdapter:
             visible_trace, request_id=request_id,
             transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM",
         )
-        if not is_admin_cmd:
-            # Called only after the adapter has authorized this sender.
-            # Mixed Telegram updates intentionally remain UNOBSERVED.
+        if not is_admin_cmd and not software_merged:
+            # Only a real Telegram update may be labeled raw HTTP body.
             PIT.capture_telegram_http_body(update_id, raw_text)
+        elif software_merged:
+            PIT.record("02_telegram_software_merged_text", raw_text,
+                       evidence_status="SOFTWARE_MERGED_NOT_RAW_HTTP",
+                       extra={"update_id": update_id})
         PIT.record("02_telegram_message_text", visible_trace, extra={
             "update_id": update_id, "message_id": message.get("message_id"),
             "direct_cmd_redacted": is_admin_cmd,
@@ -381,6 +400,15 @@ class TelegramReceiver:
         # before the task-store lock, matching this receiver's lock order.
         self.binding_lock = threading.RLock()
         self.adapter = TelegramUpdateAdapter(config, pairing_store=pairing_store)
+        self._long_merge = None
+        if config.long_message_merge_enabled:
+            from RemoteAgent.telegram_long_message_merge import TelegramLongMessageCoalescer
+            self._long_merge = TelegramLongMessageCoalescer(
+                self.install_root / "localdata" / "runtime" / "telegram_long_message_pending.json",
+                window_sec=config.long_message_merge_window_sec,
+                threshold_chars=config.long_message_merge_threshold_chars,
+                min_chunk_chars=config.long_message_merge_min_part_chars,
+            )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._control_threads: set[threading.Thread] = set()
@@ -925,7 +953,8 @@ class TelegramReceiver:
             self._process_timed_out_pre_resume()
             return accepted
 
-    def _process_updates(self, updates: list[dict[str, Any]]) -> list[Any]:
+    def _process_ready_updates(self, updates: list[dict[str, Any]],
+                               *, merge_metadata: dict | None = None) -> list[Any]:
         accepted = []
         for update in sorted(updates, key=lambda row: int(row.get("update_id", -1))):
             update_id = int(update.get("update_id", -1))
@@ -996,7 +1025,19 @@ class TelegramReceiver:
                     )
                 self._log("CONNECT", stage="PAIRING" if "配對完成" in start_response else "START_IGNORED", update_id=update_id)
                 continue
-            message, reason = self.adapter.normalize(update)
+            merged_source = (
+                merge_metadata if isinstance(merge_metadata, dict)
+                and update_id == merge_metadata.get("first_update_id")
+                else None
+            )
+            message, reason = self.adapter.normalize(
+                update, software_merged=merged_source is not None)
+            if message is not None and merged_source is not None:
+                message = replace(
+                    message,
+                    metadata={**dict(message.metadata or {}),
+                              "telegram_long_message_merge":dict(merged_source)},
+                )
             if message is None:
                 if reason not in {"ignored_update", "empty_message"}:
                     self._log("ERROR", stage="AUTHORIZATION", update_id=update_id, error=reason)
