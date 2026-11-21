@@ -614,6 +614,7 @@ def tool_run_command(
     cwd = resolve_command_working_directory(
         working_directory, security_context, command=policy_command, operation=operation)
     if wait_policy not in {"BOUNDED", "UNTIL_EXIT"}:
+        from .tool_result_contract import encode_result
         return encode_result("REJECTED", "RUN_COMMAND_WAIT_POLICY_INVALID", tool="run_command", executed=False)
     if wait_policy == "UNTIL_EXIT":
         from .auto_approve_mode import auto_approve_snapshot
@@ -764,6 +765,10 @@ def tool_run_command(
             telemetry=telemetry, approval_manifest=approval_manifest,
             wait_policy=wait_policy)
     )
+    if main.get("wait_policy") == "UNTIL_EXIT" and main.get("long_wait_state") == "UNVERIFIED":
+        main["exit_code"] = None
+        main["possible_partial_execution"] = True
+        main["process_state"] = "UNKNOWN"
     if main.get("timed_out"):
         # A killed child can return a nonzero *post-kill* exit status.
         # Do not turn an uncertain side effect into an observed command failure.

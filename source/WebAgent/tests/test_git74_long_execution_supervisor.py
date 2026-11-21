@@ -120,3 +120,71 @@ def test_untrusted_exit_identity_cannot_complete_wait(tmp_path):
          "process_identity_verified":True}, exit_code=0)
     assert end["state"] == "UNVERIFIED"
     assert end["exit_code"] is None
+
+
+def test_full_real_run_bounded_process_until_exit_sidecar(tmp_path, monkeypatch):
+    """Real runtime capture and tool result, not only the polling helper."""
+    from agent_core import turbo_broker_admission
+    from agent_core import command_security
+    from agent_core import workspace_access
+    from agent_core.bounded_process import run_bounded_process
+    monkeypatch.setattr(turbo_broker_admission, "assess",
+        lambda cwd, tool: {"decision": "NORMAL", "evidence": {}, "reason_code": "ACL_OFF"})
+    monkeypatch.setattr(command_security, "require_command_allowed",
+        lambda *args, **kwargs: None)
+    monkeypatch.setattr(workspace_access, "resolve_turbo_authorization_workspace",
+        lambda cwd: tmp_path)
+    response = run_bounded_process(
+        [sys.executable, "-c", "import time; time.sleep(2.2); print('supervised_pass')"],
+        cwd=tmp_path, timeout=1, shell=False,
+        capture_root=tmp_path / "capture", wait_policy="UNTIL_EXIT",
+        telemetry={"install_root": tmp_path, "root": tmp_path,
+                   "task_id": "TASK-FULL-IT", "request_id": "RR-FULL-IT",
+                   "action_id": "ACT-FULL-IT"})
+    assert response["exit_code"] == 0, response
+    assert response["timed_out"] is False
+    assert response["wait_policy"] == "UNTIL_EXIT"
+    assert response["long_wait_state"] == "COMPLETED"
+    assert response["long_wait_os_samples"] >= 1
+    assert "supervised_pass" in response["stdout"]
+    assert response["long_wait_id"].startswith("WAIT-")
+
+
+def test_receiver_delivers_wait_prompt_and_accepts_bound_callback(tmp_path, monkeypatch):
+    """Telegram transport sidecar without network or a second Task."""
+    from types import SimpleNamespace
+    from RemoteAgent.telegram_transport import TelegramReceiver
+    import agent_core.task_state as task_state
+
+    row = begin_wait(install=tmp_path, task_id="TASK-REMOTE",
+                     request_id="RR-REMOTE", action_id="ACT-R",
+                     execution_id="exec-r", pid=1234)
+    task = SimpleNamespace(task_id="TASK-REMOTE", request_id="RR-REMOTE",
+                           reply_route={"transport":"TELEGRAM","chat_id":555})
+    class Store:
+        def __init__(self, path):
+            pass
+        def load(self):
+            pass
+        def get(self, task_id):
+            return task if task_id == task.task_id else None
+    monkeypatch.setattr(task_state, "TaskStateStore", Store)
+    sent = []
+    receiver = TelegramReceiver.__new__(TelegramReceiver)
+    receiver.install_root = tmp_path
+    receiver.runtime_log = None
+    receiver.adapter = SimpleNamespace(is_authorized=lambda **k: True)
+    receiver.client = SimpleNamespace(send_message=lambda chat_id, text, **kw:
+                                       sent.append((chat_id,text,kw)))
+    receiver._deliver_long_wait_prompts()
+    assert len(sent) == 1
+    assert "10 分鐘" in sent[0][1]
+    assert read_wait(tmp_path,row["wait_id"])["notification"] == "SENT"
+    receiver._deliver_long_wait_prompts()
+    assert len(sent) == 1
+    callback = SimpleNamespace(
+        sender_id="555", reply_context={"chat_id":555},
+        text="long_wait_choice " + row["wait_id"] + " N")
+    assert receiver._process_long_wait_choice(callback)
+    assert read_wait(tmp_path,row["wait_id"])["decision"] == "PAUSE_AFTER_EXIT"
+    assert len(sent) == 2

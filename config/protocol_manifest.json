@@ -81,7 +81,7 @@
     "source/agent_core/attachment_transaction.py": "bfb88a2feac1ba678dc360e8b6c9724c1d4d398968bc3434a95c8d65d6126720",
     "source/agent_core/auto_approve_mode.py": "04833dbe246905b3b2d309eea6adfc5775292a1b01b117ad9a16edeed2710856",
     "source/agent_core/batch_apply.py": "3e16ad969477af9ceec3d56ff417706b21def08a2ff47b7adbb74d4b24c45118",
-    "source/agent_core/bounded_process.py": "44151af1ef8fdfe504ddca7e8309a944975b6f22748f4f4cc9e2c800b1b5a872",
+    "source/agent_core/bounded_process.py": "6fddf75e81d6fd8ac7b5a8e6fd587dcbe32e26c8f0d8f5a8a8b0ba10acd457e2",
     "source/agent_core/bp1_observation_terminal.py": "c059bc55262f96d1ca7ca952a100376adf3faaac19ec27e0a98dcd16672a5abe",
     "source/agent_core/browser_preferences.py": "4aadf625407015633a89c0b82e198988c4f8f9c758233add82e01662ec499011",
     "source/agent_core/capability_recovery.py": "4f8d69c43683e874da7421b25af403c23d0be3187fff98069bfa22a317264ed3",
@@ -211,7 +211,7 @@
     "source/agent_core/tool_result_contract.py": "2736be0515d2bee18ac870a935239f3cee067f2c8e26f157c21b3d879fd4e647",
     "source/agent_core/tool_result_policy.py": "3ed466ddacb9330b2ed2ed33eb55707112c96e5dc40d4e338184ff5e732f4c98",
     "source/agent_core/toolchain_environment_reader.py": "da58dc5bc4ccb2b5b57ec5799fa65b89885eb3d46e86310d65260126fb9e2139",
-    "source/agent_core/tools.py": "5ec3e9e93de8b8166615137b15515f66ab537224e9afd59e8b6a5a7a520c8d09",
+    "source/agent_core/tools.py": "5836deb6dcf6b3df702d4200cd64150c53f6141ebf2849d263ffa22e32576d8b",
     "source/agent_core/tri_one_answer_only.py": "13e18bdbeff61be87bf8635775e4013e04def3647e8671038bc5d68b3fe14f6c",
     "source/agent_core/tri_one_runtime_terminal.py": "83865fb88d3d5a5710c4c474685732a5c80b9f26db1ef765b8406b6140f4d92e",
     "source/agent_core/tri_one_shared_worker.py": "bddb403263eee2d1f2f5ec3675b873dd91f24d3158a7d5f77db21fe0e30c4c86",
@@ -305,7 +305,7 @@
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
     "source/agent_core/timeout_reconciliation.py": "57294c995a414e8392c40e30edc695a1cc11be38276c1573ea3b136baa8284ec",
     "source/RemoteAgent/telegram_long_message_merge.py": "6b5368fe670d8f7e3a213a201db57a7a503395e8e239820b31ccb97bfaeb3392",
-    "source/agent_core/long_execution_supervisor.py": "2e390a9818917a6a6f155ebda2d5f4ec3d0243457621460203833cc2a213c12f"
+    "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

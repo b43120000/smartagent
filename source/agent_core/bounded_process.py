@@ -114,7 +114,7 @@ def run_bounded_process(
             "sandbox_evidence": broker["evidence"],
         }
 
-    if wait_policy == "UNTIL_EXIT" and broker["decision"] != "HOST_EXECUTOR":
+    if wait_policy == "UNTIL_EXIT" and broker["decision"] != "NORMAL":
         return reject_broker("LONG_EXECUTION_REQUIRES_ACL_OFF_HOST_BACKEND")
     if native_only_runtime_test_active() and broker["decision"] != "BROKER_REQUIRED":
         return reject_broker("RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK")

@@ -229,6 +229,11 @@ def wait_until_exit(process: subprocess.Popen, *, install: str | Path | None,
             if proof["process_state"] == "EXITED":
                 end = finish_wait(install, record["wait_id"], proof, process.returncode)
                 return proof, end
+            # A lost/failed OS probe must never spin indefinitely after an
+            # independently observed Popen exit. Exit remains UNVERIFIED.
+            if process.poll() is not None:
+                end = finish_wait(install, record["wait_id"], proof, None)
+                return proof, end
             if now >= next_sample:
                 record_observation(install, record["wait_id"], proof)
                 if proof.get("liveness_verified") and on_running is not None:
