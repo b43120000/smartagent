@@ -686,6 +686,9 @@ def tool_run_command(
                 'shell_mode':spec["shell_mode"],
                 'launch_form':spec["launch_form"],
                 'process_started':main.get("process_started"),
+                'process_spawn_attempted':main.get("process_spawn_attempted"),
+                'process_start_phase':main.get("process_start_phase"),
+                'process_start_error_class':main.get("process_start_error_class"),
                 'stdout_sha256':__import__("hashlib").sha256(str(main.get("stdout") or "").encode("utf-8")).hexdigest(),
                 'stderr_sha256':__import__("hashlib").sha256(str(main.get("stderr") or "").encode("utf-8")).hexdigest(),
                 'observed_post_timeout_exit_code':main.get("observed_post_timeout_exit_code"),
@@ -783,7 +786,17 @@ def tool_run_command(
         witness = main.get("liveness_evidence") or {}
         live = (main.get("process_state") == "RUNNING"
                 and verified_running_evidence(witness))
-        current_status = "RUNNING" if live else "UNKNOWN"
+        definitely_not_started = (
+            main.get("error_stage") == "PROCESS_START"
+            and main.get("process_started") is False
+            and main.get("possible_partial_execution") is False
+            and main.get("process_state") == "NOT_STARTED"
+            and bool(main.get("error"))
+        )
+        # No Popen-created process and no possible partial execution:
+        # definite failure, not UNKNOWN. Assertion matching is independent.
+        current_status = ("RUNNING" if live else "FAILED" if definitely_not_started
+                          else "UNKNOWN")
         lines.append("VERIFICATION_STATUS: UNVERIFIED")
         lines.append("EXECUTION_STATUS: " + current_status)
         lines.append("TERMINAL_ELIGIBLE: false")
