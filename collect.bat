@@ -317,7 +317,7 @@ if ($task -and $request) {
                         operator=(Safe-Code $condition70.operator)
                         observed_present=[bool]$condition70.observed_present
                         match_state=(Safe-Code $condition70.match_state)
-                        expected_type=([string]$condition70.expected.GetType().Name)
+                        expected_type=if ($null -eq $condition70.expected) { 'NULL' } else { [string]$condition70.expected.GetType().Name }
                         observed_type=if ($null -eq $condition70.observed) { 'NULL' } else { [string]$condition70.observed.GetType().Name }
                         expected_sha256=(Hash-Text (ConvertTo-Json -InputObject $condition70.expected -Compress -Depth 4))
                         observed_sha256=(Hash-Text (ConvertTo-Json -InputObject $condition70.observed -Compress -Depth 4))
