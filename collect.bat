@@ -308,15 +308,56 @@ if ($task -and $request) {
                     $git70Matrix.status = 'PARTIAL_IDENTITY_OR_SCHEMA_MISMATCH'
                     continue
                 }
+                # RCA-visible, non-sensitive typed facts; arbitrary Planner
+                # strings and path-like observations remain hashed/redacted.
+                $visibleMatchFields70 = @(
+                    'status','reason','executed','data.exit_code',
+                    'data.process_state','data.process_started',
+                    'data.process_spawn_attempted','data.process_start_phase',
+                    'data.process_start_error_class',
+                    'data.possible_partial_execution','data.timed_out',
+                    'data.stdout_bytes','data.stderr_bytes',
+                    'data.stdout_raw_sha256','data.stderr_raw_sha256',
+                    'data.stdout_truncated','data.stderr_truncated',
+                    'data.output_complete','data.capture_integrity',
+                    'data.failure_origin','data.verification_status',
+                    'data.execution_status','data.shell_mode',
+                    'data.launch_form','data.expectation_status','data.pid'
+                )
                 $conditions70 = @()
                 foreach ($condition70 in @($entry70.assertions) | Select-Object -First 48) {
                     if ($null -eq $condition70) { continue }
+                    $safeMatchField70 = $visibleMatchFields70 -ccontains [string]$condition70.field
+                    $expShow70 = '[HASH_ONLY]'
+                    $obsShow70 = '[HASH_ONLY]'
+                    if ($safeMatchField70) {
+                        if ($null -eq $condition70.expected -or
+                            $condition70.expected -is [bool] -or
+                            $condition70.expected -is [int] -or
+                            $condition70.expected -is [long] -or
+                            $condition70.expected -is [double]) {
+                            $expShow70 = $condition70.expected
+                        } elseif ($condition70.expected -is [string]) {
+                            $expShow70 = Safe-Code $condition70.expected
+                        }
+                        if ($null -eq $condition70.observed -or
+                            $condition70.observed -is [bool] -or
+                            $condition70.observed -is [int] -or
+                            $condition70.observed -is [long] -or
+                            $condition70.observed -is [double]) {
+                            $obsShow70 = $condition70.observed
+                        } elseif ($condition70.observed -is [string]) {
+                            $obsShow70 = Safe-Code $condition70.observed
+                        }
+                    }
                     $conditions70 += [ordered]@{
                         index=$condition70.index
                         field=(Safe-Code $condition70.field)
                         operator=(Safe-Code $condition70.operator)
                         observed_present=[bool]$condition70.observed_present
                         match_state=(Safe-Code $condition70.match_state)
+                        expected_value=$expShow70
+                        observed_value=$obsShow70
                         expected_type=if ($null -eq $condition70.expected) { 'NULL' } else { [string]$condition70.expected.GetType().Name }
                         observed_type=if ($null -eq $condition70.observed) { 'NULL' } else { [string]$condition70.observed.GetType().Name }
                         expected_sha256=(Hash-Text (ConvertTo-Json -InputObject $condition70.expected -Compress -Depth 4))
