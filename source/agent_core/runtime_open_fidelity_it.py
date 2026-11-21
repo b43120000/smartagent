@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import uuid
@@ -45,6 +46,18 @@ def _cases(workspace: Path, fixture: Path) -> list[tuple[str, dict, dict]]:
     bat.write_bytes(b"@echo off\r\necho F69_BAT_STDERR 1>&2\r\nexit /b 37\r\n")
     script = ("import sys; sys.stdout.buffer.write(b' F69_DIRECT_OUT  \\r\\n'); "
               "sys.stderr.buffer.write(b'F69_DIRECT_ERR\\n'); sys.exit(9)")
+    portable_git = Path(__file__).resolve().parents[2] / ".venv" / "git" / "cmd" / "git.exe"
+    git_candidate = str(portable_git) if portable_git.is_file() else shutil.which("git.exe")
+    if not git_candidate or not Path(git_candidate).is_file():
+        raise RuntimeError("GIT69_OPEN_IT_GIT_EXECUTABLE_UNAVAILABLE")
+    git_exe = str(Path(git_candidate).resolve())
+    missing_postcondition = str(fixture / "never_created_verify_result.txt")
+    verify = _action("VERIFY_EXPECTED_FAIL", "POWERSHELL",
+                     "Write-Output 'F69_VERIFY_ZERO'", workspace, operation="TEST")
+    verify.update({"success_criteria": "intentional negative postcondition probe",
+                   "verify": [{"action": "file_exists",
+                               "path": missing_postcondition, "expect": True}],
+                   "expected_verification": {"status": "FAIL", "failed_checks": [1]}})
     return [
         ("PS_SUCCESS", _action("PS_SUCCESS", "POWERSHELL",
              "Write-Output 'F69_PS_OK'", workspace), {
@@ -70,6 +83,19 @@ def _cases(workspace: Path, fixture: Path) -> list[tuple[str, dict, dict]]:
         ("DIRECT_EXIT_0", _action("DIRECT_EXIT_0", "DIRECT", exe, workspace,
              argv=["-c", "import sys; sys.stdout.buffer.write(b'F69_DIRECT_ZERO\\r\\n')"]), {
              "exit_code": 0, "stdout": "F69_DIRECT_ZERO", "shell_mode": "DIRECT"}),
+        ("DIRECT_GIT_VERSION", _action("DIRECT_GIT_VERSION", "DIRECT",
+             git_exe, workspace, argv=["--version"], operation="GIT_INSPECT"), {
+             "exit_code": 0, "stdout": "git version", "shell_mode": "DIRECT"}),
+        ("DIRECT_GIT_128", _action("DIRECT_GIT_128", "DIRECT",
+             git_exe, workspace, argv=["-C", str(fixture), "rev-parse", "HEAD"],
+             operation="GIT_INSPECT"), {
+             "exit_code": 128, "stderr": "fatal", "failure_origin": "CHILD_PROCESS"}),
+        ("DIRECT_UTF8", _action("DIRECT_UTF8", "DIRECT", exe, workspace,
+             argv=["-c", "import sys; sys.stdout.buffer.write('F69_影像品質\\r\\n'.encode('utf-8'))"]), {
+             "exit_code": 0, "stdout": "F69_影像品質", "shell_mode": "DIRECT"}),
+        ("VERIFY_EXPECTED_FAIL", verify, {
+             "exit_code": 0, "verification_status": "FAIL",
+             "failure_origin": "VERIFICATION", "stdout": "F69_VERIFY_ZERO"}),
         ("DIRECT_MISSING", _action("DIRECT_MISSING", "DIRECT",
              str(fixture / "not_existing_git69.exe"), workspace, argv=["--version"]), {
              "exit_code": None, "process_started": False,
