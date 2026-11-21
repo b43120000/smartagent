@@ -79,6 +79,13 @@ def test_windows_real_runtime_matcher_collector(tmp_path,monkeypatch):
             for row in exported["records"]:
                 assert row["assertions"]
                 assert all(x["match_state"]=="MATCH" for x in row["assertions"])
+                for fact in row["assertions"]:
+                    if fact["field"] in {"data.exit_code","data.process_started",
+                                         "data.process_start_error_class",
+                                         "data.timed_out","data.process_state"}:
+                        assert "expected_value" in fact
+                        assert "observed_value" in fact
+                        assert fact["expected_value"]==fact["observed_value"]
                 assert row["replay_original_action"] is False
             # Readable, sanitized RCA file is persisted as CI artifact.
             out=install/"git70-ci-evidence"
