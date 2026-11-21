@@ -1059,6 +1059,17 @@ class TelegramReceiver:
                 for other in same_chat:
                     if other != key:
                         accepted.extend(self._flush_long_message_key(other))
+                if merger.has_key(key) and any(
+                    int(item["update_id"]) == int(update["update_id"])
+                    for item in merger.groups[key]["updates"]
+                ):
+                    # Crash between durable pending write and Telegram offset
+                    # commit: acknowledge the same staged update, never split
+                    # or overwrite the pending group.
+                    self.offset_store.commit(int(update["update_id"]))
+                    self._log("CONNECT", stage="LONG_MESSAGE_PART_REPLAYED",
+                              update_id=int(update["update_id"]), staged=True)
+                    continue
                 if merger.has_key(key) and not merger.can_append(update):
                     accepted.extend(self._flush_long_message_key(key))
                 status = merger.stage(update)
