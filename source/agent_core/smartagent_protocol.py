@@ -395,6 +395,11 @@ TOOL_ENVELOPE_SCHEMAS = {
     },
 }
 
+# Git70: all typed tools may carry a frozen, declarative Expected assertion.
+# This never modifies tool permissions, parameters or execution semantics.
+for _tool_schema in TOOL_ENVELOPE_SCHEMAS.values():
+    _tool_schema.setdefault("optional", {})["expected"] = dict
+
 
 def _type_name(spec) -> str:
     if isinstance(spec, tuple):
@@ -1052,6 +1057,17 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 suggestion="inspect_directory.paths 必須包含至少一個非空路徑字串。",
                 block_index=block_index,
             )
+
+    # Generic Expected contract: check before any tool is dispatched.
+    # Planner cannot retroactively change this through an observed result.
+    if call.get("expected") is not None:
+        from .goal_evidence_matching import validate_expected, ExpectedContractError
+        try:
+            validate_expected(call["expected"])
+        except ExpectedContractError as exc:
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]", "expected_observed_contract_invalid",
+                tool=tool, detail=str(exc), block_index=block_index)
 
     if tool == "run_command":
         from .shell_execution import execution_contract, ShellModeError
@@ -2319,6 +2335,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 - 簡單且彼此無相依性的只讀查詢可優先使用既有 typed tool 或 aggregate_verification；不得為了減少回合而犧牲 action/evidence 的一對一關係。
 - run_command 不是「執行成功就等於任務完成」。只要 command 是啟動程式、編譯、測試、修改後執行、部署或任何會影響狀態的 action，你必須同一個 JSON 裡提供 success_criteria 與 verify actions。
 - Local Agent 只機械式執行 command + verify，不自行發明「這樣算成功嗎」。
+- Git70 Expected/Observed：所有 ToolCall 可在執行前提供 expected={{"contract_version":1,"aggregation":"ALL","assertions":[{{"field":"data.exit_code","operator":"eq","value":0}}]}}。這是 Planner 在派送前鎖定的事實預期，而非工具執行成功宣告。Runtime 必須從可信 MIN-EV 回讀 Observed，逐欄客觀 Match；負向測試可以以 process_started=false、process_start_error_class="FileNotFoundError"、exit_code=null 作為 Expected。不可事後改寫 Expected；無法匹配時只重新取證、不得重播可能已產生副作用的命令。Matcher PASS 不會覆寫原始 execution_status，安全政策仍獨立決策。
 - VERIFICATION_STATUS=PASS 才能把該 action 視為驗證通過。
 - VERIFICATION_STATUS=FAIL 時，必須根據 stdout/stderr/verification evidence 找出問題，必要時 upload/find 相關檔案、修正後重新 run_command + verify。
 - 若任務本身是負向測試，預期 command 必須失敗，請在原 action 明確加入 expected_failure，例如 {{"exit_codes":[1],"stderr_regex":"not a directory"}}，並以 condition_id 或 success_criteria 精確綁定本輪 completion_contract.success 的條件文字／ID。Runtime 仍保存 execution_status=FAILED、verification_status=FAIL，另產生 expectation_status=PASS/FAIL 供任務終局判定；不得在一般失敗後才補填 expected_failure，也不得用它掩蓋副作用操作失敗。
