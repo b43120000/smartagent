@@ -196,7 +196,7 @@
     "source/agent_core/runtime_environment.py": "1719c9fcfa65fe929277868c779f0f20679b9d8078aa55c1ddb8f2fdf0940371",
     "source/agent_core/runtime_evidence_store.py": "aa777fa3aff0886ef887de023e2ffc72c94b34ff150972240662fb33a8433cb5",
     "source/agent_core/runtime_finish_comparator.py": "8ab68b594dc2c0301ee848d7f90768562f990f79fc270f60bbc7927761cd1a63",
-    "source/agent_core/runtime_open_fidelity_it.py": "2381c7d0b7bfeeb2baa75cd6b200a8d2a417f325567fcc5e5d035951729309b0",
+    "source/agent_core/runtime_open_fidelity_it.py": "b65d90248edfcda5c0220978b1a1da951f01c710f91bc4933602a3cf5cd235c7",
     "source/agent_core/runtime_software_inventory.py": "f0b48ddc4d4bb5851509d5bd05dd7f75fdc940d103252839be813bd19283d07c",
     "source/agent_core/runtime_test_gateway.py": "a31cae22d275d201a11384a068970d0229382524b14bdb8dff0afc975907afdc",
     "source/agent_core/safe_file_operations.py": "90de82562c7e012278bf24526d1512fc7477aba28aa01158aa6fcc1cbeb16fe7",
