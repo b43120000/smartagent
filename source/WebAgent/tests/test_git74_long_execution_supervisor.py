@@ -209,7 +209,7 @@ def test_real_collect_bat_exports_git74_cleartext_task_evidence(tmp_path):
             ["cmd.exe", "/d", "/c", str(root / "collect.bat"), task, request],
             cwd=root, capture_output=True, text=True, errors="replace", timeout=180)
         assert response.returncode == 0, response.stdout[-4000:] + response.stderr[-4000:]
-        match = re.search(r"^\\[COLLECT\\] ZIP:\\s*(.+)$", response.stdout, flags=re.M)
+        match = re.search(r"^\[COLLECT\] ZIP:\s*(.+)$", response.stdout, flags=re.M)
         assert match, response.stdout[-4000:]
         archive = Path(match.group(1).strip())
         archives.append(archive)
