@@ -211,6 +211,36 @@ def match_expected(
     }
 
 
+
+def negative_assertion_goal_evidence_eligible(action: object, receipt: object,
+                                               match_report: object) -> bool:
+    """An unexecuted action can prove a *negative test*, never mutation success.
+
+    The Runtime has already verified the immutable MIN-EV result and its frozen
+    Expected contract. A policy denial or unrelated no-execution cannot satisfy
+    a mutation goal. A negative test is proven only by definite Popen failure.
+    """
+    if not all(isinstance(v, Mapping) for v in (action, receipt, match_report)):
+        return False
+    if (action.get("tool") != "run_command"
+            or action.get("operation") not in {"TEST", "VERIFY", "INSPECT", "GIT_INSPECT"}
+            or receipt.get("status") != "FAILED"
+            or receipt.get("executed") is not False
+            or match_report.get("observed_integrity") != "VERIFIED"
+            or match_report.get("match_state") != "MATCH"
+            or match_report.get("safety_decision") != "CONTINUE_OR_REPLAN"):
+        return False
+    data=receipt.get("data")
+    return (isinstance(data, Mapping)
+            and data.get("process_spawn_attempted") is True
+            and data.get("process_start_phase") == "POPEN"
+            and data.get("process_started") is False
+            and data.get("process_state") == "NOT_STARTED"
+            and data.get("possible_partial_execution") is False
+            and data.get("exit_code") is None
+            and isinstance(data.get("process_start_error_class"),str)
+            and bool(data["process_start_error_class"]))
+
 def terminal_goal_verdict(*, goal_satisfied: bool, all_required_evidence_verified: bool,
                           infeasibility_proven: bool = False,
                           infeasibility_evidence_refs: tuple[str, ...] = ()) -> str | None:
