@@ -564,6 +564,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
     seen_mutations = set()
     pending_unknown_timeout = None
+    pending_timeout_reconciliation = None
+    timeout_reconciliation_witnesses = []
     native_preexecution_rejections = []
     native_denied_command_hashes = set()
     max_native_precheck_replans = 3
@@ -1554,6 +1556,34 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
             continue
 
+        # The only follow-up while a timed-out mutation is unresolved is
+        # its predeclared, read-only filesystem observation. The Planner
+        # cannot redefine this after seeing the Timeout or silently replay it.
+        if pending_timeout_reconciliation is not None:
+            from agent_core.timeout_reconciliation import _path, TimeoutReconciliationError
+            checks = pending_timeout_reconciliation["checks"]
+            permitted_paths = {
+                c["path"] for c in checks
+                if c["path"] not in pending_timeout_reconciliation["completed_check_paths"]
+            }
+            try:
+                scoped_path = _path(action.get("path")) if action.get("tool") == "observe_fact" else ""
+            except TimeoutReconciliationError:
+                scoped_path = ""
+            if action.get("tool") != "observe_fact" or scoped_path not in permitted_paths:
+                append_executor_event(root, loop, {
+                    "round":turn, "kind":"TIMEOUT_RECONCILIATION_ACTION_BLOCKED",
+                    "source_action_id":pending_timeout_reconciliation["action_id"],
+                    "source_evidence_ref":pending_timeout_reconciliation["source_evidence_ref"],
+                    "action_id":action.get("action_id"),"reason_code":"DECLARED_READ_ONLY_OBSERVATION_REQUIRED",
+                    "executed":False,"authorization_granted":False,
+                })
+                return _finish(
+                    loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
+                    summary="GIT71_RECONCILIATION_SCOPE_REQUIRED: use the frozen "
+                            "read-only observation, not a new command or Finish.",
+                    complete=False,
+                )
         # An admitted action is independent progress. Its actual ToolResult
         # will determine what to do next; no prior rejection grants proof.
         consecutive_admission_rejections = 0
@@ -1566,6 +1596,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # Git70: freeze the Planner's action assertions before execution.
         # The digest is recorded independently of subsequent ToolResults.
         from agent_core.goal_evidence_matching import frozen_expected_sha256
+        from agent_core.timeout_reconciliation import reconciliation_digest
+        reconciliation_digest_value = (
+            reconciliation_digest(action) if action.get("reconciliation") is not None else ""
+        )
         expected_contract = action.get("expected")
         expected_digest = (frozen_expected_sha256(expected_contract)
                            if isinstance(expected_contract, dict) else "")
@@ -1580,6 +1614,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "mutating": mutating,
             "expected_contract_sha256": expected_digest,
             "expected_contract_present": bool(expected_digest),
+            "reconciliation_contract_sha256": reconciliation_digest_value,
+            "reconciliation_contract_present": bool(reconciliation_digest_value),
             "turbo_decision": (
                 "NOT_APPLICABLE_TYPED_ACTION" if action["tool"] != "run_command"
                 else ("AUTO_CONFIRM" if auto_confirm
@@ -1685,6 +1721,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             "result_sha256": digest, "result_status": runtime_status,
             "result_reason": runtime_reason,
             "expected_contract_sha256": expected_digest,
+            "reconciliation_contract_sha256": reconciliation_digest_value,
             "expected_observed_match": match_report,
             "execution_status": runtime_status,
             "verification_status": str(
@@ -1799,6 +1836,83 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "approval_id": unknown_approval["approval_id"],
                     "evidence_ref": evidence_ref, "executed": False,
                 })
+        # Git71: reconcile *after* ToolResult and MIN-EV have been persisted.
+        # Never alter the original UNKNOWN receipt or declare a mutation
+        # successful because the timeout assertion happened to match.
+        from agent_core.timeout_reconciliation import (
+            begin_timeout_reconciliation, check_reconciliation_observation,
+            append_reconciliation_report,
+        )
+        if pending_timeout_reconciliation is not None:
+            observed_recovery = check_reconciliation_observation(
+                pending_timeout_reconciliation, action, receipt,
+                match_report, evidence_ref)
+            append_reconciliation_report(
+                root, loop.task_id, loop.run_id, observed_recovery)
+            append_executor_event(root, loop, {
+                "round":turn,"kind":"TIMEOUT_RECONCILIATION_OBSERVED",
+                "source_action_id":pending_timeout_reconciliation["action_id"],
+                "source_evidence_ref":pending_timeout_reconciliation["source_evidence_ref"],
+                "verification_action_id":action["action_id"],
+                "verification_evidence_ref":evidence_ref,
+                "state":observed_recovery["state"],"reason":observed_recovery["reason"],
+                "executed":False,"authorization_granted":False,
+            })
+            if observed_recovery["state"] not in {"OBSERVATION_REQUIRED", "RECONCILED"}:
+                return _finish(loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
+                    summary="GIT71_RECONCILIATION_OBSERVATION_UNVERIFIED; "
+                            "no replay; source="+pending_timeout_reconciliation["source_evidence_ref"],
+                    complete=False)
+            timeout_reconciliation_witnesses.append(action["action_id"])
+            if observed_recovery["state"]=="RECONCILED":
+                completed_recovery={
+                    **observed_recovery,
+                    "witness_action_ids":list(timeout_reconciliation_witnesses),
+                }
+                append_executor_event(root, loop, {
+                    "round":turn,"kind":"TIMEOUT_RECONCILIATION_COMPLETED",
+                    "source_action_id":pending_timeout_reconciliation["action_id"],
+                    "source_evidence_ref":pending_timeout_reconciliation["source_evidence_ref"],
+                    "verification_action_id":action["action_id"],
+                    "verification_evidence_ref":evidence_ref,
+                    "witness_action_ids":list(timeout_reconciliation_witnesses),
+                    "reconciliation_sha256":pending_timeout_reconciliation["reconciliation_sha256"],
+                    "state":"RECONCILED",
+                    "process_finality_verified":True,
+                    "side_effect_scope":"DECLARED_PATHS_ONLY",
+                    "replay_original_action":False,
+                    "executed":False,"authorization_granted":False,
+                })
+                append_reconciliation_report(root, loop.task_id, loop.run_id,
+                                             completed_recovery)
+                pending_timeout_reconciliation=None
+                timeout_reconciliation_witnesses=[]
+            else:
+                pending_timeout_reconciliation=observed_recovery
+        elif (action["tool"]=="run_command" and runtime_status=="UNKNOWN"
+              and isinstance(result_data, Mapping) and
+              result_data.get("timed_out") is True and match_report):
+            candidate=begin_timeout_reconciliation(
+                action,receipt,match_report,evidence_ref)
+            append_reconciliation_report(root,loop.task_id,loop.run_id,candidate)
+            append_executor_event(root,loop,{
+                "round":turn,"kind":"TIMEOUT_RECONCILIATION_STARTED",
+                "source_action_id":action["action_id"],
+                "source_evidence_ref":evidence_ref,
+                "state":candidate["state"],"reason":candidate["reason"],
+                "reconciliation_sha256":candidate.get("reconciliation_sha256",""),
+                "process_finality_verified":candidate.get("process_finality_verified",False),
+                "executed":False,"authorization_granted":False,
+            })
+            if candidate["state"]=="OBSERVATION_REQUIRED":
+                pending_timeout_reconciliation=candidate
+                timeout_reconciliation_witnesses=[]
+                hint=("GIT71_TIMEOUT_RECONCILIATION_REQUIRED: OS terminated the "
+                      "supervised process tree; the original execution still has "
+                      "UNKNOWN effects. Perform ONLY the frozen read-only "
+                      "observe_fact checks with matching Expected, then continue. "
+                      "Never replay the original command. checks="+
+                      json.dumps(candidate["checks"],ensure_ascii=False))
         recent.append({
             "round": turn, "tool": action["tool"],
             "action_id": action["action_id"],
@@ -1845,7 +1959,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
         if (match_report
                 and match_report["safety_decision"] == "PAUSE_AND_RECONCILE"
-                and mutating):
+                and mutating and pending_timeout_reconciliation is None):
             return _finish(
                 loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
                 summary="GIT70_SAFETY_RECONCILIATION_REQUIRED; original command "
@@ -1865,7 +1979,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                             + "。接續任務可重新發起精確命令授權。",
                     complete=False,
                 )
-        if runtime_status in {"UNKNOWN", "RUNNING", "PARTIAL"} and mutating:
+        if (runtime_status in {"UNKNOWN", "RUNNING", "PARTIAL"}
+                and mutating and pending_timeout_reconciliation is None):
             return _finish(
                 loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
                 summary="可能產生副作用的工具結果未確定，禁止重送：" + runtime_reason,
