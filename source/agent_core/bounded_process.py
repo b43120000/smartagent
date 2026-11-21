@@ -337,6 +337,8 @@ def run_bounded_process(
                         # because a display snapshot could not be written.
                         pass
             timed_out = False
+            tree_kill_attempted = False
+            tree_kill_exit_code = None
             try:
                 wait_with_liveness(
                     process, timeout, on_running=record_running,
@@ -349,12 +351,14 @@ def run_bounded_process(
                 # handles (and the command itself) can survive the timeout.
                 if os.name == 'nt' and process.poll() is None:
                     try:
-                        subprocess.run(
+                        tree_kill_attempted = True
+                        tree_kill = subprocess.run(
                             [str(Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'taskkill.exe'),
                              '/PID', str(process.pid), '/T', '/F'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             timeout=10, check=False,
                         )
+                        tree_kill_exit_code = tree_kill.returncode
                     except (OSError, subprocess.TimeoutExpired):
                         pass
                 if process.poll() is None:
@@ -369,6 +373,41 @@ def run_bounded_process(
         stderr_raw_sha256 = _stream_sha256(stderr_path)
         stdout, stdout_bytes, stdout_truncated, stdout_ref = _read_capture(stdout_path, max_stream_bytes)
         stderr, stderr_bytes, stderr_truncated, stderr_ref = _read_capture(stderr_path, max_stream_bytes)
+        # Preserve the post-timeout process-finality evidence independently
+        # of the original command's (unknown) success. taskkill /T /F = 0 is
+        # a bounded OS report for that PID's process tree, not a guarantee
+        # that the command had no prior side effects or detached work.
+        timeout_termination = None
+        if timed_out:
+            handle_exited = bool(
+                final_liveness_evidence
+                and final_liveness_evidence.get("process_state") == "EXITED"
+                and final_liveness_evidence.get("process_identity_verified") is True
+                and final_liveness_evidence.get("evidence_source") == "WIN32_WAIT_FOR_SINGLE_OBJECT"
+                and final_liveness_evidence.get("pid") == process.pid
+            )
+            timeout_termination = {
+                "schema": "SMARTAGENT_GIT71_PROCESS_TERMINATION_V1",
+                "pid": process.pid,
+                "owned_handle_exit_verified": handle_exited,
+                "owned_process_state": (
+                    final_liveness_evidence.get("process_state")
+                    if isinstance(final_liveness_evidence, dict) else "UNKNOWN"
+                ),
+                "final_identity_source": (
+                    final_liveness_evidence.get("evidence_source")
+                    if isinstance(final_liveness_evidence, dict) else "UNAVAILABLE"
+                ),
+                "tree_termination_source": "WIN32_TASKKILL_TREE" if tree_kill_attempted else "UNAVAILABLE",
+                "tree_kill_exit_code": tree_kill_exit_code,
+                "tree_termination_verdict": (
+                    "VERIFIED" if handle_exited and tree_kill_attempted
+                    and tree_kill_exit_code == 0 else "UNVERIFIED"
+                ),
+                "original_command_success_proven": False,
+                "side_effect_scope": "NOT_EVALUATED",
+                "replay_original_action": False,
+            }
         result = {
             "exit_code": process.returncode,
             "stdout": stdout,
@@ -397,6 +436,7 @@ def run_bounded_process(
             "execution_id": capture_id,
             "liveness_evidence": final_liveness_evidence,
             "last_running_evidence": last_running_evidence,
+            "timeout_termination": timeout_termination,
         }
         if timed_out:
             result["error"] = f"指令超過 {timeout} 秒"
