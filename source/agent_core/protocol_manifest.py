@@ -128,6 +128,9 @@ CORE_FILES = (
     'source/agent_core/progress_reply_contract.py',
     'source/agent_core/protocol_repair_transaction.py',
     'source/agent_core/tool_result_contract.py',
+    # Git70 universal Expected/Observed Assertion and real bypass gateway.
+    'source/agent_core/goal_evidence_matching.py',
+    'source/agent_core/runtime_goal_evidence_it.py',
     'source/agent_core/runtime_finish_comparator.py',
     'source/agent_core/finish_contract_adapter_v2.py',
     'source/agent_core/runtime_evidence_store.py',
