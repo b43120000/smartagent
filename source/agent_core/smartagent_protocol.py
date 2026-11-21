@@ -399,6 +399,7 @@ TOOL_ENVELOPE_SCHEMAS = {
 # This never modifies tool permissions, parameters or execution semantics.
 for _tool_schema in TOOL_ENVELOPE_SCHEMAS.values():
     _tool_schema.setdefault("optional", {})["expected"] = dict
+TOOL_ENVELOPE_SCHEMAS["run_command"].setdefault("optional", {})["reconciliation"] = dict
 
 
 def _type_name(spec) -> str:
@@ -1067,6 +1068,15 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
         except ExpectedContractError as exc:
             return False, _diagnostic(
                 "[TOOL_ENVELOPE_REJECTED]", "expected_observed_contract_invalid",
+                tool=tool, detail=str(exc), block_index=block_index)
+
+    if call.get("reconciliation") is not None:
+        from .timeout_reconciliation import validate_reconciliation, TimeoutReconciliationError
+        try:
+            validate_reconciliation(call)
+        except TimeoutReconciliationError as exc:
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]", "timeout_reconciliation_invalid",
                 tool=tool, detail=str(exc), block_index=block_index)
 
     if tool == "run_command":
