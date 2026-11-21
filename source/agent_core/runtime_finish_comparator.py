@@ -189,6 +189,14 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
     else:
         source_events = list(board.get("events", []))
     events = [row for row in source_events if row.get("kind") == "TOOL_RESULT"]
+    # Match evidence is independent of execution, but must be tied to a
+    # pre-dispatch frozen Expected SHA and task-bound producer MIN-EV.
+    admitted_expected = {
+        row.get("action_id"): row.get("expected_contract_sha256")
+        for row in source_events
+        if row.get("kind") == "ACTION_ADMITTED"
+        and row.get("expected_contract_present") is True
+    }
     denied = [row for row in source_events if row.get("kind") == "ADMISSION_REJECTED"]
     native_denials = [
         row for row in source_events
@@ -261,8 +269,40 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
             "tool": action["tool"], "execution_status": receipt["status"],
             "executed": receipt["executed"],
         })
+        expected_match = None
+        if isinstance(action.get("expected"), Mapping):
+            from .goal_evidence_matching import (
+                frozen_expected_sha256, match_expected, ExpectedContractError,
+            )
+            from .runtime_evidence_store import (
+                read_runtime_action_result, RuntimeEvidenceError,
+            )
+            try:
+                frozen = frozen_expected_sha256(action["expected"])
+            except ExpectedContractError:
+                return [], [], None, "EXPECTED_CONTRACT_INVALID_AT_FINISH"
+            if (admitted_expected.get(action_id) != frozen
+                    or entry.get("expected_contract_sha256") != frozen):
+                return [], [], None, "EXPECTED_CONTRACT_FROZEN_DIGEST_MISMATCH"
+            store_status = str((entry.get("evidence_store") or {}).get("store_status") or "")
+            if store_status == "PERSISTED_AND_READBACK_VERIFIED":
+                try:
+                    reread = read_runtime_action_result(
+                        root, task_id=loop.task_id, request_id=loop.run_id,
+                        task_epoch=loop.task_epoch, action_id=action_id,
+                        evidence_ref=ref,
+                    )
+                except (RuntimeEvidenceError, OSError, ValueError):
+                    reread = None
+                if reread != raw:
+                    return [], [], None, "EXPECTED_OBSERVED_SOURCE_READBACK_MISMATCH"
+            expected_match = match_expected(
+                action["expected"], receipt, evidence_ref=ref,
+                evidence_store_status=store_status,
+                frozen_sha256=frozen, action_id=action_id)
         history.append({"action": action, "receipt": receipt,
-                        "evidence_ref": ref, "raw_result": raw})
+                        "evidence_ref": ref, "raw_result": raw,
+                        "expected_match": expected_match})
     if set(actions) != {row["action_id"] for row in results} or set(ledger) != set(actions):
         return [], [], None, "ACTION_COVERAGE_INCOMPLETE"
     if not allow_open and list(board["terminal"].get("tool_evidence_refs", [])) != refs:
@@ -772,10 +812,13 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     # An executed FAILED command can be valid evidence of an explicitly
     # requested negative test. Unexecuted REJECTED operations are NOT facts
     # about execution and never satisfy completion requirements.
+    from .goal_evidence_matching import negative_assertion_goal_evidence_eligible
     valid_goal_history = [
         item for item in history
-        if item["receipt"]["executed"] is True
-        and item["receipt"]["status"] in {"SUCCEEDED", "FAILED"}
+        if (item["receipt"]["executed"] is True
+            and item["receipt"]["status"] in {"SUCCEEDED", "FAILED"})
+        or negative_assertion_goal_evidence_eligible(
+            item["action"], item["receipt"], item.get("expected_match"))
     ]
     if not valid_goal_history:
         return _fail("NO_EXECUTED_GOAL_EVIDENCE", refs, tool_results=results)
