@@ -195,6 +195,7 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
                 "reason": str(item.get("reason") or "")[:40],
                 "expected_type": str(item.get("expected") or "")[:64],
                 "actual_type": str(item.get("actual") or "MISSING")[:40],
+                "constraint_code": str(item.get("constraint_code") or "")[:80],
             })
         code = str(fault.get("reason") or "schema_invalid")[:120]
         enum_problem = enum_issue(
@@ -206,6 +207,7 @@ def admit_minimal_action(decision, tool_context) -> tuple[dict | None, str]:
             code in {"wrong_field_type", "missing_required_field"}
             or enum_problem is not None
             or any(issue["reason"] == "missing_required_field" for issue in issues)
+            or (code == "timeout_reconciliation_invalid" and bool(issues))
         )
         diagnostic = {
             "schema": "SMARTAGENT_ACTION_ADMISSION_DIAGNOSTIC_V1",

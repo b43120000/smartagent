@@ -1075,9 +1075,43 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
         try:
             validate_reconciliation(call)
         except TimeoutReconciliationError as exc:
+            # Git73: preserve the strict Git71 pre-dispatch rejection, but
+            # expose a bounded, actionable field issue to the Planner. The
+            # actual proposed paths/command are never echoed into diagnostics.
+            code = str(exc)
+            locations = {
+                "RECONCILIATION_WRONG_TOOL": ("tool", "run_command"),
+                "RECONCILIATION_SCHEMA_INVALID": ("reconciliation", "version=1 and checks only"),
+                "RECONCILIATION_CHECK_COUNT_INVALID": ("reconciliation.checks", "1..8 checks"),
+                "RECONCILIATION_PATH_INVALID": ("working_directory", "absolute Windows path"),
+                "RECONCILIATION_ABSOLUTE_PATH_REQUIRED": ("reconciliation.checks", "absolute Windows path"),
+                "RECONCILIATION_PARENT_TRAVERSAL": ("reconciliation.checks", "no parent traversal"),
+                "RECONCILIATION_CHECK_SCHEMA_INVALID": ("reconciliation.checks", "tool,path,expected_exists only"),
+                "RECONCILIATION_CHECK_OPERATOR_INVALID": ("reconciliation.checks", "observe_fact and bool"),
+                "RECONCILIATION_CHECK_OUTSIDE_CWD": ("reconciliation.checks", "path strictly inside CWD"),
+                "RECONCILIATION_CHECK_DUPLICATE": ("reconciliation.checks", "unique canonical paths"),
+            }
+            field, expected = locations.get(
+                code, ("reconciliation", "Git71 bounded scoped contract")
+            )
+            if code.startswith("RECONCILIATION_") and field == "working_directory":
+                # CWD is checked by the same strict Windows-path validator.
+                expected = "absolute Windows path"
             return False, _diagnostic(
                 "[TOOL_ENVELOPE_REJECTED]", "timeout_reconciliation_invalid",
-                tool=tool, detail=str(exc), block_index=block_index)
+                tool=tool, detail=code,
+                suggestion=(
+                    "保留原始 timeout/expected；reconciliation 只接受 "
+                    "{version:1,checks:[{tool:observe_fact,path:<CWD 內的絕對檔案路徑>,"
+                    "expected_exists:<boolean>}]}; 修正後以新 action_id 重新提交，"
+                    "禁止放寬 CWD 或改寫已執行的 Timeout。"
+                ),
+                field_issues=[{
+                    "field": field, "reason": "invalid_reconciliation",
+                    "expected": expected, "actual": "invalid",
+                    "constraint_code": code,
+                }],
+                repair_mode="BATCH_FIELDS", block_index=block_index)
 
     if tool == "run_command":
         from .shell_execution import execution_contract, ShellModeError
