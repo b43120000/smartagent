@@ -146,7 +146,7 @@
     "source/agent_core/project_sync_runner.py": "7a7c17e9b376b2f26b869a8acfdb9e4dd325cd2924579cfd58cb8109bd3f8d46",
     "source/agent_core/project_sync_transaction.py": "2e8514576da80223d521ab716226ebd0a2a14a4077cc68b00807148c7be5543f",
     "source/agent_core/project_sync.py": "614aad90249e003b5cb6a5d96ffdc95069819777c6f9c6d967286a4dd8d38c82",
-    "source/agent_core/protocol_manifest.py": "5cb665d256584afdcd9a19e227e34e369b58c34bc31a1799019983ec0a4ad969",
+    "source/agent_core/protocol_manifest.py": "10b490e63632c23fc14dff935e19a330c98569e3af36a370aa633fd7b4b37eed",
     "source/agent_core/protocol_repair_transaction.py": "c80a3b045fd03e01655298574c2935135ef58359bc808922b17e03d11b0e053a",
     "source/agent_core/protocol_v8.py": "c89e12ff41b7364ee3263a61a0ae59b81546b0e2395b80423b34abaf87459504",
     "source/agent_core/protocol_v9.py": "26932c3fa2bc41edfc16bc80613953e4c16f0e3a4ecfa42c6d7af5fdb3d8e51a",
@@ -285,7 +285,7 @@
     "source/RemoteAgent/telegram_delivery.py": "f6b13fdda9c75abe024f75399f5516d385eaca1838df19c93b1a5dd713372506",
     "source/RemoteAgent/telegram_direct_cmd.py": "c223abad4c547ae084cd61f6538bc24a28614bdb1d98f5677acb092c65b67fc0",
     "source/RemoteAgent/telegram_listener.py": "4ae0c2e7f5b4bf2e1eaccbaef309076f7c488a7f37b4eec0085484a133d780ad",
-    "source/RemoteAgent/telegram_transport.py": "bfe170086fa0b36e1b1cdccb539defc4634602dd16197bc2f3bfdc75756d9e93",
+    "source/RemoteAgent/telegram_transport.py": "f6ce6ce02b79fcbe357a68420468b18e3a1ddccd43377d460ef5121c1544f527",
     "source/RemoteAgent/telegram_webagent_worker.py": "321e270a93043b652b1e295981cc970c878359d653ea208f1a4997fa8a8b6af4",
     "source/RemoteAgent/webgpt_delivery.py": "1e19adb764316fa3790754f38070866d30f3ff07b3cf8c38ecf81ea3f4c0907c",
     "source/smart_agent.py": "369ba1a5bf80c6ea6c2f4d60dc68f2df18c64e040bf89086caff76106e22e443",
@@ -303,7 +303,8 @@
     "source/WebAgent/session.py": "a3e3cedda8e42611705c09b71228ec59e13f63f49e1f7e10297b64198699bd6e",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
-    "source/agent_core/timeout_reconciliation.py": "57294c995a414e8392c40e30edc695a1cc11be38276c1573ea3b136baa8284ec"
+    "source/agent_core/timeout_reconciliation.py": "57294c995a414e8392c40e30edc695a1cc11be38276c1573ea3b136baa8284ec",
+    "source/RemoteAgent/telegram_long_message_merge.py": "6b5368fe670d8f7e3a213a201db57a7a503395e8e239820b31ccb97bfaeb3392"
   },
   "manifest_schema_version": 1,
   "missing_files": [],
