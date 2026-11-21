@@ -25,6 +25,29 @@ jobs:
           python-version: '3.13'
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Protocol manifest gate
+        run: >-
+          python -B -c "from agent_core.protocol_manifest import require_protocol_manifest;
+          x=require_protocol_manifest('.'); assert x['status']=='PASS'
+          and x['hash_verification']=='PASS', x"
+      - name: Release file manifest integrity gate
+        run: >-
+          python -B -c "import json,runpy; from pathlib import Path;
+          build=runpy.run_path('install_smart_agent/build_update_manifest.py')['build'];
+          generated=build(Path('.'));
+          recorded=json.loads(Path('config/update_manifest.json').read_text(encoding='utf-8'));
+          assert generated['files']==recorded['files'],
+          {'expected':len(generated['files']),'actual':len(recorded['files']),
+          'manifest_delta':{k:v for k,v in generated['files'].items() if recorded['files'].get(k)!=v},
+          'extra_pins':[k for k in recorded['files'] if k not in generated['files']]};
+          assert generated['release_sequence']==recorded['release_sequence'],
+          'RELEASE_SEQUENCE_MISMATCH'"
+      - name: Pinned checkout upgrade preflight
+        run: >-
+          python -B -c "from pathlib import Path; import subprocess;
+          from agent_core.force_stop_all_agents import _verify_upgrade_commit;
+          sha=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip();
+          _verify_upgrade_commit(Path('.'),sha)"
       - name: Syntax compile
         run: >-
           python -B -m compileall -q source/agent_core/runtime_open_fidelity_it.py source/agent_core/runtime_goal_evidence_it.py source/agent_core/timeout_reconciliation.py source/agent_core/bounded_process.py source/agent_core/runtime_finish_comparator.py source/agent_core/goal_evidence_matching.py source/agent_core/shell_execution.py
