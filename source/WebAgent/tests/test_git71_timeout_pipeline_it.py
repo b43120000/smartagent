@@ -95,12 +95,12 @@ def _run_real_sidecar(workspace:Path, monkeypatch, *, with_reconciliation:bool=T
         loop.prompts.append(prompt)
         round_no=len(loop.prompts)
         if round_no==1:
-            return json.dumps({"type":"tool_call","name":"run_command","arguments":timed})
+            return json.dumps({"type":"tool_call","name":"run_command","arguments":{k:v for k,v in timed.items() if k!="tool"}})
         if round_no==2:
             if not with_reconciliation:
                 pytest.fail("legacy Timeout incorrectly continued")
             assert "GIT71_TIMEOUT_RECONCILIATION_REQUIRED" in prompt, prompt[-1800:]
-            return json.dumps({"type":"tool_call","name":"observe_fact","arguments":observed})
+            return json.dumps({"type":"tool_call","name":"observe_fact","arguments":{k:v for k,v in observed.items() if k!="tool"}})
         if round_no==3:
             if not expected_exists:
                 pytest.fail("mismatched observation incorrectly accepted")
