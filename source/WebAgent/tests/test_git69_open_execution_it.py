@@ -52,9 +52,9 @@ def test_open_mode_real_runtime_processes_and_immutable_evidence(tmp_path, monke
     assert report["process_backend_mocked"] is False
     assert report["runtime_dispatch_shared"] is True
     assert report["policy_source"] == "CI_INJECTED_POLICY"
-    assert len(report["cases"]) == 10, json.dumps(report, indent=2, ensure_ascii=False)
+    assert len(report["cases"]) == 14, json.dumps(report, indent=2, ensure_ascii=False)
     assert report["status"] == "PASS", json.dumps(report, indent=2, ensure_ascii=False)
-    assert report["passed"] == 10
+    assert report["passed"] == 14
     assert {x["shell_mode"] for x in report["cases"]} == {
         "DIRECT", "CMD", "POWERSHELL"
     }
@@ -110,3 +110,30 @@ def test_open_mode_gateway_rejects_invalid_effective_policy(monkeypatch, tmp_pat
                         lambda workspace: {"acl": "ON"})
     with pytest.raises(RuntimeError, match="POLICY_NOT_VERIFIED"):
         it.run_open_it(tmp_path, policy_source="CI_INJECTED_POLICY")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows policy integration")
+def test_open_mode_dangerous_git_command_stays_denied_even_auto_approve_on(tmp_path, monkeypatch):
+    from agent_core.command_security import inspect_command
+    from agent_core.smartagent_protocol import validate_tool_envelope
+    from agent_core.auto_approve_mode import evaluate_auto_approve
+
+    ws = tmp_path / "workspace_security_denial"
+    ws.mkdir()
+    _ci_policy(monkeypatch, ws)
+    danger = "git clean -fdx"
+    static = inspect_command(danger, workspace=ws)
+    assert static.allowed is False
+    assert static.approval_eligible is False
+    auto = evaluate_auto_approve(ws, danger, working_directory=ws)
+    assert auto["auto_approve_effective"] == "ON"
+    assert auto["approved"] is False
+    assert auto["executed"] is False
+    assert auto["reason_code"].startswith("COMMAND_SECURITY_HARD_DENIED:")
+    action = {"tool": "run_command", "command": danger,
+              "operation": "GIT_MUTATE", "shell_mode": "POWERSHELL",
+              "working_directory": str(ws), "action_id": "ACT-G69-DENY"}
+    allowed, diagnostic = validate_tool_envelope(action)
+    assert allowed is False, diagnostic
+    # No execute_tool call: a forbidden/destructive command must never be run
+    # merely to prove that the classifier is functioning.
