@@ -773,9 +773,19 @@ def run_minimal_core(loop, request: str) -> str:
                            round=round_id, diagnostic_reason=exc.code,
                            **trace_fields)
                 if invalids >= 2:
-                    # A schema/transport failure is NOT proof that the user's
-                    # Goal is impossible. Switch to canonical output guidance,
-                    # retain checkpoints, and keep the same task identity.
+                    # A schema failure is not terminal Goal infeasibility.
+                    # Preserve old atomic-contract reporting when there is no
+                    # Stage controller: the parent can resume or decompose it.
+                    if not stage_ledger or not stage_ledger.read():
+                        loop.protocol_state = "BLOCKED"
+                        result = blocked_result(
+                            "BLOCKED", "MINIMAL_DECISION_FORMAT_FAILED:" +
+                            exc.code, round_id)
+                        publish_executor_result(result)
+                        set_runtime_state(loop.task_id, "PAUSED",
+                                          reason=result["reason_code"],
+                                          root=loop.progress_root)
+                        return "Executor 模型輸出格式反覆無效，已封鎖且未執行該 Action。"
                     invalids = 0
                     repair_hint = (
                         "GOAL75_SCHEMA_RECOVERY: Output exactly ONE canonical "
@@ -787,7 +797,7 @@ def run_minimal_core(loop, request: str) -> str:
                         "stage_local_recovery", round=round_id,
                         reason_code="SCHEMA_STRATEGY_CHANGED",
                         stage_id=(stage_ledger.current() or {}).get(
-                            "stage_id", "") if stage_ledger else "",
+                            "stage_id", ""),
                     )
                 continue
         journal.append("decision_accepted", round=round_id,
