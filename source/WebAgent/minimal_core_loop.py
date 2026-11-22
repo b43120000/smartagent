@@ -744,26 +744,52 @@ def run_minimal_core(loop, request: str) -> str:
             decision, decision_meta = parse_minimal_decision_with_diagnostics(
                 response, original_goal=request)
         except MinimalDecisionError as exc:
-            invalids += 1
-            meta = exc.diagnostic
-            repair_hint = _format_repair_hint(exc)
-            trace_fields = _decision_event_fields(meta)
-            journal.append("decision_rejected", round=round_id,
-                           reason=exc.code, **trace_fields,
-                           response_structure_redacted=meta.get("response_structure_redacted", ""))
-            loop._emit("minimal_decision_rejected",
-                       request_id=loop.run_id, task_id=loop.task_id,
-                       round=round_id, diagnostic_reason=exc.code,
-                       **trace_fields)
-            if invalids >= 2:
-                loop.protocol_state = "BLOCKED"
-                result = blocked_result("BLOCKED",
-                                        "MINIMAL_DECISION_FORMAT_FAILED:" + exc.code, round_id)
-                publish_executor_result(result)
-                set_runtime_state(loop.task_id, "PAUSED",
-                                  reason=result["reason_code"], root=loop.progress_root)
-                return "Executor 模型輸出格式反覆無效，已封鎖且未執行該 Action。"
-            continue
+            canonical = repair_single_decision(response)
+            repaired = False
+            if canonical is not None:
+                try:
+                    decision, decision_meta = parse_minimal_decision_with_diagnostics(
+                        canonical[0], original_goal=request)
+                    repaired = True
+                    journal.append(
+                        "decision_accepted", round=round_id,
+                        decision_type=decision.kind, repair_kind="DETERMINISTIC_SCHEMA",
+                        original_sha256=canonical[1]["original_sha256"],
+                        canonical_sha256=canonical[1]["canonical_sha256"],
+                    )
+                except MinimalDecisionError:
+                    repaired = False
+            if not repaired:
+                invalids += 1
+                meta = exc.diagnostic
+                repair_hint = _format_repair_hint(exc)
+                trace_fields = _decision_event_fields(meta)
+                journal.append("decision_rejected", round=round_id,
+                               reason=exc.code, **trace_fields,
+                               response_structure_redacted=meta.get(
+                                   "response_structure_redacted", ""))
+                loop._emit("minimal_decision_rejected",
+                           request_id=loop.run_id, task_id=loop.task_id,
+                           round=round_id, diagnostic_reason=exc.code,
+                           **trace_fields)
+                if invalids >= 2:
+                    # A schema/transport failure is NOT proof that the user's
+                    # Goal is impossible. Switch to canonical output guidance,
+                    # retain checkpoints, and keep the same task identity.
+                    invalids = 0
+                    repair_hint = (
+                        "GOAL75_SCHEMA_RECOVERY: Output exactly ONE canonical "
+                        "JSON decision. No commentary, unsupported fields or "
+                        "Markdown. Do not replay committed Actions. "
+                        + repair_hint
+                    )
+                    journal.append(
+                        "stage_local_recovery", round=round_id,
+                        reason_code="SCHEMA_STRATEGY_CHANGED",
+                        stage_id=(stage_ledger.current() or {}).get(
+                            "stage_id", "") if stage_ledger else "",
+                    )
+                continue
         journal.append("decision_accepted", round=round_id,
                        decision_type=decision.kind,
                        **_decision_event_fields(decision_meta))
@@ -773,6 +799,72 @@ def run_minimal_core(loop, request: str) -> str:
                    **_decision_event_fields(decision_meta))
         invalids = 0
         repair_hint = ""
+        if decision.kind == "stage_plan":
+            if (not stage_ledger or history or stage_ledger.read()
+                    or atomic_budget is not None):
+                repair_hint = (
+                    "STAGE_PLAN_NOT_ADMITTED: a Stage plan is only valid once, "
+                    "before the first ToolCall of a compound Goal."
+                )
+                journal.append("decision_rejected", round=round_id,
+                               reason_code="GOAL75_STAGE_PLAN_NOT_ADMITTED")
+                continue
+            try:
+                frozen = stage_ledger.create(decision.stage_plan or [])
+            except ValueError as exc:
+                repair_hint = (
+                    "STAGE_PLAN_SCHEMA_REPAIR: retain the original Goal and "
+                    "provide valid topological stages with a typed, immutable "
+                    "acceptance predicate. Error code: " + str(exc)[:160]
+                )
+                journal.append("decision_rejected", round=round_id,
+                               reason_code="GOAL75_STAGE_PLAN_INVALID")
+                continue
+            journal.append("stage_plan_accepted", round=round_id,
+                           stage_count=len(frozen["stages"]),
+                           plan_sha256=frozen["plan_sha256"])
+            continue
+        if decision.kind == "stage_commit":
+            if not stage_ledger or not stage_ledger.read():
+                repair_hint = "STAGE_COMMIT_REJECTED: no frozen Stage plan exists."
+                continue
+            active_stage = stage_ledger.current() or {}
+            if decision.stage_id != active_stage.get("stage_id"):
+                repair_hint = (
+                    "STAGE_COMMIT_REJECTED: only the current uncommitted Stage "
+                    "may be committed. Frozen predecessor Stages must not change."
+                )
+                continue
+            try:
+                frozen = stage_ledger.commit(
+                    decision.stage_id, evidence_refs=decision.evidence_refs or [])
+            except ValueError as exc:
+                stage_recovery_attempts += 1
+                repair = choose_stage_recovery(
+                    reason_code="STAGE_ACCEPTANCE_UNVERIFIED",
+                    stage_id=decision.stage_id,
+                    attempt=stage_recovery_attempts)
+                stage_ledger.recover(
+                    decision.stage_id, reason_code=str(exc),
+                    strategy_id=repair["strategy_id"])
+                journal.append("stage_local_recovery", round=round_id,
+                               stage_id=decision.stage_id,
+                               reason_code="GOAL75_STAGE_COMMIT_REJECTED")
+                repair_hint = (
+                    "Frozen Stage acceptance is NOT verified. Obtain a new "
+                    "authorized, read-only evidence observation or replan "
+                    "the current Stage ONLY; never replay old mutations. "
+                    "Failure: " + str(exc)[:160]
+                )
+                continue
+            journal.append("stage_commit_accepted", round=round_id,
+                           stage_id=decision.stage_id,
+                           commit_sha256=next(
+                               x["commit"]["commit_sha256"]
+                               for x in frozen["stages"]
+                               if x["stage_id"] == decision.stage_id))
+            stage_recovery_attempts = 0
+            continue
         if decision.kind == "tool_call":
             from agent_core.command_operation import COMMAND_OPERATIONS
             raw_operation = str((decision.arguments or {}).get("operation") or "")
@@ -798,6 +890,43 @@ def run_minimal_core(loop, request: str) -> str:
                        proposal_sha256=proposal_hash, executed=False)
 
         if decision.kind == "blocked":
+            if stage_ledger and stage_ledger.read():
+                active_stage = stage_ledger.current() or {}
+                if active_stage:
+                    last_denial = action_rejections[-1] if action_rejections else {}
+                    blocker = verify_terminal_blocker(
+                        last_denial.get("root_cause_code") or
+                        last_denial.get("reason_code") or
+                        "PLANNER_UNCERTAINTY_NOT_VERIFIED",
+                        evidence={
+                            "runtime_verified": False,
+                            "scope_bound": bool(last_denial.get("scope_category")),
+                            "goal_required": False,
+                            "alternative_exhausted": False,
+                        },
+                    )
+                    if blocker["status"] == "RECOVERING":
+                        stage_recovery_attempts += 1
+                        recovery = choose_stage_recovery(
+                            reason_code=blocker["reason_code"],
+                            stage_id=active_stage["stage_id"],
+                            attempt=stage_recovery_attempts,
+                        )
+                        stage_ledger.recover(
+                            active_stage["stage_id"],
+                            reason_code=blocker["reason_code"],
+                            strategy_id=recovery["strategy_id"],
+                        )
+                        repair_hint = (
+                            "MODEL_BLOCKED_IS_NOT_TERMINAL: only the current "
+                            "Stage can be replanned. Select a materially "
+                            "different, authorized approach, or verify an "
+                            "objective terminal denial. Do NOT replay mutation."
+                        )
+                        journal.append("stage_local_recovery", round=round_id,
+                                       stage_id=active_stage["stage_id"],
+                                       reason_code=blocker["reason_code"])
+                        continue
             disposition, blocker_reason = blocked_disposition(
                 goal_context, history, action_rejections,
             )
@@ -828,6 +957,18 @@ def run_minimal_core(loop, request: str) -> str:
             return "目前無法繼續（整體目標未驗證）：" + decision.message
 
         if decision.kind == "finish":
+            if stage_ledger and stage_ledger.read():
+                readiness = stage_ledger.readiness()
+                if readiness.get("current_stage_id"):
+                    journal.append("model_finish_rejected", round=round_id,
+                                   reason_code="GOAL75_CURRENT_STAGE_NOT_COMMITTED",
+                                   stage_id=readiness["current_stage_id"])
+                    repair_hint = (
+                        "GOAL75_EARLY_FINISH: the current Stage is not yet "
+                        "verified and frozen. Continue only that Stage. "
+                        "Do not recreate previously committed Stage Actions."
+                    )
+                    continue
             # Text-only is a distinct Runtime terminal class; no fake
             # ActionResult or filesystem evidence is created for prose.
             if not history:
@@ -1305,6 +1446,21 @@ def run_minimal_core(loop, request: str) -> str:
             "action": action, "receipt": receipt,
             "evidence_ref": ref, "round": round_id,
         })
+        if stage_ledger and stage_ledger.read():
+            current_stage = stage_ledger.current()
+            if (current_stage and receipt.get("status") in {"SUCCEEDED", "FAILED"}
+                    and receipt.get("executed") is True):
+                try:
+                    stage_ledger.record_action(
+                        current_stage["stage_id"], action_id=action["action_id"],
+                        evidence_ref=ref, receipt=receipt)
+                except ValueError as exc:
+                    journal.append(
+                        "stage_local_recovery", round=round_id,
+                        stage_id=current_stage["stage_id"],
+                        reason_code="STAGE_ACTION_RECORD_REJECTED",
+                        failure_sha256=_digest(str(exc)),
+                    )
         # Publish the same observed result into the shared Runtime action ledger.
         # Neither the model's summary nor the synthetic ref creates proof:
         # the immutable real ToolResult and digest are retained locally.
@@ -1378,7 +1534,9 @@ def run_minimal_core(loop, request: str) -> str:
             deployment = evaluate_deployment_goal(loop, request, history)
             if deployment is not None:
                 proof = deployment
-        if proof.verified:
+        if (proof.verified and not (
+                stage_ledger and stage_ledger.read()
+                and stage_ledger.current() is not None)):
             terminal_receipt = _accept_and_record_goal(
                 loop, proof, journal, round_id=round_id)
             verified_executor = dict(loop.executor_result)
