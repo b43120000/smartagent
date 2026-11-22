@@ -701,7 +701,7 @@ def run_minimal_core(loop, request: str) -> str:
                 '{"type":"stage_plan","stages":[{"stage_id":"S01",'
                 '"description":"goal-aligned step","depends_on":[],'
                 '"acceptance":[{"field":"data.exit_code","operator":"eq",'
-                '"expected":0}]}]}. Use real, anticipated typed postconditions "
+                '"expected":0}]}]}. Use real, anticipated typed postconditions '
                 "in each stage; for a simple Goal use tool_call/finish. "
                 "A stage_plan does not authorize any Tool."
             )
