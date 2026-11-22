@@ -334,7 +334,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Original user request:\n" + request + "\n"
         + ("[GIT75_FROZEN_STAGE_CONTROL]\n" + stage_context
            + "\n[/GIT75_FROZEN_STAGE_CONTROL]\n" if stage_context else "")
-        "Frozen Requirement-to-Goal State Contract (Runtime compiled before "
+        + "Frozen Requirement-to-Goal State Contract (Runtime compiled before "
         "any ToolCall; source-grounded and NOT a permission grant):\n"
         + json.dumps(goal_state_contract or {}, ensure_ascii=False,
                      separators=(",", ":"))[:5500] + "\n"
