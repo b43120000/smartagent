@@ -170,3 +170,14 @@ def test_nested_indexes_reused_and_only_touched_project_invalidated(tmp_path,mon
                 "action_id":"ACT-CAMERA-QUERY"},receipt=receipt(),
         probe=fake_probe([]))
     assert result["scoped_projects"][str(p1)]["status"]=="STALE_REINDEX_REQUIRED"
+
+
+def test_unknown_effective_state_is_never_accepted_as_ready(tmp_path,monkeypatch):
+    app=tmp_path/"app";app.mkdir();ws=tmp_path/"ws";ws.mkdir()
+    monkeypatch.setattr(pf,"_effective",lambda work:{
+        "acl":"UNKNOWN","executor_backend":"UNVERIFIED",
+        "reason_code":"POLICY_UNVERIFIED"})
+    row=pf.begin_task(app,ws,task_id="TASK-ACL-UNKNOWN",
+                      request_id="RR-ACL",probe=fake_probe([]))
+    assert row["status"]=="PRECHECK_UNVERIFIED"
+    assert row["authorization_granted"] is False

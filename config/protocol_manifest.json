@@ -306,7 +306,7 @@
     "source/agent_core/timeout_reconciliation.py": "57294c995a414e8392c40e30edc695a1cc11be38276c1573ea3b136baa8284ec",
     "source/RemoteAgent/telegram_long_message_merge.py": "6b5368fe670d8f7e3a213a201db57a7a503395e8e239820b31ccb97bfaeb3392",
     "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df",
-    "source/agent_core/unified_preflight.py": "655a5d5eb16a90270215fdd1a036932695cf26fc172111afff0b3691db21528b"
+    "source/agent_core/unified_preflight.py": "514f290a6aafc2752925b437550dd711c061c82ac5312176a7f422565aab4e35"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

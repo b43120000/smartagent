@@ -72,7 +72,12 @@ def _signature(install):
     return hashlib.sha256(json.dumps(facts,sort_keys=True).encode("utf-8")).hexdigest()
 
 def _pointer(workspace):
+    from .path_security import reject_reparse_components, PathSecurityError
     root=Path(workspace)/".agents"/"project_context"
+    try:
+        reject_reparse_components(root/"current.json",Path(workspace))
+    except (PathSecurityError,OSError,ValueError):
+        return {"snapshot_id":"","status":"INVALID_REPARSE_PATH"}
     item=_read(root/"current.json")
     sid=str(item.get("snapshot_id") or "").lower()
     if not SHA.fullmatch(sid):return {"snapshot_id":"","status":"NOT_INDEXED"}
@@ -143,6 +148,18 @@ def _scoped_hints(workspace, previous):
     return results
 
 
+def _ready(workspace,effective):
+    return bool(
+        workspace.is_dir()
+        and effective.get("acl") in {"OFF","ON"}
+        and effective.get("executor_backend") in {
+            "WINDOWS_EXECUTOR","RESTRICTED_EXECUTOR","NATIVE_APPCONTAINER_BROKER"}
+        and effective.get("reason_code") not in {
+            "ACL_UNVERIFIED","POLICY_OR_SCOPE_UNVERIFIED","POLICY_UNVERIFIED",
+            "WORKSPACE_NOT_AUTHORIZED_WRITABLE","WORKSPACE_NOT_BOUND"}
+    )
+
+
 def begin_task(install,workspace,*,task_id,request_id,probe=None):
     """Read a single combined baseline; reuse binary probes across tasks."""
     install=Path(install).resolve();workspace=Path(workspace).resolve()
@@ -176,9 +193,7 @@ def begin_task(install,workspace,*,task_id,request_id,probe=None):
             "reprobe_required":False,"last_action_id":"","last_evidence_ref":"",
             "updated_at":time.time(),"authorization_granted":False,
             "source_snapshot_is_current_byte_evidence":False,
-            "status":("READY_FOR_ADMISSION" if workspace.is_dir() and
-                effective.get("reason_code") not in {"ACL_UNVERIFIED",
-                "POLICY_OR_SCOPE_UNVERIFIED","WORKSPACE_NOT_AUTHORIZED_WRITABLE"}
+            "status":("READY_FOR_ADMISSION" if _ready(workspace,effective)
                 else "PRECHECK_UNVERIFIED")}
         row["preflight_id"]=_digest(row)
         _write(base,cache,taskfile,row)
@@ -330,7 +345,9 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
         row["last_evidence_ref"]=str(evidence_ref)[:100]
         row["revision"]=int(row.get("revision",0))+1
         row["updated_at"]=time.time()
-        row["status"]="REPROBE_REQUIRED" if row.get("reprobe_required") else "READY_FOR_ADMISSION"
+        row["status"]=("REPROBE_REQUIRED" if row.get("reprobe_required")
+                       else "READY_FOR_ADMISSION" if _ready(workspace,row["effective_state"])
+                       else "PRECHECK_UNVERIFIED")
         row["preflight_id"]=_digest(row)
         _write(base,cache,taskfile,row)
         _event(base,row,"PREFLIGHT_REPROBED_AFTER_CONTRADICTION" if drift
