@@ -310,6 +310,7 @@
     "source/WebAgent/protocol_loop.py": "0fe7b21e7771cefdf55d2a99d3aae521835a967c62d6f3966aaabcd06985e5fd",
     "source/WebAgent/protocol.py": "6a11212e6eb42b94e9f79234955f8b2b9d522580213e7a386ecad6b7bc3d8d81",
     "source/WebAgent/session.py": "a3e3cedda8e42611705c09b71228ec59e13f63f49e1f7e10297b64198699bd6e",
+    "source/WebAgent/tests/test_git75_goal_driven_runtime.py": "4d20fd4037fdfb06894f205f488177b7fdc034c5353ba06dec3c1d07b70e2343",
     "source/WebAgent/tool_context.py": "12da092ff5e1a6f9060c2bdfff334c8a4416d702bd3530a24adc71a7781827c0",
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651"
   },
