@@ -732,8 +732,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             elif view.get("current_stage_id"):
                 stage_context = (
                     "PREVIOUS STAGES FROZEN. Work only on CURRENT Stage. "
-                    "On real acceptance submit {type:stage_commit,"
-                    "stage_id:<current_stage_id>,evidence_refs:[<MIN-EV>]}. "
+                    "Runtime auto-commits when persisted MIN-EV passes "
+                    "predeclared Expected/Observed and every frozen Stage "
+                    "acceptance predicate; do not submit redundant StageCommit. "
+                    "If not independently proven, submit "
+                    "{type:stage_commit,stage_id:<current_stage_id>,"
+                    "evidence_refs:[<MIN-EV>]}. "
                     "After failure choose a DIFFERENT authorized approach; "
                     "never replay a committed mutation. Current ledger="
                     + json.dumps(view, ensure_ascii=False,
@@ -774,10 +778,30 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         response = loop.planner(prompt, None, attachments)
         PIT.record("11_minimal_planner_response", response, evidence_status="BROWSER_EXTRACTED_MODEL_RESPONSE", extra={"round": turn})
         PIT.record("11_minimal_parser_input", response, evidence_status="PARSER_INPUT_STRING", extra={"round": turn})
+        # Lossless schema alias normalization is local and strictly
+        # deterministic. It does NOT modify a tool command/path, authorize
+        # an action, or manufacture evidence; avoid a browser round trip.
+        repair = repair_single_decision(response)
+        parser_input = repair[0] if repair is not None else response
         try:
             decision, metadata = parse_minimal_decision_with_diagnostics(
-                response, original_goal=request,
+                parser_input, original_goal=request,
             )
+            if repair is not None:
+                PIT.record(
+                    "12_git75_local_schema_repair",
+                    repair[1],
+                    evidence_status="DETERMINISTIC_NONAUTHORIZING_REPAIR",
+                    extra={"round": turn},
+                )
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_LOCAL_SCHEMA_REPAIR",
+                    "changes": repair[1]["changes"],
+                    "original_sha256": repair[1]["original_sha256"],
+                    "canonical_sha256": repair[1]["canonical_sha256"],
+                    "planner_round_saved": 1,
+                    "authorization_granted": False, "executed": False,
+                })
             PIT.record("12_minimal_decision", {
                 "kind": decision.kind, "tool": decision.tool,
                 "arguments": decision.arguments, "message": decision.message,
@@ -2095,6 +2119,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                             (match_report or {}).get("match_state") == "MATCH"
                             if match_report is not None else None
                         ),
+                        evidence_store_verified=(
+                            evidence_pointer.get("store_status")
+                                == "PERSISTED_AND_READBACK_VERIFIED"
+                        ),
                     )
                 except ValueError as exc:
                     append_executor_event(root, loop, {
@@ -2317,6 +2345,60 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         )
         if getattr(loop, "continuation_store", None):
             loop.continuation_store.snapshot(loop)
+        # Git75 P0: the Planner is never required to recite evidence that
+        # Runtime already matched to ALL immutable Stage postconditions.
+        # No auto-commit on absent Expected, unsafe timeout/reconciliation,
+        # corrupt/unreadable MIN-EV or failed execution verification.
+        if (stage_ledger is not None
+                and match_report is not None
+                and match_report.get("match_state") == "MATCH"
+                and evidence_pointer.get("store_status")
+                    == "PERSISTED_AND_READBACK_VERIFIED"
+                and pending_timeout_reconciliation is None
+                and pending_unknown_timeout is None
+                and runtime_status in {"SUCCEEDED", "FAILED"}
+                and (not isinstance(result_data, Mapping)
+                     or result_data.get("verification_status")
+                        not in {"FAIL", "MISMATCH", "UNVERIFIED"})):
+            active = stage_ledger.current()
+            if active is not None:
+                try:
+                    stage_after = stage_ledger.commit_if_independently_verified(
+                        active["stage_id"])
+                    if stage_after is not None:
+                        stage_recovery_attempts = 0
+                        failed_action_signatures.clear()
+                        frozen = next(
+                            item for item in stage_after["stages"]
+                            if item["stage_id"] == active["stage_id"]
+                        )
+                        frozen_refs = list(frozen["commit"]["evidence_refs"])
+                        append_executor_event(root, loop, {
+                            "round": turn,
+                            "kind": "GOAL75_STAGE_VERIFIED_COMMITTED",
+                            "stage_id": active["stage_id"],
+                            "evidence_refs": frozen_refs,
+                            "commit_origin": "RUNTIME_FROZEN_EVIDENCE_GATE",
+                            "planner_round_saved": 1,
+                            "executed": False,
+                            "authorization_granted": False,
+                        })
+                        append_executor_event(root, loop, {
+                            "round": turn, "kind": "GOAL75_PLANNER_ROUND_SAVED",
+                            "optimization": "EVIDENCE_GATED_STAGE_AUTO_COMMIT",
+                            "stage_id": active["stage_id"],
+                            "rounds_saved": 1, "executed": False,
+                            "authorization_granted": False,
+                        })
+                except (ValueError, OSError, RuntimeError, TypeError) as exc:
+                    append_executor_event(root, loop, {
+                        "round": turn,
+                        "kind": "GOAL75_STAGE_AUTO_COMMIT_DEFERRED",
+                        "stage_id": active["stage_id"],
+                        "reason_code": type(exc).__name__,
+                        "executed": False,
+                        "authorization_granted": False,
+                    })
         if match_report:
             # Git70 recovery is a *new observation*, never an automatic retry
             # of the command that produced this immutable MIN-EV.
