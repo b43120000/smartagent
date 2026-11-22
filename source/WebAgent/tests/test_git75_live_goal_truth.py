@@ -207,7 +207,7 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
     )
     request = (
         "請確實執行三階段驗證：P0 Git 狀態查詢，"
-        "P1 Git 分支資訊，P2 Git 版本庫根目錄。"
+        "P1 Git 分支資訊，P2 Git HEAD。"
         "每個階段有獨立真實證據，失敗要改方法且不可假報成功。"
     )
     loop = FakeLoop(tmp_path, request, [], "")
@@ -228,7 +228,7 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
         ("git status --short", "P0", "FAIL"),
         ("git log -1 --oneline", "P0", "PASS"),
         ("git branch --show-current", "P1", "PASS"),
-        ("git rev-parse --show-toplevel", "P2", "PASS"),
+        ("git rev-parse HEAD", "P2", "PASS"),
     ]
     sequence = {"turn": 0}
 
@@ -276,6 +276,7 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
             for row in board.get("events", ())
             if "FINISH" in str(row.get("kind"))
                or "GOAL75" in str(row.get("kind"))
+               or row.get("kind") == "ADMISSION_REJECTED"
         ]
         raise AssertionError(f"Unexpected Planner round {t}; events={markers[-16:]}; repair={prompt.split('Runtime repair information:')[-1][-1000:]}")
 
