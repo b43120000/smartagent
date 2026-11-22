@@ -439,6 +439,34 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
 def _finish(loop, root: Path, request: str, *, kind: str,
             summary: str, complete: bool, expected_runtime=None,
             goal_checks=None, canonical_finish=None) -> str:
+    # The Executor Blackboard is OPEN until finish_executor_run().
+    # Persist the Stage coverage gate *before* closing it. Never append an
+    # event to a terminalized ledger (would raise not_open and lose delivery).
+    goal75_coverage = None
+    if complete:
+        source_board = read_executor_run(
+            root, task_id=loop.task_id, request_id=loop.run_id,
+            task_epoch=loop.task_epoch,
+        ) or {}
+        required = requires_stage_control(
+            request,
+            goal_state_contract=source_board.get("goal_state_contract") or {},
+            answer_only_eligible=(
+                source_board.get("evidence_requirement") or {}
+            ).get("answer_only_eligible", False),
+        )
+        if required:
+            ledger = GoalStageLedger(
+                root, task_id=loop.task_id, request_id=loop.run_id,
+                task_epoch=loop.task_epoch, goal=request)
+            goal75_coverage = final_stage_coverage(
+                request, ledger.read(), control_required=True)
+            append_executor_event(root, loop, {
+                "round": getattr(loop, "turn_id", 0),
+                "kind": "GOAL75_TERMINAL_COVERAGE_GATE",
+                "stage_coverage": goal75_coverage,
+                "executed": False, "authorization_granted": False,
+            })
     board = finish_executor_run(
         root, loop, terminal_kind=kind, summary=summary,
         reported_outcome="UNKNOWN",
@@ -449,36 +477,19 @@ def _finish(loop, root: Path, request: str, *, kind: str,
                                             goal_checks=goal_checks,
                                             answer=summary,
                                             canonical_finish=canonical_finish)
-        # Preserve the Git74.1 Comparator. Git75 adds a fail-closed
-        # prerequisite for a compound source-defined Goal; a model's
-        # correct field values cannot replace missing Stage coverage.
-        frozen = board.get("goal_state_contract") or {}
-        required = requires_stage_control(
-            request, goal_state_contract=frozen,
-            answer_only_eligible=(board.get("evidence_requirement") or {}).get(
-                "answer_only_eligible", False),
-        )
-        if required:
-            ledger = GoalStageLedger(
-                root, task_id=loop.task_id, request_id=loop.run_id,
-                task_epoch=loop.task_epoch, goal=request)
-            coverage = final_stage_coverage(
-                request, ledger.read(), control_required=True)
-            if coverage["status"] != "PASS" and comparison["verdict"] == "PASS":
-                comparison = {
-                    **comparison, "verdict": "FAIL",
-                    "reason_code": "GOAL75_ORIGINAL_GOAL_COVERAGE_NOT_VERIFIED",
-                    "failure_origin": "GOAL_EVIDENCE_INCOMPLETE",
-                    "goal_evidence_reason": coverage["reason_code"],
-                    "coverage_basis": "GOAL75_STAGE_COVERAGE_NOT_VERIFIED",
-                    "goal75_coverage": coverage,
-                }
-            append_executor_event(root, loop, {
-                "round": getattr(loop, "turn_id", 0),
-                "kind": "GOAL75_TERMINAL_COVERAGE_GATE",
-                "stage_coverage": coverage, "executed": False,
-                "authorization_granted": False,
-            })
+        # Git74.1 final Comparator is the unmodified authority.
+        # Git75 Stage coverage is a *prerequisite* to terminal SUCCESS.
+        if (goal75_coverage is not None
+                and goal75_coverage["status"] != "PASS"
+                and comparison["verdict"] == "PASS"):
+            comparison = {
+                **comparison, "verdict": "FAIL",
+                "reason_code": "GOAL75_ORIGINAL_GOAL_COVERAGE_NOT_VERIFIED",
+                "failure_origin": "GOAL_EVIDENCE_INCOMPLETE",
+                "goal_evidence_reason": goal75_coverage["reason_code"],
+                "coverage_basis": "GOAL75_STAGE_COVERAGE_NOT_VERIFIED",
+                "goal75_coverage": goal75_coverage,
+            }
         board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
     blocking_evidence = _blocking_runtime_evidence(loop, board) if not complete else None
