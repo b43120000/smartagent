@@ -173,13 +173,17 @@ def run(workspace_root: str | Path | None = None) -> dict:
 
             # Scope is enforced by the existing tool policy; no write or
             # index creation of an unrelated path is allowed.
-            outside = root / "unrelated-source-not-authorized"
+            outside = Path(fixture).resolve() / "unrelated-source-not-authorized"
+            outside.mkdir()
+            sentinel = outside / "do_not_touch.txt"
+            sentinel.write_bytes(b"UNRELATED_CONTENT_UNTOUCHED\\n")
             forbidden = _invoke(agent, {
                 "tool": "project_sync", "strategy": "INDEX_ONLY",
                 "project_root": str(outside),
             })
             assert forbidden["status"] == "REJECTED", forbidden
-            assert not outside.exists()
+            assert sentinel.read_bytes() == b"UNRELATED_CONTENT_UNTOUCHED\\n"
+            assert not (outside / ".agents").exists()
 
             return {
                 "schema": SCHEMA, "status": "PASS",
