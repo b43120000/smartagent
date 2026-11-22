@@ -192,3 +192,125 @@ def test_hash_chain_mixed_modules_and_redacted_values(tmp_path):
     text = (root / "localdata/runtime/goal75_big_blackboard/TASK-G75-TRACE.jsonl").read_text()
     assert "hide-this" not in text
     assert events[0]["visible_changes"]["runtime_state"]["after"] == "PAUSED"
+
+
+def test_default_minimal_core_executes_frozen_stage_plan(tmp_path, monkeypatch):
+    """The actual default Minimal Core must consume StagePlan/StageCommit.
+
+    Planner and tool execution are deterministic test doubles; normal tool
+    admission stays enabled except for the explicitly mocked native broker.
+    Real Windows process execution is separately covered by Sidecar IT.
+    """
+    from agent_core.tool_result_contract import encode_result
+    from WebAgent.minimal_core_loop import run_minimal_core
+
+    monkeypatch.setattr(
+        "agent_core.task_progress.set_runtime_state", lambda *args, **kw: None
+    )
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.admit_action",
+        lambda workspace, action: {
+            "decision": "NOT_REQUIRED", "reason_code": "READ_ONLY",
+            "evidence": {},
+        },
+    )
+    inner = tmp_path / "nested"
+    inner.mkdir()
+    goal = (
+        "請執行雙階段測試，先讀取目錄 " + str(tmp_path) +
+        "，然後讀取 " + str(inner) + "，最後驗證兩段執行狀態"
+    )
+    stages = [
+        {"stage_id": "S01", "description": "Read the first directory",
+         "depends_on": [], "acceptance": [
+            {"field": "status", "operator": "eq", "expected": "SUCCEEDED"},
+        ]},
+        {"stage_id": "S02", "description": "Read nested directory",
+         "depends_on": ["S01"], "acceptance": [
+            {"field": "status", "operator": "eq", "expected": "SUCCEEDED"},
+        ]},
+    ]
+
+    class LocalTools:
+        workspace_root = tmp_path
+        current_request_text = goal
+        _protocol_turn_seq = 0
+
+        def take_pending_attachments(self):
+            return []
+
+        def web_file_capabilities(self):
+            return {"browser_upload": False, "browser_download": False}
+
+        def preview_tool_scope(self, action):
+            return {"allowed": True}
+
+    class LocalLoop:
+        def __init__(self):
+            self.workspace = self.progress_root = tmp_path
+            self.task_id = "TASK-G75-MINIMAL-IT"
+            self.run_id = "RR-G75-MINIMAL-IT"
+            self.task_epoch = "EPOCH-G75-MINIMAL-IT"
+            self.task_request = goal
+            self.max_turns = 8
+            self.tools = LocalTools()
+            self.protocol_state = "ACTIVE"
+            self.terminal_outcome = "UNKNOWN"
+            self.terminal_acceptance = {}
+            self._planner_original_actions = {}
+            self._canonical_action_proposals = {}
+            self.action_result_ledger = {}
+            self.continuation_store = None
+            self.executed = []
+            self.calls = 0
+
+        def planner(self, prompt, expected, attachments):
+            self.calls += 1
+            if self.calls == 1:
+                return json.dumps({"type": "stage_plan", "stages": stages})
+            if self.calls == 2:
+                return json.dumps({"type": "tool_call", "name": "list_directory",
+                                   "arguments": {"path": str(tmp_path)}})
+            if self.calls == 3:
+                refs = [row["evidence_ref"] for row in
+                        self.action_result_ledger.values()]
+                assert len(refs) == 1
+                return json.dumps({"type": "stage_commit", "stage_id": "S01",
+                                   "evidence_refs": refs})
+            if self.calls == 4:
+                return json.dumps({"type": "tool_call", "name": "list_directory",
+                                   "arguments": {"path": str(inner)}})
+            if self.calls == 5:
+                refs = [row["evidence_ref"] for row in
+                        self.action_result_ledger.values()]
+                return json.dumps({"type": "stage_commit", "stage_id": "S02",
+                                   "evidence_refs": refs[-1:]})
+            return json.dumps({"type": "finish", "summary": "Both directories inspected"})
+
+        def _execute_action(self, action):
+            self.executed.append(dict(action))
+            return encode_result(
+                "SUCCEEDED", "DIRECTORY_LISTED",
+                tool="list_directory", executed=True,
+                requested_path=str(action["path"]),
+                data={"entries": [], "terminal_eligible": True},
+            )
+
+        def _check_cancelled(self):
+            return None
+
+        def _emit(self, event, **fields):
+            return None
+
+    runtime = LocalLoop()
+    run_minimal_core(runtime, goal)
+    state = GoalStageLedger(
+        tmp_path, task_id=runtime.task_id, request_id=runtime.run_id,
+        task_epoch=runtime.task_epoch, goal=goal,
+    ).read()
+    assert state is not None
+    assert all(row["status"] == "VERIFIED_COMMITTED" for row in state["stages"])
+    assert len(runtime.executed) == 2
+    assert all(row["tool"] == "list_directory" for row in runtime.executed)
+    chain = read_events(tmp_path, runtime.task_id)
+    assert sum(row["event"] == "STAGE_VERIFIED_COMMITTED" for row in chain) == 2
