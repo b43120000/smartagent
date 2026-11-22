@@ -255,3 +255,83 @@ def test_project_sync_mutator_never_executes_after_native_broker_denial(
     assert result["executed"] is False
     assert result["reason"] == "TURBO_OS_BROKER_BLOCKED"
     assert not (project / ".agents" / "project_context" / "current.json").exists()
+
+def test_real_project_source_and_unified_preflight_stale_refresh_transition(
+    tmp_path, monkeypatch,
+):
+    """Actual index + query bytes; Preflight status is a distinct hint."""
+    from agent_core import unified_preflight as pf
+    from agent_core.project_access import (
+        build_project_capsule, query_project_with_runtime_index,
+    )
+    from WebAgent.tests.test_git74_unified_preflight import fake_mode, fake_probe
+
+    fake_mode(monkeypatch)  # Runner has no user's Windows ACL policy.
+    install = tmp_path / "install"
+    install.mkdir()
+    project = tmp_path / "workspace"
+    project.mkdir()
+    target = project / "main.py"
+    target.write_bytes(b"VALUE = 'A0'\\n")
+    old = build_project_capsule(project)
+    baseline = pf.begin_task(
+        install, project, task_id="TASK-P0-SYNC-IT",
+        request_id="RR-P0-SYNC-IT", probe=fake_probe([]),
+    )
+    assert baseline["project_sync"]["status"] == "CACHED_INDEX_HINT"
+    assert baseline["project_sync"]["snapshot_id"] == old["snapshot_id"]
+
+    original_stat = target.stat()
+    target.write_bytes(b"VALUE = 'B1'\\n")
+    import os
+    os.utime(target, ns=(
+        original_stat.st_atime_ns, original_stat.st_mtime_ns,
+    ))
+    stale = pf.action_observed(
+        install, project, task_id="TASK-P0-SYNC-IT",
+        request_id="RR-P0-SYNC-IT",
+        action={"tool": "run_command", "operation": "BUILD",
+                "working_directory": str(project)},
+        receipt={"status": "SUCCEEDED", "executed": True,
+                 "data": {"exit_code": 0}},
+        evidence_ref="MIN-EV-" + "9" * 24, probe=fake_probe([]),
+    )
+    assert stale["project_sync"]["status"] == "STALE_REINDEX_REQUIRED"
+    # Admission denial cannot make an outdated source index current.
+    rejected = pf.action_observed(
+        install, project, task_id="TASK-P0-SYNC-IT",
+        request_id="RR-P0-SYNC-IT",
+        action={"tool": "project_sync", "strategy": "INDEX_ONLY"},
+        receipt={"status": "REJECTED", "executed": False, "data": {}},
+        evidence_ref="MIN-EV-" + "8" * 24, probe=fake_probe([]),
+    )
+    assert rejected["project_sync"]["status"] == "STALE_REINDEX_REQUIRED"
+
+    actual = query_project_with_runtime_index(
+        project, queries=[{
+            "operation": "read_range", "path": "main.py",
+            "start_line": 1, "end_line": 2,
+        }],
+    )
+    assert actual["status"] == "READY"
+    assert actual["index_context"]["recovery_action"] == "INDEX_REBUILT_ONCE"
+    assert "B1" in actual["results"][0]["content"]
+    assert "A0" not in actual["results"][0]["content"]
+    assert actual["results"][0]["file_sha256"] == (
+        __import__("hashlib").sha256(target.read_bytes()).hexdigest()
+    )
+    refreshed = pf.action_observed(
+        install, project, task_id="TASK-P0-SYNC-IT",
+        request_id="RR-P0-SYNC-IT",
+        action={"tool": "query_project", "project_root": str(project)},
+        receipt={"status": "SUCCEEDED", "executed": True,
+                 "data": {"query_id": actual["query_id"],
+                          "snapshot_id": actual["snapshot_id"]}},
+        match_report={"match_state": "MATCH"},
+        evidence_ref="MIN-EV-" + "7" * 24, probe=fake_probe([]),
+    )
+    assert refreshed["project_sync"]["status"] == (
+        "INDEX_REFRESHED_BY_ADMITTED_ACTION"
+    )
+    assert refreshed["project_sync"]["snapshot_id"] == actual["snapshot_id"]
+    assert refreshed["source_snapshot_is_current_byte_evidence"] is False
