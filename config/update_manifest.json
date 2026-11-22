@@ -1090,7 +1090,8 @@
     "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df",
     "source/WebAgent/tests/test_git74_long_execution_supervisor.py": "9f9116bbc2c3fb71f93a0a5fea836273e0c4fc372a2a3879c6d479d5aac1a366",
     ".github/workflows/git74-dynamic-execution-supervisor.yml": "8cb717e77b3a0753a4101bfe9a333b408f8edf3c70d796ee33d8d70c7e144f68",
-    "source/agent_core/unified_preflight.py": "c58fc9336ac48578403bd6ecb131f02f7d1737aa335d3652435948719665674c"
+    "source/agent_core/unified_preflight.py": "c58fc9336ac48578403bd6ecb131f02f7d1737aa335d3652435948719665674c",
+    "source/WebAgent/tests/test_git74_unified_preflight.py": "f8b6309028bb3a6e3fb7086ba849b90fddf736fb475ce6ed0e1b960abbaf9a1a"
   },
   "protocol_family": "SMARTAGENT_V9",
   "protocol_version": 9,
