@@ -2037,6 +2037,61 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 ),
             },
         })
+        # Git75: bind the *original persisted* MIN-EV to the current Stage.
+        # Assertion mismatch is an explicit rejection of Stage acceptance,
+        # not a license for the Planner to change frozen Expected values.
+        if stage_ledger is not None:
+            active = stage_ledger.current()
+            if (active is not None and runtime_status in {"SUCCEEDED", "FAILED"}
+                    and receipt.get("executed") is True):
+                try:
+                    stage_ledger.record_action(
+                        active["stage_id"],
+                        action_id=action["action_id"],
+                        evidence_ref=evidence_ref, receipt=receipt,
+                        mutation_fingerprint=signature, mutating=mutating,
+                        expected_match=(
+                            (match_report or {}).get("match_state") == "MATCH"
+                            if match_report is not None else None
+                        ),
+                    )
+                except ValueError as exc:
+                    append_executor_event(root, loop, {
+                        "round": turn,
+                        "kind": "GOAL75_STAGE_OBSERVATION_REJECTED",
+                        "stage_id": active["stage_id"],
+                        "evidence_ref": evidence_ref,
+                        "reason_code": str(exc)[:120], "executed": False,
+                    })
+            failed_stage_action = bool(active is not None and (
+                runtime_status == "FAILED"
+                or (isinstance(result_data, Mapping)
+                    and result_data.get("verification_status")
+                    in {"FAIL", "MISMATCH", "UNVERIFIED"})
+                or (match_report is not None
+                    and match_report.get("match_state") != "MATCH")
+            ))
+            if failed_stage_action:
+                stage_recovery_attempts += 1
+                failed_action_signatures.add(signature)
+                recovery = choose_stage_recovery(
+                    reason_code="ACTION_VERIFICATION_FAILED",
+                    stage_id=active["stage_id"],
+                    attempt=stage_recovery_attempts,
+                )
+                stage_ledger.recover(
+                    active["stage_id"],
+                    reason_code="ACTION_VERIFICATION_FAILED",
+                    strategy_id=recovery["strategy_id"],
+                )
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
+                    "stage_id": active["stage_id"],
+                    "evidence_ref": evidence_ref,
+                    "reason_code": "ACTION_VERIFICATION_FAILED",
+                    "strategy_id": recovery["strategy_id"],
+                    "executed": False,
+                })
         # Git74.1: update the persisted cross-task state only after the
         # immutable observed ToolResult has been committed.
         if preflight.get("status") != "UNAVAILABLE":
@@ -2239,6 +2294,15 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "observed facts or declare terminal FAIL solely because "
                     "this attempt was unsuccessful. evidence_ref=" + evidence_ref
                 )
+        if (stage_ledger is not None
+                and signature in failed_action_signatures
+                and pending_timeout_reconciliation is None):
+            hint = (
+                "GOAL75_STAGE_RECOVERY_REQUIRED: last Action failed execution "
+                "or frozen verification. Retain real evidence " + evidence_ref +
+                ". Choose a DISTINCT permitted tool or prerequisite strategy "
+                "for the current Stage; no same-Action replay."
+            )
         if (match_report
                 and match_report["safety_decision"] == "PAUSE_AND_RECONCILE"
                 and mutating and pending_timeout_reconciliation is None):
