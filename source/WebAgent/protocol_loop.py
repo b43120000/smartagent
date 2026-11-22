@@ -1200,6 +1200,49 @@ class WebAgentProtocolLoop:
             PIT.record("16_terminal_receipt", fields, evidence_status="RUNTIME_OBSERVATION")
         if self.event_sink is not None:
             self.event_sink(event, **fields)
+        # Git75: intercept canonical Runtime events from every delegated
+        # module at the central event boundary. A module's own local log is
+        # still authoritative; this observer only correlates state/digests.
+        if getattr(self, "task_id", "") and getattr(self, "run_id", "") and getattr(self, "task_epoch", ""):
+            try:
+                from agent_core.goal75_blackboard import emit_transition
+                previous = getattr(self, "_goal75_last_runtime_observation", None)
+                current = {
+                    "round": int(getattr(self, "turn_id", 0) or 0),
+                    "runtime_state": str(getattr(getattr(self, "progress_ledger", None),
+                                                 "runtime_state", "") or ""),
+                    "protocol_state": str(getattr(self, "protocol_state", "") or ""),
+                    "outcome": str(getattr(self, "terminal_outcome", "") or ""),
+                    "active_stage": str((getattr(self, "active_stage_manifest", None) or {}).get(
+                        "stage_id", "")),
+                    "event_name": str(event)[:120],
+                    "evidence_count": len(getattr(self, "action_result_ledger", {}) or {}),
+                    "status": str(fields.get("status") or ""),
+                    "reason_code": str(fields.get("reason_code") or ""),
+                }
+                label = str(fields.get("module") or fields.get("component") or "")
+                if not label:
+                    label = (
+                        "MINIMAL_EXECUTOR" if str(event).startswith("minimal_")
+                        else "GOAL_RECOVERY" if str(event).startswith("gar_")
+                        else "TOOL_ADMISSION" if ("admission" in str(event) or
+                                                  "scope" in str(event))
+                        else "RUNTIME_EVENT_BUS"
+                    )
+                emit_transition(
+                    self.progress_root or self.workspace,
+                    task_id=self.task_id, request_id=self.run_id,
+                    task_epoch=self.task_epoch, module=label,
+                    event=str(event).upper(),
+                    before=previous, after=current,
+                    stage_id=current["active_stage"],
+                    reason_code=current["reason_code"],
+                    evidence_refs=[str(fields["evidence_ref"])]
+                    if fields.get("evidence_ref") else [],
+                )
+                self._goal75_last_runtime_observation = current
+            except (OSError, ValueError, RuntimeError):
+                pass
         if (self.continuation_store and self.progress_ledger and
                 event in {'task_progress_updated', 'ack_accepted', 'protocol_rejected'}):
             self.continuation_store.snapshot(self)
