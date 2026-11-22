@@ -141,7 +141,7 @@ def test_runtime_blocker_requires_objective_scope_and_no_alternative():
 
 
 def test_canonical_schema_repair_is_lossless_and_no_command_rewrite():
-    example = '{"type":"tool_call","name":"observe_fact","args":{"path":"X:\\\\test"}}'
+    example = json.dumps({"type": "tool_call", "name": "observe_fact", "args": {"path": r"X:\test"}})
     repaired = repair_single_decision(example)
     assert repaired
     assert repaired[1]["changes"] == ["args_to_arguments"]
