@@ -191,7 +191,7 @@ def _blocking_runtime_evidence(loop, board=None) -> dict:
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
             evidence_requirement=None, goal_state_contract=None,
-            environment_inventory=None,
+            environment_inventory=None, unified_preflight=None,
             runtime_status_catalog=None, turbo_planning_context=None,
             preexecution_rejections=None) -> str:
     from .minimal_core_loop import tool_catalog
@@ -337,6 +337,14 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "For UNCOMPILED requirements, no generic goal state is invented; "
         "legacy evidence-backed checks remain in force.\n"
         f"Round: {round_id}/{max_rounds}\n"
+        "Unified P0 Preflight (Runtime-owned single snapshot, NOT permission and NOT an accepted MIN-EV):\n"
+        + json.dumps(unified_preflight or {}, ensure_ascii=False, separators=(",", ":"))[:3500]
+        + "\nIf READY_FOR_ADMISSION, do not repeat broad environment/security directory "
+        "exploration. Proceed with the first task Action using normal Admission. "
+        "On a source index STALE_REINDEX_REQUIRED use a scoped, normally admitted "
+        "INDEX_ONLY/query_project refresh, not assumed cached source bytes. "
+        "If actual ToolResult contradicts cached facts, use refreshed Runtime "
+        "facts and REPLAN without replaying uncertain actions.\n"
         "Runtime ToolResult Status Ledger (all actual results, not only recent six; "
         "rejected admissions are NOT ToolResults):\n"
         + json.dumps(runtime_status_catalog or [], ensure_ascii=False,
@@ -592,57 +600,32 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     native_preexecution_rejections = []
     native_denied_command_hashes = set()
     max_native_precheck_replans = 3
-    # The Executor-only path previously skipped Planner's environment context.
-    # Build one bounded, observational inventory per task; never refresh
-    # executables on every model turn or trust a historic record as authority.
+    # Git74.1: unified preflight, owned by Runtime. This is advisory data;
+    # every Action still passes original per-action Security/Tool Admission.
+    from agent_core.unified_preflight import (
+        begin_task as begin_unified_preflight,
+        inventory as unified_inventory,
+        summary as unified_summary,
+        action_observed as unified_action_observed,
+    )
     try:
-        from agent_core.runtime_environment import planner_environment_snapshot
-        from agent_core.project_environment import planner_environment_hint
-        from agent_core.runtime_software_inventory import build_runtime_software_inventory
-        from agent_core.software_registry import software_registry_snapshot
-        bundled = getattr(loop, "_planner_environment_snapshot", None)
-        if not isinstance(bundled, Mapping) or not bundled.get("tools"):
-            bundled = planner_environment_snapshot()
-        project_index = planner_environment_hint(loop.workspace)
-        environment_inventory = build_runtime_software_inventory(
-            bundled, project_index,
-        )
-        environment_inventory["external_software_registry"] = software_registry_snapshot()
-        # Also read a few exact user-authorized subprojects. The task's
-        # workspace can be a broad parent such as E:\\, while existing
-        # environment.json indexes live under E:\\project\\. Recorded
-        # candidates remain non-authorizing and require a fresh probe.
-        from agent_core.path_security import is_within, reject_reparse_components
-        workspace_root = Path(loop.workspace).expanduser().resolve()
-        known_paths = list(getattr(loop.tools, "_authorized_local_paths", []) or [])
-        known_paths += list(getattr(loop, "authorized_paths", []) or [])
-        scoped = []
-        seen_roots = {str(workspace_root).casefold()}
-        for raw in known_paths:
-            if len(scoped) >= 4:
-                break
-            try:
-                candidate = Path(str(raw)).expanduser().absolute()
-                if (not candidate.is_dir()
-                        or not is_within(candidate, workspace_root)):
-                    continue
-                reject_reparse_components(candidate, workspace_root)
-                actual = candidate.resolve()
-                key = str(actual).casefold()
-                if key in seen_roots:
-                    continue
-                seen_roots.add(key)
-                info = planner_environment_hint(actual)
-                if info.get("index_status") == "PRESENT":
-                    scoped.append({"project_root": str(actual),
-                                   "candidate_index": info})
-            except (OSError, ValueError, RuntimeError):
-                continue
-        environment_inventory["scoped_project_environment_indexes"] = scoped
-    except (OSError, ValueError, RuntimeError, TypeError):
+        preflight = begin_unified_preflight(
+            root, loop.workspace, task_id=loop.task_id, request_id=loop.run_id)
+        environment_inventory = unified_inventory(root, loop.workspace, preflight)
+        append_executor_event(root, loop, {
+            "round": 0, "kind": "UNIFIED_PREFLIGHT",
+            "preflight": unified_summary(preflight),
+            "executed": False, "authorization_granted": False,
+        })
+    except (OSError, ValueError, RuntimeError, TypeError) as exc:
+        preflight = {"status": "UNAVAILABLE", "error_class": type(exc).__name__}
         environment_inventory = {
-            "status": "INVENTORY_UNAVAILABLE", "execution_authorized": False,
+            "status": "PREFLIGHT_UNAVAILABLE", "execution_authorized": False,
         }
+        append_executor_event(root, loop, {
+            "round": 0, "kind": "UNIFIED_PREFLIGHT_UNAVAILABLE",
+            "error_class": type(exc).__name__, "authorization_granted": False,
+        })
     max_rounds = min(int(loop.max_turns), 1000)
     for turn in range(1, max_rounds + finish_grace_rounds + 1):
         # Extra turns are strictly for repairing an already submitted Finish;
@@ -677,6 +660,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             evidence_requirement=requirement,
             goal_state_contract=goal_state_contract,
             environment_inventory=environment_inventory,
+            unified_preflight=unified_summary(preflight),
             runtime_status_catalog=(
                 __import__("agent_core.runtime_finish_status_repair",
                            fromlist=["finish_runtime_status_catalog"])
@@ -1814,6 +1798,36 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 ),
             },
         })
+        # Git74.1: update the persisted cross-task state only after the
+        # immutable observed ToolResult has been committed.
+        if preflight.get("status") != "UNAVAILABLE":
+            try:
+                old_source = preflight.get("environment_source")
+                old_project = dict(preflight.get("project_sync") or {})
+                preflight = unified_action_observed(
+                    root, loop.workspace, task_id=loop.task_id,
+                    request_id=loop.run_id, action=action, receipt=receipt,
+                    match_report=match_report, evidence_ref=evidence_ref)
+                if (old_source != preflight.get("environment_source")
+                        or old_project != preflight.get("project_sync")):
+                    environment_inventory = unified_inventory(
+                        root, loop.workspace, preflight)
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "UNIFIED_PREFLIGHT_UPDATED",
+                    "action_id": action["action_id"],
+                    "preflight_id": preflight.get("preflight_id"),
+                    "preflight_revision": preflight.get("revision"),
+                    "project_status": (preflight.get("project_sync") or {}).get("status"),
+                    "environment_source": preflight.get("environment_source"),
+                    "executed": False, "authorization_granted": False,
+                })
+            except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "UNIFIED_PREFLIGHT_UPDATE_FAILED",
+                    "error_class": type(exc).__name__,
+                    "action_id": action["action_id"],
+                    "executed": False, "authorization_granted": False,
+                })
         # Publish only real successful executable version probes; an install
         # command's success alone never proves an environment is usable.
         try:
