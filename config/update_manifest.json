@@ -107,7 +107,7 @@
     "config/debug_config.defaults.json": "789f845b1a55db9d1772c3b5a5fde78b070a3c9c281a69d51fb8bc55680eb68a",
     "config/feature_flags.defaults.json": "c02d0ba5b29d77b04225b3f772daf9e27af5aba88fe2a45d7f855c683fe51e5e",
     "config/managed_toolchains_catalog.json": "bb6061dc0620b7d52031dd387716c7b78c8277025d075f4c062fb12af04843d3",
-    "config/protocol_manifest.json": "86e294e03cc78b2eb6831d53501812fb16465b69175bad883aae2691920ae071",
+    "config/protocol_manifest.json": "2d31a36f87e70e35a8cb43c13551417f4485711e41c2ed00a7c27180622b4288",
     "config/source_discovery_catalog.json": "ff00a70ade698cdc4f2c82e15b45f2fb8aeb0e07b2367bcb3a9f5861d9e03644",
     "doc/action_resolution_trace_and_missing_target_prereqs.md": "e224b6c593c85d8bf8fcdcba5352b7871e4e78c769f702f3edb6242b879a73d8",
     "doc/action_scoped_admission.md": "12d6eafd1a1b70ea456281eb3bc6c8053a264907a06c62ed7599fbb83ed7ea75",
