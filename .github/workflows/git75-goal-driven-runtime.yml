@@ -79,6 +79,10 @@ jobs:
         run: >-
           python -B -m agent_core.goal75_sidecar_it
           --output git75-ci-evidence/goal75-sidecar-it.json
+      - name: Windows collector ZIP roundtrip IT
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m agent_core.goal75_collector_it
       - name: Collect artifacts
         if: always()
         uses: actions/upload-artifact@v4
