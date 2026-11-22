@@ -40,6 +40,11 @@ CORE_FILES = (
     # Minimal Core v10 and Tri-One terminal admission are security-critical.
     'source/WebAgent/minimal_decision.py',
     'source/WebAgent/pokeclaw_executor_loop.py',
+    # Git75: actual Executor-only Goal coverage, Stage admission and Recovery.
+    'source/agent_core/goal75_blackboard.py',
+    'source/agent_core/goal75_stage_ledger.py',
+    'source/agent_core/goal75_recovery.py',
+    'source/agent_core/goal75_goal_coverage.py',
     'source/WebAgent/github_stage_diagnostics.py',
     'source/WebAgent/minimal_admission.py',
     'source/WebAgent/minimal_core_loop.py',
