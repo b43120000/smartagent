@@ -35,9 +35,13 @@ Executor wait and command execution.
 
 ### P0-2: Project Sync independent E2E
 
-The independent sidecar runs the **production** `project_sync`
-`INDEX_ONLY` and `query_project` Tool implementations against a
-temporary real project. It exercises:
+The independent sidecar runs the **production underlying implementations**
+of `project_sync INDEX_ONLY` and `query_project` against a temporary
+real project (via `_execute_tool_impl`). This deliberately isolates source
+freshness from host-specific Tool Admission: it is **not** an authorization
+or Native Broker PASS. A separate regression drives the real
+`execute_tool` dispatcher with a denied Broker and requires an unexecuted
+REJECTED outcome. The sidecar exercises:
 
 1. Initial INDEX_ONLY publication and actual file-byte query.
 2. Pinned `read_context_ref` and source SHA evidence.
@@ -49,9 +53,11 @@ temporary real project. It exercises:
 8. Unauthorized/out-of-scope Project Sync target is rejected.
 
 The test creates only a new temporary folder under the selected Workspace
-and cleans it up. No existing project is mutated. It is not a claim that
-Telegram→Browser→Planner delivery or FULL_BUNDLE browser Batch ACK has been
-verified. If a task asks for transport sync, require separate RECEIVER-bound
+and cleans it up. No existing project is mutated. The internal
+implementation exercise does not grant permission to bypass the real
+dispatcher or Windows OS Broker. It is not a claim that real Tool Admission,
+Telegram→Browser→Planner delivery or FULL_BUNDLE browser Batch ACK has
+been verified. If a task asks for transport sync, require separate RECEIVER-bound
 acknowledgment and the `PROJECT_SYNC_READY` final barrier.
 
 ### CI and sidecar
@@ -62,9 +68,12 @@ set PYTHONPATH=C:\smartagent\source
 C:\smartagent\.venv\Scripts\python.exe -m agent_core.goal75_project_sync_it --workspace-root E:\AIspace --output C:\smartagent\localdata\diagnostics\git75_project_sync_p0.json
 ```
 
-The JSON must contain `status: PASS`, verified new SHA, stale pinned
+Run this on an explicitly authorized test Workspace (prefer ACL OFF/Turbo
+OFF for manual diagnostics). The JSON must contain `status: PASS`,
+`native_broker_admission_verified: false`, verified new SHA, stale pinned
 reference rejection, safe unpinned rebuild, no old-byte return, and scope
-denial. This is **sidecar IT**, not full Telegram Live.
+denial. This is **isolated source sidecar IT**, not real Tool Admission or
+full Telegram Live.
 
 ### Suggested natural-language Telegram Live acceptance
 
