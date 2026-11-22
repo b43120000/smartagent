@@ -1,0 +1,58 @@
+name: Git26 Prerequisite Evidence-Gated Transition
+
+on:
+  push:
+    branches:
+      - git26/prerequisite-evidence-gated-transition-20261107
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prerequisite-transition:
+    name: Evidence-Gated Case D ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install existing test import dependency
+        run: python -m pip install --disable-pip-version-check playwright
+      - name: Compile changed source
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/prerequisite_transition_gate.py
+          source/agent_core/planner_context_snapshot.py
+          source/agent_core/unified_contract_transaction.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_git26_prerequisite_transition_gate.py
+      - name: Case D evidence-gated transition, absent scope and forged-epoch tests
+        run: python -B source/WebAgent/tests/test_git26_prerequisite_transition_gate.py
+      - name: Existing Case D conditional interrupt safety
+        run: python -B source/WebAgent/tests/test_conditional_goal_interrupt_case_d.py
+      - name: Existing remote source authorization and software inventory
+        run: python -B source/WebAgent/tests/test_remote_artifact_access_and_software_inventory.py
+      - name: Existing Git25 unified cross-contract regression
+        run: python -B source/WebAgent/tests/test_git25_unified_contract_pipeline.py
+      - name: Existing Git24 canonical and Action Admission
+        run: python -B source/WebAgent/tests/test_git24_canonical_contract_resolution.py
+      - name: Existing CCRC repairs and planner replan
+        run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Existing Goal Directed Prerequisite
+        run: python -B source/WebAgent/tests/test_goal_directed_prerequisite_resolution.py
+      - name: Existing Tool Scope
+        run: python -B source/WebAgent/tests/validate_tool_scope_hardening.py
+      - name: Existing Command Security
+        run: python -B source/WebAgent/tests/validate_command_security_classification.py

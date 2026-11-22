@@ -40,14 +40,12 @@ Telegram 的 `localdata\secure\telegram.enc` 不在 Windows security ACL 子邊�
 
 複製到另一台電腦時，請複製程式檔，但不要複製 `.venv`，且 `localdata` 目錄必須存在但保持完全空白。尤其不得攜出 `localdata\secure`、`localdata\bindings`、`localdata\persistent`、`localdata\runtime`、`localdata\logs`、`localdata\cache`、`localdata\metadata` 或 `localdata\temp` 的內容。`%ProgramData%\SmartAgent` 位於安裝包外，不會隨資料夾複製。
 
-一般安裝預設不設定 restricted executor／Windows ACL，並在每個新安裝的 `localdata\secure\windows_security\acl_mode.json` 明確寫入安裝根綁定的 `mode: off`；M4 會標示為 `SKIPPED`。同一台電腦可各自安裝多個軟體防護模式的 SmartAgent。只有明確執行 `install_smart_agent/launchers/install_smart_agent.bat -ConfigureSecurity` 才會要求管理員設定 ACL。ACL ON 使用單一全機 machine authorization 與 restricted-executor task，不支援多個獨立安裝同時啟用；不同安裝需要同時運作時，請保持各安裝的 ACL OFF。
+一般安裝預設為 ACL OFF。要啟用 Windows restricted executor，請在要使用的安裝目錄執行 `ACLstatus.bat on`。同一台電腦只有一筆有效的 machine authorization 和 restricted-executor 排程。
 
-ACL OFF 時，即使該安裝尚無 security profile，也可直接執行 `Edit_workspace.bat` 設定 workspace 和 Telegram 配對；輸入的 workspace 必須存在且目前 Windows 使用者可寫，流程不會啟動 ACL provisioning 或 UAC。
+要切換 ACL 所屬安裝路徑，先執行 `ACLstatus.bat off`。此指令停止並移除已驗證的 SmartAgent 排程、撤銷 Turbo 和記錄中的 executor SID 權限，並清除目前的全機授權與安全 profile。工作區設定、執行環境、使用者檔案和對話綁定都留在原處。若舊版的授權範圍記錄不完整，畫面會列出共用該帳號的排程與服務，要求輸入 `REVOKE` 停用舊帳號。依賴舊帳號的排程在帳號停用期間無法執行。
 
-切換目前安裝的 Windows ACL 限制：`ACLstatus.bat on` 啟用安裝時的 restricted-executor ACL；`ACLstatus.bat off` 放寬 SmartAgent 管理目錄與安全 profile 所列 executor 路徑的 ACL、停止 restricted executor，並讓啟動與執行流程略過 restricted-executor/profile attestation，但保留 SmartAgent 軟體層的命令與路徑安全檢查。兩種切換都需要 UAC；切換後應重新啟動 SmartAgent，使所有行程讀取同一個持久化模式。
+再從要使用的安裝目錄執行 `ACLstatus.bat on`，確認列出的工作區與安全設定後輸入 `APPLY`。ON 會先檢查該版本的 protocol manifest，並以目前安裝目錄重新建立及驗證受限執行器。重新啟動 SmartAgent 後，所有行程會重新讀取已持久化的 ACL 模式。
 
-`off` 是便利安裝／除錯模式，不是受保護模式：目前 Windows 使用者與 executor 可修改受管程式檔與 ACL 管理目標；命令檢查仍會執行，但本機管理者可修改程式或安全 profile，不能視為防竄改邊界。
-
-若複製來的安裝目錄因既有 ACL 無法建立 `.venv` 或寫入安裝資料，先在該目錄執行 `ACLstatus.bat off`，再執行 `install_smart_agent/launchers/install_smart_agent.bat`。若安裝流程套用了 restricted-executor 設定，會依持久化的 `off` 模式在設定完成後恢復 ACL 放寬狀態。
+ACL OFF 使用 SmartAgent 軟體層的命令與路徑檢查，適合便利安裝及除錯。目前 Windows 使用者與管理員仍可改動受管程式與設定，所以這個模式不具備防竄改保護。可執行 `Edit_workspace.bat` 設定現有且可寫的工作區和 Telegram 配對。
 
 只驗證：`install_smart_agent/launchers/install_smart_agent.bat -ValidateOnly`

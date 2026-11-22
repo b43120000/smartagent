@@ -1,0 +1,373 @@
+"""PokeClaw-style per-round Executor record; independent of parent-agent states.
+
+A tool's three-field PokeClaw response is NOT a claim of whole-goal success.
+Every accepted/rejected tool proposal is captured before the Planner's next
+turn, with the original typed Runtime status in a separate evidence namespace.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+from collections.abc import Mapping
+
+SCHEMA = "SMARTAGENT_EXECUTOR_RUN_BLACKBOARD_V1"
+MAX_EVENTS = 128
+MAX_TEXT = 12000
+
+
+def _id(text: object) -> str:
+    value = str(text or "")
+    if not value or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", value):
+        raise ValueError("executor_run_blackboard_task_id_invalid")
+    return value
+
+
+def _path(root: str | Path, task_id: str) -> Path:
+    base = Path(root).resolve()
+    if base.name.casefold() == "source" and (base.parent / "collect.bat").is_file():
+        base = base.parent
+    return base / "localdata" / "runtime" / "executor_run_blackboard" / (_id(task_id) + ".json")
+
+
+def _atomic(path: Path, record: dict) -> None:
+    # The old persisted state is the only valid before-image. Model prose
+    # and cached projections must never claim to be a Blackboard write.
+    prior = None
+    if path.is_file():
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prior = None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    fd, temporary = tempfile.mkstemp(prefix=".executor-run-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    try:
+        from .goal75_blackboard import record_blackboard_write
+        record_blackboard_write(path, prior, record,
+                                module="EXECUTOR_RUN_BLACKBOARD")
+    except (OSError, ValueError, RuntimeError):
+        # Logging is observational, never additional Tool admission.
+        pass
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, default=str,
+    ).encode("utf-8")).hexdigest()
+
+
+def _safe_arguments(args: object) -> dict:
+    """Keep exact path binding but never persist secrets or shell contents."""
+    source = args if isinstance(args, Mapping) else {}
+    safe = {}
+    for key, value in source.items():
+        if key in {"path", "root", "workspace", "working_directory", "project_root"}:
+            safe[key] = str(value)[:512]
+        elif key == "paths" and isinstance(value, list):
+            safe[key] = [str(item)[:512] for item in value[:16]]
+        elif key in {"recursive", "operation", "timeout", "max_files", "max_bytes"}:
+            safe[key] = value if isinstance(value, (str, int, bool, float, type(None))) else str(type(value).__name__)
+        elif key in {"command", "content", "text", "code", "password", "token", "api_key", "secret"}:
+            safe[key] = "[REDACTED]"
+    return safe
+
+
+def read_executor_run(root: str | Path, *, task_id: str, request_id: str | None = None,
+                      task_epoch: str | None = None) -> dict | None:
+    path = _path(root, task_id)
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("schema") != SCHEMA:
+        return None
+    if request_id is not None and value.get("request_id") != request_id:
+        return None
+    if task_epoch is not None and value.get("task_epoch") != task_epoch:
+        return None
+    return value
+
+
+def begin_executor_run(root: str | Path, loop, request: str, *, evidence_requirement: Mapping | None = None) -> dict:
+    from .requirement_goal_state import (
+        compile_requirement_goal_state, validate_frozen_goal_contract,
+    )
+    goal_contract = compile_requirement_goal_state(request)
+    if not validate_frozen_goal_contract(goal_contract, request):
+        raise ValueError("executor_run_goal_contract_compilation_invalid")
+    task_id = _id(loop.task_id)
+    prior = read_executor_run(root, task_id=task_id)
+    if prior:
+        # No append to another request/epoch; a restarted task has to use the
+        # existing continuation protocol, not overwrite earlier evidence.
+        if prior.get("request_id") != loop.run_id or prior.get("task_epoch") != loop.task_epoch:
+            raise ValueError("executor_run_blackboard_identity_conflict")
+        if prior.get("events"):
+            raise ValueError("executor_run_blackboard_restart_requires_continuation")
+        # A changed original requirement is a Goal Contract identity failure,
+        # not a generic requirement projection change.
+        if (prior.get("goal_state_contract") != goal_contract
+                or not validate_frozen_goal_contract(
+                    prior.get("goal_state_contract"), request)):
+            raise ValueError("executor_run_goal_contract_frozen_mismatch")
+        if evidence_requirement is not None and prior.get("evidence_requirement") != dict(evidence_requirement):
+            raise ValueError("executor_run_blackboard_requirement_conflict")
+        return prior
+    bind = "\0".join((task_id, str(loop.run_id), str(loop.task_epoch)))
+    handoff_id = "HOF-" + hashlib.sha256(bind.encode("utf-8")).hexdigest()[:24].upper()
+    record = {
+        "schema": SCHEMA,
+        "task_id": task_id, "request_id": str(loop.run_id),
+        "task_epoch": str(loop.task_epoch),
+        "request_sha256": hashlib.sha256(str(request).encode("utf-8")).hexdigest(),
+        "execution_mode": "POKECLAW_AGENT_LOOP",
+        "evidence_requirement": dict(evidence_requirement or {}),
+        "goal_state_contract": goal_contract,
+        "goal_contract_frozen_before_execution": True,
+        "executor_state": "RUNNING",
+        "goal_driver_state": "DISABLED",
+        "prerequisite_state": "DISABLED",
+        "parent_dispatch_state": "NOT_DISPATCHED",
+        "parent_consumption_state": "NOT_APPLICABLE_EXECUTOR_ONLY",
+        "handoff_id": handoff_id,
+        "events": [], "event_count_total": 0,
+        "archive_chunks": [], "terminal": None,
+        "authorization_granted_by_blackboard": False,
+    }
+    _atomic(_path(root, task_id), record)
+    return record
+
+
+def append_executor_event(root: str | Path, loop, event: dict) -> dict:
+    value = read_executor_run(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    if value is None or value.get("terminal") is not None:
+        raise ValueError("executor_run_blackboard_not_open")
+    number = int(value.get("event_count_total", len(value["events"]))) + 1
+    if len(value["events"]) >= MAX_EVENTS:
+        # Keep a bounded current projection, but never discard historical
+        # metadata: archive exactly half the full-fidelity events first.
+        batch = value["events"][:MAX_EVENTS // 2]
+        first = int(batch[0]["sequence"])
+        last = int(batch[-1]["sequence"])
+        archive_dir = _path(root, loop.task_id).parent / "event_archive" / _id(loop.task_id)
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_file = archive_dir / (str(first) + "-" + str(last) + ".json")
+        archive = {
+            "schema": "SMARTAGENT_EXECUTOR_RUN_EVENTS_ARCHIVE_V1",
+            "task_id": loop.task_id, "request_id": loop.run_id,
+            "task_epoch": loop.task_epoch,
+            "first_sequence": first, "last_sequence": last,
+            "events": batch,
+        }
+        digest = _digest(archive)
+        archive["sha256"] = digest
+        if archive_file.exists():
+            prior = json.loads(archive_file.read_text(encoding="utf-8"))
+            if prior != archive:
+                raise ValueError("executor_run_archive_immutable_conflict")
+        else:
+            with archive_file.open("x", encoding="utf-8") as handle:
+                json.dump(archive, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+        value.setdefault("archive_chunks", []).append({
+            "first_sequence": first, "last_sequence": last,
+            "archive_name": archive_file.name, "sha256": digest,
+        })
+        value["events"] = value["events"][MAX_EVENTS // 2:]
+
+    row = {**event, "sequence": number}
+    row["event_id"] = "ER-EV-" + _digest({
+        "task_id": loop.task_id, "task_epoch": loop.task_epoch,
+        "sequence": number, "event": row,
+    })[:24].upper()
+    if (row.get("schema") == "SMARTAGENT_TURBO_SANDBOX_EVIDENCE_V1"
+            and not row.get("evidence_ref")):
+        # A rejection receipt references the actual persisted blackboard event;
+        # it does NOT invent an OS execution/evidence reference.
+        row["evidence_ref"] = row["event_id"]
+    value["events"].append(row)
+    value["event_count_total"] = number
+    _atomic(_path(root, loop.task_id), value)
+    return row
+
+
+def finish_executor_run(root: str | Path, loop, *,
+                        terminal_kind: str, summary: str,
+                        reported_outcome: str = "UNKNOWN") -> dict:
+    value = read_executor_run(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    if value is None or value.get("terminal") is not None:
+        raise ValueError("executor_run_blackboard_terminal_conflict")
+    kind = str(terminal_kind)
+    if kind not in {
+        "MODEL_REPORTED_COMPLETE_UNVERIFIED", "BLOCKED", "MAX_ROUNDS",
+        "FORMAT_ERROR", "EXECUTION_OUTCOME_UNKNOWN", "FINISH_CONTRACT_INVALID",
+    }:
+        raise ValueError("executor_run_blackboard_terminal_kind_invalid")
+    # Archived Blackboard events remain part of the same immutable source.
+    # A bounded recent projection must never hide historical ToolResults.
+    event_total = int(value.get("event_count_total", len(value["events"])))
+    if event_total > 10000:
+        raise ValueError("executor_run_blackboard_event_history_unbounded")
+    all_events = (
+        [read_executor_event(root, task_id=loop.task_id,
+                             request_id=loop.run_id, task_epoch=loop.task_epoch,
+                             sequence=index)
+         for index in range(1, event_total + 1)]
+        if event_total != len(value["events"]) else value["events"]
+    )
+    value["executor_state"] = kind
+    value["terminal"] = {
+        "kind": kind, "round": int(loop.turn_id),
+        "summary_sha256": hashlib.sha256(str(summary).encode("utf-8")).hexdigest(),
+        "outcome": str(reported_outcome),
+        "goal_verified": False,
+        "tool_evidence_refs": [
+            row.get("runtimeEvidence", {}).get("evidence_ref")
+            for row in all_events
+            if row.get("runtimeEvidence", {}).get("evidence_ref")
+        ],
+        "admission_rejection_count": sum(
+            1 for row in all_events
+            if row.get("runtimeEvidence", {}).get("status") == "REJECTED"
+        ),
+    }
+    _atomic(_path(root, loop.task_id), value)
+    readback = read_executor_run(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    if (readback is None or readback.get("terminal") != value["terminal"]
+            or readback.get("handoff_id") != value["handoff_id"]
+            or readback.get("events") != value["events"]):
+        raise ValueError("executor_run_blackboard_readback_failed")
+    return readback
+
+
+def record_finish_comparison(root: str | Path, loop, comparison: Mapping) -> dict:
+    """Persist Runtime's own comparison after model Finish and verify readback."""
+    value = read_executor_run(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    if (value is None or not isinstance(value.get("terminal"), dict)
+            or value["terminal"].get("kind") != "MODEL_REPORTED_COMPLETE_UNVERIFIED"
+            or "finish_comparison" in value["terminal"]):
+        raise ValueError("executor_finish_comparison_terminal_invalid")
+    verdict = comparison.get("verdict")
+    if verdict not in {"PASS", "FAIL"}:
+        raise ValueError("executor_finish_comparison_verdict_invalid")
+    record = {
+        "verdict": verdict,
+        "reason_code": str(comparison.get("reason_code") or "")[:160],
+        "failure_origin": str(comparison.get("failure_origin") or "")[:96],
+        "goal_kind": str(comparison.get("goal_kind") or "")[:160],
+        "goal_evidence_reason": str(comparison.get("goal_evidence_reason") or "")[:160],
+        "coverage_basis": str(comparison.get("coverage_basis") or "NOT_VERIFIED")[:160],
+        "completion_kind": str(comparison.get("completion_kind") or "EVIDENCE_BACKED")[:80],
+        "answer_sha256": str(comparison.get("answer_sha256") or ""),
+        "evidence_refs": list(comparison.get("evidence_refs") or []),
+        "mismatches": list(comparison.get("mismatches") or [])[:20],
+        "tool_results": list(comparison.get("tool_results") or []),
+        "goal_contract_sha256": str(comparison.get("goal_contract_sha256") or ""),
+        "goal_state_table": list(comparison.get("goal_state_table") or [])[:32],
+        "model_goal_checks_advisory": comparison.get("model_goal_checks_advisory"),
+    }
+    unconfirmed = (comparison.get("finish_diagnostic") or {}).get("unconfirmed_evidence")
+    if unconfirmed:
+        record["unconfirmed_evidence"] = list(unconfirmed)[:64]
+    if comparison.get("reconciled_observations"):
+        record["reconciled_observations"] = list(comparison["reconciled_observations"])[:64]
+    value["terminal"]["finish_comparison"] = record
+    value["terminal"]["goal_verified"] = verdict == "PASS"
+    value["terminal"]["outcome"] = verdict
+    _atomic(_path(root, loop.task_id), value)
+    checked = read_executor_run(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch,
+    )
+    if checked is None or checked.get("terminal") != value["terminal"]:
+        raise ValueError("executor_finish_comparison_readback_failed")
+    return checked
+
+
+def projection(value: Mapping) -> dict:
+    """Only actual receipt state, never a parent/Goal Driver verdict."""
+    return {
+        "task_id": value["task_id"], "request_id": value["request_id"],
+        "executor_state": value["executor_state"],
+        "goal_driver_state": value["goal_driver_state"],
+        "prerequisite_state": value["prerequisite_state"],
+        "handoff_id": value["handoff_id"],
+        "parent_dispatch_state": value["parent_dispatch_state"],
+        "parent_consumption_state": value["parent_consumption_state"],
+        "event_count": int(value.get("event_count_total", len(value["events"]))),
+        "active_event_count": len(value["events"]),
+        "archive_chunk_count": len(value.get("archive_chunks") or []),
+        "full_event_history_retrievable": True,
+        "event_read_tool": "read_runtime_blackboard",
+        "tool_evidence_refs": list((value.get("terminal") or {}).get("tool_evidence_refs") or []),
+        "goal_verified": bool((value.get("terminal") or {}).get("goal_verified", False)),
+        "goal_contract_status": (value.get("goal_state_contract") or {}).get("status", "MISSING"),
+        "goal_contract_kind": (value.get("goal_state_contract") or {}).get("goal_kind", ""),
+        "goal_contract_sha256": (value.get("goal_state_contract") or {}).get("contract_sha256", ""),
+    }
+
+    
+def read_executor_event(root: str | Path, *, task_id: str,
+                        request_id: str, task_epoch: str,
+                        sequence: int) -> dict:
+    """Source event readback, including immutable archived event chunks."""
+    value = read_executor_run(root, task_id=task_id,
+                              request_id=request_id, task_epoch=task_epoch)
+    if value is None or type(sequence) is not int or sequence < 1:
+        raise ValueError("executor_run_event_read_binding_invalid")
+    for row in value["events"]:
+        if row.get("sequence") == sequence:
+            return dict(row)
+    for chunk in value.get("archive_chunks", ()):
+        if not (chunk["first_sequence"] <= sequence <= chunk["last_sequence"]):
+            continue
+        archive_file = (_path(root, task_id).parent / "event_archive" /
+                        _id(task_id) / str(chunk["archive_name"]))
+        # Archive names originate from Runtime and are constrained on read.
+        if not re.fullmatch(r"\d+-\d+\.json", archive_file.name):
+            raise ValueError("executor_run_archive_reference_invalid")
+        archive = json.loads(archive_file.read_text(encoding="utf-8"))
+        digest = archive.pop("sha256", "")
+        if (_digest(archive) != digest or digest != chunk["sha256"]
+                or archive.get("task_id") != task_id
+                or archive.get("request_id") != request_id
+                or archive.get("task_epoch") != task_epoch):
+            raise ValueError("executor_run_archive_integrity_invalid")
+        for row in archive.get("events", ()):
+            if row.get("sequence") == sequence:
+                return dict(row)
+    raise ValueError("executor_run_event_not_found")
+
+
+__all__ = [
+    "begin_executor_run", "append_executor_event", "finish_executor_run",
+    "read_executor_run", "read_executor_event", "record_finish_comparison", "projection", "_safe_arguments",
+]

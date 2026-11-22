@@ -1,0 +1,52 @@
+name: Git68 Finish Contract Adapter V2
+
+on:
+  push:
+    branches:
+      - git68/finish-contract-adapter-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  finish-contract-regression:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile V2 adapter, parser, comparator and Executor
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/finish_contract_adapter_v2.py
+          source/agent_core/runtime_finish_comparator.py
+          source/WebAgent/minimal_decision.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/github_stage_diagnostics.py
+          source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
+          source/WebAgent/tests/test_git68_hardening.py
+      - name: Validate source protocol manifest with new adapter
+        run: >-
+          python -B -c "from agent_core.protocol_manifest import validate_protocol_manifest; from pathlib import Path; print(validate_protocol_manifest(Path.cwd()))"
+      - name: Git68 and inherited Finish regressions
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
+          source/WebAgent/tests/test_git68_hardening.py
+          source/WebAgent/tests/test_git67_missing_slash_guard.py
+          source/WebAgent/tests/test_git67_path_localization.py
+          source/WebAgent/tests/test_git56_finish_semantic_repair.py
+          source/WebAgent/tests/test_git57_live_finish_injector.py

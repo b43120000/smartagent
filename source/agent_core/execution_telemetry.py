@@ -45,4 +45,14 @@ def refresh_snapshot(root, task_id):
             except Exception:
                 pass
     data['last_output_at']=newest
+    # Persisted RUNNING is historical; require a fresh OS-owned handle sample.
+    if data.get('state')=='RUNNING':
+        from .process_liveness import verified_running_evidence
+        proof=data.get('liveness_evidence')
+        fresh=verified_running_evidence(proof)
+        data['liveness_freshness']='FRESH' if fresh else 'STALE'
+        if not fresh:
+            data['state']='UNKNOWN'
+            data['liveness_verified']=False
+            data['liveness_uncertain_reason']='OS_OBSERVATION_EXPIRED'
     return data

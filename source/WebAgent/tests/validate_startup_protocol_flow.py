@@ -137,6 +137,7 @@ def validate_bootstrap_format_repair() -> None:
         result = ensure_webagent_session(
             workspace=root, gpt_url="https://chatgpt.com/c/bootstrap-repair-test",
             state_dir=Path(root) / "state", send_prompt=malformed_then_repair,
+            allow_scoped_marker_only_bootstrap=False,
         )
         assert result["state"]["armed"] is True
         assert result["state"]["readiness_mode"] == "FULL_IDENTITY"
@@ -166,6 +167,7 @@ def validate_bootstrap_format_repair() -> None:
             gpt_url="https://chatgpt.com/c/bootstrap-compact-success",
             state_dir=Path(root) / "state",
             send_prompt=compact_after_two_markers,
+            allow_scoped_marker_only_bootstrap=False,
         )
         assert result["state"]["armed"] is True
         assert result["state"]["readiness_mode"] == "COMPACT_FULL_IDENTITY"
@@ -203,6 +205,7 @@ def validate_bootstrap_format_repair() -> None:
             ensure_webagent_session(
                 workspace=root, gpt_url="https://chatgpt.com/c/bootstrap-exhausted",
                 state_dir=Path(root) / "state", send_prompt=always_marker_only,
+                allow_scoped_marker_only_bootstrap=False,
             )
         except RuntimeError as exc:
             assert "READY_COMPACT_IDENTITY_MISMATCH" in str(exc)
@@ -272,18 +275,17 @@ def run() -> dict:
                     assert prompt.startswith("[AGENT_PROTOCOL_IDENTITY_CHALLENGE]")
                 return short_reply
 
-            try:
-                ensure_webagent_session(
-                    workspace=str(root),
-                    gpt_url="https://chatgpt.com/c/webagent-short-ready-test",
-                    state_dir=root / "state",
-                    send_prompt=short_send_prompt,
-                    allow_scoped_marker_only_bootstrap=True,
-                )
-            except RuntimeError as exc:
-                assert "matching WEBAGENT protocol readiness" in str(exc)
-            else:
-                raise AssertionError("marker-only reply bypassed mandatory identity")
+            result = ensure_webagent_session(
+                workspace=str(root),
+                gpt_url="https://chatgpt.com/c/webagent-short-ready-test",
+                state_dir=root / "state",
+                send_prompt=short_send_prompt,
+                allow_scoped_marker_only_bootstrap=True,
+            )
+            assert result["state"]["armed"] is True
+            assert result["state"]["readiness_mode"] == "SCOPED_MARKER_ONLY"
+            assert result["state"]["readiness_transport_scoped"] is True
+            assert result["state"]["readiness_identity_verified"] is False
             marker_only_results[short_reply] = True
 
     with tempfile.TemporaryDirectory(prefix="webagent-short-ready-negative-") as temp:
@@ -317,11 +319,70 @@ def run() -> dict:
                 gpt_url="https://chatgpt.com/c/webagent-short-ready-default-off",
                 state_dir=root / "state",
                 send_prompt=default_off_send_prompt,
+                allow_scoped_marker_only_bootstrap=False,
             )
         except RuntimeError as exc:
             assert "matching WEBAGENT protocol readiness" in str(exc)
         else:
             raise AssertionError("marker-only compatibility was enabled implicitly")
+
+    with tempfile.TemporaryDirectory(prefix="webagent-bare-ready-default-on-") as temp:
+        root = Path(temp)
+        captured = []
+        def exact_bare_ready(prompt: str, *, stage: str, **_kwargs) -> str:
+            captured.append(stage)
+            return "AGENT_PROTOCOL_READY"
+        result = ensure_webagent_session(
+            workspace=str(root),
+            gpt_url="https://chatgpt.com/c/webagent-bare-ready-default-on",
+            state_dir=root / "state",
+            send_prompt=exact_bare_ready,
+        )
+        assert result["state"]["readiness_mode"] == "SCOPED_MARKER_ONLY"
+        assert result["state"]["readiness_identity_verified"] is False
+        assert captured == ["協議初始化"], captured
+
+    with tempfile.TemporaryDirectory(prefix="webagent-repaired-scoped-ready-") as temp:
+        root = Path(temp)
+        phases = []
+        def repaired_marker_only(prompt: str, *, stage: str, **_kwargs) -> str:
+            phases.append(stage)
+            if stage == "協議初始化":
+                return "[AGENT_PROTOCOL_READY] incomplete"
+            assert stage == "協議初始化格式修復"
+            return "AGENT_PROTOCOL_READY"
+        armed = ensure_webagent_session(
+            workspace=str(root),
+            gpt_url="https://chatgpt.com/c/bootstrap-repair-scoped-ready",
+            state_dir=root / "state", send_prompt=repaired_marker_only,
+        )
+        assert armed["state"]["readiness_mode"] == "SCOPED_MARKER_ONLY"
+        assert armed["state"]["readiness_identity_verified"] is False
+        assert phases == ["協議初始化", "協議初始化格式修復"]
+
+    with tempfile.TemporaryDirectory(prefix="webagent-session-attach-not-marker-") as temp:
+        root = Path(temp)
+        url = "https://chatgpt.com/c/bootstrap-attach-bare-reject"
+        phases = []
+        def attached_marker_only(prompt: str, *, stage: str, **_kwargs) -> str:
+            phases.append(stage)
+            if stage == "協議附著確認":
+                # A marker must NOT claim matching identity for an attach.
+                return "[AGENT_PROTOCOL_READY]"
+            assert stage == "協議初始化"
+            return "[AGENT_PROTOCOL_READY]"
+        first = ensure_webagent_session(
+            workspace=str(root), gpt_url=url, state_dir=root / "state",
+            send_prompt=attached_marker_only,
+        )
+        assert first["mode"] == "BOOTSTRAP"
+        second = ensure_webagent_session(
+            workspace=str(root), gpt_url=url, state_dir=root / "state",
+            send_prompt=attached_marker_only,
+        )
+        assert second["mode"] == "BOOTSTRAP"
+        assert second["reason"] == "session_attach_failed"
+        assert phases == ["協議初始化", "協議附著確認", "協議初始化"]
 
     validate_bootstrap_format_repair()
 
@@ -331,9 +392,9 @@ def run() -> dict:
         "rate_delay_is_observable": True,
         "bootstrap_sent": True,
         "session_attach_sent": True,
-        "marker_only_rejected_even_with_legacy_flag": marker_only_results,
+        "marker_only_scoped_bootstrap_accepted": marker_only_results,
         "marker_only_with_extra_text_rejected": True,
-        "marker_only_default_is_fail_closed": True,
+        "marker_only_explicit_off_is_fail_closed": True,
         "local_agent_started": False,
     }
 

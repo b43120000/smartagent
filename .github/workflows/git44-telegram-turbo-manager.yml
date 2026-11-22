@@ -1,0 +1,65 @@
+name: Git44 Telegram Workspace Turbo Field
+
+on:
+  push:
+    branches:
+      - git44/telegram-manager-turbo-field-20261109
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile modified sources
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/workspace_access.py
+          source/agent_core/workspace_turbo_binding.py
+          source/agent_core/remote_binding_manager.py
+          source/agent_core/host_supervisor.py
+          source/agent_core/remote_control_dispatcher.py
+          source/agent_core/workspace_manager.py
+          source/agent_core/turbo_settings_command.py
+          source/agent_core/turbo_execution_policy.py
+          source/agent_core/software_registry.py
+          source/agent_core/action_dependencies.py
+          source/WebAgent/protocol_loop.py
+          source/RemoteAgent/telegram_transport.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/WebAgent/minimal_core_loop.py
+      - name: Git44 Telegram Manager Turbo form tests
+        run: python -B -m pytest source/WebAgent/tests/test_git44_telegram_turbo_binding_manager.py -q
+      - name: Git43 Turbo and Environment unit/regression
+        run: python -B -m pytest source/WebAgent/tests/test_git43_turbo_workspace_and_environment.py -q
+      - name: Executor and Finish regression
+        run: >-
+          python -B -m pytest
+          source/WebAgent/tests/test_git33_pokeclaw_executor_loop.py
+          source/WebAgent/tests/test_git34_runtime_finish_comparator.py
+          source/WebAgent/tests/test_git35_dynamic_finish_contract.py
+          source/WebAgent/tests/test_git36_unified_finish_evidence.py
+          source/WebAgent/tests/test_git40_software_resume_approval.py
+          source/WebAgent/tests/test_git41_command_family_approval.py
+          source/WebAgent/tests/test_git42_finish_contract_repair.py -q
+      - name: ACL OFF Workspace Policy compatibility
+        run: python -B source/WebAgent/tests/validate_acl_off_workspace_manager.py
+      - name: Inventory and source readiness
+        run: python -B -m pytest source/WebAgent/tests/test_remote_artifact_access_and_software_inventory.py -q

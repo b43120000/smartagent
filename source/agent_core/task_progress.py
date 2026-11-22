@@ -54,6 +54,7 @@ class TaskProgressLedger:
     completion_contract: dict[str, list[str]] = field(default_factory=dict)
     context_request: dict[str, Any] = field(default_factory=dict)
     repair_state: dict[str, Any] = field(default_factory=dict)
+    strategy_state: dict[str, Any] = field(default_factory=dict)
     decision: str = "CONTINUE"
     outcome: str = "PENDING"
     matched_condition: str = ""
@@ -94,6 +95,7 @@ class TaskProgressLedger:
             decision=str(data.get("decision", "CONTINUE") or "CONTINUE"),
             context_request=dict(data.get("context_request") or {}),
             repair_state=dict(data.get('repair_state') or {}),
+            strategy_state=dict(data.get('strategy_state') or {}),
             outcome=str(data.get("outcome", "PENDING") or "PENDING"),
             matched_condition=str(data.get("matched_condition", "") or ""),
             matched_condition_id=str(data.get("matched_condition_id", "") or ""),
@@ -291,6 +293,12 @@ def _condition_class_for_decision(decision: str, outcome: str) -> str:
 
 
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
+    prior = None
+    if path.is_file():
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prior = None
     temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
     try:
         temporary.write_text(
@@ -303,6 +311,12 @@ def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
+    try:
+        from .goal75_blackboard import record_blackboard_write
+        record_blackboard_write(path, prior, payload,
+                                module="TASK_PROGRESS_LEDGER")
+    except (OSError, ValueError, RuntimeError):
+        pass
 
 
 def read_progress(task_id: str, root: str | Path | None = None) -> TaskProgressLedger | None:
@@ -552,6 +566,7 @@ def record_model_progress(
         completion_contract=completion_contract, decision=decision, outcome=outcome,
         context_request=normalized['context_request'],
         repair_state=dict(ledger.repair_state),
+        strategy_state=dict(ledger.strategy_state),
         matched_condition=matched_condition,
         matched_condition_id=matched_condition_id,
         fact_assertion=fact_assertion, evidence_refs=evidence_refs,
@@ -562,6 +577,57 @@ def record_model_progress(
     )
     _atomic_write(get_ledger_path(task_id, root), updated.to_dict())
     return updated
+
+
+
+def record_planner_goal_transition(
+    task_id: str, *, request_id: str, decision: Mapping[str, Any],
+    round_id: int, root: str | Path | None = None,
+) -> TaskProgressLedger:
+    """Persist only an already-admitted, Runtime-validated Planner transition.
+
+    The Goal, accepted Completion Contract, verified action evidence and
+    Runtime-owned strategy revision are NOT modified by this record.
+    """
+    ledger = read_progress(task_id, root)
+    if ledger is None or ledger.request_id != request_id:
+        raise TaskProgressError("goal_transition_record_identity_mismatch")
+    from .goal_strategy_transition import SCHEMA, goal_digest, condition_choices
+    required = {
+        "schema", "kind", "goal_anchor_sha256", "goal_condition_id",
+        "evidence_ref", "blocked_action_id", "next_tool", "rationale_sha256",
+        "evidence_classification", "authorization_granted", "completion_verified",
+    }
+    if (not isinstance(decision, Mapping) or set(decision) != required
+            or decision.get("schema") != SCHEMA
+            or decision.get("goal_anchor_sha256") != goal_digest(ledger.goal)
+            or decision.get("goal_condition_id") not in condition_choices(ledger.completion_contract)
+            or decision.get("authorization_granted") is not False
+            or decision.get("completion_verified") is not False):
+        raise TaskProgressError("goal_transition_record_invalid")
+    record = {
+        "round_id": int(round_id),
+        "kind": str(decision["kind"]),
+        "goal_condition_id": str(decision["goal_condition_id"]),
+        "evidence_ref": str(decision["evidence_ref"]),
+        "blocked_action_id": str(decision["blocked_action_id"]),
+        "next_tool": str(decision["next_tool"]),
+        "rationale_sha256": str(decision["rationale_sha256"]),
+        "evidence_classification": str(decision["evidence_classification"]),
+        "authorization_granted": False,
+        "completion_verified": False,
+    }
+    state = dict(ledger.strategy_state or {})
+    history = list(state.get("planner_transition_history") or [])
+    if not any(row == record for row in history):
+        history.append(record)
+    state["planner_transition_history"] = history[-MAX_HISTORY:]
+    state["planner_transition_count"] = int(state.get("planner_transition_count", 0)) + 1
+    state["goal_anchor_sha256"] = goal_digest(ledger.goal)
+    ledger.strategy_state = state
+    ledger.updated_at = time.time()
+    _atomic_write(get_ledger_path(task_id, root), ledger.to_dict())
+    return ledger
 
 
 def set_runtime_state(task_id: str, state: str, *, reason: str = "", root: str | Path | None = None) -> TaskProgressLedger | None:
@@ -597,6 +663,12 @@ def format_telegram_status_view(ledger: TaskProgressLedger | Mapping[str, Any]) 
     }
     lines = ["📋 任務執行進度", f"狀態：{labels.get(ledger.runtime_state, ledger.runtime_state)}"]
     lines.append(f"目標：{ledger.goal}")
+    strategy = dict(ledger.strategy_state or {})
+    if int(strategy.get("revision", 1) or 1) > 1:
+        lines.append(f"策略版本：Progress v{strategy['revision']}（Runtime Evidence-Gated Replan）")
+        records = list(strategy.get("history") or [])
+        if records:
+            lines.append("重新規劃原因：" + str(records[-1].get("trigger", "UNKNOWN")))
     lines.append(
         f"目前階段：{ledger.current_step} / {ledger.total_steps}"
         if ledger.total_steps else "目前階段：等待模型完成初始評估"
@@ -643,6 +715,105 @@ def record_progress_repair(task_id, diagnostic, *, round_id, executed_action_ids
     return ledger
 
 
+def record_runtime_strategy_revision(
+    task_id: str, *, request_id: str, evidence: Mapping[str, Any],
+    round_id: int, root: str | Path | None = None,
+    max_revisions: int = 8,
+) -> tuple[TaskProgressLedger, bool]:
+    """Advance strategy revision ONLY with an independently attested preflight.
+
+    Keep immutable Goal and previous Progress, Completion Contract, prior
+    actions, repair budgets and verification state. The next Planner patch may
+    change only future steps; it cannot rewind completed work or claim a
+    successful side effect from this pre-execution observation.
+    """
+    ledger = read_progress(task_id, root)
+    if ledger is None or ledger.request_id != request_id:
+        raise TaskProgressError("strategy_revision_request_identity_mismatch")
+    schema = str(evidence.get("schema", "")) if isinstance(evidence, Mapping) else ""
+    if (not isinstance(evidence, Mapping)
+            or schema not in {
+                "SMARTAGENT_PREEXECUTION_REPLAN_V1",
+                "SMARTAGENT_VERIFIED_PREREQUISITE_REPLAN_V1",
+            }
+            or evidence.get("request_id") != request_id
+            or evidence.get("scope_verified") is not True
+            or evidence.get("authorization_granted") is not False
+            or (schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+                and evidence.get("executed") is not False)
+            or (schema == "SMARTAGENT_VERIFIED_PREREQUISITE_REPLAN_V1"
+                and (evidence.get("executed") is not True
+                     or evidence.get("result_verification") != "FAIL"
+                     or evidence.get("completion_verified") is not False))):
+        raise TaskProgressError("strategy_revision_evidence_not_attested")
+    digest = str(evidence.get("evidence_digest", ""))
+    if (len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)):
+        raise TaskProgressError("strategy_revision_evidence_digest_invalid")
+    state = dict(ledger.strategy_state or {})
+    existing = list(state.get("history") or [])
+    if any(row.get("evidence_digest") == digest for row in existing):
+        return ledger, False
+    current = int(state.get("revision", 1) or 1)
+    if current < 1 or current >= max_revisions:
+        raise TaskProgressError("strategy_revision_budget_exhausted")
+    revision = current + 1
+    trigger = (
+        "PREEXECUTION_REQUEST_CWD_SCOPE"
+        if (schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+            and evidence.get("admission_reason") ==
+            "command_working_directory_outside_request_scope")
+        else "PREEXECUTION_CWD_ABSENT"
+        if schema == "SMARTAGENT_PREEXECUTION_REPLAN_V1"
+        else "VERIFIED_FAILED_PREREQUISITE"
+    )
+    routes = []
+    for route in list(evidence.get("routes") or [])[:4]:
+        if not isinstance(route, Mapping):
+            continue
+        route_id = str(route.get("id") or route.get("route_id") or "")
+        tool = str(route.get("tool") or "")
+        if route_id not in {"NATIVE_FILE_CREATION", "EXISTING_CWD_CREATION"}:
+            continue
+        if tool not in {"write_file", "run_command"}:
+            continue
+        routes.append({
+            "route_id": route_id,
+            "tool": tool,
+            "rule": str(route.get("rule") or "")[:500],
+        })
+    row = {
+        "revision": revision, "trigger": trigger,
+        "round_id": int(round_id), "evidence_digest": digest,
+        "rejected_action_id": str(evidence.get("rejected_action_id", ""))[:128],
+        "target": str(evidence.get("target", ""))[:MAX_TEXT],
+        "existing_writable_parent": str(evidence.get("existing_writable_parent", ""))[:MAX_TEXT],
+        "routes": routes,
+        "route_count": len(routes),
+        "executed": evidence["executed"], "completion_verified": False,
+        "evidence_ref": str(evidence.get("evidence_ref", ""))[:128],
+        "authorization_granted": False,
+    }
+    ledger.strategy_state = {
+        "schema": "SMARTAGENT_PROGRESS_STRATEGY_REVISION_V1",
+        "revision": revision,
+        "history": [*existing, row][-MAX_HISTORY:],
+        # Preserve previously admitted Planner links when Runtime records a
+        # separate evidence-attested strategy revision. Neither authorizes
+        # scope expansion nor rewrites the immutable task goal.
+        "planner_transition_history": list(state.get("planner_transition_history") or [])[-MAX_HISTORY:],
+        "planner_transition_count": int(state.get("planner_transition_count", 0)),
+        "active_evidence_digest": digest,
+        "goal_changed": False,
+        "original_goal_sha256": hashlib.sha256(ledger.goal.encode("utf-8")).hexdigest(),
+        "does_not_reset_repair_budget": True,
+        "does_not_grant_authorization": True,
+    }
+    ledger.updated_at = time.time()
+    _atomic_write(get_ledger_path(task_id, root), ledger.to_dict())
+    return ledger, True
+
+
 def format_prompt_context(ledger: TaskProgressLedger | Mapping[str, Any]) -> str:
     if isinstance(ledger, Mapping):
         ledger = TaskProgressLedger.from_dict(ledger)
@@ -674,6 +845,11 @@ def format_prompt_context(ledger: TaskProgressLedger | Mapping[str, Any]) -> str
         + "[PROGRESS_REPAIR_STATE]\n"
         + json.dumps({**ledger.repair_state, 'history':list(ledger.repair_state.get('history') or [])[-3:]}, ensure_ascii=False, separators=(',', ':'))
         + "\n[/PROGRESS_REPAIR_STATE]\n"
+        + "[RUNTIME_PROGRESS_STRATEGY_REVISION]\n"
+        + json.dumps(ledger.strategy_state or {
+            "revision": 1, "history": [], "does_not_grant_authorization": True,
+        }, ensure_ascii=False, separators=(",", ":"))
+        + "\n[/RUNTIME_PROGRESS_STRATEGY_REVISION]\n"
         + "[PROGRESS_REPLY_CONTRACT]\n"
         + json.dumps(reply_contract(ledger), ensure_ascii=False, separators=(',', ':'))
         + "\n[/PROGRESS_REPLY_CONTRACT]\n"
@@ -695,5 +871,6 @@ __all__ = [
     "completion_condition_choices", "condition_id_for", "format_prompt_context",
     "format_telegram_status_view", "get_ledger_path",
     "initialize_progress", "read_progress", "record_model_progress", "set_runtime_state",
-    "validate_model_progress",
+    "validate_model_progress", "record_runtime_strategy_revision",
+    "record_planner_goal_transition",
 ]

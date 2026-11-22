@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .path_security import is_within, reject_reparse_components
+from .path_security import is_within, reject_reparse_components, workspace_path_mode
 from .workspace_access import access_snapshot
 
 MAX_RECENT_TASKS = 3
@@ -23,6 +23,12 @@ MAX_RECENT_TASKS = 3
 _WINDOWS_PATH = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/])(?:[^\s'\"，,；;。\r\n]*)")
 _QUOTED_PATH = re.compile(r"""(["'])([A-Za-z]:[\\/][^"'\r\n]+)\1""")
 _RECOVERABLE = frozenset({"COMPLETED", "FAILED", "PAUSED", "INTERRUPTED"})
+# Only a dedicated Workspace field may select a Task working directory.
+_WORKSPACE_DIRECTIVE = re.compile(
+    r"(?im)^\s*(?:@workspace|/workspace|workspace|working\s+directory|工作目錄|工作區)"
+    r"\s*[:=：]\s*(?P<path>[^\r\n]+?)\s*$"
+)
+
 
 
 def _key(path: str | Path) -> str:
@@ -70,18 +76,79 @@ def request_paths(text: str) -> list[str]:
     return result
 
 
+def explicit_workspace_directive(text: str) -> str | None:
+    """A narrative reference never nominates a working directory or grants scope."""
+    values: list[str] = []
+    for match in _WORKSPACE_DIRECTIVE.finditer(str(text or "")):
+        value = match.group("path").strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1].strip()
+        if not re.match(r"^[A-Za-z]:[\\/]", value):
+            raise ValueError("request_explicit_workspace_path_invalid")
+        if value not in values:
+            values.append(value)
+    if len(values) > 1:
+        raise ValueError("request_explicit_workspace_ambiguous")
+    return values[0] if values else None
+
+
+def _writable_directory(path: Path, writable: tuple[Path, ...], readable: tuple[Path, ...]) -> bool:
+    return workspace_path_mode(path, writable, readable) == "writable" and _authorized(path, writable)
+
+
 def _directory_for_path(raw: str, writable: tuple[Path, ...], readable: tuple[Path, ...]) -> Path | None:
     requested = Path(raw).expanduser().resolve(strict=False)
-    if not _authorized(requested, writable):
+    if workspace_path_mode(requested, writable, readable) != "writable" or not _authorized(requested, writable):
         if _authorized(requested, readable):
             return None  # Read-only target is not a working directory.
         raise ValueError("request_path_outside_authorized_roots:" + str(requested))
     directory = requested if requested.is_dir() else requested.parent
     while not directory.is_dir() and directory != directory.parent:
         directory = directory.parent
-    if not directory.is_dir() or not _authorized(directory, writable):
+    if not directory.is_dir() or not _writable_directory(directory, writable, readable):
         raise ValueError("request_working_directory_unavailable:" + str(requested))
     return directory
+
+
+
+def _request_authorized_turbo_directory(
+    paths: list[str], writable: tuple[Path, ...], readable: tuple[Path, ...],
+) -> Path | None:
+    """Current-request path wins only within one already-authorized Turbo Root.
+
+    Plain text never grants a new Root. Multiple distinct matched Roots are
+    ambiguous and must be handled through explicit action-specific CWDs.
+    """
+    if not paths:
+        return None
+    access = access_snapshot()
+    policy = access.get("policy") or {}
+    configured = access.get("turbo_roots") or policy.get("turbo_roots") or ()
+    if not (policy.get("turbo_requested") and configured):
+        return None
+    from .workspace_access import is_valid_turbo_root
+    matched: dict[str, Path] = {}
+    for raw in paths:
+        try:
+            target = Path(raw).expanduser().resolve(strict=False)
+            if not _writable_directory(target, writable, readable):
+                continue
+            for candidate in configured:
+                root = Path(candidate).expanduser().resolve(strict=False)
+                if not is_within(target, root):
+                    continue
+                owners = [owner for owner in writable if is_valid_turbo_root(
+                    root, owner, writable, readable,
+                    policy.get("denied_write_roots") or (),
+                )]
+                if len(owners) != 1:
+                    continue
+                selected = _directory_for_path(str(target), writable, readable)
+                if selected is not None and is_within(selected, root):
+                    matched.setdefault(_key(root), selected)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return next(iter(matched.values())) if len(matched) == 1 else None
 
 
 def _recent_candidates(store, *, conversation_key: str, transport: str, sender_id: str) -> list[dict]:
@@ -122,19 +189,19 @@ def resolve_task_workspace(
     Explicit unknown paths fail closed instead of silently choosing a default.
     """
     writable, readable = _policy_roots()
+    # Keep path mentions as Planner data; never inspect/authorize them at ingress.
     paths = request_paths(request)
+    explicit = explicit_workspace_directive(request)
     selected: Path | None = None
     source = ""
     source_task_id = ""
-    for path in paths:
-        candidate = _directory_for_path(path, writable, readable)
-        if candidate is not None and selected is None:
-            selected = candidate
-            source = "CURRENT_REQUEST"
-    if selected is not None:
-        return {"workspace": str(selected), "source": source,
+    if explicit is not None:
+        selected = _directory_for_path(explicit, writable, readable)
+        if selected is None:
+            raise ValueError("request_explicit_workspace_not_writable")
+        return {"workspace": str(selected), "source": "EXPLICIT_WORKSPACE_DIRECTIVE",
                 "source_task_id": "", "context_candidates": [],
-                "explicit_paths": paths}
+                "explicit_paths": [explicit], "mentioned_paths": paths}
 
     # Only a signed task journal can give a historical Task ID authority;
     # matching the text alone does not authorize a new filesystem root.
@@ -162,13 +229,22 @@ def resolve_task_workspace(
         source_task_id = task.task_id
         selected = Path(task.workspace).resolve()
         source = "EXPLICIT_CONTINUATION"
-        if not selected.is_dir() or not _authorized(selected, writable):
+        if not selected.is_dir() or not _writable_directory(selected, writable, readable):
             raise ValueError("continuation_workspace_no_longer_writable")
+
+    # The actual current request has precedence over a stale conversation
+    # fallback. Resolve only operator-registered Turbo scopes; this grants
+    # no privilege and final Action Admission still rechecks the policy.
+    if selected is None:
+        inferred = _request_authorized_turbo_directory(paths, writable, readable)
+        if inferred is not None:
+            selected = inferred
+            source = "REQUEST_AUTHORIZED_TURBO_PATH"
 
     filtered = []
     for row in recent:
         candidate = Path(row["workspace"]).resolve()
-        if candidate.is_dir() and _authorized(candidate, writable):
+        if candidate.is_dir() and _writable_directory(candidate, writable, readable):
             filtered.append(row)
     if selected is None and filtered:
         unique = {_key(row["workspace"]) for row in filtered}
@@ -193,9 +269,9 @@ def resolve_task_workspace(
         # in Edit_workspace Security setup. It is not the old WebGPT binding.
         selected = writable[0]
         source = "WRITABLE_PRIMARY_DEFAULT"
-    if not selected.is_dir() or not _authorized(selected, writable):
+    if not selected.is_dir() or not _writable_directory(selected, writable, readable):
         raise ValueError("resolved_workspace_no_longer_writable")
     return {"workspace": str(selected), "source": source,
             "source_task_id": source_task_id,
             "context_candidates": filtered,
-            "explicit_paths": paths}
+            "explicit_paths": [], "mentioned_paths": paths}

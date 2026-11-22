@@ -20,6 +20,7 @@ from agent_core.conversation_registry import ConversationRegistry
 from agent_core.remote_events import RemoteEventStore
 from agent_core.remote_runtime_log import RemoteRuntimeLog
 from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+from agent_core.tri_one_runtime_terminal import terminal_verdict_from_loop
 from agent_core.paths import (install_root, remote_events_path, remote_execution_page_lock_path, remote_control_output_root, remote_runtime_log_path, remote_skill_context_root, remote_tasks_path, remote_webagent_state_root, remote_workers_root)
 from agent_core.task_transport import resolve_task_execution_chatgpt_url
 from agent_core.plan_ledger import PlanLedger, publish_completed_plan
@@ -155,6 +156,34 @@ def bind_resolved_execution_page(scraper, requested_url: str, execution_url: str
     return resolved
 
 
+def _auto_rca_debug_hook(runtime_log: RemoteRuntimeLog, task, state: str) -> None:
+    """Temporary fixed software hook; never mutates the task's terminal status."""
+    try:
+        from agent_core.auto_rca_upload import collect_and_upload
+        result = collect_and_upload(task.task_id, task.request_id)
+        success = result.get("status") == "SUCCESS"
+        runtime_log.write(
+            "STATUS" if success else "ERROR",
+            component="telegram_webagent_worker",
+            stage="AUTO_RCA_GITHUB_UPLOADED" if success else "AUTO_RCA_GITHUB_UPLOAD_FAILED",
+            task_id=task.task_id,
+            request_id=task.request_id,
+            interruption_state=state,
+            **result,
+        )
+    except Exception as exc:
+        # Diagnostics must never mask an actual failure or block queue cleanup.
+        try:
+            runtime_log.write(
+                "ERROR", component="telegram_webagent_worker",
+                stage="AUTO_RCA_HOOK_ERROR", task_id=task.task_id,
+                request_id=task.request_id, interruption_state=state,
+                error_type=type(exc).__name__,
+            )
+        except Exception:
+            pass
+
+
 def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     from agent_core.protocol_manifest import require_protocol_manifest
     # ``root`` may be redirected to a temporary state directory by tests, but
@@ -187,6 +216,17 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     from agent_core.task_continuation import TaskContinuationStore, task_owner, render_task_reply
     continuation_store = TaskContinuationStore(root)
     continuation_store.register_task(task)
+    # The software/transport layer collected this explicit decision before
+    # dispatch. Bind it to the child task before any model or tool executes.
+    # This is not permission to skip Admission or replay an old tool.
+    ingress = dict((task.metadata or {}).get("ingress_metadata") or {})
+    resume_approval_id = str(ingress.get("resume_approval_id") or "")
+    if resume_approval_id:
+        from agent_core.resume_command_approval import ResumeCommandGate
+        ResumeCommandGate(root).bind_child(
+            resume_approval_id, child_task_id=task.task_id,
+            owner=task_owner(task),
+        )
     protocol_version = int((task.metadata or {}).get("protocol_version", 9) or 0)
     protocol_family = str((task.metadata or {}).get("protocol_family", "SMARTAGENT_V9"))
     if protocol_version not in {8, 9}:
@@ -194,6 +234,13 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
     if protocol_family not in {"SMARTAGENT_V8", "SMARTAGENT_V9"}:
         raise RuntimeError("remote_task_protocol_family_mismatch")
     source_transport = str((task.metadata or {}).get("transport", "")).upper()
+    # Git58: validate the authenticated, ingress-created test selector before
+    # any browser/GPT work. A normal user request never arms injection.
+    from agent_core.git58_telegram_live_control import verify_worker_task
+    git58_live_marker = verify_worker_task(
+        task, source_transport=source_transport,
+    )
+    git58_live_injector = None
     from agent_core.tri_one_shared_worker import use_shared_v9_worker
     if not use_shared_v9_worker(source_transport):
         raise RuntimeError("shared_webagent_worker_transport_not_admitted")
@@ -467,6 +514,16 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                         }
                         if str(manifest.get("approval_kind", "")).upper() == "EXECUTION"
                         else {
+                            "approval_kind": "UNKNOWN_COMMAND",
+                            "approval_id": record["approval_id"],
+                            "target": manifest.get("target", ""),
+                            "command": manifest.get("command", ""),
+                            "cwd": manifest.get("cwd", ""),
+                            "command_sha256": manifest.get("command_sha256", ""),
+                            "manifest_digest": manifest["manifest_digest"],
+                            "timeout_sec": 600,
+                        } if str(manifest.get("approval_kind", "")).upper() == "UNKNOWN_COMMAND"
+                        else {
                             "approval_kind": "DELETE",
                             "approval_id": record["approval_id"],
                             "target": manifest["target"],
@@ -538,6 +595,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             try:
                 from agent_core.source_attestation import capture
                 verified = require_protocol_manifest(install_root())
+                PIT.record("06a_worker_protocol_manifest_result", verified,
+                           evidence_status="MANIFEST_VERIFICATION_RESULT")
                 if strict_source_gate and (
                     verified.get("hash_verification") != "PASS"
                     or verified.get("hash_mismatches")
@@ -545,10 +604,20 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                     raise RuntimeError("strict_observation_manifest_not_verified")
                 attestation = capture(role="telegram_webagent_worker", manifest_verified=
                                       verified.get("hash_verification") == "PASS")
+                PIT.record("06b_worker_loaded_source_attestation", attestation,
+                           evidence_status="IN_PROCESS_WORKER_SOURCE_ATTESTATION")
                 # Require the Worker process's own actual loaded code proof,
                 # not Git HEAD or an independently staged import.
                 from agent_core.source_attestation import require_writer_loaded_source_attestation
-                require_writer_loaded_source_attestation(attestation)
+                try:
+                    writer_proof = require_writer_loaded_source_attestation(attestation)
+                except RuntimeError as exc:
+                    PIT.record("06c_worker_writer_attestation_gate", {
+                        "result": "FAILED", "reason_code": str(exc),
+                    }, evidence_status="SOURCE_GATE_FAILURE")
+                    raise
+                PIT.record("06c_worker_writer_attestation_gate", writer_proof,
+                           evidence_status="SOURCE_GATE_PASS")
                 if strict_source_gate:
                     required = {
                         "WebAgent.protocol_loop": (
@@ -585,6 +654,35 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 # Attestation must fail closed for every task: otherwise a
                 # source mismatch could reach chunked write Tool execution.
                 raise
+            # Git32 temporary Executor-only lab mode: no parent agents make
+            # decisions. Security Admission, Runtime evidence verification
+            # and durable Blackboard writes remain fully enabled.
+            loop.executor_only_mode = (
+                os.environ.get("SMARTAGENT_EXECUTOR_ONLY_MODE", "1").strip() == "1"
+            )
+            if git58_live_marker is not None:
+                from agent_core.git58_telegram_live_control import (
+                    install_real_planner_injector,
+                )
+                git58_live_injector = install_real_planner_injector(
+                    loop, task, marker=git58_live_marker,
+                )
+                runtime_log.write(
+                    "CONNECT", component="telegram_webagent_worker",
+                    stage="GIT58_REAL_PLANNER_INJECTOR_ARMED",
+                    task_id=task.task_id, request_id=task.request_id,
+                    task_epoch=task.task_epoch,
+                    original_goal_sha256=git58_live_marker["request_sha256"],
+                    authorization_granted=False,
+                )
+            runtime_log.write(
+                "STATUS", component="telegram_webagent_worker",
+                stage="EXECUTOR_ONLY_MODE_SELECTED",
+                task_id=task.task_id, request_id=task.request_id,
+                executor_only_mode=loop.executor_only_mode,
+                goal_driver_decisions_enabled=not loop.executor_only_mode,
+                prerequisite_decisions_enabled=not loop.executor_only_mode,
+            )
             final_content = loop.run(
                 task.request,
                 request_id=task.request_id,
@@ -601,6 +699,68 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 ),
                 trusted_authorized_paths=trusted_authorized_paths,
             )
+            if git58_live_injector is not None:
+                from agent_core.git58_telegram_live_control import (
+                    assess_real_planner_live,
+                )
+                import json
+                git58_report = assess_real_planner_live(
+                    root, task, loop, git58_live_injector,
+                )
+                runtime_log.write(
+                    "STATUS" if git58_report["verdict"] ==
+                    "GIT58_REAL_PLANNER_LIVE_PASS" else "ERROR",
+                    component="telegram_webagent_worker",
+                    stage="GIT58_REAL_PLANNER_LIVE_RESULT",
+                    task_id=task.task_id, request_id=task.request_id,
+                    **{key: git58_report[key] for key in (
+                        "verdict", "tool_execution_count",
+                        "injection_count", "semantic_repair_count",
+                        "evidence_ref", "comparator_cause", "final_verdict",
+                    )},
+                )
+                final_content += (
+                    "\n\n[Git58 真實 GPT Planner Live E2E]\n"
+                    + json.dumps(git58_report, ensure_ascii=False)
+                )
+                if git58_report["verdict"] != "GIT58_REAL_PLANNER_LIVE_PASS":
+                    raise RuntimeError(
+                        "GIT58_REAL_PLANNER_LIVE_FAIL:"
+                        + json.dumps({
+                            key: git58_report[key] for key in (
+                                "tool_execution_count", "injection_count",
+                                "semantic_repair_count", "final_verdict",
+                            )
+                        }, ensure_ascii=False)
+                    )
+            # Git59: report the Native Git/Python CHILD verdict separately
+            # from the diagnostic Goal PASS. A correct UNVERIFIED report must
+            # never be announced as executable success.
+            if (source_transport == "TELEGRAM"
+                    and (task.metadata or {}).get("ingress_metadata", {}).get(
+                        "git59_native_exec_live") is not None):
+                from agent_core.git59_telegram_native_live import (
+                    assess_native_child_live,
+                )
+                import json
+                git59_report = assess_native_child_live(
+                    task, loop, source_transport=source_transport,
+                )
+                runtime_log.write(
+                    "STATUS", component="telegram_webagent_worker",
+                    stage="GIT59_NATIVE_CHILD_LIVE_RESULT",
+                    task_id=task.task_id, request_id=task.request_id,
+                    verdict=git59_report["verdict"],
+                    diagnostic_goal_verdict=git59_report["diagnostic_goal_verdict"],
+                    git_direct_child_verified=git59_report["git_direct_child_verified"],
+                    python_direct_child_verified=git59_report["python_direct_child_verified"],
+                    git_reason=git59_report["git_reason"],
+                    python_reason=git59_report["python_reason"],
+                )
+                final_content += (
+                    "\n\n[Git59 Native AppContainer Git/Python 子程序驗收]\n"
+                    + json.dumps(git59_report, ensure_ascii=False)
+                )
             if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
                 raise RemoteTaskCancelled("telegram_interrupt_requested")
             # Completion handoff barrier: the v8 response is already UI-idle
@@ -626,23 +786,40 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 remaining_owners=int(handoff["remaining_owners"]),
             )
         elapsed = round(time.time() - started_at, 3)
-        progress_snapshot = read_progress(task.task_id, root=root)
-        final_content, plan_id = publish_completed_plan(
-            ledger=PlanLedger.from_task_store(remote_tasks_path(root)),
-            task=task,
-            final_summary=final_content,
-            progress=progress_snapshot,
-            authorized_paths=loop.authorized_paths,
+        core_minimal = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() != "legacy_v9"
+        # One Runtime terminal decision is shared by all Tri-One ingress routes.
+        # Worker/transports are not authorized to recalculate goal completion.
+        terminal = terminal_verdict_from_loop(loop, minimal=core_minimal)
+        runtime_log.write(
+            "STATUS", component="telegram_webagent_worker",
+            stage="TRI_ONE_TERMINAL_RECONCILED",
+            task_id=task.task_id, request_id=task.request_id,
+            runtime_state=terminal.state, task_outcome=terminal.outcome,
+            terminal_reason=terminal.reason,
+            receipt_id=str(terminal.receipt.get("receipt_id") or ""),
         )
-        if plan_id:
-            runtime_log.write(
-                "STATUS",
-                component="telegram_webagent_worker",
-                stage="PLAN_PUBLISHED",
-                task_id=task.task_id,
-                request_id=task.request_id,
-                plan_id=plan_id,
+        progress_snapshot = read_progress(task.task_id, root=root)
+        plan_id = ""
+        if terminal.is_complete and not getattr(loop, "executor_only_mode", False):
+            # PokeClaw Executor Finish is model-reported, not an independently
+            # verified Goal or a publishable completed plan. Its durable
+            # per-action record lives in executor_run_blackboard instead.
+            final_content, plan_id = publish_completed_plan(
+                ledger=PlanLedger.from_task_store(remote_tasks_path(root)),
+                task=task,
+                final_summary=final_content,
+                progress=progress_snapshot,
+                authorized_paths=loop.authorized_paths,
             )
+            if plan_id:
+                runtime_log.write(
+                    "STATUS",
+                    component="telegram_webagent_worker",
+                    stage="PLAN_PUBLISHED",
+                    task_id=task.task_id,
+                    request_id=task.request_id,
+                    plan_id=plan_id,
+                )
         outbound = loop.tools.take_outbound_artifacts()
         if source_transport == "WEBGPT_COPILOT":
             # WebCopilot delivers TEXT through its original WebGPT outbox.
@@ -665,17 +842,95 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 expect_artifact=False if plan_id else None,
             )
         terminal_payload["plan_id"] = plan_id
-        terminal_payload['task_outcome'] = loop.terminal_outcome
-        terminal_payload['terminal_acceptance'] = dict(getattr(loop, 'terminal_acceptance', {}) or {})
-        terminal_payload['summary'] = render_task_reply(
-            original_request=loop.task_request, base=str(getattr(loop.progress_ledger, 'base_evaluation', '') or ''),
-            conclusion=terminal_payload['summary'], task_id=task.task_id, request_id=task.request_id,
-            state='COMPLETED', outcome=loop.terminal_outcome,
-            terminal_acceptance=loop.terminal_acceptance,
-            source_task_id=(loop.continuation_source or {}).get('task_id', ''))
+        terminal_payload["task_outcome"] = terminal.outcome
+        terminal_payload["terminal_acceptance"] = dict(terminal.receipt)
+        terminal_payload["runtime_state"] = terminal.state
+        terminal_payload["terminal_reason"] = terminal.reason
+        terminal_payload["protocol_family"] = (
+            "SMARTAGENT_MINIMAL_CORE_V10" if core_minimal else "SMARTAGENT_V9"
+        )
+        terminal_payload["summary"] = render_task_reply(
+            original_request=loop.task_request,
+            base=str(getattr(loop.progress_ledger, "base_evaluation", "") or ""),
+            conclusion=terminal_payload["summary"],
+            task_id=task.task_id,
+            request_id=task.request_id,
+            state=terminal.state,
+            outcome=terminal.outcome,
+            terminal_acceptance=terminal.receipt,
+            source_task_id=(loop.continuation_source or {}).get("task_id", ""),
+        )
         final_content = terminal_payload["summary"]
         if cancel_seen.is_set() or queue.cancellation_requested(task.task_id):
             raise RemoteTaskCancelled("telegram_interrupt_requested")
+        # A paused/unknown goal is nonterminal. Never queue.complete() it
+        # or delete its progress, even if the model emitted a Finish summary.
+        # The result is delivered through the same source-owned event/outbox.
+        if core_minimal:
+            os.environ.setdefault("TRI_ONE_TASK_RESULT_V1", "1")
+        if terminal.state == "PAUSED":
+            # Handoff is a separate parent-layer state, not the Task Queue
+            # status and not an automatic Goal Stage transition.
+            child_receipt = dict(getattr(loop, "executor_blackboard_terminal", {}) or {})
+            layer_handoff = dict(child_receipt.get("tri_layer_handoff") or {})
+            paused_result = {
+                "response": final_content,
+                "task_outcome": terminal.outcome,
+                "terminal_acceptance": {},
+                "intent_digest": loop.intent_digest,
+                "action_result_ledger": dict(loop.action_result_ledger),
+                "condition_result_ledger": dict(loop.condition_result_ledger),
+                "outbound_artifacts": terminal_payload["artifacts"],
+                "artifact_rejections": terminal_payload["artifact_rejections"],
+                "protocol_family": terminal_payload["protocol_family"],
+                "executor_result": dict(getattr(loop, "executor_result", {}) or {}),
+                "executor_blackboard_terminal": child_receipt,
+                "tri_layer_handoff": layer_handoff,
+                "prerequisite_handoff": dict(layer_handoff.get("prerequisite_handoff") or {}),
+                "goal_stage_handoff": dict(layer_handoff.get("goal_stage_handoff") or {}),
+            }
+            # Keep the precise Executor pause reason instead of overwriting it
+            # with the generic Tri-One terminal projection.
+            prior_progress = read_progress(task.task_id, root=root)
+            pause_reason = str(getattr(prior_progress, "interruption_reason", "") or terminal.reason)
+            paused = queue.pause_running(
+                task.task_id, pause_reason, result=paused_result)
+            if paused is None:
+                raise RuntimeError("TRI_ONE_PAUSE_STATE_TRANSITION_FAILED")
+            set_runtime_state(task.task_id, "PAUSED",
+                              reason=pause_reason, root=root)
+            events.emit("TASK_PAUSED", paused, status="PAUSED",
+                        payload={
+                            **terminal_payload, "pause_is_nonterminal": True,
+                            "tri_layer_handoff": layer_handoff,
+                            "executor_terminal_status": child_receipt.get("terminal_status", ""),
+                            "goal_stage_completion_inferred": False,
+                        })
+            if layer_handoff:
+                runtime_log.write(
+                    "EXECUTOR_PARENT_HANDOFF_READY",
+                    component="telegram_webagent_worker",
+                    stage="BLACKBOARD_HANDOFF_PUBLISHED",
+                    task_id=task.task_id, request_id=task.request_id,
+                    handoff_id=layer_handoff.get("handoff_id", ""),
+                    executor_terminal_status=child_receipt.get("terminal_status", ""),
+                    prerequisite_handoff_state=(
+                        layer_handoff.get("prerequisite_handoff") or {}
+                    ).get("prerequisite_handoff_state", ""),
+                    goal_stage_handoff_state=(
+                        layer_handoff.get("goal_stage_handoff") or {}
+                    ).get("goal_stage_handoff_state", ""),
+                    parent_owner=layer_handoff.get("next_parent_owner", ""),
+                )
+            runtime_log.write(
+                "TASK_PAUSED", component="telegram_webagent_worker",
+                stage="TRI_ONE_EGRESS_PAUSED", task_id=task.task_id,
+                request_id=task.request_id, terminal_reason=terminal.reason)
+            _auto_rca_debug_hook(runtime_log, task, "PAUSED")
+            return 0
+        if terminal.state != "COMPLETED":
+            raise RuntimeError("TRI_ONE_TERMINAL_NOT_COMPLETED:" + terminal.reason)
+
         completed = queue.complete(
             task.task_id,
             result={
@@ -684,8 +939,8 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "elapsed_sec": elapsed,
                 "protocol_engine": "web_agent_direct",
                 "ack_ids": list(loop.accepted_ack_ids),
-                "protocol_family": "SMARTAGENT_V9",
-                "protocol_version": 9,
+                "protocol_family": "SMARTAGENT_MINIMAL_CORE_V10" if core_minimal else "SMARTAGENT_V9",
+                "protocol_version": 10 if core_minimal else 9,
                 "task_id": task.task_id,
                 "task_epoch": task.task_epoch,
                 "intent_digest": loop.intent_digest,
@@ -694,9 +949,14 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 "uploaded_attachments": list(loop.sent_attachment_paths),
                 "outbound_artifacts": terminal_payload["artifacts"],
                 "artifact_rejections": terminal_payload["artifact_rejections"],
-                "task_outcome": loop.terminal_outcome,
-                "terminal_acceptance": dict(getattr(loop, 'terminal_acceptance', {}) or {}),
+                "task_outcome": terminal.outcome,
+                "terminal_acceptance": dict(terminal.receipt),
                 "verification_status": loop.tools.last_verification_status,
+                "executor_result": dict(getattr(loop, "executor_result", {}) or {}),
+                "executor_blackboard_terminal": dict(getattr(loop, "executor_blackboard_terminal", {}) or {}),
+                "tri_layer_handoff": dict(
+                    (getattr(loop, "executor_blackboard_terminal", {}) or {}).get(
+                        "tri_layer_handoff") or {}),
                 "execution_state": loop.execution_state,
                 "protocol_state": loop.protocol_state,
                 "terminal_candidate": dict(loop.terminal_candidate),
@@ -756,6 +1016,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 stage="TASK_CANCELLED", task_id=task.task_id,
                 request_id=task.request_id,
             )
+            _auto_rca_debug_hook(runtime_log, task, "CANCELLED")
             return 0
         progress = read_progress(task.task_id, root=root)
         # A protocol loop may deliberately pause after detecting semantic
@@ -829,6 +1090,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
                 request_id=task.request_id,
                 error=f"{type(exc).__name__}: {exc}",
             )
+            _auto_rca_debug_hook(runtime_log, task, "PAUSED")
             return 0  # Worker exited cleanly; task remains nonterminal PAUSED.
         if protocol_only_interruption:
             interrupted = queue.interrupt_running(
@@ -859,6 +1121,7 @@ def run_task(*, task_id: str, token: str, cdp: str, root: Path = ROOT) -> int:
             request_id=task.request_id,
             error=f"{type(exc).__name__}: {exc}",
         )
+        _auto_rca_debug_hook(runtime_log, task, "INTERRUPTED" if protocol_only_interruption else "FAILED")
         raise
     finally:
         stop_heartbeat.set()

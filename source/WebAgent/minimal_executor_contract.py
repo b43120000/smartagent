@@ -1,0 +1,167 @@
+"""Bounded PokeClaw-style atomic Executor receipts (v10).
+
+Provides typed results to Goal/Prerequisite parents; never executes tools,
+changes user scope, grants permission or declares full-goal completion.
+"""
+from __future__ import annotations
+import ntpath
+import re
+from collections.abc import Mapping
+
+ATOMIC_MODEL_DECISION_LIMIT = 2
+TERMINAL_OUTCOMES = frozenset({"VERIFIED", "BLOCKED", "NEEDS_PREREQUISITE"})
+# UNKNOWN may occur only in tool observations, never in Executor Terminal.
+INTERMEDIATE_STATES = frozenset({"OBSERVING", "RESOLVING"})
+_PREREQUISITES = ("PARENT_MISSING", "PREREQUISITE", "DEPENDENCY", "SOURCE_REQUIRED",
+                  "SOURCE_LOCATION", "ENVIRONMENT_MISSING")
+_DENIALS = ("SCOPE_REJECTED", "PERMISSION_DENIED", "WRITE_CEILING", "NOT_AUTHORIZED")
+_MULTI_STAGE = re.compile(
+    r"(?:如果|若|倘若|當).{0,100}?(?:不存在|缺失|沒有|失敗).{0,100}?"
+    r"(?:建立|創建|新增|修復|下載|安裝)"
+    r"|(?:最後|接著|然後|再(?:次)?).{0,30}?(?:驗證|確認|檢查)"
+    r"|\\bif\\b.{0,100}?\\b(?:missing|absent)\\b.{0,100}?\\b(?:create|repair)\\b",
+    re.I,
+)
+_COMPOUND_ACTION = re.compile(
+    r"(?:並|且|還要|再|接著|然後|同時).{0,32}?"
+    r"(?:寫入|修改|刪除|編譯|下載|部署|安裝|複製|建立檔案|執行命令)"
+    r"|\b(?:and then|also|followed by)\b.{0,32}?"
+    r"\b(?:write|modify|delete|download|deploy|install|copy|run)\b",
+    re.I,
+)
+
+
+def single_directory_contract_target(goal: str, action_path: str) -> str:
+    """Use a bound one-directory goal; never mistake a compound task for mkdir."""
+    from agent_core.target_path_contract import extract_target_contract
+    from agent_core.goal_prerequisite_resolution import source_requirement
+    contract = extract_target_contract(goal)
+    if (not isinstance(contract, Mapping)
+            or contract.get("target_kind") != "DIRECTORY_ONLY"
+            or contract.get("binding_status") != "BOUND"
+            or contract.get("required_top_level_entries")
+            or source_requirement(goal) != "NOT_REQUIRED"
+            or _COMPOUND_ACTION.search(goal)):
+        return ""
+    target = str(contract.get("requested_target") or "")
+    if not target or not re.match(r"^[A-Za-z]:[\\/]", target):
+        return ""
+    from agent_core.semantic_capability_resolution import translate_goal_action
+    if translate_goal_action(goal).get("canonical_tool") != "create_directory":
+        return ""
+    normalized = ntpath.normcase(ntpath.normpath(target))
+    return normalized if normalized == ntpath.normcase(ntpath.normpath(action_path)) else ""
+
+
+def isolated_task_model_budget(goal: str, loop) -> int | None:
+    """Bound an explicit atomic task to <=2 model decisions.
+
+    Compound and deployment goals retain the orchestration budget: they must
+    be decomposed into child atomic tasks by their caller, not silently forced
+    into two total turns.
+    """
+    contract = getattr(loop, "atomic_task_contract", None)
+    if isinstance(contract, Mapping) and contract.get("schema") == "SMARTAGENT_ATOMIC_TASK_V1":
+        if contract.get("task_id") == getattr(loop, "task_id", None):
+            return ATOMIC_MODEL_DECISION_LIMIT
+    from agent_core.task_requirement import assess_task_requirement, no_tool_terminal_candidate
+    requirement = assess_task_requirement(goal)
+    if no_tool_terminal_candidate(requirement):
+        return ATOMIC_MODEL_DECISION_LIMIT
+    if requirement.get("external_information_required"):
+        return None
+    ops = set(requirement.get("required_operations") or [])
+    if ops == {"READ"} and not _COMPOUND_ACTION.search(goal) and not _MULTI_STAGE.search(goal):
+        return ATOMIC_MODEL_DECISION_LIMIT
+    from agent_core.target_path_contract import extract_target_contract
+    target = extract_target_contract(goal)
+    if isinstance(target, Mapping) and target.get("target_kind") == "DIRECTORY_ONLY":
+        if target.get("binding_status") == "BOUND" and not _COMPOUND_ACTION.search(goal):
+            return ATOMIC_MODEL_DECISION_LIMIT
+    return None
+
+
+def blocked_disposition(goal_context: Mapping, history: list[dict],
+                        rejected: list[dict]) -> tuple[str, str]:
+    """Converge the latest *actual* runtime failure, not Planner prose.
+
+    A previously successful stat is not proof that a later Action Admission
+    succeeded. Keep the last rejection's exact code and fail closed.
+    """
+    last_rejection = rejected[-1] if rejected else {}
+    last_observation = history[-1] if history else {}
+    rejected_round = int(last_rejection.get("round") or 0)
+    observed_round = int(last_observation.get("round") or 0)
+    if last_rejection and rejected_round >= observed_round:
+        denial = str(last_rejection.get("reason_code") or "").upper()[:120]
+        if any(code in denial for code in (
+            "DIRECTORY_PARENT_NOT_EXISTING_DIRECTORY",
+            "DIRECTORY_PARENT_NOT_A_DIRECTORY", "PARENT_MISSING",
+            "CONFIRMED_MISSING_PREREQUISITE_DIRECTORY",
+            "DIRECTORY_PARENT_MISSING",
+        )):
+            return "NEEDS_PREREQUISITE", "ACTION_PREREQUISITE_MISSING:" + denial[:80]
+        return "BLOCKED", "ACTION_ADMISSION_REJECTED:" + denial[:90]
+    for entry in reversed(history[-2:]):
+        receipt = entry.get("receipt") or {}
+        status = str(receipt.get("status") or "").upper()
+        reason = str(receipt.get("reason") or "").upper()
+        if status not in {"FAILED", "REJECTED", "UNKNOWN"}:
+            continue
+        if any(code in reason for code in (
+            *_PREREQUISITES,
+            "DIRECTORY_PARENT_NOT_EXISTING_DIRECTORY",
+            "DIRECTORY_PARENT_NOT_A_DIRECTORY",
+            "DIRECTORY_PARENT_MISSING",
+        )):
+            return "NEEDS_PREREQUISITE", reason[:120]
+        # A failed actual ToolResult is a concrete blocker, not missing
+        # Planner evidence. Preserve its exact, bounded original code.
+        return "BLOCKED", "ACTION_TOOL_RESULT:" + reason[:95]
+    if str(goal_context.get("source_requirement") or "") == "REQUIRED":
+        category = str(goal_context.get("next_category") or "")
+        if category in {
+            "SOURCE_LOCATION_OR_SCOPE_REQUIRED", "SOURCE_SCOPE_AUTHORIZATION_REQUIRED",
+            "RESOLVE_REGISTERED_SOURCE_ARTIFACT", "VERIFY_SOURCE_CONTENTS",
+            "DISCOVER_SOURCE_WITHIN_SCOPE", "CHECK_DEPLOYMENT_ADMISSION",
+        }:
+            return "NEEDS_PREREQUISITE", category
+    return "BLOCKED", "PLANNER_UNCERTAINTY_NOT_VERIFIED"
+
+
+def action_result_receipt(action: dict, receipt: dict,
+                          evidence_ref: str, model_round: int) -> dict:
+    """Actual ActionResult receipt, never whole-task proof from a successful tool."""
+    status = str(receipt.get("status") or "UNKNOWN").upper()
+    reason = str(receipt.get("reason") or "UNKNOWN")[:120]
+    executed = receipt.get("executed") is True
+    from .minimal_admission import action_is_mutating
+    # Action observations are NEVER terminal, regardless of tool success.
+    # Only Runtime GoalEvidence can publish the terminal VERIFIED receipt.
+    outcome = "RESOLVING" if status in {"UNKNOWN", "RUNNING"} else "OBSERVING"
+    return {
+        "schema": "SMARTAGENT_ATOMIC_EXECUTOR_RESULT_V1", "outcome": outcome,
+        "reason_code": reason, "tool_status": status,
+        "tool": str(action.get("tool") or "")[:64],
+        "action_id": str(action.get("action_id") or "")[:96],
+        "evidence_ref": str(evidence_ref)[:128], "model_round": int(model_round),
+        "executed": executed, "goal_verified": False,
+        "executor_state": outcome, "terminal_status": "",
+        "original_tool_status": status,
+        "side_effect_may_have_occurred": bool(executed and action_is_mutating(action)),
+    }
+
+
+def blocked_result(outcome: str, reason: str, model_round: int) -> dict:
+    # An unresolved attempt is a BLOCKED verification process, not a claim
+    # that the original side effect failed. Never export UNKNOWN.
+    state = outcome if outcome in TERMINAL_OUTCOMES else "BLOCKED"
+    return {
+        "schema": "SMARTAGENT_ATOMIC_EXECUTOR_RESULT_V1", "outcome": state,
+        "reason_code": str(reason)[:120], "tool_status": "NOT_EXECUTED",
+        "tool": "", "action_id": "", "evidence_ref": "",
+        "model_round": int(model_round), "executed": False,
+        "goal_verified": False, "executor_state": "TERMINAL",
+        "terminal_status": state, "original_tool_status": "",
+        "side_effect_outcome_confirmed": False,
+    }

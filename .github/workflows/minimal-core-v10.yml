@@ -1,0 +1,89 @@
+name: Minimal Core v10 - Decision and Runtime Regression
+
+on:
+  push:
+    branches:
+      - refactor/pokeclaw-core-loop-20261108
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Compile modified core modules
+        run: |
+          python -m py_compile source/WebAgent/minimal_decision.py
+          python -m py_compile source/WebAgent/minimal_admission.py
+          python -m py_compile source/WebAgent/minimal_core_loop.py
+          python -m py_compile source/agent_core/tri_one_runtime_terminal.py
+          python -m py_compile source/agent_core/tri_one_task_result.py
+          python -m py_compile source/WebAgent/protocol_loop.py
+          python -m py_compile source/WebAgent/protocol.py
+          python -m py_compile source/RemoteAgent/telegram_webagent_worker.py
+          python -m py_compile source/agent_core/action_dependencies.py
+      - name: Validate source protocol manifest (fail closed)
+        env:
+          PYTHONPATH: source
+        run: python -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.')['hash_verification'])"
+      - name: Validate preexisting Tri-One V1 contract and shared-worker selection
+        env:
+          PYTHONPATH: source
+        run: |
+          python source/agent_core/validate_tri_one_task_result.py
+          python source/WebAgent/tests/validate_tri_one_5b_shared_worker.py
+      - name: Execute isolated core regressions
+        env:
+          PYTHONPATH: source
+        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_tri_one_runtime_terminal.py source/WebAgent/tests/test_tri_one_egress_v10.py -v --tb=short
+
+  windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Compile Minimal Core and Windows Runtime
+        run: |
+          python -m py_compile source/WebAgent/minimal_decision.py
+          python -m py_compile source/WebAgent/minimal_admission.py
+          python -m py_compile source/WebAgent/minimal_core_loop.py
+          python -m py_compile source/RemoteAgent/telegram_webagent_worker.py
+      - name: Check embedded RCA Collector PowerShell syntax
+        shell: powershell
+        run: |
+          $source = [IO.File]::ReadAllText("collect.bat")
+          $marker = "# POWERSHELL_BEGIN"
+          $offset = $source.LastIndexOf($marker, [StringComparison]::Ordinal)
+          if ($offset -lt 0) { throw "Collector PowerShell block missing" }
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput(
+            $source.Substring($offset + $marker.Length),
+            [ref]$tokens,
+            [ref]$parseErrors
+          ) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            foreach ($e in ($parseErrors | Select-Object -First 8)) {
+              Write-Host ("COLLECTOR_PARSE_ERROR at {0}:{1} - {2} - token={3}" -f $e.Extent.StartLineNumber, $e.Extent.StartColumnNumber, $e.Message, $e.Extent.Text)
+            }
+            throw "COLLECTOR_POWERSHELL_SYNTAX_INVALID"
+          }
+      - name: Validate Windows source protocol manifest (fail closed)
+        env:
+          PYTHONPATH: source
+        run: python -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.')['hash_verification'])"
+      - name: Windows real filesystem and Collector RCA regression
+        env:
+          PYTHONPATH: source
+        run: python -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_tri_one_runtime_terminal.py source/WebAgent/tests/test_tri_one_egress_v10.py source/WebAgent/tests/test_minimal_core_collector_windows.py source/WebAgent/tests/validate_collect_rca_v3_it.py source/WebAgent/tests/test_git27_collector_causal_coverage.py -v --tb=short

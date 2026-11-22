@@ -1,12 +1,12 @@
-"""Windows regression: Telegram CMD follows ACL mode; fresh install defaults OFF.
+"""Windows regression: explicitly authenticated Telegram CMD is a host channel.
 
-Run with PYTHONPATH=source. No real network access, Telegram Bot or ACL changes.
-Only harmless echo commands are launched in a temporary workspace.
+Human-approved CMD is independent of Agent ACL/Turbo state and may contain
+delete operations. It is NEVER callable as an Agent action. All executions here
+are mocked unless a specific disposable Windows test invokes a harmless echo.
 """
 from __future__ import annotations
 
 import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,145 +18,126 @@ from RemoteAgent.telegram_direct_cmd import (
 from agent_core.windows_security import restricted_executor_required
 
 
+@unittest.skipUnless(os.name == "nt", "Windows desktop CMD")
 class TelegramCmdAclModesIT(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="tgcmd-acl-modes-")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name).resolve()
+        temp = tempfile.TemporaryDirectory(prefix="tgcmd-manual-host-")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
         self.policy = CmdControlPolicy(True, frozenset({11}), frozenset({22}))
         self.request = (
             f'run cmd by TG\ncmd path: "{self.root}"\n'
             'command:\n"echo hello"\n"echo %TIME%"'
         )
 
-    def test_fresh_clone_without_acl_profile_is_software_guard_default(self):
-        missing_profile = (
-            self.root / "localdata" / "secure" / "windows_security"
-            / "security_profile.json"
-        )
-        self.assertFalse(missing_profile.exists())
-        # Existing bootstrap provisions explicit mode OFF. Without any local
-        # state after git clone, no ACL profile or activation is inherited.
+    def _batch_result(self, count=2):
+        return {
+            "console_started": True, "console_exit_code": 0,
+            "completed": True, "reason": "",
+            "results": [
+                {"line": i, "exit_code": 0, "stdout": "MANUAL_HOST",
+                 "stderr": "", "status": "SUCCESS", "timed_out": False}
+                for i in range(1, count + 1)
+            ],
+        }
+
+    def test_fresh_clone_does_not_change_acl_on_its_own(self):
+        profile = (self.root / "localdata" / "secure" /
+                   "windows_security" / "security_profile.json")
+        self.assertFalse(profile.exists())
         with patch.dict(os.environ, {
             "SMARTAGENT_RESTRICTED_EXECUTOR_REQUIRED": "0",
         }):
-            self.assertFalse(restricted_executor_required(missing_profile))
-        self.assertFalse(missing_profile.with_name("acl_mode.json").exists())
+            self.assertFalse(restricted_executor_required(profile))
+        self.assertFalse(profile.with_name("acl_mode.json").exists())
 
-    def test_acl_off_real_cmd_runs_through_existing_bounded_process(self):
-        from agent_core.bounded_process import run_bounded_process
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": (str(self.root),)}), \
-             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
-            response = execute_cmd_request(
-                self.request, user_id=11, chat_id=22,
-                policy=self.policy, runner=run_bounded_process,
+    def test_all_acl_and_turbo_modes_use_same_visible_host_console(self):
+        # Patch the legacy safety gates to RAISE; these are Agent-only gates
+        # and MUST NOT even be queried by the paired human CMD path.
+        for acl in ("off", "on"):
+            for turbo in ("off", "on"):
+                with self.subTest(acl=acl, turbo=turbo), \
+                     patch("agent_core.windows_security.restricted_executor_required",
+                           side_effect=AssertionError("TG_MUST_NOT_USE_RESTRICTED_EXECUTOR")), \
+                     patch("agent_core.workspace_access.access_snapshot",
+                           side_effect=AssertionError("TG_MUST_NOT_REQUIRE_WORKSPACE_POLICY")), \
+                     patch("agent_core.command_security.inspect_command",
+                           side_effect=AssertionError("TG_MUST_NOT_USE_AGENT_COMMAND_GUARD")), \
+                     patch("agent_core.turbo_sandbox.resolve_turbo_state",
+                           side_effect=AssertionError("TG_MUST_NOT_REQUIRE_TURBO")), \
+                     patch("RemoteAgent.telegram_console_cmd.run_visible_cmd_batch",
+                           return_value=self._batch_result()) as visible:
+                    result = execute_cmd_request(
+                        self.request, user_id=11, chat_id=22, policy=self.policy,
+                    )
+                    self.assertEqual(result["status"], "SUCCESS", result)
+                    self.assertIn("Telegram 手動 Host CMD", result["message"])
+                    self.assertIn("Windows Token", result["message"])
+                    visible.assert_called_once()
+                    self.assertEqual(visible.call_args.args[0],
+                                     ("echo hello", "echo %TIME%"))
+
+    def test_del_rmdir_and_outside_workspace_are_explicit_human_commands(self):
+        # This test does NOT execute destructive commands: it proves routing.
+        parent = self.root.parent
+        target = parent / "safe-fake-target"
+        msg = (f'run cmd by TG\ncmd path: "{parent}"\n'
+               'command:\n'
+               f'"del /q {target}.txt"\n'
+               f'"rmdir /s /q {target}"')
+        with patch("agent_core.workspace_access.access_snapshot",
+                   side_effect=AssertionError("NO_WORKSPACE_CEILING_FOR_HUMAN")), \
+             patch("agent_core.command_security.inspect_command",
+                   side_effect=AssertionError("NO_AGENT_COMMAND_FILTER")), \
+             patch("RemoteAgent.telegram_console_cmd.run_visible_cmd_batch",
+                   return_value=self._batch_result()) as visible:
+            result = execute_cmd_request(
+                msg, user_id=11, chat_id=22, policy=self.policy,
+                trusted_install_root=self.root,
             )
-        self.assertEqual(response["status"], "SUCCESS", response)
-        self.assertEqual([row["exit_code"] for row in response["results"]], [0, 0])
-        self.assertIn("ACL OFF / Software Guard", response["message"])
-        self.assertIn("hello", response["message"])
-        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(visible.call_args.kwargs["cwd"], parent)
+        self.assertTrue(visible.call_args.args[0][0].startswith("del /q "))
+        self.assertTrue(visible.call_args.args[0][1].startswith("rmdir /s /q "))
 
-    def test_acl_on_keeps_restricted_executor_routing(self):
-        from agent_core.bounded_process import run_bounded_process
-        invocations = []
-        def restricted(command, **kwargs):
-            invocations.append((command, kwargs))
-            return {"process_started": True, "exit_code": 0,
-                    "stdout": "restricted-ok", "stderr": "",
-                    "timed_out": False}
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=True), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": (str(self.root),)}), \
-             patch("agent_core.restricted_executor_client.execute_restricted",
-                   side_effect=restricted), \
-             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
-            response = execute_cmd_request(
-                self.request, user_id=11, chat_id=22,
-                policy=self.policy, runner=run_bounded_process,
-            )
-        self.assertEqual(response["status"], "SUCCESS", response)
-        self.assertEqual(len(invocations), 2)
-        self.assertIn("ACL ON / Restricted Executor", response["message"])
-
-    def test_acl_off_still_rejects_untrusted_shell_command(self):
-        bad_request = self.request.replace('"echo hello"', '"diskpart"')
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": (str(self.root),)}), \
-             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
-            with self.assertRaisesRegex(CmdControlError, "COMMAND_REJECTED"):
-                execute_cmd_request(
-                    bad_request, user_id=11, chat_id=22,
-                    policy=self.policy,
-                    runner=lambda *args, **kwargs: self.fail("No process should start"),
-                )
-
-    def test_acl_off_does_not_bypass_telegram_admin_allowlist(self):
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False), \
-             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
-            with self.assertRaisesRegex(CmdControlError, "TG_CMD_ADMIN_NOT_AUTHORIZED"):
-                execute_cmd_request(
-                    self.request, user_id=999, chat_id=22,
-                    policy=self.policy,
-                    runner=lambda *args, **kwargs: self.fail("No process should start"),
-                )
-
-    def test_default_install_root_cwd_is_accepted_without_workspace_grant(self):
-        invoked = []
-        def benign_runner(*args, **kwargs):
-            invoked.append((args, kwargs))
-            return {"process_started": True, "exit_code": 0,
-                    "stdout": "ok", "stderr": "", "timed_out": False}
-        # New-install default policy typically permits a separate default
-        # workspace, not the SmartAgent source/installation root. The actual
-        # Telegram dispatcher supplies its root as a trusted argument.
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": ()}), \
-             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
-            reply = execute_cmd_request(
-                self.request, user_id=11, chat_id=22, policy=self.policy,
-                runner=benign_runner, trusted_install_root=self.root,
-            )
-        self.assertEqual(reply["status"], "SUCCESS")
-        self.assertEqual(len(invoked), 2)
-        self.assertIn("ACL OFF / Software Guard", reply["message"])
-
-    def test_install_root_exception_does_not_cover_sibling_or_parent(self):
-        sibling = self.root.parent
-        altered = self.request.replace(str(self.root), str(sibling))
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": ()}), \
-             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
-            with self.assertRaisesRegex(CmdControlError, "WORKSPACE_NOT_AUTHORIZED"):
-                execute_cmd_request(
-                    altered, user_id=11, chat_id=22, policy=self.policy,
-                    trusted_install_root=self.root,
-                    runner=lambda *args, **kwargs: self.fail("must not execute"),
-                )
-
-    def test_acl_off_requires_preexisting_authorized_workspace(self):
-        with patch("agent_core.windows_security.restricted_executor_required",
-                   return_value=False), \
-             patch("agent_core.workspace_access.access_snapshot",
-                   return_value={"writable_workspaces": ()}), \
-             patch("RemoteAgent.telegram_direct_cmd.os.name", "nt"):
-            with self.assertRaisesRegex(CmdControlError, "WORKSPACE_NOT_AUTHORIZED"):
+    def test_missing_private_chat_authorization_is_never_a_shell_grant(self):
+        with patch("RemoteAgent.telegram_console_cmd.run_visible_cmd_batch") as visible:
+            with self.assertRaisesRegex(CmdControlError, "TG_CMD_RECEIVER_AUTH_REQUIRED"):
+                execute_cmd_request(self.request, user_id=11, chat_id=22)
+            with self.assertRaisesRegex(CmdControlError, "TG_CMD_DISABLED"):
                 execute_cmd_request(
                     self.request, user_id=11, chat_id=22,
-                    policy=self.policy,
-                    runner=lambda *args, **kwargs: self.fail("No process should start"),
+                    policy=CmdControlPolicy(False, frozenset({11}), frozenset({22})),
                 )
+            with self.assertRaisesRegex(CmdControlError, "TG_CMD_ADMIN_NOT_AUTHORIZED"):
+                execute_cmd_request(
+                    self.request, user_id=999, chat_id=22, policy=self.policy,
+                )
+            with self.assertRaisesRegex(CmdControlError, "TG_CMD_ADMIN_NOT_AUTHORIZED"):
+                execute_cmd_request(
+                    self.request, user_id=11, chat_id=999, policy=self.policy,
+                )
+            visible.assert_not_called()
+
+    def test_legacy_injected_test_runner_does_not_become_agent_executor(self):
+        seen = []
+
+        def fake_runner(argv, **kwargs):
+            seen.append((argv, kwargs))
+            return {"process_started": True, "exit_code": 0,
+                    "stdout": "ok", "stderr": "", "timed_out": False}
+
+        with patch("agent_core.windows_security.restricted_executor_required",
+                   side_effect=AssertionError("NO_RESTRICTED_SERVICE")), \
+             patch("agent_core.workspace_access.access_snapshot",
+                   side_effect=AssertionError("NO_WORKSPACE_ACCESS")):
+            reply = execute_cmd_request(
+                self.request, user_id=11, chat_id=22,
+                policy=self.policy, runner=fake_runner,
+            )
+        self.assertEqual(reply["status"], "SUCCESS")
+        self.assertEqual(len(seen), 2)
+        self.assertTrue(all(x[0][-2] == "/c" for x in seen))
 
 
 if __name__ == "__main__":

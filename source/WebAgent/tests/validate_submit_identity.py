@@ -1,6 +1,8 @@
 """Fixed-count/recycled DOM ownership and fresh reconnect handshakes."""
 import json
+from unittest.mock import patch
 from agent_core.web_ui.providers.chatgpt.adapter import ChatGPTUIAdapter
+from agent_core.web_ui.providers.chatgpt.profiles import SEARCH_UNIT_2026_PROFILE
 from agent_core.session_protocol import SessionProtocol
 from WebAgent.tests.validate_web_ui_contract import FakePage
 
@@ -34,7 +36,11 @@ def run():
     page = FakePage()
     page.users = [page.user('previous request', 'fallback-turn-5:0:user', 1)]
     page.assistants = [page.assistant('previous answer', 'fallback-turn-5:1:assistant', 2)]
-    adapter = ChatGPTUIAdapter(page)
+    # This fixture implements the canonical profile, independently of any
+    # machine-local calibrated selector. Compatibility is still exercised.
+    with patch.object(ChatGPTUIAdapter, 'load_active_profile',
+                      return_value=SEARCH_UNIT_2026_PROFILE):
+        adapter = ChatGPTUIAdapter(page)
     prompt = adapter.prepare_transport_prompt('same logical request')
     assert prompt != adapter.prepare_transport_prompt('same logical request')
     scope = adapter.capture_request(prompt)

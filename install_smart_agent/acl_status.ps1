@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [switch]$RestoreTurboAfterUpgrade,
     [Parameter(Mandatory=$true)][ValidateSet('on','off')][string]$Mode,
     [Parameter(Mandatory=$true)][string]$ProjectRoot,
     [string]$ControllerSid = ''
@@ -13,6 +14,8 @@ $ProfilePath = Join-Path $SecurityRoot 'security_profile.json'
 $AccessPolicyPath = Join-Path $SecurityRoot 'workspace_access_policy.json'
 $ModePath = Join-Path $SecurityRoot 'acl_mode.json'
 $TaskName = 'SmartAgent Restricted Executor'
+$MachineRoot = Join-Path $env:ProgramData 'SmartAgent'
+$RevocationMarker = Join-Path $MachineRoot 'acl_revocation_pending.json'
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -40,7 +43,7 @@ function Assert-NoReparsePoints([string]$Path) {
     if ($reparse) { throw "acl_mode_reparse_point_forbidden:$($reparse.FullName)" }
 }
 
-function Write-ModeState([string]$Value, [string]$ExecutorSid, [string]$ControllerSid) {
+function Write-ModeState([string]$Value, [string]$ExecutorSid, [string]$ControllerSid, [string]$RetiredUser = '', [string]$RetiredSid = '') {
     $directory = Split-Path -Parent $ModePath
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     $payload = [ordered]@{
@@ -50,6 +53,10 @@ function Write-ModeState([string]$Value, [string]$ExecutorSid, [string]$Controll
         controller_sid = $ControllerSid
         updated_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     }
+    if ($RetiredUser) {
+        $payload.retired_executor_user = $RetiredUser
+        $payload.retired_executor_sid = $RetiredSid
+    }
     $temporary = "$ModePath.tmp"
     [IO.File]::WriteAllText($temporary, ($payload | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
     Move-Item -LiteralPath $temporary -Destination $ModePath -Force
@@ -57,6 +64,76 @@ function Write-ModeState([string]$Value, [string]$ExecutorSid, [string]$Controll
     if ($ControllerSid -match '^S-1-' -and $ControllerSid -ne 'S-1-5-32-545') { $modeAcl += "*$ControllerSid`:R" }
     if ($ExecutorSid -match '^S-1-') { $modeAcl += "*$ExecutorSid`:R" }
     Invoke-Icacls $modeAcl
+}
+
+function Clear-AutoApproveOnAclOn {
+    # A completed ACL OFF -> ON transition must not retain latent host
+    # auto-confirmation for the next ACL OFF session. Do not touch Turbo roots.
+    # Run only inside a transitioning_on transaction, before native enrollment.
+    if (-not (Test-Path -LiteralPath $AccessPolicyPath -PathType Leaf)) { return }
+    $policy = Get-Content -LiteralPath $AccessPolicyPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json -ErrorAction Stop
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1') {
+        throw 'AUTO_APPROVE_POLICY_INVALID_DURING_ACL_ON'
+    }
+    if (-not $policy.PSObject.Properties['auto_approve_requested'] -or
+        $policy.auto_approve_requested -ne $true) { return }
+    $policy.auto_approve_requested = $false
+    $policy.revision = [long]$policy.revision + 1
+    $policy.updated_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $temp = "$AccessPolicyPath.git65-auto-approve-off.tmp"
+    try {
+        [IO.File]::WriteAllText($temp, ($policy | ConvertTo-Json -Depth 16),
+            (New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temp -Destination $AccessPolicyPath -Force -ErrorAction Stop
+    } finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    }
+    $post = Get-Content -LiteralPath $AccessPolicyPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json -ErrorAction Stop
+    if ($post.auto_approve_requested -ne $false -or
+        [long]$post.revision -ne [long]$policy.revision) {
+        throw 'AUTO_APPROVE_POLICY_RESET_POSTCONDITION_FAILED'
+    }
+    Write-Host '[SmartAgent ACL] AUTO_APPROVE_REQUESTED=OFF; Effective=OFF (ACL ON transition)' -ForegroundColor Cyan
+}
+
+function Clear-TurboPolicyOnAclOff {
+    # ACL OFF revokes Turbo roots and intent. ACL ON never restores this state.
+    if (-not (Test-Path -LiteralPath $AccessPolicyPath -PathType Leaf)) { return }
+    $policy = Get-Content -LiteralPath $AccessPolicyPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json -ErrorAction Stop
+    if ($policy.schema -ne 'SMARTAGENT_WORKSPACE_ACCESS_POLICY_V1') {
+        throw 'TURBO_POLICY_INVALID_DURING_ACL_OFF'
+    }
+    $policy.turbo_roots = @()
+    # Reset latent auto-confirmation whenever ACL is revoked. A later ACL
+    # OFF session must require an explicit fresh human opt-in.
+    if ($policy.PSObject.Properties['auto_approve_requested']) {
+        $policy.auto_approve_requested = $false
+    } else {
+        $policy | Add-Member -NotePropertyName 'auto_approve_requested' -NotePropertyValue $false
+    }
+    if (-not $policy.PSObject.Properties['turbo_requested']) {
+        $policy | Add-Member -NotePropertyName 'turbo_requested' -NotePropertyValue $false
+    } else {
+        $policy.turbo_requested = $false
+    }
+    $policy.revision = [long]$policy.revision + 1
+    $newPolicyUpdatedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($policy.PSObject.Properties['updated_at']) {
+        $policy.updated_at = $newPolicyUpdatedAt
+    } else {
+        $policy | Add-Member -NotePropertyName 'updated_at' -NotePropertyValue $newPolicyUpdatedAt
+    }
+    $temp = "$AccessPolicyPath.git46-acl-off.tmp"
+    try {
+        [IO.File]::WriteAllText($temp, ($policy | ConvertTo-Json -Depth 16),
+            (New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temp -Destination $AccessPolicyPath -Force -ErrorAction Stop
+    } finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Assert-SafeInstallRoot([string]$Path) {
@@ -256,6 +333,10 @@ function Get-WorkspaceAccessPolicy {
     })
     if ($writable.Count -lt 1) { throw 'acl_workspace_access_policy_has_no_writable_workspace' }
     return [pscustomobject]@{
+        turbo_requested = ($policy.turbo_requested -eq $true)
+        turbo_roots = @($policy.turbo_roots | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_)
+        } | ForEach-Object { [IO.Path]::GetFullPath([string]$_) } | Select-Object -Unique)
         writable_workspaces = @($writable | Select-Object -Unique)
         read_only_roots = @($policy.read_only_roots | ForEach-Object {
             if (-not [string]::IsNullOrWhiteSpace([string]$_)) { [IO.Path]::GetFullPath([string]$_) }
@@ -275,11 +356,18 @@ function Assert-OnEnvironmentReady {
     if (-not (Test-Path -LiteralPath $protocolManifest -PathType Leaf)) {
         throw "ACL_ON_ENVIRONMENT_NOT_READY:missing=$protocolManifest; run install_smart_agent\launchers\install_smart_agent.bat"
     }
+    $source = Join-Path $ProjectRoot 'source'
+    $validation = 'import sys; sys.path.insert(0, sys.argv[1]); from agent_core.protocol_manifest import validate_protocol_manifest; result = validate_protocol_manifest(sys.argv[2]); mismatches = result["hash_mismatches"]; sys.exit("protocol_manifest_hash_mismatch:" + ",".join(mismatches) if mismatches else 0)'
+    # Windows PowerShell's native argument parser strips embedded double quotes.
+    $validation = $validation.Replace('"', "'")
+    & $executorPython -I -c $validation $source $ProjectRoot | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'ACL_ON_PROTOCOL_MANIFEST_UNVERIFIED' }
     return $executorPython
 }
 
 function Read-MachineAuthorization {
-    $path = Join-Path ([string]$env:ProgramData) 'SmartAgent\machine_authorization.json'
+    $path = Join-Path $MachineRoot 'machine_authorization.json'
+    Assert-RevocationPath $path
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         return [pscustomobject]@{ state='MISSING'; path=$path; value=$null }
     }
@@ -298,31 +386,379 @@ function Read-MachineAuthorization {
     }
 }
 
-function Wait-ExecutorReady([string]$ExpectedMode, [string]$Endpoint) {
+function Get-RecordedValue($Record, [string]$Name) {
+    if ($Record -and $Record.PSObject.Properties[$Name]) { return $Record.$Name }
+}
+
+function Get-ExecutorTask {
+    $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq $TaskName })
+    if ($tasks.Count -gt 1 -or ($tasks.Count -eq 1 -and $tasks[0].TaskPath -ne '\')) {
+        throw 'acl_executor_task_ambiguous'
+    }
+    if ($tasks.Count -eq 1) { return $tasks[0] }
+}
+
+function Get-ExecutorTaskBinding($Task) {
+    $actions = @($Task.Actions)
+    $python = if ($actions.Count -eq 1) { [string]$actions[0].Execute } else { '' }
+    $suffix = '\.venv\Scripts\python.exe'
+    $executorArguments = '-I -c "import os,sys,runpy; sys.path.insert(0,os.getcwd()); runpy.run_module(''agent_core.restricted_executor_service'',run_name=''__main__'')"'
+    if (-not [IO.Path]::IsPathRooted($python) -or
+        -not $python.EndsWith($suffix, [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$actions[0].Arguments -cnotin @('-m agent_core.restricted_executor_service', $executorArguments) -or
+        [string]$Task.Principal.LogonType -ne 'Password' -or
+        [string]$Task.Principal.RunLevel -notin @('Limited','LeastPrivilege')) {
+        throw 'acl_executor_task_ownership_unverified'
+    }
+    $root = [IO.Path]::GetFullPath($python.Substring(0, $python.Length - $suffix.Length)).TrimEnd('\')
+    $directory = Join-Path $root 'localdata\secure\windows_security\executor_code'
+    if ([string]$actions[0].WorkingDirectory -ine $directory) {
+        throw 'acl_executor_task_ownership_unverified'
+    }
+    $principal = [string]$Task.Principal.UserId
+    $sid = if ($principal -match '^S-1-') {
+        [Security.Principal.SecurityIdentifier]::new($principal)
+    } else {
+        [Security.Principal.NTAccount]::new($principal).Translate([Security.Principal.SecurityIdentifier])
+    }
+    $account = Get-LocalUser -SID $sid -ErrorAction Stop
+    return [pscustomobject]@{root=$root; sid=[string]$account.SID; user=[string]$account.Name}
+}
+
+function Assert-RevocationPath([string]$Path) {
+    if ($Path -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)') {
+        throw "acl_revocation_path_not_absolute:$Path"
+    }
+    $itemPath = [IO.Path]::GetFullPath($Path)
+    while ($itemPath) {
+        if (Test-Path -LiteralPath $itemPath) {
+            if ((Get-Item -LiteralPath $itemPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "acl_mode_reparse_point_forbidden:$itemPath"
+            }
+        }
+        $itemPath = [IO.Path]::GetDirectoryName($itemPath)
+    }
+}
+
+function Get-ExecutorRevocation($Machine, $LocalProfile, $Task) {
+    if ($Machine.state -eq 'INVALID') { throw 'acl_revocation_machine_authorization_invalid' }
+    $binding = if ($Task) { Get-ExecutorTaskBinding $Task } else { $null }
+    $owner = if ($Machine.value) { $Machine.value } else { $null }
+    if ($owner) { Assert-RevocationPath ([string]$owner.install_root) }
+    $ownerRoot = if ($owner) { [IO.Path]::GetFullPath([string]$owner.install_root).TrimEnd('\') }
+        elseif ($binding) { $binding.root } else { $ProjectRoot }
+    if ($ownerRoot -ieq [IO.Path]::GetPathRoot($ownerRoot).TrimEnd('\')) { throw 'acl_revocation_owner_is_volume_root' }
+    if ($ownerRoot -ine $ProjectRoot -and $LocalProfile) { throw 'acl_revocation_conflicting_local_profile' }
+    $ownerSecurity = Join-Path $ownerRoot 'localdata\secure\windows_security'
+    $ownerProfilePath = Join-Path $ownerSecurity 'security_profile.json'
+    $ownerRuntime = Join-Path $ownerRoot 'localdata\runtime\security'
+    if ($owner -and ([string]$owner.security_profile -ine $ownerProfilePath -or
+            [string]$owner.executor_task_name -ne $TaskName -or
+            ($binding -and ($binding.root -ine $ownerRoot -or $binding.sid -ne [string]$owner.executor_sid -or
+                $binding.user -ne [string]$owner.executor_user)))) {
+        throw 'acl_revocation_machine_owner_mismatch'
+    }
+    Assert-RevocationPath $ownerProfilePath
+    $ownerProfile = if ($ownerRoot -ieq $ProjectRoot) { $LocalProfile }
+        elseif (Test-Path -LiteralPath $ownerProfilePath -PathType Leaf) {
+            Get-Content -LiteralPath $ownerProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        }
+    $sid = if ($owner) { [string]$owner.executor_sid } elseif ($binding) { $binding.sid }
+        else { [string](Get-RecordedValue $ownerProfile 'executor_sid') }
+    $user = if ($owner) { [string]$owner.executor_user } elseif ($binding) { $binding.user }
+        else { [string](Get-RecordedValue $ownerProfile 'executor_user') }
+    if ($ownerProfile -and ($ownerProfile.schema -ne 'SMARTAGENT_WINDOWS_SECURITY_V2' -or
+            [string]$ownerProfile.executor_sid -ne $sid -or [string]$ownerProfile.executor_user -ne $user -or
+            [string]$ownerProfile.executor_code_root -ine (Join-Path $ownerSecurity 'executor_code') -or
+            [string]$ownerProfile.executor_task_name -ne $TaskName)) {
+        throw 'acl_revocation_profile_owner_mismatch'
+    }
+    if ($binding -and -not $owner -and -not $ownerProfile -and
+        $binding.user -ne 'SmartAgentExecutor' -and $binding.user -ne (Get-InstanceExecutorName $ownerRoot)) {
+        throw 'acl_executor_task_ownership_unverified'
+    }
+    $installPendingPath = Join-Path $ownerSecurity 'executor_install_pending.json'
+    Assert-RevocationPath $installPendingPath
+    if (Test-Path -LiteralPath $installPendingPath -PathType Leaf) {
+        $installPending = Get-Content -LiteralPath $installPendingPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $pendingUser = [string]$installPending.executor_user
+        $pendingSid = [string]$installPending.executor_sid
+        if ($installPending.schema -ne 'SMARTAGENT_EXECUTOR_INSTALL_PENDING_V1' -or
+            ($user -and $pendingUser -ne $user) -or ($sid -and $pendingSid -and $pendingSid -ne $sid) -or
+            (-not $user -and $pendingUser -ne (Get-InstanceExecutorName $ownerRoot))) {
+            throw 'acl_revocation_pending_account_owner_mismatch'
+        }
+        if (-not $sid) {
+            $account = Get-LocalUser -Name $pendingUser -ErrorAction SilentlyContinue
+            if ($account -and $pendingSid -and [string]$account.SID -ne $pendingSid) {
+                throw 'acl_revocation_pending_account_owner_mismatch'
+            }
+            if ($account) { $sid = [string]$account.SID; $user = $pendingUser }
+        }
+    }
+    if ($sid -and $sid -notmatch '^S-1-5-21-(\d+-){3}\d+$') { throw 'acl_revocation_executor_sid_invalid' }
+
+    $journalPath = Join-Path (Split-Path -Parent $Machine.path) 'pending_acl_transaction.json'
+    Assert-RevocationPath $journalPath
+    $journal = if (Test-Path -LiteralPath $journalPath -PathType Leaf) {
+        Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    $journalBound = $false
+    if ($journal) {
+        if ($journal.schema -ne 'SMARTAGENT_PENDING_ACL_TRANSACTION_V1') { throw 'acl_revocation_pending_journal_invalid' }
+        if (-not $sid) {
+            $journalUser = [string]$journal.executor_user
+            $journalSid = [string]$journal.executor_sid
+            if ($journalUser -ne 'SmartAgentExecutor' -and $journalUser -ne (Get-InstanceExecutorName $ProjectRoot)) {
+                throw 'acl_revocation_pending_journal_owner_mismatch'
+            }
+            $account = Get-LocalUser -Name $journalUser -ErrorAction Stop
+            if ([string]$account.SID -ne $journalSid) { throw 'acl_revocation_pending_journal_owner_mismatch' }
+            $sid = $journalSid
+            $user = $journalUser
+        }
+        $journalRoot = [string](Get-RecordedValue $journal 'install_root')
+        if ([string]$journal.executor_sid -ne $sid -or [string]$journal.executor_user -ne $user -or
+            ($journalRoot -and $journalRoot -ine $ownerRoot)) {
+            throw 'acl_revocation_pending_journal_owner_mismatch'
+        }
+        $journalBound = $journalRoot -ieq $ownerRoot
+    }
+    $paths = @(
+        $ownerSecurity, $ownerRuntime, $ownerProfilePath,
+        (Join-Path $ownerRoot '.venv'), (Join-Path $ownerRoot '.venv\Scripts'),
+        (Join-Path $ownerSecurity 'executor_code'), (Join-Path $ownerSecurity 'skills'),
+        (Join-Path $ownerSecurity 'controller_state'), (Join-Path $ownerRuntime 'executor_queue')
+    )
+    foreach ($name in @('authorized_workspace_roots','workspace_traverse_roots','read_only_roots',
+            'denied_write_roots','root_create_denied','skill_roots','runtime_root',
+            'executor_endpoint','controller_state_root','executor_code_root','python_acl_roots')) {
+        $paths += @(Get-RecordedValue $ownerProfile $name)
+    }
+    if ($journalBound) {
+        $paths += @(Get-RecordedValue $journal 'workspace_traverse_roots')
+        $paths += @(Get-RecordedValue $journal 'managed_acl_roots')
+        foreach ($snapshot in @(Get-RecordedValue $journal 'acl_snapshots')) {
+            $paths += @(Get-RecordedValue $snapshot 'path')
+        }
+    }
+    $paths = @($paths | Where-Object { $_ } | Select-Object -Unique)
+    foreach ($path in $paths) { Assert-RevocationPath $path }
+    foreach ($tree in @($ownerSecurity, $ownerRuntime)) {
+        Assert-ContainedPathHasNoReparseAncestor $ownerRoot $tree
+        Assert-NoReparsePoints $tree
+        if (Test-Path -LiteralPath $tree -PathType Container) {
+            $paths += @(Get-ChildItem -LiteralPath $tree -Recurse -Force | ForEach-Object { $_.FullName })
+        }
+    }
+    $paths = @($paths | Select-Object -Unique)
+    return [pscustomobject]@{
+        root=$ownerRoot; sid=$sid; user=$user; paths=$paths
+        profile_path=$ownerProfilePath; journal_path=$journalPath; install_pending=$installPendingPath
+        legacy_scope_incomplete=($sid -and -not (
+            ($ownerProfile -and $ownerProfile.PSObject.Properties['python_acl_roots']) -or
+            ($journalBound -and $journal.PSObject.Properties['managed_acl_roots'])
+        ))
+    }
+}
+
+function Confirm-LegacyExecutorRetirement($Revocation) {
+    if (-not $Revocation.legacy_scope_incomplete) { return }
+    $sid = [Security.Principal.SecurityIdentifier]::new($Revocation.sid)
+    $account = Get-LocalUser -SID $sid -ErrorAction Stop
+    if (-not $account.Enabled) { return }
+    $alias = @($Revocation.sid, $Revocation.user, ".\$($Revocation.user)", "$env:COMPUTERNAME\$($Revocation.user)")
+    $otherTasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+        $_.TaskName -ne $TaskName -and [string]$_.Principal.UserId -in $alias
+    })
+    Write-Warning "The legacy ACL inventory is incomplete. To revoke effective access, ACL OFF must disable the old Windows executor '$($Revocation.user)'."
+    foreach ($other in $otherTasks) {
+        Write-Warning "This task also uses the old account and will be unable to run while it is disabled: $($other.TaskPath)$($other.TaskName)"
+    }
+    $services = @(Get-CimInstance Win32_Service -ErrorAction Stop | Where-Object { $_.StartName -in $alias })
+    foreach ($service in $services) {
+        Write-Warning "This service also uses the old account and will be unable to start while it is disabled: $($service.Name)"
+    }
+    if ((Read-Host 'Type REVOKE to disable the legacy executor and continue') -cne 'REVOKE') {
+        throw 'acl_revocation_legacy_retirement_declined'
+    }
+}
+
+function Disable-LegacyExecutor($Revocation) {
+    if (-not $Revocation.legacy_scope_incomplete) { return }
+    $sid = [Security.Principal.SecurityIdentifier]::new($Revocation.sid)
+    $account = Get-LocalUser -SID $sid -ErrorAction Stop
+    if ($account.Enabled) { Disable-LocalUser -SID $sid -ErrorAction Stop }
+    $account = Get-LocalUser -SID $sid -ErrorAction Stop
+    if ($account.Enabled) { throw 'acl_revocation_legacy_executor_still_enabled' }
+    $user = "$env:COMPUTERNAME\$($Revocation.user)"
+    $processes = @(Get-Process -IncludeUserName -ErrorAction Stop | Where-Object { $_.UserName -ieq $user })
+    if ($processes) { throw "acl_revocation_legacy_executor_has_running_processes:$($Revocation.user)" }
+}
+
+function Assert-AdminOwnedRevocationMarker {
+    $acl = Get-Acl -LiteralPath $RevocationMarker
+    $trusted = @('S-1-5-18', 'S-1-5-32-544')
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    $mutation = [Security.AccessControl.FileSystemRights]::Write -bor
+        [Security.AccessControl.FileSystemRights]::Delete -bor
+        [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [Security.AccessControl.FileSystemRights]::TakeOwnership
+    if ($owner -notin $trusted -or -not $acl.AreAccessRulesProtected -or
+        @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
+            $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -notin $trusted -and
+                ($_.FileSystemRights -band $mutation)
+        }).Count) {
+        throw 'acl_revocation_marker_unprotected'
+    }
+}
+
+function Read-ExecutorRevocationMarker($Task, $Machine) {
+    Assert-RevocationPath $RevocationMarker
+    if (-not (Test-Path -LiteralPath $RevocationMarker)) { return }
+    if (-not (Test-Path -LiteralPath $RevocationMarker -PathType Leaf)) {
+        throw 'acl_revocation_marker_invalid'
+    }
+    Assert-AdminOwnedRevocationMarker
+    $record = Get-Content -LiteralPath $RevocationMarker -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($record.schema -ne 'SMARTAGENT_ACL_REVOCATION_V1' -or
+        [string]$record.invoking_root -ine $ProjectRoot) {
+        throw 'acl_revocation_pending_for_different_installation'
+    }
+    $root = [string]$record.root
+    $sid = [string]$record.sid
+    $user = [string]$record.user
+    Assert-RevocationPath $root
+    if ($root -ieq [IO.Path]::GetPathRoot($root).TrimEnd('\') -or
+        ($sid -and $sid -notmatch '^S-1-5-21-(\d+-){3}\d+$') -or
+        ($user -and $user -notmatch '^[A-Za-z0-9._-]{1,20}$')) {
+        throw 'acl_revocation_marker_invalid'
+    }
+    if ($Task) {
+        $binding = Get-ExecutorTaskBinding $Task
+        if ($binding.root -ine $root -or $binding.sid -ne $sid -or $binding.user -ne $user) {
+            throw 'acl_revocation_task_changed'
+        }
+    }
+    if ($Machine.state -eq 'INVALID' -or ($Machine.value -and
+        ([string]$Machine.value.install_root -ine $root -or [string]$Machine.value.executor_sid -ne $sid))) {
+        throw 'acl_revocation_machine_owner_mismatch'
+    }
+    $profilePath = Join-Path $root 'localdata\secure\windows_security\security_profile.json'
+    $journalPath = Join-Path $MachineRoot 'pending_acl_transaction.json'
+    Assert-RevocationPath $profilePath
+    Assert-RevocationPath $journalPath
+    $installPendingPath = Join-Path (Split-Path -Parent $profilePath) 'executor_install_pending.json'
+    Assert-RevocationPath $installPendingPath
+    return [pscustomobject]@{
+        root=$root; sid=$sid; user=$user; profile_path=$profilePath; journal_path=$journalPath
+        install_pending=$installPendingPath
+    }
+}
+
+function Save-ExecutorRevocationMarker($Revocation) {
+    Assert-RevocationPath $RevocationMarker
+    New-Item -ItemType Directory -Force -Path $MachineRoot | Out-Null
+    Invoke-Icacls @($MachineRoot,'/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F',
+        '*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
+    $temporary = $RevocationMarker + '.' + [guid]::NewGuid().ToString('N')
+    try {
+        $record = [ordered]@{
+            schema='SMARTAGENT_ACL_REVOCATION_V1'
+            invoking_root=$ProjectRoot
+            root=$Revocation.root
+            sid=$Revocation.sid
+            user=$Revocation.user
+        }
+        [IO.File]::WriteAllText($temporary, ($record | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+        Invoke-Icacls @($temporary,'/setowner','*S-1-5-32-544')
+        Invoke-Icacls @($temporary,'/inheritance:r','/grant:r','*S-1-5-18:F','*S-1-5-32-544:F')
+        Move-Item -LiteralPath $temporary -Destination $RevocationMarker
+        Assert-AdminOwnedRevocationMarker
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    }
+}
+
+function Remove-RecordedExecutorAccess($Revocation) {
+    if (-not $Revocation.sid) { return }
+    $identity = [Security.Principal.SecurityIdentifier]::new($Revocation.sid)
+    foreach ($path in $Revocation.paths) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $acl = Get-Acl -LiteralPath $path
+        $rules = @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) |
+            Where-Object { $_.IdentityReference.Equals($identity) })
+        if (-not $rules) { continue }
+        Invoke-Icacls @($path, '/remove', "*$($Revocation.sid)")
+    }
+    foreach ($path in $Revocation.paths) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $remaining = @((Get-Acl -LiteralPath $path).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+            Where-Object { $_.IdentityReference.Equals($identity) })
+        if ($remaining) { throw "acl_revocation_executor_ace_remaining:$path" }
+    }
+}
+
+function Get-InstanceExecutorName([string]$Root) {
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Root.ToUpperInvariant())
+        $digest = ([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+        return 'SAExec_' + $digest.Substring(0, 12)
+    } finally { $hasher.Dispose() }
+}
+
+function Get-ProvisioningExecutorName($PreviousMode) {
+    $name = Get-InstanceExecutorName $ProjectRoot
+    $existing = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+    if (-not $existing) { return $name }
+    if (-not $existing.Enabled) { throw 'acl_executor_instance_account_disabled' }
+    $sid = [string]$existing.SID
+    $markerPath = Join-Path $SecurityRoot 'executor_install_pending.json'
+    $pending = if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+        Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    $knownPending = $pending -and $pending.schema -eq 'SMARTAGENT_EXECUTOR_INSTALL_PENDING_V1' -and
+        [string]$pending.executor_user -eq $name -and ([string]$pending.executor_sid -in @('', $sid))
+    $knownRetired = (Get-RecordedValue $PreviousMode 'retired_executor_user') -eq $name -and
+        (Get-RecordedValue $PreviousMode 'retired_executor_sid') -eq $sid
+    if (-not ($knownPending -or $knownRetired)) { throw 'acl_executor_instance_account_unverified' }
+    $admins = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop)
+    if ($admins | Where-Object { [string]$_.SID -eq $sid }) { throw 'acl_executor_instance_account_is_admin' }
+    $aliases = @($sid, $name, ".\$name", "$env:COMPUTERNAME\$name")
+    $tasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+        [string]$_.Principal.UserId -in $aliases -and [string]$_.Principal.LogonType -notin @('Interactive','InteractiveToken')
+    })
+    $services = @(Get-CimInstance Win32_Service -ErrorAction Stop | Where-Object { $_.StartName -in $aliases })
+    if ($tasks -or $services) { throw 'acl_executor_instance_account_used_elsewhere' }
+    return $name
+}
+
+function Wait-ExecutorReady([string]$ExpectedMode, [string]$Endpoint, [double]$StartedAt) {
     $statePath = Join-Path $Endpoint 'service_state.json'
-    $deadline = (Get-Date).AddSeconds(35)
+    $lastObservation = 'service_state_missing'
+    $deadline = (Get-Date).AddSeconds(75)
     while ((Get-Date) -lt $deadline) {
         if (Test-Path -LiteralPath $statePath -PathType Leaf) {
             try {
-                $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+                $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
                 $selfTest = $state.self_test
-                $fresh = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$state.heartbeat_at) -lt 10
+                $heartbeatAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$state.heartbeat_at
+                $fresh = [double]$state.heartbeat_at -ge $StartedAt -and $heartbeatAge -lt 10
+                $lastObservation = ('passed={0}, mode={1}, fresh={2}, heartbeat_age={3:N1}s, reasons={4}' -f
+                    $selfTest.passed, $selfTest.mode, $fresh, $heartbeatAge,
+                    (@($selfTest.reasons) -join ','))
                 if ($fresh -and $selfTest.passed -eq $true -and $selfTest.mode -eq $ExpectedMode) { return }
-            } catch { }
+            } catch {
+                $lastObservation = 'service_state_read_error:' + $_.Exception.Message
+            }
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "restricted_executor_mode_transition_failed:$ExpectedMode"
+    throw "restricted_executor_mode_transition_failed:${ExpectedMode}:$lastObservation"
 }
 
-$mutexBytes = [Text.Encoding]::UTF8.GetBytes($ProjectRoot.ToUpperInvariant())
-$mutexHasher = [Security.Cryptography.SHA256]::Create()
-try {
-    $mutexHash = ([BitConverter]::ToString($mutexHasher.ComputeHash($mutexBytes))).Replace('-', '')
-} finally {
-    $mutexHasher.Dispose()
-}
-$transitionMutex = New-Object Threading.Mutex($false, "Global\SmartAgentAclMode_$mutexHash")
+$transitionMutex = New-Object Threading.Mutex($false, 'Global\SmartAgentAclMode_Machine_V1')
 $transitionMutexHeld = $false
 try {
     try {
@@ -335,7 +771,10 @@ try {
     }
 
     Assert-SafeInstallRoot $ProjectRoot
+    Assert-RevocationPath $ProjectRoot
     Assert-ContainedPathHasNoReparseAncestor $ProjectRoot $SecurityRoot
+    Assert-RevocationPath $ProfilePath
+    Assert-RevocationPath $ModePath
 
 $profile = $null
 $profileFileExists = Test-Path -LiteralPath $ProfilePath -PathType Leaf
@@ -393,7 +832,7 @@ if (Test-Path -LiteralPath $ModePath -PathType Leaf) {
         $candidateRoot = [IO.Path]::GetFullPath([string]$candidateModeState.install_root).TrimEnd('\')
         if ($candidateModeState.schema -eq 'SMARTAGENT_ACL_MODE_V1' -and
             $candidateRoot.Equals($ProjectRoot, [StringComparison]::OrdinalIgnoreCase) -and
-            $candidateModeState.mode -in @('on','off')) {
+            $candidateModeState.mode -in @('on','off','transitioning_off','transitioning_on')) {
             $previousModeState = $candidateModeState
         }
     } catch { $previousModeState = $null }
@@ -405,8 +844,28 @@ if ($callerSid -notmatch '^S-1-' -and $previousModeState -and [string]$previousM
 if ($callerSid -notmatch '^S-1-') { $callerSid = [string]$identity.User.Value }
 
 if ($Mode -eq 'on') {
+    Assert-RevocationPath $RevocationMarker
+    if ((Test-Path -LiteralPath $RevocationMarker) -or
+        (Get-RecordedValue $previousModeState 'mode') -eq 'transitioning_off') {
+        throw 'ACL_ON_REVOCATION_PENDING:run ACLstatus.bat off'
+    }
+    # Re-provisioning ACL ON while an AppContainer SID still has inherited
+    # grants is unsafe. Require the transactional revoker first.
+    $activeTurboJournal = Join-Path $SecurityRoot 'turbo_os_activation.json'
+    if (-not $RestoreTurboAfterUpgrade -and (Test-Path -LiteralPath $activeTurboJournal -PathType Leaf)) {
+        throw 'GIT50_TURBO_BROKER_REVOKE_REQUIRED_BEFORE_ACL_ON_RECONFIGURE'
+    }
     $defaultExecutorPython = Assert-OnEnvironmentReady
     $accessPolicy = Get-WorkspaceAccessPolicy
+    $aclPending = Join-Path $MachineRoot 'pending_acl_transaction.json'
+    Assert-RevocationPath $aclPending
+    if (Test-Path -LiteralPath $aclPending -PathType Leaf) {
+        $pending = Get-Content -LiteralPath $aclPending -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($pending.schema -ne 'SMARTAGENT_PENDING_ACL_TRANSACTION_V1' -or
+            (Get-RecordedValue $pending 'install_root') -ine $ProjectRoot) {
+            throw 'ACL_ON_PREVIOUS_AUTHORIZATION_PENDING:run ACLstatus.bat off before retrying'
+        }
+    }
     if ($profileFileExists -and -not $profileStructurallyValid) {
         throw 'ACL_ON_SECURITY_STATE_INVALID:security_profile_invalid; use install_smart_agent\launchers\reinstall_smart_agent.bat to remove the inconsistent security state before retrying'
     }
@@ -417,105 +876,324 @@ if ($Mode -eq 'on') {
         throw "ACL_ON_SECURITY_STATE_INVALID:machine_authorization_invalid:$($machineAuthorizationState.path)"
     }
     if (-not $profile -and $machineAuthorizationState.state -eq 'BOUND') {
-        throw 'ACL_ON_SECURITY_STATE_INCOMPLETE:machine_authorization_exists_but_security_profile_is_missing'
+        throw 'ACL_ON_SECURITY_STATE_INCOMPLETE:machine_authorization_exists_but_security_profile_is_missing; run ACLstatus.bat off before retrying'
     }
-    if (-not $profile -and $machineAuthorizationState.state -eq 'MISSING') {
-        $unboundTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($machineAuthorizationState.state -eq 'MISSING') {
+        $unboundTask = Get-ExecutorTask
         if ($unboundTask) {
-            Write-Warning "The machine-wide '$TaskName' task exists, but no local profile or machine authorization proves that it belongs to this installation."
-            $repairAnswer = Read-Host 'Type REPAIR to bind and re-attest that task for this installation'
-            if ($repairAnswer -cne 'REPAIR') {
-                throw 'ACL_ON_SECURITY_STATE_INCOMPLETE:unbound_executor_task_requires_explicit_repair'
+            $taskBinding = Get-ExecutorTaskBinding $unboundTask
+            if (-not $profileStructurallyValid -or $taskBinding.root -ine $ProjectRoot -or
+                $taskBinding.sid -ne [string]$profile.executor_sid) {
+                throw 'ACL_ON_UNBOUND_EXECUTOR_TASK:run ACLstatus.bat off before re-authorizing'
             }
         }
     }
     $configure = Join-Path $PSScriptRoot 'configure_security.ps1'
-    if ($profileStructurallyValid) {
-        $writeRoots = if ($accessPolicy) {
-            @($accessPolicy.writable_workspaces)
-        } else {
-            @($profile.authorized_workspace_roots | ForEach-Object { [string]$_ })
+    $taskBefore = Get-ExecutorTask
+    $retryUpgrade = $RestoreTurboAfterUpgrade -and $profileBoundToRoot -and
+        (Get-RecordedValue $previousModeState 'mode') -eq 'transitioning_on' -and
+        -not (Test-Path -LiteralPath $aclPending) -and
+        -not (Test-Path -LiteralPath (Join-Path $SecurityRoot 'executor_install_pending.json')) -and
+        -not (Test-Path -LiteralPath $activeTurboJournal)
+    if ($taskBefore -and (Get-RecordedValue $previousModeState 'mode') -eq 'transitioning_on' -and -not $retryUpgrade) {
+        throw 'ACL_ON_PREVIOUS_ATTEMPT_INCOMPLETE:run ACLstatus.bat off before retrying'
+    }
+    # Git62 multi-root Git upgrade: preserve existing Native SIDs and NTFS
+    # rights. A verified manifest refresh does not require full ACL re-provision.
+    $hasIndexedTurbo = $false
+    if ($RestoreTurboAfterUpgrade -and $accessPolicy -and
+        $accessPolicy.turbo_requested -eq $true -and
+        @($accessPolicy.turbo_roots).Count -eq 1) {
+        . (Join-Path $PSScriptRoot 'turbo_multi_root_paths.ps1')
+        $indexed = Get-TurboRootJournalPaths $SecurityRoot ([string]$accessPolicy.turbo_roots[0])
+        $hasIndexedTurbo = Test-Path -LiteralPath $indexed.activation -PathType Leaf
+    }
+    if ($RestoreTurboAfterUpgrade -and $accessPolicy -and
+        $accessPolicy.turbo_requested -eq $true -and
+        (@($accessPolicy.turbo_roots).Count -gt 1 -or $hasIndexedTurbo)) {
+        if (-not $profileBoundToRoot -or -not $profileStructurallyValid -or
+            $machineAuthorizationState.state -ne 'BOUND' -or
+            (Get-RecordedValue $previousModeState 'mode') -ne 'on' -or
+            -not $taskBefore -or
+            (Test-Path -LiteralPath $aclPending) -or
+            (Test-Path -LiteralPath (Join-Path $SecurityRoot 'executor_install_pending.json'))) {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_SECURITY_STATE_NOT_VERIFIED'
         }
-        $workspace = [string]$writeRoots[0]
-        $additionalWriteRoots = @($writeRoots | Where-Object {
-            -not ([IO.Path]::GetFullPath($_).Equals([IO.Path]::GetFullPath($workspace), [StringComparison]::OrdinalIgnoreCase))
-        })
-        $builtInReadOnlyRoots = @([string]$profile.executor_code_root) + @($profile.skill_roots | ForEach-Object { [string]$_ })
-        $readOnlyRoots = if ($accessPolicy) {
-            @($accessPolicy.read_only_roots)
-        } else {
-            @($profile.read_only_roots | ForEach-Object { [string]$_ } | Where-Object {
-                $candidate = [IO.Path]::GetFullPath($_)
-                -not @($builtInReadOnlyRoots | Where-Object {
-                    [IO.Path]::GetFullPath($_).Equals($candidate, [StringComparison]::OrdinalIgnoreCase)
-                }).Count
+        $taskOwner = Get-ExecutorTaskBinding $taskBefore
+        if ($taskOwner.root -ine $ProjectRoot -or
+            $taskOwner.sid -ne [string]$profile.executor_sid -or
+            $taskOwner.user -ne [string]$profile.executor_user) {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_EXECUTOR_OWNERSHIP_MISMATCH'
+        }
+        $upgrade = Join-Path $PSScriptRoot 'turbo_multi_root_upgrade_authorization.ps1'
+        if (-not (Test-Path -LiteralPath $upgrade -PathType Leaf)) {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_HELPER_MISSING'
+        }
+        Write-Host '[SmartAgent ACL] Multi-root Git upgrade: verifying all Native SIDs before machine authorization rebind.' -ForegroundColor Cyan
+        & $upgrade -ProjectRoot $ProjectRoot
+        $currentHash=(Get-FileHash -LiteralPath (Join-Path $ProjectRoot 'config\protocol_manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+        $authorization=Read-MachineAuthorization
+        if ($authorization.state -ne 'BOUND' -or
+            [string]$authorization.value.protocol_manifest_sha256 -ne $currentHash -or
+            (Get-RecordedValue $previousModeState 'mode') -ne 'on') {
+            throw 'GIT62_UPGRADE_MULTI_ROOT_MACHINE_POSTCONDITION_FAILED'
+        }
+        Write-Host ('GIT62_MULTI_ROOT_ACL_UPGRADE_PASS roots=' + @($accessPolicy.turbo_roots).Count) -ForegroundColor Green
+        return
+    }
+    $options = if (-not $profileStructurallyValid) { Get-SecurityProvisioningOptions }
+    $repairExecutor = $false
+    if ($options) {
+        $options.executor_user = Get-ProvisioningExecutorName $previousModeState
+        $repairExecutor = [bool](Get-LocalUser -Name $options.executor_user -ErrorAction SilentlyContinue)
+    }
+    # Reject unsupported existing Turbo project trees BEFORE changing ACL
+    # state. Native AppContainer import/rollback is not implemented for them.
+    if ($accessPolicy -and $accessPolicy.turbo_requested -eq $true) {
+        $selectedTurbo = @($accessPolicy.turbo_roots)
+        if ($selectedTurbo.Count -ne 1 -and -not (
+            $RestoreTurboAfterUpgrade -and $selectedTurbo.Count -gt 1)) {
+            throw 'ACL_ON_TURBO_SINGLE_ROOT_REQUIRED_NO_SECURITY_CHANGES'
+        }
+        if (-not $RestoreTurboAfterUpgrade -and (Test-Path -LiteralPath ([string]$selectedTurbo[0]))) {
+            throw 'ACL_ON_TURBO_EXISTING_ROOT_IMPORT_UNSUPPORTED_NO_SECURITY_CHANGES'
+        }
+    }
+    if ($RestoreTurboAfterUpgrade) {
+        if (-not $profileBoundToRoot -or ((Get-RecordedValue $previousModeState 'mode') -ne 'on' -and -not $retryUpgrade)) {
+            throw 'ACL_UPGRADE_REQUIRES_BOUND_ACL_ON'
+        }
+        $importJournal = Join-Path $SecurityRoot 'turbo_existing_root_import.json'
+        $switchJournal = Join-Path $SecurityRoot 'turbo_existing_root_switch.json'
+        if (Test-Path -LiteralPath $switchJournal) { throw 'ACL_UPGRADE_PENDING_TURBO_SWITCH' }
+        if (Test-Path -LiteralPath $activeTurboJournal) {
+            Assert-RevocationPath $activeTurboJournal
+            $activeTurbo = Get-Content -LiteralPath $activeTurboJournal -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($activeTurbo.schema -ne 'SMARTAGENT_TURBO_OS_ACTIVATION_V1' -or
+                $activeTurbo.install_root -ine $ProjectRoot -or
+                -not $accessPolicy -or $accessPolicy.turbo_requested -ne $true -or
+                [string]$selectedTurbo[0] -ine [string]$activeTurbo.turbo_root) {
+                throw 'ACL_UPGRADE_TURBO_BINDING_MISMATCH'
+            }
+            & (Join-Path $PSScriptRoot 'turbo_os_activation.ps1') -Action Revoke -ProjectRoot $ProjectRoot
+            if (Test-Path -LiteralPath $activeTurboJournal) { throw 'ACL_UPGRADE_TURBO_REVOCATION_UNCONFIRMED' }
+        }
+        if (Test-Path -LiteralPath $importJournal) { throw 'ACL_UPGRADE_PENDING_TURBO_IMPORT' }
+    }
+    $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+    Write-ModeState 'transitioning_on' $executorSid $callerSid
+    try {
+        Clear-AutoApproveOnAclOn
+        if ($profileStructurallyValid) {
+            $writeRoots = if ($accessPolicy) {
+                @($accessPolicy.writable_workspaces)
+            } else {
+                @($profile.authorized_workspace_roots | ForEach-Object { [string]$_ })
+            }
+            # PowerShell unwraps singleton arrays returned by if-expressions.
+            # Rewrap before indexing so D:\workspace never becomes just 'D'.
+            $writeRoots = @($writeRoots)
+            $workspace = [string]$writeRoots[0]
+            $additionalWriteRoots = @($writeRoots | Where-Object {
+                -not ([IO.Path]::GetFullPath($_).Equals([IO.Path]::GetFullPath($workspace), [StringComparison]::OrdinalIgnoreCase))
             })
-        }
-        $deniedWriteRoots = if ($accessPolicy) {
-            @($accessPolicy.denied_write_roots)
+            $builtInReadOnlyRoots = @([string]$profile.executor_code_root) + @($profile.skill_roots | ForEach-Object { [string]$_ })
+            $readOnlyRoots = if ($accessPolicy) {
+                @($accessPolicy.read_only_roots)
+            } else {
+                @($profile.read_only_roots | ForEach-Object { [string]$_ } | Where-Object {
+                    $candidate = [IO.Path]::GetFullPath($_)
+                    -not @($builtInReadOnlyRoots | Where-Object {
+                        [IO.Path]::GetFullPath($_).Equals($candidate, [StringComparison]::OrdinalIgnoreCase)
+                    }).Count
+                })
+            }
+            $deniedWriteRoots = if ($accessPolicy) {
+                @($accessPolicy.denied_write_roots)
+            } else {
+                @($profile.denied_write_roots | ForEach-Object { [string]$_ })
+            }
+            $readOnlyRoots = @($readOnlyRoots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $deniedWriteRoots = @($deniedWriteRoots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $skillRoot = if (@($profile.skill_roots).Count -gt 0) { [string]$profile.skill_roots[0] } else { Join-Path $SecurityRoot 'skills' }
+            Write-Host '[SmartAgent ACL] Re-applying the complete security profile...' -ForegroundColor Cyan
+            & $configure `
+                -WorkspaceContainer $workspace `
+                -AdditionalWriteRoots $additionalWriteRoots `
+                -RuntimeRoot ([string]$profile.runtime_root) `
+                -DeniedWriteRoots $deniedWriteRoots `
+                -ReadOnlyRoots $readOnlyRoots `
+                -SkillRoot $skillRoot `
+                -ExecutorUser ([string]$profile.executor_user) `
+                -ControllerSid $callerSid `
+                -ProfilePath $ProfilePath `
+                -ExecutorPython $defaultExecutorPython `
+                -SkipAclModeRestore -NonInteractive -Apply
         } else {
-            @($profile.denied_write_roots | ForEach-Object { [string]$_ })
+            if ($accessPolicy) {
+                $options.workspace_container = [string]$accessPolicy.writable_workspaces[0]
+                $options.additional_write_roots = @($accessPolicy.writable_workspaces | Select-Object -Skip 1)
+                $options.read_only_roots = @($accessPolicy.read_only_roots)
+                $options.denied_write_roots = @($accessPolicy.denied_write_roots)
+            }
+            Write-Host '[SmartAgent ACL] No completed security profile was found.' -ForegroundColor Yellow
+            Write-Host '[SmartAgent ACL] Starting the full security-only provisioning flow; Python and .venv will not be installed or modified.' -ForegroundColor Cyan
+            & $configure `
+                -WorkspaceContainer ([string]$options.workspace_container) `
+                -AdditionalWriteRoots @($options.additional_write_roots) `
+                -RuntimeRoot ([string]$options.runtime_root) `
+                -DeniedWriteRoots @($options.denied_write_roots) `
+                -ReadOnlyRoots @($options.read_only_roots) `
+                -SkillRoot ([string]$options.skill_root) `
+                -SkillSourcePath ([string]$options.skill_source_path) `
+                -ExecutorUser ([string]$options.executor_user) `
+                -ControllerSid $callerSid `
+                -ProfilePath $ProfilePath `
+                -ExecutorPython $defaultExecutorPython `
+                -RepairExecutorCredential:$repairExecutor -SkipAclModeRestore -NonInteractive -Apply
         }
-        $skillRoot = if (@($profile.skill_roots).Count -gt 0) { [string]$profile.skill_roots[0] } else { Join-Path $SecurityRoot 'skills' }
-        Write-Host '[SmartAgent ACL] Re-applying the complete security profile...' -ForegroundColor Cyan
-        & $configure `
-            -WorkspaceContainer $workspace `
-            -AdditionalWriteRoots $additionalWriteRoots `
-            -RuntimeRoot ([string]$profile.runtime_root) `
-            -DeniedWriteRoots $deniedWriteRoots `
-            -ReadOnlyRoots $readOnlyRoots `
-            -SkillRoot $skillRoot `
-            -ExecutorUser ([string]$profile.executor_user) `
-            -ControllerSid $callerSid `
-            -ProfilePath $ProfilePath `
-            -ExecutorPython $defaultExecutorPython `
-            -SkipAclModeRestore -NonInteractive -Apply
-    } else {
-        $options = Get-SecurityProvisioningOptions
-        if ($accessPolicy) {
-            $options.workspace_container = [string]$accessPolicy.writable_workspaces[0]
-            $options.additional_write_roots = @($accessPolicy.writable_workspaces | Select-Object -Skip 1)
-            $options.read_only_roots = @($accessPolicy.read_only_roots)
-            $options.denied_write_roots = @($accessPolicy.denied_write_roots)
+        if ($LASTEXITCODE -ne 0) { throw "ACL_ON_SECURITY_PROVISIONING_FAILED:exit=$LASTEXITCODE" }
+        if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) {
+            throw 'ACL_ON_SECURITY_PROVISIONING_FAILED:security_profile_not_published'
         }
-        Write-Host '[SmartAgent ACL] No completed security profile was found.' -ForegroundColor Yellow
-        Write-Host '[SmartAgent ACL] Starting the full security-only provisioning flow; Python and .venv will not be installed or modified.' -ForegroundColor Cyan
-        & $configure `
-            -WorkspaceContainer ([string]$options.workspace_container) `
-            -AdditionalWriteRoots @($options.additional_write_roots) `
-            -RuntimeRoot ([string]$options.runtime_root) `
-            -DeniedWriteRoots @($options.denied_write_roots) `
-            -ReadOnlyRoots @($options.read_only_roots) `
-            -SkillRoot ([string]$options.skill_root) `
-            -SkillSourcePath ([string]$options.skill_source_path) `
-            -ExecutorUser ([string]$options.executor_user) `
-            -ControllerSid $callerSid `
-            -ProfilePath $ProfilePath `
-            -ExecutorPython $defaultExecutorPython `
-            -SkipAclModeRestore -Apply
+        $profile = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $executorSid = [string]$profile.executor_sid
+        $postAuthorization = Read-MachineAuthorization
+        if ($postAuthorization.state -ne 'BOUND' -or
+            [string]$postAuthorization.value.executor_sid -ne $executorSid) {
+            throw "ACL_ON_SECURITY_PROVISIONING_FAILED:machine_authorization_state=$($postAuthorization.state)"
+        }
+        $liveTask = Get-ExecutorTask
+        if (-not $liveTask -or (Get-ExecutorTaskBinding $liveTask).root -ine $ProjectRoot) {
+            throw 'ACL_ON_SECURITY_PROVISIONING_FAILED:executor_task_binding_mismatch'
+        }
+        Wait-ExecutorReady 'on' ([string]$profile.executor_endpoint) $startedAt
+        Write-ModeState 'on' $executorSid $callerSid
+    } catch {
+        $failure = $_
+        $failedTask = Get-ExecutorTask
+        if ($failedTask -and (Get-ExecutorTaskBinding $failedTask).root -ieq $ProjectRoot) {
+            Stop-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction SilentlyContinue
+        }
+        $installPending = Join-Path $SecurityRoot 'executor_install_pending.json'
+        $aclPending = Join-Path $MachineRoot 'pending_acl_transaction.json'
+        if (-not $taskBefore -and -not $failedTask -and
+            -not (Test-Path -LiteralPath $ProfilePath) -and
+            -not (Test-Path -LiteralPath $installPending) -and
+            -not (Test-Path -LiteralPath $aclPending) -and
+            (Get-RecordedValue $previousModeState 'mode') -eq 'off') {
+            Write-ModeState 'off' '' $callerSid (Get-RecordedValue $previousModeState 'retired_executor_user') (Get-RecordedValue $previousModeState 'retired_executor_sid')
+        }
+        throw $failure
     }
-    if ($LASTEXITCODE -ne 0) { throw "ACL_ON_SECURITY_PROVISIONING_FAILED:exit=$LASTEXITCODE" }
-    if (-not (Test-Path -LiteralPath $ProfilePath -PathType Leaf)) {
-        throw 'ACL_ON_SECURITY_PROVISIONING_FAILED:security_profile_not_published'
-    }
-    $profile = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $executorSid = [string]$profile.executor_sid
-    $postAuthorization = Read-MachineAuthorization
-    if ($postAuthorization.state -ne 'BOUND' -or
-        [string]$postAuthorization.value.executor_sid -ne $executorSid) {
-        throw "ACL_ON_SECURITY_PROVISIONING_FAILED:machine_authorization_state=$($postAuthorization.state)"
-    }
-    Write-ModeState 'on' $executorSid $callerSid
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-    Wait-ExecutorReady 'on' ([string]$profile.executor_endpoint)
     Write-Host 'ACL mode is ON. SmartAgent filesystem restrictions are active.' -ForegroundColor Green
+    # Native enrollment only after the restricted Executor/ACL ON committed.
+    # Existing populated user trees are not silently re-ACL'd or imported.
+    $finalTurboPolicy = Get-WorkspaceAccessPolicy
+    if ($finalTurboPolicy -and $finalTurboPolicy.turbo_requested -eq $true) {
+        $turboAuto = Join-Path $PSScriptRoot 'turbo_auto_activate.ps1'
+        if (-not (Test-Path -LiteralPath $turboAuto -PathType Leaf)) {
+            throw 'ACL_ON_TURBO_AUTOSTART_SCRIPT_MISSING:ACL_ON_COMMITTED_TURBO_NOT_READY'
+        }
+        Write-Host '[SmartAgent ACL] Enrolling configured scoped Turbo Root...' -ForegroundColor Cyan
+        $target = [string]@($finalTurboPolicy.turbo_roots)[0]
+        if ($RestoreTurboAfterUpgrade -and (Test-Path -LiteralPath $target -PathType Container)) {
+            $parents = @($finalTurboPolicy.writable_workspaces | Where-Object {
+                $target.StartsWith(([string]$_).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($parents.Count -ne 1) { throw 'ACL_UPGRADE_TURBO_WORKSPACE_NOT_UNIQUE' }
+            # A previous snapshot directory may have been writable by the
+            # controller. Preserve it for inspection; never trust its contents.
+            # The import and switch journals have already been checked above.
+            $snapshots = Join-Path $SecurityRoot 'turbo_existing_root_snapshots'
+            if (Test-Path -LiteralPath $snapshots) {
+                Assert-RevocationPath $snapshots
+                if ((Test-Path -LiteralPath $activeTurboJournal) -or
+                    (Test-Path -LiteralPath $importJournal) -or
+                    (Test-Path -LiteralPath $switchJournal)) {
+                    throw 'ACL_UPGRADE_TURBO_JOURNAL_CHANGED'
+                }
+                $archiveName = 'turbo_existing_root_snapshots_previous-' + [guid]::NewGuid().ToString('N')
+                Rename-Item -LiteralPath $snapshots -NewName $archiveName -ErrorAction Stop
+            }
+            $restore = @{
+                Action='Activate'; ProjectRoot=$ProjectRoot; Workspace=$parents[0]
+                TurboRoot=$target; ConfirmTarget=$target
+            }
+            & (Join-Path $PSScriptRoot 'turbo_existing_root_activate.ps1') @restore
+        } else {
+            & $turboAuto -ProjectRoot $ProjectRoot -Action Apply
+        }
+        if (-not $?) {
+            throw 'ACL_ON_TURBO_AUTOSTART_FAILED:ACL_ON_COMMITTED_TURBO_NOT_READY'
+        }
+    }
     return
 }
 
-# Publish an intentionally invalid intermediate mode before any OFF preflight.
-# A stale mode=off can therefore never survive a failed repair attempt.
-Write-ModeState 'transitioning_off' $executorSid $callerSid
+$task = Get-ExecutorTask
+$revocation = Read-ExecutorRevocationMarker $task $machineAuthorizationState
+$resumingRevocation = $null -ne $revocation
+if (-not $resumingRevocation) {
+    $revocation = Get-ExecutorRevocation $machineAuthorizationState $profile $task
+    Confirm-LegacyExecutorRetirement $revocation
+}
+if ($revocation.sid -and $revocation.sid -in @($callerSid, [string]$identity.User.Value)) {
+    throw 'acl_revocation_executor_is_controller'
+}
+$retiredUser = ''
+$retiredSid = ''
+if ($revocation.root -ieq $ProjectRoot -and $revocation.user -eq (Get-InstanceExecutorName $ProjectRoot)) {
+    $retiredUser = $revocation.user
+    $retiredSid = $revocation.sid
+} elseif ((Get-RecordedValue $previousModeState 'retired_executor_user') -eq (Get-InstanceExecutorName $ProjectRoot)) {
+    $retiredUser = Get-RecordedValue $previousModeState 'retired_executor_user'
+    $retiredSid = Get-RecordedValue $previousModeState 'retired_executor_sid'
+}
+Write-ModeState 'transitioning_off' '' $callerSid $retiredUser $retiredSid
+
+if ($task) {
+    if ($task.State -ne 'Disabled') {
+        Disable-ScheduledTask -InputObject $task -ErrorAction Stop | Out-Null
+    }
+    if ($task.State -notin @('Ready','Disabled')) {
+        Stop-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
+    }
+    $stopDeadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $stopDeadline) {
+        $task = Get-ExecutorTask
+        if (-not $task -or $task.State -in @('Ready','Disabled')) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    $task = Get-ExecutorTask
+    if ($task -and $task.State -notin @('Ready','Disabled')) { throw 'restricted_executor_stop_timeout' }
+}
+
+# Revoke both the invoking installation's Turbo boundary and the verified
+# machine-wide executor owner's boundary before publishing OFF.
+foreach ($install in @($ProjectRoot, $revocation.root) | Select-Object -Unique) {
+    $turboSwitchJournal = Join-Path $install 'localdata\secure\windows_security\turbo_existing_root_switch.json'
+    Assert-RevocationPath $turboSwitchJournal
+    if (Test-Path -LiteralPath $turboSwitchJournal -PathType Leaf) {
+        $switchRecovery = Join-Path $PSScriptRoot 'turbo_existing_root_switch.ps1'
+        if (-not (Test-Path -LiteralPath $switchRecovery -PathType Leaf)) {
+            throw 'TURBO_D3_SWITCH_RECOVERY_MISSING_ACL_OFF_BLOCKED'
+        }
+        & $switchRecovery -Action Recover -ProjectRoot $install
+        if (Test-Path -LiteralPath $turboSwitchJournal -PathType Leaf) {
+            throw 'TURBO_D3_SWITCH_RECOVERY_INCOMPLETE_ACL_OFF_BLOCKED'
+        }
+    }
+    $turboOsJournal = Join-Path $install 'localdata\secure\windows_security\turbo_os_activation.json'
+    Assert-RevocationPath $turboOsJournal
+    if (Test-Path -LiteralPath $turboOsJournal -PathType Leaf) {
+        $turboRevoker = Join-Path $PSScriptRoot 'turbo_os_activation.ps1'
+        & $turboRevoker -Action Revoke -ProjectRoot $install
+        if (Test-Path -LiteralPath $turboOsJournal -PathType Leaf) {
+            throw 'GIT50_TURBO_OS_REVOCATION_NOT_CONFIRMED_ACL_OFF_BLOCKED'
+        }
+    }
+}
 
 $identities = @($callerSid)
 if ($identity.User.Value -ne $callerSid) { $identities += [string]$identity.User.Value }
@@ -527,16 +1205,9 @@ foreach ($path in $mutationRoots) {
     Assert-NoReparsePoints $path
 }
 
-if ($profile -and $profileBoundToRoot) {
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    $stopDeadline = (Get-Date).AddSeconds(10)
-    while ((Get-Date) -lt $stopDeadline) {
-        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        if (-not $task -or $task.State -ne 'Running') { break }
-        Start-Sleep -Milliseconds 250
-    }
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if ($task -and $task.State -eq 'Running') { throw 'restricted_executor_stop_timeout' }
+if (-not $resumingRevocation) {
+    Disable-LegacyExecutor $revocation
+    Remove-RecordedExecutorAccess $revocation
 }
 foreach ($sid in $identities) {
     Invoke-Icacls @($ProjectRoot,'/remove:d',"*$sid")
@@ -559,11 +1230,40 @@ foreach ($path in $mutationRoots) {
 # This prevents acl_mode.json from claiming software-only mode while stale ACLs
 # still block atomic workspace policy updates.
 Assert-AclOffPostcondition $callerSid (@($ProjectRoot) + $mutationRoots)
-Write-ModeState 'off' $executorSid $callerSid
-# OFF is a real software-only runtime mode.  Keep the protected task stopped;
-# runtime command/path admission remains active in the controller process.
-# ACLstatus ON will re-provision/re-attest and start the task again.
-Write-Host 'ACL mode is OFF. Restricted executor checks are bypassed; SmartAgent command and path safety checks remain enabled.' -ForegroundColor Yellow
+Clear-TurboPolicyOnAclOff
+if (-not $resumingRevocation -and ($task -or $revocation.sid)) {
+    Save-ExecutorRevocationMarker $revocation
+}
+# Keep ownership evidence until ACL removal succeeds. Each removal is safe
+# to retry, and the existing task identifies the old root until it is removed.
+if (Test-Path -LiteralPath $revocation.profile_path -PathType Leaf) {
+    Remove-Item -LiteralPath $revocation.profile_path -Force -ErrorAction Stop
+}
+if (Test-Path -LiteralPath $revocation.install_pending -PathType Leaf) {
+    Remove-Item -LiteralPath $revocation.install_pending -Force -ErrorAction Stop
+}
+if (Test-Path -LiteralPath $revocation.journal_path -PathType Leaf) {
+    Remove-Item -LiteralPath $revocation.journal_path -Force -ErrorAction Stop
+}
+if (Test-Path -LiteralPath $machineAuthorizationState.path -PathType Leaf) {
+    Remove-Item -LiteralPath $machineAuthorizationState.path -Force -ErrorAction Stop
+}
+$task = Get-ExecutorTask
+if ($task) {
+    $binding = Get-ExecutorTaskBinding $task
+    if ($binding.root -ine $revocation.root -or $binding.sid -ne $revocation.sid -or
+        $binding.user -ne $revocation.user -or $task.State -ne 'Disabled') {
+        throw 'acl_revocation_task_changed'
+    }
+    Unregister-ScheduledTask -TaskName $TaskName -TaskPath '\' -Confirm:$false -ErrorAction Stop
+}
+if (Get-ExecutorTask) { throw 'acl_revocation_executor_task_remaining' }
+
+Write-ModeState 'off' '' $callerSid $retiredUser $retiredSid
+if (Test-Path -LiteralPath $RevocationMarker -PathType Leaf) {
+    Remove-Item -LiteralPath $RevocationMarker -Force -ErrorAction Stop
+}
+Write-Host 'ACL mode is OFF. SmartAgent Windows executor authorization was revoked. Command and path safety checks remain enabled.' -ForegroundColor Yellow
 } finally {
     if ($transitionMutexHeld) {
         try { $transitionMutex.ReleaseMutex() } catch { }

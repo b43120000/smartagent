@@ -56,6 +56,12 @@ class TelegramReceiverConfig:
     api_base: str = "https://api.telegram.org"
     pairing_enabled: bool = False
     pairing_ttl_sec: int = 300
+    # Enabled in the installed Telegram configuration, not the other
+    # transports or disabled unit-test receivers.
+    long_message_merge_enabled: bool = False
+    long_message_merge_window_sec: float = 2.5
+    long_message_merge_threshold_chars: int = 5000
+    long_message_merge_min_part_chars: int = 900
 
     @classmethod
     def from_env(cls) -> "TelegramReceiverConfig":
@@ -69,6 +75,15 @@ class TelegramReceiverConfig:
             poll_timeout_sec=max(1, min(50, int(os.environ.get("SMARTAGENT_TELEGRAM_POLL_TIMEOUT_SEC", "25")))),
             pairing_enabled=os.environ.get("SMARTAGENT_TELEGRAM_PAIRING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},
             pairing_ttl_sec=max(60, min(900, int(os.environ.get("SMARTAGENT_TELEGRAM_PAIR_TTL_SEC", "300")))),
+            long_message_merge_enabled=os.environ.get(
+                "SMARTAGENT_TELEGRAM_LONG_MESSAGE_MERGE", "1"
+            ).strip().lower() in {"1", "true", "yes", "on"},
+            long_message_merge_window_sec=max(0.5, min(
+                8.0, float(os.environ.get("SMARTAGENT_TELEGRAM_LONG_MESSAGE_WINDOW_SEC", "2.5")))),
+            long_message_merge_threshold_chars=max(4096, min(
+                25000, int(os.environ.get("SMARTAGENT_TELEGRAM_LONG_MESSAGE_THRESHOLD", "5000")))),
+            long_message_merge_min_part_chars=max(1, min(
+                4096, int(os.environ.get("SMARTAGENT_TELEGRAM_LONG_MESSAGE_MIN_PART", "900")))),
         )
 
     def validate(self) -> None:
@@ -102,7 +117,12 @@ class TelegramBotClient:
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
         try:
             with self._opener(request, timeout=timeout) as response:
-                body = json.loads(response.read().decode("utf-8"))
+                raw_http_body = response.read()
+                # Preserve the original response-body bytes before UTF-8 / JSON decode.
+                # Only a locally armed IT10 request may later persist them.
+                if method == "getUpdates":
+                    PIT.note_telegram_http_body(raw_http_body)
+                body = json.loads(raw_http_body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             description = ""
             try:
@@ -217,14 +237,17 @@ class TelegramOffsetStore:
 
     def commit(self, update_id: int) -> int:
         with self._lock:
-            self.next_offset = max(self.next_offset, int(update_id) + 1)
+            proposed = max(self.next_offset, int(update_id) + 1)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temp = self.path.with_name(self.path.name + f".{os.getpid()}.tmp")
             temp.write_text(
-                json.dumps({"version": 1, "next_offset": self.next_offset}, ensure_ascii=False, indent=2),
+                json.dumps({"version": 1, "next_offset": proposed}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             temp.replace(self.path)
+            # Memory cursor advances ONLY after the durable replace succeeds.
+            # A transient disk error must not skip a Telegram update in-process.
+            self.next_offset = proposed
             return self.next_offset
 
 
@@ -272,7 +295,8 @@ class TelegramUpdateAdapter:
             ))
         return tuple(rows)
 
-    def normalize(self, update: dict[str, Any]) -> tuple[NormalizedInboundMessage | None, str]:
+    def normalize(self, update: dict[str, Any], *,
+                  software_merged: bool = False) -> tuple[NormalizedInboundMessage | None, str]:
         try:
             update_id = int(update["update_id"])
         except Exception:
@@ -292,7 +316,23 @@ class TelegramUpdateAdapter:
         raw_text = str(message.get("text") or message.get("caption") or "")
         is_admin_cmd = is_direct_cmd_request(raw_text)
         visible_trace = "[TG_DIRECT_CMD_REDACTED]" if is_admin_cmd else raw_text
-        PIT.begin(visible_trace, transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM")
+        # Use the exact Gateway idempotency key/Request ID BEFORE any raw
+        # ingress trace; repeating the same text in a new update is distinct.
+        idempotency_key = f"TELEGRAM|api.telegram.org|{chat_id}|{update_id}"
+        request_id = "RR-TELEGRAM-" + hashlib.sha256(
+            idempotency_key.encode("utf-8", errors="replace")
+        ).hexdigest()[:16].upper()
+        PIT.begin(
+            visible_trace, request_id=request_id,
+            transport="LOCAL_TEST" if self.config.bot_token == "LOCAL-TEST-NO-NETWORK" else "TELEGRAM",
+        )
+        if not is_admin_cmd and not software_merged:
+            # Only a real Telegram update may be labeled raw HTTP body.
+            PIT.capture_telegram_http_body(update_id, raw_text)
+        elif software_merged:
+            PIT.record("02_telegram_software_merged_text", raw_text,
+                       evidence_status="SOFTWARE_MERGED_NOT_RAW_HTTP",
+                       extra={"update_id": update_id})
         PIT.record("02_telegram_message_text", visible_trace, extra={
             "update_id": update_id, "message_id": message.get("message_id"),
             "direct_cmd_redacted": is_admin_cmd,
@@ -316,7 +356,7 @@ class TelegramUpdateAdapter:
             source_message_id=str(message_id),
             text=text,
             received_at=float(message.get("date", time.time()) or time.time()),
-            idempotency_key=f"TELEGRAM|api.telegram.org|{chat_id}|{update_id}",
+            idempotency_key=idempotency_key,
             reply_context={
                 "chat_id": chat_id,
                 "message_id": message_id,
@@ -341,6 +381,7 @@ class TelegramReceiver:
         control_handler=None,
         accepted_handler=None,
         task_admission_guard=None,
+        install_root: str | Path | None = None,
     ):
         config.validate()
         self.config = config
@@ -352,11 +393,22 @@ class TelegramReceiver:
         self.control_handler = control_handler
         self.accepted_handler = accepted_handler
         self.task_admission_guard = task_admission_guard
+        # Must match the WebAgent worker's root, not the task workspace.
+        self.install_root = Path(install_root or Path(__file__).resolve().parents[1]).resolve()
         # Serializes one normalized Telegram update through durable enqueue
         # against a workspace binding hot-swap.  HostSupervisor acquires this
         # before the task-store lock, matching this receiver's lock order.
         self.binding_lock = threading.RLock()
         self.adapter = TelegramUpdateAdapter(config, pairing_store=pairing_store)
+        self._long_merge = None
+        if config.long_message_merge_enabled:
+            from RemoteAgent.telegram_long_message_merge import TelegramLongMessageCoalescer
+            self._long_merge = TelegramLongMessageCoalescer(
+                self.install_root / "localdata" / "runtime" / "telegram_long_message_pending.json",
+                window_sec=config.long_message_merge_window_sec,
+                threshold_chars=config.long_message_merge_threshold_chars,
+                min_chunk_chars=config.long_message_merge_min_part_chars,
+            )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._control_threads: set[threading.Thread] = set()
@@ -392,6 +444,202 @@ class TelegramReceiver:
             return self.client.send_message(
                 chat_id, text, reply_to_message_id=reply_to_message_id
             )
+
+    def _resume_approval_gate(self):
+        from agent_core.resume_command_approval import ResumeCommandGate
+        return ResumeCommandGate(self.install_root)
+
+    def _resume_owner(self, message: NormalizedInboundMessage) -> str:
+        chat = str((message.reply_context or {}).get("chat_id") or "")
+        return "telegram:" + str(message.sender_id) + ":" + chat
+
+    def _offer_pre_resume_decision(self, message: NormalizedInboundMessage,
+                                    *, update_id: int) -> bool:
+        """Only software is allowed to decide whether to show this prompt."""
+        from agent_core.resume_command_approval import (
+            ResumeApprovalError, format_resume_approval_prompt,
+        )
+        from RemoteAgent.remote_feature_catalog import security_approval_inline_keyboard
+        from agent_core.task_continuation import parse_continuation
+        try:
+            request = parse_continuation(message.text)
+            if not request or request.get("mode") != "RESUME":
+                return False
+            channel_id = str(message.reply_context.get("chat_id") or "")
+            original = {
+                "transport": message.transport, "endpoint": message.endpoint,
+                "conversation_key": message.conversation_key,
+                "sender_id": message.sender_id,
+                "source_message_id": message.source_message_id,
+                "text": message.text, "received_at": message.received_at,
+                "idempotency_key": message.idempotency_key,
+                "reply_context": dict(message.reply_context),
+                "metadata": dict(message.metadata),
+            }
+            prompt = self._resume_approval_gate().begin(
+                request=message.text,
+                owner=self._resume_owner(message),
+                workspace=self.config.workspace,
+                channel_id=channel_id, transport="TELEGRAM", incoming=original,
+            )
+            if prompt is None:
+                return False
+            self._send_message(
+                int(channel_id), format_resume_approval_prompt(prompt),
+                reply_to_message_id=int(message.reply_context.get("message_id") or 0) or None,
+                reply_markup=security_approval_inline_keyboard(
+                    prompt["approval_id"], approval_kind="RESUME_UNKNOWN_COMMAND",
+                ),
+            )
+            self._resume_approval_gate().mark_notified(prompt["approval_id"])
+            self._log("CONNECT", stage="PRE_RESUME_APPROVAL_PROMPT",
+                      source_task_id=prompt["source_task_id"],
+                      approval_id=prompt["approval_id"], update_id=update_id)
+            return True
+        except (ResumeApprovalError, ValueError) as exc:
+            self._send_message(
+                int(message.reply_context["chat_id"]),
+                "🔴 無法預先顯示接續授權：" + str(exc)[:400]
+                + "\n不會自動授權或下發該指令。",
+                reply_to_message_id=int(message.reply_context["message_id"]),
+            )
+            self._log("ERROR", stage="PRE_RESUME_APPROVAL_BLOCKED",
+                      reason=str(exc)[:150], update_id=update_id)
+            return True
+
+    def _process_timed_out_pre_resume(self) -> None:
+        """Only after handling actual callback updates, auto-handle no click."""
+        try:
+            outcomes = self._resume_approval_gate().take_timed_out_telegram(
+                workspace=self.config.workspace,
+            )
+        except Exception as exc:
+            self._log("ERROR", stage="PRE_RESUME_TIMEOUT_SCAN_FAILED",
+                      error=type(exc).__name__)
+            return
+        for outcome in outcomes:
+            approval_id = outcome["approval_id"]
+            try:
+                from agent_core.resume_command_approval import ResumeApprovalError
+                fields = outcome["incoming"]
+                original = NormalizedInboundMessage(
+                    transport=str(fields["transport"]),
+                    endpoint=str(fields["endpoint"]),
+                    conversation_key=str(fields["conversation_key"]),
+                    sender_id=str(fields["sender_id"]),
+                    source_message_id=str(fields["source_message_id"]),
+                    text=str(fields["text"]),
+                    received_at=float(fields["received_at"]),
+                    idempotency_key=str(fields["idempotency_key"]),
+                    reply_context=dict(fields["reply_context"]),
+                    metadata={**dict(fields.get("metadata") or {}),
+                              "resume_approval_id": approval_id},
+                )
+                if self.task_admission_guard is not None:
+                    check = self.task_admission_guard(original)
+                    allowed = bool(check[0]) if isinstance(check, tuple) else bool(check)
+                    if not allowed:
+                        raise ResumeApprovalError("resume_task_admission_denied")
+                accepted = self.ingress.accept(original, workspace=self.config.workspace)
+                task = accepted.task
+                if task is None:
+                    raise ResumeApprovalError("resume_ingress_task_missing")
+                self._resume_approval_gate().bind_child(
+                    approval_id, child_task_id=task.task_id,
+                    owner=self._resume_owner(original),
+                )
+                self._send_message(
+                    int(original.reply_context["chat_id"]),
+                    "10 分鐘沒有選擇，Auto Approve 已自動允許一次，開始接續任務 "
+                    + str(task.task_id)
+                    + "。後續仍會重新執行 Command Admission 與 Workspace 檢查。",
+                    reply_to_message_id=int(original.reply_context["message_id"]),
+                )
+                if bool(getattr(accepted, "created", True)) and self.accepted_handler:
+                    self.accepted_handler(task)
+                self._log(
+                    "CONNECT", stage="PRE_RESUME_TIMEOUT_AUTO_ENQUEUED",
+                    approval_id=approval_id,
+                    source_task_id=outcome["source_task_id"],
+                    task_id=task.task_id, decision="APPROVED",
+                )
+            except Exception as exc:
+                self._log(
+                    "ERROR", stage="PRE_RESUME_TIMEOUT_ENQUEUE_FAILED",
+                    approval_id=approval_id, error=type(exc).__name__,
+                )
+
+    def _process_pre_resume_choice(self, message: NormalizedInboundMessage,
+                                    *, update_id: int) -> bool:
+        """Consume an already authenticated Telegram callback/choice."""
+        match = re.fullmatch(
+            r"(security_approve_once|security_reject_once)\s+(APR-[A-F0-9]{20})",
+            str(message.text or ""), re.I,
+        )
+        if not match:
+            return False
+        approval_id = match.group(2).upper()
+        gate = self._resume_approval_gate()
+        challenge = gate.public(approval_id)
+        if not challenge or challenge.get("transport") != "TELEGRAM":
+            return False  # Existing non-resume security action.
+        from agent_core.resume_command_approval import ResumeApprovalError
+        try:
+            outcome = gate.decide(
+                approval_id, allowed=match.group(1).lower() == "security_approve_once",
+                owner=self._resume_owner(message),
+                channel_id=str(message.reply_context["chat_id"]),
+            )
+            fields = outcome["incoming"]
+            original = NormalizedInboundMessage(
+                transport=str(fields["transport"]),
+                endpoint=str(fields["endpoint"]),
+                conversation_key=str(fields["conversation_key"]),
+                sender_id=str(fields["sender_id"]),
+                source_message_id=str(fields["source_message_id"]),
+                text=str(fields["text"]),
+                received_at=float(fields["received_at"]),
+                idempotency_key=str(fields["idempotency_key"]),
+                reply_context=dict(fields["reply_context"]),
+                metadata={**dict(fields.get("metadata") or {}),
+                          "resume_approval_id": approval_id},
+            )
+            # Task admission is checked again at click time. Approval is not a
+            # replacement for Software Guard or execution authorization.
+            if self.task_admission_guard is not None:
+                check = self.task_admission_guard(original)
+                granted = bool(check[0]) if isinstance(check, tuple) else bool(check)
+                if not granted:
+                    raise ResumeApprovalError("resume_task_admission_denied")
+            accepted = self.ingress.accept(original, workspace=self.config.workspace)
+            task = accepted.task
+            if task is None:
+                raise ResumeApprovalError("resume_ingress_task_missing")
+            gate.bind_child(approval_id, child_task_id=task.task_id,
+                            owner=self._resume_owner(message))
+            self._send_message(
+                int(message.reply_context["chat_id"]),
+                ("✅ 已記錄允許一次" if outcome["state"] == "APPROVED" else "⛔ 已記錄拒絕")
+                + f"，開始接續任務 {task.task_id}。\n"
+                "後續仍會重新檢查 Command Admission；不會執行超出授權範圍的操作。",
+                reply_to_message_id=int(message.reply_context["message_id"]),
+            )
+            if bool(getattr(accepted, "created", True)) and self.accepted_handler:
+                self.accepted_handler(task)
+            self._log("CONNECT", stage="PRE_RESUME_DECISION_ENQUEUED",
+                      approval_id=approval_id, source_task_id=outcome["source_task_id"],
+                      task_id=task.task_id, decision=outcome["state"],
+                      update_id=update_id)
+        except (ResumeApprovalError, ValueError, KeyError) as exc:
+            self._send_message(
+                int(message.reply_context["chat_id"]),
+                "🔴 接續授權無法啟動：" + str(exc)[:500]
+                + "\n原命令未執行；可重新送出接續工作指令。",
+                reply_to_message_id=int(message.reply_context["message_id"]),
+            )
+            self._log("ERROR", stage="PRE_RESUME_DECISION_REJECTED",
+                      approval_id=approval_id, reason=str(exc)[:120], update_id=update_id)
+        return True
 
     def discard_pending_updates_for_clean_start(self) -> int:
         """Advance the Telegram cursor past the pre-start backlog.
@@ -695,15 +943,230 @@ class TelegramReceiver:
         return True, "配對完成。現在可直接傳送自然語言工作指令。" if paired else "配對連結無效或已過期；請在電腦端重新產生 QR Code。"
 
     def poll_once(self) -> list[Any]:
+        # A pending long message needs short polling to flush after a quiet
+        # window even if Telegram sends no more updates.
+        poll_timeout = (
+            min(1, self.config.poll_timeout_sec)
+            if self._long_merge is not None and self._long_merge.has_pending
+            else self.config.poll_timeout_sec
+        )
         updates = self.client.get_updates(
             offset=self.offset_store.next_offset,
-            timeout=self.config.poll_timeout_sec,
+            timeout=poll_timeout,
         )
         self._log("POLL", offset=self.offset_store.next_offset, update_count=len(updates))
         with self.binding_lock:
-            return self._process_updates(updates)
+            accepted = self._process_updates(updates)
+            self._process_timed_out_pre_resume()
+            self._deliver_long_wait_prompts()
+            return accepted
+
+    def _deliver_long_wait_prompts(self) -> None:
+        """Send software-owned wait decisions; never authorize a command."""
+        from agent_core.long_execution_supervisor import (
+            pending_notifications, bind_notice, finish_notice,
+        )
+        from agent_core.task_state import TaskStateStore
+        from agent_core.paths import remote_tasks_path
+        from RemoteAgent.remote_feature_catalog import long_wait_inline_keyboard
+        for row in pending_notifications(self.install_root):
+            try:
+                task_store = TaskStateStore(remote_tasks_path(self.install_root))
+                task_store.load()
+                task = task_store.get(row["task_id"])
+                route = dict(getattr(task, "reply_route", {}) or {})
+                if (task is None or task.request_id != row["request_id"]
+                        or str(route.get("transport", "")).upper() != "TELEGRAM"):
+                    continue
+                chat_id = int(route.get("chat_id", 0) or 0)
+                if chat_id <= 0 or not self.adapter.is_authorized(
+                        user_id=chat_id, chat_id=chat_id):
+                    continue
+                if not bind_notice(self.install_root, row["wait_id"], chat_id=chat_id):
+                    continue
+                try:
+                    self._send_message(chat_id,
+                        "⏳ SmartAgent 正在監測執行中的程序\\n"
+                        "Task: " + row["task_id"] + "\\n"
+                        "等待方式：監測 OS 程序直到退出，不設定執行 Timeout。\\n"
+                        "10 分鐘內不回覆會自動繼續等待；若程序先完成則直接往下執行。\\n"
+                        "安全暫停不會直接殺死程序，會在本次程序退出後停止新的 Planner Action。",
+                        reply_markup=long_wait_inline_keyboard(row["wait_id"]))
+                except Exception:
+                    finish_notice(self.install_root, row["wait_id"], success=False)
+                    raise
+                finish_notice(self.install_root, row["wait_id"], success=True)
+                self._log("STATUS", stage="LONG_EXEC_WAIT_PROMPT_SENT",
+                          task_id=row["task_id"], wait_id=row["wait_id"])
+            except Exception as exc:
+                self._log("ERROR", stage="LONG_EXEC_WAIT_PROMPT_FAILED",
+                          wait_id=row["wait_id"], error=type(exc).__name__)
+
+    def _process_long_wait_choice(self, message: NormalizedInboundMessage) -> bool:
+        match = re.fullmatch(r"long_wait_choice (WAIT-[0-9A-F]{20}) ([YN])",
+                             str(message.text or ""))
+        if not match:
+            return False
+        from agent_core.long_execution_supervisor import read_wait, set_decision
+        row = read_wait(self.install_root, match.group(1))
+        chat_id = int(message.reply_context.get("chat_id", 0) or 0)
+        if not row or chat_id <= 0 or str(message.sender_id) != str(chat_id):
+            self._log("ERROR", stage="LONG_EXEC_WAIT_CALLBACK_REJECTED",
+                      wait_id=match.group(1), reason="unauthorized_or_missing")
+            return True
+        try:
+            result = set_decision(self.install_root, match.group(1),
+                task_id=row["task_id"], chat_id=chat_id,
+                choice="CONTINUE" if match.group(2) == "Y" else "PAUSE_AFTER_EXIT")
+            self._send_message(chat_id, "已記錄等待選擇：" + result["decision"])
+            self._log("STATUS", stage="LONG_EXEC_WAIT_CALLBACK_ACCEPTED",
+                      task_id=row["task_id"], wait_id=match.group(1),
+                      decision=result["decision"])
+        except (ValueError, OSError, KeyError) as exc:
+            self._log("ERROR", stage="LONG_EXEC_WAIT_CALLBACK_REJECTED",
+                      wait_id=match.group(1), reason=type(exc).__name__)
+        return True
+
+    def _long_message_eligible(self, update: dict[str, Any]) -> bool:
+        """Only normal, authorized, unthreaded long text may be delayed."""
+        merger = self._long_merge
+        if merger is None:
+            return False
+        message = update.get("message")
+        if not isinstance(message, dict):
+            return False
+        identity = TelegramUpdateAdapter._private_non_bot(message)
+        if identity is None or not self.adapter.is_authorized(
+            user_id=identity[0], chat_id=identity[1]):
+            return False
+        text = message.get("text")
+        if not isinstance(text, str) or len(text) < merger.min_chunk_chars:
+            return False
+        if any(message.get(key) for key in (
+            "reply_to_message", "external_reply", "forward_origin",
+            "via_bot", "document", "photo", "video", "audio", "voice",
+            "media_group_id", "message_thread_id",
+        )):
+            return False
+        stripped = text.lstrip()
+        # Skill tags belong to the task text. Resolve them only after the
+        # receiver has assembled the whole request.
+        if (stripped.rstrip() in {"/start", "/new"}
+                or stripped.startswith(("/start ", "/new ", "接續工作 ", "執行cmd ", "執行CMD "))):
+            return False
+        control_key = canonical_remote_control(text)
+        software_controls = {
+            MANAGER_COMMAND.casefold(), LIST_SKILLS_COMMAND.casefold(),
+            "關閉任務", "snapshot webgpt", "refresh", "重新整理",
+            STATUS_COMMAND.casefold(), INTERRUPT_COMMAND.casefold(),
+            RECONNECT_COMMAND.casefold(), CMD_CONTROL_LABEL.casefold(),
+            FEATURE_QUERY_COMMAND.casefold(),
+        }
+        if (is_direct_cmd_request(text) or control_key in software_controls
+                or control_key.startswith((
+                    "確認刪除 ", "拒絕刪除 ", "security_approve_once ",
+                    "security_reject_once ", "security_workspace_delete ",
+                    "查看任務進度 ",
+                ))):
+            return False
+        if RemoteBindingManager.is_update(text):
+            return False
+        from agent_core.auto_approve_mode import parse_auto_approve_control
+        from agent_core.turbo_settings_command import parse_turbo_control
+        if parse_auto_approve_control(text) is not None or parse_turbo_control(text) is not None:
+            return False
+        try:
+            from RemoteAgent.telegram_long_message_merge import _identity
+            _identity(update)
+        except (ValueError, TypeError, KeyError):
+            return False
+        return True
+
+    def _flush_long_message_key(self, key: str) -> list[Any]:
+        merger = self._long_merge
+        if merger is None or not merger.has_key(key):
+            return []
+        dispatched = merger.compose(key)
+        accepted: list[Any] = []
+        # A queue or disk failure leaves the staged raw updates intact.
+        # Reattempts use the stable first-update idempotency key; gateway
+        # deduplication prevents a second Task for already accepted content.
+        for update, provenance in dispatched:
+            accepted.extend(self._process_ready_updates(
+                [update], merge_metadata=provenance))
+        merger.clear(key)
+        self._log(
+            "CONNECT", stage="LONG_MESSAGE_INGRESS_FLUSHED",
+            chat_sender_sha256=hashlib.sha256(key.encode()).hexdigest()[:16],
+            part_count=(provenance["part_count"] if len(dispatched) == 1
+                        and provenance is not None else len(dispatched)),
+            merged=len(dispatched) == 1 and provenance is not None,
+            accepted_task_count=len(accepted),
+        )
+        return accepted
 
     def _process_updates(self, updates: list[dict[str, Any]]) -> list[Any]:
+        """Durable receive-before-enqueue coalescing. Controls never wait."""
+        merger = self._long_merge
+        if merger is None:
+            return self._process_ready_updates(updates)
+        accepted: list[Any] = []
+        for key in merger.due():
+            accepted.extend(self._flush_long_message_key(key))
+        for update in sorted(updates, key=lambda row: int(row.get("update_id", -1))):
+            message = update.get("message") if isinstance(update.get("message"), dict) else {}
+            chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+            chat_id = chat.get("id")
+            # A control/attachment from this chat is processed only after
+            # earlier buffered requests in that same chat are accepted.
+            same_chat = [
+                key for key in tuple(merger.groups)
+                if isinstance(chat_id, int) and key.startswith(str(chat_id) + ":")
+            ]
+            eligible = self._long_message_eligible(update)
+            if eligible:
+                key = merger.key_for(update)
+                for other in same_chat:
+                    if other != key:
+                        accepted.extend(self._flush_long_message_key(other))
+                if merger.has_key(key) and any(
+                    int(item["update_id"]) == int(update["update_id"])
+                    for item in merger.groups[key]["updates"]
+                ):
+                    # Crash between durable pending write and Telegram offset
+                    # commit: acknowledge the same staged update, never split
+                    # or overwrite the pending group.
+                    self.offset_store.commit(int(update["update_id"]))
+                    self._log("CONNECT", stage="LONG_MESSAGE_PART_REPLAYED",
+                              update_id=int(update["update_id"]), staged=True)
+                    continue
+                if merger.has_key(key) and not merger.can_append(update):
+                    accepted.extend(self._flush_long_message_key(key))
+                status = merger.stage(update)
+                # Durable pending record precedes Telegram offset acknowledgement.
+                # A repeated update remains harmless even if a previous offset
+                # persistence failed between these steps.
+                self.offset_store.commit(int(update["update_id"]))
+                self._log(
+                    "CONNECT", stage="LONG_MESSAGE_PART_STAGED",
+                    update_id=int(update["update_id"]),
+                    message_id=int(update["message"]["message_id"]),
+                    status=status,
+                    char_count=len(update["message"]["text"]),
+                    content_sha256=hashlib.sha256(
+                        update["message"]["text"].encode("utf-8")).hexdigest(),
+                    pending_parts=len(merger.groups[key]["updates"]),
+                )
+                continue
+            for other in same_chat:
+                accepted.extend(self._flush_long_message_key(other))
+            accepted.extend(self._process_ready_updates([update]))
+        for key in merger.due():
+            accepted.extend(self._flush_long_message_key(key))
+        return accepted
+
+    def _process_ready_updates(self, updates: list[dict[str, Any]],
+                               *, merge_metadata: dict | None = None) -> list[Any]:
         accepted = []
         for update in sorted(updates, key=lambda row: int(row.get("update_id", -1))):
             update_id = int(update.get("update_id", -1))
@@ -724,6 +1187,10 @@ class TelegramReceiver:
                         update_id=update_id,
                         error=f"{type(exc).__name__}: {exc}",
                     )
+                if self._process_pre_resume_choice(callback_message, update_id=update_id):
+                    continue
+                if self._process_long_wait_choice(callback_message):
+                    continue
                 control_key = canonical_remote_control(callback_message.text)
                 control_stages = {
                     MANAGER_COMMAND.casefold(): "CONTROL_BINDING_MANAGER",
@@ -772,13 +1239,28 @@ class TelegramReceiver:
                     )
                 self._log("CONNECT", stage="PAIRING" if "配對完成" in start_response else "START_IGNORED", update_id=update_id)
                 continue
-            message, reason = self.adapter.normalize(update)
+            merged_source = (
+                merge_metadata if isinstance(merge_metadata, dict)
+                and update_id == merge_metadata.get("first_update_id")
+                else None
+            )
+            message, reason = self.adapter.normalize(
+                update, software_merged=merged_source is not None)
+            if message is not None and merged_source is not None:
+                message = replace(
+                    message,
+                    metadata={**dict(message.metadata or {}),
+                              "telegram_long_message_merge":dict(merged_source)},
+                )
             if message is None:
                 if reason not in {"ignored_update", "empty_message"}:
                     self._log("ERROR", stage="AUTHORIZATION", update_id=update_id, error=reason)
                 self.offset_store.commit(update_id)
                 continue
             control_key=canonical_remote_control(message.text)
+            if self._process_pre_resume_choice(message, update_id=update_id):
+                self.offset_store.commit(update_id)
+                continue
             if control_key == FEATURE_QUERY_COMMAND.casefold():
                 self.offset_store.commit(update_id)
                 self._dispatch_local_response_async(
@@ -820,11 +1302,66 @@ class TelegramReceiver:
                         update_id=update_id,
                     )
                 continue
+            # Operator-only Auto Approve switch, intercepted before Planner.
+            from agent_core.auto_approve_mode import (
+                parse_auto_approve_control, apply_auto_approve_control,
+                format_auto_approve_status,
+            )
+            if parse_auto_approve_control(message.text) is not None:
+                self.offset_store.commit(update_id)
+                try:
+                    if message.attachments:
+                        raise ValueError("auto_approve_control_attachments_not_allowed")
+                    outcome = apply_auto_approve_control(
+                        message.text, workspace=self.config.workspace,
+                    )
+                    reply = format_auto_approve_status(outcome)
+                    self._log("CONNECT", stage="CONTROL_AUTO_APPROVE",
+                              update_id=update_id,
+                              revision=outcome["policy_revision"])
+                except (ValueError, OSError, RuntimeError) as exc:
+                    reply = "Auto Approve setting rejected: " + str(exc)[:400]
+                    self._log("ERROR", stage="CONTROL_AUTO_APPROVE_REJECTED",
+                              update_id=update_id, error=str(exc)[:300])
+                self._send_message(
+                    int(message.reply_context["chat_id"]), reply,
+                    reply_to_message_id=int(message.reply_context["message_id"]),
+                )
+                continue
+            # Explicit Turbo configuration is a software-owned human control.
+            # Process in the authenticated Telegram ingress before any Planner,
+            # WebGPT DOM submission or Agent task creation.
+            from agent_core.turbo_settings_command import (
+                parse_turbo_control, apply_turbo_control, turbo_control_reply,
+            )
+            if parse_turbo_control(message.text) is not None:
+                self.offset_store.commit(update_id)
+                try:
+                    if message.attachments:
+                        raise ValueError("turbo_control_attachments_not_allowed")
+                    outcome = apply_turbo_control(
+                        message.text, workspace=self.config.workspace,
+                    )
+                    reply = turbo_control_reply(outcome)
+                    self._log("CONNECT", stage="CONTROL_TURBO_MODE",
+                              update_id=update_id,
+                              revision=outcome["revision"])
+                except (ValueError, OSError, RuntimeError) as exc:
+                    reply = "🔴 Turbo Mode 設定拒絕：" + str(exc)[:400]
+                    self._log("ERROR", stage="CONTROL_TURBO_MODE_REJECTED",
+                              update_id=update_id, error=str(exc)[:300])
+                self._send_message(
+                    int(message.reply_context["chat_id"]), reply,
+                    reply_to_message_id=int(message.reply_context["message_id"]),
+                )
+                continue
             if is_direct_cmd_request(message.text):
                 # Authenticated Telegram software control, same as other
                 # buttons and direct controls. The general Agent-task preflight
-                # is not a prerequisite; bounded_process enforces its own
-                # ACL-mode and Software Guard command restrictions.
+                # is not a prerequisite. This authenticated human-control
+                # channel launches a host CMD under the Telegram Listener's
+                # Windows token regardless of ACL/Turbo settings. It can
+                # modify outside Turbo Root: never expose it to Planner tools.
                 # Never enqueue an Agent task or send content to WebGPT.
                 self.offset_store.commit(update_id)
                 if self.control_handler is None or message.attachments:
@@ -840,6 +1377,69 @@ class TelegramReceiver:
                         update_id=update_id,
                     )
                 continue
+            # Git58: authenticated, one-message Real Planner Live E2E.
+            # Only the private/paired Telegram receiver may generate this
+            # task-bound test selector. The Planner sees a plain folder query.
+            from agent_core.git58_telegram_live_control import (
+                COMMAND as GIT58_LIVE_COMMAND, prepare_message as prepare_git58_live,
+            )
+            if str(message.text or "").strip() == GIT58_LIVE_COMMAND:
+                try:
+                    message = prepare_git58_live(
+                        message, workspace=self.config.workspace, update_id=update_id,
+                    )
+                    if message is None:
+                        raise ValueError("GIT58_CONTROL_NOT_PREPARED")
+                    self._log(
+                        "CONNECT", stage="GIT58_TEST_TASK_PREPARED",
+                        update_id=update_id,
+                        request_sha256=message.metadata[
+                            "git58_real_planner_live"]["request_sha256"],
+                    )
+                except (ValueError, OSError, RuntimeError) as exc:
+                    self.offset_store.commit(update_id)
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 Git58 Real Planner Live 測試拒絕：" + str(exc)[:320],
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                    self._log(
+                        "ERROR", stage="GIT58_TEST_CONTROL_REJECTED",
+                        update_id=update_id, error_type=type(exc).__name__,
+                    )
+                    continue
+            # Git59: the same already authenticated Telegram receiver may
+            # expand ONE exact native diagnostic command into six strict,
+            # read-only Runtime actions. It is not a Host CMD execution path.
+            from agent_core.git59_telegram_native_live import (
+                COMMAND as GIT59_LIVE_COMMAND,
+                prepare_message as prepare_git59_native_live,
+            )
+            if str(message.text or "").strip() == GIT59_LIVE_COMMAND:
+                try:
+                    message = prepare_git59_native_live(
+                        message, update_id=update_id, project_root=self.install_root,
+                    )
+                    if message is None:
+                        raise ValueError("GIT59_DIAGNOSTIC_NOT_PREPARED")
+                    self._log(
+                        "CONNECT", stage="GIT59_DIAGNOSTIC_TASK_PREPARED",
+                        update_id=update_id,
+                        request_sha256=message.metadata[
+                            "git59_native_exec_live"]["request_sha256"],
+                    )
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self.offset_store.commit(update_id)
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 Git59 Native Executable 診斷拒絕：" + str(exc)[:320],
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                    self._log(
+                        "ERROR", stage="GIT59_DIAGNOSTIC_CONTROL_REJECTED",
+                        update_id=update_id, error_type=type(exc).__name__,
+                    )
+                    continue
             if self.task_admission_guard is not None:
                 try:
                     admission = self.task_admission_guard(message)
@@ -861,6 +1461,12 @@ class TelegramReceiver:
                         update_id=update_id, error=reason,
                     )
                     continue
+            # Pre-resume confirmation is software-owned and takes precedence
+            # over Agent ingestion. Neither transport nor model may enqueue
+            # the resumed task before the human decision is recorded.
+            if self._offer_pre_resume_decision(message, update_id=update_id):
+                self.offset_store.commit(update_id)
+                continue
             if RemoteSkillManager.looks_like_invocation(message.text):
                 try:
                     from agent_core.remote_binding import active, load
@@ -909,7 +1515,51 @@ class TelegramReceiver:
                 conversation_key=message.conversation_key,
                 source_message_id=message.source_message_id,
             )
-            result = self.ingress.accept(message, workspace=self.config.workspace)
+            try:
+                result = self.ingress.accept(message, workspace=self.config.workspace)
+            except ValueError as exc:
+                # Permanent request-shape/workspace rejection is NOT a failed
+                # Telegram POLL. Record a durable denial before advancing the
+                # offset so one poison message cannot starve every later chat.
+                # Storage/queue/OS errors are never swallowed and remain retryable.
+                reason = str(exc)
+                permanent = reason.startswith((
+                    "request_explicit_workspace_",
+                    "request_path_outside_authorized_roots:",
+                    "request_working_directory_unavailable:",
+                    "workspace_writable_roots_not_configured",
+                    "continuation_workspace_reference_not_found_or_ambiguous",
+                    "continuation_workspace_no_longer_writable",
+                    "resolved_workspace_no_longer_writable",
+                    "empty_transport_message",
+                ))
+                if not permanent:
+                    raise
+                self._log(
+                    "ERROR", stage="REQUEST_ADMISSION_REJECTED",
+                    update_id=update_id,
+                    rejection_reason=reason[:240],
+                    request_id=self.ingress._request_id(message)
+                    if hasattr(self.ingress, "_request_id") else "",
+                    permanent=True, executed=False,
+                )
+                # Commit is durable and may raise: NEVER drop the message when
+                # the offset store itself is temporarily unavailable.
+                self.offset_store.commit(update_id)
+                try:
+                    self._send_message(
+                        int(message.reply_context["chat_id"]),
+                        "🔴 請求未建立：工作目錄選擇無效或不在 Edit Workspace 授權範圍。"
+                        "\n請確認明確的 Workspace 設定；文字提及路徑本身不會被擋。",
+                        reply_to_message_id=int(message.reply_context["message_id"]),
+                    )
+                except Exception as send_exc:
+                    self._log(
+                        "ERROR", stage="REQUEST_REJECTION_REPLY_FAILED",
+                        update_id=update_id,
+                        error=f"{type(send_exc).__name__}: {send_exc}"[:240],
+                    )
+                continue
             self.offset_store.commit(update_id)
             if result.response:
                 self.client.send_message(

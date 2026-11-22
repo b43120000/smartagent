@@ -6,18 +6,46 @@ from pathlib import Path
 from .json_state_io import read_json_retry,write_json_atomic
 from .windows_security import load_security_profile
 from .protocol_v8 import sha256_digest
+from .process_liveness import verified_running_evidence
 
 class RestrictedExecutorUnavailable(RuntimeError):pass
 
-def execute_restricted(command,*,cwd=None,timeout=30,shell=False,max_stream_bytes=5*1024*1024,approval_manifest=None,security_command=None)->dict:
+def execute_restricted(command,*,cwd=None,timeout=30,shell=False,max_stream_bytes=5*1024*1024,approval_manifest=None,security_command=None,noninteractive=False,on_running=None)->dict:
+ from .turbo_sandbox import resolve_turbo_state, require_turbo_backend
+ sandbox=resolve_turbo_state(cwd)
+ # Always verify the canonical ACL/Turbo gate; a stale ON is inactive under
+ # explicit ACL OFF, while unreadable policy and ACL ON+Turbo ON still block.
+ try:require_turbo_backend(sandbox)
+ except RuntimeError as exc:raise RestrictedExecutorUnavailable('TURBO_SANDBOX_BLOCKED:'+str(exc)) from exc
  profile=load_security_profile();endpoint=Path(profile['executor_endpoint']).resolve();requests=endpoint/'requests';results=endpoint/'results'
  if not endpoint.is_dir():raise RestrictedExecutorUnavailable(f'restricted_executor_endpoint_unavailable:{endpoint}')
- request_id='EXEC-'+uuid.uuid4().hex.upper();payload={'schema':'RESTRICTED_EXECUTOR_REQUEST_V1','request_id':request_id,'command':command,'cwd':str(Path(cwd).resolve()) if cwd else '','timeout':int(timeout),'shell':bool(shell),'max_stream_bytes':int(max_stream_bytes),'created_at':time.time(),'approval_manifest':dict(approval_manifest or {}),'security_command':str(security_command or '')};payload['request_digest']=sha256_digest(payload)
+ request_id='EXEC-'+uuid.uuid4().hex.upper();payload={'schema':'RESTRICTED_EXECUTOR_REQUEST_V1','request_id':request_id,'command':command,'cwd':str(Path(cwd).resolve()) if cwd else '','timeout':int(timeout),'shell':bool(shell),'max_stream_bytes':int(max_stream_bytes),'created_at':time.time(),'approval_manifest':dict(approval_manifest or {}),'security_command':str(security_command or ''),'noninteractive':bool(noninteractive)};payload['request_digest']=sha256_digest(payload)
  requests.mkdir(parents=True,exist_ok=True);write_json_atomic(requests/f'{request_id}.json',payload);deadline=time.time()+max(5,int(timeout)+10)
  result_path=results/f'{request_id}.json'
+ status_path=endpoint/'status'/f'{request_id}.json'
+ last_observed=0.0
  while time.time()<deadline:
   if result_path.is_file():
-   result=read_json_retry(result_path);result_path.unlink(missing_ok=True);return dict(result.get('result') or {})
+   result=read_json_retry(result_path)
+   result_path.unlink(missing_ok=True)
+   try:status_path.unlink(missing_ok=True)
+   except OSError:pass
+   return dict(result.get('result') or {})
+  if on_running is not None and status_path.is_file():
+   try:
+    progress=read_json_retry(status_path)
+    proof=progress.get('liveness_evidence') or {}
+    observed=float(proof.get('observed_at') or 0)
+    if (progress.get('schema')=='SMARTAGENT_EXECUTOR_PROGRESS_V1'
+        and progress.get('request_id')==request_id
+        and progress.get('state')=='RUNNING'
+        and last_observed < observed
+        and verified_running_evidence(proof,execution_id=request_id)):
+     last_observed=observed
+     on_running(proof)
+   except (OSError,ValueError,TypeError,KeyError):
+    # No status message is an execution failure or proof of child exit.
+    pass
   time.sleep(.1)
  raise RestrictedExecutorUnavailable(f'restricted_executor_timeout:{request_id}')
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Regression coverage for the explicit unsafe composer verification switch."""
+"""Regression: unsafe debug config cannot bypass the send-ready integrity gate."""
 from __future__ import annotations
 
 import inspect
@@ -41,9 +41,9 @@ def run() -> None:
                 json.dumps({"composer_verification": {"unsafe_force_pass": True}}),
                 encoding="utf-8",
             )
-            assert scraper._composer_verification_passes("expected") is True
+            assert scraper._composer_verification_passes("expected") is False
             assert events == [
-                ("UNSAFE_composer_verification_forced_pass", "prompt_len=8")
+                ("composer_unsafe_override_ignored", "prompt_len=8")
             ]
 
             events.clear()
@@ -64,7 +64,7 @@ def run() -> None:
     ready_source = inspect.getsource(runtime.WebLLMScraper._wait_for_send_ready)
     assert "not self._composer_verification_passes(prompt)" in ready_source
 
-    print("UNSAFE_COMPOSER_VERIFICATION_BYPASS_OK")
+    print("UNSAFE_COMPOSER_VERIFICATION_BLOCKED_OK")
 
 
 if __name__ == "__main__":

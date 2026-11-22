@@ -1,0 +1,53 @@
+name: Git27 V10 Atomic Executor and RCA
+
+on:
+  push:
+    branches:
+      - git27/v10-executor-textonly-rca-20261108
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atomic-v10-contract:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test prerequisites
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Compile executor, text, collector and tests
+        run: >-
+          python -B -m compileall -q
+          source/WebAgent/minimal_core_loop.py
+          source/WebAgent/minimal_executor_contract.py
+          source/WebAgent/minimal_goal_driver.py
+          source/agent_core/task_requirement.py
+          source/agent_core/tri_one_answer_only.py
+          source/agent_core/tri_one_runtime_terminal.py
+          source/agent_core/auto_rca_upload.py
+          source/RemoteAgent/telegram_webagent_worker.py
+          source/WebAgent/tests/test_minimal_core_v10.py
+      - name: Minimal v10 full base and Git27 regressions
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_v10.py source/WebAgent/tests/test_auto_rca_upload.py -q
+      - name: Git26 independent deployment terminal regressions
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_deployment_terminal WebAgent.tests.test_git26_safe_operation_alias -v
+      - name: Windows RCA and collector integration
+        run: python -B -m pytest source/WebAgent/tests/test_minimal_core_collector_windows.py -q
+      - name: Existing v10 terminal and tri-one regression
+        run: python -B -m unittest WebAgent.tests.test_git26_minimal_collector_live_rca -v
+      - name: Verify core source manifest
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; from agent_core.paths import install_root; require_protocol_manifest(install_root()); print('MANIFEST_PASS')"

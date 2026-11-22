@@ -47,6 +47,34 @@ def _read(path: Path) -> dict:
     return value
 
 
+def _local_workspace(workspace_raw: str, root: Path) -> Path | None:
+    """Return only an in-checkout workspace; NEVER inspect another checkout.
+
+    A Task stored in this installation's queue can refer to an external or
+    deleted project. Cancel its durable task record, but do not inspect its
+    filesystem, writers or security approvals. Non-absolute paths are invalid.
+    """
+    raw = str(workspace_raw or "").strip()
+    if not raw:
+        return None
+    # Cross-platform test runners treat Windows drives as relative POSIX
+    # paths. Such paths are external to a POSIX checkout, not a reason to
+    # access/guess their contents.
+    if os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", raw):
+        return None
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        raise RuntimeError("force_stop_workspace_not_absolute")
+    # Check the lexical boundary before _plain(), which probes filesystem
+    # ancestors for symlinks/junctions. A foreign path must not be probed.
+    candidate = Path(os.path.abspath(str(candidate)))
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return _plain(candidate)
+
+
 def _archive(root: Path, files: set[Path]) -> tuple[Path, dict]:
     """Publish a verified archive before the first cleanup mutation."""
     base = _plain(runtime_root(root) / "force_stop_archives")
@@ -96,15 +124,16 @@ def _plan(root: Path, inventory: list[dict]) -> dict:
     requests = {}
     for task_id, row in rows.items():
         metadata = row.get("metadata") or {}
+        declared_root = metadata.get("install_root")
+        # Explicitly foreign task records in a legacy shared state file are
+        # not ours: leave their state untouched, including PAUSED tasks.
+        # Resolve neither their workspace nor their package paths.
+        if declared_root and os.path.normcase(os.path.abspath(str(declared_root))) != os.path.normcase(str(root)):
+            continue
         transport = str(metadata.get("transport") or (row.get("reply_route") or {}).get("transport") or "").upper()
         if transport not in TRANSPORTS:
             if row.get("state") in INCOMPLETE:
                 raise RuntimeError(f"force_stop_unowned_incomplete_task:{task_id}")
-            continue
-        declared_root = metadata.get("install_root")
-        if declared_root and Path(declared_root).resolve() != root:
-            if row.get("state") in INCOMPLETE:
-                raise RuntimeError(f"force_stop_foreign_task:{task_id}")
             continue
         request = str(row.get("request_id") or "")
         if not request:
@@ -121,34 +150,33 @@ def _plan(root: Path, inventory: list[dict]) -> dict:
             reconcile.append(task_id)
         if row.get("state") in INCOMPLETE:
             cancel.append(task_id)
-            for key in ("worker_pid", "launcher_pid", "dispatcher_pid"):
-                pid = int(metadata.get(key, 0) or 0)
-                if pid and pid in alive:
-                    raise RuntimeError(f"force_stop_live_or_reused_task_pid:{task_id}:{pid}")
+            # The inventory gate above guards LIVE processes actually
+            # identified as belonging to this checkout. A historical PID
+            # in metadata may have been reused by another application's
+            # process: it is not ownership evidence and cannot block or
+            # authorize touching that process.
+
     writers = []
     checked = set()
     known_scopes = set()
     workspace_roots = set()
     for task_id, task in owned.items():
-        raw = str(task.get("workspace") or "")
-        if raw and Path(raw).is_absolute() and task.get("task_epoch"):
+        workspace = _local_workspace(str(task.get("workspace") or ""), root)
+        if workspace is not None and task.get("task_epoch"):
             identity = json.dumps([task_id, task["task_epoch"], task["request_id"]],
                                   ensure_ascii=False, separators=(",", ":"))
-            known_scopes.add(Path(raw).absolute() / ".agents" / "chunked_writes" / "tasks" /
+            known_scopes.add(workspace / ".agents" / "chunked_writes" / "tasks" /
                              hashlib.sha256(identity.encode()).hexdigest())
+    skipped_workspace_tasks: list[str] = []
     for task_id, task in owned.items():
-        workspace_raw = str(task.get("workspace") or "")
-        if not workspace_raw:
-            if task_id in cancel:
-                raise RuntimeError("force_stop_missing_workspace")
+        workspace = _local_workspace(str(task.get("workspace") or ""), root)
+        if workspace is None or not workspace.is_dir():
+            # A project outside this installation (or already deleted)
+            # is not an Agent installation resource. Its external file tree
+            # must never be scanned, archived, moved, or modified.
+            # The locally owned task record is still safely archivable.
+            skipped_workspace_tasks.append(task_id)
             continue
-        if not Path(workspace_raw).is_absolute():
-            raise RuntimeError("force_stop_workspace_not_absolute")
-        workspace = _plain(Path(workspace_raw))
-        if not workspace.is_dir():
-            if task_id not in cancel:
-                continue  # Historical terminal task; no surviving writer tree.
-            raise RuntimeError("force_stop_workspace_unavailable")
         legacy = _plain(workspace / ".agents" / "chunked_writes")
         workspace_roots.add(legacy)
         roots = [(legacy, False)]
@@ -244,7 +272,8 @@ def _plan(root: Path, inventory: list[dict]) -> dict:
         if path.exists():
             files.add(_plain(path))
     return {"tasks": cancel, "reconcile": reconcile, "writers": writers, "files": files,
-            "task_path": task_path, "transaction_path": transaction_path}
+            "task_path": task_path, "transaction_path": transaction_path,
+            "external_or_missing_workspace_tasks": sorted(skipped_workspace_tasks)}
 
 
 def cleanup_stopped_work(root: Path, inventory: list[dict], *, inventory_provider=None, _barrier_held=False) -> dict:
@@ -308,6 +337,8 @@ def cleanup_stopped_work(root: Path, inventory: list[dict], *, inventory_provide
                 store.finish_force_stop(reconcile)
             return {"success": True, "archive": str(archive), "tasks_cancelled": cancelled,
                     "writers_aborted": aborted, "events_paused": paused_events,
+                    "external_or_missing_workspace_tasks":
+                        plan["external_or_missing_workspace_tasks"],
                     "transactions_invalidated": count}
     except (OSError, RuntimeError, ValueError, TypeError, KeyError) as exc:
         return {"success": False, "error": f"{type(exc).__name__}: {exc}",

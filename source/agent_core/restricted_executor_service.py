@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Queue worker that must be launched as the configured non-admin identity."""
 from __future__ import annotations
-import argparse,getpass,json,os,signal,subprocess,time,uuid
+import argparse,getpass,hashlib,json,os,re,signal,subprocess,time,uuid
 from pathlib import Path
 from .json_state_io import read_json_retry,write_json_atomic
 from .path_security import authorize_path
@@ -10,6 +10,7 @@ from .security_approval import SecurityApprovalLedger
 from .protocol_v8 import sha256_digest
 from .windows_security import acl_mode,authorized_workspace_roots,default_profile_path,is_admin,load_security_profile,workspace_traverse_roots
 from .windows_process_job import ensure_current_process_kill_job
+from .process_liveness import observe_owned_process, communicate_with_liveness
 
 def _probe_write(root:Path,*,expect_allowed:bool)->tuple[bool,str]:
  root=root.resolve()
@@ -49,7 +50,8 @@ def _probe_traverse(root:Path)->tuple[bool,str]:
  return _probe_write(root,expect_allowed=False)
 
 def _security_self_test(profile:dict)->dict:
- mode=acl_mode().casefold()
+ mode=acl_mode(allow_on_transition=True)
+ if mode=='transitioning_on':mode='on'
  if mode=='off':return {'passed':True,'reasons':[],'checked_at':time.time(),'mode':mode}
  checks=[]
  for root in authorized_workspace_roots(profile):checks.append(_probe_write(root,expect_allowed=True))
@@ -62,9 +64,44 @@ def _security_self_test(profile:dict)->dict:
  reasons=[reason for passed,reason in checks if not passed]
  return {'passed':not reasons,'reasons':reasons,'checked_at':time.time(),'mode':mode}
 
+def _capture_restricted_stream(raw: bytes, limit: int, root: Path,
+                               request_id: str, stream: str) -> dict:
+ """Preserve exact bytes; if preview truncates, retain full private raw data."""
+ if stream not in {"stdout", "stderr"} or not re.fullmatch(r"EXEC-[0-9A-F]{32}",request_id):
+  raise RuntimeError("restricted_capture_identity_invalid")
+ if type(limit) is not int or not 1 <= limit <= 32 * 1024 * 1024:
+  raise RuntimeError("restricted_capture_limit_invalid")
+ truncated=len(raw)>limit
+ ref=""
+ if truncated:
+  capture_dir=root/"command_capture"
+  capture_dir.mkdir(parents=True,exist_ok=True)
+  if capture_dir.is_symlink():
+   raise RuntimeError("restricted_capture_reparse_forbidden")
+  target=capture_dir/(request_id+"."+stream+".bin")
+  with target.open("xb") as handle:
+   handle.write(raw)
+   handle.flush()
+   os.fsync(handle.fileno())
+  if hashlib.sha256(target.read_bytes()).digest()!=hashlib.sha256(raw).digest():
+   raise RuntimeError("restricted_capture_readback_mismatch")
+  ref=str(target.resolve())
+ return {stream:raw[:limit].decode("utf-8",errors="replace"),
+         stream+"_bytes":len(raw),stream+"_truncated":truncated,
+         stream+"_ref":ref,stream+"_raw_sha256":hashlib.sha256(raw).hexdigest()}
+
 def _run(req:dict,profile:dict)->dict:
+ # Defense in depth for direct queue clients, including Telegram workers.
+ from .turbo_sandbox import resolve_turbo_state, require_turbo_backend
+ sandbox=resolve_turbo_state(req.get('cwd') or None)
+ # Recheck per request in the service as defense in depth. ACL OFF suppresses
+ # stale Turbo intent without bypassing the normal command authorization.
+ require_turbo_backend(sandbox)
  supplied=str(req.get('request_digest',''));unsigned={key:value for key,value in req.items() if key!='request_digest'}
  if supplied!=sha256_digest(unsigned):raise RuntimeError('restricted_executor_request_digest_mismatch')
+ if not re.fullmatch(r'EXEC-[0-9A-F]{32}',str(req.get('request_id',''))):raise RuntimeError('restricted_executor_request_id_invalid')
+ noninteractive=req.get('noninteractive',False)
+ if type(noninteractive) is not bool:raise RuntimeError('restricted_executor_noninteractive_invalid')
  command=req.get('command')
  command_text=command if isinstance(command,str) else subprocess.list2cmdline([str(x) for x in command])
  workspace_roots=authorized_workspace_roots(profile)
@@ -82,18 +119,65 @@ def _run(req:dict,profile:dict)->dict:
   if str(binding.get('manifest_digest',''))!=str(approval_manifest.get('manifest_digest','')):raise RuntimeError('execution_approval_manifest_binding_mismatch')
   SecurityApprovalLedger(cwd).consume(approval_id,binding)
  from .runtime_environment import build_runtime_environment
- env=build_runtime_environment();env['SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE']='1';temp=Path(profile['runtime_root']).resolve();temp.mkdir(parents=True,exist_ok=True);env.update(TEMP=str(temp),TMP=str(temp))
+ env=build_runtime_environment();env['SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE']='1'
+ if noninteractive:env.update(SMARTAGENT_NONINTERACTIVE='1',GIT_TERMINAL_PROMPT='0',GCM_INTERACTIVE='Never')
+ temp=Path(profile['runtime_root']).resolve();temp.mkdir(parents=True,exist_ok=True);env.update(TEMP=str(temp),TMP=str(temp))
  flags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=='nt' else 0
- cp=subprocess.Popen(req['command'],cwd=str(cwd),shell=bool(req.get('shell')),stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,creationflags=flags)
+ cp=subprocess.Popen(req['command'],cwd=str(cwd),shell=bool(req.get('shell')),stdout=subprocess.PIPE,stderr=subprocess.PIPE,stdin=subprocess.DEVNULL if noninteractive else None,env=env,creationflags=flags)
  timed_out=False
- try:stdout,stderr=cp.communicate(timeout=int(req.get('timeout',30)))
+ last_running_evidence=None
+ status_path=Path(profile['executor_endpoint']).resolve()/'status'/(str(req['request_id'])+'.json')
+ def record_running(observation):
+  nonlocal last_running_evidence
+  if not observation.get('liveness_verified'):return
+  last_running_evidence=observation
+  try:
+   status_path.parent.mkdir(parents=True,exist_ok=True)
+   write_json_atomic(status_path,{
+    'schema':'SMARTAGENT_EXECUTOR_PROGRESS_V1',
+    'request_id':req['request_id'],'state':'RUNNING',
+    'liveness_evidence':observation,
+   })
+  except OSError:
+   # A telemetry write failure is not a child-process failure.
+   pass
+ try:
+  stdout,stderr=communicate_with_liveness(
+   cp,int(req.get('timeout',30)),on_running=record_running,
+   execution_id=str(req['request_id']),interval=2.0)
  except subprocess.TimeoutExpired:
   timed_out=True
   if os.name=='nt':subprocess.run(['taskkill','/PID',str(cp.pid),'/T','/F'],capture_output=True,check=False,timeout=10)
   else:os.killpg(os.getpgid(cp.pid),signal.SIGKILL)
   stdout,stderr=cp.communicate(timeout=5)
- limit=int(req.get('max_stream_bytes',5*1024*1024));result={'exit_code':cp.returncode,'stdout':stdout[:limit].decode('utf-8',errors='replace').strip(),'stderr':stderr[:limit].decode('utf-8',errors='replace').strip(),'stdout_bytes':len(stdout),'stderr_bytes':len(stderr),'stdout_truncated':len(stdout)>limit,'stderr_truncated':len(stderr)>limit,'stdout_ref':'','stderr_ref':'','timed_out':timed_out}
- if timed_out:result['error']=f'command exceeded {req.get("timeout",30)} seconds; process tree terminated'
+ final_liveness=observe_owned_process(cp,execution_id=str(req['request_id']))
+ limit=int(req.get('max_stream_bytes',5*1024*1024))
+ try:
+  out=_capture_restricted_stream(stdout,limit,temp,str(req['request_id']),'stdout')
+  err=_capture_restricted_stream(stderr,limit,temp,str(req['request_id']),'stderr')
+ except (OSError,RuntimeError,ValueError) as exc:
+  # Child was already started and may have produced irreversible effects.
+  # Capture persistence failure cannot be rewritten as preflight rejection,
+  # an empty successful stream, or a fabricated child exit.
+  return {'exit_code':None,'stdout':'','stderr':'',
+          'stdout_bytes':None,'stderr_bytes':None,
+          'stdout_truncated':None,'stderr_truncated':None,
+          'stdout_ref':'','stderr_ref':'',
+          'timed_out':timed_out,'process_started':True,
+          'possible_partial_execution':True,'process_state':'UNKNOWN',
+          'pid':cp.pid,'last_running_evidence':last_running_evidence,
+          'liveness_evidence':final_liveness,
+          'error_stage':'CAPTURE',
+          'error':'RESTRICTED_CAPTURE_PERSISTENCE_FAILED:'+type(exc).__name__}
+ result={'exit_code':cp.returncode,**out,**err,
+         'capture_encoding':'utf-8','decode_error_policy':'replace',
+         'timed_out':timed_out,'process_started':True,
+         'process_state':'EXITED' if cp.returncode is not None else final_liveness['process_state'],
+         'pid':cp.pid,'liveness_evidence':final_liveness,
+         'last_running_evidence':last_running_evidence}
+ if timed_out:result['error']=f'command exceeded {req.get("timeout",30)} seconds; process tree termination requested'
+ try:status_path.unlink(missing_ok=True)
+ except OSError:pass
  return result
 
 def serve(*,once=False,poll=.2):
@@ -108,6 +192,9 @@ def serve(*,once=False,poll=.2):
  while True:
   if time.time()-float(self_test.get('checked_at',0) or 0)>30:self_test=_security_self_test(profile)
   write_json_atomic(endpoint/'service_state.json',{'schema':'RESTRICTED_EXECUTOR_SERVICE_STATE_V1','pid':os.getpid(),'user':getpass.getuser(),'is_admin':False,'heartbeat_at':time.time(),'profile_digest':sha256_digest(profile),'self_test':self_test})
+  if acl_mode(allow_on_transition=True)=='transitioning_on':
+   if once:return 0
+   time.sleep(poll);continue
   found=False
   for path in sorted(requests.glob('EXEC-*.json')):
    found=True

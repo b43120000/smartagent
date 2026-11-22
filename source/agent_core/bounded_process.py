@@ -2,12 +2,25 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
 import tempfile
 import uuid
 from pathlib import Path
 
 from .payload_budget import RESULT_ATTACHMENT_MAX_BYTES
+from .process_liveness import observe_owned_process, wait_with_liveness
+
+
+def _stream_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    if path.is_file():
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1048576), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
@@ -18,7 +31,7 @@ def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
             path.unlink()
         except OSError:
             pass
-        return raw.decode("utf-8", errors="replace").strip(), size, False, ""
+        return raw.decode("utf-8", errors="replace"), size, False, ""
 
     preview_bytes = 16 * 1024
     with path.open("rb") as handle:
@@ -29,8 +42,29 @@ def _read_capture(path: Path, limit: int) -> tuple[str, int, bool, str]:
         head.decode("utf-8", errors="replace")
         + "\n...[command output retained locally; middle omitted]...\n"
         + tail.decode("utf-8", errors="replace")
-    ).strip()
+    )
     return preview, size, True, str(path.resolve())
+
+
+# Internal, tightening-only context. It is NOT read from tool_call,
+# Planner JSON or an environment variable. A test cannot silently fall
+# back to the host if ACL/Turbo changes between admission and dispatch.
+_NATIVE_ONLY_RUNTIME_TEST = ContextVar(
+    "smartagent_native_only_runtime_test", default=False
+)
+
+
+@contextmanager
+def native_only_runtime_test():
+    token = _NATIVE_ONLY_RUNTIME_TEST.set(True)
+    try:
+        yield
+    finally:
+        _NATIVE_ONLY_RUNTIME_TEST.reset(token)
+
+
+def native_only_runtime_test_active() -> bool:
+    return _NATIVE_ONLY_RUNTIME_TEST.get() is True
 
 
 def run_bounded_process(
@@ -44,6 +78,8 @@ def run_bounded_process(
     telemetry: dict | None = None,
     approval_manifest: dict | None = None,
     security_command: str | None = None,
+    noninteractive: bool = False,
+    wait_policy: str = "BOUNDED",
 ) -> dict:
     """Capture process streams to disk so large output cannot exhaust agent memory."""
     from .command_security import CommandSecurityError, require_command_allowed
@@ -52,20 +88,124 @@ def run_bounded_process(
         else subprocess.list2cmdline([str(value) for value in command])
     )
     security_text = str(security_command if security_command is not None else command_text)
-    try:
-        if security_text != command_text:
-            require_command_allowed(command_text)
-        require_command_allowed(security_text, workspace=cwd, approval_manifest=approval_manifest)
-    except CommandSecurityError as exc:
+    if wait_policy not in {"BOUNDED", "UNTIL_EXIT"}:
+        raise ValueError("RUN_COMMAND_WAIT_POLICY_INVALID")
+    # Git49 OS Broker admission. This runs before selecting any executor,
+    # so neither direct host subprocess nor a stale service can be a fallback.
+    from .turbo_broker_admission import assess
+    # Git62: multi-root admission MUST use the exact action CWD.  The
+    # writable Workspace is an authorization parent, not the Turbo Root
+    # selector.  Substituting it here loses the selected AppContainer SID
+    # and incorrectly blocks all commands with MULTI_ROOT_CWD_REQUIRED.
+    # The Broker independently checks the enrollment and root on execution.
+    broker = assess(cwd, tool="run_command")
+    # Parent is consulted only for the legacy single-root CWD boundary check;
+    # it must NEVER replace the action CWD in admission.
+    from .workspace_access import resolve_turbo_authorization_workspace
+    authorization_workspace = resolve_turbo_authorization_workspace(cwd)
+    def reject_broker(reason: str) -> dict:
         return {
             "exit_code": None, "stdout": "", "stderr": "",
             "stdout_bytes": 0, "stderr_bytes": 0,
             "stdout_truncated": False, "stderr_truncated": False,
             "stdout_ref": "", "stderr_ref": "", "timed_out": False,
-            "error": f"SECURITY_COMMAND_REJECTED:{exc}",
-            "security_rejected": True,
-            "process_started": False,
+            "error": "TURBO_OS_BROKER_BLOCKED:" + reason,
+            "security_rejected": True, "process_started": False,
+            "sandbox_evidence": broker["evidence"],
         }
+
+    if wait_policy == "UNTIL_EXIT" and broker["decision"] != "NORMAL":
+        return reject_broker("LONG_EXECUTION_REQUIRES_ACL_OFF_HOST_BACKEND")
+    if native_only_runtime_test_active() and broker["decision"] != "BROKER_REQUIRED":
+        return reject_broker("RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK")
+    if broker["decision"] == "BLOCKED":
+        return reject_broker(str(broker["reason_code"]))
+    if broker["decision"] != "BROKER_REQUIRED":
+        # Preserve the original command blacklist, one-shot authorization,
+        # and executable checks in ACL OFF / Turbo OFF modes.
+        try:
+            if security_text != command_text:
+                require_command_allowed(command_text)
+            require_command_allowed(
+                security_text, workspace=cwd,
+                approval_manifest=approval_manifest,
+            )
+        except CommandSecurityError as exc:
+            return {
+                "exit_code": None, "stdout": "", "stderr": "",
+                "stdout_bytes": 0, "stderr_bytes": 0,
+                "stdout_truncated": False, "stderr_truncated": False,
+                "stdout_ref": "", "stderr_ref": "", "timed_out": False,
+                "error": f"SECURITY_COMMAND_REJECTED:{exc}",
+                "security_rejected": True, "process_started": False,
+            }
+    if broker["decision"] == "BROKER_REQUIRED":
+        # Even an enrolled Broker must not execute from an unrelated sibling.
+        # The registered parent CWD remains supported and is redirected into
+        # Turbo Root by the native client; all other CWDs must be inside it.
+        from .path_security import is_within
+        state = broker.get("state") or {}
+        if state.get("turbo_root") and authorization_workspace is not None:
+            try:
+                actual_cwd = Path(cwd).expanduser().resolve(strict=True)
+                allowed_parent = Path(authorization_workspace).resolve(strict=True)
+                actual_root = Path(state["turbo_root"]).resolve(strict=True)
+                if (actual_cwd != allowed_parent and
+                        not is_within(actual_cwd, actual_root)):
+                    return reject_broker("TURBO_OS_BROKER_CWD_OUTSIDE_ROOT")
+            except (OSError, RuntimeError, ValueError, TypeError):
+                return reject_broker("TURBO_OS_BROKER_CWD_UNVERIFIED")
+        # ONLY the already-admitted single PowerShell command adapter can
+        # cross the boundary. Reject all other host process launch forms:
+        # arbitrary shell=True, direct Python/Git binaries, elevated scripts,
+        # and wrapper-free subprocess calls. Within the AppContainer,
+        # PowerShell itself can launch tools that the OS token permits.
+        is_powershell_adapter = (
+            not shell and isinstance(command, (tuple, list))
+            and len(command) == 4
+            and str(command[0]).casefold() in {"powershell", "powershell.exe"}
+            and str(command[1]).casefold() == "-noprofile"
+            and str(command[2]).casefold() == "-command"
+            and security_command is not None
+        )
+        if not is_powershell_adapter:
+            return reject_broker("TURBO_BROKER_UNSUPPORTED_LAUNCH_FORM")
+        # Authorization/approval has already been checked above, but no
+        # privileged host process receives the user's script. This helper
+        # launches only an admin-protected native broker and independently
+        # validates a Windows AppContainer process-token receipt per action.
+        from .turbo_os_broker_client import (
+            TurboOSBrokerUnavailable, execute_turbo_command,
+        )
+        metadata = dict(telemetry or {})
+        try:
+            return execute_turbo_command(
+                security_text, cwd=cwd, timeout=int(timeout),
+                max_stream_bytes=max_stream_bytes,
+                task_id=str(metadata.get("task_id") or ""),
+                action_id=str(metadata.get("action_id") or ""),
+            )
+        except (TurboOSBrokerUnavailable, OSError, ValueError) as exc:
+            # A controller timeout can happen AFTER the native child started.
+            # Do not convert this into a pre-execution SECURITY_REJECTED or
+            # a confirmed FAILED command. No host executor fallback.
+            reason = str(exc)
+            if "TIMEOUT_EXECUTION_UNCERTAIN" in reason or "NATIVE_CHILD_EXECUTION_TIMEOUT" in reason:
+                return {
+                    "exit_code": None, "stdout": "", "stderr": "",
+                    "stdout_bytes": 0, "stderr_bytes": 0,
+                    "stdout_truncated": False, "stderr_truncated": False,
+                    "stdout_ref": "", "stderr_ref": "",
+                    "timed_out": True,
+                    "error": "TURBO_OS_BROKER_OUTCOME_UNKNOWN:" + reason,
+                    "security_rejected": False,
+                    "possible_partial_execution": True,
+                    "process_started": None,
+                    "process_state": "UNKNOWN",
+                    "liveness_evidence": {},
+                    "sandbox_evidence": broker["evidence"],
+                }
+            return reject_broker(reason)
     from .windows_security import restricted_executor_required
     restricted_required = restricted_executor_required()
     if restricted_required and os.environ.get("SMARTAGENT_RESTRICTED_EXECUTOR_SERVICE") != "1":
@@ -75,20 +215,69 @@ def run_bounded_process(
             telemetry_root = telemetry.get("root"); telemetry_task = telemetry.get("task_id")
             if telemetry_root and telemetry_task:
                 from .execution_telemetry import write_snapshot
-                write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="RUNNING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid())
-            result = execute_restricted(command, cwd=cwd, timeout=timeout, shell=shell, max_stream_bytes=max_stream_bytes, approval_manifest=approval_manifest, security_command=security_text)
+                write_snapshot(
+                    telemetry_root, telemetry_task,
+                    request_id=telemetry.get("request_id", ""),
+                    action_id=telemetry.get("action_id", ""),
+                    state="QUEUED", command=command_text[:500],
+                    started_at=__import__("time").time(),
+                    worker_pid=os.getpid(), liveness_verified=False,
+                )
+            def record_restricted_running(observation):
+                if not (telemetry_root and telemetry_task):
+                    return
+                try:
+                    write_snapshot(
+                        telemetry_root, telemetry_task,
+                        state="RUNNING", pid=observation.get("pid"),
+                        execution_id=observation.get("execution_id"),
+                        liveness_verified=True,
+                        liveness_evidence=observation,
+                        liveness_observed_at=observation["observed_at"],
+                    )
+                except OSError:
+                    pass
+            result = execute_restricted(
+                command, cwd=cwd, timeout=timeout, shell=shell,
+                max_stream_bytes=max_stream_bytes,
+                approval_manifest=approval_manifest, security_command=security_text,
+                noninteractive=noninteractive, on_running=record_restricted_running,
+            )
             result.setdefault('process_started', True if result.get('exit_code') is not None else None)
             if telemetry_root and telemetry_task:
-                write_snapshot(telemetry_root, telemetry_task, state="TIMED_OUT" if result.get("timed_out") else "EXITED", ended_at=__import__("time").time(), exit_code=result.get("exit_code"), stdout_tail=str(result.get("stdout", ""))[-8192:], stderr_tail=str(result.get("stderr", ""))[-8192:])
+                write_snapshot(
+                    telemetry_root, telemetry_task,
+                    state=("TIMED_OUT" if result.get("timed_out")
+                           else "EXITED" if result.get("process_state") == "EXITED"
+                           else "UNKNOWN"),
+                    liveness_verified=False,
+                    liveness_evidence=result.get("liveness_evidence"),
+                    ended_at=__import__("time").time(),
+                    exit_code=result.get("exit_code"),
+                    stdout_tail=str(result.get("stdout", ""))[-8192:],
+                    stderr_tail=str(result.get("stderr", ""))[-8192:],
+                )
             return result
         except Exception as exc:
+            unconfirmed = "restricted_executor_timeout:" in str(exc)
+            if unconfirmed and telemetry_root and telemetry_task:
+                try:
+                    write_snapshot(
+                        telemetry_root, telemetry_task,
+                        state="UNKNOWN", liveness_verified=False,
+                        error="RESTRICTED_EXECUTOR_RESPONSE_TIMEOUT",
+                    )
+                except OSError:
+                    pass
             return {
                 "exit_code": None, "stdout": "", "stderr": "",
                 "stdout_bytes": 0, "stderr_bytes": 0,
                 "stdout_truncated": False, "stderr_truncated": False,
                 "stdout_ref": "", "stderr_ref": "", "timed_out": False,
                 "error": f"RESTRICTED_EXECUTOR_REQUIRED:{type(exc).__name__}: {exc}",
-                "security_rejected": True,
+                "security_rejected": not unconfirmed,
+                "possible_partial_execution": unconfirmed,
+                "process_state": "UNKNOWN" if unconfirmed else "NOT_STARTED",
                 "process_started": None,
             }
     capture_dir = (
@@ -107,24 +296,68 @@ def run_bounded_process(
         from .execution_telemetry import write_snapshot
         write_snapshot(telemetry_root, telemetry_task, request_id=telemetry.get("request_id", ""), action_id=telemetry.get("action_id", ""), state="STARTING", command=command_text[:500], started_at=__import__("time").time(), worker_pid=os.getpid(), stdout_path=str(stdout_path), stderr_path=str(stderr_path))
     process_started = False
+    process_spawn_attempted = False  # Distinguishes Popen rejection from preparation failures.
+    last_running_evidence = None
+    final_liveness_evidence = None
     try:
         from .runtime_environment import build_runtime_environment
         child_environment = build_runtime_environment()
+        if noninteractive:
+            # No synthetic confirmation keystrokes. Git must fail explicitly
+            # if credentials require interactive input; cooperative BAT scripts
+            # can skip cosmetic PAUSE via SMARTAGENT_NONINTERACTIVE.
+            child_environment.update({
+                "SMARTAGENT_NONINTERACTIVE": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+                "GCM_INTERACTIVE": "Never",
+            })
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+            process_spawn_attempted = True
             process = subprocess.Popen(
                 command,
                 cwd=str(Path(cwd).expanduser().resolve()) if cwd else None,
                 shell=shell,
                 stdout=stdout_handle,
                 stderr=stderr_handle,
+                stdin=subprocess.DEVNULL if noninteractive else None,
                 env=child_environment,
             )
             process_started = True
-            if telemetry_root and telemetry_task:
-                write_snapshot(telemetry_root, telemetry_task, state="RUNNING", pid=process.pid)
+            def record_running(observation):
+                nonlocal last_running_evidence
+                if not observation.get("liveness_verified"):
+                    return
+                last_running_evidence = observation
+                if telemetry_root and telemetry_task:
+                    try:
+                        write_snapshot(
+                            telemetry_root, telemetry_task,
+                            state="RUNNING", execution_id=capture_id,
+                            pid=process.pid, liveness_evidence=observation,
+                            liveness_verified=True,
+                            liveness_observed_at=observation["observed_at"],
+                        )
+                    except OSError:
+                        # Telemetry is secondary; never abandon a live child
+                        # because a display snapshot could not be written.
+                        pass
             timed_out = False
+            wait_result = None
+            tree_kill_attempted = False
+            tree_kill_exit_code = None
             try:
-                process.wait(timeout=timeout)
+                if wait_policy == "UNTIL_EXIT":
+                    from .long_execution_supervisor import wait_until_exit
+                    _, wait_result = wait_until_exit(
+                        process, install=telemetry.get("install_root"),
+                        telemetry=telemetry, execution_id=capture_id,
+                        on_running=record_running,
+                    )
+                else:
+                    wait_with_liveness(
+                        process, timeout, on_running=record_running,
+                        execution_id=capture_id, interval=2.0,
+                    )
             except subprocess.TimeoutExpired:
                 timed_out = True
                 # On Windows shell=True owns cmd.exe, not just the actual child.
@@ -132,55 +365,150 @@ def run_bounded_process(
                 # handles (and the command itself) can survive the timeout.
                 if os.name == 'nt' and process.poll() is None:
                     try:
-                        subprocess.run(
+                        tree_kill_attempted = True
+                        tree_kill = subprocess.run(
                             [str(Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'taskkill.exe'),
                              '/PID', str(process.pid), '/T', '/F'],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             timeout=10, check=False,
                         )
+                        tree_kill_exit_code = tree_kill.returncode
                     except (OSError, subprocess.TimeoutExpired):
                         pass
                 if process.poll() is None:
                     process.kill()
                 process.wait(timeout=5)
+            final_liveness_evidence = observe_owned_process(
+                process, execution_id=capture_id,
+            )
 
+        # Hash original byte streams before any UTF-8 replacement/truncation/unlink.
+        stdout_raw_sha256 = _stream_sha256(stdout_path)
+        stderr_raw_sha256 = _stream_sha256(stderr_path)
         stdout, stdout_bytes, stdout_truncated, stdout_ref = _read_capture(stdout_path, max_stream_bytes)
         stderr, stderr_bytes, stderr_truncated, stderr_ref = _read_capture(stderr_path, max_stream_bytes)
+        # Preserve the post-timeout process-finality evidence independently
+        # of the original command's (unknown) success. taskkill /T /F = 0 is
+        # a bounded OS report for that PID's process tree, not a guarantee
+        # that the command had no prior side effects or detached work.
+        timeout_termination = None
+        if timed_out:
+            handle_exited = bool(
+                final_liveness_evidence
+                and final_liveness_evidence.get("process_state") == "EXITED"
+                and final_liveness_evidence.get("process_identity_verified") is True
+                and final_liveness_evidence.get("evidence_source") == "WIN32_WAIT_FOR_SINGLE_OBJECT"
+                and final_liveness_evidence.get("pid") == process.pid
+            )
+            timeout_termination = {
+                "schema": "SMARTAGENT_GIT71_PROCESS_TERMINATION_V1",
+                "pid": process.pid,
+                "owned_handle_exit_verified": handle_exited,
+                "owned_process_state": (
+                    final_liveness_evidence.get("process_state")
+                    if isinstance(final_liveness_evidence, dict) else "UNKNOWN"
+                ),
+                "final_identity_source": (
+                    final_liveness_evidence.get("evidence_source")
+                    if isinstance(final_liveness_evidence, dict) else "UNAVAILABLE"
+                ),
+                "tree_termination_source": "WIN32_TASKKILL_TREE" if tree_kill_attempted else "UNAVAILABLE",
+                "tree_kill_exit_code": tree_kill_exit_code,
+                "tree_termination_verdict": (
+                    "VERIFIED" if handle_exited and tree_kill_attempted
+                    and tree_kill_exit_code == 0 else "UNVERIFIED"
+                ),
+                "original_command_success_proven": False,
+                "side_effect_scope": "NOT_EVALUATED",
+                "replay_original_action": False,
+            }
         result = {
             "exit_code": process.returncode,
             "stdout": stdout,
             "stderr": stderr,
             "stdout_bytes": stdout_bytes,
             "stderr_bytes": stderr_bytes,
+            "stdout_raw_sha256": stdout_raw_sha256,
+            "stderr_raw_sha256": stderr_raw_sha256,
+            "capture_encoding": "utf-8",
+            "decode_error_policy": "replace",
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
             "stdout_ref": stdout_ref,
             "stderr_ref": stderr_ref,
             "timed_out": timed_out,
             "process_started": process_started,
+            "process_spawn_attempted": process_spawn_attempted,
+            "process_start_error_class": None,
+            "process_start_phase": "STARTED",
+            "process_state": (
+                "EXITED" if process.returncode is not None
+                else final_liveness_evidence["process_state"]
+                if final_liveness_evidence else "UNKNOWN"
+            ),
+            "pid": process.pid,
+            "execution_id": capture_id,
+            "liveness_evidence": final_liveness_evidence,
+            "last_running_evidence": last_running_evidence,
+            "timeout_termination": timeout_termination,
+            "wait_policy": wait_policy,
+            "long_wait_id": wait_result.get("wait_id", "") if wait_result else "",
+            "long_wait_decision": wait_result.get("decision", "") if wait_result else "",
+            "long_wait_state": wait_result.get("state", "") if wait_result else "",
+            "long_wait_os_samples": wait_result.get("liveness_sample_count", 0) if wait_result else 0,
         }
         if timed_out:
             result["error"] = f"指令超過 {timeout} 秒"
         if telemetry_root and telemetry_task:
-            write_snapshot(telemetry_root, telemetry_task, state="TIMED_OUT" if timed_out else "EXITED", ended_at=__import__("time").time(), exit_code=process.returncode, stdout_tail=stdout[-8192:], stderr_tail=stderr[-8192:])
+            write_snapshot(
+                telemetry_root, telemetry_task,
+                state="TIMED_OUT" if timed_out else "EXITED",
+                ended_at=__import__("time").time(),
+                liveness_verified=False, liveness_evidence=final_liveness_evidence,
+                exit_code=process.returncode,
+                stdout_tail=stdout[-8192:], stderr_tail=stderr[-8192:],
+            )
         return result
     except Exception as exc:
-        for path in (stdout_path, stderr_path):
+        # Process start versus a post-start capture failure must be distinguishable.
+        # In either case do not invent an exit code or replay this action.
+        if process_started and "process" in locals():
             try:
-                path.unlink()
-            except OSError:
+                if process.poll() is None and os.name == "nt":
+                    subprocess.run(
+                        [str(Path(os.environ.get("SystemRoot", r"C:\\Windows")) /
+                             "System32" / "taskkill.exe"),
+                         "/PID", str(process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=10, check=False,
+                    )
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
                 pass
+        if not process_started:
+            for path in (stdout_path, stderr_path):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
         return {
-            "exit_code": None,
-            "stdout": "",
-            "stderr": "",
-            "stdout_bytes": 0,
-            "stderr_bytes": 0,
-            "stdout_truncated": False,
-            "stderr_truncated": False,
-            "stdout_ref": "",
-            "stderr_ref": "",
+            "exit_code": None, "stdout": "", "stderr": "",
+            "stdout_bytes": None, "stderr_bytes": None,
+            "stdout_truncated": None, "stderr_truncated": None,
+            "stdout_ref": str(stdout_path.resolve()) if process_started and stdout_path.is_file() else "",
+            "stderr_ref": str(stderr_path.resolve()) if process_started and stderr_path.is_file() else "",
             "timed_out": False,
-            "error": str(exc),
+            "error": f"{type(exc).__name__}: {exc}",
+            "error_stage": "CAPTURE" if process_started else "PROCESS_START",
+            "process_start_phase": ("STARTED" if process_started else
+                                    "POPEN" if process_spawn_attempted else "PRELAUNCH"),
+            "process_spawn_attempted": process_spawn_attempted,
+            "process_start_error_class": type(exc).__name__ if not process_started else None,
             "process_started": process_started,
+            "possible_partial_execution": process_started,
+            "process_state": "UNKNOWN" if process_started else "NOT_STARTED",
+            "pid": process.pid if process_started and "process" in locals() else None,
+            "execution_id": capture_id if process_started else None,
         }

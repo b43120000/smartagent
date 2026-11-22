@@ -110,10 +110,17 @@ INLINE_EXECUTOR_SPECS = (
 
 
 TOOL_ENVELOPE_SCHEMAS = {
+    "install_toolchain": {
+        "required": {"name": str, "version": str},
+        "optional": {"source": dict},
+    },
     "run_command": {
         "required": {"command": str, "operation": str},
         "optional": {
             "timeout": int,
+            "wait_policy": str,
+            "shell_mode": str,
+            "argv": list,
             "working_directory": str,
             "verify": (list, dict),
             "success_criteria": str,
@@ -130,8 +137,24 @@ TOOL_ENVELOPE_SCHEMAS = {
         "required": {"path": str},
         "optional": {},
     },
+    "read_runtime_evidence": {
+        "required": {"evidence_ref": str},
+        "optional": {"section": str, "offset": int, "max_chars": int},
+    },
+    "read_runtime_blackboard": {
+        "required": {"section": str},
+        "optional": {"sequence": int, "offset": int, "max_chars": int},
+    },
+    "inspect_toolchain_environment": {
+        "required": {},
+        "optional": {},
+    },
     "write_file": {
         "required": {"path": str, "content": str},
+        "optional": {},
+    },
+    "create_directory": {
+        "required": {"path": str},
         "optional": {},
     },
     "delete_path": {
@@ -215,7 +238,7 @@ TOOL_ENVELOPE_SCHEMAS = {
     },
     "project_sync": {
         "required": {"strategy": str},
-        "optional": {"project_root": str, "workspace": str, "path": str, "base_snapshot_id": str, "max_bytes": int, "max_files": int},
+        "optional": {"project_root": str, "workspace": str, "path": str, "base_snapshot_id": str, "max_bytes": int, "max_files": int, "goal_conditions": list},
     },
     "query_project": {
         "required": {"project_root": str, "queries": list},
@@ -338,6 +361,7 @@ TOOL_ENVELOPE_SCHEMAS = {
             "completion_contract": dict,
             "capability_resolution": dict,
             "path_resolution": dict,
+            "goal_transition": dict,
             "context_request": dict,
             "decision": str,
             "outcome": str,
@@ -371,6 +395,12 @@ TOOL_ENVELOPE_SCHEMAS = {
         "optional": {"stage": dict},
     },
 }
+
+# Git70: all typed tools may carry a frozen, declarative Expected assertion.
+# This never modifies tool permissions, parameters or execution semantics.
+for _tool_schema in TOOL_ENVELOPE_SCHEMAS.values():
+    _tool_schema.setdefault("optional", {})["expected"] = dict
+TOOL_ENVELOPE_SCHEMAS["run_command"].setdefault("optional", {})["reconciliation"] = dict
 
 
 def _type_name(spec) -> str:
@@ -672,6 +702,13 @@ def _validate_run_command_complexity(command: str, *, block_index: int | None = 
         )
 
     family, inline_code = _extract_inline_executor(command)
+    # Git52: exact AST-validated bounded HTTPS GET is a read-only observation,
+    # not a generic inline script exception. Command-security/ACL/Turbo checks
+    # still run after envelope validation.
+    if family == "python":
+        from .python_https_probe import is_bounded_python_https_probe
+        if is_bounded_python_https_probe(command):
+            return True, None
     score, signals = _command_complexity_signals(command, inline_code)
 
     # Known inline executors need multiple script-like signals.  For ordinary
@@ -709,7 +746,8 @@ def _validate_run_command_complexity(command: str, *, block_index: int | None = 
 
 
 def validate_tool_envelope(call: object, raw_payload: str = "",
-                           block_index: int | None = None) -> tuple[bool, dict | None]:
+                           block_index: int | None = None, *,
+                           native_broker: bool = False) -> tuple[bool, dict | None]:
     """Validate schema and control-plane complexity before any execution."""
     call = normalize_tool_numeric_fields(call)
     raw_tool = call.get("tool") if isinstance(call, dict) else _guess_tool_name(raw_payload)
@@ -768,6 +806,26 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
     if tool not in {'report_progress', 'final_response', 'turn_commit'}:
         allowed_fields.add('depends_on')
         allowed_fields.add('replaces_action_id')
+        # Runtime-issued candidate correlation only; this never grants
+        # execution, authorization, Scope or a semantic rewrite.
+        allowed_fields.add('strategy_id')
+        if "strategy_id" in call:
+            strategy_id = call.get("strategy_id")
+            valid_strategy_id = (
+                isinstance(strategy_id, str)
+                and len(strategy_id) == 26
+                and strategy_id.startswith("STRAT-")
+                and all(char in "0123456789ABCDEF" for char in strategy_id[6:])
+            )
+            if not valid_strategy_id:
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]",
+                    "strategy_candidate_reference_invalid",
+                    tool=tool,
+                    detail="strategy_id must be a Runtime-issued STRAT- plus 20 uppercase hex characters",
+                    suggestion="只使用本輪 Runtime shared_blackboard.strategy.candidates 提供的 strategy_id。",
+                    block_index=block_index,
+                )
         replacement = call.get('replaces_action_id')
         if replacement is not None and (not isinstance(replacement,str) or not replacement.strip()):
             return False, _diagnostic('[TOOL_ENVELOPE_REJECTED]', 'action_replacement_invalid',
@@ -882,6 +940,50 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 block_index=block_index,
             )
 
+    if tool == "read_runtime_blackboard":
+        from .runtime_blackboard_reader import SECTIONS, MAX_SLICE_CHARS
+        if (call.get("section") not in SECTIONS
+                or type(call.get("sequence", 0)) is not int
+                or call.get("sequence", 0) < 0
+                or type(call.get("offset", 0)) is not int
+                or call.get("offset", 0) < 0
+                or type(call.get("max_chars", 1800)) is not int
+                or not 1 <= call.get("max_chars", 1800) <= MAX_SLICE_CHARS):
+            bad_section = call.get("section")
+            if bad_section not in SECTIONS:
+                guidance = (
+                    "This API only reads Executor event/events_index/metadata/terminal. "
+                    "For Software Inventory or Global Toolchain Ledger, use "
+                    "inspect_toolchain_environment (no Planner path or section). "
+                    "Do not repeat the invalid blackboard section."
+                )
+            else:
+                guidance = (
+                    "Keep the selected Executor Blackboard section, but correct "
+                    "sequence/offset/max_chars to the documented integer ranges. "
+                    "For section=event, use a real nonzero event sequence."
+                )
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "runtime_blackboard_read_slice_invalid", tool=tool,
+                detail=(
+                    "section=" + str(bad_section)[:80] +
+                    "; allowed_sections=event,events_index,metadata,terminal;" +
+                    " sequence>=0;offset>=0;max_chars=1.." + str(MAX_SLICE_CHARS)
+                ),
+                suggestion=guidance)
+
+    if tool == "read_runtime_evidence":
+        from .runtime_evidence_store import REF_PATTERN, SECTIONS, MAX_SLICE_CHARS
+        if (not REF_PATTERN.fullmatch(call.get("evidence_ref", ""))
+                or call.get("section", "raw_result") not in SECTIONS
+                or type(call.get("offset", 0)) is not int
+                or call.get("offset", 0) < 0
+                or type(call.get("max_chars", 1800)) is not int
+                or not 1 <= call.get("max_chars", 1800) <= MAX_SLICE_CHARS):
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "runtime_evidence_reference_or_slice_invalid", tool=tool,
+                suggestion="Use an actual same-request MIN-EV reference and a bounded slice.")
+
     if tool == "observe_fact":
         from .evidence_foundation import validate_observe_fact_action, EvidenceSpecError
         try:
@@ -958,28 +1060,111 @@ def validate_tool_envelope(call: object, raw_payload: str = "",
                 block_index=block_index,
             )
 
-    if tool == "run_command":
-        command = call.get("command", "")
-        valid_command, command_error = _validate_run_command_complexity(
-            command,
-            block_index=block_index,
-            field_path="command",
-        )
-        if not valid_command:
-            return False, command_error
-        admission = inspect_command(command)
-        if not admission.allowed:
+    # Generic Expected contract: check before any tool is dispatched.
+    # Planner cannot retroactively change this through an observed result.
+    if call.get("expected") is not None:
+        from .goal_evidence_matching import validate_expected, ExpectedContractError
+        try:
+            validate_expected(call["expected"])
+        except ExpectedContractError as exc:
             return False, _diagnostic(
-                "[TOOL_ENVELOPE_REJECTED]",
-                admission.code,
-                tool=tool,
-                detail=admission.detail,
-                suggestion="不要用 run_command 執行破壞性操作；改用 runtime 提供的 typed operation。",
-                block_index=block_index,
+                "[TOOL_ENVELOPE_REJECTED]", "expected_observed_contract_invalid",
+                tool=tool, detail=str(exc), block_index=block_index)
+
+    if tool == "run_command" and call.get("wait_policy", "BOUNDED") not in {"BOUNDED", "UNTIL_EXIT"}:
+        return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+            "RUN_COMMAND_WAIT_POLICY_INVALID", tool=tool,
+            detail="wait_policy must be BOUNDED or UNTIL_EXIT", block_index=block_index)
+    if call.get("reconciliation") is not None:
+        from .timeout_reconciliation import validate_reconciliation, TimeoutReconciliationError
+        try:
+            validate_reconciliation(call)
+        except TimeoutReconciliationError as exc:
+            # Git73: preserve the strict Git71 pre-dispatch rejection, but
+            # expose a bounded, actionable field issue to the Planner. The
+            # actual proposed paths/command are never echoed into diagnostics.
+            code = str(exc)
+            locations = {
+                "RECONCILIATION_WRONG_TOOL": ("tool", "run_command"),
+                "RECONCILIATION_SCHEMA_INVALID": ("reconciliation", "version=1 and checks only"),
+                "RECONCILIATION_CHECK_COUNT_INVALID": ("reconciliation.checks", "1..8 checks"),
+                "RECONCILIATION_PATH_INVALID": ("working_directory", "absolute Windows path"),
+                "RECONCILIATION_ABSOLUTE_PATH_REQUIRED": ("reconciliation.checks", "absolute Windows path"),
+                "RECONCILIATION_PARENT_TRAVERSAL": ("reconciliation.checks", "no parent traversal"),
+                "RECONCILIATION_CHECK_SCHEMA_INVALID": ("reconciliation.checks", "tool,path,expected_exists only"),
+                "RECONCILIATION_CHECK_OPERATOR_INVALID": ("reconciliation.checks", "observe_fact and bool"),
+                "RECONCILIATION_CHECK_OUTSIDE_CWD": ("reconciliation.checks", "path strictly inside CWD"),
+                "RECONCILIATION_CHECK_DUPLICATE": ("reconciliation.checks", "unique canonical paths"),
+            }
+            field, expected = locations.get(
+                code, ("reconciliation", "Git71 bounded scoped contract")
             )
+            if code.startswith("RECONCILIATION_") and field == "working_directory":
+                # CWD is checked by the same strict Windows-path validator.
+                expected = "absolute Windows path"
+            return False, _diagnostic(
+                "[TOOL_ENVELOPE_REJECTED]", "timeout_reconciliation_invalid",
+                tool=tool, detail=code,
+                suggestion=(
+                    "保留原始 timeout/expected；reconciliation 只接受 "
+                    "{version:1,checks:[{tool:observe_fact,path:<CWD 內的絕對檔案路徑>,"
+                    "expected_exists:<boolean>}]}; 修正後以新 action_id 重新提交，"
+                    "禁止放寬 CWD 或改寫已執行的 Timeout。"
+                ),
+                field_issues=[{
+                    "field": field, "reason": "invalid_reconciliation",
+                    "expected": expected, "actual": "invalid",
+                    "constraint_code": code,
+                }],
+                repair_mode="BATCH_FIELDS", block_index=block_index)
+
+    if tool == "run_command":
+        from .shell_execution import execution_contract, ShellModeError
+        try:
+            shell_spec = execution_contract(call)
+        except ShellModeError as exc:
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "run_command_shell_contract_invalid", tool=tool,
+                detail=str(exc), block_index=block_index)
+        if native_broker and shell_spec["shell_mode"] != "POWERSHELL":
+            return False, _diagnostic("[TOOL_ENVELOPE_REJECTED]",
+                "NATIVE_BROKER_SHELL_MODE_UNSUPPORTED", tool=tool,
+                detail="native broker only supports POWERSHELL; no host fallback",
+                block_index=block_index)
+        command = shell_spec["policy_command"]
+        if native_broker:
+            # Runtime-owned mode only; not selectable from the model envelope.
+            # AppContainer, not a content blacklist, bounds native commands.
+            if (not isinstance(command, str) or not command.strip()
+                    or len(command) > 8192 or "\x00" in command):
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]",
+                    "native_run_command_invalid", tool=tool,
+                    detail="empty, NUL, or exceeds 8192 characters",
+                    block_index=block_index,
+                )
+        else:
+            valid_command, command_error = _validate_run_command_complexity(
+                command, block_index=block_index, field_path="command",
+            )
+            if not valid_command:
+                return False, command_error
+            admission = inspect_command(command)
+            if not admission.allowed:
+                return False, _diagnostic(
+                    "[TOOL_ENVELOPE_REJECTED]", admission.code,
+                    tool=tool, detail=admission.detail,
+                    suggestion="不要用 run_command 執行破壞性操作；改用 runtime 提供的 typed operation。",
+                    block_index=block_index,
+                )
 
         try:
-            mismatch = operation_mismatch_detail(call)
+            if native_broker:
+                from .command_operation import normalize_command_operation
+                normalize_command_operation(call.get("operation"))
+                mismatch = ""
+            else:
+                mismatch = operation_mismatch_detail({**call, "command":shell_spec["policy_command"]})
         except ValueError as exc:
             return False, _diagnostic(
                 "[TOOL_ENVELOPE_REJECTED]",
@@ -2138,6 +2323,11 @@ SYSTEM_PROMPT_TEMPLATE = """
 8. 上傳多個附件到目前網頁對話：{{"tool": "upload_files", "paths": ["絕對路徑1", "絕對路徑2"]}}
 8a. 將 Workspace 內檔案回傳給本次 Telegram 使用者：{{"tool":"return_artifact","path":"絕對路徑","kind":"document|photo（可省略）","caption":"可省略"}}
 9. 網路搜尋：{{"tool": "web_search", "query": "關鍵字"}}
+【非指令任務的 ACL/Turbo 無差別路由（適用 Telegram、WebCopilot、Executor）】
+- 使用者只是詢問、閱讀、比較新聞／英文消息、理解文章、做文字分析，或要求一般自然語言回答時，與 ACL OFF 的正常 Planner／Executor 行為一致；不得因 ACL ON 或 Turbo ON/OFF，先要求 Turbo Sandbox READY、先啟動 restricted_executor，或把沒有 Shell 需求的任務標記為 BLOCKED。
+- 需要外部新聞／資料查證時，使用 web_search 或現有非 OS 查詢能力；搜尋失敗須回報來源／網路限制，不得偷偷改以 run_command、PowerShell、Python、curl 等本機指令搜尋網路。
+- 只有真正需要本機 OS 指令或本機檔案副作用（run_command、建立／寫入／刪除檔案等）時，才走共用 ACL/Turbo Action Admission；Turbo ON 時此類動作必須經 Native AppContainer Broker，未就緒則保留 fail-closed，禁止降權繞道 ordinary Executor。
+- 不得從任務是否「自然語言」推定檔案修改免授權；使用者用自然語言要求本機建立、修改或刪除檔案，仍然是 OS mutation。
 9. Local AI 最後手段：{{"tool": "ask_executor", "instruction": "明確且封閉的局部工作", "context": "必要資訊", "allow_local_ai_fallback": true, "run_id": "必須等於目前 RUN_ID"}}
 10. 保存本次 project session summary：{{"tool":"save_session_summary","summary":"本次已理解/完成內容","decisions":["重要架構決策"],"modified_files":["路徑"],"verification":["驗證與結果"],"pending":["未完成/風險"],"next_steps":["下次可直接接續的事項"]}}
 11. Web 直接修改單一檔案：{{"tool":"web_edit_file","path":"絕對路徑","instruction":"要對此檔案做的修改","output_path":"可省略；預設覆寫原檔"}}
@@ -2194,6 +2384,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 - 簡單且彼此無相依性的只讀查詢可優先使用既有 typed tool 或 aggregate_verification；不得為了減少回合而犧牲 action/evidence 的一對一關係。
 - run_command 不是「執行成功就等於任務完成」。只要 command 是啟動程式、編譯、測試、修改後執行、部署或任何會影響狀態的 action，你必須同一個 JSON 裡提供 success_criteria 與 verify actions。
 - Local Agent 只機械式執行 command + verify，不自行發明「這樣算成功嗎」。
+- Git70 Expected/Observed：所有 ToolCall 可在執行前提供 expected={{"contract_version":1,"aggregation":"ALL","assertions":[{{"field":"data.exit_code","operator":"eq","value":0}}]}}。這是 Planner 在派送前鎖定的事實預期，而非工具執行成功宣告。Runtime 必須從可信 MIN-EV 回讀 Observed，逐欄客觀 Match；負向測試可以以 process_started=false、process_start_error_class="FileNotFoundError"、exit_code=null 作為 Expected。不可事後改寫 Expected；無法匹配時只重新取證、不得重播可能已產生副作用的命令。Matcher PASS 不會覆寫原始 execution_status，安全政策仍獨立決策。
 - VERIFICATION_STATUS=PASS 才能把該 action 視為驗證通過。
 - VERIFICATION_STATUS=FAIL 時，必須根據 stdout/stderr/verification evidence 找出問題，必要時 upload/find 相關檔案、修正後重新 run_command + verify。
 - 若任務本身是負向測試，預期 command 必須失敗，請在原 action 明確加入 expected_failure，例如 {{"exit_codes":[1],"stderr_regex":"not a directory"}}，並以 condition_id 或 success_criteria 精確綁定本輪 completion_contract.success 的條件文字／ID。Runtime 仍保存 execution_status=FAILED、verification_status=FAIL，另產生 expectation_status=PASS/FAIL 供任務終局判定；不得在一般失敗後才補填 expected_failure，也不得用它掩蓋副作用操作失敗。

@@ -75,19 +75,26 @@ def _terminate_task_processes(tasks: list[Any]) -> int:
     return terminated
 
 
-def remote_clean_start(root: str | Path, *, reason: str = "REMOTE_CLEAN_START") -> dict[str, int]:
-    """Terminalize all remote work before a new runtime generation starts."""
+def remote_clean_start(root: str | Path, *, reason: str = "REMOTE_CLEAN_START",
+                       local_checkout_only: bool = False) -> dict[str, int]:
+    """Recover local Runtime leases without crossing ForceStop install scope.
+
+    Normal clean-start retains its legacy behavior. ForceStop uses
+    local_checkout_only AFTER its archive/cancel transaction: do not abandon
+    more tasks or terminate arbitrary PIDs from task metadata, and never open
+    an external task.workspace approval database.
+    """
     from .remote_events import RemoteEventStore
     from .request_ownership import RequestOwnershipRegistry
     from .task_state import RemoteTaskQueue, TaskStateStore
 
     queue = RemoteTaskQueue(TaskStateStore(remote_tasks_path(root)))
-    changed = queue.abandon_incomplete(
+    changed = [] if local_checkout_only else queue.abandon_incomplete(
         transports={"TELEGRAM", "WEBGPT", "WEBGPT_COPILOT", "LOCAL_TEST"},
         request_prefixes={"RR-"},
         reason=str(reason),
     )
-    processes_terminated = _terminate_task_processes(changed)
+    processes_terminated = 0 if local_checkout_only else _terminate_task_processes(changed)
     task_ids = {str(task.task_id) for task in changed}
     paused = RemoteEventStore(remote_events_path(root)).pause_for_tasks(
         task_ids, reason=str(reason)
@@ -109,7 +116,11 @@ def remote_clean_start(root: str | Path, *, reason: str = "REMOTE_CLEAN_START") 
     try:
         from .security_approval import SecurityApprovalLedger
         approval_roots = {str(Path(root).resolve())}
-        approval_roots.update(str(Path(task.workspace).resolve()) for task in changed if getattr(task, "workspace", ""))
+        if not local_checkout_only:
+            approval_roots.update(
+                str(Path(task.workspace).resolve()) for task in changed
+                if getattr(task, "workspace", "")
+            )
         approvals_cancelled = sum(
             SecurityApprovalLedger(workspace).clear_pending(reason=str(reason))
             for workspace in approval_roots

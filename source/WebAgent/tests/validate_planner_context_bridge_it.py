@@ -1,0 +1,449 @@
+#!/usr/bin/env python3
+"""P0-P2 Runtime-to-Planner decision snapshot regressions (no side effects).
+
+Use PYTHONPATH=source python -B source/WebAgent/tests/validate_planner_context_bridge_it.py
+This suite does not contact GitHub, download/install anything or mutate the E: fixture.
+"""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from agent_core.planner_context_snapshot import (
+    build_planner_context_snapshot, render_planner_context_snapshot,
+)
+
+
+class FakeRuntime:
+    def __init__(self):
+        self.run_id = 'RR-CASE-D'
+        self.task_epoch = 'EPOCH-D'
+        self.authorized_paths = [r'E:\SmartAgent_PR_BCD_LIVE']
+        self.tools = SimpleNamespace(_runtime_semantic_capability_resolution={
+            'request_id': self.run_id, 'task_epoch': self.task_epoch,
+            'capabilities': ['project.inspect_scope', 'directory.inspect_metadata'],
+        })
+        self.progress_ledger = SimpleNamespace(
+            decision='CONTINUE', current_step=2, total_steps=5,
+            strategy_state={'revision': 2, 'history': []},
+        )
+        self.action_loop_state = {
+            'required_transition': 'REPLAN_REQUIRED',
+            'allowed_next_actions': ['list_directory', 'inspect_directory', 'run_command'],
+            'blockers': [{'blocking_action_id': 'scope-case-d-replan-02',
+                          'reason': 'REPLAN_REQUIRED',
+                          'release_conditions': [{'kind': 'NEW_OBJECTIVE_EVIDENCE_OR_RESOLVED_FIELDS'}]}],
+        }
+        self.action_result_ledger = {
+            'scope-case-d-replan-02': {
+                'tool': 'inspect_project_scope', 'result_status': 'REJECTED',
+                'result_reason': 'TOOL_SCOPE_REJECTED', 'executed': False,
+                'execution_status': 'FAILED', 'effective_verification_status': 'UNKNOWN',
+                'produced_round': 3,
+            },
+            'inspect-case-d-target-replan-02': {
+                'tool': 'inspect_directory', 'result_status': 'FAILED',
+                'result_reason': 'DIRECTORY_INSPECTION_INCOMPLETE', 'executed': False,
+                'execution_status': 'FAILED', 'effective_verification_status': 'UNKNOWN',
+                'produced_round': 3,
+            },
+        }
+        self.action_ledger = {
+            'scope-case-d-replan-02': {
+                'result': '[TOOL_SCOPE_REJECTED] resolved_scope_expands_beyond_explicit_path:'
+                          + r'E:\SmartAgent_PR_BCD_LIVE' + '\nPRIVATE_SECRET_NEVER_SEND',
+            },
+            'inspect-case-d-target-replan-02': {'result': 'DIRECTORY_INSPECTION_INCOMPLETE'},
+        }
+        self.condition_result_ledger = {'COND-A': {
+            'condition_id': 'COND-A', 'action_id': 'scope-case-d-replan-02', 'status': 'UNKNOWN',
+        }}
+        self._environment_fact_refs = {}
+        self._planner_context_diagnostics = []
+        self.pending_result_recovery = {}
+        self.pending_progress_repair_actions = []
+
+    def _context_capabilities(self):
+        return {'read_tools': ['list_directory', 'inspect_directory'],
+                'objective_blockers': [{'action_id': 'scope-case-d-replan-02',
+                                        'reason': 'TOOL_SCOPE_REJECTED'}]}
+
+
+class PlannerContextBridgeIT(unittest.TestCase):
+    def setUp(self):
+        self.runtime = FakeRuntime()
+
+    def test_ccrc_transaction_is_visible_without_raw_commands(self):
+        from agent_core.cross_contract_repair import CrossContractRepairCoordinator
+        coordinator = CrossContractRepairCoordinator(
+            request_id=self.runtime.run_id, task_epoch=self.runtime.task_epoch,
+            goal="Deploy the authorized fixture",
+        )
+        rejected = [{
+            "reason": "invalid_progress_payload",
+            "field_issues": [{"field": "outcome", "code": "missing"}],
+        }]
+        coordinator.observe([{
+            "tool": "report_progress", "action_id": "PROGRESS",
+            "decision": "CONTINUE", "next_action": "run_command",
+        }, {
+            "tool": "run_command", "action_id": "REPLACE-ME",
+            "command": "PRIVATE_SCRIPT_CONTENT_MUST_NOT_BE_EXPORTED",
+        }], rejected, declared_tools=["run_command"])
+        self.runtime._ccrc = coordinator
+        self.runtime._planner_context_diagnostics = [{
+            **rejected[0],
+            "cross_contract_repair": {
+                "schema": "SMARTAGENT_CROSS_CONTRACT_REPAIR_V1",
+                "mode": "FIELD_REPAIR", "field_rounds": 1,
+                "reconstruction_rounds": 0,
+            },
+        }]
+        snapshot = build_planner_context_snapshot(self.runtime)
+        state = snapshot["recovery"]["cross_contract_repair"]
+        self.assertTrue(state["active"])
+        self.assertEqual(state["mode"], "FIELD_REPAIR")
+        self.assertEqual(state["field_rounds"], 1)
+        self.assertFalse(state["budget_reset"])
+        self.assertEqual(len(state["goal_anchor_sha256"]), 64)
+        self.assertEqual(snapshot["latest_protocol_diagnostics"][-1]
+                         ["cross_contract_repair"]["mode"], "FIELD_REPAIR")
+        self.assertNotIn("PRIVATE_SCRIPT_CONTENT_MUST_NOT_BE_EXPORTED",
+                         json.dumps(snapshot))
+
+    def test_case_d_scope_failure_preserved_with_correct_execution_facts(self):
+        snapshot = build_planner_context_snapshot(self.runtime)
+        self.assertEqual(snapshot['schema'], 'SMARTAGENT_PLANNER_CONTEXT_V1')
+        self.assertEqual(snapshot['goal']['strategy_revision'], 2)
+        rows = {row['action_id']: row for row in snapshot['recent_action_evidence']}
+        rejected = rows['scope-case-d-replan-02']
+        self.assertFalse(rejected['executed'])
+        self.assertEqual(rejected['result_reason'], 'TOOL_SCOPE_REJECTED')
+        self.assertEqual(rejected['scope_error_code'],
+                         'resolved_scope_expands_beyond_explicit_path')
+        self.assertEqual(rows['inspect-case-d-target-replan-02']['verification_status'], 'UNKNOWN')
+        self.assertFalse(snapshot['scope']['scope_expansion_authorized'])
+        self.assertIn('runtime_capability_state', snapshot)
+        self.assertNotIn('capability_resolution', snapshot)
+
+    def test_scope_preflight_action_readiness_and_goal_anchoring(self):
+        from agent_core.action_readiness import classify_scope_preflight
+        info = classify_scope_preflight(
+            "inspect_project_scope",
+            "workspace_not_found_or_not_directory:E:/nonexistent",
+            allowed=False,
+        )
+        self.runtime.action_result_ledger["scope-case-d-replan-02"]["scope_diagnostic"] = info
+        state = build_planner_context_snapshot(self.runtime)
+        active = state["scope_preflight_readiness"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["category"],
+                         "PROJECT_WORKSPACE_UNAVAILABLE_OR_NOT_DIRECTORY")
+        self.assertEqual(active[0]["eligible_transition"], "EVIDENCE_ACQUISITION")
+        self.assertFalse(active[0]["filesystem_absence_verified"])
+        self.assertNotIn("E:/nonexistent", json.dumps(active))
+        readiness = {row["tool"]: row for row in
+                     state["runtime_capability_state"]["tool_readiness"]}
+        self.assertEqual(
+            readiness["list_directory"]["action_fields"]["required_action_fields_when_explicit_scope"],
+            ["path"],
+        )
+        self.assertTrue(
+            state["scope_preflight_readiness"][0]["tool_admission_still_required"]
+        )
+
+    def test_context_request_repair_subfields_remain_visible_without_raw_text(self):
+        from agent_core.context_acquisition import context_request_repair_diagnostic
+        advice = context_request_repair_diagnostic(
+            {"kind": "BLOCKED", "detail": "", "invented_key": "DO_NOT_EXPORT_SECRET"},
+            objective_blocker_ids=["scope-case-d-replan-02"],
+        )
+        self.runtime._planner_context_diagnostics = [{
+            "reason": "invalid_progress_payload",
+            "field_issues": advice["field_issues"],
+            "repair_scope": "CONTEXT_REQUEST_SCHEMA",
+            "context_request_repair": advice,
+        }]
+        state = build_planner_context_snapshot(self.runtime)
+        item = state["latest_protocol_diagnostics"][0]
+        fields = {row["field"]: row["code"] for row in item["field_issues"]}
+        self.assertEqual(fields["context_request"], "unsupported_keys")
+        self.assertEqual(fields["context_request.detail"], "detail_required")
+        self.assertEqual(fields["context_request.blocking_action_id"],
+                         "objective_blocker_ref_required")
+        self.assertEqual(
+            item["context_request_repair"]["objective_blocker_ids"],
+            ["scope-case-d-replan-02"],
+        )
+        self.assertNotIn("DO_NOT_EXPORT_SECRET", json.dumps(state))
+
+    def test_command_repair_diagnostic_survives_context_without_script_source(self):
+        self.runtime._planner_context_diagnostics = [{
+            "reason": "run_command_verification_contract_required",
+            "tool": "run_command",
+            "command_repair": {
+                "schema": "SMARTAGENT_COMMAND_REPAIR_READINESS_V1",
+                "mode": "FIELD_REPAIR", "action_id": "D9-REPAIR",
+                "required_fields": ["operation", "verify", "success_criteria"],
+                "issue_count": 3,
+                "field_issues": [
+                    {"field": "operation", "code": "operation_not_in_registry"},
+                    {"field": "verify", "code": "required_if_non_observation"},
+                    {"field": "success_criteria", "code": "required_if_non_observation"},
+                ],
+                "instruction": "PRIVATE_SCRIPT_NEVER_EXPORT",
+                "authorization_granted": False,
+            },
+        }]
+        snapshot = build_planner_context_snapshot(self.runtime)
+        item = snapshot["latest_protocol_diagnostics"][0]["command_repair"]
+        self.assertEqual(item["mode"], "FIELD_REPAIR")
+        self.assertEqual(set(item["required_fields"]),
+                         {"operation", "verify", "success_criteria"})
+        self.assertEqual(item["issue_count"], 3)
+        self.assertFalse(item["authorization_granted"])
+        self.assertNotIn("PRIVATE_SCRIPT_NEVER_EXPORT", json.dumps(snapshot))
+
+    def test_deferred_command_reconstruction_remains_visible_without_source(self):
+        self.runtime.deferred_action_repairs = {
+            "D9-UNEXECUTED": {
+                "tool": "run_command", "status": "ACTION_RECONSTRUCTION_REQUIRED",
+                "action": {"command": "PRIVATE_SCRIPT_NEVER_EXPORT"},
+                "readiness": {"field_issues": [{
+                    "field": "command", "code": "inline_script_too_complex",
+                }]},
+            },
+        }
+        self.runtime.pending_command_field_repairs = {}
+        state = build_planner_context_snapshot(self.runtime)
+        pending = state["recovery"]["pending_command_repairs"]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["action_id"], "D9-UNEXECUTED")
+        self.assertEqual(pending[0]["mode"], "ACTION_RECONSTRUCTION")
+        self.assertFalse(pending[0]["authorization_granted"])
+        self.assertNotIn("PRIVATE_SCRIPT_NEVER_EXPORT", json.dumps(state))
+
+    def test_scr_candidate_is_not_falsely_advertised_as_admitted(self):
+        snapshot = build_planner_context_snapshot(self.runtime)
+        readiness = {row['tool']: row for row in
+                     snapshot['runtime_capability_state']['tool_readiness']}
+        self.assertEqual(readiness['list_directory']['read_capability'], 'directory.list')
+        self.assertEqual(readiness['list_directory']['capability_state'], 'SELECTION_REQUIRED')
+        self.assertEqual(readiness['inspect_directory']['capability_state'], 'SELECTED')
+        self.assertEqual(readiness['run_command']['action_admission'],
+                         'REQUIRES_RUNTIME_ADMISSION')
+        self.assertFalse(readiness['list_directory']['selection_can_expand_authorization'])
+        self.assertEqual(snapshot['runtime_capability_state']['selected_capabilities'],
+                         ['directory.inspect_metadata', 'project.inspect_scope'])
+
+    def test_protocol_reject_does_not_erase_prior_tool_failures(self):
+        self.runtime._planner_context_diagnostics = [{
+            'reason': 'invalid_progress_payload',
+            'field_issues': [{'field': 'outcome', 'expected': 'INTERRUPT requires FAILED | UNKNOWN',
+                              'actual': 'PENDING'}],
+            'preserved_action_ids': ['ACT-HELD'],
+        }]
+        self.runtime.pending_progress_repair_actions = [{'action_id': 'ACT-HELD'}]
+        for _ in range(3):
+            snapshot = build_planner_context_snapshot(self.runtime)
+            self.assertEqual(snapshot['latest_protocol_diagnostics'][0]['field_issues'][0]['field'], 'outcome')
+            self.assertNotIn('actual', snapshot['latest_protocol_diagnostics'][0]['field_issues'][0])
+            self.assertEqual(snapshot['recovery']['pending_progress_action_ids'], ['ACT-HELD'])
+            self.assertTrue(any(row['result_reason'] == 'TOOL_SCOPE_REJECTED'
+                                for row in snapshot['recent_action_evidence']))
+            self.runtime.progress_ledger.current_step += 1
+
+    def test_snapshot_is_bounded_and_never_includes_raw_result(self):
+        rendered, payload = render_planner_context_snapshot(self.runtime)
+        self.assertEqual(rendered.count('[SMARTAGENT_PLANNER_CONTEXT_V1]'), 1)
+        self.assertNotIn('PRIVATE_SECRET_NEVER_SEND', rendered)
+        self.assertTrue(payload['context_digest'])
+        self.assertFalse(payload['raw_tool_results_included'])
+        self.assertEqual(build_planner_context_snapshot(self.runtime)['context_digest'],
+                         payload['context_digest'])
+
+    def test_request_epoch_binding_mismatch_is_explicit(self):
+        self.runtime.tools._runtime_semantic_capability_resolution['task_epoch'] = 'OLD'
+        snapshot = build_planner_context_snapshot(self.runtime)
+        self.assertTrue(snapshot['runtime_capability_state']['binding_identity_mismatch'])
+        self.assertFalse(snapshot['runtime_capability_state']['binding_present'])
+        self.assertEqual(snapshot['runtime_capability_state']['tool_readiness'][0]['capability_state'],
+                         'BINDING_IDENTITY_MISMATCH')
+
+    def test_old_active_blockers_are_reported_when_truncated(self):
+        self.runtime.action_result_ledger.clear()
+        self.runtime.action_ledger.clear()
+        for n in range(60):
+            aid = f'ACT-{n:03d}'
+            self.runtime.action_result_ledger[aid] = {
+                'tool': 'inspect_directory', 'result_status': 'REJECTED',
+                'result_reason': 'TOOL_SCOPE_REJECTED', 'executed': False,
+                'execution_status': 'FAILED', 'effective_verification_status': 'UNKNOWN',
+                'evidence_status': 'ACTIVE',
+            }
+        snapshot = build_planner_context_snapshot(self.runtime)
+        self.assertLessEqual(len(snapshot['recent_action_evidence']), 24)
+        self.assertGreater(snapshot['omitted_active_blocker_count'], 0)
+        self.assertTrue(snapshot['critical_context_omitted'])
+        self.assertGreater(len(snapshot['omitted_active_blocker_refs']), 0)
+
+    def test_environment_and_condition_evidence_present_without_claiming_success(self):
+        self.runtime._environment_fact_refs = {'ENVFACT-X': {
+            'fact': {'state': 'MISSING', 'probe_status': 'VERIFIED'},
+        }}
+        snapshot = build_planner_context_snapshot(self.runtime)
+        self.assertEqual(snapshot['environment_facts'][0]['fact_state'], 'MISSING')
+        self.assertEqual(snapshot['condition_evidence'][0]['status'], 'UNKNOWN')
+        self.assertEqual(snapshot['goal']['status'], 'INCOMPLETE')
+
+
+
+class PlannerSCRRecoveryIT(unittest.TestCase):
+    def test_rejected_signature_tracks_real_capability_changes_not_noise(self):
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from agent_core.semantic_capability_resolution import SCHEMA
+        def decision(action_id, caps, schema=SCHEMA):
+            return [{"tool": "report_progress", "action_id": action_id,
+                     "current_step": 1, "total_steps": 2,
+                     "decision": "CONTINUE", "outcome": "PENDING",
+                     "capability_resolution": {
+                         "schema": schema, "capabilities": caps,
+                     }}, {"tool": "turn_commit", "action_count": 1}]
+        diag = [{"reason": "semantic_capability_list_invalid"}]
+        old = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-1", ["directory.list"]), diag, "",
+        )
+        updated = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-2", ["directory.list", "directory.inspect_metadata"]), diag, "",
+        )
+        same = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-CHANGED-ID", ["directory.list"]), diag, "",
+        )
+        self.assertNotEqual(old, updated)
+        self.assertEqual(old, same)
+        noise1 = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-3", [], "NOT_A_REAL_SCHEMA_1"), diag, "",
+        )
+        noise2 = WebAgentProtocolLoop._rejected_exchange_signature(
+            decision("P-4", [], "NOT_A_REAL_SCHEMA_2"), diag, "",
+        )
+        self.assertEqual(noise1, noise2)
+
+    def test_scr_invalid_then_fixed_admits_real_read_once(self):
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        from WebAgent.tests.validate_progress_terminal_lifecycle import response
+        from agent_core.semantic_capability_resolution import SCHEMA
+        with tempfile.TemporaryDirectory(prefix="scr-context-repair-") as folder:
+            root = Path(folder).resolve()
+            turns, events = [], []
+            clause = "Directory contents have been inspected"
+            def progress(action_id, broken):
+                proposal = {"schema": SCHEMA,
+                            "capabilities": ["directory.inspect_metadata"]}
+                if broken:
+                    proposal["runtime_capability_state"] = {"binding_present": False}
+                return {
+                    "tool": "report_progress", "action_id": action_id,
+                    "base_evaluation": "Only read the explicit authorized directory",
+                    "total_steps": 2, "current_step": 1,
+                    "steps": [
+                        {"step": 1, "desc": "Inspect the directory",
+                         "status": "IN_PROGRESS"},
+                        {"step": 2, "desc": "Evaluate the inspection evidence",
+                         "status": "PENDING"},
+                    ],
+                    "current_focus": "Read directory metadata",
+                    "next_action": "inspect_directory",
+                    "completion_contract": {
+                        "success": [clause],
+                        "failure": ["Inspection verified failed"],
+                        "in_progress": ["Directory inspection pending"],
+                        "interrupted": ["No allowed observation route"],
+                    },
+                    "decision": "CONTINUE", "outcome": "PENDING",
+                    "matched_condition": "Directory inspection pending",
+                    "evidence_refs": ["REQUEST_ACCEPTED"],
+                    "decision_reason": "Collect scoped read evidence.",
+                    "capability_resolution": proposal,
+                }
+            action = {"tool": "inspect_directory", "action_id": "SCR-READ",
+                      "paths": [str(root)], "recursive": False}
+            def planner(prompt, expected, attachments):
+                turns.append(prompt)
+                if len(turns) == 1:
+                    return response(progress("P-SCR-INVALID", True), action)
+                if len(turns) == 2:
+                    self.assertIn("[SCR_SCHEMA_REPAIR]", prompt)
+                    self.assertIn('"runtime_capability_state"', prompt)
+                    self.assertIn('"capability_repair"', prompt)
+                    return response(progress("P-SCR-FIXED", False), action)
+                raise RuntimeError("STOP_AFTER_SCR_RECOVERED")
+            loop = WebAgentProtocolLoop(
+                root, planner, progress_root=root, max_turns=5,
+                event_sink=lambda name, **kw: events.append((name, kw)),
+            )
+            with patch.dict(os.environ, {
+                "SMARTAGENT_GAR_V1": "0",
+                "SMARTAGENT_PREREQ_V3_BCD": "0",
+                "SMARTAGENT_PREREQ_V3_PR_A": "0",
+            }):
+                with self.assertRaisesRegex(RuntimeError, "STOP_AFTER_SCR_RECOVERED"):
+                    loop.run("唯讀檢查明確授權的目錄", request_id="RR-SCR-REPAIR-E2E",
+                             task_id="TASK-SCR-REPAIR-E2E", task_epoch="EPOCH-SCR",
+                             trusted_authorized_paths=[str(root)])
+            self.assertEqual(len(turns), 3)
+            rejected = [r[1] for r in events if r[0] == "protocol_rejected"]
+            self.assertTrue(any(
+                any(d.get("reason") == "semantic_capability_schema_invalid"
+                    for d in item.get("diagnostics", [])) for item in rejected))
+            started = [row[1] for row in events
+                       if row[0] == "tool_started" and row[1].get("action_id") == "SCR-READ"]
+            self.assertEqual(len(started), 1)
+            self.assertTrue(any(r[0] == "planner_context_response_correlated" for r in events))
+
+
+class PlannerDeliveryIT(unittest.TestCase):
+    def test_runtime_rejection_next_round_receives_a_fresh_compiled_context(self):
+        from WebAgent.protocol_loop import WebAgentProtocolLoop
+        prompts, events = [], []
+        with tempfile.TemporaryDirectory(prefix='planner-ctx-') as folder:
+            root = Path(folder).resolve()
+            allowed = root / 'allowed'
+            allowed.mkdir()
+            def planner(prompt, expected, attachments):
+                prompts.append(prompt)
+                if len(prompts) == 1:
+                    return 'INVALID_V9_TOOL_TRANSPORT'
+                raise RuntimeError('STOP_AFTER_CONTEXT_CAPTURE')
+            loop = WebAgentProtocolLoop(
+                allowed, planner, progress_root=root, max_turns=4,
+                event_sink=lambda name, **kw: events.append((name, kw)),
+            )
+            with patch.dict(os.environ, {
+                'SMARTAGENT_GAR_V1': '0',
+                'SMARTAGENT_PREREQ_V3_BCD': '0',
+                'SMARTAGENT_PREREQ_V3_PR_A': '0',
+            }):
+                with self.assertRaisesRegex(RuntimeError, 'STOP_AFTER_CONTEXT_CAPTURE'):
+                    loop.run('請唯讀檢查已授權資料夾', request_id='RR-PLANNER-CONTEXT-IT',
+                             task_id='TASK-PLANNER-CONTEXT-IT', task_epoch='EPOCH-CTX')
+        self.assertEqual(len(prompts), 2)
+        for prompt in prompts:
+            self.assertIn('[SMARTAGENT_PLANNER_CONTEXT_V1]', prompt)
+            self.assertIn('"context_digest"', prompt)
+        self.assertIn('latest_protocol_diagnostics', prompts[1])
+        prepared = [event for event in events if event[0] == 'planner_context_prepared']
+        self.assertEqual(len(prepared), 2)
+        self.assertEqual(len({row[1]['context_digest'] for row in prepared}), 2)
+        correlated = [event for event in events if event[0] == 'planner_context_response_correlated']
+        self.assertEqual(len(correlated), 1)
+        self.assertEqual(correlated[0][1]['context_digest'], prepared[0][1]['context_digest'])
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

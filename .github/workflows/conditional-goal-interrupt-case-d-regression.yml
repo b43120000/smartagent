@@ -1,0 +1,60 @@
+name: Conditional Goal and Interrupt Readiness Case D
+
+on:
+  push:
+    branches:
+      - fix/conditional-goal-gap-interrupt-readiness-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conditional-goal:
+    name: Conditional Goal Case D - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile affected source
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/conditional_goal_policy.py
+          source/agent_core/goal_gap_ledger.py
+          source/agent_core/interrupt_readiness.py
+          source/agent_core/planner_context_snapshot.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_conditional_goal_interrupt_case_d.py
+      - name: Conditional Case D RCA Regression
+        run: python -B source/WebAgent/tests/test_conditional_goal_interrupt_case_d.py
+      - name: Previous Goal Gap Decision Grounding Regression
+        run: python -B source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
+      - name: Previous First FULL and Action Hold Regression
+        run: python -B source/WebAgent/tests/test_case_d_first_full_admission.py
+      - name: Existing Context Acquisition
+        run: python -B source/WebAgent/tests/validate_context_acquisition.py
+      - name: Existing Planner Context Bridge
+        run: python -B source/WebAgent/tests/validate_planner_context_bridge_it.py
+      - name: Existing Goal Strategy Transition
+        run: python -B source/WebAgent/tests/validate_goal_strategy_transition_it.py
+      - name: Existing CCRC Regression
+        run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Existing Action Loop Regression
+        run: python -B source/WebAgent/tests/validate_action_loop_runtime_state.py
+      - name: Existing Windows Preexecution Strategy Replan
+        if: runner.os == 'Windows'
+        run: python -B source/WebAgent/tests/validate_preexecution_strategy_replan_it.py
+      - name: Full Core Manifest Integrity
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.'))"

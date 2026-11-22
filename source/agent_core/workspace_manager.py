@@ -24,6 +24,9 @@ from .workspace_access import (
     access_snapshot,
     require_writable_workspace,
     save_workspace_access_policy,
+    save_turbo_roots,
+    load_workspace_access_policy,
+    is_valid_turbo_root,
     software_only_mode_enabled,
 )
 from .windows_security import acl_mode, default_profile_path
@@ -129,6 +132,12 @@ def _binding_snapshot() -> dict:
         "security_status": access["security_status"],
         "writable_workspaces": list(access["writable_workspaces"]),
         "read_only_roots": list(access["read_only_roots"]),
+        "turbo_roots": list(access.get("turbo_roots") or ()),
+        # A manager renders all Roots, not the selected Action's CWD.
+        "turbo_sandbox": __import__(
+            "agent_core.turbo_sandbox", fromlist=["global_turbo_snapshot"]
+        ).global_turbo_snapshot(access=access),
+        "policy_revision": int((access.get("policy") or {}).get("revision", 0) or 0),
         "local": load_startup_preferences(),
         "remote": remote,
         "gar_webgpt2_url": load_gar_webgpt2(),
@@ -272,7 +281,7 @@ def _editable_read_only(snapshot: dict) -> list[str]:
         for value in (*tuple(profile.get("skill_roots") or ()), profile.get("executor_code_root", ""))
         if str(value or "").strip()
     }
-    return [value for value in snapshot["read_only_roots"] if value.casefold() not in protected]
+    return [value for value in snapshot["policy"]["read_only_roots"] if value.casefold() not in protected]
 
 
 def _path_key(value: str | Path) -> str:
@@ -299,6 +308,7 @@ def _verify_access_postcondition(writable: list[str], read_only: list[str]) -> N
     expected_writable = {_path_key(value) for value in writable}
     actual_writable = {_path_key(value) for value in applied["writable_workspaces"]}
     protected_read_only = [
+        *list(applied.get("builtin_toolchain_read_roots") or ()),
         *list(applied_profile.get("skill_roots") or ()),
         applied_profile.get("executor_code_root", ""),
     ]
@@ -361,7 +371,7 @@ def _apply_access(writable: list[str], read_only: list[str], profile: dict) -> i
         "-ExecutorUser", executor_user,
         "-ProfilePath", str(default_profile_path()),
         "-ExecutorPython", str(profile["executor_python"]),
-        "-Apply",
+        "-NonInteractive", "-Apply",
     ])
     _write_apply_log(
         "APPLY_ACCESS_REQUEST "
@@ -484,7 +494,85 @@ def _initialize_security_profile() -> int:
     return int(result.returncode)
 
 
-def _security_menu() -> int:
+
+def _is_strict_turbo_child(path: str | Path, workspace: str | Path) -> bool:
+    """Only the exact nominated writable Workspace may enroll this Root."""
+    try:
+        target = Path(path).expanduser().resolve()
+        parent = Path(workspace).expanduser().resolve()
+        return target != parent and parent in target.parents
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def _completed_legacy_turbo_import(
+    imported: Path, activation: Path, install: Path, revision: int
+) -> bool:
+    from .path_security import is_reparse_path
+
+    try:
+        if any(is_reparse_path(path) for path in (imported, activation)):
+            return False
+        old = json.loads(imported.read_text(encoding="utf-8-sig"))
+        live = json.loads(activation.read_text(encoding="utf-8-sig"))
+        return bool(
+            old["schema"] == "SMARTAGENT_TURBO_EXISTING_IMPORT_V1"
+            and live["schema"] == "SMARTAGENT_TURBO_OS_ACTIVATION_V1"
+            and old["status"] == "ACTIVE"
+            and live["status"] == "ACTIVE_PROVISIONED"
+            and live["existing_root_import"] is True
+            and _path_key(old["install_root"]) == _path_key(live["install_root"]) == _path_key(install)
+            and old["policy_revision"] == live["policy_revision"] == revision
+            and all(old[key] and _path_key(old[key]) == _path_key(live[key])
+                    for key in ("workspace_root", "turbo_root"))
+            and all(old[key] and old[key] == live[key] for key in ("package_sid", "moniker"))
+            and old["snapshot_id"] and old["snapshot_id"] == live["existing_import_snapshot_id"]
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
+_TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION = 10
+
+
+def _verify_applied_turbo_roots() -> int:
+    from .turbo_os_broker_client import execute_turbo_command
+
+    policy = load_workspace_access_policy()
+    roots = policy["turbo_roots"]
+    revision = policy["revision"]
+    for root in roots:
+        try:
+            # Windows PowerShell's provider location can differ from the OS
+            # working directory when the AppContainer cannot read ancestors.
+            result = execute_turbo_command("[Environment]::CurrentDirectory", cwd=root)
+            evidence = result["sandbox_evidence"]
+            if (
+                result["exit_code"] != 0
+                or not result["output_complete"]
+                or _path_key(result["stdout"].strip()) != _path_key(root)
+                or _path_key(evidence["turbo_root"]) != _path_key(root)
+                or evidence["sandbox_backend"] != "WIN32_APPCONTAINER"
+                or evidence["sandbox_identity_verified"] is not True
+                or evidence["kernel_outside_read_denied"] is not True
+                or evidence["kernel_outside_write_denied"] is not True
+            ):
+                raise RuntimeError("TURBO_RUNTIME_ATTESTATION_INVALID")
+        except Exception as exc:
+            message = f"TURBO_RUNTIME_VERIFY_FAILED root={root} error={exc}"
+            _write_apply_log(message)
+            print(message)
+            print("Configuration saved. Retry Apply to repair and verify.")
+            return 1
+    if load_workspace_access_policy()["revision"] != revision:
+        print("TURBO_RUNTIME_VERIFY_POLICY_CHANGED. Retry Apply.")
+        return 1
+    print(f"\nAPPLY_EXIT_CODE=0 roots={len(roots)}")
+    _write_apply_log("GIT62_MULTI_ROOT_APPLY_PASS")
+    return 0
+
+
+def _security_menu(*, verify_from_parent: bool = False) -> int:
     software_only = _acl_off_enabled()
     if not software_only and not _is_admin():
         raise RuntimeError("security_menu_requires_administrator")
@@ -497,7 +585,25 @@ def _security_menu() -> int:
     profile = snapshot["profile"]
     writable = list(snapshot["writable_workspaces"])
     read_only = _editable_read_only(snapshot)
+    turbo = list(snapshot.get("turbo_roots") or ())
+    baseline = (list(writable), list(read_only), list(turbo))
+    base_revision = int(snapshot["policy"].get("revision", 0) or 0)
     while True:
+        # Telegram/WebGPT and this Manager share one policy file. Never apply
+        # a stale, locally edited draft over a newer external configuration.
+        latest_revision = int(load_workspace_access_policy().get("revision", 0) or 0)
+        if latest_revision != base_revision:
+            if (writable, read_only, turbo) != baseline:
+                print("[!] Workspace policy changed externally while editing; "
+                      "reopen this menu before applying to avoid lost changes.")
+                return 3
+            snapshot = access_snapshot()
+            profile = snapshot["profile"]
+            writable = list(snapshot["writable_workspaces"])
+            read_only = _editable_read_only(snapshot)
+            turbo = list(snapshot.get("turbo_roots") or ())
+            baseline = (list(writable), list(read_only), list(turbo))
+            base_revision = latest_revision
         print("\nSecurity / Workspace Access")
         print("Writable workspaces:")
         for i, value in enumerate(writable, 1):
@@ -505,7 +611,30 @@ def _security_menu() -> int:
         print("Read-only roots:")
         for i, value in enumerate(read_only, 1):
             print(f"  R{i}. {value}")
-        print("\n[1] Add writable  [2] Remove writable  [3] Add read-only  [4] Remove read-only  [5] Apply  [0] Back")
+        from .turbo_sandbox import global_turbo_snapshot
+        state = global_turbo_snapshot(access=snapshot)
+        print("Turbo requested=" + state["turbo_requested"]
+              + " effective=" + state["turbo_effective"]
+              + " sandbox=" + state["sandbox_status"]
+              + " reason=" + state["reason_code"])
+        from .auto_approve_mode import auto_approve_snapshot
+        # Effective is derived from the CURRENT ACL state and the authorized
+        # active Workspace, never an editable security grant.
+        active_workspace = writable[0] if writable else None
+        auto_state = auto_approve_snapshot(active_workspace)
+        print("Auto Approve Requested: " + auto_state["auto_approve_requested"] + "  [editable]")
+        print("Auto Approve Effective: " + auto_state["auto_approve_effective"] + "  [Runtime/read-only]")
+        print("Executor Backend: " + auto_state["executor_backend"])
+        print("Auto Approve Reason: " + auto_state["reason_code"])
+        print("Auto Approve Workspace: " + (str(active_workspace) if active_workspace else "(none)"))
+        print("Turbo mode roots (strict writable Workspace descendants):")
+        for i, value in enumerate(turbo, 1):
+            print(f"  T{i}. {value}")
+        for record in state["roots"]:
+            print("    enrollment: " + record["path"] + " = " + record["native_enrollment"])
+        print("\n[1] Add writable  [2] Remove writable  [3] Add read-only  [4] Remove read-only")
+        print("[5] Add turbo mode  [6] Remove turbo mode  [7] Apply  [8] Back")
+        print("[9] Set Auto Approve Requested ON/OFF (Effective is read-only)")
         choice = input("Select: ").strip()
         if choice in {"1", "3"}:
             path = str(Path(input("Path: ").strip().strip('\"')).expanduser().resolve())
@@ -522,22 +651,377 @@ def _security_menu() -> int:
             except (ValueError, IndexError):
                 print("[!] Invalid index.")
         elif choice == "5":
+            path = str(Path(input("Turbo path (existing directory or unused Workspace child): ").strip().strip('"')).expanduser().absolute())
+            denied = profile.get("denied_write_roots") or ()
+            if not any(is_valid_turbo_root(path, root, writable, read_only, denied)
+                       for root in writable):
+                print("[!] Turbo path must be a strict writable Workspace subdirectory; no read-only/denied overlap.")
+                continue
+            if path not in turbo:
+                turbo.append(path)
+        elif choice == "6":
             try:
-                return_code = (
-                    _apply_software_only_access(writable, read_only, profile)
-                    if software_only
-                    else _apply_access(writable, read_only, profile)
+                del turbo[int(input("Turbo index: ").strip()) - 1]
+            except (ValueError, IndexError):
+                print("[!] Invalid Turbo index.")
+        elif choice == "9":
+            value = input("Auto Approve Requested [ON/OFF]: ").strip().upper()
+            if value not in {"ON", "OFF"}:
+                print("[!] Expected ON or OFF.")
+                continue
+            try:
+                from .auto_approve_mode import (
+                    set_auto_approve_requested, auto_approve_snapshot,
+                    format_auto_approve_status,
                 )
-                print(f"\nAPPLY_EXIT_CODE={return_code}")
-                _write_apply_log(f"APPLY_MENU_RESULT code={return_code}")
-                return return_code
+                set_auto_approve_requested(value == "ON")
+                print(format_auto_approve_status(
+                    auto_approve_snapshot(writable[0] if writable else None)))
+            except (OSError, RuntimeError, ValueError) as exc:
+                print("[!] Auto Approve setting rejected: " + str(exc))
+            continue
+        elif choice == "7":
+            try:
+                from .turbo_root_registry import (
+                    journal_path as per_root_journal, validate_root_set,
+                )
+                if turbo and acl_mode() != "on":
+                    raise ValueError("TURBO_REQUIRES_ACL_ON")
+                validate_root_set(turbo)
+                denied = profile.get("denied_write_roots") or ()
+                for candidate in turbo:
+                    if not any(
+                        is_valid_turbo_root(
+                            candidate, owner, writable, read_only, denied
+                        ) for owner in writable
+                    ):
+                        raise RuntimeError(
+                            "TURBO_ROOT_OUTSIDE_AUTHORIZED_WORKSPACE:" + candidate
+                        )
+                access_changed = (
+                    {_path_key(v) for v in writable} !=
+                    {_path_key(v) for v in baseline[0]}
+                    or {_path_key(v) for v in read_only} !=
+                    {_path_key(v) for v in baseline[1]}
+                )
+                turbo_changed = (
+                    {_path_key(v) for v in turbo} !=
+                    {_path_key(v) for v in baseline[2]}
+                )
+                prior_policy = load_workspace_access_policy()
+                request_changed = bool(turbo) != (
+                    prior_policy.get("turbo_requested") is True
+                )
+                security_dir = (
+                    AGENT_PROJECT_ROOT / "localdata" / "secure"
+                    / "windows_security"
+                )
+                legacy_journal = security_dir / "turbo_os_activation.json"
+                multi_dir = security_dir / "turbo_root_activations"
+                pending = (
+                    security_dir / "turbo_existing_root_import.json",
+                    security_dir / "turbo_existing_root_switch.json",
+                )
+                legacy_import, legacy_switch = pending
+                if legacy_switch.exists() or (
+                    legacy_import.exists() and not _completed_legacy_turbo_import(
+                        legacy_import, legacy_journal, AGENT_PROJECT_ROOT, latest_revision
+                    )
+                ):
+                    raise RuntimeError(
+                        "TURBO_PENDING_TRANSACTION_REQUIRES_VERIFIED_RECOVERY"
+                    )
+                if multi_dir.exists() and (
+                    not multi_dir.is_dir() or multi_dir.is_symlink()
+                ):
+                    raise RuntimeError("TURBO_MULTI_ROOT_JOURNAL_DIR_UNTRUSTED")
+                journals = sorted(multi_dir.glob("activation-*.json")) if (
+                    multi_dir.is_dir()) else []
+                if any(path.is_symlink() or not path.is_file()
+                       for path in journals):
+                    raise RuntimeError("TURBO_MULTI_ROOT_JOURNAL_UNTRUSTED")
+                current_roots = {
+                    _path_key(path) for path in turbo
+                }
+                active_roots: dict[str, str] = {}
+                active_owners: dict[str, str] = {}
+                for path in journals:
+                    try:
+                        record = json.loads(path.read_text(encoding="utf-8-sig"))
+                        root = str(record["turbo_root"])
+                        if per_root_journal(security_dir, root) != path or (
+                            record.get("schema") !=
+                            "SMARTAGENT_TURBO_OS_ACTIVATION_V1"
+                        ):
+                            raise ValueError("journal mismatch")
+                        active_roots[_path_key(root)] = root
+                        active_owners[_path_key(root)] = str(record["workspace_root"])
+                    except (OSError, TypeError, ValueError, KeyError) as exc:
+                        raise RuntimeError(
+                            "TURBO_MULTI_ROOT_JOURNAL_UNVERIFIED"
+                        ) from exc
+                # When an old single-root Broker is already active, an
+                # operator-authorized multi-root change must first revoke it.
+                # No live activation journal is overwritten or migrated
+                # without rollback. The original root remains on disk.
+                legacy_active = legacy_journal.is_file()
+                legacy_migration_needed = bool(
+                    legacy_active and (
+                        access_changed or turbo_changed or len(turbo) > 1
+                    )
+                )
+                # Only revoke changed or removed identities, never all Roots
+                # because unrelated writable/read-only access was edited.
+                removed_active = []
+                for key, root in active_roots.items():
+                    owners = [owner for owner in writable
+                              if _is_strict_turbo_child(root, owner)]
+                    if (key not in current_roots or len(owners) != 1 or
+                            _path_key(active_owners[key]) != _path_key(owners[0])):
+                        removed_active.append(root)
+                revoked_keys = {_path_key(root) for root in removed_active}
+                # Even an interrupted import without a completed activation
+                # prevents unguarded admission of this target.
+                for root in turbo:
+                    from .turbo_root_registry import import_journal_path
+                    imported = import_journal_path(security_dir, root)
+                    activated = per_root_journal(security_dir, root)
+                    if imported.is_file() and not activated.is_file():
+                        raise RuntimeError(
+                            "TURBO_PENDING_IMPORT_REQUIRES_RECOVERY:" + root
+                        )
+                needs_enrollment = [
+                    root for root in turbo
+                    if (_path_key(root) in revoked_keys or
+                        not per_root_journal(security_dir, root).is_file())
+                    and not (
+                        legacy_active and not legacy_migration_needed
+                        and len(turbo) == 1
+                        and _path_key(root) in {
+                            _path_key(v) for v in baseline[2]
+                        }
+                    )
+                ]
+                if not (access_changed or turbo_changed or request_changed
+                        or legacy_migration_needed or removed_active
+                        or needs_enrollment or turbo):
+                    print("[OK] All registered Turbo Roots unchanged.")
+                    return 0
+                print("\n[Git62] Multi-root Native AppContainer Apply")
+                print("    Registered Roots: " + str(len(turbo)))
+                print("    New enrollments: " + str(len(needs_enrollment)))
+                print("    Roots to revoke: " + str(len(removed_active)))
+                if legacy_migration_needed:
+                    print("    Legacy Broker: revoke and re-enroll safely")
+                print("    Existing folders retain their contents; Native")
+                print("    enrollment adjusts NTFS DACL / Integrity Labels.")
+                if input("Type APPLY to confirm all listed changes: ").strip() != "APPLY":
+                    return 1
+
+                def invoke_native(script: str, *args: str) -> None:
+                    target = (
+                        AGENT_PROJECT_ROOT / "install_smart_agent" / script
+                    )
+                    if not target.is_file():
+                        raise RuntimeError(
+                            "TURBO_NATIVE_SCRIPT_MISSING:" + script
+                        )
+                    result = subprocess.run(
+                        ["powershell", "-NoProfile", "-NonInteractive",
+                         "-ExecutionPolicy", "Bypass", "-File",
+                         str(target), *args],
+                        cwd=str(AGENT_PROJECT_ROOT), check=False,
+                        capture_output=True, text=True,
+                        encoding="utf-8", errors="replace",
+                    )
+                    if result.stdout:
+                        print(result.stdout, end="")
+                    if result.stderr:
+                        print(result.stderr, end="", file=sys.stderr)
+                    _write_apply_log(
+                        f"GIT62_NATIVE script={script} code={result.returncode}"
+                        f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            "TURBO_NATIVE_OPERATION_FAILED:"
+                            + script + ":" + str(result.returncode)
+                        )
+
+                # Check existing targets before revoking a working Broker
+                # or publishing a policy revision that would invalidate it.
+                enrollment_owners = {}
+                for root in needs_enrollment:
+                    owners = [
+                        owner for owner in writable
+                        if _is_strict_turbo_child(root, owner)
+                    ]
+                    if len(owners) != 1:
+                        raise RuntimeError(
+                            "TURBO_ROOT_AUTHORIZATION_WORKSPACE_AMBIGUOUS:" + root
+                        )
+                    enrollment_owners[root] = owners[0]
+                    if Path(root).exists() and _path_key(root) not in revoked_keys:
+                        if not Path(root).is_dir():
+                            raise RuntimeError("TURBO_ROOT_NOT_DIRECTORY:" + root)
+                        invoke_native(
+                            "turbo_existing_root_preflight.ps1",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Workspace", owners[0], "-TurboRoot", root,
+                        )
+
+                # Repair and attest under the old policy before revoking
+                # roots. The same pass can migrate legacy per-root epochs.
+                if active_roots:
+                    invoke_native(
+                        "turbo_multi_root_rebind.ps1",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-MigrateRootEpochs", "-AllowPendingEnrollments",
+                        "-RepairMissingSentinels",
+                    )
+                elif legacy_active and not legacy_migration_needed:
+                    invoke_native(
+                        "turbo_multi_root_rebind.ps1",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-RepairLegacySentinel",
+                    )
+
+                # Native revocation is mandatory BEFORE removing an active
+                # Root from the registry. No policy-only removal of OS grants.
+                if legacy_migration_needed:
+                    invoke_native(
+                        "turbo_os_activation.ps1", "-Action", "Revoke",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT)
+                    )
+                    if legacy_journal.exists():
+                        raise RuntimeError(
+                            "TURBO_LEGACY_BROKER_REVOCATION_NOT_VERIFIED"
+                        )
+                    legacy_active = False
+                for root in removed_active:
+                    invoke_native(
+                        "turbo_os_activation.ps1", "-Action", "Revoke",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-TurboRoot", root,
+                    )
+                    if per_root_journal(security_dir, root).exists():
+                        raise RuntimeError(
+                            "TURBO_REMOVED_ROOT_STILL_ENROLLED:" + root
+                        )
+
+                if access_changed:
+                    code = (
+                        _apply_software_only_access(
+                            writable, read_only, profile
+                        ) if software_only else
+                        _apply_access(writable, read_only, profile)
+                    )
+                    if code != 0:
+                        return code
+                if access_changed or turbo_changed or request_changed:
+                    save_turbo_roots(turbo)
+                actual = load_workspace_access_policy()
+                if {_path_key(p) for p in actual["turbo_roots"]} != current_roots:
+                    raise RuntimeError("TURBO_MULTI_ROOT_POLICY_POSTCONDITION_FAILED")
+
+                # Existing active SIDs have to be independently re-attested
+                # against the *new* policy revision before their journals
+                # are rebound; otherwise they remain fail-closed.
+                if multi_dir.exists() and list(
+                    multi_dir.glob("activation-*.json")
+                ):
+                    invoke_native(
+                        "turbo_multi_root_rebind.ps1",
+                        "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                        "-AllowPendingEnrollments", "-RepairMissingSentinels",
+                        "-RebindAfterSentinelRepair",
+                    )
+                for root in turbo:
+                    activation = per_root_journal(security_dir, root)
+                    if activation.is_file():
+                        continue
+                    if legacy_active and legacy_journal.is_file():
+                        continue
+                    owner = enrollment_owners[root]
+                    if (_path_key(root) in revoked_keys and Path(root).is_dir()):
+                        invoke_native(
+                            "turbo_existing_root_preflight.ps1",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Workspace", owner, "-TurboRoot", root,
+                        )
+                    if Path(root).is_dir():
+                        invoke_native(
+                            "turbo_existing_root_activate.ps1",
+                            "-Action", "Activate",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Workspace", owner,
+                            "-TurboRoot", root,
+                            "-ConfirmTarget", root,
+                        )
+                    else:
+                        invoke_native(
+                            "turbo_auto_activate.ps1",
+                            "-ProjectRoot", str(AGENT_PROJECT_ROOT),
+                            "-Action", "Apply",
+                            "-TurboRoot", root,
+                        )
+                    if not (
+                        activation.is_file() or (
+                            len(turbo) == 1 and legacy_journal.is_file()
+                        )
+                    ):
+                        raise RuntimeError(
+                            "TURBO_NATIVE_ENROLLMENT_JOURNAL_MISSING:" + root
+                        )
+                # A successful OS rebind must also be accepted by the
+                # Runtime's regular user-mode Broker gate for each Root.
+                from .turbo_os_broker_client import active_broker_available
+                from .workspace_access import turbo_root_epoch
+                for root in turbo:
+                    indexed = per_root_journal(security_dir, root)
+                    receipt_path = (
+                        indexed if indexed.is_file() else
+                        legacy_journal if len(turbo) == 1 and
+                        legacy_journal.is_file() else None
+                    )
+                    if receipt_path is None:
+                        raise RuntimeError(
+                            "TURBO_RETAINED_ROOT_ACTIVATION_MISSING:" + root
+                        )
+                    receipt = json.loads(
+                        receipt_path.read_text(encoding="utf-8-sig")
+                    )
+                    if (
+                        receipt.get("schema")
+                        != "SMARTAGENT_TURBO_OS_ACTIVATION_V1"
+                        or receipt.get("status") != "ACTIVE_PROVISIONED"
+                        or _path_key(receipt.get("turbo_root", "")) != _path_key(root)
+                        or type(receipt.get("policy_revision")) is not int
+                        or receipt["policy_revision"] != turbo_root_epoch(actual, root)
+                    ):
+                        raise RuntimeError(
+                            "TURBO_RETAINED_ROOT_ACTIVATION_STALE:" + root
+                        )
+                    if not active_broker_available(root):
+                        raise RuntimeError(
+                            "TURBO_RETAINED_ROOT_BROKER_UNAVAILABLE:" + root
+                        )
+                if turbo and _is_admin():
+                    print("TURBO_CONFIGURATION_SAVED_RUNTIME_VERIFICATION_PENDING")
+                    if not verify_from_parent:
+                        print("Run Edit_workspace.bat --verify-turbo-apply from a standard window.")
+                    return _TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION
+                return _verify_applied_turbo_roots()
             except Exception as exc:
-                _write_apply_log(f"APPLY_EXCEPTION type={type(exc).__name__} message={exc}")
+                _write_apply_log(
+                    f"GIT62_APPLY_EXCEPTION type={type(exc).__name__} message={exc}"
+                )
                 print(f"\nAPPLY_EXCEPTION: {type(exc).__name__}: {exc}")
                 return 1
             finally:
-                input("\nApply finished. Press Enter to continue...")
-        elif choice == "0":
+                if not verify_from_parent:
+                    input("\nApply finished. Press Enter to continue...")
+        elif choice == "8":
             return 0
 
 
@@ -584,6 +1068,9 @@ def _run_elevated_workspace_manager(argument: str) -> int:
         encoding="utf-8",
         errors="replace",
     )
+    if (argument == "--security-menu-from-controller"
+            and result.returncode == _TURBO_APPLY_AWAITING_RUNTIME_VERIFICATION):
+        return _verify_applied_turbo_roots()
     if result.returncode != 0:
         outer_detail = (result.stderr or result.stdout or "").strip()
         detail = outer_detail or f"security_workflow_failed; see {elevated_log}"
@@ -595,7 +1082,7 @@ def _run_elevated_workspace_manager(argument: str) -> int:
 
 
 def _launch_elevated_security_menu() -> int:
-    return _run_elevated_workspace_manager("--security-menu")
+    return _run_elevated_workspace_manager("--security-menu-from-controller")
 
 
 def _launch_elevated_security_initialize() -> int:
@@ -1118,15 +1605,48 @@ def _feature_flags_menu() -> int:
 
 
 def _interactive() -> int:
-    snapshot = _binding_snapshot()
+    try:
+        snapshot = _binding_snapshot()
+    except RuntimeError as exc:
+        if str(exc) != "acl_mode_invalid":
+            raise
+        profile = AGENT_PROJECT_ROOT / "localdata" / "secure" / "windows_security" / "security_profile.json"
+        try:
+            mode = acl_mode(profile, allow_on_transition=True)
+        except RuntimeError:
+            raise exc from None
+        if mode != "transitioning_on":
+            raise
+        message = "ACL 啟用尚未完成。請等 ACLstatus.bat ON 結束。若啟用失敗，先執行 ACLstatus.bat OFF，再開啟工作區設定。"
+        _write_apply_log("ACL_ON_TRANSITION_BLOCKED_WORKSPACE_MENU")
+        print(message)
+        return 2
     print("\nSmartAgent Workspace Manager")
     print(f"Security: {snapshot['security_status']}")
+    state = snapshot["turbo_sandbox"]
+    print("ACL=" + state["acl_mode"] + " requested=" + state["turbo_requested"]
+          + " effective=" + state["turbo_effective"] + " sandbox=" + state["sandbox_status"])
+    print("Turbo reason=" + state["reason_code"])
+    from .auto_approve_mode import auto_approve_snapshot
+    active_workspace = (snapshot["writable_workspaces"][0]
+                        if snapshot["writable_workspaces"] else None)
+    auto_state = auto_approve_snapshot(active_workspace)
+    print("Auto Approve Requested: " + auto_state["auto_approve_requested"]
+          + " | Effective: " + auto_state["auto_approve_effective"]
+          + " | Executor: " + auto_state["executor_backend"])
+    print("Auto Approve Reason: " + auto_state["reason_code"])
+    print("Turbo roots: " + str(state["configured_root_count"])
+          + " registered; " + str(state["enrolled_root_count"])
+          + " enrolled (advisory; per-action OS verification required)")
     print("\nWritable workspaces:")
     if snapshot["writable_workspaces"]:
         for value in snapshot["writable_workspaces"]:
             print(f"  - {value}")
     else:
         print("  (none - configure Security first)")
+    print("Turbo Mode roots:")
+    for record in state["roots"]:
+        print("  - " + record["path"] + " [" + record["native_enrollment"] + "]")
     print("Read-only roots:")
     if snapshot["read_only_roots"]:
         for value in snapshot["read_only_roots"]:
@@ -1167,6 +1687,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--security-menu", action="store_true")
+    parser.add_argument("--security-menu-from-controller", action="store_true",
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--verify-turbo-apply", action="store_true")
     parser.add_argument("--initialize-security", action="store_true")
     parser.add_argument("--set-binding", choices=("local", "remote"))
     parser.add_argument("--workspace", default="")
@@ -1192,6 +1715,12 @@ def main(argv=None) -> int:
                           "agent":args.feature_agent or "global"},
                           ensure_ascii=False))
         return 0
+    if args.verify_turbo_apply:
+        if _is_admin():
+            raise RuntimeError("turbo_apply_verification_requires_standard_token")
+        return _verify_applied_turbo_roots()
+    if args.security_menu_from_controller:
+        return _security_menu(verify_from_parent=True)
     if args.security_menu: return _security_menu()
     if args.initialize_security:
         if not _is_admin():

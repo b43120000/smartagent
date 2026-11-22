@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse,json,os,subprocess,sys,time
 from pathlib import Path
 from agent_core.process_file_lock import _pid_alive
+from agent_core.windows_process_job import ensure_current_process_kill_job
 from agent_core.runtime_cleanup import RuntimeCleanupManager
 from agent_core.workspace import AGENT_PROJECT_ROOT
 from agent_core.paths import remote_restart_log_path, remote_supervisor_state_path, telegram_listener_state_path
@@ -25,7 +26,23 @@ def spawn_restart_helper(*,root,old_pid,old_generation,chat_id,reply_to_message_
     cmd=[sys.executable,"-m","RemoteAgent.remote_restart","--root",str(Path(root).resolve()),"--old-pid",str(int(old_pid)),"--old-generation",str(old_generation or ""),"--chat-id",str(int(chat_id)),"--reply-to-message-id",str(int(reply_to_message_id))]
     flags=0
     if os.name=="nt": flags=(getattr(subprocess,"CREATE_NEW_PROCESS_GROUP",0)|getattr(subprocess,"DETACHED_PROCESS",0)|getattr(subprocess,"CREATE_BREAKAWAY_FROM_JOB",0x01000000))
-    proc=popen(cmd,cwd=str(Path(root).resolve()),creationflags=flags,close_fds=(os.name!="nt"))
+    try:
+        proc=popen(cmd,cwd=str(Path(root).resolve()),creationflags=flags,close_fds=(os.name!="nt"))
+    except PermissionError as exc:
+        # CreateProcess failed before a child existed: retrying cannot duplicate
+        # the restart. Never drop breakaway for our own kill-on-close Job.
+        if os.name != "nt" or getattr(exc, "winerror", None) != 5:
+            raise
+        job = ensure_current_process_kill_job()
+        if not job.active or job.error != "inherited_job" or job.handle is not None:
+            raise
+        # An externally owned Job is not closed when this host exits. Keep its
+        # lifetime boundary and detach only from the console/process group.
+        # No permissions or Job limits are changed. A failed retry propagates.
+        proc=popen(cmd,cwd=str(Path(root).resolve()),
+                   creationflags=flags & ~getattr(subprocess,"CREATE_BREAKAWAY_FROM_JOB",0x01000000),
+                   close_fds=False)
+        _log(root, "RESTART_HELPER_INHERITED_JOB_FALLBACK")
     return int(proc.pid)
 
 def _load(path):

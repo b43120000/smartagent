@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from agent_core.write_budget import render_write_budget
 
 from agent_core.tool_capabilities import get_allowed_tools, render_protocol_tool_section
@@ -102,6 +103,31 @@ def render_initial_planner_toolkit(environment: dict | None = None) -> str:
         "需要沿用 path/paths/project_root/output_path/expected_filename 時，明確使用 field_refs:{field:{ref_id,version}}，"
         "不要同時填該欄位的 literal。缺少引用或過期／不同欄位的引用需重答；Runtime 不會猜測省略欄位。"
         "command、decision、outcome、evidence、snapshot、verify、plan 不可透過 field_refs 沿用。\n"
+        "11. 目標導向建立：原始需求明確要求『在既有父目錄下新增子資料夾／輸出檔案』時，"
+        "不存在的子資料夾與輸出檔案是預期狀態，並非缺少輸入、Tool 或授權的證據。"
+        "先依使用者的原始 literal 父路徑與子名稱確定輸出位置，再用 Runtime 原有的"
+        " SecurityContext / Workspace Policy / ACL / request write ceiling 審查每個寫入。"
+        "若審查允許，直接以 write_file 等合法 Tool 建立（write_file 可建立不存在的父子目錄），"
+        "並實際驗證內容；不可僅因目標 ABSENT 就 INTERRUPT、要求額外確認或反覆叫使用者"
+        "把一個已明確表達的路徑改寫成另一種格式。"
+        "若審查被拒絕，引用真正的拒絕原因；不要自行提高權限。"
+        "若子目錄名稱有明確衝突（例如 feature 與 featrue 都被指定且不可判斷），"
+        "只針對這個歧義請求 USER_INPUT，不可自行更正文字。"
+        "若使用者要求編譯／執行，仍須依 run_command operation、執行權限及"
+        "獨立 Runtime Evidence 的既有規範逐步執行。\n"
+        "12. Evidence-Gated Strategy Revision：若 Runtime 發出"
+        " RUNTIME_PREEXECUTION_REPLAN_REQUIRED 或 RUNTIME_VERIFIED_PREREQUISITE_REPLAN_REQUIRED，"
+        "不要只更換 action_id 或重送拒絕命令；須根據真正的 Runtime Evidence、"
+        "scope 和原始 Goal 提出不同的合法 canonical Action。"
+        "Progress vN 由 Runtime 記錄；不得自行添加未知 Progress 欄位、倒退已完成進度、"
+        "抹除 Evidence 或重設 Bounded Repair/GAR 預算。"
+        "對新輸出可選擇 write_file 建立父目錄並取得讀回證據。"
+        "對編譯器／套件不足，單一已驗證失敗 probe 不能證明特定能力缺失；"
+        "應探查替代工具與版本或標準是否足夠。"
+        "只有來源與完整性、網路、安裝目標、命令執行及必要批准全部符合現有"
+        " Runtime 授權契約時，才可用既有 Tool 補救安裝，"
+        "之後獨立驗證依賴並恢復原任務。若現有 Runtime 無安全補救能力，"
+        "如實回報缺口並請求必要授權，不可冒充安裝成功。\n"
         + _render_runtime_environment(environment)
         + "task_plan_schema_contract=" + _TASK_PLAN_SCHEMA_CONTRACT + "\n"
         + _SHARED_TOOL_SECTION + "\n" + render_write_budget()
@@ -133,6 +159,21 @@ def render_action_response_constraints() -> str:
         "8. Progress 修復時只補必要欄位；Runtime 保留原 action，不能提前 final_response 或換掉尚未執行的操作。"
         "STALE evidence 必須刷新，SUPERSEDED 依 Runtime 的新證據取代。數值仍優先用 JSON number；"
         "只有 schema 明確定義的數字欄位可由 Runtime 無歧義正規化，不會猜測路徑、ID、bool 或命令。\n"
+        "10. 中斷前的目標導向檢查：不存在的預期輸出（新目錄、新 .cpp、編譯產物）"
+        "不是需要人工確認的 Runtime blocker。只要父目錄與子名稱清楚，"
+        "且既有 Runtime 寫入權限可涵蓋該子路徑，就應選擇合法 Tool 執行並驗證，"
+        "不得以『先確認精確路徑與授權』的泛用措辭取代既有授權檢查。"
+        "只有已取得實際授權拒絕、不可消除的名稱衝突、必要的人工選擇，"
+        "或已證明無合法恢復動作時，才應 INTERRUPT 並輸出需求修改建議。\n"
+        "9. 當 report_progress 的終態決策是 INTERRUPT，且有客觀 Runtime 阻礙時，"
+        "在 final_response.content 的中斷原因後附加一個獨立四行區塊，每個內容標籤只寫一行：\n"
+        "[SMARTAGENT_REVISION_SUGGESTION_V1]\n"
+        "建議改寫：保留原本目標、但澄清路徑或必要條件的完整修訂需求（供使用者確認複製）\n"
+        "建議做法：依真實阻礙提出可行、合法的下一步；需要新的寫入授權時，只能請使用者明確授權\n"
+        "[/SMARTAGENT_REVISION_SUGGESTION_V1]\n"
+        "這只是模型建議，不是 Runtime 事實、執行結果或授權。不得捏造已授權路徑、"
+        "不可建議繞過 Workspace / ACL，不能因中斷而偷偷改寫原始需求。"
+        "如果無可靠可行的建議，可省略區塊。\n"
         "[/SMARTAGENT_ACTION_RESPONSE_CONSTRAINTS]\n" + render_write_budget()
     )
 
@@ -382,8 +423,57 @@ WEBAGENT_PROTOCOL_BODY += (
 )
 
 
+# Legacy contract remains intact for explicit rollback. Minimal Core is the
+# primary protocol for every action category, not a read-only fast-path.
+LEGACY_WEBAGENT_PROTOCOL_BODY = WEBAGENT_PROTOCOL_BODY
+MINIMAL_WEBAGENT_PROTOCOL_BODY = """
+[SMARTAGENT_MODE] MINIMAL_CORE_INITIALIZATION
+You are the decision engine of SmartAgent. The local Runtime, not you,
+executes tools, stores full evidence, owns Task/Request/Round/Action IDs,
+records progress and validates permissions, postconditions and completion.
+You never directly operate the user's computer.
+After protocol readiness, each ordinary task turn uses
+[SMARTAGENT_MINIMAL_CORE_V1]. Respond with exactly ONE JSON object:
+
+{"type":"tool_call","name":"list_directory","arguments":{"path":"."}}
+or {"type":"finish","summary":"A concise evidence-based answer"}
+or {"type":"blocked","reason":"An actual blocker, not a guess"}.
+
+For a self-contained TEXT-ONLY request (such as writing a joke, translation
+or conceptual explanation without external sources), respond directly with
+{"type":"finish","summary":"the actual requested textual answer"}.
+A Text-only Finish is admitted only by Runtime's trusted original-request
+classification and only if no Tool Action or external dependency is needed.
+Never fabricate ActionResult evidence for a text-only answer.
+
+Each task round supplies a bounded Runtime-owned Goal-Driven Blackboard:
+confirmed Goal Gaps, prerequisites, strategy candidates and Action Readiness.
+Use its current evidence to choose a new prerequisite, repair fields or
+replan after failure. UNKNOWN and tool rejection are NOT evidence of absence.
+Planner selects ONE next Action; Runtime alone authorizes and verifies it.
+Do not add v9 report_progress/goal_transition transport fields.
+
+Do not output report_progress, turn_commit, action_id, ACK tokens, runtime-owned
+fields, multiple JSON objects, or free prose on task turns. The Runtime
+supplies canonical tool names and argument fields in each task prompt.
+Never invent tool results, access grants, environment state or completion.
+Do not retry uncertain mutations. Respect the Runtime's scope and write
+ceilings, explicit user authorization and result-verification requirements.
+For Windows shell, run_command is PowerShell by default; specify operation.
+This core applies to reading, file operations, Python, Git, CMD and
+every canonical tool that the Runtime permits. No separate fast path exists.
+The older v9 multi-block model transport applies only when explicitly
+bootstrapped in legacy mode. During THIS bootstrap, follow only the
+protocol readiness response required by the handshake.
+""".strip()
+if os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() != "legacy_v9":
+    WEBAGENT_PROTOCOL_BODY = MINIMAL_WEBAGENT_PROTOCOL_BODY
+    WEBAGENT_PROTOCOL_VERSION = 10
+
+
 __all__ = [
     "SUPPORTED_ACTION_TOOLS", "WEBAGENT_PROTOCOL_BODY", "WEBAGENT_PROTOCOL_NAME",
     "WEBAGENT_PROTOCOL_VERSION", "render_action_response_constraints",
-    "render_initial_planner_toolkit",
+    "render_initial_planner_toolkit", "LEGACY_WEBAGENT_PROTOCOL_BODY",
+    "MINIMAL_WEBAGENT_PROTOCOL_BODY",
 ]

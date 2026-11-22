@@ -15,6 +15,8 @@ import uuid
 
 from .json_state_io import read_json_retry, write_json_atomic
 
+WRITE_TURN_COUNT_TOLERANCE = 2
+
 
 class ComposerOperationError(RuntimeError):
     def __init__(self, reason, evidence=None):
@@ -101,7 +103,12 @@ def run_helper(payload, timeout_sec, cancel_check=None):
     command=[sys.executable,'-B','-m','agent_core.composer_operation']
     process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,creationflags=(subprocess.CREATE_NO_WINDOW | 0x4) if os.name=='nt' else 0)
-    deadline=time.monotonic()+timeout_sec
+    started_at=time.monotonic()
+    deadline=started_at+timeout_sec
+    # Finite progress-aware extension for the writer only. Read-only observers
+    # and all submit gates retain their existing fixed deadlines.
+    hard_deadline=started_at+max(timeout_sec,min(900.0,timeout_sec*3.0))
+    last_extended_progress=0
     first=True
     job=None
     try:
@@ -113,9 +120,25 @@ def run_helper(payload, timeout_sec, cancel_check=None):
         while True:
             if cancel_check:
                 cancel_check()
-            remaining=deadline-time.monotonic()
+            now=time.monotonic()
+            remaining=deadline-now
             if remaining<=0:
-                raise subprocess.TimeoutExpired(command,timeout_sec)
+                advanced=False
+                if payload.get('mode')=='write' and now<hard_deadline:
+                    try:
+                        progress=read_json_retry(Path(payload['journal']))
+                        chars=int(progress.get('write_progress_chars') or 0)
+                        progress_at=float(progress.get('write_progress_monotonic') or 0)
+                        advanced=(chars>last_extended_progress
+                                  and 0<=now-progress_at<=45.0)
+                    except (OSError, ValueError, TypeError):
+                        advanced=False
+                    if advanced:
+                        last_extended_progress=chars
+                        deadline=min(hard_deadline, now+max(30.0,min(90.0,timeout_sec/2.0)))
+                        remaining=deadline-now
+                if not advanced:
+                    raise subprocess.TimeoutExpired(command,timeout_sec)
             try:
                 output,error=process.communicate(json.dumps(payload).encode() if first else None,
                     timeout=min(0.25,remaining))
@@ -185,9 +208,16 @@ def reset_initialization_composer(*, endpoint, url, journal_root, cancel_check=N
         if cancel_check:
             cancel_check()
         if result.get('status') != 'INIT_RESET_CONFIRMED':
+            latest = read_json_retry(journal)
+            if latest.get('operation_id') != record['operation_id']:
+                raise ComposerOperationError('composer_initialization_reset_identity_changed')
+            latest['initialization_reset_failure'] = result
+            write_json_atomic(journal, latest)
+            reason = result.get('reason_code')
             raise ComposerOperationError(
                 'composer_initialization_reset_required:'
-                + str(result.get('status', 'UNKNOWN')), result)
+                + str(result.get('status', 'UNKNOWN'))
+                + (':' + reason if reason else ''), result)
         latest = read_json_retry(journal)
         if latest.get('operation_id') != record['operation_id']:
             raise ComposerOperationError('composer_initialization_reset_identity_changed')
@@ -197,6 +227,7 @@ def reset_initialization_composer(*, endpoint, url, journal_root, cancel_check=N
             archive.mkdir(exist_ok=True)
             archived = dict(latest, initialization_reset_reason='user_authorized_init_only')
             write_json_atomic(archive / (latest['operation_id'] + '.json'), archived)
+        latest.pop('initialization_reset_failure', None)
         latest.update(
             state='RECOVERED',
             initialization_reset=dict(status='INIT_RESET_CONFIRMED',
@@ -240,6 +271,9 @@ def _prepare_locked(*,endpoint,url,prompt,journal_root,timeout_sec,
     record['submit_id']=marker.group(0) if marker else ''
     record['owner_pid']=os.getpid()
     record['logical_prompt_sha256']=logical_prompt_sha(prompt)
+    record['check_turn_counts'] = (
+        os.environ.get('SMARTAGENT_COMPOSER_CHECK_TURN_COUNTS', '1').strip() != '0'
+    )
     write_json_atomic(journal,record)
     payload=dict(mode='write',endpoint=endpoint,url=url,prompt=prompt,journal=str(journal),
                  operation_id=record['operation_id'],hybrid=bool(hybrid))
@@ -411,6 +445,30 @@ def _last_turn_readiness(adapter, users, assistants):
     return 'LAST_TURN_ORDER_UNKNOWN'
 
 
+def _composer_is_empty(scraper):
+    """Prove empty DOM, preserving real whitespace and failing closed on reads."""
+    editor = scraper._composer_locator()
+    if editor is None:
+        return False
+    try:
+        return editor.evaluate(r"""el => {
+            if (typeof el.value === 'string') return el.value === '';
+            if (el.getAttribute('contenteditable') !== 'true') return false;
+            if ((el.textContent || '') !== '') return false;
+            // Only the canonical empty paragraph's synthetic caret BR is
+            // ignored. Multiple paragraphs/BRs still represent authored lines.
+            const nodes = [...el.childNodes];
+            if (nodes.length === 0) return true;
+            if (nodes.length !== 1 || nodes[0].nodeName !== 'P') return false;
+            const children = [...nodes[0].childNodes];
+            return children.length === 0 || (children.length === 1 &&
+                children[0].nodeName === 'BR' &&
+                children[0].classList.contains('ProseMirror-trailingBreak'));
+        }""") is True
+    except Exception:
+        return False
+
+
 def _page_snapshot(scraper,prompt):
     adapter=scraper._web_ui_adapter()
     users=adapter.observation_turns('user')
@@ -426,7 +484,7 @@ def _page_snapshot(scraper,prompt):
         observed_sha256=str(validation.observed_sha256))
     return dict(composer_matches=bool(validation.matched),
         composer_validation=verification,
-        composer_empty=not scraper._normalize_composer_text(scraper._read_composer_text()),
+        composer_empty=_composer_is_empty(scraper),
         last_turn_status=last_turn_status,
         url=scraper._page.url,
         user_anchors=[[t.structural_id,t.content_digest] for t in users[-2:]],
@@ -458,10 +516,11 @@ def _atomic_clear_owned(scraper,primary):
     }''',primary))
 
 
-def classify_observation(before,after):
+def classify_observation(before,after,*,check_turn_counts=True,turn_count_tolerance=0):
     if not isinstance(before,dict) or not before or not isinstance(after,dict):
         return 'UNKNOWN'
-    unchanged=_same_turns(before,after)
+    unchanged=_same_turns(before,after,check_turn_counts=check_turn_counts,
+                          turn_count_tolerance=turn_count_tolerance)
     if not unchanged or before.get('generation_active') or after.get('generation_active'):
         return 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
     return 'VERIFIED_SAFE_TO_SUBMIT' if after.get('composer_matches') is True else 'PARTIAL_OR_EMPTY'
@@ -473,16 +532,40 @@ def _native_identity(turn):
         'data-chatgpt-search-message-ids','id') if attrs.get(name)),'')
 
 
-def _same_turns(before,after):
+def _same_turns(before,after,*,check_turn_counts=True,turn_count_tolerance=0):
     if not before or not after:return False
-    if any(before.get(k)!=after.get(k) for k in ('url','user_count','assistant_count')):return False
+    if before.get('url') != after.get('url'):return False
+    if check_turn_counts:
+        for key in ('user_count', 'assistant_count'):
+            old_count, new_count = before.get(key), after.get(key)
+            if old_count == new_count:
+                continue
+            if (type(old_count) is not int or type(new_count) is not int
+                    or abs(new_count - old_count) > turn_count_tolerance):
+                return False
     if ('last_turn_status' in before and 'last_turn_status' in after
             and before['last_turn_status'] != after['last_turn_status']):
         return False
     for role in ('user','assistant'):
         a=before.get(role+'_anchors',[]);b=after.get(role+'_anchors',[])
-        if [v[1] for v in a]!=[v[1] for v in b]:return False
         old=before.get(role+'_native_ids');new=after.get(role+'_native_ids')
+        if check_turn_counts and turn_count_tolerance and len(a) != len(b):
+            old_count = before.get(role + '_count')
+            new_count = after.get(role + '_count')
+            # Only align when an older visible row was added or removed.
+            # Losing all shared anchors cannot establish turn identity.
+            if (not a or not b or type(old_count) is not int or type(new_count) is not int
+                    or old_count < len(a) or new_count < len(b)
+                    or (new_count > old_count) != (len(b) > len(a))
+                    or old is None or new is None
+                    or len(old) != len(a) or len(new) != len(b)):
+                return False
+            overlap = min(len(a), len(b))
+            # Snapshots retain only two tail rows. A count change of two
+            # can therefore shrink the retained tail by just one row.
+            a, b = a[-overlap:], b[-overlap:]
+            old, new = old[-overlap:], new[-overlap:]
+        if [v[1] for v in a]!=[v[1] for v in b]:return False
         if old is not None and new is not None and old!=new:return False
         # Legacy records did not store native IDs. They can migrate only via
         # equal counts+ordered content tails and two stable fresh observations.
@@ -491,13 +574,16 @@ def _same_turns(before,after):
 
 
 
-def _snapshot_difference(before, after):
+def _snapshot_difference(before, after, *, check_turn_counts=True, turn_count_tolerance=0):
     """Digest/index-only diagnostic; never an authorization to recover."""
     if not isinstance(before, dict) or not isinstance(after, dict):
         return {"baseline_available": False, "same_turns": False}
     details = {
         "baseline_available": True,
-        "same_turns": _same_turns(before, after),
+        "same_turns": _same_turns(before, after, check_turn_counts=check_turn_counts,
+                                  turn_count_tolerance=turn_count_tolerance),
+        "turn_count_tolerance": turn_count_tolerance,
+        "check_turn_counts": check_turn_counts,
         "url_same": before.get("url") == after.get("url"),
         "user_count_same": before.get("user_count") == after.get("user_count"),
         "assistant_count_same": before.get("assistant_count") == after.get("assistant_count"),
@@ -587,6 +673,63 @@ def _wait_for_prewrite_stability(
                 reason_code=last_reason)
 
 
+def _prepare_write_baseline(scraper, prompt):
+    """Settle writer focus/viewport before capturing immutable turn evidence."""
+    try:
+        editor = scraper._composer_locator()
+        if (editor is None or not editor.is_visible()
+                or not editor.is_enabled() or not editor.is_editable()):
+            raise ComposerOperationError('composer_not_interactive')
+        scraper._focus_composer_dom()
+        # Focus can scroll and remount virtualized history. Sample only after
+        # the same caret positioning used by the writer has happened.
+        editor.evaluate("""el => {
+            el.focus();
+            if (typeof el.setSelectionRange === 'function') {
+                el.setSelectionRange(el.value.length, el.value.length);
+            } else {
+                const r = document.createRange();
+                r.selectNodeContents(el); r.collapse(false);
+                const s = window.getSelection();
+                s.removeAllRanges(); s.addRange(r);
+            }
+        }""")
+        scraper._page.keyboard.press('Control+End')
+        scroll = _scroll_conversation_to_bottom(scraper)
+        if scroll.get('status') not in {'AT_BOTTOM', 'NO_TURNS', 'NO_SCROLL_RANGE'}:
+            raise ComposerOperationError('conversation_scroll_not_ready')
+    except Exception as exc:
+        return dict(status='PREWRITE_UNSTABLE', mutation_possible=False,
+                    reason_code='WRITER_FOCUS_NOT_READY',
+                    error_type=type(exc).__name__, samples_observed=0)
+    return _wait_for_prewrite_stability(scraper, prompt)
+
+
+
+def _scroll_conversation_to_bottom(scraper):
+    """Settle the conversation viewport before taking a writable baseline."""
+    adapter = scraper._web_ui_adapter()
+    turns = adapter.turn_elements('assistant') or adapter.turn_elements('user')
+    if not turns:
+        return dict(status='NO_TURNS')
+    return turns[-1].evaluate("""anchor => {
+        for (let el = anchor.parentElement; el; el = el.parentElement) {
+            const overflow = getComputedStyle(el).overflowY;
+            if (!['auto', 'scroll', 'overlay'].includes(overflow) ||
+                el.clientHeight <= 0 || el.scrollHeight <= el.clientHeight + 1) continue;
+            const before = Math.round(el.scrollHeight - el.clientHeight - el.scrollTop);
+            el.scrollTo({top: el.scrollHeight, behavior: 'instant'});
+            const after = Math.round(el.scrollHeight - el.clientHeight - el.scrollTop);
+            return {status: Math.abs(after) <= 2 ? 'AT_BOTTOM' : 'NOT_AT_BOTTOM', before, after};
+        }
+        const root = document.scrollingElement;
+        if (!root || root.scrollHeight <= root.clientHeight + 1) return {status: 'NO_SCROLL_RANGE'};
+        const before = Math.round(root.scrollHeight - root.clientHeight - root.scrollTop);
+        root.scrollTo({top: root.scrollHeight, behavior: 'instant'});
+        const after = Math.round(root.scrollHeight - root.clientHeight - root.scrollTop);
+        return {status: Math.abs(after) <= 2 ? 'AT_BOTTOM' : 'NOT_AT_BOTTOM', before, after};
+    }""")
+
 
 def _reset_initialized_page(scraper, *, sleep=None):
     """Reset one stable, idle bound editor without submitting or changing tabs."""
@@ -611,11 +754,18 @@ def _reset_initialized_page(scraper, *, sleep=None):
             return dict(status='INIT_RESET_CLEAR_FAILED', cleared=False)
         changed = True
     final = _page_snapshot(scraper, '')
-    ready = (final.get('composer_empty') is True
-             and not final.get('generation_active')
-             and _same_turns(second, final))
-    return dict(status='INIT_RESET_CONFIRMED' if ready else 'INIT_RESET_UNCONFIRMED',
-                cleared=changed)
+    comparison = _snapshot_difference(second, final)
+    reasons = []
+    if final.get('composer_empty') is not True:
+        reasons.append('COMPOSER_NOT_EMPTY')
+    if final.get('generation_active'):
+        reasons.append('GENERATION_ACTIVE')
+    if not comparison['same_turns']:
+        reasons.append('TURN_CHANGED')
+    if reasons:
+        return dict(status='INIT_RESET_UNCONFIRMED', cleared=changed,
+                    reason_code=','.join(reasons), comparison=comparison)
+    return dict(status='INIT_RESET_CONFIRMED', cleared=changed)
 
 
 def _recover_page(scraper,record):
@@ -666,56 +816,144 @@ def _recover_page(scraper,record):
         sent_count=len(delivered),draft_cleanup='OWNED_DRAFT_CLEARED',observation=final)
 
 
-def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
-                          clock=None, sleep=None):
-    """Bounded, strictly read-only DOM verification after ONE keyboard write.
+def _composer_readback_sample(scraper, expected):
+    """Read all DOM views, retaining content in memory only (never in journals)."""
+    try:
+        candidates = scraper._read_composer_text_candidates()
+    except Exception:
+        return None
+    if not candidates:
+        return None
+    from .web_ui.providers.chatgpt.composer import canonical_composer_text
+    target = canonical_composer_text(expected)
+    values = [canonical_composer_text(value) for value in candidates]
+    def overlap(value):
+        return next(
+            (index for index, (left, right) in enumerate(zip(target, value))
+             if left != right), min(len(target), len(value))
+        )
+    chosen = max(values, key=overlap)
+    return {
+        "values": values,
+        "chosen": chosen,
+        "sample_hash": hashlib.sha256(
+            json.dumps(values, ensure_ascii=False).encode("utf-8")
+        ).hexdigest(),
+    }
 
-    Never type again or treat a timeout as success. The returned/raised
-    diagnostics contain only counts, SHA-256 digests, and error class names.
+
+def _composer_readback_diff(expected, sample, *, confirmed_chars=0):
+    """Bounded, content-free first-difference and owned-prefix diagnostics."""
+    from .web_ui.providers.chatgpt.composer import canonical_composer_text
+    expected = canonical_composer_text(expected)
+    observed = sample["chosen"]
+    first = next(
+        (index for index, (left, right) in enumerate(zip(expected, observed))
+         if left != right), min(len(expected), len(observed))
+    )
+    suffix = 0
+    while (suffix < min(len(expected), len(observed)) - first
+           and expected[len(expected)-suffix-1] == observed[len(observed)-suffix-1]):
+        suffix += 1
+    return {
+        "first_diff_index": first,
+        "common_prefix_chars": first,
+        "common_suffix_chars": suffix,
+        "observed_length": len(observed),
+        "observed_sha256": hashlib.sha256(observed.encode()).hexdigest(),
+        "confirmed_prefix_intact": observed.startswith(expected[:confirmed_chars]),
+        "diff_class": (
+            "INSERTION" if first == len(expected) and len(observed) > len(expected)
+            else "TRUNCATION" if first == len(observed) and len(expected) > len(observed)
+            else "REPLACEMENT" if first < min(len(expected), len(observed))
+            else "NONE"
+        ),
+    }
+
+
+def _await_chunk_readback(scraper, prefix, *, timeout_sec=8.0,
+                          clock=None, sleep=None, confirmed_chars=0):
+    """Read-only verification: two consecutive matches, or bounded failure.
+
+    DOM observations may lag behind insert_text; no unconfirmed batch is
+    considered committed and the verifier never retypes or submits content.
     """
     clock = clock or time.monotonic
     sleep = sleep or time.sleep
     started = clock()
     deadline = started + max(0.01, float(timeout_sec))
     attempts = 0
+    matching_streak = 0
+    stable_mismatch_streak = 0
+    last_observation_hash = None
+    last_sample = None
     read_error = None
     while True:
         attempts += 1
+        matched = False
         try:
-            if scraper._composer_matches_prompt(prefix):
-                return dict(attempts=attempts,
-                            elapsed_sec=round(clock()-started, 3))
+            matched = bool(scraper._composer_matches_prompt(prefix))
             read_error = None
         except Exception as exc:
-            # No retry of the writer: transient read-only DOM observations
-            # may be sampled again within the same finite deadline.
             read_error = type(exc).__name__
+        previous_sample_hash = last_observation_hash
+        sample = _composer_readback_sample(scraper, prefix)
+        if sample is not None:
+            if sample["sample_hash"] == last_observation_hash:
+                stable_mismatch_streak += 1
+            else:
+                stable_mismatch_streak = 1
+            last_observation_hash = sample["sample_hash"]
+            last_sample = sample
+        else:
+            stable_mismatch_streak = 0
+            last_observation_hash = None
+        if matched:
+            # An equality result cannot advance the checkpoint while the
+            # complete DOM representation is still changing.
+            if (sample is not None and previous_sample_hash is not None
+                    and sample["sample_hash"] != previous_sample_hash):
+                matching_streak = 1
+            else:
+                matching_streak += 1
+            if matching_streak >= 2:
+                return {
+                    "attempts": attempts,
+                    "elapsed_sec": round(clock()-started, 3),
+                    "consecutive_matches": matching_streak,
+                }
+        else:
+            matching_streak = 0
         remaining = deadline-clock()
         if remaining <= 0:
             break
         sleep(min(.20, remaining))
-
-    # _composer_matches_prompt() records the most recent strict adapter
-    # validation. Whitelist only scalar lengths and validated digest strings;
-    # never persist any composer text or prompt fragment in the journal.
-    info = dict(attempts=attempts,
-                timeout_sec=round(max(0.01, float(timeout_sec)), 3),
-                elapsed_sec=round(clock()-started, 3),
-                expected_prefix_chars=len(prefix),
-                expected_prefix_sha256=hashlib.sha256(prefix.encode()).hexdigest())
-    validation = getattr(scraper, '_last_composer_validation', None)
+    info = {
+        "attempts": attempts,
+        "timeout_sec": round(max(0.01, float(timeout_sec)), 3),
+        "elapsed_sec": round(clock()-started, 3),
+        "expected_prefix_chars": len(prefix),
+        "expected_prefix_sha256": hashlib.sha256(prefix.encode()).hexdigest(),
+        "stable_readback": stable_mismatch_streak >= 2,
+        "stable_observations": stable_mismatch_streak,
+    }
+    if last_sample is not None:
+        info.update(_composer_readback_diff(
+            prefix, last_sample, confirmed_chars=confirmed_chars
+        ))
+    validation = getattr(scraper, "_last_composer_validation", None)
     if validation is not None:
-        for key in ('expected_length', 'observed_length'):
+        for key in ("expected_length", "observed_length"):
             value = getattr(validation, key, None)
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                info[key] = value
-        for key in ('expected_sha256', 'observed_sha256'):
+                info.setdefault(key, value)
+        for key in ("expected_sha256", "observed_sha256"):
             value = getattr(validation, key, None)
-            if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value):
-                info[key] = value
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value):
+                info.setdefault(key, value)
     if read_error:
-        info['last_read_error_type'] = read_error
-    raise ComposerOperationError('composer_chunk_readback_failed', info)
+        info["last_read_error_type"] = read_error
+    raise ComposerOperationError("composer_chunk_readback_failed", info)
 
 
 def _composer_write_units(prompt):
@@ -760,7 +998,16 @@ def _composer_write_batches(prompt, max_chars=1024):
     """
     pending = []
     size = 0
-    for unit in _composer_write_units(prompt):
+    def finer_units():
+        for start, end, value, soft_break in _composer_write_units(prompt):
+            if max_chars < 1024 and not soft_break and len(value) > max_chars:
+                for offset in range(0, len(value), max_chars):
+                    part = value[offset:offset + max_chars]
+                    yield start + offset, start + offset + len(part), part, False
+            else:
+                yield start, end, value, soft_break
+
+    for unit in finer_units():
         span = unit[1] - unit[0]
         if pending and size + span > max_chars:
             yield pending[0][0], pending[-1][1], tuple(pending)
@@ -910,11 +1157,228 @@ def _write_hybrid_prompt(scraper, prompt, record, journal, *, verified_chars=512
         pass
 
 
-def _write_staged_prompt(scraper,prompt,record,journal):
+def _attempt_bounded_composer_repair(scraper, prompt, record, journal, *,
+                                     start, end, units, failure):
+    """One owned-draft repair only; never replay an uncertain send.
+
+    Stable mismatches can repair a native input's latest batch, or reset a
+    provably owned ProseMirror draft once. No DOM-selection guesses for blocks.
+    """
+    evidence = failure.evidence or {}
+    if (record.get("composer_repair_attempted")
+            or evidence.get("stable_readback") is not True
+            or evidence.get("confirmed_prefix_intact") is not True
+            or not isinstance(record.get("baseline"), dict)):
+        return None
+    try:
+        baseline = record["baseline"]
+        before = _page_snapshot(scraper, "")
+        time.sleep(.2)
+        stable = _page_snapshot(scraper, "")
+        loc = scraper._composer_locator()
+        if (not _same_turns(baseline, before)
+                or not _same_turns(before, stable)
+                or before.get("generation_active") or stable.get("generation_active")
+                or loc is None or not loc.is_visible()
+                or not loc.is_enabled() or not loc.is_editable()):
+            return None
+        one = _composer_readback_sample(scraper, prompt[:end])
+        time.sleep(.2)
+        two = _composer_readback_sample(scraper, prompt[:end])
+        if not one or not two or one["sample_hash"] != two["sample_hash"]:
+            return None
+        from .web_ui.providers.chatgpt.composer import canonical_composer_text
+        observed = two["chosen"]
+        prefix = canonical_composer_text(prompt[:start])
+        # A confirmed earlier prefix must be exact. For batch zero, establish
+        # draft ownership with a nontrivial identical leading fragment.
+        identity_len = min(len(prompt), 16)
+        if (start > 0 and not observed.startswith(prefix)) or (
+                start == 0 and (len(observed) < identity_len or
+                not observed.startswith(canonical_composer_text(prompt[:identity_len])))):
+            return None
+        primary_candidates = scraper._read_composer_text_candidates()
+        if not primary_candidates:
+            return None
+        primary = str(primary_candidates[0])
+        if scraper._composer_matches_prompt(prompt[:end]):
+            return "STABILIZED"
+    except Exception:
+        return None
+
+    record["composer_repair_attempted"] = True
+    record["composer_repair"] = {
+        "state": "STARTED", "batch_start": start, "batch_end": end,
+        "max_tail_attempts": 1, "max_full_restarts": 1,
+        "first_diff_index": evidence.get("first_diff_index"),
+    }
+    write_json_atomic(journal, record)
+
+    # Native textarea/input only. The page callback compare-and-select is
+    # atomic; ProseMirror's block boundaries do NOT satisfy this contract.
+    if (start > 0 and len(units) == 1 and not units[0][3]
+            and "\n" not in prompt[start:end] and "\r" not in prompt[start:end]
+            and primary.startswith(prompt[:start]) and primary == observed):
+        try:
+            selected = bool(loc.evaluate(
+                """(el,args) => {
+                    if(typeof el.value!=='string' ||
+                       typeof el.setSelectionRange!=='function') return false;
+                    if(el.value!==args[0] || !el.value.startsWith(args[1])) return false;
+                    el.focus();
+                    el.setSelectionRange(args[1].length,el.value.length);
+                    return true;
+                }""", [primary, prompt[:start]]
+            ))
+            if selected:
+                scraper._page.keyboard.insert_text(prompt[start:end])
+                _await_chunk_readback(
+                    scraper, prompt[:end], timeout_sec=3, confirmed_chars=start
+                )
+                record["composer_repair"].update(
+                    state="VERIFIED", mode="NATIVE_INPUT_LATEST_BATCH")
+                write_json_atomic(journal, record)
+                return "TAIL_VERIFIED"
+        except Exception as exc:
+            record["composer_repair"]["tail_error_type"] = type(exc).__name__
+            write_json_atomic(journal, record)
+
+    # Full restart is a single, separately verified, compare-and-clear action;
+    # neither a stale baseline nor a changed primary draft may authorize it.
+    try:
+        current = _page_snapshot(scraper, "")
+        if not _same_turns(baseline, current) or current.get("generation_active"):
+            return None
+        latest = scraper._read_composer_text_candidates()
+        if not latest:
+            return None
+        current_primary = str(latest[0])
+        current_sample = _composer_readback_sample(scraper, prompt[:end])
+        if (not current_sample
+                or not current_sample["chosen"].startswith(prefix)
+                or (start == 0 and not current_sample["chosen"].startswith(
+                    canonical_composer_text(prompt[:identity_len])))):
+            return None
+        if not _atomic_clear_owned(scraper, current_primary):
+            return None
+        cleared = _page_snapshot(scraper, "")
+        time.sleep(.2)
+        cleared_again = _page_snapshot(scraper, "")
+        if (not cleared.get("composer_empty")
+                or not cleared_again.get("composer_empty")
+                or not _same_turns(current, cleared)
+                or not _same_turns(cleared, cleared_again)
+                or cleared.get("generation_active")
+                or cleared_again.get("generation_active")):
+            return None
+    except Exception:
+        return None
+    # A previous confirmed prefix belongs to the old editor transaction.
+    # Never present it as a checkpoint for the new empty draft.
+    record["composer_repair"]["previous_confirmed_prefix"] = (
+        record.get("confirmed_prefix") or {}
+    )
+    record.pop("confirmed_prefix", None)
+    record.pop("pending_prefix", None)
+    record["composer_repair"].update(
+        state="RESET_CONFIRMED", mode="OWNED_SINGLE_RESTART_SMALLER_BATCH")
+    write_json_atomic(journal, record)
+    return "RESET_CONFIRMED"
+
+
+def _write_continuous_prompt(scraper, prompt, record, journal, *, max_chars=1024):
+    """Write once, then verify the complete composer twice before any submit.
+
+    In-flight DOM history virtualization and transient editor readback lag must
+    not interrupt the input stream. This writer never submits, clears a draft,
+    replays a batch, or treats dispatched character counts as verified content.
+    """
+    PIT.record('09_helper_input', prompt)
+    total = len(prompt)
+    if not scraper._composer_matches_prompt(prompt):
+        loc = scraper._focus_composer_dom()
+        if loc is not None:
+            loc.evaluate("""el => {
+                el.focus();
+                if (typeof el.setSelectionRange === 'function') {
+                    el.setSelectionRange(el.value.length, el.value.length);
+                } else {
+                    const r = document.createRange();
+                    r.selectNodeContents(el);
+                    r.collapse(false);
+                    const s = window.getSelection();
+                    s.removeAllRanges();
+                    s.addRange(r);
+                }
+            }""")
+        scraper._page.keyboard.press('Control+End')
+        for start, end, units in _composer_write_batches(prompt, max_chars=max_chars):
+            # This inexpensive page binding check is not a historical Turn
+            # count/digest check. Never continue writing on another conversation.
+            expected_url = str(record.get('url') or '')
+            if expected_url and str(scraper._page.url) != expected_url:
+                raise ComposerOperationError('composer_operation_identity_changed')
+            record['pending_prefix'] = {
+                'chars': end,
+                'sha256': hashlib.sha256(prompt[:end].encode()).hexdigest(),
+                'normalized_sha256': hashlib.sha256(
+                    scraper._normalize_composer_text(prompt[:end]).encode()).hexdigest(),
+            }
+            write_json_atomic(journal, record)
+            for _, _, value, soft_break in units:
+                scraper._check_cancel_requested('composer_chunk')
+                if soft_break:
+                    scraper._page.keyboard.press('Shift+Enter')
+                else:
+                    PIT.record('09_keyboard_insert_text', value,
+                               extra={'chunk_start': start, 'chunk_end': end})
+                    scraper._page.keyboard.insert_text(value)
+            # Progress means physical input was dispatched, NOT DOM verified.
+            record['write_progress_chars'] = end
+            record['write_progress_monotonic'] = time.monotonic()
+            write_json_atomic(journal, record)
+            scraper._log_stage(
+                'composer_batch_written',
+                f'chars={end}/{total} units={len(units)} verified=false',
+            )
+
+    # One authoritative, full-content readback. The two stable observations
+    # are the only source of write success; partial input never reaches Send.
+    try:
+        verified = _await_chunk_readback(
+            scraper, prompt,
+            timeout_sec=max(12.0, min(40.0, 12.0 + total / 4096.0 * 2.0)),
+        )
+    except ComposerOperationError as exc:
+        record['readback_failure'] = {
+            'stage': 'final_full_content', 'expected_chars': total,
+            **exc.evidence,
+        }
+        write_json_atomic(journal, record)
+        scraper._log_stage('composer_final_readback_failed',
+                           json.dumps(record['readback_failure'],
+                                      ensure_ascii=True, separators=(',', ':')))
+        raise
+
+    record['confirmed_prefix'] = {
+        'chars': total,
+        'sha256': hashlib.sha256(prompt.encode()).hexdigest(),
+        'normalized_sha256': hashlib.sha256(
+            scraper._normalize_composer_text(prompt).encode()).hexdigest(),
+    }
+    write_json_atomic(journal, record)
+    scraper._log_stage(
+        'composer_final_readback_verified',
+        f'chars={total} matches={verified["consecutive_matches"]}',
+    )
+
+
+def _write_staged_prompt(scraper,prompt,record,journal, *,
+                         _restart_used=False, max_chars=1024):
     PIT.record('09_helper_input', prompt)
     if scraper._composer_matches_prompt(prompt):return
     scraper._focus_composer_dom()
-    for start, end, units in _composer_write_batches(prompt):
+    for start, end, units in _composer_write_batches(prompt, max_chars=max_chars):
         if start and not scraper._composer_matches_prompt(prompt[:start]):
             raise ComposerOperationError('composer_prefix_changed')
         loc=scraper._focus_composer_dom()
@@ -944,7 +1408,7 @@ def _write_staged_prompt(scraper,prompt,record,journal):
                            extra={'chunk_start': part_start, 'chunk_end': part_end})
                 scraper._page.keyboard.insert_text(value)
         try:
-            readback = _await_chunk_readback(scraper, prefix)
+            readback = _await_chunk_readback(scraper, prefix, confirmed_chars=start)
         except ComposerOperationError as exc:
             # Durable, content-free evidence survives writer quarantine.
             record['readback_failure'] = dict(
@@ -960,10 +1424,25 @@ def _write_staged_prompt(scraper,prompt,record,journal):
             scraper._log_stage('composer_chunk_readback_failed',
                                json.dumps(record['readback_failure'],
                                           ensure_ascii=True, separators=(',', ':')))
-            raise
+            repair = None if _restart_used else _attempt_bounded_composer_repair(
+                scraper, prompt, record, journal, start=start, end=end,
+                units=units, failure=exc,
+            )
+            if repair == "RESET_CONFIRMED":
+                return _write_staged_prompt(
+                    scraper, prompt, record, journal,
+                    _restart_used=True, max_chars=256,
+                )
+            if repair in {"TAIL_VERIFIED", "STABILIZED"}:
+                readback = {"attempts": 0}
+            else:
+                raise
         record['confirmed_prefix']=checkpoint;write_json_atomic(journal,record)
         scraper._log_stage('composer_chunk_verified',
                            f"chars={end}/{len(prompt)} units={len(units)} readback_attempts={readback['attempts']}")
+    if _restart_used:
+        record["composer_repair"]["state"] = "REWRITTEN_AND_VERIFIED"
+        write_json_atomic(journal, record)
 
 
 def helper_main():
@@ -994,6 +1473,20 @@ def helper_main():
             return
         scraper=WebLLMScraper('chatgpt',slow_mo=0)
         scraper._page=pages[0];scraper._browser=pages[0].context
+        if payload['mode'] in {'initialization_reset', 'write'}:
+            try:
+                scroll = _scroll_conversation_to_bottom(scraper)
+            except Exception as exc:
+                scroll = dict(status='SCROLL_FAILED', error_type=type(exc).__name__)
+            scraper._log_stage('composer_scroll_bottom', json.dumps(scroll))
+            if scroll.get('status') not in {'AT_BOTTOM', 'NO_TURNS', 'NO_SCROLL_RANGE'}:
+                status = ('INIT_RESET_PAGE_NOT_STABLE' if payload['mode']=='initialization_reset'
+                          else 'PREWRITE_UNSTABLE')
+                print('COMPOSER_RESULT '+json.dumps(dict(
+                    status=status, reason_code='CONVERSATION_SCROLL_NOT_READY',
+                    scroll=scroll, cleared=False, samples_observed=0,
+                    mutation_possible=False)), flush=True)
+                return
         if payload['mode']=='initialization_reset':
             print('COMPOSER_RESULT ' + json.dumps(
                 _reset_initialized_page(scraper)), flush=True)
@@ -1023,7 +1516,14 @@ def helper_main():
             print('COMPOSER_RESULT '+json.dumps(result),flush=True)
             return
         if payload['mode']=='write':
-            prewrite=_wait_for_prewrite_stability(scraper,payload['prompt'])
+            # The parent has pinned the immutable original text and digest.
+            # A stale or modified payload may not write or repair a draft.
+            prompt = payload.get('prompt')
+            if (not isinstance(prompt, str)
+                    or hashlib.sha256(prompt.encode()).hexdigest()
+                       != record.get('prompt_sha256')):
+                raise ComposerOperationError('composer_frozen_prompt_mismatch')
+            prewrite=_prepare_write_baseline(scraper,prompt)
             if prewrite['status']!='READY':
                 print('COMPOSER_RESULT '+json.dumps({
                     'status':prewrite['status'],
@@ -1039,18 +1539,41 @@ def helper_main():
                 return
             if not before['composer_empty'] and not before['composer_matches']:
                 raise ComposerOperationError('composer_unrelated_draft_present')
-            if payload.get('hybrid') and len(payload['prompt']) > 1024:
-                _write_hybrid_prompt(scraper,payload['prompt'],record,journal)
-            else:
-                _write_staged_prompt(scraper,payload['prompt'],record,journal)
+            # The experimental bulk-tail writer cannot prove every prefix.
+            # Git23 deliberately routes even hybrid requests through staged
+            # checkpoints until that experiment offers equivalent guarantees.
+            _write_continuous_prompt(scraper,prompt,record,journal)
             after=_page_snapshot(scraper,payload['prompt'])
         else:
             before=record.get('baseline')
             after=_page_snapshot(scraper,payload['prompt'])
-        status=classify_observation(before,after)
+        # DOM virtualization can change the number of visible history rows
+        # during a write. Keep checking the original conversation and tail.
+        # Legacy journals without an explicit setting retain strict behavior.
+        count_policy = dict(
+            check_turn_counts=record.get('check_turn_counts') is not False,
+            turn_count_tolerance=WRITE_TURN_COUNT_TOLERANCE
+                if record.get('check_turn_counts') is True else 0,
+        )
+        # During the write/observer phase, DOM history can virtualize.
+        # Judge the writer by full content and the pinned page only. The
+        # separate pre-Send verify_prepared_composer() still applies the strict
+        # historical Turn identity and generation safety contract.
+        if payload['mode'] in {'write', 'observe'} and record.get('state') == 'IN_FLIGHT':
+            if not isinstance(before, dict) or not isinstance(after, dict):
+                status = 'UNKNOWN'
+            elif (before.get('url') != after.get('url')
+                  or before.get('generation_active')
+                  or after.get('generation_active')):
+                status = 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+            else:
+                status = ('VERIFIED_SAFE_TO_SUBMIT' if after.get('composer_matches') is True
+                          else 'PARTIAL_OR_EMPTY')
+        else:
+            status=classify_observation(before,after,**count_policy)
         result=dict(status=status,observation=after)
         if status=='TURN_CHANGED_OR_SUBMIT_UNCERTAIN':
-            result['comparison']=_snapshot_difference(before,after)
+            result['comparison']=_snapshot_difference(before,after,**count_policy)
         print('COMPOSER_RESULT '+json.dumps(result),flush=True)
         # Do not browser.close/page.close: this client does not own Edge.
 

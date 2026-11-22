@@ -283,18 +283,15 @@ class HostSupervisor:
             return False
 
     def _remote_task_security_admission(self, _message=None) -> tuple[bool, str]:
-        """Keep software controls live while rejecting unsafe task creation."""
-        if not bool(getattr(self, "security_mutation_disabled", False)):
-            return True, ""
-        report = getattr(self, "security_preflight_report", None) or {}
-        attestation = report.get("attestation", {}) if isinstance(report, dict) else {}
-        reasons = (
-            report.get("reasons") or attestation.get("reasons")
-            if isinstance(report, dict) and isinstance(attestation, dict)
-            else None
-        )
-        detail = ", ".join(str(item) for item in (reasons or []))
-        return False, detail or "security_preflight_failed"
+        """Ingress never authorizes a filesystem operation or an OS process.
+
+        Authenticate the Telegram sender in TelegramUpdateAdapter; let
+        AgentIngressGateway durably queue prose. A failed restricted-executor
+        preflight must reject actual OS Actions at Runtime admission, not
+        suppress ordinary dialogue and block future Telegram updates.
+        This never changes security_mutation_disabled or grants a root.
+        """
+        return True, "INGRESS_ONLY_ACTION_GATED_SECURITY"
 
     def ensure_telegram_listener_alive(self) -> bool:
         """Keep ingress alive independently from the browser/runtime worker."""
@@ -401,6 +398,22 @@ class HostSupervisor:
             TaskStateStore,
         )
         from .windows_security import restricted_executor_required
+        from .workspace_turbo_binding import (
+            prepare_turbo_mode_update, commit_turbo_mode_update,
+        )
+
+        # The input comes from an authenticated operator control. Still never
+        # trust an upstream precomputed permission/path as Runtime authority.
+        requested_turbo = binding.get("_turbo_prepared")
+        prepared_turbo = None
+        if requested_turbo is not None:
+            if not isinstance(requested_turbo, dict):
+                raise ValueError("remote_binding_turbo_prepared_invalid")
+            prepared_turbo = prepare_turbo_mode_update(
+                requested_turbo.get("mode"), binding["workspace"],
+            )
+            if prepared_turbo != requested_turbo:
+                raise ValueError("remote_binding_turbo_policy_changed_or_invalid")
 
         task_store = TaskStateStore(remote_tasks_path(self.root))
         registry_path = conversation_registry_path(self.root)
@@ -470,6 +483,12 @@ class HostSupervisor:
                         if listener is not None:
                             listener.update_workspace(applied["workspace"])
                         self._close_remote_session(reason="REMOTE_BINDING_UPDATED")
+                        # Commit LAST after the binding and listener are
+                        # successfully published. The shared policy uses
+                        # revision CAS, so an editor update cannot be lost.
+                        # If this fails, existing binding rollback below runs.
+                        if prepared_turbo is not None:
+                            commit_turbo_mode_update(prepared_turbo)
                     except Exception as apply_error:
                         rollback_errors = []
                         try:

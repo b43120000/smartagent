@@ -2,6 +2,7 @@
 import inspect
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -416,6 +417,70 @@ def run():
     for change in ({'user_count':3},{'assistant_anchors':[['a2','x']]},{'generation_active':True}, {'url':'other'}):
         assert co.classify_observation(before,{**after,**change})=='TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
     assert co.classify_observation(before,{**after,'composer_matches':False})=='PARTIAL_OR_EMPTY'
+    baseline = {**before, 'user_native_ids': ['user-id'],
+                'assistant_native_ids': ['assistant-id'], 'last_turn_status': 'LAST_ASSISTANT'}
+    viewport_changed = {**baseline, 'composer_matches': True, 'user_count': 3, 'assistant_count': 3}
+    assert co.classify_observation(baseline, viewport_changed, check_turn_counts=False) == 'VERIFIED_SAFE_TO_SUBMIT'
+    assert co.classify_observation(baseline, viewport_changed, check_turn_counts=True) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    for change in (
+        {'assistant_anchors': [['a', 'changed']]},
+        {'user_native_ids': ['new-user-id']},
+        {'last_turn_status': 'LAST_USER'},
+        {'generation_active': True},
+        {'url': 'https://chatgpt.com/c/different'},
+    ):
+        assert co.classify_observation(
+            baseline, {**viewport_changed, **change}, check_turn_counts=False
+        ) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    assert co.classify_observation(
+        baseline, {**viewport_changed, 'composer_matches': False}, check_turn_counts=False
+    ) == 'PARTIAL_OR_EMPTY'
+    for user_count, assistant_count, safe in (
+        (3, 3, True), (1, 1, True), (1, 3, True), (4, 2, False), (2, 0, False)
+    ):
+        observed = {**viewport_changed, 'user_count': user_count, 'assistant_count': assistant_count}
+        expected = 'VERIFIED_SAFE_TO_SUBMIT' if safe else 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+        assert co.classify_observation(baseline, observed, turn_count_tolerance=1) == expected
+    assert co.classify_observation(
+        baseline, {**viewport_changed, 'generation_active': True}, turn_count_tolerance=1
+    ) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    one_visible = {
+        **baseline, 'user_count': 1, 'assistant_count': 1, 'user_native_ids': [''],
+        'composer_matches': True,
+    }
+    older_history_visible = {
+        **one_visible, 'user_count': 2, 'assistant_count': 2,
+        'user_anchors': [['older-u', 'older'], *one_visible['user_anchors']],
+        'assistant_anchors': [['older-a', 'older'], *one_visible['assistant_anchors']],
+        'user_native_ids': ['older-user-id', ''],
+        'assistant_native_ids': ['older-assistant-id', 'assistant-id'],
+    }
+    for first, second in ((one_visible, older_history_visible), (older_history_visible, one_visible)):
+        assert co.classify_observation(first, second, turn_count_tolerance=1) == 'VERIFIED_SAFE_TO_SUBMIT'
+        assert co.classify_observation(first, second) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    for change in (
+        {'assistant_native_ids': ['older-assistant-id', 'new-assistant-id']},
+        {'assistant_anchors': [*one_visible['assistant_anchors'], ['new-a', 'new']]},
+        {'user_count': 3},
+        {'user_count': 1},
+        {'generation_active': True},
+    ):
+        assert co.classify_observation(
+            one_visible, {**older_history_visible, **change}, turn_count_tolerance=1
+        ) == 'TURN_CHANGED_OR_SUBMIT_UNCERTAIN'
+    for value, enabled in ((None, True), ('0', False), ('1', True)):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            os.environ
+        ), patch.object(co, 'run_helper', side_effect=fake_result('VERIFIED_SAFE_TO_SUBMIT')):
+            key = 'SMARTAGENT_COMPOSER_CHECK_TURN_COUNTS'
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+            co.prepare_composer(endpoint='http://127.0.0.1:1272', url=before['url'],
+                                prompt='test', journal_root=temp)
+            record = json.loads(next(Path(temp).glob('*.json')).read_text(encoding='utf-8'))
+            assert record['check_turn_counts'] is enabled
     assert co.classify_observation(None,after)=='UNKNOWN'
     assert co.page_key('http://localhost:1272','https://chatgpt.com/g/test/c/id?q=1')==co.page_key('http://localhost:1272','https://chatgpt.com/c/id')
     for status in ('VERIFIED_SAFE_TO_SUBMIT','PARTIAL_OR_EMPTY','UNKNOWN','TURN_CHANGED_OR_SUBMIT_UNCERTAIN'):

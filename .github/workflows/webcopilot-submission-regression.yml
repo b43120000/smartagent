@@ -1,0 +1,54 @@
+name: WebCopilot submission regression
+
+on:
+  pull_request:
+  push:
+    branches:
+      - git67/case-c-action-contract-repair
+    paths:
+      - source/agent_core/composer_operation.py
+      - source/agent_core/web_runtime.py
+      - source/agent_core/web_ui/**
+      - source/WebAgent/**
+      - .github/workflows/webcopilot-submission-regression.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  submission-offline:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install pytest playwright
+      - run: python -m playwright install --with-deps chromium
+      - name: Composer UT
+        run: python -m pytest -q source/WebAgent/tests/test_webcopilot_submission_regression.py -k "not offline_browser"
+      - name: Isolated browser Offline IT
+        run: python -m pytest -q source/WebAgent/tests/test_webcopilot_submission_regression.py -k offline_browser
+      - name: Submission state and recovery regression
+        run: python source/WebAgent/tests/validate_composer_operation.py
+      - run: python source/WebAgent/tests/validate_composer_recovery.py
+      - run: python source/WebAgent/tests/validate_submit_identity.py
+      - run: python source/WebAgent/tests/validate_unsafe_composer_verification_bypass.py
+      - run: python source/WebAgent/tests/test_git23_composer_integrity_and_rewrite.py
+      - name: Telegram, WebCopilot and Planner Runtime interface regression
+        run: >-
+          python -m pytest -q
+          source/WebAgent/tests/test_git47_webcopilot_result_panel.py
+          source/WebAgent/tests/test_other_webcopilot_startup.py
+          source/WebAgent/tests/test_git58_telegram_real_planner_live.py
+          source/WebAgent/tests/test_git42_finish_contract_repair.py

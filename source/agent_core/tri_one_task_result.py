@@ -332,11 +332,32 @@ def make_task_result(
         if not answer_only_receipt:
             raise TaskResultContractError("answer_only_not_implemented_in_2a")
         from .tri_one_answer_only import enabled as answer_only_enabled
-        if not (enabled() and answer_only_enabled(source=source_interface)):
+        # v10 has its own Runtime-owned, request-scoped text admission.
+        # Preserve the optional v9/5A feature flag for all older receipts.
+        minimal_v10_receipt = (
+            receipt.get("decision") == "MINIMAL_TEXT_ONLY_FINISH_V1"
+            and receipt.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+            and str(receipt.get("answer_sha256") or "")
+            and len(str(receipt.get("answer_sha256") or "")) == 64
+        )
+        comparator_text_receipt = (
+            receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1"
+            and receipt.get("completion_kind") == "ANSWER_ONLY"
+            and receipt.get("final_verdict") == "PASS"
+            and verdict == "PASS" and not refs
+            and len(str(receipt.get("answer_sha256") or "")) == 64
+            and receipt.get("goal_coverage_basis") == "RUNTIME_TEXT_ADMISSION"
+        )
+        if not (minimal_v10_receipt or comparator_text_receipt or
+                (enabled() and answer_only_enabled(source=source_interface))):
             raise TaskResultContractError("answer_only_feature_disabled")
     if kind == "ANSWER_ONLY" and not (
         answer_only_receipt and state == "COMPLETED" and outcome == "SUCCESS"
-        and verdict == "UNVERIFIED" and not refs and not artifacts
+        and (verdict == "UNVERIFIED" or (
+            verdict == "PASS" and
+            receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1"
+            and receipt.get("goal_coverage_basis") == "RUNTIME_TEXT_ADMISSION"
+        )) and not refs and not artifacts
         and operational_action_count == 0 and answer_text.strip()
     ):
         raise TaskResultContractError("answer_only_admission_contract_invalid")
@@ -370,6 +391,9 @@ def make_task_result(
         "completion_kind": kind,
         "task_state": state,
         "outcome": outcome,
+        "final_verdict": (
+            "PASS" if outcome == "SUCCESS" else "FAIL"
+        ) if state in {"COMPLETED", "FAILED", "INTERRUPTED"} else None,
         "terminal_acceptance": {
             "status": "ACCEPTED" if accepted else "MISSING",
             "receipt_id": receipt.get("receipt_id") if accepted else None,
@@ -390,6 +414,17 @@ def make_task_result(
     }
     if kind == "ANSWER_ONLY":
         result["terminal_acceptance"]["admission_reason"] = "ANSWER_ONLY_RESPONSE_ADMITTED"
+        if receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1":
+            result["terminal_acceptance"]["decision"] = "RUNTIME_FINISH_COMPARATOR_V1"
+    if accepted and receipt.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1":
+        comparison = receipt.get("comparison") or {}
+        result["goal_acceptance"] = {
+            "verdict": result["final_verdict"],
+            "reason_code": comparison.get("reason_code"),
+            "coverage_basis": receipt.get("goal_coverage_basis"),
+            "mismatches": list(comparison.get("mismatches") or []),
+            "tool_results": list(comparison.get("tool_results") or []),
+        }
     return validate_task_result(result)
 
 
@@ -407,7 +442,7 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
         "terminal_acceptance", "operational_action_count",
         "operational_action_count_basis", "evidence_refs", "answer_text",
         "artifacts", "delivery", "result_id", "created_at",
-        "plan_id", "source_plan_id",
+        "plan_id", "source_plan_id", "final_verdict", "goal_acceptance",
     }
     if set(result) - allowed_result_fields:
         raise TaskResultContractError("unexpected_task_result_field")
@@ -425,6 +460,23 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     kind = str(result.get("completion_kind") or "").strip().upper()
     if state not in STATES or outcome not in OUTCOMES or kind not in KINDS:
         raise TaskResultContractError("invalid_state_outcome_or_kind")
+    final_verdict = result.get("final_verdict")
+    expected_final = (
+        "PASS" if outcome == "SUCCESS" else "FAIL"
+    ) if state in {"COMPLETED", "FAILED", "INTERRUPTED"} else None
+    if final_verdict is not None and final_verdict != expected_final:
+        raise TaskResultContractError("final_verdict_outcome_mismatch")
+    if "goal_acceptance" in result:
+        goal_acceptance = result["goal_acceptance"]
+        if (not isinstance(goal_acceptance, Mapping)
+                or set(goal_acceptance) != {"verdict", "reason_code", "coverage_basis", "mismatches", "tool_results"}
+                or goal_acceptance.get("verdict") != expected_final
+                or expected_final not in {"PASS", "FAIL"}
+                or not isinstance(goal_acceptance.get("reason_code"), str)
+                or not isinstance(goal_acceptance.get("coverage_basis"), str)
+                or not isinstance(goal_acceptance.get("mismatches"), list)
+                or not isinstance(goal_acceptance.get("tool_results"), list)):
+            raise TaskResultContractError("invalid_goal_acceptance")
     count = result.get("operational_action_count")
     if type(count) is not int or count < 0:
         raise TaskResultContractError("invalid_operational_action_count")
@@ -456,21 +508,26 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
     terminal = result.get("terminal_acceptance")
     if not isinstance(terminal, Mapping) or terminal.get("status") not in {"ACCEPTED", "MISSING"}:
         raise TaskResultContractError("missing_terminal_acceptance")
-    if set(terminal) - {"status", "receipt_id", "evidence_verdict", "admission_reason"}:
+    if set(terminal) - {"status", "receipt_id", "evidence_verdict", "admission_reason", "decision"}:
         raise TaskResultContractError("unexpected_terminal_acceptance_field")
     receipt_id = str(terminal.get("receipt_id") or "").strip()
     verdict = str(terminal.get("evidence_verdict") or "").strip().upper()
     if terminal.get("status") == "ACCEPTED":
         if not receipt_id or verdict not in {"PASS", "FAIL", "UNVERIFIED"}:
             raise TaskResultContractError("invalid_terminal_acceptance_summary")
-    elif receipt_id or verdict or terminal.get("admission_reason"):
+    elif receipt_id or verdict or terminal.get("admission_reason") or terminal.get("decision"):
         raise TaskResultContractError("missing_receipt_has_claims")
     if kind == "ANSWER_ONLY":
         if not (
             terminal.get("status") == "ACCEPTED"
             and terminal.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
             and state == "COMPLETED" and outcome == "SUCCESS"
-            and verdict == "UNVERIFIED" and not refs and not artifacts
+            and (
+                (verdict == "UNVERIFIED" and not terminal.get("decision")) or
+                (verdict == "PASS" and
+                 terminal.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1")
+            )
+            and not refs and not artifacts
             and count == 0 and bool(str(result.get("answer_text") or "").strip())
         ):
             raise TaskResultContractError("answer_only_admission_contract_invalid")
@@ -500,8 +557,13 @@ def validate_task_result(result: Mapping[str, object]) -> dict[str, object]:
         state != "COMPLETED" or terminal.get("status") != "ACCEPTED"
         or not (
             (kind == "EVIDENCE_BACKED" and verdict == "PASS" and bool(refs))
-            or (kind == "ANSWER_ONLY" and verdict == "UNVERIFIED"
-                and terminal.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED")
+            or (kind == "ANSWER_ONLY" and
+                terminal.get("admission_reason") == "ANSWER_ONLY_RESPONSE_ADMITTED"
+                and (
+                    (verdict == "UNVERIFIED" and not terminal.get("decision"))
+                    or (verdict == "PASS" and
+                        terminal.get("decision") == "RUNTIME_FINISH_COMPARATOR_V1")
+                ))
         )
     ):
         raise TaskResultContractError("unverified_success")
@@ -641,9 +703,14 @@ def make_task_result_from_webagent_loop(loop: object, answer_text: str, *,
     else:
         action_count = 0
         action_basis = "NO_LEDGER_OBSERVED"
-    outcome = str(getattr(loop, "terminal_outcome", "") or "UNKNOWN").strip().upper()
-    if outcome not in OUTCOMES:
-        outcome = "UNKNOWN"
+    from .tri_one_runtime_terminal import terminal_verdict_from_loop
+    verdict = terminal_verdict_from_loop(
+        loop, minimal=os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower()
+        != "legacy_v9",
+    )
+    outcome = verdict.outcome
+    receipt = verdict.receipt
+    refs = list(receipt.get("evidence_refs", []))
     return make_task_result(
         request_id=str(getattr(loop, "run_id", "") or ""),
         task_id=str(getattr(loop, "task_id", "") or ""),
@@ -651,7 +718,7 @@ def make_task_result_from_webagent_loop(loop: object, answer_text: str, *,
         intent_digest=str(getattr(loop, "intent_digest", "") or ""),
         source_interface=source_interface,
         trusted_reply_route=route,
-        state="COMPLETED",
+        state=verdict.state,
         outcome=outcome,
         terminal_acceptance=receipt,
         answer_text=str(answer_text),

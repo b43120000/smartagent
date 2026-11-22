@@ -1,0 +1,51 @@
+name: ForceStop Installation Boundary Regression
+
+on:
+  push:
+    branches:
+      - feat/force-stop-local-checkout-only-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  force-stop:
+    name: ForceStop scoped cleanup - ${{ matrix.os }} - Python 3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile scoped ForceStop source and tests
+        run: >
+          python -B -m compileall -q
+          source/agent_core/force_stop_all_agents.py
+          source/agent_core/force_stop_cleanup.py
+          source/agent_core/remote_clean_start.py
+          source/WebAgent/tests/validate_force_stop_owned_cleanup.py
+      - name: ForceStop native sandbox regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_force_stop_owned_cleanup.py
+      - name: Restart and shared worker smoke tests
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_auto_rca_upload.py
+      - name: Verify modified core-file hashes
+        run: >
+          python -B -c "import hashlib,json,pathlib;
+          m=json.loads(pathlib.Path('config/protocol_manifest.json').read_text(encoding='utf-8'));
+          paths=['source/agent_core/force_stop_all_agents.py',
+          'source/agent_core/force_stop_cleanup.py',
+          'source/agent_core/remote_clean_start.py'];
+          bad=[p for p in paths if m['core_files'].get(p)!=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()];
+          print('MANIFEST_MISMATCHES:',bad);
+          assert not bad,bad"

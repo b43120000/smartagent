@@ -1,0 +1,81 @@
+name: Git68 ACL OFF Turbo OFF Auto Approve ON data-flow UT
+
+on:
+  push:
+    branches: [git68/finish-contract-adapter-v2]
+    paths:
+      - '.github/workflows/git68-acl-off-auto-on-e2e-ut.yml'
+      - 'source/WebAgent/tests/test_git68_open_mode_pipeline.py'
+      - 'source/WebAgent/tests/test_git68_timeout_approval.py'
+      - 'source/WebAgent/tests/test_git68_pre_resume_timeout.py'
+      - 'source/agent_core/**'
+      - 'source/web_copilot.py'
+      - 'source/WebAgent/pokeclaw_executor_loop.py'
+      - 'source/WebAgent/minimal_decision.py'
+      - 'source/WebAgent/github_stage_diagnostics.py'
+      - 'config/protocol_manifest.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  open-mode-datalineage:
+    name: Open mode data-flow / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install isolated dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Verify packaged source manifest
+        run: >-
+          python -B -c "from agent_core.protocol_manifest import
+          require_protocol_manifest; result=require_protocol_manifest('.');
+          assert result['status']=='PASS' and result['hash_verification']=='PASS'
+          and not result['hash_mismatches'], result; print(result)"
+      - name: Compile exact open-mode test and source pipeline
+        run: >-
+          python -B -m compileall -q
+          source/WebAgent/tests/test_git68_open_mode_pipeline.py
+          source/agent_core/auto_approve_mode.py
+          source/agent_core/runtime_evidence_store.py
+          source/agent_core/executor_run_blackboard.py
+          source/agent_core/tri_one_task_result.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/web_copilot.py
+      - name: Run open-mode end-to-end data lineage and V2 regressions
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git68_open_mode_pipeline.py
+          source/WebAgent/tests/test_git68_timeout_approval.py
+          source/WebAgent/tests/test_git68_pre_resume_timeout.py
+          source/WebAgent/tests/test_git68_finish_contract_adapter_v2.py
+          source/WebAgent/tests/test_git68_hardening.py
+          --tb=short
+          --junitxml=git68-open-mode-results.xml
+      - name: Run real Windows subprocess stdout stderr and exit test
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git65_auto_approve.py::WindowsProcessIntegration::test_real_cmd_bat_stdout_stderr_exit
+          --tb=short
+      - name: Publish isolated UT evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git68-acl-off-turbo-off-auto-on-${{ matrix.os }}
+          path: git68-open-mode-results.xml
+          if-no-files-found: warn

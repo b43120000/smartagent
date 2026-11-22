@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from agent_core.paths import (
     dispatcher_state_path,
     remote_tasks_path,
     remote_transport_sessions_path,
+    remote_events_path,
 )
 
 
@@ -321,8 +323,13 @@ def _seed_webcopilot_tasks(task_queue, conversation_url: str) -> dict[str, str]:
     return tracked
 
 
-def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page) -> None:
-    """Mirror durable task transitions to the visible WebCopilot console."""
+def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page,
+                                 *, event_store=None, conversation_url: str = "") -> None:
+    """Present authoritative Tri-One result without modifying its raw record."""
+    from agent_core.webcopilot_result_view import (
+        build_webcopilot_result_view, validated_tri_one_result,
+    )
+    from agent_core.webcopilot_result_panel import show_webcopilot_result
     if not tracked:
         return
     with task_queue.store.process_lock():
@@ -339,8 +346,10 @@ def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page) -> N
         "FAILED": "TASK_FAILED",
         "INTERRUPTED": "TASK_INTERRUPTED",
         "CANCELLED": "TASK_CANCELLED",
+        "PAUSED": "TASK_PAUSED",
     }
     terminal = {"COMPLETED", "FAILED", "INTERRUPTED", "CANCELLED"}
+    presentable = terminal | {"PAUSED"}
     for task_id, task in snapshots.items():
         if task is None:
             _emit_webcopilot_event(
@@ -348,27 +357,61 @@ def _poll_webcopilot_task_states(task_queue, tracked: dict[str, str], page) -> N
             )
             tracked.pop(task_id, None)
             continue
-        state = str(task.get("state", "") or "")
-        if tracked.get(task_id) == state:
+        state = str(task.get("state", "") or "").upper()
+        canonical = (
+            validated_tri_one_result(task, event_store, conversation_url)
+            if state in presentable and event_store is not None and conversation_url
+            else None
+        )
+        # A TaskState transition can precede the durable Tri-One event. Keep
+        # polling a pending result until it appears, even when state is stable.
+        result_marker = (
+            str(canonical.get("result_id") or "canonical")
+            if canonical else "no-canonical-result"
+        )
+        transition_key = state + "|" + (
+            result_marker if state in presentable else "-"
+        )
+        if tracked.get(task_id) == transition_key:
+            if state in terminal and canonical is None:
+                completed_at = float(task.get("completed_at") or 0)
+                if completed_at and time.time() - completed_at > 300:
+                    tracked.pop(task_id, None)
             continue
-        tracked[task_id] = state
+        tracked[task_id] = transition_key
         event = event_for_state.get(state, "TASK_STATUS")
-        detail = ""
-        if state == "COMPLETED":
-            detail = _compact_task_value((task.get("result_ledger") or {}).get("final"))
-        elif state in {"FAILED", "INTERRUPTED", "CANCELLED"}:
-            detail = _compact_task_value(task.get("error"))
-        message = f"[WebGPT Copilot] {event} task_id={task_id}"
-        if detail:
-            message += f" detail={detail}"
+        view = build_webcopilot_result_view(task, canonical)
+        message = (
+            f"[WebGPT Copilot] {event} task_id={task_id} "
+            f"tri_one_source={view['source']} verified={view['verified']}"
+        )
         _emit_webcopilot_event(event, message, task_id)
         if state == "RUNNING":
-            _present_webcopilot_notice(page, f"Agent1 worker started [{task_id}]", "info")
-        elif state == "COMPLETED":
-            _present_webcopilot_notice(page, f"Task completed [{task_id}]", "done")
-        elif state in terminal:
-            _present_webcopilot_notice(page, f"Task {state.lower()} [{task_id}]: {detail}", "error")
-        if state in terminal:
+            _present_webcopilot_notice(
+                page, f"Agent1 worker started [{task_id}]", "info",
+            )
+        elif state in presentable:
+            shown = show_webcopilot_result(page, view)
+            _emit_webcopilot_event(
+                "TASK_RESULT_VIEW",
+                f"[WebGPT Copilot] result view task_id={task_id} "
+                f"rendered={shown} source={view['source']} "
+                f"verified={view['verified']}",
+                task_id,
+            )
+            if not shown:
+                # Keep the existing notice as a fallback if the host page was
+                # replaced or the result panel could not be injected.
+                _present_webcopilot_notice(
+                    page, view["title"] + " [" + task_id + "]: "
+                    + view["summary"][:280],
+                    "done" if view["verified"] else "error",
+                )
+        if state in terminal and canonical is not None:
+            tracked.pop(task_id, None)
+        elif state in terminal and float(task.get("completed_at") or 0) and (
+            time.time() - float(task["completed_at"]) > 300
+        ):
             tracked.pop(task_id, None)
 
 
@@ -509,14 +552,31 @@ def main():
         baseline_count = observer.baseline()
         print(f"[WebGPT Copilot] Startup cursor: {baseline_count} user turns.", flush=True)
         from agent_core.task_state import RemoteTaskQueue, TaskStateStore
+        from agent_core.remote_events import RemoteEventStore
         from agent_core.agent_gateway import AgentIngressGateway
         from agent_core.transport_sessions import TransportSessionRouter
         task_queue = RemoteTaskQueue(TaskStateStore(remote_tasks_path()))
+        result_events = RemoteEventStore(remote_events_path())
         ingress_gateway = AgentIngressGateway(
             task_queue=task_queue,
             session_router=TransportSessionRouter(remote_transport_sessions_path()),
         )
         tracked_tasks = _seed_webcopilot_tasks(task_queue, target_url)
+        # Software-owned pre-resume prompts. Browser UI is only a human
+        # decision surface; no model output can authorise a ToolCall.
+        from agent_core.resume_command_approval import (
+            ResumeCommandGate, ResumeApprovalError, format_resume_approval_prompt,
+        )
+        from agent_core.webcopilot_resume_dialog import (
+            show_resume_dialog, poll_resume_dialog, close_resume_dialog,
+        )
+        from dataclasses import replace as _dataclass_replace
+        resume_gate = ResumeCommandGate(Path(__file__).resolve().parent)
+        resume_owner = "webcopilot:" + hashlib.sha256(
+            target_url.encode("utf-8")
+        ).hexdigest()[:24]
+        resume_channel = _conversation_id(target_url)
+        pending_resume = None
         if tracked_tasks:
             recovery_started = _ensure_remote_dispatcher(Path(__file__).resolve().parent)
             _emit_webcopilot_event(
@@ -533,7 +593,94 @@ def main():
                     page = canonical_page
                     observer.page = page
                     scraper._page = page
-                _poll_webcopilot_task_states(task_queue, tracked_tasks, page)
+                _poll_webcopilot_task_states(
+                    task_queue, tracked_tasks, page, event_store=result_events,
+                    conversation_url=target_url,
+                )
+                if pending_resume is not None:
+                    approval_id = pending_resume["approval_id"]
+                    show_resume_dialog(
+                        page, pending_resume,
+                        format_resume_approval_prompt(pending_resume),
+                    )
+                    # Poll the actual trusted user click first. A late explicit
+                    # denial must not be overwritten by a timeout decision.
+                    choice = poll_resume_dialog(page, approval_id)
+                    timeout_decision = None
+                    if choice is None and time.time() >= float(pending_resume["expires_at"]):
+                        timeout_decision = resume_gate.take_timed_out_webcopilot(
+                            approval_id, owner=resume_owner, workspace=workspace,
+                        )
+                        if timeout_decision is not None:
+                            choice = "APPROVED"
+                        else:
+                            close_resume_dialog(page, approval_id)
+                            _present_webcopilot_notice(
+                                page,
+                                "接續授權等待已超過10分鐘；目前未符合自動允許條件，"
+                                "沒有執行指令。請重新輸入「接續工作 TASK-ID」。",
+                                "error",
+                            )
+                            pending_resume = None
+                            continue
+                    if choice is None:
+                        time.sleep(0.3)
+                        continue
+                    # A human choice is recorded BEFORE enqueue. A timed-out
+                    # grant is recorded in the software ledger, never the DOM.
+                    try:
+                        decision = timeout_decision if timeout_decision is not None else resume_gate.decide(
+                            approval_id, allowed=choice == "APPROVED",
+                            owner=resume_owner, channel_id=resume_channel,
+                        )
+                        fields = decision["incoming"]
+                        from agent_core.current_conversation_adapter import build_webcopilot_message
+                        inbound = build_webcopilot_message(
+                            str(fields["raw_request"]),
+                            conversation_url=str(fields["conversation_url"]),
+                            turn_index=int(fields["turn_index"]),
+                            conversation_title=str(fields.get("conversation_title") or ""),
+                            allow_plain=True,
+                        )
+                        inbound = _dataclass_replace(
+                            inbound, metadata={
+                                **dict(inbound.metadata),
+                                "resume_approval_id": approval_id,
+                            },
+                        )
+                        accepted = ingress_gateway.accept(inbound, workspace=workspace)
+                        task, created = accepted.task, accepted.created
+                        if task is None:
+                            raise ResumeApprovalError("resume_ingress_task_missing")
+                        resume_gate.bind_child(
+                            approval_id, child_task_id=task.task_id,
+                            owner=resume_owner,
+                        )
+                    except Exception as exc:
+                        # An already-recorded choice does not justify a
+                        # speculative replay or a new queue entry.
+                        close_resume_dialog(page, approval_id)
+                        pending_resume = None
+                        _present_webcopilot_notice(
+                            page,
+                            "接續授權已記錄，但啟動未完成（"
+                            + type(exc).__name__
+                            + "）；請確認任務進度後再接續，不會自動重播指令。",
+                            "error",
+                        )
+                        continue
+                    close_resume_dialog(page, approval_id)
+                    pending_resume = None
+                    tracked_tasks[task.task_id] = str(task.state)
+                    _present_webcopilot_notice(
+                        page,
+                        ("10 分鐘未選擇，Auto Approve 自動允許一次" if timeout_decision
+                         else "已記錄允許一次" if choice == "APPROVED" else "已記錄拒絕")
+                        + f"，接續任務 {task.task_id} 開始。", "info",
+                    )
+                    if created:
+                        _ensure_remote_dispatcher(Path(__file__).resolve().parent)
+                    continue
                 # This process is explicitly bound to one WebCopilot
                 # conversation, so every new non-empty user turn is an ingress
                 # request.  The historical ``webcopilot`` prefix remains
@@ -557,6 +704,40 @@ def main():
                         "REQUEST_DETECTED",
                         f"[WebGPT Copilot] REQUEST_DETECTED turn={turn_index}: {inbound.text}",
                     )
+                    # A paused UNKNOWN_COMMAND requires an explicit
+                    # pre-resume decision before creating the child task.
+                    try:
+                        challenge = resume_gate.begin(
+                            request=inbound.text, owner=resume_owner,
+                            workspace=workspace, channel_id=resume_channel,
+                            transport="WEBGPT_COPILOT",
+                            incoming={
+                                "raw_request": raw_request,
+                                "conversation_url": target_url,
+                                "turn_index": turn_index,
+                                "conversation_title": title,
+                            },
+                        )
+                    except ResumeApprovalError as exc:
+                        observer.acknowledge_user_turn(turn_index, raw_request)
+                        _present_webcopilot_notice(
+                            page, "接續授權無法顯示：" + str(exc)[:280], "error",
+                        )
+                        continue
+                    if challenge is not None:
+                        observer.acknowledge_user_turn(turn_index, raw_request)
+                        pending_resume = challenge
+                        if show_resume_dialog(
+                            page, pending_resume,
+                            format_resume_approval_prompt(pending_resume),
+                        ):
+                            resume_gate.mark_notified(pending_resume["approval_id"])
+                        _emit_webcopilot_event(
+                            "PRE_RESUME_APPROVAL_PROMPT",
+                            "[WebCopilot] 已顯示接續前授權選擇："
+                            + challenge["source_task_id"],
+                        )
+                        continue
                     accepted = ingress_gateway.accept(inbound, workspace=workspace)
                     task, created = accepted.task, accepted.created
                     observer.acknowledge_user_turn(turn_index, raw_request)

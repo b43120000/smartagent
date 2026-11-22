@@ -101,7 +101,9 @@ def default_profile_path() -> Path:
     return module_path.parents[2] / "localdata" / "secure" / "windows_security" / "security_profile.json"
 
 
-def acl_mode(profile_path: str | Path | None = None) -> str:
+def acl_mode(
+    profile_path: str | Path | None = None, *, allow_on_transition: bool = False,
+) -> str:
     profile = Path(profile_path or default_profile_path()).expanduser().resolve()
     mode_path = profile.with_name("acl_mode.json")
     if not mode_path.is_file():
@@ -113,7 +115,7 @@ def acl_mode(profile_path: str | Path | None = None) -> str:
     if not isinstance(value, dict) or value.get("schema") != "SMARTAGENT_ACL_MODE_V1":
         raise RuntimeError("acl_mode_invalid")
     mode = str(value.get("mode", "") or "").strip().lower()
-    if mode not in {"on", "off"}:
+    if mode not in {"on", "off"} and not (allow_on_transition and mode == "transitioning_on"):
         raise RuntimeError("acl_mode_invalid")
     expected_root = profile.parent.parent.parent.parent.resolve()
     recorded_root = Path(str(value.get("install_root", "") or "")).expanduser()
@@ -128,9 +130,7 @@ def restricted_executor_required(
     """Return whether this process must use the OS restricted executor.
 
     ``ACLstatus.bat off`` is an explicit transition to software-guard-only
-    mode.  The profile intentionally remains on disk so ``on`` can restore the
-    protection without reinstalling; profile existence therefore cannot be
-    used as the mode switch.  The persisted ACL mode takes precedence even
+    mode. The persisted ACL mode takes precedence even
     over the launcher's legacy ``SMARTAGENT_RESTRICTED_EXECUTOR_REQUIRED``
     environment variable.
 
@@ -288,6 +288,36 @@ def is_trusted_executable(path: str | Path, profile: dict | None = None) -> bool
         return False
     digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
     return hmac.compare_digest(digest, expected)
+
+
+def is_sha256_pinned_executable(
+    path: str | Path, profile: dict | None = None,
+) -> bool:
+    """Strict operator SHA256 pin for Native Turbo, independent of ACL OFF.
+
+    Unlike the ordinary ACL-OFF is_trusted_executable compatibility shortcut,
+    this requires an exact operator-pinned path and matching file digest even
+    if the host's ACL flag changes between admission and broker dispatch.
+    """
+    try:
+        candidate = Path(path).expanduser().resolve(strict=True)
+        if not candidate.is_file():
+            return False
+        active = profile if isinstance(profile, dict) else load_security_profile()
+        key = os.path.normcase(str(candidate)).casefold()
+        expected = next((
+            row["sha256"] for row in trusted_executable_records(active)
+            if os.path.normcase(str(Path(row["path"]).resolve())).casefold() == key
+        ), "")
+        if not expected:
+            return False
+        digest = hashlib.sha256()
+        with candidate.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return hmac.compare_digest(digest.hexdigest(), expected)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return False
 
 
 def _is_within(path: Path, root: Path) -> bool:

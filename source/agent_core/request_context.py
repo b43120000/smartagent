@@ -30,7 +30,10 @@ class RequestContextStore:
         try:
             if self.path.stat().st_size>8*1024*1024:
                 raise RequestContextError('request_context_too_large')
-            payload=json.loads(self.path.read_text(encoding='utf-8'))
+            original_bytes=self.path.read_bytes()
+            PIT.record_bytes('12a_request_context_file_bytes',original_bytes,
+                             origin='REQUEST_CONTEXT_FILE_BYTES')
+            payload=json.loads(original_bytes.decode('utf-8'))
         except (OSError,ValueError) as exc:
             raise RequestContextError('request_context_unreadable') from exc
         if (not isinstance(payload,dict) or payload.get('schema')!='SMARTAGENT_REQUEST_CONTEXT_V1'

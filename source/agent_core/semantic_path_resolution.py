@@ -37,6 +37,39 @@ _EFFECT_IMPERATIVE = re.compile(
 )
 
 
+def same_original_request_path(left: object, right: object) -> bool:
+    """Compare two observed original-target paths without granting scope.
+
+    On Windows the SecurityContext resolver expands 8.3 aliases (RUNNER~1),
+    even while the original Goal and inspect Action keep the short spelling.
+    Semantic binding needs identity equivalence; authorization still belongs
+    to the independent native Tool Scope/ACL guard.
+    """
+    import ntpath
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a or not b:
+        return False
+    if ntpath.normcase(ntpath.normpath(a)) == ntpath.normcase(ntpath.normpath(b)):
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        p, q = Path(a), Path(b)
+        if p.resolve(strict=False) == q.resolve(strict=False):
+            return True
+        # Windows short-name aliases can persist for a *missing* child path
+        # even though its existing parents resolve to one physical directory.
+        # The final component is compared exactly modulo Windows casing.
+        return bool(
+            p.name.casefold() == q.name.casefold()
+            and p.parent.is_dir() and q.parent.is_dir()
+            and p.parent.resolve(strict=True) == q.parent.resolve(strict=True)
+        )
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def readonly_narrowing_allowed(request: str, lexical_paths: list[str]) -> bool:
     """Use only the instruction prefix before the first literal path.
 
@@ -48,7 +81,12 @@ def readonly_narrowing_allowed(request: str, lexical_paths: list[str]) -> bool:
     text = str(request or "")
     positions = [text.find(value) for value in lexical_paths if value and text.find(value) >= 0]
     prefix = text[:min(positions)] if positions else text
-    return not bool(_EFFECT_IMPERATIVE.search(prefix))
+    from .semantic_capability_resolution import translate_goal_action
+    translated = translate_goal_action(prefix)
+    return not (
+        bool(_EFFECT_IMPERATIVE.search(prefix))
+        or translated["semantic_intent"] == "CREATE_DIRECTORY"
+    )
 
 
 def _path_exists(path: str, probe: Callable[[str], bool]) -> bool:
@@ -113,7 +151,22 @@ def analyze_request_paths(
     are kept verbatim, never replaced by a parent or workspace fallback.
     """
     source = str(request or "")
-    probe = probe or (lambda value: Path(value).exists())
+    if probe is None:
+        # Lexical path hints must never perform an unrestricted filesystem
+        # existence probe. Read policy is owned by Edit Workspace; an unlisted
+        # path is only text, not authority to stat() the host filesystem.
+        def policy_scoped_probe(value: str) -> bool:
+            try:
+                from .workspace_access import access_snapshot
+                from .path_security import authorize_path, PathSecurityError
+                roots = access_snapshot()
+                allowed = (*roots.get("writable_workspaces", ()),
+                           *roots.get("read_only_roots", ()))
+                path = authorize_path(value, allowed, require_absolute=True)
+                return path.exists()
+            except (OSError, RuntimeError, ValueError, PathSecurityError):
+                return False
+        probe = policy_scoped_probe
     resolved: list[str] = []
     records: list[dict] = []
     scan_from = 0
@@ -255,6 +308,15 @@ def planner_path_context(document: dict) -> str:
             "selected_paths: " + SCHEMA + " and the paths listed above. "
             "Runtime verifies exact matches before Tool admission; this "
             "model proposal cannot authorize a new path. "
-            "Use only the selected paths in canonical read actions. Do not "
-            "retry ABSENT candidates, invent new paths, or expand to parents. "
+            "Use only selected paths for request-source evidence; never expand "
+            "existing read authorization via this preflight. An ABSENT "
+            "existing input may require discovery, but an ABSENT *new output* "
+            "directory or file requested by the user is an expected creation "
+            "target, not a missing prerequisite. For a root such as E:\\ with "
+            "a separately named child, construct the exact child from the "
+            "original request and use the ordinary Runtime write-policy/ACL "
+            "gate before creating and verifying. A valid existing writable "
+            "parent can cover the new child; do not request redundant "
+            "permission or interrupt solely because the output does not exist. "
+            "Never infer authorization or repair spelling from this context. "
             "If AMBIGUOUS, request a quoted exact path; do not issue file actions.")

@@ -1,0 +1,105 @@
+name: Git75 Goal-Driven Runtime UT + Real Process Sidecar IT
+on:
+  push:
+    branches:
+      - git75/goal-driven-runtime
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  goal75:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install testing dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Syntax compile and imports
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/goal75_blackboard.py
+          source/agent_core/goal75_stage_ledger.py
+          source/agent_core/goal75_recovery.py
+          source/agent_core/goal75_goal_coverage.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/agent_core/protocol_manifest.py
+          source/agent_core/goal75_sidecar_it.py
+          source/WebAgent/minimal_decision.py
+          source/WebAgent/minimal_core_loop.py
+          source/agent_core/shared_blackboard.py
+          source/agent_core/executor_run_blackboard.py
+          source/agent_core/task_progress.py
+          source/WebAgent/tests/test_git75_goal_driven_runtime.py
+          source/WebAgent/tests/test_git75_live_goal_truth.py
+      - name: Git75 pinned release hash inventory
+        run: >-
+          python -B -c "import hashlib,json; from pathlib import Path;
+          paths='.github/workflows/git75-goal-driven-runtime.yml source/WebAgent/pokeclaw_executor_loop.py source/agent_core/goal75_goal_coverage.py source/agent_core/goal75_stage_ledger.py source/WebAgent/tests/test_git75_live_goal_truth.py source/agent_core/protocol_manifest.py config/protocol_manifest.json'.split();
+          print('GIT75_FILE_SHA256_JSON='+json.dumps({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths},sort_keys=True))"
+      - name: Protocol release integrity
+        run: >-
+          python -B -c "from agent_core.protocol_manifest import require_protocol_manifest;
+          x=require_protocol_manifest('.'); assert x['status']=='PASS'
+          and x['hash_verification']=='PASS', x"
+      - name: Release manifest integrity
+        run: >-
+          python -B -c "import json,runpy; from pathlib import Path;
+          build=runpy.run_path('install_smart_agent/build_update_manifest.py')['build'];
+          generated=build(Path('.'));
+          recorded=json.loads(Path('config/update_manifest.json').read_text(encoding='utf-8'));
+          assert generated['files']==recorded['files'],
+          {'delta':[k for k,v in generated['files'].items() if recorded['files'].get(k)!=v],
+          'extra':[k for k in recorded['files'] if k not in generated['files']]};
+          assert generated['release_sequence']==recorded['release_sequence']"
+      - name: Git75 UT and existing regression
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git75_goal_driven_runtime.py
+          source/WebAgent/tests/test_git75_live_goal_truth.py
+          source/WebAgent/tests/test_git70_goal_evidence.py
+          source/WebAgent/tests/test_git71_timeout_reconciliation.py
+          source/WebAgent/tests/test_git74_long_execution_supervisor.py
+          source/WebAgent/tests/test_git74_unified_preflight.py
+          source/WebAgent/tests/test_shared_blackboard_strategy.py
+          --tb=short
+          --junitxml=git75-ci-evidence/git75-regression.xml
+      # Historical v10 tests assume a configured native AppContainer broker.
+      # Hosted runners do NOT have the user's machine authorization roots.
+      # Preserve their diagnostic evidence instead of weakening Turbo policy.
+      - name: Legacy Minimal Core host-dependent regression diagnostic
+        continue-on-error: true
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_minimal_core_v10.py
+          --tb=short
+          --junitxml=git75-ci-evidence/git75-host-dependent-baseline.xml
+      - name: Full ten-stage real process sidecar IT
+        run: >-
+          python -B -m agent_core.goal75_sidecar_it
+          --output git75-ci-evidence/goal75-sidecar-it.json
+      - name: Windows collector ZIP roundtrip IT
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m agent_core.goal75_collector_it
+      - name: Collect artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: git75-evidence-${{ matrix.os }}
+          path: |
+            git75-ci-evidence/*
+            localdata/runtime/goal75_big_blackboard/*
+            localdata/runtime/goal75_stages/*
+          if-no-files-found: warn

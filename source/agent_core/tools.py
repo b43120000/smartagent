@@ -145,6 +145,9 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
     if not request_allowed:
         info.update(allowed=False, scope_source="request_write_ceiling",
                     error=request_reason)
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info["error"], allowed=False)
         return info
     if tool == 'run_command':
         try:
@@ -157,6 +160,76 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
                 resolved_paths=[str(cwd)],scope_source='working_directory' if 'working_directory' in tool_call else 'workspace_default')
         except (PathSecurityError, ValueError, OSError) as exc:
             info.update(allowed=False,error=str(exc))
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info.get("error", ""), allowed=bool(info["allowed"]))
+        return info
+    if tool == 'create_directory':
+        requested = str(tool_call.get("path", "") or "").strip()
+        info["requested_paths"] = [requested]
+        info["scope_source"] = "exact_directory_write_target"
+        # These are Runtime-owned preflight observations, NOT permission grants.
+        info["directory_preconditions"] = {
+            "write_authorization_verdict": "NOT_EVALUATED",
+            "target_binding_verdict": "NOT_EVALUATED",
+            "parent_directory_verdict": "NOT_EVALUATED",
+            "writes_executed": False,
+        }
+        preconditions = info["directory_preconditions"]
+        try:
+            context = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+            # Never bypass ACL/workspace/write-ceiling security, even if a
+            # verified read established that the requested target is absent.
+            target = context.require_write(
+                requested, require_absolute=True, forbid_glob=True,
+            )
+            preconditions["write_authorization_verdict"] = "AUTHORIZED_BY_EXISTING_POLICY"
+            if explicit_paths and not any(target == root for root in explicit_paths):
+                preconditions["target_binding_verdict"] = "TARGET_NOT_EXACT"
+                raise PathSecurityError(
+                    "directory_target_not_exact_original_request", requested,
+                )
+            preconditions["target_binding_verdict"] = "EXACT_ORIGINAL_REQUEST_TARGET"
+            # is_dir() collapses FileNotFoundError / NotADirectoryError /
+            # PermissionError to False. Use stat() to preserve the actual
+            # causal precondition failure (still a read, no mutation).
+            try:
+                parent_stat = target.parent.stat()
+            except FileNotFoundError as exc:
+                preconditions["parent_directory_verdict"] = "MISSING"
+                raise PathSecurityError(
+                    "directory_parent_not_existing_directory", str(target.parent),
+                ) from exc
+            except NotADirectoryError as exc:
+                preconditions["parent_directory_verdict"] = "NOT_A_DIRECTORY"
+                raise PathSecurityError(
+                    "directory_parent_not_a_directory", str(target.parent),
+                ) from exc
+            except PermissionError as exc:
+                preconditions["parent_directory_verdict"] = "ACCESS_DENIED"
+                raise PathSecurityError(
+                    "directory_parent_access_denied", str(target.parent),
+                ) from exc
+            except OSError as exc:
+                preconditions["parent_directory_verdict"] = "STAT_FAILED"
+                raise PathSecurityError(
+                    "directory_parent_stat_failed", str(target.parent),
+                ) from exc
+            if not stat.S_ISDIR(parent_stat.st_mode):
+                preconditions["parent_directory_verdict"] = "NOT_A_DIRECTORY"
+                raise PathSecurityError(
+                    "directory_parent_not_a_directory", str(target.parent),
+                )
+            preconditions["parent_directory_verdict"] = "EXISTS_AND_IS_DIRECTORY"
+            info["resolved_paths"] = [str(target)]
+        except (PathSecurityError, ValueError, OSError, RuntimeError) as exc:
+            info.update(allowed=False, error=str(exc))
+            if preconditions["write_authorization_verdict"] == "NOT_EVALUATED":
+                preconditions["write_authorization_verdict"] = "REJECTED_OR_UNRESOLVED"
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info.get("error", ""), allowed=bool(info["allowed"]),
+        )
         return info
     if tool == 'delete_path':
         requested = str(tool_call.get('path', '') or '')
@@ -170,6 +243,9 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
             info['resolved_paths'] = [str(target)]
         except (PathSecurityError, ValueError, OSError) as exc:
             info.update(allowed=False, error=str(exc))
+        from .action_readiness import classify_scope_preflight
+        info["scope_diagnostic"] = classify_scope_preflight(
+            tool, info.get("error", ""), allowed=bool(info["allowed"]))
         return info
     if tool not in _SCOPED_INSPECTION_TOOLS:
         return info
@@ -194,16 +270,18 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
             if explicit_paths and not requested:
                 raise ValueError("explicit_path_scope_requires_workspace")
             info["requested_paths"] = [requested] if requested else []
-            resolved_paths = [Path(_project_workspace(tool_call, agent)).resolve()]
             info["scope_source"] = "workspace" if requested else "workspace_default"
+            resolved_paths = [Path(_project_workspace(tool_call, agent)).resolve()]
         elif tool == 'inspect_project_working_set':
             requested=str(tool_call.get('workspace','') or '').strip()
             if explicit_paths and not requested:raise ValueError('explicit_path_scope_requires_workspace')
             values=tool_call.get('paths')
             if not isinstance(values,list) or not values or not all(isinstance(v,str) and v.strip() and v==v.strip() for v in values):
                 raise ValueError('project_working_set_paths_invalid')
+            info['requested_paths']=[requested] if requested else []
+            info['scope_source']='workspace_and_paths'
             root=Path(_project_workspace(tool_call,agent)).resolve()
-            resolved_paths=[];info['requested_paths']=list(values);info['scope_source']='workspace_and_paths'
+            resolved_paths=[];info['requested_paths']=list(values)
             for value in values:
                 candidate=Path(value)
                 resolved=security_context.require_read(str(candidate if candidate.is_absolute() else root/candidate))
@@ -241,6 +319,10 @@ def preview_tool_scope(tool_call: dict, agent=None) -> dict:
     except (PathSecurityError, ValueError, OSError, RuntimeError) as exc:
         info["allowed"] = False
         info["error"] = str(exc)
+    from .action_readiness import classify_scope_preflight
+    info["scope_diagnostic"] = classify_scope_preflight(
+        tool, info.get("error", ""), allowed=bool(info["allowed"])
+    )
     return info
 
 
@@ -271,6 +353,14 @@ def _powershell_with_native_exit_propagation(command: str) -> str:
     )
 
 
+def _native_run_command_admitted(cwd: str | Path | None) -> bool:
+    """Advisory routing only; OS Broker independently reattests every action."""
+    from .turbo_broker_admission import assess
+    # Git62: a parent Workspace can contain multiple independent Root SIDs.
+    # Never replace the specific command CWD with its broad Workspace owner.
+    return assess(cwd, tool="run_command")["decision"] == "BROKER_REQUIRED"
+
+
 def _run_powershell_capture(
     command: str,
     timeout: int = 30,
@@ -279,10 +369,12 @@ def _run_powershell_capture(
     cwd: str | Path | None = None,
     telemetry: dict | None = None,
     approval_manifest: dict | None = None,
+    wait_policy: str = "BOUNDED",
 ) -> dict:
     """Execute PowerShell and return structured evidence instead of only text."""
     try:
-        require_command_allowed(command, workspace=cwd, approval_manifest=approval_manifest)
+        if not _native_run_command_admitted(cwd):
+            require_command_allowed(command, workspace=cwd, approval_manifest=approval_manifest)
     except CommandSecurityError as exc:
         return {
             "exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
@@ -294,8 +386,43 @@ def _run_powershell_capture(
         timeout=timeout,
         capture_root=capture_root,
         telemetry=telemetry, approval_manifest=approval_manifest, security_command=command,
+        wait_policy=wait_policy,
     )
     return {"command": command, **payload}
+
+
+def _run_explicit_shell_capture(spec: dict, timeout: int, capture_root,
+                                *, cwd, telemetry, approval_manifest, wait_policy="BOUNDED") -> dict:
+    """Run DIRECT/CMD with the same admission and bounded capture as PowerShell."""
+    from .command_security import CommandSecurityError, require_command_allowed
+    from .turbo_broker_admission import assess
+    if assess(cwd, tool="run_command")["decision"] == "BROKER_REQUIRED":
+        return {"exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
+                "process_started": False, "security_rejected": True,
+                "error": "TURBO_BROKER_UNSUPPORTED_LAUNCH_FORM"}
+    try:
+        require_command_allowed(spec["policy_command"], workspace=cwd,
+                                approval_manifest=approval_manifest)
+    except CommandSecurityError as exc:
+        return {"exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
+                "process_started": False, "security_rejected": True,
+                "error": "SECURITY_COMMAND_REJECTED:" + str(exc)}
+    # On Windows Popen(list) applies list2cmdline quoting designed for argv,
+    # not for cmd.exe's /s /c script parser. A compound CMD script containing
+    # quoted BAT paths then acquires literal escape quotes and fails to launch.
+    # Use an OS-owned cmd.exe and a single Windows command line: /s removes
+    # only the enclosing quotes and preserves quotes within the CMD script.
+    # Normal command security still reviews both this wrapper and the actual
+    # user-supplied policy_command; never bypass the Native Broker gate.
+    launch = spec["launch_argv"]
+    if spec["shell_mode"] == "CMD" and os.name == "nt":
+        system_cmd = Path(os.environ.get("SystemRoot", r"C:\\Windows")) / "System32" / "cmd.exe"
+        launch = '"' + str(system_cmd) + '" /d /s /c "' + spec["policy_command"] + '"'
+    return run_bounded_process(launch, cwd=cwd, timeout=timeout,
+                               capture_root=capture_root, telemetry=telemetry,
+                               approval_manifest=approval_manifest,
+                               security_command=spec["policy_command"],
+                               wait_policy=wait_policy)
 
 
 def _evaluate_verification_step(
@@ -447,9 +574,13 @@ def tool_run_command(
     expected_failure: dict | None = None,
     expected_verification: dict | None = None,
     *,
+    shell_mode: str = "POWERSHELL",
+    argv: list | None = None,
     security_context: SecurityContext | None = None,
     approval_manifest: dict | None = None,
     working_directory: str | Path | None = None,
+    action_id: str = "",
+    wait_policy: str = "BOUNDED",
 ) -> str:
     """Run an action and the Web Planner's explicit post-action verification plan.
 
@@ -462,6 +593,15 @@ def tool_run_command(
         result_schema_for_operation,
     )
     operation = normalize_command_operation(operation)
+    from .shell_execution import execution_contract, ShellModeError
+    try:
+        spec = execution_contract({"command": command, "shell_mode": shell_mode,
+                                   **({"argv": argv} if argv is not None else {})})
+    except ShellModeError as exc:
+        from .tool_result_contract import encode_result
+        return encode_result("REJECTED", "SHELL_CONTRACT_INVALID", tool="run_command",
+                             executed=False, detail=str(exc))
+    policy_command = spec["policy_command"]
     if expected_verification is not None:
         from .verification_expectation import validate_expectation
         try:
@@ -472,33 +612,170 @@ def tool_run_command(
             from .tool_result_contract import encode_result
             return encode_result('REJECTED','EXPECTED_VERIFICATION_INVALID',tool='run_command',executed=False,detail=str(exc))
     cwd = resolve_command_working_directory(
-        working_directory, security_context, command=command, operation=operation)
+        working_directory, security_context, command=policy_command, operation=operation)
+    if wait_policy not in {"BOUNDED", "UNTIL_EXIT"}:
+        from .tool_result_contract import encode_result
+        return encode_result("REJECTED", "RUN_COMMAND_WAIT_POLICY_INVALID", tool="run_command", executed=False)
+    if wait_policy == "UNTIL_EXIT":
+        from .auto_approve_mode import auto_approve_snapshot
+        from .tool_result_contract import encode_result
+        from .turbo_broker_admission import assess
+        state = auto_approve_snapshot(
+            security_context.workspace_root if security_context else None,
+            working_directory=cwd,
+        )
+        if (state.get("acl") != "OFF" or state.get("turbo_effective") != "OFF"
+                or state.get("auto_approve_effective") != "ON"
+                or assess(cwd, tool="run_command").get("decision") == "BROKER_REQUIRED"):
+            return encode_result("REJECTED", "LONG_EXECUTION_MODE_NOT_AUTHORIZED", tool="run_command", executed=False)
     from .action_dependencies import command_is_proven_observation
-    observation_confirmed = command_is_proven_observation({'operation':operation,'command':command})
+    observation_confirmed = command_is_proven_observation({'operation':operation,'command':policy_command})
     def finish(operation_result):
         from .tool_result_contract import attach_runtime_result
         rejected = bool(main.get('security_rejected'))
         execution = operation_result['execution_status']
-        running = main.get('process_state') == 'RUNNING'
+        from .process_liveness import verified_running_evidence
+        witness = main.get('liveness_evidence') or {}
+        running = (main.get('process_state') == 'RUNNING'
+                   and verified_running_evidence(witness))
         status = 'REJECTED' if rejected else 'RUNNING' if running else execution
-        executed = not rejected and (running or main.get('exit_code') is not None)
-        return attach_runtime_result('\n'.join(lines), status,
-            'COMMAND_REJECTED' if rejected else 'COMMAND_RUNNING' if running else 'COMMAND_EXITED' if executed else 'PROCESS_NOT_STARTED', tool='run_command',
+        executed = not rejected and (
+            running or main.get('process_started') is True
+            or main.get('exit_code') is not None
+        )
+        reason = (
+            'COMMAND_REJECTED' if rejected
+            else 'COMMAND_RUNNING_OS_VERIFIED' if running
+            else 'COMMAND_OUTCOME_UNKNOWN' if status == 'UNKNOWN'
+            else 'COMMAND_EXITED' if main.get('exit_code') is not None
+            else 'PROCESS_NOT_STARTED'
+        )
+
+        # Preserve evidence provenance independently of the status verdict.
+        if rejected:
+            failure_origin = "ADMISSION"
+        elif main.get("timed_out"):
+            failure_origin = "UNKNOWN"
+        elif main.get("error_stage") == "PROCESS_START" or (
+                main.get("error") and main.get("process_started") is False):
+            failure_origin = "PROCESS_START"
+        elif main.get("error_stage") == "CAPTURE":
+            failure_origin = "CAPTURE"
+        elif status == "UNKNOWN":
+            failure_origin = "UNKNOWN"
+        elif main.get("exit_code") not in (None, 0):
+            failure_origin = "CHILD_PROCESS"
+        elif operation_result.get("verification_status") in {"FAIL", "SPEC_INVALID"}:
+            failure_origin = "VERIFICATION"
+        else:
+            failure_origin = "NONE"
+        stream_capture_proven = (
+            type(main.get("stdout_bytes")) is int
+            and type(main.get("stderr_bytes")) is int
+            and type(main.get("stdout_truncated")) is bool
+            and type(main.get("stderr_truncated")) is bool
+        )
+        capture_integrity = (
+            "UNVERIFIED" if not stream_capture_proven or status == "UNKNOWN"
+            else "TRUNCATED" if main["stdout_truncated"] or main["stderr_truncated"]
+            else "COMPLETE" if main.get("exit_code") is not None
+            else "UNVERIFIED"
+        )
+        return attach_runtime_result('\n'.join(lines), status, reason, tool='run_command',
             executed=executed, data={**operation_result,
+                # Full captured streams are Runtime evidence. The Planner
+                # receives inline small data or a task-bound evidence pointer;
+                # no metadata is dropped at this producer boundary.
+                'stdout':str(main.get('stdout') or ''),
+                'stderr':str(main.get('stderr') or ''),
+                'stdout_bytes':main.get('stdout_bytes', len(str(main.get('stdout') or '').encode('utf-8'))),
+                'stderr_bytes':main.get('stderr_bytes', len(str(main.get('stderr') or '').encode('utf-8'))),
+                'stdout_truncated':bool(main.get('stdout_truncated')),
+                'stderr_truncated':bool(main.get('stderr_truncated')),
+                'stdout_raw_sha256':main.get('stdout_raw_sha256'),
+                'stderr_raw_sha256':main.get('stderr_raw_sha256'),
+                'capture_encoding':main.get('capture_encoding'),
+                'decode_error_policy':main.get('decode_error_policy'),
+                'output_complete':capture_integrity == "COMPLETE",
+                'capture_integrity':capture_integrity,
+                'stream_capture_proven':stream_capture_proven,
                 'execution_status':status, 'verification_status':'UNVERIFIED' if running else operation_result['verification_status'],
-                'terminal_eligible':False if running or rejected else operation_result['terminal_eligible'],
+                'terminal_eligible':False if running or rejected or status == 'UNKNOWN' else operation_result['terminal_eligible'],
                 'working_directory':str(cwd),
+                'shell_mode':spec["shell_mode"],
+                'launch_form':spec["launch_form"],
+                'process_started':main.get("process_started"),
+                'process_spawn_attempted':main.get("process_spawn_attempted"),
+                'process_start_phase':main.get("process_start_phase"),
+                'process_start_error_class':main.get("process_start_error_class"),
+                'stdout_sha256':__import__("hashlib").sha256(str(main.get("stdout") or "").encode("utf-8")).hexdigest(),
+                'stderr_sha256':__import__("hashlib").sha256(str(main.get("stderr") or "").encode("utf-8")).hexdigest(),
+                'observed_post_timeout_exit_code':main.get("observed_post_timeout_exit_code"),
+                'timeout_termination':main.get("timeout_termination") if isinstance(main.get("timeout_termination"),dict) else {},
+                'failure_origin':failure_origin,
                 'observation_confirmed':observation_confirmed,
                 'exit_code':main.get('exit_code'), 'timed_out':bool(main.get('timed_out')),
-                'process_state':'RUNNING' if running else 'EXITED' if executed else 'NOT_STARTED', 'pid':main.get('pid')})
+                'sandbox_evidence':main.get('sandbox_evidence', {}),
+                'auto_approval': dict((approval_manifest or {}).get('_auto_approval') or {}),
+                'command_error':str(main.get('error') or '')[:512],
+                'command_rejection_stage': (
+                    'COMMAND_SECURITY' if str(main.get('error') or '').startswith(
+                        'SECURITY_COMMAND_REJECTED:')
+                    else 'TURBO_BROKER' if str(main.get('error') or '').startswith(
+                        'TURBO_OS_BROKER_BLOCKED:')
+                    else 'UNCLASSIFIED' if rejected else ''
+                ),
+                'process_state':('RUNNING' if running else
+                    main.get('process_state') if main.get('process_state') in {'EXITED', 'UNKNOWN', 'NOT_STARTED'}
+                    else 'EXITED' if main.get('exit_code') is not None
+                    else 'UNKNOWN' if executed or main.get('possible_partial_execution')
+                    else 'NOT_STARTED'),
+                'pid':main.get('pid'),
+                'execution_id':main.get('execution_id'),
+                'liveness_evidence':witness,
+                'last_running_evidence':main.get('last_running_evidence'),
+                'possible_partial_execution':bool(main.get('possible_partial_execution')),
+                'wait_policy':main.get('wait_policy', "BOUNDED"),
+                'long_wait_id':main.get('long_wait_id', ""),
+                'long_wait_decision':main.get('long_wait_decision', ""),
+                'long_wait_state':main.get('long_wait_state', ""),
+                'long_wait_os_samples':main.get('long_wait_os_samples', 0)})
     telemetry = None
-    if security_context and security_context.interface_name == "remote":
-        telemetry = {"root": security_context.workspace_root, "task_id": security_context.task_id, "request_id": security_context.request_id}
-    main = _run_powershell_capture(
-        command, timeout, capture_root,
-        cwd=cwd,
-        telemetry=telemetry, approval_manifest=approval_manifest,
+    if security_context:
+        # Propagate the real Action and Task identities to the native OS
+        # Broker across WebCopilot, Telegram and other Tri-One entrances.
+        telemetry = {
+            "task_id": str(security_context.task_id or ""),
+            "action_id": str(action_id or ""),
+        }
+        # Progress telemetry is a Runtime-owned observation for any gateway,
+        # not just Telegram. It is optional and grants no extra Task scope.
+        telemetry.update({
+            "root": security_context.workspace_root,
+            "request_id": security_context.request_id,
+        })
+    main = (
+        _run_powershell_capture(
+            command, timeout, capture_root, cwd=cwd,
+            telemetry=telemetry, approval_manifest=approval_manifest,
+            wait_policy=wait_policy)
+        if spec["shell_mode"] == "POWERSHELL" else
+        _run_explicit_shell_capture(
+            spec, timeout, capture_root, cwd=cwd,
+            telemetry=telemetry, approval_manifest=approval_manifest,
+            wait_policy=wait_policy)
     )
+    if main.get("wait_policy") == "UNTIL_EXIT" and main.get("long_wait_state") == "UNVERIFIED":
+        main["exit_code"] = None
+        main["possible_partial_execution"] = True
+        main["process_state"] = "UNKNOWN"
+    if main.get("timed_out"):
+        # A killed child can return a nonzero *post-kill* exit status.
+        # Do not turn an uncertain side effect into an observed command failure.
+        main["observed_post_timeout_exit_code"] = main.get("exit_code")
+        main["exit_code"] = None
+        main["possible_partial_execution"] = bool(main.get("process_started"))
+        main["process_state"] = "UNKNOWN"
     lines = [
         "[COMMAND_RESULT]",
         f"result_schema: {COMMAND_RESULT_SCHEMA}",
@@ -506,6 +783,8 @@ def tool_run_command(
         "required_result_fields: " + ",".join(operation_result_contract(operation)),
         f"operation: {operation}",
         f"command: {command}",
+        f"shell_mode: {spec['shell_mode']}",
+        f"launch_form: {spec['launch_form']}",
         f"working_directory: {cwd}",
         'working_directory_source: ' + ('explicit' if working_directory else 'workspace_default'),
         f"exit_code: {main.get('exit_code')}",
@@ -522,6 +801,52 @@ def tool_run_command(
             )
     if main.get("error"):
         lines.append("error: " + main["error"])
+    if main.get("sandbox_evidence"):
+        # OS evidence must be visible in the Tool Result/Blackboard, not
+        # only inside the Python process result. This is Runtime-produced
+        # evidence, distinct from arbitrary text in command stdout.
+        lines.append("[TURBO_OS_SANDBOX_EVIDENCE] " +
+                     json.dumps(main["sandbox_evidence"], ensure_ascii=False, default=str))
+
+    # A missing exit code is not an observed nonzero exit code.  In
+    # particular, a Broker/controller timeout may occur after the child
+    # started and even produced an artifact.  Preserve UNKNOWN; do not
+    # manufacture FAILED or run postconditions against an unknown mutation.
+    if main.get("exit_code") is None and not main.get("security_rejected"):
+        from .process_liveness import verified_running_evidence
+        witness = main.get("liveness_evidence") or {}
+        live = (main.get("process_state") == "RUNNING"
+                and verified_running_evidence(witness))
+        definitely_not_started = (
+            main.get("error_stage") == "PROCESS_START"
+            and main.get("process_started") is False
+            and main.get("possible_partial_execution") is False
+            and main.get("process_state") == "NOT_STARTED"
+            and bool(main.get("error"))
+        )
+        # No Popen-created process and no possible partial execution:
+        # definite failure, not UNKNOWN. Assertion matching is independent.
+        current_status = ("RUNNING" if live else "FAILED" if definitely_not_started
+                          else "UNKNOWN")
+        lines.append("VERIFICATION_STATUS: UNVERIFIED")
+        lines.append("EXECUTION_STATUS: " + current_status)
+        lines.append("TERMINAL_ELIGIBLE: false")
+        operation_result = build_operation_result(
+            operation, command=command, execution_status=current_status,
+            verification_status="UNVERIFIED", stdout=main.get("stdout", ""),
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""),
+            verifies_action_id=verifies_action_id, condition_id=condition_id,
+        )
+        lines.append("[OPERATION_RESULT] " + json.dumps(
+            operation_result, ensure_ascii=False, default=str,
+        ))
+        return finish(operation_result)
 
     if expected_failure is not None:
         spec_valid = isinstance(expected_failure, dict) and bool(expected_failure)
@@ -565,7 +890,13 @@ def tool_run_command(
         operation_result = build_operation_result(
             operation, command=command, execution_status=execution_status,
             verification_status=verification_status, stdout=main.get("stdout", ""),
-            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""), verifies_action_id=verifies_action_id,
             condition_id=condition_id, expectation_status=expectation_status,
             expected_failure=expected_failure, expectation_evidence=expectation_evidence,
         )
@@ -583,7 +914,13 @@ def tool_run_command(
         operation_result = build_operation_result(
             operation, command=command, execution_status="FAILED",
             verification_status=verification_status, stdout=main.get("stdout", ""),
-            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""), verifies_action_id=verifies_action_id,
             condition_id=condition_id,
         )
         lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
@@ -606,7 +943,13 @@ def tool_run_command(
         operation_result = build_operation_result(
             operation, command=command, execution_status="SUCCEEDED",
             verification_status=verification_status, stdout=main.get("stdout", ""),
-            stdout_ref=main.get("stdout_ref", ""), verifies_action_id=verifies_action_id,
+            stderr=main.get("stderr", ""),
+            stdout_bytes=main.get("stdout_bytes"),
+            stderr_bytes=main.get("stderr_bytes"),
+            stdout_truncated=bool(main.get("stdout_truncated")),
+            stderr_truncated=bool(main.get("stderr_truncated")),
+            stdout_ref=main.get("stdout_ref", ""),
+            stderr_ref=main.get("stderr_ref", ""), verifies_action_id=verifies_action_id,
             condition_id=condition_id,
         )
         lines.append("[OPERATION_RESULT] " + json.dumps(operation_result, ensure_ascii=False, default=str))
@@ -641,7 +984,12 @@ def tool_run_command(
     operation_result = build_operation_result(
         operation, command=command, execution_status="SUCCEEDED",
         verification_status=verification_status, stdout=main.get("stdout", ""),
-        stdout_ref=main.get("stdout_ref", ""), verification_evidence=verification_evidence,
+        stderr=main.get("stderr", ""),
+        stdout_bytes=main.get("stdout_bytes"), stderr_bytes=main.get("stderr_bytes"),
+        stdout_truncated=bool(main.get("stdout_truncated")),
+        stderr_truncated=bool(main.get("stderr_truncated")),
+        stdout_ref=main.get("stdout_ref", ""), stderr_ref=main.get("stderr_ref", ""),
+        verification_evidence=verification_evidence,
         verifies_action_id=verifies_action_id,
         condition_id=condition_id,
         expectation_status=expectation_status, expectation_evidence=expectation_evidence,
@@ -1226,6 +1574,21 @@ def resolve_command_working_directory(
         raise PathSecurityError('command_working_directory_invalid')
     from .action_dependencies import command_is_proven_observation
     operation_name = str(operation or "GENERAL").upper()
+    from .action_resolution_trace import registered_remote_git_read
+    remote_read_action = {
+        "tool": "run_command", "operation": operation_name,
+        "command": str(command or ""),
+    }
+    # Exact registered GitHub HEAD-only reads may run from the already bound
+    # Runtime workspace, without widening the original deployment request.
+    # This is CWD-scope classification, not network or repo authorization.
+    remote_probe_bound = (
+        agent is not None and operation_name == "GIT_INSPECT"
+        and registered_remote_git_read(
+            remote_read_action,
+            getattr(agent, "_registered_remote_artifact_view", None),
+        )
+    )
     # Only INSPECT has a read-only-CWD exception. A VERIFY action may include
     # additional tool checks; it retains its original write-CWD admission.
     proven_read = operation_name in {"INSPECT", "GIT_INSPECT"} and command_is_proven_observation({
@@ -1239,16 +1602,29 @@ def resolve_command_working_directory(
     cwd = gate(value or context.workspace_root, require_absolute=True, forbid_glob=True)
     if not cwd.is_dir():
         raise PathSecurityError('command_working_directory_not_directory:' + str(cwd))
+    native_broker = _native_run_command_admitted(cwd)
     is_bound_command = _path_independent_command_must_use_bound_workspace(command)
-    if is_bound_command and cwd != context.workspace_root:
+    if is_bound_command and cwd != context.workspace_root and not native_broker:
         raise PathSecurityError('path_independent_command_cwd_outside_bound_workspace:' + str(cwd))
     requested = _explicit_request_paths(agent)
     requested = [root.parent if root.is_file() else root for root in requested]
-    if requested and not any(is_within(cwd, root) for root in requested):
+    # A proven single literal file read may use the already-bound workspace
+    # as its CWD. The literal target is still validated against Read Scope
+    # AND the original request below, so this never widens path authorization.
+    literal_read_from_bound_cwd = (
+        proven_read and cwd == context.workspace_root
+        and bool(re.search(
+            r"(?:-LiteralPath\s+)('(?:[^'\r\n]|'')*')",
+            str(command or ""), re.I,
+        ))
+    )
+    if requested and not native_broker and not any(is_within(cwd, root) for root in requested):
         if cwd != context.workspace_root or not (
-            _bounded_path_independent_wait(command)
+            literal_read_from_bound_cwd
+            or _bounded_path_independent_wait(command)
             or str(command or '').strip().casefold()
             in {'(get-location).path', 'get-location', 'pwd', '$pwd.path'}
+            or (remote_probe_bound and cwd == context.workspace_root)
         ):
             raise PathSecurityError('command_working_directory_outside_request_scope:' + str(cwd))
 
@@ -1281,18 +1657,47 @@ def resolve_command_working_directory(
             resolved = context.require_read(
                 target, require_absolute=True, forbid_glob=True)
             if requested and not any(is_within(resolved, root) for root in requested):
-                raise PathSecurityError('proven_inspect_literal_outside_request_scope')
+                # Built-in Python/Git are an installation-scoped Read Root,
+                # not a model-supplied request path or arbitrary host read.
+                from .workspace_access import builtin_toolchain_read_roots
+                if not native_broker and not any(
+                    is_within(resolved, Path(root))
+                    for root in builtin_toolchain_read_roots()
+                ):
+                    raise PathSecurityError('proven_inspect_literal_outside_request_scope')
     return cwd
 
 
 def _execution_approval_manifest(tool_call: dict, agent, security_context: SecurityContext, working_directory=None) -> dict | None:
-    command = str(tool_call.get("command", "") or "")
+    from .shell_execution import execution_contract
+    command = execution_contract(tool_call)["policy_command"]
+    # Native commands have already passed OS Broker admission; their grammar
+    # does not require legacy one-shot/command-family human approval.
+    if _native_run_command_admitted(working_directory or security_context.workspace_root):
+        return None
     admission = inspect_command(command, workspace=working_directory or security_context.workspace_root)
     if admission.allowed:
         return None
     if not admission.approval_eligible:
         raise CommandSecurityError(admission.code, admission.detail)
     manifest = build_command_approval_manifest(command, workspace=working_directory or security_context.workspace_root)
+    from .auto_approve_mode import evaluate_auto_approve
+    auto = evaluate_auto_approve(
+        security_context.workspace_root, command,
+        working_directory=working_directory or security_context.workspace_root,
+    )
+    if auto["approved"]:
+        approved = dict(manifest)
+        approved["_auto_approval"] = {
+            "decision": "AUTO_APPROVED",
+            "reason_code": auto["reason_code"],
+            "authorization_scope": auto["authorization_scope"],
+            "policy_revision": auto["policy_revision"],
+            "executor_backend": auto["executor_backend"],
+            "command_sha256": auto["command_sha256"],
+            "executed": False,
+        }
+        return approved
     from .protocol_v8 import action_digest as v8_action_digest
     action_id = str(tool_call.get("action_id", "") or "")
     admitted = dict(getattr(agent, "_v8_admitted_actions", {}).get(action_id, {}) or {}) if agent else {}
@@ -1309,7 +1714,16 @@ def _execution_approval_manifest(tool_call: dict, agent, security_context: Secur
         "approval_kind": "EXECUTION",
     }
     ledger = SecurityApprovalLedger(getattr(agent, "security_approval_ledger_root", security_context.workspace_root))
-    record = ledger.request(binding, ttl_sec=float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0))
+    from .auto_approve_mode import auto_approve_snapshot
+    timeout_auto_approve = auto_approve_snapshot(
+        security_context.workspace_root,
+        working_directory=working_directory or security_context.workspace_root,
+    ).get("auto_approve_effective") == "ON"
+    record = ledger.request(
+        binding,
+        ttl_sec=(600.0 if timeout_auto_approve else
+                 float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0)),
+    )
     notifier = getattr(agent, "notify_security_approval", None)
     if not callable(notifier) or getattr(agent, "_security_approval_notifier", None) is None:
         raise SecurityApprovalError(f"execution_confirmation_required:{record['approval_id']}")
@@ -1332,6 +1746,26 @@ def _execution_approval_manifest(tool_call: dict, agent, security_context: Secur
         if state in {"REJECTED", "CANCELLED", "EXPIRED", "CONSUMED"}:
             raise SecurityApprovalError(f"execution_approval_state={state}")
         time.sleep(0.5)
+    # A timeout does not waive the command classifier or workspace scope.
+    # A changed policy is checked again before granting a one-shot receipt.
+    from .auto_approve_mode import evaluate_auto_approve
+    current_auto = evaluate_auto_approve(
+        security_context.workspace_root, command,
+        working_directory=working_directory or security_context.workspace_root,
+    )
+    if timeout_auto_approve and current_auto["approved"]:
+        ledger.approve_unanswered_timeout(record["approval_id"], binding,
+                                          timeout_sec=600.0)
+        ledger.consume(record["approval_id"], binding)
+        approved = dict(manifest)
+        approved["_approval_consumed"] = True
+        approved["_auto_approval"] = {
+            "decision": "AUTO_APPROVED_AFTER_TIMEOUT",
+            "reason_code": "AUTO_APPROVE_TIMEOUT_600S",
+            "command_sha256": current_auto["command_sha256"],
+            "executed": False,
+        }
+        return approved
     raise SecurityApprovalError("execution_approval_expired")
 
 
@@ -1351,11 +1785,139 @@ def _ledger_read_result(tool, reader, workspace, **fields):
 def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str:
     """Common P0 result boundary; original transcripts/business data remain intact."""
     from .smartagent_protocol import normalize_tool_numeric_fields
-    tool_call = normalize_tool_numeric_fields(tool_call)
-    from .tool_result_contract import decode_result, attach_runtime_result
+    tool_call = dict(normalize_tool_numeric_fields(tool_call))
+    # Never accept a Planner-supplied internal Broker decision marker.
+    tool_call.pop("_runtime_native_broker_required", None)
+    from .tool_result_contract import decode_result, attach_runtime_result, encode_result
     from .tool_result_policy import P1_TOOLS, business_payload, structured_outcome
     p2_tools={'web_search','save_session_summary','google_drive_upload','ask_executor'}
     tool = str(tool_call.get('tool', ''))
+    # Git49: all typed mutators share the same OS broker admission as shell
+    # commands. Never let controller-side Python perform Turbo writes.
+    from .turbo_broker_admission import assess, needs_broker
+    if needs_broker(tool):
+        bound_workspace = (
+            getattr(agent, "workspace_root", None)
+            or getattr(agent, "workspace", None)
+        ) if agent else None
+        if bound_workspace is None:
+            bound_workspace = Path.cwd()
+        # Git62: select the Broker for the actual operation path. The broad
+        # writable Workspace is not an AppContainer authorization boundary.
+        action_workspace = bound_workspace
+        if tool in {"write_file", "create_directory", "delete_path"}:
+            try:
+                auth = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+                requested = auth.require_write(
+                    tool_call.get("path", ""), require_absolute=True,
+                    forbid_glob=True, allow_root=False,
+                )
+                action_workspace = requested if requested.is_dir() else requested.parent
+            except (PathSecurityError, ValueError, OSError, TypeError):
+                # A malformed or unauthorized target must be rejected, never
+                # treated as host-executable by a fallback path.
+                action_workspace = bound_workspace
+        elif tool == "run_command" and tool_call.get("working_directory"):
+            try:
+                auth = SecurityContext.from_agent(agent, fallback_workspace=Path.cwd())
+                action_workspace = resolve_command_working_directory(
+                    tool_call.get("working_directory"), auth, agent,
+                    command=tool_call.get("command", ""),
+                    operation=tool_call.get("operation", "GENERAL"),
+                )
+            except (PathSecurityError, ValueError, OSError,
+                    CommandSecurityError) as exc:
+                # Never silently bind an invalid explicit Action CWD to
+                # another registered Root and misreport broker admission.
+                return encode_result(
+                    'REJECTED', 'RUN_COMMAND_WORKING_DIRECTORY_REJECTED',
+                    tool=tool, executed=False, detail=type(exc).__name__,
+                    data={"os_execution_result": "NOT_EXECUTED",
+                          "terminal_eligible": False},
+                )
+        broker = assess(action_workspace, tool=tool,
+                        action_id=str(tool_call.get("action_id", "") or ""))
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and broker["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"os_execution_result": "NOT_EXECUTED",
+                      "sandbox_evidence": broker["evidence"],
+                      "terminal_eligible": False},
+            )
+        if (broker["decision"] == "BLOCKED" or
+                (broker["decision"] == "BROKER_REQUIRED" and
+                 tool not in {"run_command", "create_directory", "write_file",
+                              "delete_path"})):
+            # No native adapter for other typed mutations. They cannot be
+            # routed to the unrestricted host Python implementation.
+            from .tool_result_contract import encode_result
+            return encode_result(
+                'REJECTED', 'TURBO_OS_BROKER_BLOCKED', tool=tool,
+                executed=False, detail=broker["reason_code"],
+                data={"sandbox_evidence": broker["evidence"],
+                      "os_execution_result": "NOT_EXECUTED",
+                      "terminal_eligible": False},
+            )
+        if broker["decision"] == "BROKER_REQUIRED":
+            # A mode switch between admission and final dispatch must not
+            # turn an admitted Turbo request into a host-side mutation.
+            tool_call["_runtime_native_broker_required"] = True
+    if tool == "read_runtime_blackboard":
+        from .runtime_blackboard_reader import read_runtime_blackboard
+        from .tool_result_contract import encode_result
+        root = getattr(agent, "_runtime_evidence_root", None) if agent else None
+        task_id = str(getattr(agent, "current_task_id", "") or "") if agent else ""
+        request_id = str(getattr(agent, "current_request_id", "") or "") if agent else ""
+        task_epoch = str(getattr(agent, "current_task_epoch", "") or "") if agent else ""
+        if not all((root, task_id, request_id, task_epoch)):
+            return encode_result("REJECTED", "BLACKBOARD_REQUEST_CONTEXT_UNBOUND",
+                                 tool=tool, executed=False)
+        try:
+            entry = read_runtime_blackboard(
+                root, task_id=task_id, request_id=request_id,
+                task_epoch=task_epoch, section=tool_call.get("section", ""),
+                sequence=tool_call.get("sequence", 0),
+                offset=tool_call.get("offset", 0),
+                max_chars=tool_call.get("max_chars", 1800),
+            )
+        except (ValueError, OSError, KeyError) as exc:
+            return encode_result("REJECTED", str(exc), tool=tool, executed=False)
+        return encode_result("SUCCEEDED", "BLACKBOARD_SOURCE_SLICE_READ",
+            tool=tool, executed=True, data={
+                **entry, "verification_status": "PASS",
+                "terminal_eligible": False, "authorization_granted": False,
+            })
+    if tool == "read_runtime_evidence":
+        # This is a read of Runtime-owned immutable evidence, not a filesystem
+        # read scoped by user-provided paths and never a Host CMD fallback.
+        from .runtime_evidence_store import read_runtime_evidence, RuntimeEvidenceError
+        from .tool_result_contract import encode_result
+        root = getattr(agent, "_runtime_evidence_root", None) if agent else None
+        task_id = str(getattr(agent, "current_task_id", "") or "") if agent else ""
+        request_id = str(getattr(agent, "current_request_id", "") or "") if agent else ""
+        task_epoch = str(getattr(agent, "current_task_epoch", "") or "") if agent else ""
+        if not all((root, task_id, request_id, task_epoch)):
+            return encode_result("REJECTED", "EVIDENCE_REQUEST_CONTEXT_UNBOUND",
+                tool=tool, executed=False, data={"terminal_eligible": False})
+        try:
+            item = read_runtime_evidence(
+                root, task_id=task_id, request_id=request_id,
+                task_epoch=task_epoch,
+                evidence_ref=str(tool_call.get("evidence_ref") or ""),
+                section=str(tool_call.get("section") or "raw_result"),
+                offset=tool_call.get("offset", 0),
+                max_chars=tool_call.get("max_chars", 1800),
+            )
+        except (RuntimeEvidenceError, OSError) as exc:
+            return encode_result("REJECTED", str(exc),
+                tool=tool, executed=False, data={"terminal_eligible": False})
+        return encode_result("SUCCEEDED", "RUNTIME_EVIDENCE_SLICE_READ",
+            tool=tool, executed=True,
+            data={**item, "verification_status": "PASS",
+                  "terminal_eligible": False, "authorization_granted": False})
     if tool == "observe_fact":
         # This read-only tool observes a filesystem fact inside the existing
         # authorization boundary. It never guesses absence from access errors.
@@ -1472,7 +2034,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
             action_id=tool_call.get('action_id',''),
             request_id=getattr(agent,'current_request_id','') if agent else '',
             task_id=getattr(agent,'current_task_id','') if agent else '')
-    if tool not in {'read_file','write_file','list_directory','find_file','run_command','upload_file','upload_files','return_artifact',
+    if tool not in {'read_file','write_file','create_directory','list_directory','find_file','run_command','install_toolchain','inspect_toolchain_environment','upload_file','upload_files','return_artifact',
                     'download_artifact','web_edit_file','execute_artifact_bundle',
                     'web_search','save_session_summary','google_drive_upload','ask_executor'} | P1_TOOLS:
         return result
@@ -1570,6 +2132,7 @@ def execute_tool(tool_call: dict, agent=None, models: dict | None = None) -> str
 
 
 def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) -> str:
+    from .tool_result_contract import encode_result
     models = models or getattr(agent, "_models_registry", {}) or {}
     tool = tool_call.get("tool", "")
     from .pr_bcd_request_scope import check_action_against_write_ceiling
@@ -1586,21 +2149,161 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         return "[TOOL_SCOPE_REJECTED] " + json.dumps(
             scope, ensure_ascii=False, separators=(",", ":")
         )
+    if tool == "inspect_toolchain_environment":
+        from .toolchain_environment_reader import inspect_toolchain_environment
+        from .tool_result_contract import encode_result
+        try:
+            observation = inspect_toolchain_environment()
+        except (OSError, ValueError, TypeError) as exc:
+            return encode_result("UNKNOWN", "GLOBAL_TOOLCHAIN_INSPECTION_UNAVAILABLE",
+                tool=tool, executed=False, detail=type(exc).__name__,
+                data={"terminal_eligible": False, "installation_granted": False})
+        return encode_result("SUCCEEDED", "GLOBAL_TOOLCHAIN_INVENTORY_READ",
+            tool=tool, executed=True,
+            data={**observation, "verification_status": "PASS",
+                  "terminal_eligible": False})
+    if tool == "install_toolchain":
+        from .managed_toolchain_install import install_toolchain_action
+        telemetry = {
+            "root": (getattr(agent, "workspace_root", None)
+                     or getattr(agent, "workspace", None)) if agent else None,
+            "task_id": str(getattr(agent, "current_task_id", "") or "") if agent else "",
+            "action_id": str(tool_call.get("action_id", "") or ""),
+        }
+        return install_toolchain_action(tool_call, telemetry=telemetry)
     if tool == "run_command" and not scope["allowed"]:
         from .tool_result_contract import encode_result
         return encode_result('REJECTED', 'COMMAND_SCOPE_REJECTED', tool=tool,
                              executed=False, detail=str(scope.get("error", "")))
+    if tool == "create_directory":
+        from .tool_result_contract import encode_result
+        if not scope.get("allowed") or len(scope.get("resolved_paths") or []) != 1:
+            return encode_result(
+                "REJECTED", "DIRECTORY_SCOPE_REJECTED:" + str(
+                    (scope.get("scope_diagnostic") or {}).get("reason_code")
+                    or "SCOPE_REJECTION_MISSING_CAUSE"
+                ),
+                tool=tool, executed=False, requested_path=tool_call.get("path", ""),
+                data={
+                    "scope_reason_code": (
+                        (scope.get("scope_diagnostic") or {}).get("reason_code", "")
+                    ),
+                    "scope_failure_stage": (
+                        (scope.get("scope_diagnostic") or {}).get("failure_stage", "")
+                    ),
+                    "directory_preconditions": dict(
+                        scope.get("directory_preconditions") or {}
+                    ),
+                    "terminal_eligible": False,
+                },
+            )
+        target = Path(scope["resolved_paths"][0])
+        from .turbo_broker_admission import assess
+        requested_target = tool_call.get("path", "")
+        try:
+            checked_target = security_context.require_write(
+                requested_target, require_absolute=True,
+                forbid_glob=True, allow_root=False,
+            )
+            native_scope = (
+                checked_target if checked_target.is_dir()
+                else checked_target.parent
+            )
+        except (PathSecurityError, ValueError, OSError, TypeError):
+            native_scope = security_context.workspace_root
+        native = assess(native_scope, tool=tool)
+        # A native-only test request cannot downgrade after initial admission.
+        # This check only tightens dispatch; a Planner cannot set the flag.
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and native["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"terminal_eligible": False,
+                      "sandbox_evidence": native["evidence"]},
+            )
+        if native["decision"] == "BROKER_REQUIRED":
+            from .turbo_os_typed_mutations import create_directory_in_broker
+            return create_directory_in_broker(
+                str(target), security_context=security_context,
+                action_id=str(tool_call.get("action_id", "") or ""),
+            )
+        if (native["decision"] != "NORMAL" or
+                tool_call.get("_runtime_native_broker_required") is True):
+            return encode_result(
+                "REJECTED", "TURBO_OS_BROKER_BLOCKED", tool=tool,
+                executed=False, requested_path=str(target),
+                data={"sandbox_evidence": native["evidence"],
+                      "terminal_eligible": False},
+            )
+        # One exact directory only; no recursive parent creation.
+        try:
+            target.mkdir(parents=False, exist_ok=False)
+        except FileExistsError:
+            return encode_result(
+                "REJECTED", "DIRECTORY_ALREADY_EXISTS_REOBSERVE",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"directory_created": False, "terminal_eligible": False},
+            )
+        except FileNotFoundError:
+            return encode_result(
+                "REJECTED", "DIRECTORY_PARENT_MISSING",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"directory_created": False, "terminal_eligible": False},
+            )
+        except PermissionError:
+            return encode_result(
+                "REJECTED", "DIRECTORY_WRITE_PERMISSION_DENIED",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"directory_created": False, "terminal_eligible": False},
+            )
+        except OSError as exc:
+            return encode_result(
+                "UNKNOWN", "DIRECTORY_CREATE_OUTCOME_UNCERTAIN",
+                tool=tool, executed=False, requested_path=str(target),
+                data={"execution_confirmed": False,
+                      "possible_partial_execution": True,
+                      "error_class": type(exc).__name__,
+                      "terminal_eligible": False},
+            )
+        try:
+            verified = target.is_dir() and not target.is_symlink()
+        except OSError:
+            verified = False
+        if not verified:
+            return encode_result(
+                "UNKNOWN", "DIRECTORY_CREATION_VERIFY_UNCERTAIN",
+                tool=tool, executed=True, requested_path=str(target),
+                data={"execution_confirmed": True,
+                      "directory_created": True,
+                      "terminal_eligible": False},
+            )
+        return encode_result(
+            "SUCCEEDED", "DIRECTORY_CREATED",
+            tool=tool, executed=True,
+            requested_path=str(target), resolved_path=str(target),
+            data={"directory_created": True, "observed_exists": True,
+                  "observed_is_directory": True,
+                  "observation_status": "CONFIRMED",
+                  "no_existing_files_overwritten": True,
+                  "no_parent_directories_created": True,
+                  "goal_completion_verified": False},
+        )
     if tool == "run_command":
         workspace = security_context.workspace_root
         try:
+            from .shell_execution import execution_contract, ShellModeError
+            shell_spec = execution_contract(tool_call)
             cwd = resolve_command_working_directory(
                 tool_call.get('working_directory'), security_context, agent,
-                command=tool_call.get('command', ''),
+                command=shell_spec["policy_command"],
                 operation=tool_call.get('operation', 'GENERAL'))
             approval_manifest = _execution_approval_manifest(tool_call, agent, security_context, cwd)
-        except PathSecurityError as exc:
+        except (PathSecurityError, ShellModeError) as exc:
             from .tool_result_contract import encode_result
-            return encode_result('REJECTED','WORKING_DIRECTORY_REJECTED',tool='run_command',executed=False,
+            return encode_result('REJECTED','WORKING_DIRECTORY_REJECTED' if isinstance(exc,PathSecurityError)
+                else 'SHELL_CONTRACT_INVALID',tool='run_command',executed=False,
                 requested_path=tool_call.get('working_directory',''),detail=str(exc))
         except (CommandSecurityError, SecurityApprovalError) as exc:
             if agent:
@@ -1610,6 +2313,8 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             tool_call.get("command", ""),
             tool_call.get("operation", ""),
             timeout=int(tool_call.get("timeout", 30)),
+            shell_mode=tool_call.get("shell_mode","POWERSHELL"),
+            argv=tool_call.get("argv"),
             verify=tool_call.get("verify") or [],
             success_criteria=tool_call.get("success_criteria", ""),
             capture_root=workspace / ".agents" / "results" / "command_capture",
@@ -1619,6 +2324,8 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             expected_verification=tool_call.get('expected_verification'),
             security_context=security_context, approval_manifest=approval_manifest,
             working_directory=tool_call.get('working_directory'),
+            action_id=str(tool_call.get('action_id', '') or ''),
+            wait_policy=str(tool_call.get('wait_policy', "BOUNDED")),
         )
         if agent:
             if "VERIFICATION_STATUS: PASS" in result:
@@ -1711,6 +2418,47 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
         except OSError as exc:
             return encode_result('FAILED', 'READ_IO_ERROR', executed=True, requested_path=path, detail=str(exc), tool=tool)
     elif tool == "write_file":
+        from .turbo_broker_admission import assess
+        requested_target = tool_call.get("path", "")
+        try:
+            checked_target = security_context.require_write(
+                requested_target, require_absolute=True,
+                forbid_glob=True, allow_root=False,
+            )
+            native_scope = (
+                checked_target if checked_target.is_dir()
+                else checked_target.parent
+            )
+        except (PathSecurityError, ValueError, OSError, TypeError):
+            native_scope = security_context.workspace_root
+        native = assess(native_scope, tool=tool)
+        # A native-only test request cannot downgrade after initial admission.
+        # This check only tightens dispatch; a Planner cannot set the flag.
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and native["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"terminal_eligible": False,
+                      "sandbox_evidence": native["evidence"]},
+            )
+        if native["decision"] == "BROKER_REQUIRED":
+            from .turbo_os_typed_mutations import write_file_in_broker
+            return write_file_in_broker(
+                tool_call.get("path", ""), tool_call.get("content", ""),
+                security_context=security_context,
+                action_id=str(tool_call.get("action_id", "") or ""),
+            )
+        if (native["decision"] != "NORMAL" or
+                tool_call.get("_runtime_native_broker_required") is True):
+            from .tool_result_contract import encode_result
+            return encode_result(
+                "REJECTED", "TURBO_OS_BROKER_BLOCKED", tool=tool,
+                executed=False, requested_path=tool_call.get("path", ""),
+                data={"sandbox_evidence": native["evidence"],
+                      "terminal_eligible": False},
+            )
         from .tool_result_contract import adapt_legacy_result
         result = tool_write_file(
             tool_call.get("path", ""), tool_call.get("content", ""),
@@ -1871,7 +2619,23 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             raise ValueError(f"project_sync_strategy_invalid:{strategy}")
         workspace=_project_sync_workspace(tool_call,agent)
         if strategy == "INDEX_ONLY":
-            return json.dumps(build_project_capsule(workspace),ensure_ascii=False,separators=(",",":"))
+            capsule = build_project_capsule(workspace)
+            if "goal_conditions" in tool_call:
+                from .goal_environment_reconciliation import reconcile_goal_conditions
+                from .project_environment import read_project_environment
+                # Reuse exactly the snapshot built by Project Sync.
+                snapshot = load_project_snapshot(workspace, capsule["snapshot_id"])
+                capsule["goal_reconciliation"] = reconcile_goal_conditions(
+                    snapshot, tool_call["goal_conditions"],
+                    environment_index=read_project_environment(workspace),
+                    action_ledger=getattr(agent, "action_ledger", None),
+                    action_results=getattr(agent, "action_result_ledger", None),
+                    request_id=str(getattr(agent, "current_request_id", "") or ""),
+                    task_epoch=str(getattr(agent, "task_epoch", "") or ""),
+                )
+            return json.dumps(capsule,ensure_ascii=False,separators=(",",":"))
+        if "goal_conditions" in tool_call:
+            raise ValueError("goal_conditions_require_index_only")
         result=build_atomic_project_sync(workspace,strategy,base_snapshot_id=tool_call.get("base_snapshot_id",""),max_bytes=int(tool_call.get("max_bytes",500000)),max_files=int(tool_call.get("max_files",50)))
         if result.get("status")=="READY" and agent:
             runner=getattr(agent,"run_project_sync_transaction",None)
@@ -2073,6 +2837,49 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             execute_action=lambda action: execute_tool(action, agent=agent, models=models),
         )
     elif tool == "delete_path":
+        from .turbo_broker_admission import assess
+        requested_target = tool_call.get("path", "")
+        try:
+            checked_target = security_context.require_write(
+                requested_target, require_absolute=True,
+                forbid_glob=True, allow_root=False,
+            )
+            native_scope = (
+                checked_target if checked_target.is_dir()
+                else checked_target.parent
+            )
+        except (PathSecurityError, ValueError, OSError, TypeError):
+            native_scope = security_context.workspace_root
+        native = assess(native_scope, tool=tool)
+        # A native-only test request cannot downgrade after initial admission.
+        # This check only tightens dispatch; a Planner cannot set the flag.
+        from .bounded_process import native_only_runtime_test_active
+        if (native_only_runtime_test_active()
+                and native["decision"] != "BROKER_REQUIRED"):
+            return encode_result(
+                "REJECTED", "RUNTIME_TEST_NATIVE_ONLY_NO_HOST_FALLBACK",
+                tool=tool, executed=False,
+                data={"terminal_eligible": False,
+                      "sandbox_evidence": native["evidence"]},
+            )
+        if native["decision"] == "BROKER_REQUIRED":
+            from .turbo_os_typed_mutations import delete_path_in_broker
+            return delete_path_in_broker(
+                tool_call.get("path", ""),
+                recursive=bool(tool_call.get("recursive", False)),
+                security_context=security_context,
+                action_id=str(tool_call.get("action_id", "") or ""),
+            )
+        if (native["decision"] != "NORMAL" or
+                tool_call.get("_runtime_native_broker_required") is True):
+            from .tool_result_contract import encode_result
+            return encode_result(
+                "REJECTED", "TURBO_OS_BROKER_BLOCKED",
+                tool=tool, executed=False,
+                requested_path=tool_call.get("path", ""),
+                data={"sandbox_evidence": native["evidence"],
+                      "terminal_eligible": False},
+            )
         from .tool_result_contract import encode_result, rejection_reason
         def delete_result(status, reason, executed=False, data=None, detail=''):
             return encode_result(status, reason, executed=executed,
@@ -2111,6 +2918,7 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             "chat_id": str(getattr(agent, "security_approval_chat_id", "") or ""),
             "permanent_scope": permanent_scope,
             "workspace_root": str(security_context.workspace_root),
+            "approval_kind": "DELETE",
         }
         ledger = SecurityApprovalLedger(
             getattr(agent, "security_approval_ledger_root", security_context.workspace_root)
@@ -2125,9 +2933,23 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             deleted["authorization"] = "PERMANENT_WORKSPACE"
             deleted["workspace_scope"] = authorized_scope
             return delete_result('SUCCEEDED', 'DELETED', executed=True, data=deleted)
+        # Delete has a separate confirmation from run_command. An unanswered
+        # prompt may become a one-shot permit after ten minutes only if both
+        # the workspace and target parent remain independently writable.
+        from .auto_approve_mode import auto_approve_snapshot
+        target_dir = Path(manifest["target"])
+        if not target_dir.is_dir():
+            target_dir = target_dir.parent
+        def timeout_auto_approve_effective():
+            return auto_approve_snapshot(
+                security_context.workspace_root, working_directory=target_dir,
+            ).get("auto_approve_effective") == "ON"
+
+        timeout_auto_approve = timeout_auto_approve_effective()
         record = ledger.request(
             binding,
-            ttl_sec=float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0),
+            ttl_sec=(600.0 if timeout_auto_approve else
+                     float(getattr(agent, "security_approval_timeout_sec", 300.0) or 300.0)),
         )
         notifier = getattr(agent, "notify_security_approval", None)
         if not callable(notifier) or getattr(agent, "_security_approval_notifier", None) is None:
@@ -2150,6 +2972,23 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             if state in {"REJECTED", "CANCELLED", "EXPIRED", "CONSUMED"}:
                 return delete_result('REJECTED', 'USER_APPROVAL_'+state)
             time.sleep(0.5)
+        # No click is only eligible if the *current* Auto Approve policy
+        # still applies; the ledger rejects races with human decisions.
+        if timeout_auto_approve and timeout_auto_approve_effective():
+            try:
+                ledger.approve_unanswered_timeout(
+                    record["approval_id"], binding, timeout_sec=600.0,
+                )
+                ledger.consume(record["approval_id"], binding)
+            except SecurityApprovalError as exc:
+                return delete_result('REJECTED', 'USER_APPROVAL_TIMEOUT_NOT_GRANTED',
+                                     detail=str(exc))
+            deleted, error = perform_delete(manifest)
+            if error:
+                return error
+            deleted["authorization"] = "AUTO_APPROVE_TIMEOUT_ONCE"
+            deleted["approval_id"] = record["approval_id"]
+            return delete_result('SUCCEEDED', 'DELETED', executed=True, data=deleted)
         return delete_result('REJECTED', 'USER_APPROVAL_EXPIRED')
     elif tool == "save_session_summary":
         return tool_save_session_summary(agent, tool_call)

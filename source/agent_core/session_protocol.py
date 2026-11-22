@@ -229,6 +229,18 @@ class SessionProtocol:
             f"{line}"
         )
 
+    @staticmethod
+    def parse_protocol_ready_marker_only(response: str) -> bool:
+        """Exact marker accepted ONLY by the caller's scoped bootstrap flow.
+
+        A marker proves that an awaited bootstrap response completed, but
+        does NOT prove the protocol hash/session identity was echoed. Callers
+        must not use it for session attach or ordinary task/Tool admission.
+        """
+        return str(response or "").strip() in {
+            PROTOCOL_READY_MARKER, f"[{PROTOCOL_READY_MARKER}]",
+        }
+
     def parse_protocol_ready_compact(self, response: str, *, session_id: str) -> bool:
         """A complete, exact identity is required even in compact form."""
         return str(response or "").strip() == self.protocol_ready_compact_identity_line(

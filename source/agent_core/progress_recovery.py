@@ -10,7 +10,8 @@ READ_ONLY_TOOLS = frozenset({'list_directory', 'inspect_directory', 'find_file',
 DISPLAY_FIELDS = frozenset({'total_steps', 'current_step', 'steps', 'base_evaluation', 'current_focus', 'next_action'})
 
 
-def repair_diagnostic(payload, ledger, error, known_refs=None):
+def repair_diagnostic(payload, ledger, error, known_refs=None,
+                      objective_blocker_ids=()):
     from .task_progress import PROGRESS_DECISIONS, PROGRESS_OUTCOMES, MAX_EVIDENCE_REFS
     issues = []
     def add(field, expected, actual=None):
@@ -58,10 +59,23 @@ def repair_diagnostic(payload, ledger, error, known_refs=None):
                 add(f'steps[{index}].status', 'PENDING | IN_PROGRESS | COMPLETED', step.get('status'))
     detail = str(error)
     field = getattr(error, 'field', '') or next((key for key in sorted(DISPLAY_FIELDS) if key in detail), 'progress')
+    context_repair = {}
+    if field == 'context_request' or detail.startswith('context_request_'):
+        from .context_acquisition import context_request_repair_diagnostic
+        context_repair = context_request_repair_diagnostic(
+            payload.get('context_request'),
+            objective_blocker_ids=objective_blocker_ids,
+        )
+        for item in context_repair["field_issues"]:
+            if not any(row['field'] == item['field'] and row.get('code') == item['code']
+                       for row in issues):
+                issues.append(dict(item))
     if not issues:
         add(field, detail)
     return {'marker':'[WEBAGENT_PROGRESS_REJECTED]', 'reason':'invalid_progress_payload',
             'detail':detail, 'repair_mode':'BATCH_FIELDS', 'field_issues':issues,
+            'repair_scope': 'CONTEXT_REQUEST_SCHEMA' if context_repair else 'PROGRESS_SCHEMA',
+            'context_request_repair': context_repair,
             'available_evidence_refs': sorted(known_refs or []),
             'evidence_reference_policy': {
                 'initial_continue': 'Select REQUEST_ACCEPTED or RUNTIME_STATUS when no tool result exists; do not invent an action result.',
@@ -151,3 +165,23 @@ def read_fact_digest(action, result):
             payload = {key:payload.get(key) for key in ('status','error','project_root','project_handle','snapshot_id','results')}
             text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+def progress_repair_hold_safe(actions, committed_ids=()):
+    """Fail closed on replay, invalid identity or a terminal-shaped hold.
+
+    This is an unadmitted proposal check; it never grants authorization.
+    """
+    if not isinstance(actions, (list, tuple)) or not actions:
+        return False
+    committed = set(committed_ids)
+    seen = set()
+    for action in actions:
+        if not isinstance(action, dict):
+            return False
+        if action.get('tool') in {'report_progress', 'turn_commit', 'final_response'}:
+            return False
+        aid = action.get('action_id')
+        if not isinstance(aid, str) or not aid.strip() or aid in seen or aid in committed:
+            return False
+        seen.add(aid)
+    return True

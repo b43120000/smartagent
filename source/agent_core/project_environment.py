@@ -67,7 +67,10 @@ def read_project_environment(project_root: str | Path) -> dict:
     tools = doc.get("tools")
     if not isinstance(dependencies, dict) or not isinstance(tools, dict):
         return empty
-    return {"schema": SCHEMA, "dependencies": dependencies, "tools": tools}
+    result={"schema":SCHEMA,"dependencies":dependencies,"tools":tools}
+    if isinstance(doc.get("global_tool_refs"), dict):
+        result["global_tool_refs"]=doc["global_tool_refs"]
+    return result
 
 
 def verified_candidate(project_root: str | Path, distribution: str) -> dict | None:
@@ -294,7 +297,11 @@ def planner_environment_hint(project_root: str | Path) -> dict:
     }
     result = {"schema": SCHEMA, "authority": "CANDIDATES_REQUIRING_RUNTIME_REPROBE",
               "index_status": index_fact["state"], "index_reason": index_fact["reason"],
-              "dependencies": [], "tools": []}
+              "dependencies": [], "tools": [],
+              "global_tool_refs": {
+                  k:v for k,v in (doc.get("global_tool_refs") or {}).items()
+                  if isinstance(k,str) and isinstance(v,str)
+              } if isinstance(doc.get("global_tool_refs"),dict) else {}}
     for name, row in list(sorted(doc["dependencies"].items()))[:20]:
         if isinstance(row, dict) and row.get("status") == "VERIFIED":
             result["dependencies"].append({
@@ -337,3 +344,32 @@ def resolve_install_target(
             raise ValueError("shared_runtime_venv_target_invalid")
         return path
     raise PermissionError("dependency_install_target_authorization_required")
+
+def bind_global_tool_refs(project_root: str | Path, refs: Mapping[str, str],
+                          *, authorized_project_write: bool) -> dict:
+    """Optional project Pointer table, never an independent installation."""
+    if not authorized_project_write:
+        raise PermissionError("project_environment_write_not_authorized")
+    from .managed_toolchains import TOKEN, VERSION
+    from .json_state_io import write_json_atomic
+    root=Path(project_root).expanduser().resolve()
+    if not root.is_dir() or len(refs)>32:
+        raise ValueError("project_tool_refs_invalid")
+    for name,pointer in refs.items():
+        if not TOKEN.fullmatch(str(name)) or ":" not in str(pointer):
+            raise ValueError("project_tool_ref_invalid")
+        tool,version=str(pointer).split(":",1)
+        if not TOKEN.fullmatch(tool) or not VERSION.fullmatch(version):
+            raise ValueError("project_tool_ref_invalid")
+    target=environment_index_path(root)
+    reject_reparse_components(target,root)
+    target.parent.mkdir(parents=True,exist_ok=True)
+    from .process_file_lock import exclusive_process_lock
+    with exclusive_process_lock(target.with_name("environment.lock"),
+                                label="project environment"):
+        doc=read_project_environment(root)
+        doc["global_tool_refs"]=dict(sorted(refs.items()))
+        if len(json.dumps(doc).encode("utf-8"))>MAX_BYTES:
+            raise ValueError("project_environment_index_limit")
+        write_json_atomic(target,doc)
+    return dict(refs)

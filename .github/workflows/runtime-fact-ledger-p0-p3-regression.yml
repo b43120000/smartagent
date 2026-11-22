@@ -1,0 +1,64 @@
+name: Runtime Fact Ledger and Dynamic Contract P0-P3
+
+on:
+  push:
+    branches:
+      - feat/runtime-fact-ledger-dynamic-contract-p0-p3-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fact-ledger:
+    name: Provenance, facts and contracts - ${{ matrix.os }} - Python 3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile changed runtime and regression sources
+        run: >
+          python -B -m compileall -q
+          source/agent_core/runtime_fact_ledger.py
+          source/agent_core/planner_context_snapshot.py
+          source/agent_core/progress_reply_contract.py
+          source/agent_core/pr_bcd_observation_evidence.py
+          source/agent_core/action_loop_state.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py
+      - name: New P0-P3 provenance and negative-fact regression
+        run: python -B source/WebAgent/tests/test_runtime_fact_ledger_p0_p3.py
+      - name: Prior P0-P3 transactional repair regression
+        run: python -B source/WebAgent/tests/test_protocol_repair_transaction_p0_p3.py
+      - name: Existing action loop runtime state regression
+        run: python -B source/WebAgent/tests/validate_action_loop_runtime_state.py
+      - name: Existing Progress reply contract regression
+        run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
+      - name: Existing flexible Progress admission regression
+        run: python -B source/WebAgent/tests/validate_flexible_progress_admission.py
+      - name: Existing PR-A requirement graph regression
+        run: python -B source/WebAgent/tests/validate_pr_a_requirement_graph.py
+      - name: Existing GAR Progress hold regression
+        run: python -B source/WebAgent/tests/validate_gar_progress_hold_it.py
+      - name: Verify manifest hash for changed tracked core files
+        run: >
+          python -B -c "import hashlib,json,pathlib;
+          m=json.loads(pathlib.Path('config/protocol_manifest.json').read_text(encoding='utf-8'));
+          p=['source/WebAgent/protocol_loop.py',
+          'source/agent_core/progress_reply_contract.py',
+          'source/agent_core/runtime_fact_ledger.py'];
+          bad=[f for f in p if m['core_files'].get(f)!=hashlib.sha256(pathlib.Path(f).read_bytes()).hexdigest()];
+          print('MANIFEST_MISMATCHES:',bad);
+          assert not bad,bad"

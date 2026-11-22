@@ -65,16 +65,46 @@ def command_is_proven_observation(action):
     if wrapper:
         command = wrapper[1]
     literal = r"'(?:[^'\r\n]|'')*'"
+    # Double-quoted native path is safe only if it cannot interpolate a
+    # PowerShell variable/subexpression or escape via backtick.
+    native_literal = r'''(?:'(?:[^'\r\n]|'')*'|"[^"`$\r\n]*")'''
     patterns = (
         r'Get-Location',
         r'(?:Write-Output\s+)?\(Get-Location\)\.Path',
         rf'(?:Test-Path|Get-Item|Get-Content)\s+-LiteralPath\s+{literal}(?:\s+-Raw)?',
+        # A single SHA256 read, no pipe, redirect, expression, or side effects.
+        rf'Get-FileHash\s+-LiteralPath\s+{literal}\s+-Algorithm\s+SHA256',
+        # Only a complete literal Get-FileHash SHA256 scalar comparison is proven read.
+        rf"\(Get-FileHash\s+-LiteralPath\s+{literal}\s+-Algorithm\s+SHA256\)\.Hash\s+-eq\s+'[0-9a-fA-F]{{64}}'",
+        # Exact native hash commands are reads; no -w/--path filters,
+        # pipelines, or side-effecting extra arguments.
+        rf'certutil(?:\.exe)?\s+-hashfile\s+{native_literal}\s+SHA256',
+        rf'git(?:\.exe)?\s+hash-object\s+--no-filters\s+--\s+{native_literal}',
+        rf'git(?:\.exe)?\s+-C\s+{native_literal}\s+hash-object\s+--no-filters\s+--\s+{native_literal}',
         r'Get-Process\s+-Id\s+[0-9]+',
         r'\$PSVersionTable\.PSVersion',
         rf'Write-Output\s+{literal}',
         rf'git\s+-C\s+{literal}\s+(?:status\s+--short|rev-parse\s+HEAD|branch\s+--show-current|log\s+-1\s+--oneline)',
         r'git\s+(?:status(?:\s+--short)?|rev-parse\s+HEAD|branch\s+--show-current|log\s+-1\s+--oneline)',
+        r'cmd(?:\.exe)?\s+/c\s+(?:dir|ver)',
+        r'git\s+diff\s+--(?:stat|name-only)',
+        # Exact read-only Git-object ancestry check; status 0 means the first
+        # commit is an ancestor of the second. No object fetch is performed.
+        r'git\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}',
+        rf'git\s+-C\s+{native_literal}\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{{40}}\s+[0-9a-fA-F]{{40}}',
+        # Identical read-only ancestry check through a literal portable Git.
+        # Never accept interpolation, shell chains or extra arguments.
+        r'''&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe")\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}''',
+        r'''&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe")\s+-C\s+(?:'[^'\r\n]+'|"[^"$\x60\r\n]+")\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}''',
     )
+    from .python_https_probe import is_bounded_python_https_probe
+    if action.get('operation') in {'INSPECT', 'VERIFY'} and is_bounded_python_https_probe(command):
+        return True
+    from .action_resolution_trace import exact_remote_git_read_repository
+    # A single fixed HEAD remote read is a safe *command classification*;
+    # classification never bypasses separate network/credential/scope admission.
+    if action.get('operation') == 'GIT_INSPECT' and exact_remote_git_read_repository(command):
+        return True
     return any(re.fullmatch(pattern, command, re.IGNORECASE) for pattern in patterns)
 
 

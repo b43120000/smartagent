@@ -115,10 +115,19 @@ def run():
                 return response(bad_initial,{'tool':'list_directory','action_id':'HELD-READ','path':str(sub)})
             if len(repair_turns)==2:
                 assert 'available_evidence_refs' in prompt and 'REQUEST_ACCEPTED' in prompt
-                return response({**bad_initial,'outcome':'PENDING'})
+                # Explicitly forged non-status evidence is NOT normalized.
+                # This keeps the legacy multi-turn hold repair scenario valid.
+                return response({**bad_initial,'outcome':'PENDING',
+                                 'evidence_refs':['FORGED-ACTION']})
             if len(repair_turns)==3:
                 assert 'evidence_refs' in prompt and 'RUNTIME_STATUS' in prompt
-                return response({**initial(),'evidence_refs':['REQUEST_ACCEPTED']})
+                # If CCRC released the never-executed hold on REPLAN,
+                # reconstruct the same read as a fresh authorized proposal.
+                # If still held, Runtime correlates it; either way, execute
+                # the read exactly once and require genuine result evidence.
+                return response({**initial(),'evidence_refs':['REQUEST_ACCEPTED']},
+                                {'tool':'list_directory','action_id':'HELD-READ',
+                                 'path':str(sub)})
             assert len(repair_turns)==4 and 'proof.txt' in prompt
             return response({**initial(),'decision':'COMPLETE','outcome':'SUCCESS',
                 'current_step':1,'steps':[{'step':1,'desc':'讀取目錄','status':'COMPLETED'}],
@@ -142,7 +151,8 @@ def run():
         stalled_repairs=[]; stalled_actions=[]
         def repeat_invalid(prompt, expected, attachments):
             stalled_repairs.append(prompt)
-            progress={**initial(),'evidence_refs':[],'decision_reason':'different prose '+str(len(stalled_repairs))}
+            # An explicitly malformed value is not an omitted/empty status ref.
+            progress={**initial(),'evidence_refs':None,'decision_reason':'different prose '+str(len(stalled_repairs))}
             if len(stalled_repairs)==1:
                 return response(progress,{'tool':'list_directory','action_id':'NEVER-EXECUTE','path':str(sub)})
             return response(progress)

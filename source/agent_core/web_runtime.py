@@ -1378,13 +1378,16 @@ class WebLLMScraper:
         return bool(validation.matched)
 
     def _composer_verification_passes(self, prompt: str) -> bool:
-        """Apply the explicit unsafe override only at post-write send gates."""
+        """Require actual readback equality before every send-ready gate.
+
+        Legacy debug unsafe-force-pass is intentionally ignored: an
+        unverified draft can never be submitted by a production agent.
+        """
         if _unsafe_force_composer_verify_pass():
             self._log_stage(
-                "UNSAFE_composer_verification_forced_pass",
+                "composer_unsafe_override_ignored",
                 f"prompt_len={len(prompt)}",
             )
-            return True
         self._last_composer_validation = None
         matched = self._composer_matches_prompt(prompt)
         verification = getattr(self, "_last_composer_validation", None)
@@ -2435,6 +2438,22 @@ class WebLLMScraper:
         self._log_user_binding_diagnostic(snapshot, 'generation_fallback')
         return True
 
+    def _observe_scoped_it10_user_dom(self, snapshot: dict) -> None:
+        """Best-effort post-submit DOM evidence from a confirmed RequestScope."""
+        if not PIT.raw_capture_enabled() or snapshot.get("_it10_submitted_dom_status") == "CAPTURED":
+            return
+        try:
+            adapter = self._web_ui_adapter()
+            scope = snapshot.get("_web_ui_scope")
+            status = PIT.record_scoped_submitted_user_dom(scope, adapter)
+        except Exception:
+            status = "OBSERVATION_FAILED"
+        snapshot["_it10_submitted_dom_status"] = status
+        try:
+            self._log_stage("it10_submitted_dom_capture", f"status={status}")
+        except Exception:
+            pass
+
     def _wait_for_user_sent(self, snapshot: dict, timeout_sec: float = 45.0) -> None:
         """Require a genuinely new user turn before looking at assistant content.
 
@@ -2463,6 +2482,7 @@ class WebLLMScraper:
             if scope is not None:
                 user_turn, binding_state = self._web_ui_adapter().reconcile_user_turn(scope)
                 if user_turn is not None:
+                    self._observe_scoped_it10_user_dom(snapshot)
                     snapshot['_submit_delivery_confirmed'] = True
                     self._record_composer_delivery()
                     self._log_stage(
@@ -2644,6 +2664,9 @@ class WebLLMScraper:
             if scope is not None:
                 owned_assistant = self._web_ui_adapter().latest_owned_assistant(scope)
                 if owned_assistant is not None:
+                    # User Turn may mount after provisional transport delivery.
+                    # Retry only with the same request-bound semantic scope.
+                    self._observe_scoped_it10_user_dom(snapshot)
                     if snapshot.pop('_generation_delivery_pending_scope', False):
                         self._log_stage('user_scope_restored_after_generation_fallback',
                                         'assistant_ownership_confirmed=true')
@@ -4952,6 +4975,29 @@ class WebLLMScraper:
         """
         from .payload_budget import PromptBudgetExceeded, ensure_webgpt_prompt_budget
         from .request_ownership import guard_web_prompt
+        from .conversation_chunk_transport import make_chunk_messages, validate_chunk_ack
+
+        # Universal bottom-level entry: callers that bypass BrowserClient or
+        # WebLLMManager still get ACK-gated splitting before any UI operation.
+        physical_messages = make_chunk_messages(prompt)
+        if len(physical_messages) > 1:
+            if image_paths or attachment_paths or file_paths:
+                raise WebScraperStageError(
+                    "CHUNKED_PROMPT_WITH_ATTACHMENTS_UNSUPPORTED",
+                    stage="prompt_budget", safe_to_retry=False,
+                )
+            final_reply = ""
+            for index, (chunk_prompt, required_ack) in enumerate(physical_messages):
+                final_reply = self.ask(
+                    chunk_prompt,
+                    new_conversation=new_conversation if index == 0 else False,
+                    image_paths=None, attachment_paths=None, file_paths=None,
+                    protocol_expected=protocol_expected if required_ack is None else None,
+                    initialization_composer_reset=initialization_composer_reset,
+                )
+                if required_ack is not None:
+                    validate_chunk_ack(final_reply, required_ack)
+            return final_reply
 
         # A new ask (including a pre-submit failure) retires the previous file
         # scope. Empty request IDs must never reopen a prior response artifact.
@@ -4967,6 +5013,7 @@ class WebLLMScraper:
             prompt = self._web_file_planner_prompt(prompt)
             prompt = self._web_ui_adapter().prepare_transport_prompt(prompt)
 
+        # The legacy 512 KiB UTF-8 budget below is the only active submit limit.
         try:
             prompt_bytes = ensure_webgpt_prompt_budget(prompt)
         except PromptBudgetExceeded as exc:
@@ -5276,6 +5323,8 @@ class WebLLMScraper:
             print(f"  [WebScraper] 等待 {self.service} 回應...", flush=True)
             stage = "generation"
             response = self._wait_for_response_complete(snapshot, protocol_expected=protocol_expected)
+            PIT.record("10d_provider_response_return", response,
+                       evidence_status="BROWSER_EXTRACTED_PROVIDER_RESULT")
             for record in attachment_records:
                 attachment_transaction.transition(
                     record.attachment_id, "CONSUMED",
@@ -5695,6 +5744,14 @@ class ScraperManager:
         prompt when only DOM acknowledgement/response detection failed.
         """
         from .payload_budget import PromptBudgetExceeded, ensure_webgpt_prompt_budget
+        from .conversation_chunk_transport import make_chunk_messages, validate_chunk_ack
+
+        logical_messages = make_chunk_messages(prompt)
+        if len(logical_messages) > 1 and any((image_paths, attachment_paths, file_paths)):
+            raise WebScraperStageError(
+                "CHUNKED_PROMPT_WITH_ATTACHMENTS_UNSUPPORTED",
+                stage="prompt_budget", safe_to_retry=False,
+            )
 
         try:
             ensure_webgpt_prompt_budget(prompt)
@@ -5743,7 +5800,20 @@ class ScraperManager:
                         detail="global_submit_lock_acquired",
                     )
             try:
-                result = scraper.ask(prompt, **kwargs)
+                result = ""
+                completed_chunks = 0
+                for chunk_index, (chunk_text, expected_ack) in enumerate(logical_messages):
+                    chunk_kwargs = dict(kwargs)
+                    chunk_kwargs["protocol_expected"] = (
+                        protocol_expected if expected_ack is None else None
+                    )
+                    chunk_kwargs["new_conversation"] = (
+                        new_conversation if chunk_index == 0 else False
+                    )
+                    result = scraper.ask(chunk_text, **chunk_kwargs)
+                    completed_chunks += 1
+                    if expected_ack is not None:
+                        validate_chunk_ack(result, expected_ack)
                 if service == "chatgpt":
                     try:
                         self._rate_governor.record_success()
@@ -5786,6 +5856,13 @@ class ScraperManager:
                 scraper = self.get_or_create(service, headless)
                 if rate_lease is not None:
                     scraper._rate_submit_lease = rate_lease
+                # Reconnect may be safe, but replaying a logical multi-submit
+                # transaction is not. Fail closed rather than duplicate chunks.
+                if len(logical_messages) > 1:
+                    raise WebScraperStageError(
+                        "CHUNK_TRANSFER_RESTART_REQUIRES_RECONCILIATION",
+                        stage="chunk_transfer", safe_to_retry=False,
+                    ) from exc
                 return scraper.ask(prompt, **kwargs)
             except Exception as exc:
                 _debug_log(f"MANAGER_UNKNOWN_ERROR service={service} exc={exc!r}")

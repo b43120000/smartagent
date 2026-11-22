@@ -140,6 +140,17 @@ class TelegramDeliveryAdapter:
             return _terminal_text(event, summary, 'INTERRUPTED')
         if event_type == "SECURITY_CONFIRMATION_REQUIRED":
             kind = str(payload.get("approval_kind", "DELETE") or "DELETE").upper()
+            if kind == "UNKNOWN_COMMAND":
+                return (
+                    "🔐 未知風險指令需要使用者授權（限這一條、限本次）\n"
+                    f"指令：{payload.get('command', '')}\n"
+                    f"Command SHA256：{payload.get('command_sha256', '')}\n"
+                    f"工作目錄：{payload.get('cwd', '')}\n"
+                    "等待上限：10 分鐘。超時不執行；接續任務須重新授權。\n"
+                    "授權不會解除原有 Workspace、ACL、Write Ceiling 或安全禁止規則。\n"
+                    f"approval_id: {payload.get('approval_id', '')}\n"
+                    f"request_id: {request_id}\ntask_id: {task_id}"
+                )
             if kind == "EXECUTION":
                 return (
                     "🔐 需要允許執行一次\n"

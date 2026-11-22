@@ -22,6 +22,18 @@ _TEXT = re.compile(
     r"提供|分析|review|Review|檢視以下|檢查以下)|什麼是|何謂)",
     re.I,
 )
+# Creative text generated entirely in the reply (not a file or action).
+# Keep this request-local, never use it to authorize a tool or external source.
+_CREATIVE_TEXT = re.compile(
+    r"^\s*(?:(?:請|請你|幫我|請幫我|麻煩你)\s*)?"
+    r"(?:說|講)\s*(?:一個|個|一段|段)?"
+    r"(?:[^。；;\n]{0,100}?)?(?:笑話|故事)"
+    r"(?:[。！!\s]|$)"
+    r"|^\s*(?:(?:please)\s+)?(?:tell\s+me|make\s+up|write|compose)"
+    r"\s+(?:a|an|one)?\s*(?:.{0,80}?\s)?(?:joke|story)\b",
+    re.I,
+)
+
 _CONCEPT = re.compile(
     r"^\s*(?:(?:please\s+)?(?:explain|define|describe|"
     r"what\s+is|how\s+(?:to|does)|compare)\b|"
@@ -70,6 +82,7 @@ _CURRENT = re.compile(
 )
 _PATH = re.compile(
     r"(?:https?://|www\.|[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|"
+    r"(?<![A-Za-z0-9:])/(?:[A-Za-z0-9_.-]+/?)+|"
     r"(?:^|[\s(])(?:\.{1,2}[/\\]|~/))", re.I,
 )
 _GITHUB = re.compile(
@@ -237,6 +250,16 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
     ):
         sources.add("GITHUB")
         ops.add("READ")
+    # A local-object request may use a text verb such as 列出, but still
+    # requires real filesystem evidence. The noun is the dependency;
+    # only explicit conceptual explanations or self-contained creative
+    # writing can be answer-only without reading files.
+    local_object_required = (
+        bool(_LOCAL.search(cleaned)) and not concept
+        and not bool(_CREATIVE_TEXT.search(cleaned)) and not inline
+    )
+    if local_object_required and not ops:
+        ops.add("READ")
     if _LOCAL.search(cleaned) and ops:
         sources.add("LOCAL")
     if _EXTERNAL.search(cleaned) and ops:
@@ -249,11 +272,31 @@ def assess_task_requirement(request: str, *, attachments: bool = False,
     if ops or sources:
         return _result(original, "RESOURCE_REQUIRED", sources, ops,
                        "external_resource_or_action_required", restrictions)
-    if not _TEXT.search(cleaned):
+    if not (_TEXT.search(cleaned) or _CREATIVE_TEXT.search(cleaned)):
         return _result(original, "AMBIGUOUS", sources, ops,
                        "text_intent_not_unambiguously_classified", restrictions)
     return _result(original, "ANSWER_ONLY", {"INLINE"} if inline else set(), set(),
                    "bounded_text_only_intent", restrictions)
+
+
+def no_tool_terminal_candidate(assessment: Mapping[str, object]) -> bool:
+    """Requirement-only eligibility for a no-tool model Finish.
+
+    Unknown greetings and other harmless prose need not match a keyword
+    whitelist. Source, action, continuation or ambiguous private-context
+    requirements still fail closed. This never verifies the truth of prose.
+    """
+    if assessment.get("required_operations"):
+        return False
+    if set(assessment.get("resource_sources") or []) != {"NONE"}:
+        return False
+    if assessment.get("external_information_required") or assessment.get("side_effect_required"):
+        return False
+    route = str(assessment.get("route") or "")
+    reason = str(assessment.get("reason") or "")
+    return route == "ANSWER_ONLY" or (
+        route == "AMBIGUOUS" and reason == "text_intent_not_unambiguously_classified"
+    )
 
 
 def render_task_requirement(assessment: Mapping[str, object]) -> str:

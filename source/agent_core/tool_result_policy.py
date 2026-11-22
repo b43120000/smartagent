@@ -43,12 +43,46 @@ def structured_outcome(tool, payload, *, expected_outcome=None):
             transaction_state=payload.get('state',''), terminal_eligible=committed or tool=='abort_file_write')
     elif tool=='inspect_directory':
         rows=payload.get('paths')
-        if isinstance(rows,list) and rows:
-            good=sum(bool(row.get('authorized') and row.get('exists')) for row in rows)
-            errors=sum(bool(row.get('errors')) for row in rows)
-            status='SUCCEEDED' if good==len(rows) and not errors else 'PARTIAL' if good else 'REJECTED' if any(not row.get('authorized') for row in rows) else 'FAILED'
-            reason='DIRECTORY_INSPECTED' if status=='SUCCEEDED' else 'DIRECTORY_INSPECTION_INCOMPLETE'
-            executed=good>0
+        if isinstance(rows,list) and rows and all(isinstance(row,dict) for row in rows):
+            # One authorized, completed filesystem stat with an exact
+            # FileNotFoundError is a negative observation, not failed tool
+            # execution. Missing directories do not authorize creation.
+            row=rows[0]
+            confirmed_absence=(
+                len(rows)==1
+                and row.get('authorized') is True
+                and row.get('exists') is False
+                and row.get('errors')==['path_not_found']
+                and type(row.get('inaccessible_count')) is int
+                and row['inaccessible_count']==0
+                and isinstance(row.get('path'),str)
+                and bool(row['path'])
+            )
+            if confirmed_absence:
+                status,reason,executed='SUCCEEDED','DIRECTORY_ABSENCE_OBSERVED',True
+                data.update(observation_status='CONFIRMED',
+                            observation_kind='directory.exists',
+                            observed_exists=False,observed_path=row['path'],
+                            terminal_eligible=False)
+            else:
+                good=sum(bool(row.get('authorized') and row.get('exists')) for row in rows)
+                errors=sum(bool(row.get('errors')) for row in rows)
+                status='SUCCEEDED' if good==len(rows) and not errors else 'PARTIAL' if good else 'REJECTED' if any(not row.get('authorized') for row in rows) else 'FAILED'
+                reason='DIRECTORY_INSPECTED' if status=='SUCCEEDED' else 'DIRECTORY_INSPECTION_INCOMPLETE'
+                executed=good>0
+                # A successful, single-root inspect only reaches exists=True
+                # after an actual stat.S_ISDIR check in tool_inspect_directory.
+                # Preserve that typed root fact in ToolResult for independent
+                # Executor verification; not inferred from a directory name.
+                if status=='SUCCEEDED' and len(rows)==1:
+                    data.update(
+                        observation_status='CONFIRMED',
+                        observation_kind='directory.exists_and_type',
+                        observed_exists=True,
+                        observed_is_directory=True,
+                        observed_path=row['path'],
+                        terminal_eligible=True,
+                    )
     elif tool=='query_project':
         if business=='REJECTED': status,reason='REJECTED',str(payload.get('error','QUERY_REJECTED'))
         elif business in {'READY','INCOMPLETE'} and isinstance(payload.get('results'),list):

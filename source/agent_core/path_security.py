@@ -91,6 +91,17 @@ def is_reparse_path(path: Path) -> bool:
     return path.is_symlink() or bool(attrs & reparse_flag)
 
 
+def workspace_path_mode(
+    path: Path, writable: Iterable[Path], read_only: Iterable[Path]
+) -> str | None:
+    """Resolve nested rules by nearest ancestor. An exact tie is read-only."""
+    write_depth = max((len(root.parts) for root in writable if is_within(path, root)), default=0)
+    read_depth = max((len(root.parts) for root in read_only if is_within(path, root)), default=0)
+    if read_depth and read_depth >= write_depth:
+        return "read_only"
+    return "writable" if write_depth else None
+
+
 def reject_reparse_components(path: Path, root: Path) -> None:
     if not is_within(path, root):
         raise PathSecurityError("path_outside_authorized_root", str(path))

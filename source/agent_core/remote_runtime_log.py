@@ -67,6 +67,29 @@ class RemoteRuntimeLog:
     def _redact(cls, value: Any, *, key: str = "") -> Any:
         """Keep diagnostics useful without leaking transport credentials."""
         lowered = str(key).lower()
+        # A machine-readable authorization STATUS is not a credential. Only
+        # explicitly bounded enumerations/codes and real booleans are safe;
+        # arbitrary fields with "authorization" remain redacted.
+        safe_auth_enums = {
+            "authorization_state": {
+                "UNKNOWN", "AUTHORIZED", "DENIED", "NEEDS_USER_APPROVAL",
+                "NOT_CHECKED", "UNAVAILABLE",
+            },
+        }
+        safe_auth_bools = {
+            "authorization_granted", "authorization_evidence_present",
+            "grants_authorization", "write_authorization_granted",
+            "authorization_inferred_from_git_installation",
+            "authorization_inferred_from_artifact_reference",
+        }
+        if lowered in safe_auth_enums:
+            return value if type(value) is str and value in safe_auth_enums[lowered] else "***REDACTED***"
+        if lowered == "authorization_reason_code":
+            return value if type(value) is str and re.fullmatch(
+                r"[A-Z][A-Z0-9_]{0,95}", value
+            ) else "***REDACTED***"
+        if lowered in safe_auth_bools:
+            return value if type(value) is bool else "***REDACTED***"
         if any(word in lowered for word in ("token", "secret", "password", "authorization")):
             return "***REDACTED***"
         if isinstance(value, dict):

@@ -25,13 +25,18 @@ class BoundedRepairBudget:
         self._since_evidence = 0
         self._total = 0
         self._reasons: Counter[str] = Counter()
+        # Only *strictly shrinking* Runtime-classified contract defects earn
+        # a bounded local window; real Evidence and the hard cap stay separate.
+        self._contract_credit_used = 0
+        self._last_contract_generation: tuple[int, int] | None = None
 
     @property
     def rejected_turns(self) -> int:
         return self._total
 
     def observe(self, diagnostics: Iterable[Mapping[str, object]],
-                *, evidence_generation: int) -> dict[str, object]:
+                *, evidence_generation: int,
+                contract_repair: Mapping[str, object] | None = None) -> dict[str, object]:
         """Count one rejected turn, not the number of error fields within it."""
         if not isinstance(evidence_generation, int) or evidence_generation < 0:
             raise ValueError("bounded_repair_evidence_generation_invalid")
@@ -39,6 +44,8 @@ class BoundedRepairBudget:
             self._generation = evidence_generation
             self._since_evidence = 0
             self._reasons.clear()
+            self._contract_credit_used = 0
+            self._last_contract_generation = None
         reasons = sorted({
             str(diag.get("reason", "protocol_rejected") or "protocol_rejected")
             for diag in diagnostics if isinstance(diag, Mapping)
@@ -47,8 +54,27 @@ class BoundedRepairBudget:
         self._since_evidence += 1
         for reason in reasons:
             self._reasons[reason] += 1
+        repair = contract_repair if isinstance(contract_repair, Mapping) else {}
+        key = (repair.get("transaction_seq"), repair.get("convergence_generation"))
+        # Credit only a new, strictly contracting FIELD_REPAIR diagnosis.
+        # Never credit a different action ID, new prose, new reason, or
+        # reconstruction/replan with unresolved new defects.
+        converging = (
+            repair.get("converging") is True
+            and repair.get("mode") == "FIELD_REPAIR"
+            and type(key[0]) is int and type(key[1]) is int
+            and key[1] > 0
+            and type(repair.get("resolved_issue_count")) is int
+            and repair["resolved_issue_count"] > 0
+            and repair.get("introduced_issue_count") == 0
+            and self._last_contract_generation != key
+        )
+        if converging:
+            self._last_contract_generation = key
+            self._contract_credit_used = min(2, self._contract_credit_used + 1)
+        effective_no_progress = max(0, self._since_evidence - self._contract_credit_used)
         exhausted = (
-            self._since_evidence >= self.max_without_evidence
+            effective_no_progress >= self.max_without_evidence
             or self._total >= self.max_total
             or any(count >= self.max_same_reason for count in self._reasons.values())
         )
@@ -57,6 +83,9 @@ class BoundedRepairBudget:
             "status": "EXHAUSTED" if exhausted else "REPAIR_ALLOWED",
             "rejected_turns_total": self._total,
             "rejected_turns_without_new_evidence": self._since_evidence,
+            "effective_no_progress_rejections": effective_no_progress,
+            "contract_repair_credit_used": self._contract_credit_used,
+            "contract_repair_converging": converging,
             "evidence_generation": evidence_generation,
             "reason_codes": reasons,
             "max_without_evidence": self.max_without_evidence,

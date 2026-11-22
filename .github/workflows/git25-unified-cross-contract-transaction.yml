@@ -1,0 +1,57 @@
+name: Git25 Unified Cross-Contract Transaction
+
+on:
+  push:
+    branches:
+      - git25/unified-cross-contract-transaction-20261107
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-contract:
+    name: Unified Contracts ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install baseline test import dependency
+        run: python -m pip install --disable-pip-version-check playwright
+      - name: Compile affected Python files
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/unified_contract_transaction.py
+          source/agent_core/canonical_contract_resolver.py
+          source/agent_core/progress_reply_contract.py
+          source/agent_core/planner_context_snapshot.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_git25_unified_contract_pipeline.py
+      - name: Unified contract and recovery regressions
+        run: python -B source/WebAgent/tests/test_git25_unified_contract_pipeline.py
+      - name: Git24 canonical safety and Action admission
+        run: python -B source/WebAgent/tests/test_git24_canonical_contract_resolution.py
+      - name: Existing CCRC convergence and restore integration
+        run: python -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Existing Progress schema
+        run: python -B source/WebAgent/tests/validate_progress_reply_contract.py
+      - name: Existing Progress Admission and repair
+        run: python -B source/WebAgent/tests/validate_flexible_progress_admission.py
+      - name: Existing Action trace and Case D prerequisites
+        run: python -B source/WebAgent/tests/test_action_resolution_trace_and_missing_target.py
+      - name: Existing Tool Scope
+        run: python -B source/WebAgent/tests/validate_tool_scope_hardening.py
+      - name: Existing Command Security
+        run: python -B source/WebAgent/tests/validate_command_security_classification.py

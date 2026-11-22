@@ -112,7 +112,13 @@ class Integrity(unittest.TestCase):
             if str(path).casefold() == BAD.casefold():
                 unauthorized_stats.append(str(path))
             return real_stat(path, *args, **kwargs)
-        with patch("agent_core.evidence_foundation.probe_file_exists") as probe, patch("os.stat", side_effect=spy):
+        from agent_core.security_context import SecurityContext
+        isolated_security = SecurityContext.for_workspace(
+            Path("E:/card"), read_roots=(Path("E:/card"),),
+            write_roots=(Path("E:/card"),))
+        # Do not inherit this machine's broader configured read roots.
+        with patch("agent_core.tools.SecurityContext.from_agent", return_value=isolated_security), \
+             patch("agent_core.evidence_foundation.probe_file_exists") as probe, patch("os.stat", side_effect=spy):
             result = decode_result(execute_tool(action, agent=agent))
         self.assertEqual(result["reason"], "EVIDENCE_SCOPE_REJECTED")
         self.assertFalse(result["executed"])

@@ -70,11 +70,18 @@ def run():
             quoted = "'" + str(bat) + "' 'TASK-C6A7B83EF0F633A988BC'"
             assert request_paths(quoted) == [str(bat)], request_paths(quoted)
             direct = choose("請執行 " + command, FakeStore())
-            assert direct["workspace"] == str(project_b)
-            assert direct["source"] == "CURRENT_REQUEST"
+            assert direct["workspace"] == str(default)
+            assert direct["source"] == "WRITABLE_PRIMARY_DEFAULT"
+            assert direct["explicit_paths"] == []
+            assert str(bat) in direct["mentioned_paths"]
 
-            # An explicit outside path is never silently replaced by default.
-            rejected(lambda: choose("modify " + str(outside / "x.py"), FakeStore()),
+            # A narrative path is harmless; only an explicit Workspace directive
+            # may select a Task working directory.
+            assert choose("modify " + str(outside / "x.py"), FakeStore())["workspace"] == str(default)
+            selected_directive = choose("Workspace: " + str(project_b), FakeStore())
+            assert selected_directive["workspace"] == str(project_b)
+            assert selected_directive["source"] == "EXPLICIT_WORKSPACE_DIRECTIVE"
+            rejected(lambda: choose("Workspace: " + str(outside), FakeStore()),
                      "request_path_outside_authorized_roots")
             # Read-only paths are usable as read targets, not active write roots.
             read = choose("read " + str(readonly / "test.txt"), FakeStore())
@@ -148,12 +155,12 @@ def run():
             message = NormalizedInboundMessage(
                 transport="TELEGRAM", endpoint="telegram", conversation_key="telegram://chat/44",
                 sender_id="sender", source_message_id="M-1",
-                text="請執行 " + command, received_at=1.0, idempotency_key="KEY-1",
+                text="Workspace: " + str(project_b), received_at=1.0, idempotency_key="KEY-1",
             )
             accepted = gateway.accept(message, workspace=str(default))
             assert accepted.task.workspace == str(project_b)
             assert accepted.task.metadata["workspace_resolution_version"] == 1
-            assert accepted.task.metadata["workspace_resolution"]["source"] == "CURRENT_REQUEST"
+            assert accepted.task.metadata["workspace_resolution"]["source"] == "EXPLICIT_WORKSPACE_DIRECTIVE"
 
     print("REQUEST_FIRST_WORKSPACE_ROUTING_PASS")
 

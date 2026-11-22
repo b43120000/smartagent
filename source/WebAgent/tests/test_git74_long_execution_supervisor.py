@@ -1,0 +1,229 @@
+"""Git74 sidecar UT/IT: actual child, no deadline; callback/auto-consent, fail closed."""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+from agent_core.long_execution_supervisor import (
+    begin_wait, bind_notice, finish_notice, finish_wait, pending_notifications,
+    read_wait, record_observation, set_decision, wait_until_exit,
+)
+from agent_core.process_liveness import observe_owned_process
+from RemoteAgent.remote_feature_catalog import (
+    command_for_remote_callback, long_wait_inline_keyboard,
+)
+from agent_core.smartagent_protocol import validate_tool_envelope
+
+
+def test_keyboard_is_opaque_and_telegram_owned():
+    markup = long_wait_inline_keyboard("WAIT-" + "A" * 20)
+    choices = [b["callback_data"] for b in markup["inline_keyboard"][0]]
+    assert len(choices) == 2
+    assert command_for_remote_callback(choices[0]) == "long_wait_choice WAIT-" + "A" * 20 + " Y"
+    assert command_for_remote_callback(choices[1]) == "long_wait_choice WAIT-" + "A" * 20 + " N"
+    assert command_for_remote_callback("long_wait:INVALID:Y") is None
+
+
+def test_wait_policy_canonical_admission():
+    action = {"tool": "run_command", "operation": "TEST",
+              "command": "Write-Output 'hello'", "shell_mode": "POWERSHELL",
+              "wait_policy": "UNTIL_EXIT"}
+    ok, issue = validate_tool_envelope(action, native_broker=True)
+    assert ok, issue
+    action["wait_policy"] = "NONE"
+    ok, issue = validate_tool_envelope(action, native_broker=True)
+    assert not ok
+    assert issue["reason"] == "RUN_COMMAND_WAIT_POLICY_INVALID"
+
+
+def test_no_reply_auto_accept_only_after_ten_minutes(tmp_path, monkeypatch):
+    row = begin_wait(install=tmp_path, task_id="TASK-ONE", request_id="RR-ONE",
+                     action_id="ACT-ONE", execution_id="exec-a", pid=123)
+    import agent_core.long_execution_supervisor as sup
+    fake = {"clock": row["created_at"] + 599}
+    monkeypatch.setattr(sup.time, "time", lambda: fake["clock"])
+    obs = {"execution_id":"exec-a", "pid":123, "observed_at":fake["clock"],
+           "process_state":"RUNNING", "evidence_source":"OWNED_POPEN_WAITPID",
+           "liveness_verified":True}
+    record_observation(tmp_path, row["wait_id"], obs)
+    assert read_wait(tmp_path, row["wait_id"])["decision"] == "PENDING"
+    fake["clock"] += 2
+    obs["observed_at"] = fake["clock"]
+    record_observation(tmp_path, row["wait_id"], obs)
+    assert read_wait(tmp_path, row["wait_id"])["decision"] == "AUTO_CONTINUE"
+    assert read_wait(tmp_path, row["wait_id"])["state"] == "RUNNING"
+
+
+def test_callback_binding_and_safe_pause(tmp_path):
+    row = begin_wait(install=tmp_path, task_id="TASK-ONE", request_id="RR-ONE",
+                     action_id="ACT-ONE", execution_id="exec-a", pid=123)
+    assert len(pending_notifications(tmp_path)) == 1
+    assert bind_notice(tmp_path, row["wait_id"], chat_id=8765)
+    finish_notice(tmp_path, row["wait_id"], success=True)
+    with pytest.raises(ValueError):
+        set_decision(tmp_path, row["wait_id"], task_id="TASK-WRONG",
+                     chat_id=8765, choice="CONTINUE")
+    with pytest.raises(ValueError):
+        set_decision(tmp_path, row["wait_id"], task_id="TASK-ONE",
+                     chat_id=8888, choice="CONTINUE")
+    updated = set_decision(tmp_path, row["wait_id"], task_id="TASK-ONE",
+                           chat_id=8765, choice="PAUSE_AFTER_EXIT")
+    assert updated["decision"] == "PAUSE_AFTER_EXIT"
+    assert set_decision(tmp_path, row["wait_id"], task_id="TASK-ONE",
+                        chat_id=8765, choice="CONTINUE")["decision"] == "PAUSE_AFTER_EXIT"
+
+
+def test_completed_before_reply_and_os_identity_proven(tmp_path):
+    row = begin_wait(install=tmp_path, task_id="TASK-ONE", request_id="RR-ONE",
+                     action_id="ACT-ONE", execution_id="exec-a", pid=123)
+    proof = {"execution_id":"exec-a", "pid":123, "process_state":"EXITED",
+             "evidence_source":"OWNED_POPEN_WAITPID", "process_identity_verified":True}
+    end = finish_wait(tmp_path, row["wait_id"], proof, 0)
+    assert end["state"] == "COMPLETED"
+    assert end["decision"] == "COMPLETED_BEFORE_DECISION"
+    assert pending_notifications(tmp_path) == []
+    assert end["exit_code"] == 0
+
+
+def test_real_sidecar_python_process_waits_beyond_bounded_timeout(tmp_path):
+    # A 2.2-second silent Python child proves wait_policy UNTIL_EXIT is not
+    # secretly routed through the old one-second action deadline.
+    cmd = [sys.executable, "-c", "import time; time.sleep(2.2)"]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        proof, end = wait_until_exit(process, install=tmp_path,
+            telemetry={"task_id":"TASK-IT", "request_id":"RR-IT",
+                       "action_id":"ACT-IT"}, execution_id="real-child",
+            interval=0.1)
+        assert proof["process_state"] == "EXITED"
+        assert end["state"] == "COMPLETED"
+        assert end["exit_code"] == 0
+        assert end["liveness_sample_count"] >= 1
+        assert end["decision"] == "COMPLETED_BEFORE_DECISION"
+        assert (tmp_path / "localdata" / "runtime" / "long_execution" / "events.jsonl").exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+
+
+def test_untrusted_exit_identity_cannot_complete_wait(tmp_path):
+    row = begin_wait(install=tmp_path, task_id="TASK-ONE", request_id="RR-ONE",
+                     action_id="ACT-ONE", execution_id="exec-a", pid=123)
+    end = finish_wait(tmp_path, row["wait_id"],
+        {"execution_id":"exec-a","pid":999,"process_state":"EXITED",
+         "process_identity_verified":True}, exit_code=0)
+    assert end["state"] == "UNVERIFIED"
+    assert end["exit_code"] is None
+
+
+def test_full_real_run_bounded_process_until_exit_sidecar(tmp_path, monkeypatch):
+    """Real runtime capture and tool result, not only the polling helper."""
+    from agent_core import turbo_broker_admission
+    from agent_core import command_security
+    from agent_core import workspace_access
+    from agent_core.bounded_process import run_bounded_process
+    monkeypatch.setattr(turbo_broker_admission, "assess",
+        lambda cwd, tool: {"decision": "NORMAL", "evidence": {}, "reason_code": "ACL_OFF"})
+    monkeypatch.setattr(command_security, "require_command_allowed",
+        lambda *args, **kwargs: None)
+    monkeypatch.setattr(workspace_access, "resolve_turbo_authorization_workspace",
+        lambda cwd: tmp_path)
+    response = run_bounded_process(
+        [sys.executable, "-c", "import time; time.sleep(2.2); print('supervised_pass')"],
+        cwd=tmp_path, timeout=1, shell=False,
+        capture_root=tmp_path / "capture", wait_policy="UNTIL_EXIT",
+        telemetry={"install_root": tmp_path, "root": tmp_path,
+                   "task_id": "TASK-FULL-IT", "request_id": "RR-FULL-IT",
+                   "action_id": "ACT-FULL-IT"})
+    assert response["exit_code"] == 0, response
+    assert response["timed_out"] is False
+    assert response["wait_policy"] == "UNTIL_EXIT"
+    assert response["long_wait_state"] == "COMPLETED"
+    assert response["long_wait_os_samples"] >= 1
+    assert "supervised_pass" in response["stdout"]
+    assert response["long_wait_id"].startswith("WAIT-")
+
+
+def test_receiver_delivers_wait_prompt_and_accepts_bound_callback(tmp_path, monkeypatch):
+    """Telegram transport sidecar without network or a second Task."""
+    from types import SimpleNamespace
+    from RemoteAgent.telegram_transport import TelegramReceiver
+    import agent_core.task_state as task_state
+
+    row = begin_wait(install=tmp_path, task_id="TASK-REMOTE",
+                     request_id="RR-REMOTE", action_id="ACT-R",
+                     execution_id="exec-r", pid=1234)
+    task = SimpleNamespace(task_id="TASK-REMOTE", request_id="RR-REMOTE",
+                           reply_route={"transport":"TELEGRAM","chat_id":555})
+    class Store:
+        def __init__(self, path):
+            pass
+        def load(self):
+            pass
+        def get(self, task_id):
+            return task if task_id == task.task_id else None
+    monkeypatch.setattr(task_state, "TaskStateStore", Store)
+    sent = []
+    receiver = TelegramReceiver.__new__(TelegramReceiver)
+    receiver.install_root = tmp_path
+    receiver.runtime_log = None
+    receiver.adapter = SimpleNamespace(is_authorized=lambda **k: True)
+    receiver.client = SimpleNamespace(send_message=lambda chat_id, text, **kw:
+                                       sent.append((chat_id,text,kw)))
+    receiver._deliver_long_wait_prompts()
+    assert len(sent) == 1
+    assert "10 分鐘" in sent[0][1]
+    assert read_wait(tmp_path,row["wait_id"])["notification"] == "SENT"
+    receiver._deliver_long_wait_prompts()
+    assert len(sent) == 1
+    callback = SimpleNamespace(
+        sender_id="555", reply_context={"chat_id":555},
+        text="long_wait_choice " + row["wait_id"] + " N")
+    assert receiver._process_long_wait_choice(callback)
+    assert read_wait(tmp_path,row["wait_id"])["decision"] == "PAUSE_AFTER_EXIT"
+    assert len(sent) == 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows collect.bat is PowerShell backed")
+def test_real_collect_bat_exports_git74_cleartext_task_evidence(tmp_path):
+    """Full real collector ZIP stage, not a mock of collect logic."""
+    import json
+    import re
+    import uuid
+    import zipfile
+    root = Path(__file__).resolve().parents[3]
+    tag = uuid.uuid4().hex[:14].upper()
+    task, request = "TASK-G74COL-" + tag, "RR-G74COL-" + tag
+    record = begin_wait(install=root, task_id=task, request_id=request,
+                        action_id="ACT-G74-COLLECT", execution_id="col-it", pid=471)
+    filename = root / "localdata" / "runtime" / "long_execution" / (record["wait_id"] + ".json")
+    archives = []
+    try:
+        response = subprocess.run(
+            ["cmd.exe", "/d", "/c", str(root / "collect.bat"), task, request],
+            cwd=root, capture_output=True, text=True, errors="replace", timeout=180)
+        assert response.returncode == 0, response.stdout[-4000:] + response.stderr[-4000:]
+        match = re.search(r"^\[COLLECT\] ZIP:\s*(.+)$", response.stdout, flags=re.M)
+        assert match, response.stdout[-4000:]
+        archive = Path(match.group(1).strip())
+        archives.append(archive)
+        with zipfile.ZipFile(archive) as z:
+            assert z.testzip() is None
+            states = json.loads(z.read("git74_long_execution_states.json"))
+            events = json.loads(z.read("git74_long_execution_events.json"))
+            assert any(row["wait_id"] == record["wait_id"] for row in states)
+            assert any(row["event"] == "LONG_EXEC_STARTED" and
+                       row["wait_id"] == record["wait_id"] for row in events)
+            assert all(row["task_id"] == task for row in states)
+            assert all(row["request_id"] == request for row in events)
+    finally:
+        filename.unlink(missing_ok=True)
+        (filename.with_suffix(".lock")).unlink(missing_ok=True)
+        for archive in archives:
+            archive.unlink(missing_ok=True)

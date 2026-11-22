@@ -54,9 +54,18 @@ def verify_init_page_reset():
     with patch.object(co, "_page_snapshot", side_effect=[dirty, dirty]), patch.object(
             co, "_atomic_clear_owned", return_value=False):
         assert co._reset_initialized_page(fake, sleep=lambda _: None)["status"] == "INIT_RESET_CLEAR_FAILED"
-    with patch.object(co, "_page_snapshot", side_effect=[dirty, dirty, dirty]), patch.object(
-            co, "_atomic_clear_owned", return_value=True):
-        assert co._reset_initialized_page(fake, sleep=lambda _: None)["status"] == "INIT_RESET_UNCONFIRMED"
+    for final, reason in (
+        (dirty, "COMPOSER_NOT_EMPTY"),
+        (snapshot(generation=True), "GENERATION_ACTIVE"),
+        (snapshot(user_count=3), "TURN_CHANGED"),
+        (snapshot(empty=False, generation=True, user_count=3),
+         "COMPOSER_NOT_EMPTY,GENERATION_ACTIVE,TURN_CHANGED"),
+    ):
+        with patch.object(co, "_page_snapshot", side_effect=[dirty, dirty, final]), patch.object(
+                co, "_atomic_clear_owned", return_value=True):
+            out = co._reset_initialized_page(fake, sleep=lambda _: None)
+        assert out["status"] == "INIT_RESET_UNCONFIRMED", out
+        assert out["cleared"] is True and out["reason_code"] == reason, out
 
 
 def verify_journal_retirement():

@@ -56,6 +56,10 @@ def build_delete_manifest(
                 reject_reparse_components(item, target)
             except PathSecurityError as exc:
                 raise SafeFileOperationError(f"delete_tree_contains_reparse:{exc}") from exc
+            try:
+                context.require_write(item)
+            except PathSecurityError as exc:
+                raise SafeFileOperationError(f"delete_tree_entry_not_writable:{exc}") from exc
             entries.append({
                 "path": str(item),
                 "kind": "directory" if item.is_dir() else "file",

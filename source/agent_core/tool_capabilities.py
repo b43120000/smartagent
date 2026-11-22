@@ -27,9 +27,12 @@ PROTOCOL_CONTROL = "PROTOCOL_CONTROL"
 
 _CATEGORY_MEMBERS = {
     DETERMINISTIC_LOCAL: {
-        "run_command", "read_file", "write_file", "delete_path", "begin_file_write",
+        "install_toolchain", "run_command", "read_file", "write_file", "create_directory", "delete_path", "begin_file_write",
         "write_file_chunk", "commit_file_write", "abort_file_write",
         "list_directory", "inspect_directory", "find_file", "observe_fact",
+        "read_runtime_evidence",
+        "read_runtime_blackboard",
+        "inspect_toolchain_environment",
         "inspect_project_scope", "inspect_project_working_set", "compare_project_snapshot",
         "inspect_semantic_map", "update_semantic_map", "update_semantic_map_file",
         "extract_project_dependencies", "build_project_bundle",
@@ -68,6 +71,9 @@ _TOOL_PURPOSES = MappingProxyType({
     "list_directory": "List entries at one exact authorized directory without widening scope.",
     "find_file": "Find matching files below one authorized root.",
     "read_file": "Read one targeted authorized file and return bounded content or a result reference.",
+    "read_runtime_evidence": "Retrieve a bounded slice of the immutable same-request Runtime ToolResult using a real MIN-EV reference; never executes a shell.",
+    "read_runtime_blackboard": "Read only Executor event/events_index/metadata/terminal; never use for Global Toolchain or Software Inventory.",
+    "inspect_toolchain_environment": "Read current shared Toolchain Registry candidates and saved Software Inventory from the canonical installation root; no Planner path input and no host command.",
     "inspect_directory": "Inspect bounded directory metadata when a plain listing is insufficient.",
     "inspect_project_scope": "Inspect a declared project scope; not a substitute for list_directory.",
     "inspect_project_working_set": "Bind only the task plan's exact paths to the current Git/filesystem snapshot without uploading source.",
@@ -77,7 +83,9 @@ _TOOL_PURPOSES = MappingProxyType({
     "inspect_project_ledger": "Inspect compact project sync and semantic-history provenance without uploading files.",
     "query_project_history": "Query bounded Project Ledger events by type, snapshot, path, or time.",
     "project_sync": "Create or refresh Runtime project context using the smallest selected strategy.",
+    "install_toolchain": "Install only a checksum-verified on-demand tool ZIP in an isolated AppContainer, then register globally for reuse across ACL/Turbo modes.",
     "run_command": "Run an explicitly selected command inside the authorized workspace.",
+    "create_directory": "Create exactly one new, authorized directory without shell execution, recursive parent creation or overwrites.",
 })
 
 _WEB_DIRECT_DENY = frozenset({
@@ -141,7 +149,7 @@ def render_protocol_tool_section(interface: str) -> str:
             for name, kind in schema.get("optional", {}).items()
         ) or "(none)"
         if TOOL_CATEGORIES.get(tool) != PROTOCOL_CONTROL:
-            optional += ', depends_on:list (prior action IDs), replaces_action_id:str (never-executed deferred action only)'
+            optional += ', depends_on:list (prior action IDs), replaces_action_id:str (never-executed deferred action only), strategy_id:str (Runtime-issued STRAT candidate correlation only; no authority)'
             if str(interface or '').strip().lower().replace('-', '_') in {'web_direct','webdirect','remote'}:
                 optional += ', field_refs:dict (explicit current-request stable input ref_id+version)'
         lines.append(
@@ -182,6 +190,8 @@ def validate_capability_registry() -> None:
         raise ValueError(
             f"tool_capability_registry_drift:missing={missing};extra={extra}"
         )
+    from .semantic_capability_resolution import validate_action_semantic_registry
+    validate_action_semantic_registry()
 
 
 validate_capability_registry()

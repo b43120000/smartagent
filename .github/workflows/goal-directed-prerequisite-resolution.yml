@@ -1,0 +1,54 @@
+name: Goal Directed Prerequisite Resolution
+
+on:
+  push:
+    branches:
+      - feat/goal-directed-prerequisite-resolution-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prerequisite-resolution:
+    name: GDPR decision regression - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile changed modules and integration
+        run: >-
+          python -B -m compileall -q
+          source/agent_core/goal_prerequisite_resolution.py
+          source/agent_core/goal_gap_ledger.py
+          source/agent_core/action_readiness.py
+          source/agent_core/planner_context_snapshot.py
+          source/agent_core/protocol_manifest.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_goal_directed_prerequisite_resolution.py
+      - name: New goal prerequisite regression
+        run: python -B source/WebAgent/tests/test_goal_directed_prerequisite_resolution.py
+      - name: Previous Case D conditional goal regression
+        run: python -B source/WebAgent/tests/test_conditional_goal_interrupt_case_d.py
+      - name: Previous persistent Goal Gap regression
+        run: python -B source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py
+      - name: Previous Planner Context regression
+        run: python -B source/WebAgent/tests/validate_planner_context_bridge_it.py
+      - name: Previous Action Admission regression
+        run: python -B source/WebAgent/tests/validate_action_loop_runtime_state.py
+      - name: Existing context acquisition regression
+        run: python -B source/WebAgent/tests/validate_context_acquisition.py
+      - name: Source Manifest integrity
+        run: python -B -c "from agent_core.protocol_manifest import require_protocol_manifest; print(require_protocol_manifest('.'))"

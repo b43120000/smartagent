@@ -31,7 +31,7 @@ def terminal_heading(state, outcome=''):
     if state == 'COMPLETED':
         value = normalize_task_outcome(outcome)
         return {'SUCCESS': '🟢 已完成', 'FAILED': '🔴 已結束（驗收失敗）',
-                'PARTIAL': '🟠 部分完成／結果未確認', 'UNKNOWN': '🟠 部分完成／結果未確認'}[value]
+                'PARTIAL': '🔴 驗收未通過', 'UNKNOWN': '🔴 驗收未通過'}[value]
     if state == 'PAUSED':
         return '🟠 任務已暫停（尚未完成）'
     return '🔴 執行失敗' if state == 'FAILED' else '🟠 任務中斷'
@@ -118,6 +118,13 @@ def task_owner(task) -> str:
         return f'telegram:{sender}:{chat}'
     if str(meta.get('transport', '')).upper() == 'LOCAL_TEST':
         return local_owner()
+    if str(meta.get('transport', '')).upper() == 'WEBGPT_COPILOT':
+        # Bound to the configured page/conversation, never the model text.
+        route = dict(task.reply_route or meta.get('reply_route') or {})
+        url = str(route.get('conversation_key') or route.get('conversation_url') or '')
+        if not url.startswith('https://'):
+            raise ContinuationError('webcopilot_continuation_identity_missing')
+        return 'webcopilot:' + hashlib.sha256(url.encode('utf-8')).hexdigest()[:24]
     raise ContinuationError('continuation_owner_unsupported')
 
 
@@ -369,6 +376,61 @@ class TaskContinuationStore:
                         parent['continuations'].append(task_id)
             self._save(data)
 
+    def source_history_records(self, *, owner, workspace, exclude_task_id="", limit=48):
+        """Bounded read of same-owner/instance/workspace historical source facts.
+
+        Only completed/paused/interrupted records and list_directory action
+        receipts are included. This method neither replays nor authorizes actions.
+        """
+        if not owner:
+            return []
+        cap = max(1, min(int(limit), 64))
+        with self.lock.process_lock():
+            document = self._load()
+            records = list(document["records"].values())[-256:]
+            selected = []
+            for rec in reversed(records):
+                if (not isinstance(rec, dict)
+                        or rec.get("task_id") == exclude_task_id
+                        or rec.get("owner") != owner
+                        or rec.get("instance") != self.instance
+                        or rec.get("state") not in {"COMPLETED", "PAUSED", "INTERRUPTED", "FAILED"}
+                        or not _same_path(rec.get("workspace", ""), workspace)):
+                    continue
+                actions = rec.get("actions") or {}
+                results = rec.get("results") or {}
+                filtered_actions, filtered_results = {}, {}
+                if isinstance(actions, dict) and isinstance(results, dict):
+                    for aid, action_row in list(actions.items())[-48:]:
+                        if not isinstance(action_row, dict):
+                            continue
+                        action = action_row.get("action") or {}
+                        if not isinstance(action, dict) or action.get("tool") != "list_directory":
+                            continue
+                        filtered_actions[str(aid)] = {
+                            "action": {"tool": "list_directory", "path": action.get("path")},
+                            "result": str(action_row.get("result") or "")[:200000],
+                        }
+                        row = results.get(aid)
+                        if isinstance(row, dict):
+                            filtered_results[str(aid)] = {
+                                key: row.get(key) for key in (
+                                    "tool", "result_status", "executed", "request_id",
+                                    "task_epoch", "evidence_status"
+                                )
+                            }
+                selected.append({
+                    "task_id": str(rec.get("task_id", ""))[:120],
+                    "request_id": str(rec.get("request_id", ""))[:120],
+                    "task_epoch": str(rec.get("epoch", ""))[:120],
+                    "goal": str(rec.get("effective_goal") or rec.get("goal") or "")[:16000],
+                    "actions": filtered_actions,
+                    "results": filtered_results,
+                })
+                if len(selected) >= cap:
+                    break
+            return selected
+
     def get(self, task_id):
         with self.lock.process_lock():
             return copy.deepcopy(self._load()['records'].get(task_id))
@@ -511,7 +573,9 @@ def format_terminal_acceptance(terminal_acceptance, *, task_id, request_id):
     decision = str(receipt.get('decision', '') or '').upper()
     terminal_outcome = str(receipt.get('task_outcome', '') or '').upper()
     if not ((decision == 'COMPLETE' and terminal_outcome in {'SUCCESS', 'FAILED', 'PARTIAL'})
-            or (decision == 'INTERRUPT' and terminal_outcome in {'FAILED', 'UNKNOWN'})):
+            or (decision == 'INTERRUPT' and terminal_outcome in {'FAILED', 'UNKNOWN'})
+            or (decision == 'RUNTIME_FINISH_COMPARATOR_V1'
+                and terminal_outcome in {'SUCCESS', 'FAILED'})):
         return ''
     verification = str(receipt.get('verification_status', '') or '').upper()
     if verification not in {'PASS', 'FAIL', 'UNKNOWN', 'UNVERIFIED', 'SPEC_INVALID'}:
@@ -520,13 +584,83 @@ def format_terminal_acceptance(terminal_acceptance, *, task_id, request_id):
             + f'\nRuntime Decision / Outcome：{decision} / {terminal_outcome}'
             + f'\nRuntime Verification：{verification}'
             + f'\nReceipt ID：{receipt["receipt_id"]}'
-            + f'\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}')
+            + f'\nCondition ID：{str(receipt.get("matched_condition_id", "") or "")}'
+            + (f'\nComparator Cause：{str((receipt.get("comparison") or {}).get("reason_code") or "")}'
+               if decision == 'RUNTIME_FINISH_COMPARATOR_V1' else ''))
+
+
+_REVISION_MARKER_OPEN = "[SMARTAGENT_REVISION_SUGGESTION_V1]"
+_REVISION_MARKER_CLOSE = "[/SMARTAGENT_REVISION_SUGGESTION_V1]"
+
+
+def _extract_planner_requirement_revision(conclusion: str) -> tuple[str, dict | None]:
+    """Display-only proposal from accepted Planner terminal prose.
+
+    Model-authored text is never a Runtime permission, verified tool result,
+    accepted terminal receipt, or continuation goal. Only extract two bounded,
+    explicitly labeled single-line fields from the final-response body.
+    """
+    prose = str(conclusion or "")
+    pattern = (
+        re.escape(_REVISION_MARKER_OPEN)
+        + r"\r?\n(.*?)\r?\n"
+        + re.escape(_REVISION_MARKER_CLOSE)
+    )
+    matches = list(re.finditer(pattern, prose, re.S))
+    if len(matches) != 1:
+        return prose, None
+    match = matches[0]
+    raw = match.group(1)
+    if len(raw) > 1900:
+        return prose, None
+    lines = raw.splitlines()
+    if len(lines) != 2:
+        return prose, None
+    goal_prefix, method_prefix = "建議改寫：", "建議做法："
+    if not lines[0].startswith(goal_prefix) or not lines[1].startswith(method_prefix):
+        return prose, None
+    goal = lines[0][len(goal_prefix):].strip()
+    method = lines[1][len(method_prefix):].strip()
+    if (not goal or not method or len(goal) > 850 or len(method) > 850
+            or any(c in "\x00\r\n" for c in goal + method)):
+        return prose, None
+    cleaned = (prose[:match.start()] + prose[match.end():]).strip()
+    return cleaned, {"suggested_goal": goal, "suggested_method": method}
+
+
+def _render_requirement_revision(conclusion: str, task_id: str) -> tuple[str, str]:
+    cleaned, proposal = _extract_planner_requirement_revision(conclusion)
+    if proposal is None:
+        section = (
+            "🟣 需求修改建議（Planner 尚未提供具體提案）\n"
+            "目前沒有可直接採用的修訂文字。請先確認上方中斷原因；"
+            "不要把未知的路徑、授權或執行結果當成已確認。"
+        )
+        return cleaned, section
+    section = (
+        "🟣 需求修改建議（Planner 提案，尚未執行）\n"
+        "建議改寫：" + proposal["suggested_goal"] + "\n"
+        "建議做法：" + proposal["suggested_method"] + "\n"
+        "⚠️ 這只是模型建議，不是 Runtime 驗證或新授權。"
+        "請確認後才手動複製以下接續內容；不會自動送出或執行。"
+        "\n\n📋 建議接續文字（請確認後整段複製傳送）：\n"
+        + "接續工作 " + task_id + "\n"
+        + "調整需求：" + proposal["suggested_goal"] + "\n"
+        + "建議做法：" + proposal["suggested_method"]
+    )
+    return cleaned, section
 
 
 def render_task_reply(*, original_request, base, conclusion, task_id, request_id, state, source_task_id='', ack_id='', outcome='', terminal_acceptance=None):
+    advisory = ''
+    if state in {'INTERRUPTED', 'PAUSED', 'FAILED'}:
+        conclusion, advisory = _render_requirement_revision(str(conclusion or ''), task_id)
     return (f'使用者原始需求：\n{original_request}\n\nBase：\n{base or "（尚無已接受的評估）"}'
-            f'\n\n結果／中斷原因：\n{conclusion}\n\n狀態：{state}'
-            + (f'\n驗收結果：{outcome}' if outcome else '')
+            f'\n\n結果／中斷原因：\n{conclusion}'
+            + (f'\n\n{advisory}' if advisory else '')
+            + f'\n\n狀態：{state}'
+            + (f'\n驗收結果：{"PASS" if normalize_task_outcome(outcome) == "SUCCESS" else "FAIL"}'
+               if state in {'COMPLETED', 'FAILED', 'INTERRUPTED'} else '')
             + f'\n任務結果：{terminal_heading(state, outcome)}'
             + format_terminal_acceptance(terminal_acceptance, task_id=task_id, request_id=request_id)
             + f'\ntask_id: {task_id}\nrequest_id: {request_id}'

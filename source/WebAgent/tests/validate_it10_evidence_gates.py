@@ -83,6 +83,7 @@ class IT10EvidenceGates(unittest.TestCase):
             generation_active=lambda: False)
         scraper = SimpleNamespace(
             _web_ui_adapter=lambda: adapter,
+            _composer_locator=lambda: SimpleNamespace(evaluate=lambda script: True),
             _normalize_composer_text=lambda value: value,
             _read_composer_text=lambda: "visible",
             _page=SimpleNamespace(url="about:blank"))

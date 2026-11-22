@@ -1,0 +1,129 @@
+name: Git67 Sidecar Reproduction (No Fix)
+
+on:
+  push:
+    branches: [git67/case-c-action-contract-repair]
+    paths:
+      - 'source/WebAgent/tests/sidecar_git67_reproduction.py'
+      - 'source/WebAgent/tests/test_git67_sidecar_reproduction.py'
+      - 'source/WebAgent/tests/sidecar_git67_path_localization.py'
+      - 'source/WebAgent/tests/test_git67_path_localization.py'
+      - '.github/workflows/git67-sidecar-reproduction.yml'
+      - 'docs/git67_sidecar_reproduction.md'
+      - 'docs/git67_path_localization_report.md'
+      - 'docs/evidence/**'
+      - 'docs/git67_raw_evidence_capture.md'
+      - 'source/WebAgent/tests/test_git67_raw_evidence_collector.py'
+      - 'source/WebAgent/tests/test_git67_collect_bat_windows.py'
+      - 'source/WebAgent/tests/test_git67_minimal_trace.py'
+      - 'source/WebAgent/tests/test_git67_trace_identity_isolation.py'
+      - 'source/WebAgent/tests/test_git67_submitted_dom_scope.py'
+      - 'source/WebAgent/tests/test_git67_missing_slash_guard.py'
+      - 'source/WebAgent/tests/test_git67_init_publish.py'
+      - 'source/agent_core/it10_auto_publish.py'
+      - 'source/agent_core/auto_rca_upload.py'
+      - 'init.bat'
+      - 'install_smart_agent/git67_it10_prepare.ps1'
+      - 'source/WebAgent/minimal_decision.py'
+      - 'source/WebAgent/pokeclaw_executor_loop.py'
+      - 'source/agent_core/web_runtime.py'
+      - 'source/agent_core/web_ui/message_text.py'
+      - 'source/RemoteAgent/telegram_webagent_worker.py'
+      - 'source/agent_core/request_context.py'
+      - 'source/agent_core/path_integrity_trace.py'
+      - 'source/agent_core/it10_raw_collector.py'
+      - 'source/RemoteAgent/telegram_transport.py'
+      - 'source/WebAgent/protocol_loop.py'
+      - 'collect.bat'
+      - 'config/protocol_manifest.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sidecar:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install offline test dependencies
+        run: python -m pip install --disable-pip-version-check pytest playwright
+      - name: Emit canonical Protocol Manifest for forensic packaging reconciliation (read only)
+        run: >-
+          python -B -c "import json; from pathlib import Path; from agent_core.protocol_manifest import build_protocol_manifest; canonical=json.dumps(build_protocol_manifest(Path('.')),ensure_ascii=False,indent=2,sort_keys=True); print('GIT67_CANONICAL_MANIFEST_JSON='+json.dumps(canonical,ensure_ascii=False))"
+      - name: Verify packaged protocol manifest without bypass (read only)
+        run: >-
+          python -B -c "import json; from pathlib import Path; from agent_core.protocol_manifest import require_protocol_manifest, build_protocol_manifest; r = require_protocol_manifest(Path('.')); missing = build_protocol_manifest(Path('.'))['missing_files']; assert r['status'] == 'PASS' and r['hash_verification'] == 'PASS' and r['hash_mismatches'] == [] and missing == [], r; print(json.dumps(dict(r, missing_files=missing)))"
+      - name: Compile sidecar only
+        run: >-
+          python -B -m compileall -q
+          source/WebAgent/tests/sidecar_git67_reproduction.py
+          source/WebAgent/tests/test_git67_sidecar_reproduction.py
+          source/WebAgent/tests/sidecar_git67_path_localization.py
+          source/WebAgent/tests/test_git67_path_localization.py
+          source/WebAgent/tests/test_git67_raw_evidence_collector.py
+          source/WebAgent/tests/test_git67_collect_bat_windows.py
+          source/WebAgent/tests/test_git67_minimal_trace.py
+          source/WebAgent/tests/test_git67_trace_identity_isolation.py
+          source/WebAgent/tests/test_git67_submitted_dom_scope.py
+          source/WebAgent/tests/test_git67_missing_slash_guard.py
+          source/WebAgent/tests/test_git67_init_publish.py
+          source/agent_core/it10_auto_publish.py
+          source/agent_core/auto_rca_upload.py
+          source/WebAgent/minimal_decision.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/agent_core/web_runtime.py
+          source/agent_core/request_context.py
+          source/agent_core/path_integrity_trace.py
+          source/agent_core/web_ui/message_text.py
+          source/agent_core/it10_raw_collector.py
+          source/RemoteAgent/telegram_webagent_worker.py
+          source/RemoteAgent/telegram_transport.py
+      - name: Reproduce Git67 with production functions (no code edits)
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_sidecar_reproduction.py
+          source/WebAgent/tests/test_git67_path_localization.py
+      - name: Verify exact IT10 raw-byte and pointer-closure behavior (offline)
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_raw_evidence_collector.py
+          source/WebAgent/tests/test_git67_minimal_trace.py
+          source/WebAgent/tests/test_git67_trace_identity_isolation.py
+          source/WebAgent/tests/test_git67_submitted_dom_scope.py
+          source/WebAgent/tests/test_git67_missing_slash_guard.py
+          source/WebAgent/tests/test_git67_init_publish.py
+          source/WebAgent/tests/test_auto_rca_upload.py
+      - name: Windows PowerShell 5.1 collector ZIP smoke
+        if: runner.os == 'Windows'
+        run: >-
+          python -m venv .venv
+      - name: Restore tracked venv gitignore after synthetic CI venv creation
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -c "import subprocess; from pathlib import Path; p=Path('.venv/.gitignore'); p.write_bytes(subprocess.check_output(['git','show','HEAD:.venv/.gitignore'])); print('CI_VENV_TRACKED_GITIGNORE_RESTORED=YES')"
+      - name: Windows real init.bat CMD to PowerShell parameter and private ACL regression
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_init_publish.py::test_init_bat_persists_environment_and_protects_private_acl
+      - name: Windows Collector ZIP integration regression
+        if: runner.os == 'Windows'
+        run: >-
+          python -B -m pytest -q
+          source/WebAgent/tests/test_git67_collect_bat_windows.py
+      - name: Emit sidecar diagnosis in logs (not a Live transport claim)
+        run: >-
+          python -B -m WebAgent.tests.sidecar_git67_reproduction

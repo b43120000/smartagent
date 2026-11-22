@@ -24,7 +24,8 @@ PROTOCOL_VERSION = 8
 MODEL_ACTION_FIELDS = {"tool", "action_id"}
 MODEL_COMMIT_FIELDS = {"tool", "action_count"}
 TOOL_REQUIRED_FIELDS = {
-    "run_command": {"command", "operation"}, "observe_fact": {"path"}, "read_file": {"path"},
+    "run_command": {"command", "operation"}, "install_toolchain": {"name", "version", "source"}, "observe_fact": {"path"}, "read_file": {"path"},
+    "inspect_toolchain_environment": set(),
     "write_file": {"path", "content"},
     "delete_path": {"path", "recursive", "reason"},
     "begin_file_write": {"write_id", "path", "encoding", "overwrite"},
@@ -215,7 +216,11 @@ def validate_model_action(
     result["action_id"] = action_id
     if not transport_only and tool == "run_command" and "operation" in result:
         try:
-            mismatch = operation_mismatch_detail(result)
+            from .shell_execution import effective_action_for_policy, ShellModeError
+            try:
+                mismatch = operation_mismatch_detail(effective_action_for_policy(result))
+            except ShellModeError as exc:
+                raise ProtocolV8Error("RUN_COMMAND_SHELL_CONTRACT_INVALID", str(exc)) from exc
         except ValueError as exc:
             raise ProtocolV8Error("RUN_COMMAND_OPERATION_INVALID", str(exc)) from exc
         if mismatch:

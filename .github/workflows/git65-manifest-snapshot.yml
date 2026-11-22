@@ -1,0 +1,35 @@
+name: Git65 Generate Full Update Manifest Snapshot
+
+on:
+  push:
+    branches:
+      - "git65/acl-off-auto-approve-runtime"
+    paths:
+      - ".github/workflows/git65-manifest-snapshot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Generate complete release manifest (read-only; no automatic push)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          from install_smart_agent.build_update_manifest import build
+          manifest = build(Path('.').resolve(), release_id='git65-acl-off-auto-approve-20261116')
+          value = json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
+          print("GIT65_MANIFEST_BEGIN")
+          for index in range(0, len(value), 512):
+              print("GIT65_MANIFEST_CHUNK_%05d=%s" % (index // 512, value[index:index+512]))
+          print("GIT65_MANIFEST_DIGEST=" + hashlib.sha256(value.encode('ascii')).hexdigest())
+          print("GIT65_MANIFEST_END")
+          PY

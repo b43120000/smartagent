@@ -55,6 +55,32 @@ def run() -> dict:
     assert authorize_path(extracted[0], [root], require_absolute=True) == plan.resolve()
     assert authorize_path(extracted[1], [root], require_absolute=True) == root.resolve()
 
+    # Requested creation under an already-existing authorized parent:
+    # the drive root is an input/root, and the following Chinese imperative
+    # must not be swallowed into a malformed path.
+    create_root_request = (
+        "你到這個路徑下 E:\\   去生成一個資料夾叫做 ScreenOFF的資料夾\n"
+        '然後先去做一個main.cpp 裡面print "tool 是用來對螢幕做關閉的功能"'
+    )
+    assert extract_authorized_paths(create_root_request) == ["E:\\"], (
+        extract_authorized_paths(create_root_request)
+    )
+    assert resolve_authorized_paths(create_root_request) == ["E:\\"]
+    # Existing folder names with spaces are not shortened just because the
+    # basename is absent, and spelling is never silently corrected.
+    explicit_output_request = (
+        '目標資料夾完整路徑：E:\\featrue。請在上述路徑建立 main.cpp，'
+        '輸出「tool 或應用程式開發區」。'
+    )
+    assert extract_authorized_paths(explicit_output_request) == [
+        r"E:\featrue"
+    ]
+    assert resolve_authorized_paths(explicit_output_request) == [
+        r"E:\featrue"
+    ]
+    assert extract_authorized_paths(r"列出 E:\ Camera Test Data") == [
+        r"E:\ Camera Test Data"
+    ]
     assert extract_authorized_paths(r"list C:\workspace\picture") == [r"C:\workspace\picture"]
     assert extract_authorized_paths(
         "列出 E:\\card\\runtime_it 第一層內容\n在 E:\\card\\runtime_it 建立 batch_large_probe.txt"
@@ -125,6 +151,32 @@ def run() -> dict:
         else:
             raise AssertionError(f"disguised ADS path must fail closed: {candidates}")
 
+    # Expected output absence is not a prerequisite failure. The write
+    # authority comes ONLY from the configured existing parent, and
+    # tool_write_file performs parent mkdir after the normal require_write gate.
+    import tempfile
+    from agent_core.tools import tool_write_file
+    with tempfile.TemporaryDirectory(prefix="authorized-creation-it-") as temp:
+        base = Path(temp)
+        authorized_parent = base / "allowed"
+        authorized_parent.mkdir()
+        output = authorized_parent / "feature" / "main.cpp"
+        assert not output.parent.exists()
+        context = SecurityContext.for_workspace(authorized_parent)
+        created = tool_write_file(
+            str(output), '#include <iostream>\nint main() { return 0; }\n',
+            security_context=context,
+        )
+        assert "[成功]" in created, created
+        assert output.is_file()
+        assert '#include <iostream>' in output.read_text(encoding="utf-8")
+        unauthorized = base / "outside" / "main.cpp"
+        refused = tool_write_file(
+            str(unauthorized), "unapproved",
+            security_context=context,
+        )
+        assert "[錯誤]" in refused, refused
+        assert not unauthorized.exists()
     result = {
         "multi_path_request_split": True,
         "quoted_path_with_spaces": True,
@@ -135,6 +187,8 @@ def run() -> dict:
         "disguised_ads_guard_preserved": True,
         "saved_plan_scope_isolated": True,
         "authorized_root_allows_future_children": True,
+        "actual_missing_output_created_inside_authorized_parent": True,
+        "unauthorized_sibling_remains_unwritten": True,
     }
     print("AUTHORIZED_PATH_EXTRACTION_OK")
     print(result)

@@ -1,0 +1,71 @@
+name: P0-P3 Bootstrap and Protocol Regression
+
+on:
+  push:
+    branches:
+      - feat/p0-p3-bootstrap-progress-target-ready-20261106
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: Protocol regression - ${{ matrix.os }} - Python 3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      PYTHONPATH: source
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONWARNINGS: error::SyntaxWarning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile modified sources and tests
+        run: >
+          python -B -m compileall -q
+          source/agent_core/initial_progress_normalization.py
+          source/agent_core/target_path_contract.py
+          source/agent_core/session_protocol.py
+          source/WebAgent/session.py
+          source/WebAgent/protocol_loop.py
+          source/WebAgent/tests/test_p0_p3_bootstrap_contract.py
+          source/WebAgent/tests/validate_startup_protocol_flow.py
+      - name: P0-P3 integration
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_p0_p3_bootstrap_contract.py
+      - name: WebAgent session bootstrap
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_startup_protocol_flow.py
+      - name: CCRC repair integration
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_cross_contract_repair_it.py
+      - name: Flexible progress integration
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_flexible_progress_admission.py
+      - name: Progress reply schema
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_progress_reply_contract.py
+      - name: GAR hold regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/validate_gar_progress_hold_it.py
+      - name: Existing terminal-target regression
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_target_path_contract.py
+      - name: Existing P0 environmental evidence
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_goal_repair_p0_env.py
+      - name: Existing Auto RCA
+        run: python -W error::SyntaxWarning -B source/WebAgent/tests/test_auto_rca_upload.py
+      - name: Validate modified-source manifest
+        run: >
+          python -B -c "import hashlib,json,pathlib;
+          m=json.loads(pathlib.Path('config/protocol_manifest.json').read_text(encoding='utf-8'));
+          paths=['source/agent_core/initial_progress_normalization.py',
+          'source/agent_core/session_protocol.py',
+          'source/agent_core/target_path_contract.py',
+          'source/WebAgent/session.py',
+          'source/WebAgent/protocol_loop.py',
+          'source/agent_core/protocol_manifest.py'];
+          bad=[p for p in paths if m['core_files'].get(p)!=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()];
+          print('MANIFEST_MISMATCHES:',bad);
+          assert not bad,bad"

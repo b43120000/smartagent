@@ -47,6 +47,28 @@ def reply_contract(ledger):
     }
 
 
+def reconcile_redundant_patch_fields(payload, ledger):
+    """Omit only redundant, exactly equivalent inherited Progress fields.
+
+    The accepted Ledger remains authoritative; never reinterpret an explicit
+    new Step, Goal clause, decision, outcome, condition, or Evidence ref.
+    Any conflicting field is kept for the ordinary Progress validator to
+    reject or accept as a legitimate planned change.
+    """
+    if (not has_accepted_plan(ledger)
+            or not isinstance(payload, dict)
+            or payload.get('progress_update', 'PATCH') != 'PATCH'
+            or str(payload.get('decision', '')).upper() != 'CONTINUE'):
+        return dict(payload), []
+    proposed = normalize_progress_fields(payload)
+    redundant = []
+    for key in INHERITED_FIELDS:
+        if key in proposed and proposed[key] == getattr(ledger, key):
+            proposed.pop(key)
+            redundant.append(key)
+    return proposed, redundant
+
+
 def materialize_progress(
     payload, ledger, *, allow_omitted_answer_only_evidence=False,
 ):
@@ -88,14 +110,8 @@ def materialize_progress(
 
 def normalize_progress_fields(payload):
     """Normalize spelling/types only when the interpretation is unique."""
-    result = deepcopy(dict(payload))
-    for alias, canonical in {'current step':'current_step', 'total steps':'total_steps',
-                              'current focus':'current_focus', 'next action':'next_action',
-                              'base evaluation':'base_evaluation'}.items():
-        if alias in result:
-            if canonical in result and result[canonical] != result[alias]:
-                raise ValueError('conflicting_progress_alias:'+canonical)
-            result[canonical] = result.pop(alias)
+    from .canonical_contract_resolver import resolve_core_progress_fields
+    result, _receipt = resolve_core_progress_fields(deepcopy(dict(payload)))
     def number(value):
         if isinstance(value, str) and re.fullmatch(r'(?:0|[1-9][0-9]*)(?:\.[0-9]+)?', value.strip()):
             return float(value.strip()) if '.' in value else int(value.strip())
@@ -113,3 +129,52 @@ def normalize_progress_fields(payload):
                 status = step['status'].strip().upper().replace(' ', '_')
                 step['status'] = 'COMPLETED' if status == 'COMPLETE' else status
     return result
+
+
+def dynamic_progress_contract(ledger, *, runtime_transition: str = "",
+                              action_history_count: int = 0) -> dict:
+    """Advertise conditional fields without relaxing admission.
+
+    Accepted plan fields are inherited on PATCH; decision and evidence are
+    always verified afresh. The trusted text-only terminal exception continues
+    to belong exclusively to the existing Runtime terminal gate.
+    """
+    is_patch = has_accepted_plan(ledger)
+    return {
+        "schema": "SMARTAGENT_DYNAMIC_PROGRESS_CONTRACT_V1",
+        "mode": "PATCH" if is_patch else "FULL",
+        "required": (
+            ["decision", "current_focus", "decision_reason", "evidence_refs"]
+            if is_patch else
+            ["decision", "current_focus", "decision_reason", "steps",
+             "total_steps", "current_step", "completion_contract",
+             "base_evaluation", "evidence_refs"]
+        ),
+        "inherited_if_omitted": list(INHERITED_FIELDS) if is_patch else [],
+        "conditional": {
+            "CONTINUE": ["next_action", "operational_action_unless_runtime_wait"],
+            "COMPLETE": ["outcome", "matched_condition", "terminal_evidence_gate"],
+            "INTERRUPT": ["outcome", "context_request"],
+        },
+        "decision_outcome_values": {
+            "CONTINUE": ["PENDING"],
+            "COMPLETE": ["SUCCESS", "FAILED", "PARTIAL"],
+            "INTERRUPT": ["FAILED", "UNKNOWN"],
+        },
+        "context_request_contract": {
+            "allowed_fields": ["kind", "detail", "blocking_action_id"],
+            "kinds": ["RUNTIME_READ", "USER_INPUT", "BLOCKED"],
+            "runtime_read_requires_continue": True,
+            "user_input_requires_detail": True,
+            "blocked_requires_detail_and_runtime_objective_blocker_id": True,
+            "interruption_requires_runtime_context_gate": True,
+            "do_not_invent_blocker_references": True,
+        },
+        "can_omit_outcome_if_continue": True,
+        "null_only_when_inapplicable": ["next_action"],
+        "runtime_wait_allowed": runtime_transition == "WAIT_RUNTIME",
+        "action_history_present": bool(action_history_count),
+        "text_only_terminal_requires_existing_runtime_gate": True,
+        "unknown_is_not_null": True,
+        "full_runtime_admission_required": True,
+    }

@@ -1,0 +1,279 @@
+"""Git67 byte-exact IT10 capture & collector regressions; no network / no Runtime actions."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from agent_core import path_integrity_trace as PIT
+from agent_core.it10_raw_collector import collect
+from agent_core.request_context import RequestContextStore
+from agent_core.web_ui.providers.chatgpt.composer import read_composer_snapshot
+from agent_core.web_ui.message_text import read_message_text, read_answer_text
+from WebAgent.minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
+from RemoteAgent.telegram_transport import TelegramBotClient, TelegramReceiverConfig, TelegramUpdateAdapter
+
+
+REQUEST = ("NLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\n"
+           "NLIT_MANUAL_RUN_ID=GIT67-RAW-TEST\n"
+           "E:\\AIspace\\.case_d_backups\\中文\\probe.txt\r\n")
+TASK = "TASK-GIT67-RAW"
+RID = "RR-GIT67-RAW"
+
+
+class FakeResponse:
+    def __init__(self, raw):
+        self.raw = raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+    def read(self):
+        return self.raw
+
+
+class RawCollectorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.private = self.root / "private"
+        self.stage = self.root / "stage"
+        self.private.mkdir()
+        self.stage.mkdir()
+        self.env = patch.dict(os.environ, {
+            "SMARTAGENT_IT10_PATH_TRACE": "1",
+            "SMARTAGENT_IT10_PATH_TRACE_RAW": "YES",
+            "SMARTAGENT_IT10_PATH_TRACE_PRIVATE_ACL_CONFIRMED": "YES",
+            "SMARTAGENT_IT10_PATH_TRACE_RUN_ID": "GIT67-RAW-OFFLINE",
+            "SMARTAGENT_IT10_PATH_TRACE_ROOT": str(self.private),
+        })
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        PIT.begin(REQUEST, task_id=TASK, request_id=RID)
+
+    def _rows(self):
+        return [json.loads(line) for p in self.private.glob("it10-path-*.jsonl")
+                for line in p.read_text(encoding="utf-8").splitlines()]
+
+    def _update(self):
+        return {"update_id": 71, "message": {"message_id": 72, "date": 12345678,
+                 "from": {"id": 1, "is_bot": False},
+                 "chat": {"id": 1, "type": "private"},
+                 "text": REQUEST}}
+
+    def test_raw_blob_exact_utf8_bytes_and_pointer_closure(self):
+        PIT.record("06_worker_input", REQUEST)
+        row = self._rows()[0]
+        original = REQUEST.encode("utf-8")
+        self.assertEqual(row["raw_blob_status"], "PERSISTED")
+        self.assertEqual(row["raw_origin"], "UTF8_FROM_PYTHON_STR")
+        self.assertEqual((self.private / row["raw_blob_ref"]).read_bytes(), original)
+        self.assertEqual(row["raw_blob_sha256"], hashlib.sha256(original).hexdigest())
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["status"], "PARTIAL")  # Other live boundaries absent.
+        self.assertEqual(result["raw_blob_count"], 1)
+        self.assertTrue((self.stage / "it10/raw" / row["raw_blob_ref"]).is_file())
+        self.assertEqual((self.stage / "it10/raw" / row["raw_blob_ref"]).read_bytes(), original)
+        self.assertEqual(len(result["missing_refs"]), 0)
+
+    def test_request_context_pointer_resolves_original_file_bytes(self):
+        store = RequestContextStore(self.root / "contexts", RID, "epoch", REQUEST)
+        path = str(self.root / "probe.txt")
+        reference = store.remember("path", path, "USER_REQUEST")
+        original = store.path.read_bytes()
+        self.assertEqual(store.resolve("path", reference), path)
+        rows = [row for row in self._rows() if row["stage"] == "12a_request_context_file_bytes"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["raw_origin"], "REQUEST_CONTEXT_FILE_BYTES")
+        self.assertEqual((self.private / rows[0]["raw_blob_ref"]).read_bytes(), original)
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["raw_blob_count"], 1)
+        self.assertEqual((self.stage / "it10/raw" / rows[0]["raw_blob_ref"]).read_bytes(), original)
+
+    def test_composer_raw_dom_and_semantic_views_remain_separate(self):
+        inner_html = "<p>E:\\AIspace\\.case_d_backups</p><p>下一行</p>"
+        text_content = "E:\\AIspace\\.case_d_backups下一行"
+        class Locator:
+            def evaluate(self, script):
+                if "innerHTML:" in script:
+                    return {"innerHTML": inner_html, "textContent": text_content}
+                return {"primary": "E:\\AIspace\\.case_d_backups\n下一行",
+                        "semantic": "E:\\AIspace\\.case_d_backups\n下一行"}
+        snapshot = read_composer_snapshot(Locator())
+        self.assertIn(".case_d_backups", snapshot.primary_text)
+        observed = {row["stage"]: row for row in self._rows()}
+        for stage, exact in (("09_composer_dom_innerHTML", inner_html),
+                             ("09_composer_dom_textContent", text_content)):
+            self.assertEqual(observed[stage]["evidence_status"], "DOM_SERIALIZATION")
+            blob = self.private / observed[stage]["raw_blob_ref"]
+            self.assertEqual(blob.read_bytes(), exact.encode("utf-8"))
+
+    def test_submitted_user_dom_matches_unique_it10_subcase_not_request_id(self):
+        request = ("NLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\n"
+                   "IT10_SUBCASE_ID=GIT67-USER-SUBMIT-001\n"
+                   "E:\\AIspace\\.case_d_backups\n")
+        PIT.begin(request, task_id=TASK, request_id=RID, transport="LOCAL_TEST")
+        class Turn:
+            def __init__(self, message):
+                self.message = message
+            def evaluate(self, script):
+                if "const excluded" in script:
+                    return self.message
+                if "innerText:el.innerText" in script:
+                    return {"innerText": self.message, "textContent": self.message}
+                if "el.innerHTML" in script:
+                    return "<p>" + self.message.replace("\n", "</p><p>") + "</p>"
+                raise AssertionError("unexpected JS evaluation")
+        # No RR-... Request ID in user-visible turn, as with actual ChatGPT.
+        self.assertNotIn(RID, request)
+        self.assertEqual(read_message_text(Turn(request)), request.strip())
+        got = {r["stage"]: r for r in self._rows()}
+        self.assertIn("10_submitted_innerText", got)
+        self.assertIn("10_submitted_textContent", got)
+        self.assertIn("10_submitted_innerHTML", got)
+        for stage in ("10_submitted_innerText", "10_submitted_textContent"):
+            self.assertEqual((self.private / got[stage]["raw_blob_ref"]).read_bytes(), request.encode("utf-8"))
+        before = len(self._rows())
+        foreign = request.replace("GIT67-USER-SUBMIT-001", "GIT67-USER-SUBMIT-FOREIGN")
+        read_message_text(Turn(foreign))
+        self.assertEqual(len(self._rows()), before)
+        # A cross-helper context restoration must carry the same subcase ID.
+        token = PIT.context()
+        PIT.restore(token)
+        self.assertEqual(PIT.context()["subcase_id"], "GIT67-USER-SUBMIT-001")
+
+    def test_minimal_stage_index_reports_missing_live_boundaries(self):
+        PIT.record("08_minimal_prompt", REQUEST)
+        PIT.record("11_minimal_planner_response", '{"type":"blocked","reason":"demo"}')
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["execution_path"], "MINIMAL_EXECUTOR")
+        self.assertIn("11_minimal_parser_input", result["missing_stages"])
+        self.assertIn("10_submitted_innerText", result["missing_stages"])
+        self.assertIn("MODEL_SERVICE_SERVER_RAW_OUTPUT_NOT_CAPTURED_BY_BROWSER_UI",
+                      result["unobserved_external_boundaries"])
+        self.assertEqual(result["status"], "PARTIAL")
+
+    def test_stage_name_without_raw_blob_is_not_a_fidelity_pass(self):
+        PIT.record("08_minimal_prompt", REQUEST)
+        PIT.record("11_minimal_parser_input", "")
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertIn("11_minimal_parser_input", result["observed_stages"])
+        self.assertNotIn("11_minimal_parser_input", result["missing_stages"])
+        self.assertIn("11_minimal_parser_input", result["missing_raw_stages"])
+        self.assertEqual(result["status"], "PARTIAL")
+
+    def test_parser_candidate_decode_and_rejected_path_have_all_raw_bytes(self):
+        good = r"E:\AIspace\.case_d_backups"
+        bad = r"E:\AIspace.case_d_backups"
+        goal = ("NLIT_CASE_ID=IT10\nNLIT_TEST_PURPOSE=PATH_INTEGRITY_E2E\n" + good)
+        PIT.begin(goal, task_id=TASK, request_id=RID, transport="LOCAL_TEST")
+        response = json.dumps({"type": "tool_call", "name": "observe_fact",
+                               "arguments": {"path": bad}}, ensure_ascii=False)
+        with self.assertRaises(MinimalDecisionError) as error:
+            parse_minimal_decision_with_diagnostics(response, original_goal=goal)
+        self.assertEqual(error.exception.code, "model_explicit_path_separator_missing")
+        rows = self._rows()
+        needed = ("11_minimal_json_candidate_raw",
+                  "11_minimal_candidate_before_json_decode",
+                  "11_minimal_json_decoded", "11_minimal_path_integrity_rejected")
+        for key in needed:
+            row = next(row for row in rows if row["stage"] == key)
+            self.assertEqual(row["raw_blob_status"], "PERSISTED")
+            raw = (self.private / row["raw_blob_ref"]).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), row["raw_blob_sha256"])
+            self.assertEqual(row.get("extra", {}).get("candidate_index"), 0 if key != "11_minimal_path_integrity_rejected" else None)
+        result = collect(TASK, RID, self.private, self.stage)
+        stages = {row["stage"] for row in result["boundary_records"]}
+        self.assertTrue(set(needed).issubset(stages))
+        self.assertEqual(result["missing_refs"], [])
+        self.assertTrue(all(
+            row["pointer_verified_and_copied"] for row in result["boundary_records"]
+            if row["stage"] in needed
+        ))
+
+    def test_assistant_dom_and_adapter_value_are_stored_before_strip(self):
+        class Answer:
+            def evaluate(self, script, *args):
+                if "innerHTML:el.innerHTML" in script:
+                    return {
+                        "innerHTML": "<code>E:\\AIspace\\.case_d_backups</code>",
+                        "textContent": "E:\\AIspace\\.case_d_backups",
+                        "innerText": "E:\\AIspace\\.case_d_backups",
+                    }
+                return "  E:\\AIspace\\.case_d_backups  "
+        value = read_answer_text(Answer())
+        self.assertEqual(value, r"E:\AIspace\.case_d_backups")
+        names = {row["stage"] for row in self._rows()}
+        self.assertTrue({
+            "10c_answer_content_innerHTML", "10c_answer_content_textContent",
+            "10c_answer_content_innerText", "10c_answer_adapter_value",
+        }.issubset(names))
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["missing_refs"], [])
+        self.assertTrue(any(
+            row["stage"] == "10c_answer_adapter_value"
+            and row["pointer_verified_and_copied"]
+            for row in result["boundary_records"]
+        ))
+
+    def test_unarmed_raw_is_not_persisted(self):
+        with patch.dict(os.environ, {"SMARTAGENT_IT10_PATH_TRACE_RAW": "NO"}):
+            PIT.record("06_worker_input", REQUEST)
+            self.assertFalse(list(self.private.glob("*.bin")))
+            self.assertEqual(collect(TASK, RID, self.private, self.stage)["status"], "NOT_ARMED")
+
+    def test_missing_raw_pointer_is_explicit(self):
+        PIT.record("06_worker_input", REQUEST)
+        reference = self._rows()[0]["raw_blob_ref"]
+        (self.private / reference).unlink()
+        result = collect(TASK, RID, self.private, self.stage)
+        self.assertEqual(result["raw_blob_count"], 0)
+        self.assertTrue(any(x.startswith("RAW_MISSING_OR_OVERSIZED") for x in result["missing_refs"]))
+
+    def test_http_body_exact_before_decode(self):
+        raw = json.dumps({"ok": True, "result": [self._update()]},
+                         ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        config = TelegramReceiverConfig(bot_token="LOCAL-TEST-NO-NETWORK",
+                    allowed_user_ids=(1,), allowed_chat_ids=(1,))
+        client = TelegramBotClient(config, opener=lambda *a, **k: FakeResponse(raw))
+        update = client.get_updates(offset=0, timeout=1)[0]
+        message, reason = TelegramUpdateAdapter(config).normalize(update)
+        self.assertEqual(reason, "")
+        self.assertEqual(message.text, REQUEST.strip())
+        rows = [row for row in self._rows() if row["stage"] == "01b_telegram_http_body"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["raw_origin"], "TELEGRAM_GETUPDATES_HTTP_RESPONSE_BODY")
+        self.assertEqual((self.private / rows[0]["raw_blob_ref"]).read_bytes(), raw)
+        self.assertEqual(rows[0]["raw_blob_sha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_mixed_http_update_batch_is_not_leaked(self):
+        item = self._update()
+        other = {"update_id": 72, "message": {
+            "message_id": 73, "date": 12345679, "from": {"id": 2, "is_bot": False},
+            "chat": {"id": 2, "type": "private"}, "text": "another private conversation"}}
+        raw = json.dumps({"ok": True, "result": [item, other]}, ensure_ascii=False).encode("utf-8")
+        config = TelegramReceiverConfig(bot_token="LOCAL-TEST-NO-NETWORK",
+                    allowed_user_ids=(1,), allowed_chat_ids=(1,))
+        update = TelegramBotClient(config, opener=lambda *a, **k: FakeResponse(raw)).get_updates(offset=0, timeout=1)[0]
+        TelegramUpdateAdapter(config).normalize(update)
+        self.assertFalse(any(row["stage"] == "01b_telegram_http_body" for row in self._rows()))
+
+    def test_wrong_task_or_request_cannot_collect_neighbor_trace(self):
+        PIT.record("06_worker_input", REQUEST)
+        self.assertEqual(collect("TASK-FOREIGN", RID, self.private, self.stage)["status"],
+                         "NO_TASK_REQUEST_BOUND_TRACE")
+        self.assertEqual(collect(TASK, "RR-FOREIGN", self.private, self.stage)["status"],
+                         "NO_TASK_REQUEST_BOUND_TRACE")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

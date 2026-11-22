@@ -10,6 +10,7 @@ import os
 import re
 import time
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -25,7 +26,7 @@ from agent_core.protocol_v9 import (
     action_digest as v8_action_digest,
     admit_action as v8_admit_action,
     build_result as v8_build_result,
-    parse_v9_tool_transport,
+    parse_v9_tool_transport_detailed,
     validate_model_commit as v8_validate_model_commit,
 )
 from agent_core.result_exchange import prepare_tool_result
@@ -83,7 +84,7 @@ _PATH_PROSE_BOUNDARY_RE = re.compile(
     # An unquoted path cannot consume a following natural-language predicate
     # or task instruction. Keep explicit quotes intact in _authorized_path_end;
     # never guess a shortened path from a genuine path containing spaces.
-    r"\s+(?=(?:執行(?=\s)|檢查(?=\s)|確認(?=\s)|驗證(?=\s)|使用(?=\s)|透過(?=\s)|然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後"
+    r"\s+(?=(?:執行(?=\s|[^\\/\r\n]{1,60}(?:整合)?(?:驗證|測試|任務)[：:])|檢查(?=\s)|確認(?=\s)|驗證(?=\s)|使用(?=\s)|透過(?=\s)|然後|接著|接下來|之後|完成後|接續|繼續|你先|請|並且|同時|最後"
     r"|再(?:去|執行|看|讀|修改|處理)|是否(?:不存在|存在|為)"
     r"|\s*的\s*(?=(?:(?:事前\s+)?file\.exists|結構化(?:狀態|查詢)|查詢結果|狀態|驗證結果)(?=\s|$|[,，；。;]))"
     r"|內(?=\s*[,，；。;]|\s+(?:使用|透過|執行|查詢|讀取|建立|檢查|確認|請))"
@@ -144,6 +145,23 @@ def _authorized_path_end(text: str, start: int, content_start: int) -> int:
         quoted_end = text.find(closer, content_start)
         if quoted_end >= 0:
             return quoted_end
+
+    # A bare Windows drive root followed by a separate Chinese imperative
+    # names a *parent directory* and a creation task, not a gigantic path.
+    # Example: "在 E:\ 去生成一個 ScreenOFF 資料夾" means path E:\.
+    # Only truncate before the imperative when whitespace separates it; an
+    # actual subdirectory name (including spaces) must stay intact.
+    # This is lexical parsing ONLY, never an authorization or a write.
+    if (content_start - start == 3 and
+            re.match(r"[A-Za-z]:[\\/]", text[start:content_start])):
+        following = text[content_start:]
+        if re.match(
+            r"[ \t]+(?:去(?:建立|生成|創建|新增|做|製作)"
+            r"|(?:請|幫我|先|再)?(?:建立|生成|創建|新增|製作)"
+            r"|先去(?:建立|生成|創建|新增))(?=[ \t]|一個|資料夾|目錄|檔案|文件|[「『])",
+            following,
+        ):
+            return content_start
 
     end = len(text)
     boundary = _PATH_SENTENCE_BOUNDARY_RE.search(text, content_start)
@@ -249,7 +267,10 @@ def resolve_authorized_paths(
             text, lexical,
             allow_readonly_narrowing=readonly_narrowing_allowed(text, lexical),
         )
-        return require_resolved_paths(snapshot)
+        # Request text is a path HINT, not authorization. A diagnostic
+        # ambiguity must not kill a text-only Planner turn before Action
+        # Admission can evaluate a concrete tool target.
+        return list(snapshot.get("paths") or []) if snapshot.get("status") != "AMBIGUOUS" else []
     if text.count(_SAVED_PLAN_OPEN) != 1 or text.count(_SAVED_PLAN_CLOSE) != 1:
         raise ValueError("saved_plan_authorization_source_invalid")
     if text.count(_ORIGINAL_REQUEST_OPEN) != 1 or text.count(_ORIGINAL_REQUEST_CLOSE) != 1:
@@ -277,7 +298,7 @@ class WebAgentProtocolLoop:
         planner: PlannerCall,
         *,
         tool_context: WebAgentToolContext | None = None,
-        max_turns: int = 250,
+        max_turns: int = 1000,
         event_sink: Callable[..., None] | None = None,
         display_name: str = "WebAgent",
         cancel_check: Callable[[], None] | None = None,
@@ -298,6 +319,9 @@ class WebAgentProtocolLoop:
         self.progress_root = Path(progress_root).resolve() if progress_root is not None else None
         self.progress_ledger = None
         self._spr_path_resolution = None
+        self._last_canonical_contract_receipts: list[dict] = []
+        self._source_candidate_history = {"schema": "SMARTAGENT_SOURCE_HISTORY_V1", "candidates": []}
+        self._source_discovery_bootstrap = {}
         self.continuation_store = continuation_store
         self.continuation_owner = continuation_owner
         self.continuation_source = None
@@ -305,6 +329,12 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance: dict = {}
         self._answer_only_admitted = False
+        self._preexec_strategy_blocked: dict = {}
+        self._runtime_strategy_replan_note = ""
+        self._planner_context_diagnostics: list[dict] = []
+        self._last_shared_blackboard_snapshot: dict = {}
+        self._last_strategy_candidate_registry: dict = {}
+        self._last_terminal_readiness: dict = {}
         self._tri_one_origin = "WEB_DIRECT"
         self._tri_one_has_attached_context = False
         self.tools.configure_project_sync_transport(
@@ -319,6 +349,11 @@ class WebAgentProtocolLoop:
         self.sent_attachment_paths: list[str] = []
         self.action_ledger: dict[str, dict] = {}
         self.action_result_ledger: dict[str, dict] = {}
+        self._planner_original_actions: dict[str, dict] = {}
+        self._canonical_action_proposals: dict[str, dict] = {}
+        # Parse/admission-rejected Actions must have a disposition receipt too.
+        self._rejected_action_resolution_traces: list[dict] = []
+        self._runtime_action_rewrite_notes: dict[str, dict] = {}
         # A pre-execution envelope rejection is protocol evidence, never a Tool result.
         self._protocol_spec_rejection: dict[str, object] = {}
         # Native pre-execution bound-cwd rejection: not a ToolResult or terminal fact.
@@ -344,6 +379,12 @@ class WebAgentProtocolLoop:
         from agent_core.bounded_repair import BoundedRepairBudget
         self._bounded_repair = BoundedRepairBudget()
         self._repair_stagnation = None
+        self._ccrc = None  # Request-scoped Cross-Contract Repair Coordinator.
+        self._last_unified_contract_receipt: dict = {}
+        self._unified_action_recovery_events: list[dict] = []
+        self._last_prerequisite_transition_receipt: dict = {}
+        self._pending_progress_repair_binding: dict = {}
+        self._protocol_repair_tx = None  # Request-scoped unadmitted candidate.
         from agent_core.bounded_repair import SemanticStagnationGuard
         self._semantic_stagnation = SemanticStagnationGuard()
         self._stagnation_pending = None
@@ -927,8 +968,15 @@ class WebAgentProtocolLoop:
             1 for entry in self.action_result_ledger.values()
             if entry.get("executed") is True
         )
+        contract = next(
+            (row.get("cross_contract_repair") for row in diagnostics
+             if isinstance(row, dict)
+             and isinstance(row.get("cross_contract_repair"), dict)),
+            None,
+        )
         budget = self._bounded_repair.observe(
-            diagnostics, evidence_generation=evidence_generation
+            diagnostics, evidence_generation=evidence_generation,
+            contract_repair=contract,
         )
         if getattr(self, "_repair_stagnation", None) is not None:
             self._repair_stagnation.rejected(
@@ -1124,10 +1172,26 @@ class WebAgentProtocolLoop:
                     action_id=fields.get("action_id"),
                     executed=fields.get("executed"),
                     verification_status=fields.get("effective_verification_status"))
+                evidence_kind = "VERIFIED_ACTION_RESULT"
+                if not advanced:
+                    # A new exact, confirmed filesystem fact is observation
+                    # progress even if it does not verify a Goal condition.
+                    # An identical re-probe does not reset the repair clock.
+                    from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+                    observed_id = str(fields.get("action_id", "") or "")
+                    current_gaps = reconstruct_goal_gaps(self)
+                    for gap in current_gaps["gaps"]:
+                        if gap["observed_fact_ref"] == observed_id:
+                            advanced = tracker.accepted_observation(
+                                action_id=observed_id,
+                                fact_key=(gap["predicate"], gap["path"], gap["observed_value"]))
+                            if advanced:
+                                evidence_kind = "NEW_VERIFIED_FILESYSTEM_FACT"
+                            break
                 if advanced and self.event_sink is not None:
                     self.event_sink("repair_effective_progress",
                         request_id=self.run_id, round=self.turn_id,
-                        evidence_kind="VERIFIED_ACTION_RESULT")
+                        evidence_kind=evidence_kind)
             elif event == "gar_recovery_decision":
                 tracker.level(fields.get("level"))
         if event == "tool_completed":
@@ -1136,6 +1200,49 @@ class WebAgentProtocolLoop:
             PIT.record("16_terminal_receipt", fields, evidence_status="RUNTIME_OBSERVATION")
         if self.event_sink is not None:
             self.event_sink(event, **fields)
+        # Git75: intercept canonical Runtime events from every delegated
+        # module at the central event boundary. A module's own local log is
+        # still authoritative; this observer only correlates state/digests.
+        if getattr(self, "task_id", "") and getattr(self, "run_id", "") and getattr(self, "task_epoch", ""):
+            try:
+                from agent_core.goal75_blackboard import emit_transition
+                previous = getattr(self, "_goal75_last_runtime_observation", None)
+                current = {
+                    "round": int(getattr(self, "turn_id", 0) or 0),
+                    "runtime_state": str(getattr(getattr(self, "progress_ledger", None),
+                                                 "runtime_state", "") or ""),
+                    "protocol_state": str(getattr(self, "protocol_state", "") or ""),
+                    "outcome": str(getattr(self, "terminal_outcome", "") or ""),
+                    "active_stage": str((getattr(self, "active_stage_manifest", None) or {}).get(
+                        "stage_id", "")),
+                    "event_name": str(event)[:120],
+                    "evidence_count": len(getattr(self, "action_result_ledger", {}) or {}),
+                    "status": str(fields.get("status") or ""),
+                    "reason_code": str(fields.get("reason_code") or ""),
+                }
+                label = str(fields.get("module") or fields.get("component") or "")
+                if not label:
+                    label = (
+                        "MINIMAL_EXECUTOR" if str(event).startswith("minimal_")
+                        else "GOAL_RECOVERY" if str(event).startswith("gar_")
+                        else "TOOL_ADMISSION" if ("admission" in str(event) or
+                                                  "scope" in str(event))
+                        else "RUNTIME_EVENT_BUS"
+                    )
+                emit_transition(
+                    self.progress_root or self.workspace,
+                    task_id=self.task_id, request_id=self.run_id,
+                    task_epoch=self.task_epoch, module=label,
+                    event=str(event).upper(),
+                    before=previous, after=current,
+                    stage_id=current["active_stage"],
+                    reason_code=current["reason_code"],
+                    evidence_refs=[str(fields["evidence_ref"])]
+                    if fields.get("evidence_ref") else [],
+                )
+                self._goal75_last_runtime_observation = current
+            except (OSError, ValueError, RuntimeError):
+                pass
         if (self.continuation_store and self.progress_ledger and
                 event in {'task_progress_updated', 'ack_accepted', 'protocol_rejected'}):
             self.continuation_store.snapshot(self)
@@ -1301,6 +1408,199 @@ class WebAgentProtocolLoop:
             "rule": "Continue only remaining content; OPEN is not a completed file. Do not replay accepted chunks.",
         }, ensure_ascii=False, sort_keys=True) + "\n[/RUNTIME_WRITE_CONTINUATION]"
 
+    def _record_rejected_action_resolutions(self, calls, diagnostics) -> None:
+        """Attest each parsed operational proposal whose turn was not admitted.
+
+        Admission denial is evidence about *why no process ran*, never a
+        ToolResult. Preserve the model's source action separately from any
+        submitted numeric/field normalization, and bind to request/epoch.
+        """
+        from agent_core.action_resolution_trace import rejection_traces
+        # An action already recorded as dispatched in an earlier accepted
+        # round must not acquire a contradictory NOT_EXECUTED receipt merely
+        # because a later batch containing its ID is rejected.
+        new_proposals = [
+            item for item in list(calls or [])
+            if not isinstance(item, dict)
+            or str(item.get("action_id") or "") not in self.action_ledger
+        ]
+        traces = rejection_traces(
+            new_proposals, list(diagnostics or []),
+            original_actions=self._planner_original_actions,
+            rewrite_notes=self._runtime_action_rewrite_notes,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            round_id=self.turn_id,
+        )
+        self._rejected_action_resolution_traces.extend(traces)
+        self._rejected_action_resolution_traces = (
+            self._rejected_action_resolution_traces[-64:]
+        )
+        for row in traces:
+            reasons = (row.get("runtime_resolved") or {}).get("reason_codes") or []
+            self._emit(
+                "action_resolution_recorded",
+                request_id=self.run_id, round=self.turn_id,
+                action_id=row["action_id"],
+                disposition=(row.get("runtime_resolved") or {}).get(
+                    "disposition", "REJECTED_PREEXECUTION"
+                ),
+                tool=(row.get("planner_requested") or {}).get("tool", ""),
+                original_command_sha256=(
+                    (row.get("planner_requested") or {}).get("command_sha256", "")
+                ),
+                reason_codes=reasons,
+                dispatched=False, executed=False,
+                evidence_kind="PREEXECUTION_ADMISSION_DIAGNOSTIC",
+            )
+
+    def _runtime_preexecution_strategy_replan(self, diagnostics, calls) -> str:
+        """Escalate a verified missing CWD from field repair to new strategy.
+
+        This method never executes tools or widens the request/workspace.
+        It only provides a durable, evidence-bound revision to the Planner.
+        Normal Tool Admission remains mandatory for any NEW action.
+        """
+        if not any(
+            isinstance(row, dict) and row.get("reason") ==
+            "run_command_working_directory_rejected"
+            for row in diagnostics
+        ):
+            return ""
+        from agent_core.preexecution_replan import (
+            analyze_preexecution_rejection, render_preexecution_replan,
+        )
+        from agent_core.security_context import SecurityContext
+        from agent_core.task_progress import (
+            record_runtime_strategy_revision, TaskProgressError,
+        )
+        try:
+            context = SecurityContext.from_agent(
+                self.tools, fallback_workspace=self.workspace,
+            )
+            evidence = analyze_preexecution_rejection(
+                diagnostics=diagnostics,
+                submitted_actions=[
+                    item for item in calls
+                    if isinstance(item, dict)
+                    and item.get("tool") not in {"report_progress", "turn_commit"}
+                ],
+                security_context=context,
+                original_request_paths=list(self.authorized_paths),
+                request_id=self.run_id,
+                task_epoch=self.task_epoch,
+            )
+            if evidence is None:
+                self._emit(
+                    "preexecution_strategy_replan_evaluated",
+                    request_id=self.run_id, round=self.turn_id,
+                    status="NOT_ELIGIBLE",
+                    reason_code="RUNTIME_ATTESTATION_NOT_AVAILABLE",
+                    authorization_granted=False,
+                )
+                return ""
+            self.progress_ledger, new_revision = record_runtime_strategy_revision(
+                self.task_id, request_id=self.run_id,
+                evidence=evidence, round_id=self.turn_id,
+                root=self.progress_root,
+            )
+        except (TaskProgressError, ValueError, OSError, RuntimeError) as exc:
+            self._emit(
+                "preexecution_strategy_revision_unavailable",
+                request_id=self.run_id, round=self.turn_id,
+                reason=type(exc).__name__,
+            )
+            self._emit(
+                "preexecution_strategy_replan_evaluated",
+                request_id=self.run_id, round=self.turn_id,
+                status="ERROR", reason_code=type(exc).__name__,
+                authorization_granted=False,
+            )
+            return ""
+        state = dict(self.progress_ledger.strategy_state or {})
+        rejected = next((
+            item for item in calls if isinstance(item, dict)
+            and item.get("tool") == "run_command"
+        ), {})
+        self._preexec_strategy_blocked = {
+            "tool": "run_command",
+            "command": str(rejected.get("command", "")),
+            "operation": str(rejected.get("operation", "")),
+            "working_directory": str(rejected.get("working_directory", "")),
+        }
+        self._emit(
+            "preexecution_strategy_replan_evaluated",
+            request_id=self.run_id, round=self.turn_id,
+            status="ATTESTED", reason_code="VERIFIED_PREEXECUTION_CWD",
+            authorization_granted=False,
+        )
+        self._emit(
+            "progress_strategy_revision_recorded",
+            request_id=self.run_id, task_id=self.task_id,
+            round=self.turn_id,
+            revision=state.get("revision", 1),
+            evidence_digest=evidence["evidence_digest"],
+            rejected_action_id=evidence["rejected_action_id"],
+            new_revision=new_revision,
+            executed=False,
+            authorization_granted=False,
+        )
+        return (render_preexecution_replan(evidence) + "\n"
+                + format_prompt_context(self.progress_ledger))
+
+    def _runtime_verified_failure_strategy_replan(
+        self, action: dict, action_result: dict, evidence_ref: str,
+    ) -> None:
+        """Replan only a completed, verified failed read/probe.
+
+        Runtime receipts are passed directly from the committed Action Result
+        path; no model-provided result dictionary or installer permission is
+        accepted. Unknown mutation effects remain subject to reconciliation.
+        """
+        from agent_core.preexecution_replan import (
+            analyze_verified_prerequisite_failure,
+            render_verified_prerequisite_replan,
+        )
+        from agent_core.task_progress import (
+            record_runtime_strategy_revision, TaskProgressError,
+        )
+        pending_effects = any(
+            str(row.get("execution_status", "")).upper()
+            in {"QUEUED", "RUNNING", "UNKNOWN", "PARTIAL", "OPEN"}
+            for row in self.action_ledger.values() if isinstance(row, dict)
+        )
+        receipt = analyze_verified_prerequisite_failure(
+            action=action, result=action_result, evidence_ref=evidence_ref,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            effects_pending=pending_effects,
+        )
+        if receipt is None:
+            return
+        try:
+            self.progress_ledger, new_revision = record_runtime_strategy_revision(
+                self.task_id, request_id=self.run_id, evidence=receipt,
+                round_id=self.turn_id, root=self.progress_root,
+            )
+        except (TaskProgressError, ValueError, OSError):
+            return
+        self._runtime_strategy_replan_note = (
+            render_verified_prerequisite_replan(receipt)
+            + "\nOriginal Goal is unchanged; inspect another verified toolchain "
+              "or prerequisite. Install only if the actual source, target, "
+              "network and execution rights are independently authorized. "
+              "An unsuccessful probe is not evidence that any particular "
+              "installer is safe or that the goal is satisfied."
+        )
+        self._emit(
+            "progress_strategy_revision_recorded",
+            request_id=self.run_id, task_id=self.task_id,
+            round=self.turn_id,
+            revision=self.progress_ledger.strategy_state.get("revision", 1),
+            evidence_digest=receipt["evidence_digest"],
+            evidence_ref=evidence_ref, new_revision=new_revision,
+            executed=True, completion_verified=False,
+            authorization_granted=False,
+        )
+
     def _bound_cwd_command_contract(self, command: str = 'Start-Sleep -Seconds 4') -> dict:
         """Runtime-owned, no-execution scope preview for path-free commands.
 
@@ -1343,6 +1643,97 @@ class WebAgentProtocolLoop:
         ) if contract else ''
 
     def _with_commit(self, prompt: str, expected: dict) -> str:
+        from agent_core.planner_context_snapshot import render_planner_context_snapshot
+        planner_context, context_info = render_planner_context_snapshot(self)
+        self._last_shared_blackboard_snapshot = dict(
+            context_info.get("shared_blackboard") or {}
+        )
+        self._last_strategy_candidate_registry = dict(
+            context_info.get("strategy_candidates") or {}
+        )
+        self._last_prerequisite_transition_receipt = dict(
+            context_info.get("prerequisite_transition_gate") or {}
+        )
+        prereq = self._last_prerequisite_transition_receipt
+        self._emit(
+            "prerequisite_transition_prepared",
+            request_id=self.run_id, round=self.turn_id,
+            stage=prereq.get("stage", "NOT_APPLICABLE"),
+            progress_transition=prereq.get("progress_transition", ""),
+            access_state=prereq.get("access_state", "UNKNOWN"),
+            scope_preflight_status=prereq.get("scope_preflight_status", ""),
+            scope_preflight_reason_code=prereq.get("scope_preflight_reason_code", ""),
+            probe_evidence_present=bool(prereq.get("probe_evidence_present")),
+            latest_probe_failure_category=prereq.get(
+                "latest_probe_failure_category", ""
+            ),
+            latest_probe_failure_ref=(
+                (prereq.get("latest_probe_failure") or {}).get("action_id", "")
+            ),
+            next_failure_evaluation=prereq.get("next_failure_evaluation", ""),
+            guidance_is_evidence=False,
+            authorization_granted=False,
+            executed=False,
+        )
+        remote_access = context_info.get("remote_artifact_access_readiness") or {}
+        inventory = context_info.get("runtime_software_inventory") or {}
+        self._emit(
+            "remote_artifact_access_readiness_prepared",
+            request_id=self.run_id, round=self.turn_id,
+            authorization_state=remote_access.get("authorization_state", "UNKNOWN"),
+            authorization_reason_code=remote_access.get("reason_code", ""),
+            next_verification=remote_access.get("next_verification", ""),
+            git_executable_status=remote_access.get("git_executable_status", "UNKNOWN"),
+            registered_artifact_count=remote_access.get("registered_artifact_count", 0),
+            authorization_evidence_present=bool(remote_access.get("authorization_evidence_ref")),
+            project_environment_index_status=inventory.get(
+                "project_environment_index_status", "NOT_OBSERVED"
+            ),
+            grants_authorization=False,
+        )
+        self._last_planner_context_digest = context_info["context_digest"]
+        self._last_planner_context_snapshot_id = context_info["context_snapshot_id"]
+        context_failures = list(context_info.get("failure_causal_receipts") or [])[-12:]
+        self._last_planner_failure_action_ids = [
+            str(row.get("action_id", "") or "") for row in context_failures
+        ]
+        self._last_planner_failure_category = (
+            str((context_failures[-1].get("failure") or {}).get("category") or "")
+            if context_failures else ""
+        )
+        self._emit(
+            "planner_context_prepared",
+            request_id=self.run_id, round=self.turn_id,
+            context_snapshot_id=context_info["context_snapshot_id"],
+            context_digest=context_info["context_digest"],
+            evidence_total=context_info["evidence_total"],
+            omitted_active_blocker_count=context_info["omitted_active_blocker_count"],
+            critical_context_omitted=context_info["critical_context_omitted"],
+            diagnostic_count=len(context_info["latest_protocol_diagnostics"]),
+            failure_causal_receipt_count=len(context_failures),
+            last_failure_category=self._last_planner_failure_category,
+            planner_failure_action_ids=self._last_planner_failure_action_ids,
+            prerequisite_transition_stage=(
+                (context_info.get("prerequisite_transition_gate") or {}).get(
+                    "stage", ""
+                )
+            ),
+            strategy_candidate_count=(
+                (context_info.get("strategy_candidates") or {}).get("candidate_count", 0)
+            ),
+            strategy_candidate_route_ids=[
+                str(item.get("route_id") or "")[:100]
+                for item in list(
+                    (context_info.get("strategy_candidates") or {}).get("candidates") or []
+                )[:8] if isinstance(item, dict)
+            ],
+            strategy_candidate_statuses=[
+                str(item.get("status") or "")[:100]
+                for item in list(
+                    (context_info.get("strategy_candidates") or {}).get("candidates") or []
+                )[:8] if isinstance(item, dict)
+            ],
+        )
         trace = (
             "[WEBAGENT_REQUEST_TRACE]\n"
             f"request_id={expected['run_id']}\n"
@@ -1356,6 +1747,9 @@ class WebAgentProtocolLoop:
             + str(prompt).rstrip()
             + "\n\n"
             + self._runtime_evidence_context()
+            + "\n" + planner_context
+            + ('\n' + self._runtime_strategy_replan_note
+               if self._runtime_strategy_replan_note else '')
             + ('\n' + self._bound_cwd_command_guidance() if ('run_command' in str(getattr(self, 'task_request', '') or '').lower() and ( '等待' in str(getattr(self, 'task_request', '') or '') or 'sleep' in str(getattr(self, 'task_request', '') or '').lower() )) else '')
             + ('\n[REQUEST_CONTEXT_OBJECTS]\n'+json.dumps(self.request_context.catalog(),ensure_ascii=False)
                +'\n[/REQUEST_CONTEXT_OBJECTS]' if self.request_context else '')
@@ -1404,7 +1798,19 @@ class WebAgentProtocolLoop:
                     if record.get('evidence_status', 'ACTIVE') == 'ACTIVE'
                     and record.get('request_id', self.run_id) == self.run_id
                     and record.get('task_epoch', self.task_epoch) == self.task_epoch)
-        return repair_diagnostic(payload, self.progress_ledger, error, refs)
+        try:
+            context = self._context_capabilities()
+            objective_ids = [
+                str(row.get("action_id"))
+                for row in list(context.get("objective_blockers") or [])
+                if isinstance(row, dict) and row.get("action_id") in refs
+            ]
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            objective_ids = []
+        return repair_diagnostic(
+            payload, self.progress_ledger, error, refs,
+            objective_blocker_ids=objective_ids,
+        )
 
     def _runtime_evidence_context(self) -> str:
         evidence = []
@@ -1416,6 +1822,9 @@ class WebAgentProtocolLoop:
                 'snapshot_id':item.get('snapshot_id',''),
                 'superseded_by_action_id':item.get('superseded_by_action_id',''),
                 "tool": str(item.get("tool", "") or ""),
+                "result_status": str(item.get("result_status", "UNKNOWN") or "UNKNOWN"),
+                "result_reason": str(item.get("result_reason", "") or "")[:120],
+                "executed": item.get("executed"),
                 "execution_status": str(item.get("execution_status", "UNKNOWN") or "UNKNOWN"),
                 "verification_status": str(item.get("verification_status", "UNKNOWN") or "UNKNOWN"),
                 "effective_verification_status": str(
@@ -1547,8 +1956,14 @@ class WebAgentProtocolLoop:
                         ) or ""
                     ),
                 })
+        from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+        from agent_core.decision_rules.directory_workspace_rule import evaluate_directory_decision
+        gap_view = reconstruct_goal_gaps(self)
+        directory_decision = evaluate_directory_decision(self, gap_view)
         self.action_loop_state = build_action_loop_state(
             transport_state=self.protocol_state,
+            goal_gap_view=gap_view,
+            directory_decision=directory_decision,
             progress=self._progress_state_payload(),
             action=action,
             result=result,
@@ -1609,6 +2024,35 @@ class WebAgentProtocolLoop:
         transition = str(state.get("required_transition", "CONTINUE_PLAN") or "CONTINUE_PLAN")
         allowed = {str(item) for item in list(state.get("allowed_next_actions") or []) if str(item)}
         actual_tools = [str(item.get("tool", "") or "") for item in operational]
+        if "create_directory" in actual_tools:
+            # DIR-001 is derived from the current immutable read projection.
+            # Action Loop cannot contradict the state sent to this Planner
+            # turn; no candidate ever grants a write permission.
+            board = dict(getattr(self, "_last_shared_blackboard_snapshot", {}) or {})
+            identity = board.get("identity") or {}
+            if (identity.get("request_id") == self.run_id
+                    and identity.get("task_epoch") == self.task_epoch):
+                sections = board.get("sections") or {}
+                progress_section = (sections.get("progress") or {}).get("value") or {}
+                action_section = (sections.get("actions") or {}).get("value") or {}
+                frozen_loop = progress_section.get("action_loop_state") or {}
+                frozen_decision = action_section.get("action_loop_decision") or {}
+                if (
+                    frozen_loop.get("decision_rule_id") == "DIR-001"
+                    and (
+                        frozen_loop.get("state_id") != state_id
+                        or frozen_decision.get("state_id") != state_id
+                        or "create_directory" not in frozen_decision.get(
+                            "allowed_next_actions", []
+                        )
+                    )
+                ):
+                    return {
+                        "marker": "[ACTION_LOOP_STATE_REJECTED]",
+                        "reason": "blackboard_action_loop_snapshot_drift",
+                        "detail": "DIR-001 candidate must use identical current-epoch Blackboard state",
+                        "suggestion": "刷新共用 Blackboard、Action Loop 與 Goal-Gap Evidence；不得用舊的候選 Action。",
+                    }
         if transition in {"PREREQUISITE_REQUIRED", "VERIFY_REQUIRED", "REPLAN_REQUIRED", "WAIT_RUNTIME"}:
             # Progress-only replies are admitted here so the existing bounded
             # dead-end/verification recovery can issue one complete prompt and
@@ -2455,6 +2899,9 @@ class WebAgentProtocolLoop:
                     # Historical execution remains UNKNOWN/PARTIAL. A linked
                     # current verifier resolves the pending postcondition only.
                     target['pending_resolution'] = 'SCOPED_VERIFICATION_OBTAINED'
+        provenance = (self.action_ledger.get(action_id) or {}).get("provenance")
+        if isinstance(provenance, dict) and isinstance(provenance.get("fact"), dict):
+            ledger_entry["runtime_fact"] = deepcopy(provenance["fact"])
         self.action_result_ledger[action_id] = ledger_entry
         if (action.get('tool') == 'repair_task_plan'
                 and ledger_entry.get('result_status') == 'SUCCEEDED'
@@ -2802,9 +3249,35 @@ class WebAgentProtocolLoop:
             if tool == "report_progress":
                 nested = call.get("progress")
                 progress = nested if isinstance(nested, dict) else call
+                from agent_core.semantic_capability_resolution import resolution_decision_shape
+                path_proposal = progress.get("path_resolution")
+                path_shape = (
+                    {"kind": "OMITTED"} if path_proposal is None else
+                    {"kind": "OBJECT", "keys": sorted(str(k) for k in path_proposal)[:12],
+                     "selected_paths_digest": hashlib.sha256(
+                         json.dumps(path_proposal.get("selected_paths"), sort_keys=True,
+                                    ensure_ascii=False, default=str).encode("utf-8")
+                     ).hexdigest() if "selected_paths" in path_proposal else ""}
+                    if isinstance(path_proposal, dict)
+                    else {"kind": "NON_OBJECT"}
+                )
+                next_action_first_token = str(progress.get("next_action", "") or "").split()
+                next_action_tool = next_action_first_token[0] if next_action_first_token else ""
                 semantic_calls.append({
                     "tool": tool,
                     "progress_shape": "nested" if isinstance(nested, dict) else "flat",
+                    "capability_resolution": resolution_decision_shape(progress.get("capability_resolution")),
+                    "path_resolution": path_shape,
+                    "goal_transition": (
+                        {
+                            "kind": str(progress["goal_transition"].get("kind", "")),
+                            "goal_condition_id": str(progress["goal_transition"].get("goal_condition_id", "")),
+                            "evidence_ref": str(progress["goal_transition"].get("evidence_ref", "")),
+                            "next_tool": str(progress["goal_transition"].get("next_tool", "")),
+                        } if isinstance(progress.get("goal_transition"), dict)
+                        else {"kind": "OMITTED" if progress.get("goal_transition") is None else "INVALID"}
+                    ),
+                    "next_action_tool": next_action_tool if next_action_tool in SUPPORTED_ACTION_TOOLS else "",
                     "current_step": progress.get("current_step"),
                     "total_steps": progress.get("total_steps"),
                     "decision": str(progress.get("decision", "") or "").upper(),
@@ -2902,6 +3375,16 @@ class WebAgentProtocolLoop:
                 refs, matched_condition=progress.matched_condition,
                 fact_assertion=getattr(progress, "fact_assertion", {})),
         }
+        # Record the independent, request-anchored path verdict. Never
+        # substitute it for ordinary Action/Condition verification.
+        if getattr(self, "_target_path_contract", None) is not None:
+            payload["target_path_compliance"] = dict(
+                getattr(self, "_target_path_verdict", {}) or {
+                    "status": "UNVERIFIED",
+                    "reason": "NO_ACCEPTED_TARGET_VERDICT",
+                    "requested_target": self._target_path_contract.get(
+                        "requested_target", ""),
+                })
         # Include the distinct answer-only admission type in the receipt ID.
         # An evidence-free text reply cannot collide with an ordinary receipt.
         if self._answer_only_admitted:
@@ -3091,75 +3574,404 @@ class WebAgentProtocolLoop:
         )
         return True
 
+    def _ccrc_rejected(self, calls: list[dict], diagnostics: list[dict]) -> dict | None:
+        """Coordinate unadmitted Progress/Command/Action defects, never execute.
+
+        The normal V9 admission result remains authoritative. This function
+        only adds a bounded, sanitized recovery transaction and can invalidate
+        unexecuted holds when the Planner must reconstruct or replan.
+        """
+        from agent_core.cross_contract_repair import (
+            CrossContractRepairCoordinator, ACTION_RECONSTRUCTION,
+            REPLAN_REQUIRED,
+        )
+        coordinator = getattr(self, "_ccrc", None)
+        if coordinator is None:
+            return None
+        progress = next((item for item in calls if isinstance(item, dict)
+                         and item.get("tool") == "report_progress"), {})
+        declared = self._declared_next_tools(progress.get("next_action", ""))
+        result = coordinator.observe(calls, diagnostics, declared_tools=declared)
+        if result is None:
+            return None
+        mode = result["mode"]
+        if mode in {ACTION_RECONSTRUCTION, REPLAN_REQUIRED}:
+            # CCRC owns ONE logical repair target; a new rejected Action ID
+            # must not manufacture another deferred obligation or reset budget.
+            # An already executed or committed action is never replaceable.
+            from copy import deepcopy
+            command_pending = getattr(self, "pending_command_field_repairs", {})
+            deferred = getattr(self, "deferred_action_repairs", {})
+            if mode == ACTION_RECONSTRUCTION:
+                candidate = None
+                for action in calls:
+                    if not isinstance(action, dict) or action.get("tool") in {
+                        "report_progress", "turn_commit", "final_response",
+                    }:
+                        continue
+                    ref = action.get("action_id")
+                    if (isinstance(ref, str) and ref
+                            and ref not in self.action_ledger
+                            and ref not in self.action_result_ledger):
+                        candidate = action
+                        if ref in command_pending or ref in deferred:
+                            break
+                if candidate is not None:
+                    ref = candidate["action_id"]
+                    saved = command_pending.pop(ref, None)
+                    previous = deferred.get(ref) or {}
+                    original = (saved.get("action") if isinstance(saved, dict)
+                                else previous.get("action")) or candidate
+                    deferred[ref] = {
+                        "action_id": ref, "tool": str(original.get("tool", "")),
+                        "status": "ACTION_RECONSTRUCTION_REQUIRED",
+                        "executed": False, "action": deepcopy(original),
+                        "diagnostics": [], "cross_contract_repair": {
+                            "mode": mode, "transaction_seq": result["transaction_seq"],
+                        },
+                    }
+            if mode in {ACTION_RECONSTRUCTION, REPLAN_REQUIRED}:
+                # A format repair may hold unadmitted Actions, but reconstructing
+                # a new Action cannot be forced to preserve the old action IDs.
+                # Neither handoff admits or executes an Action.
+                held = list(getattr(self, "pending_progress_repair_actions", []))
+                if held:
+                    self.pending_progress_repair_actions = []
+                    self._pending_progress_repair_binding = {}
+                    WebAgentProtocolLoop._record_unified_action_recovery(
+                        self, "CCRC_RELEASED_UNADMITTED", held
+                    )
+                    self._emit(
+                        "ccrc_unadmitted_progress_hold_released",
+                        request_id=self.run_id, round=self.turn_id,
+                        action_ids=[str(row.get("action_id", "")) for row in held],
+                        release_mode=mode,
+                        authorization_granted=False, executed=False,
+                    )
+            if mode == REPLAN_REQUIRED:
+                # A Goal Replan must discard the never-admitted initial draft;
+                # only accepted Progress and executed Evidence can be inherited.
+                self._first_full_progress_draft = {}
+                # The prior unadmitted Action hold was released above; the
+                # original Goal and actually accepted evidence remain intact.
+                self.pending_action_repair = {}
+                command_pending.clear()
+            self.pending_command_field_repairs = command_pending
+            self.deferred_action_repairs = deferred
+        # BoundedRepairBudget and GAR remain the only rejection-budget owners.
+        # No Action, Progress or Goal is automatically admitted or rewritten.
+        diagnostics[0]["cross_contract_repair"] = {
+            key: result[key] for key in (
+                "schema", "mode", "transaction_seq", "goal_anchor_sha256",
+                "issue_count", "field_issues", "declared_next_tools",
+                "actual_operational_tools", "field_rounds", "reconstruction_rounds",
+                "nonconverging_rounds", "replan_required",
+                "resolved_issue_count", "introduced_issue_count", "converging",
+                "convergence_generation",
+                "full_admission_required", "authorization_granted", "budget_reset",
+            )
+        }
+        self._emit("cross_contract_repair_decision",
+            request_id=self.run_id, round=self.turn_id,
+            mode=mode, transaction_seq=result["transaction_seq"],
+            issue_count=result["issue_count"],
+            issue_codes=[row["code"] for row in result["field_issues"]],
+            field_rounds=result["field_rounds"],
+            reconstruction_rounds=result["reconstruction_rounds"],
+            nonconverging_rounds=result["nonconverging_rounds"],
+            converging=result["converging"],
+            replan_required=result["replan_required"],
+            authorization_granted=False, executed=False, budget_reset=False)
+        return result
+
+    def _publish_unified_contract(
+        self, *, calls: list[dict], diagnostics: list[dict] | None = None,
+        ccrc: dict | None = None, phase: str = "REJECTED",
+        admitted: list[dict] | None = None,
+    ) -> dict:
+        """Project all owning modules into ONE request/epoch-bound vocabulary.
+
+        This adapter cannot grant Scope, mutate Tool Actions, run tools or
+        restore previously executed operations. Every validator stays owner.
+        """
+        from agent_core.unified_contract_transaction import build_transaction
+        from agent_core.failure_causal_receipt import recent_failure_receipts
+        causality = recent_failure_receipts(
+            action_ledger=self.action_ledger,
+            result_ledger=self.action_result_ledger,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+        )
+        record = build_transaction(
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            original_goal=getattr(self, "task_request", ""),
+            round_id=self.turn_id, phase=phase,
+            diagnostics=diagnostics or [], submitted=calls,
+            accepted=admitted or [],
+            pending=getattr(self, "pending_progress_repair_actions", []),
+            recovery_events=getattr(self, "_unified_action_recovery_events", []),
+            ccrc=ccrc,
+            canonical=getattr(self, "_last_canonical_contract_receipts", []),
+            prerequisite_transition=getattr(
+                self, "_last_prerequisite_transition_receipt", {}
+            ),
+            failure_receipts=causality,
+            evidence_count=len(self.action_result_ledger),
+        )
+        if not getattr(self, "_action_admission_probe", False):
+            self._last_unified_contract_receipt = record
+            self._emit(
+                "unified_contract_transaction_resolved",
+                request_id=self.run_id, round=self.turn_id,
+                phase=phase,
+                contract_names=sorted({item["contract"] for item in record["issues"]}),
+                decision_codes=[item["decision"] for item in record["issues"]],
+                reason_codes=[item["reason_code"] for item in record["issues"]],
+                pending_action_ids=record["pending_action_ids"],
+                admitted_action_ids=record["admitted_action_ids"],
+                ccrc_mode=record["ccrc_mode"],
+                failure_count=len(record["failure_causal_receipts"]),
+                last_failure_category=(
+                    record["failure_causal_receipts"][-1]["failure_category"]
+                    if record["failure_causal_receipts"] else ""
+                ),
+                authorization_granted=False, executed=False,
+            )
+        return record
+
+    def _record_unified_action_recovery(
+        self, status: str, actions: list[dict],
+    ) -> None:
+        if getattr(self, "_action_admission_probe", False):
+            return
+        from agent_core.unified_contract_transaction import _safe
+        ids = [_safe(item.get("action_id")) for item in actions[:32]
+               if isinstance(item, dict) and _safe(item.get("action_id"))]
+        self._unified_action_recovery_events = (
+            list(getattr(self, "_unified_action_recovery_events", []))
+            + [{"status": status, "action_ids": ids}]
+        )[-8:]
+
     def _accept_ack(self, calls: list[dict], expected: dict) -> tuple[list[dict], list[dict]]:
+        """Preserve partial Command repairs while batching independent defects.
+
+        A merged action is NOT admitted until _accept_action_batch has rechecked
+        every normal V9, Progress, Scope, Dependency and Tool gate.
+        """
         from copy import deepcopy
+        from agent_core.command_repair_readiness import (
+            analyze_command_repair, repair_progress,
+            FIELD_REPAIR, ACTION_RECONSTRUCTION, READY_FOR_ADMISSION,
+        )
         pending = getattr(self, 'pending_command_field_repairs', {})
         merged = []
+        before_by_id = {}
         for call in calls:
             ref = call.get('action_id')
-            saved = pending.get(ref) if isinstance(ref,str) else None
+            saved = pending.get(ref) if isinstance(ref, str) else None
             if saved:
-                if (saved['request_id'] != self.run_id or saved['task_epoch'] != getattr(self,'task_epoch','')
-                    or ref in self.action_ledger or ref in self.action_result_ledger):
-                    return [], [{'reason':'command_repair_target_not_pending','detail':ref}]
+                if (saved['request_id'] != self.run_id
+                        or saved['task_epoch'] != getattr(self, 'task_epoch', '')
+                        or ref in self.action_ledger or ref in self.action_result_ledger):
+                    return [], [{'reason': 'command_repair_target_not_pending',
+                                 'detail': ref}]
+                if saved.get('mode') == ACTION_RECONSTRUCTION:
+                    return [], [{
+                        'marker': '[WEBAGENT_COMMAND_REPAIR_REQUIRED]',
+                        'reason': 'command_action_reconstruction_required',
+                        'repair_scope': 'COMMAND_ACTION_RECONSTRUCTION',
+                        'action_id': ref,
+                        'suggestion': (
+                            'The original command cannot be field-patched. '
+                            'Planner must submit a new action_id and '
+                            'replaces_action_id; ordinary Tool Admission remains required.'
+                        ),
+                    }]
                 original = saved['action']
-                for name,value in call.items():
-                    if name not in ({'verify','success_criteria'} | set(saved.get('required_fields', []))) and value != original.get(name):
-                        return [], [{'reason':'command_repair_identity_changed','detail':name,
-                            'suggestion':'命令、operation、目錄或依賴改變時，使用新 action_id 與 replaces_action_id；不得沿用舊驗證。'}]
+                fields = set(saved.get('required_fields', [])) | {
+                    'verify', 'success_criteria',
+                }
+                for name, value in call.items():
+                    if name not in fields and value != original.get(name):
+                        return [], [{
+                            'reason': 'command_repair_identity_changed',
+                            'detail': name if name in {
+                                'tool', 'action_id', 'command', 'operation',
+                                'working_directory', 'depends_on',
+                                'replaces_action_id',
+                            } else 'other_action_field',
+                            'suggestion': (
+                                'Use a NEW action_id with replaces_action_id '
+                                'when command, operation, directory or dependencies change '
+                                'outside the Runtime-issued repair fields.'
+                            ),
+                        }]
+                before_by_id[ref] = saved
                 materialized = {**deepcopy(original), **deepcopy(call)}
                 merged.append(materialized)
-                self._emit('command_field_repair_merged',request_id=self.run_id,round=self.turn_id,
-                    action_id=ref,patched_fields=sorted(set(call)-{'tool','action_id'}))
+                self._emit(
+                    'command_field_repair_merged',
+                    request_id=self.run_id, round=self.turn_id,
+                    action_id=ref, patched_fields=sorted(
+                        field for field in set(call) - {'tool', 'action_id'}
+                        if field in fields
+                    ),
+                    authorization_granted=False,
+                )
             else:
                 merged.append(call)
+
         admitted, diagnostics = self._accept_action_batch(merged, expected)
         for action in admitted:
             ref = action.get('action_id')
-            pending.pop(ref,None)
-            pending.pop(action.get('replaces_action_id'),None)
-        deferred_diagnostics = [item for repair in getattr(self,'current_action_repairs',[])
-            for item in repair.get('diagnostics',[])]
+            saved = before_by_id.get(ref)
+            if saved and action.get('tool') == 'run_command':
+                accepted_readiness = analyze_command_repair(action)
+                convergence = repair_progress(saved.get('readiness'), accepted_readiness)
+                self._emit(
+                    'command_repair_converged',
+                    request_id=self.run_id, round=self.turn_id,
+                    action_id=ref,
+                    previous_issue_count=convergence['previous_issue_count'],
+                    current_issue_count=convergence['current_issue_count'],
+                    resolved_issue_count=convergence['resolved_issue_count'],
+                    introduced_issue_count=convergence['introduced_issue_count'],
+                    full_admission_passed=True,
+                    executed=False, authorization_granted=False,
+                )
+            pending.pop(ref, None)
+            pending.pop(action.get('replaces_action_id'), None)
+        deferred_diagnostics = [
+            item for repair in getattr(self, 'current_action_repairs', [])
+            for item in repair.get('diagnostics', [])
+        ]
         repair_sources = diagnostics + deferred_diagnostics
-        repair_diagnostic = any(item.get('reason') in {'run_command_verification_contract_required','wrong_field_type','run_command_operation_invalid'}
-            for item in repair_sources)
-        if repair_diagnostic:
-            for action in merged:
-                ref = action.get('action_id')
-                if action.get('tool') != 'run_command' or not isinstance(ref,str) or ref in self.action_ledger:
+        for action in merged:
+            ref = action.get('action_id')
+            if (action.get('tool') != 'run_command'
+                    or not isinstance(ref, str) or not ref.strip()
+                    or ref in self.action_ledger or ref in self.action_result_ledger
+                    or any(item.get('action_id') == ref for item in admitted)):
+                continue
+            # The original response is rejected (or this independent action
+            # was deferred). Classify ALL independently detectable defects,
+            # rather than exposing only the first Tool/Progress error.
+            if not repair_sources and ref not in before_by_id:
+                continue
+            readiness = analyze_command_repair(action)
+            old = before_by_id.get(ref)
+            previous = old.get('readiness') if old else None
+            convergence = repair_progress(previous, readiness)
+            if old and readiness['mode'] == FIELD_REPAIR:
+                no_improvement = int(old.get('no_improvement', 0))
+                no_improvement = 0 if convergence['converging'] else no_improvement + 1
+            else:
+                no_improvement = 0
+            mode = readiness['mode']
+            if mode == FIELD_REPAIR and no_improvement >= 2:
+                mode = ACTION_RECONSTRUCTION
+                readiness = {**readiness, 'mode': mode,
+                             'escalation_reason': 'repair_not_converging'}
+            self._emit(
+                'command_repair_readiness_evaluated',
+                request_id=self.run_id, round=self.turn_id,
+                action_id=ref, repair_mode=mode,
+                issue_count=readiness['issue_count'],
+                issue_codes=[item['code'] for item in readiness['field_issues']],
+                issue_fields=sorted({item['field'] for item in readiness['field_issues']}),
+                previous_issue_count=convergence['previous_issue_count'],
+                resolved_issue_count=convergence['resolved_issue_count'],
+                introduced_issue_count=convergence['introduced_issue_count'],
+                converging=convergence['converging'],
+                authorization_granted=False, executed=False,
+            )
+            if mode == READY_FOR_ADMISSION:
+                # A valid command may be blocked by Progress, Scope or a
+                # different action. Do not manufacture a Command repair.
+                if old:
+                    pending.pop(ref, None)
+                continue
+            if mode == ACTION_RECONSTRUCTION:
+                pending.pop(ref, None)
+                self.deferred_action_repairs[ref] = {
+                    'action_id': ref, 'tool': 'run_command',
+                    'status': 'ACTION_RECONSTRUCTION_REQUIRED',
+                    'executed': False, 'action': deepcopy(action),
+                    'readiness': readiness, 'diagnostics': [],
+                }
+                repair = {
+                    'schema': readiness['schema'],
+                    'action_id': ref, 'mode': ACTION_RECONSTRUCTION,
+                    'issue_count': readiness['issue_count'],
+                    'field_issues': readiness['field_issues'],
+                    'replaces_action_id_required': True,
+                    'full_admission_required': True,
+                    'authorization_granted': False,
+                    'instruction': (
+                        'Use a NEW action_id and set replaces_action_id to '
+                        'the exact action_id identified in this diagnostic. '
+                        'Submit a fully reconstructed canonical run_command. '
+                        'If a script was previously created, use a short invocation '
+                        'rather than embedding script source in command. '
+                        'No previous operation was executed.'
+                    ),
+                }
+            elif mode == FIELD_REPAIR:
+                fields = readiness['repairable_fields']
+                if not fields or (len(pending) >= 32 and ref not in pending):
                     continue
-                if not isinstance(action.get('command'),str) or not action['command'].strip():
-                    continue
-                fields = []
-                try:
-                    detail = self._run_command_verification_detail(action)
-                except (ValueError,TypeError):
-                    continue
-                for field in ('operation','verify','success_criteria'):
-                    if field in detail or (field in action and not isinstance(action[field], (list,dict) if field=='verify' else str)):
-                        fields.append(field)
-                if not fields: continue
-                if len(pending) >= 32 and ref not in pending: continue
-                saved = {'request_id':self.run_id,'task_epoch':getattr(self,'task_epoch',''),
-                    'action':deepcopy(action),'required_fields':fields}
-                pending[ref] = saved
-                self.deferred_action_repairs[ref] = {'action_id':ref,'tool':'run_command',
-                    'status':'REPAIR_REQUIRED','executed':False,'action':deepcopy(action),'diagnostics':repair_sources}
-                for diagnostic in repair_sources:
-                    if diagnostic.get('reason') in {'run_command_verification_contract_required','wrong_field_type','run_command_operation_invalid'}:
-                        diagnostic.setdefault('command_field_repairs',[]).append({
-                            'action_id':ref,'tool':'run_command','required_fields':fields,
-                            'reply_example':{'tool':'run_command','action_id':ref,**{field:
-                                ([{'action':'run_command','command':'<read-only verification command>','expect_exit_code':0}]
-                                 if field=='verify' else ('INSPECT|MUTATE|BUILD|TEST|VERIFY|GIT_INSPECT|GIT_MUTATE|PROCESS|TRANSFER|GENERAL' if field=='operation' else '<describe the expected observable result>')) for field in fields}},
-                            'rule':'Only patch these fields. Runtime restores the pending action and revalidates it; it has NOT executed.'})
+                pending[ref] = {
+                    'request_id': self.run_id,
+                    'task_epoch': getattr(self, 'task_epoch', ''),
+                    'mode': FIELD_REPAIR,
+                    'action': deepcopy(action),
+                    'required_fields': fields,
+                    'readiness': readiness,
+                    'no_improvement': no_improvement,
+                }
+                self.deferred_action_repairs[ref] = {
+                    'action_id': ref, 'tool': 'run_command',
+                    'status': 'REPAIR_REQUIRED', 'executed': False,
+                    'action': deepcopy(action), 'readiness': readiness,
+                    'diagnostics': [],
+                }
+                repair = {
+                    'schema': readiness['schema'],
+                    'action_id': ref, 'mode': FIELD_REPAIR,
+                    'required_fields': fields,
+                    'issue_count': readiness['issue_count'],
+                    'field_issues': readiness['field_issues'],
+                    'convergence': convergence,
+                    'full_admission_required': True,
+                    'authorization_granted': False,
+                    'instruction': (
+                        'Patch ONLY listed required_fields with the SAME tool/action_id. '
+                        'Runtime restores original command and revalidates everything. '
+                        'Never invent verify evidence or assume execution.'
+                    ),
+                }
+            else:
+                continue
+            # Keep the original actual rejection reason. Attach a bounded
+            # diagnostic to one correlated rejection rather than generating
+            # an independent synthetic rejected turn.
+            target = next(
+                (item for item in repair_sources
+                 if item.get('tool') == 'run_command'), None
+            )
+            if target is None:
+                target = repair_sources[0] if repair_sources else None
+            if target is not None:
+                target.setdefault('command_repair', repair)
+                target.setdefault('command_field_repairs', []).append(repair)
         self.pending_command_field_repairs = pending
         return admitted, diagnostics
 
     def _probe_action_admission(self, calls, expected, *, single=False):
         from copy import deepcopy
         names = ('pending_result_recovery', 'pending_verification_requirement',
-                 'pending_progress_repair_actions', 'pending_action_repair',
+                 'pending_progress_repair_actions', '_pending_progress_repair_binding',
+                 '_unified_action_recovery_events', '_last_unified_contract_receipt',
+                 '_last_canonical_contract_receipts', 'pending_action_repair',
                  'read_only_progress_deferred', 'deferred_progress_repair', 'active_stage_manifest')
         saved = {name: deepcopy(getattr(self, name, None)) for name in names}
         self._action_admission_probe = True
@@ -3337,6 +4149,11 @@ class WebAgentProtocolLoop:
         if not candidates or len(candidates) != len(operational):
             self.pending_progress_repair_actions = []
             return []
+        from agent_core.progress_recovery import progress_repair_hold_safe
+        used_ids = set(self.action_ledger) | set(self.action_result_ledger)
+        if not progress_repair_hold_safe(candidates, used_ids):
+            self.pending_progress_repair_actions = []
+            return []
         try:
             context = V8RequestContext(
                 self.run_id,
@@ -3368,6 +4185,10 @@ class WebAgentProtocolLoop:
                 return []
             seen.add(action_id)
         self.pending_progress_repair_actions = candidates
+        self._pending_progress_repair_binding = {
+            "request_id": self.run_id, "task_epoch": self.task_epoch,
+        }
+        self._record_unified_action_recovery("HELD_UNADMITTED", candidates)
         action_ids = [str(action.get("action_id", "") or "") for action in candidates]
         self._emit(
             "progress_repair_actions_preserved",
@@ -3396,16 +4217,96 @@ class WebAgentProtocolLoop:
             self._emit('action_numeric_fields_normalized', request_id=self.run_id, round=self.turn_id, block_indexes=numeric_changes)
         calls = normalized
         pending = [dict(action) for action in self.pending_progress_repair_actions]
+        binding = dict(getattr(self, "_pending_progress_repair_binding", {}) or {})
+        if pending and binding and (
+            binding.get("request_id") != self.run_id
+            or binding.get("task_epoch") != self.task_epoch
+        ):
+            self.pending_progress_repair_actions = []
+            self._pending_progress_repair_binding = {}
+            self._record_unified_action_recovery("REQUEST_EPOCH_MISMATCH_REJECTED", pending)
+            self._emit("progress_repair_action_binding_rejected",
+                       request_id=self.run_id, round=self.turn_id,
+                       action_ids=[str(a.get("action_id", "")) for a in pending],
+                       executed=False, authorization_granted=False)
+            return calls
+        # A CCRC Goal-Replan handoff must not impose obsolete, never-admitted
+        # field-repair holds on the newly reconstructed plan. No tool result
+        # or authorization is produced by releasing the hold.
+        if (pending and getattr(getattr(self, "_ccrc", None),
+                                "replan_required", False)
+                and not any(item.get("action_id") in self.action_ledger
+                            or item.get("action_id") in self.action_result_ledger
+                            for item in pending)):
+            self.pending_progress_repair_actions = []
+            self._pending_progress_repair_binding = {}
+            self._record_unified_action_recovery("REPLAN_RELEASED_UNADMITTED", pending)
+            self._emit(
+                "ccrc_replan_unadmitted_hold_released",
+                request_id=self.run_id, round=self.turn_id,
+                action_ids=[item["action_id"] for item in pending],
+                executed=False, authorization_granted=False,
+            )
+            return calls
+        if pending:
+            from agent_core.progress_recovery import progress_repair_hold_safe
+            used_ids = set(self.action_ledger) | set(self.action_result_ledger)
+            if not progress_repair_hold_safe(pending, used_ids):
+                self.pending_progress_repair_actions = []
+                self._emit("progress_repair_actions_replay_blocked",
+                           request_id=self.run_id, round=self.turn_id,
+                           authorization_granted=False, executed=False)
+                return calls
         if not pending or not calls or calls[-1].get("tool") != "turn_commit":
             return calls
         submitted = [
             action for action in calls[:-1]
             if action.get("tool") != "report_progress"
         ]
+        # Do not restore an unexecuted operational hold into an INTERRUPT or
+        # terminal-shaped response; normal blocker/terminal guards decide.
+        current_progress = next(
+            (item for item in calls[:-1] if item.get("tool") == "report_progress"),
+            {},
+        )
+        if str(current_progress.get("decision", "")).upper() != "CONTINUE":
+            return calls
         pending_by_id = {str(item.get('action_id', '')): item for item in pending}
-        if any(str(item.get('action_id', '')) not in pending_by_id
-               or semantic_action_signature(item) != semantic_action_signature(pending_by_id[str(item.get('action_id', ''))])
-               for item in submitted):
+        # A format-only repair may echo the same unexecuted Action under a
+        # fresh ID. Correlate only a unique, byte-for-byte semantic match with
+        # identical dependency/replacement fields. Restore the Runtime-held
+        # original identity; never execute a new command or replay a result.
+        unknown = []
+        used = set()
+        for submitted_action in submitted:
+            aid = str(submitted_action.get("action_id", "") or "")
+            matched = pending_by_id.get(aid)
+            if matched is None:
+                matches = [candidate for candidate in pending
+                           if candidate["action_id"] not in used
+                           and semantic_action_signature(candidate)
+                           == semantic_action_signature(submitted_action)
+                           and candidate.get("depends_on") == submitted_action.get("depends_on")
+                           and candidate.get("replaces_action_id")
+                           == submitted_action.get("replaces_action_id")]
+                if len(matches) != 1:
+                    unknown.append(aid)
+                    continue
+                matched = matches[0]
+                self._emit("progress_repair_unadmitted_action_identity_restored",
+                           request_id=self.run_id, round=self.turn_id,
+                           restored_action_id=matched["action_id"],
+                           executed=False, authorization_granted=False)
+            if (matched["action_id"] in used
+                    or semantic_action_signature(submitted_action)
+                    != semantic_action_signature(matched)
+                    or submitted_action.get("depends_on") != matched.get("depends_on")
+                    or submitted_action.get("replaces_action_id")
+                    != matched.get("replaces_action_id")):
+                unknown.append(aid)
+            else:
+                used.add(matched["action_id"])
+        if unknown:
             return calls
         # A partial repair reply may echo only one of several held actions.
         # Restore the entire original order without executing any action here.
@@ -3413,6 +4314,7 @@ class WebAgentProtocolLoop:
         commit = dict(calls[-1])
         commit["action_count"] = len(restored)
         restored.append(commit)
+        self._record_unified_action_recovery("RESTORED_FOR_FULL_ADMISSION", pending)
         self._emit(
             "progress_repair_actions_restored",
             request_id=self.run_id,
@@ -3591,6 +4493,13 @@ class WebAgentProtocolLoop:
         held = {str(item.get('action_id', '')): item for item in self.pending_progress_repair_actions
                 if str(item.get('action_id', '')) not in self.action_ledger}
         submitted = [item for item in actions if item.get('tool') != 'report_progress']
+        from agent_core.shared_blackboard import validate_strategy_candidate_bindings
+        strategy_binding_diagnostic = validate_strategy_candidate_bindings(
+            submitted, getattr(self, "_last_strategy_candidate_registry", {}),
+            request_id=self.run_id, task_epoch=self.task_epoch,
+        )
+        if strategy_binding_diagnostic:
+            return [], [strategy_binding_diagnostic]
         if (held and str(progress_actions[0].get('decision', '')).upper() != 'INTERRUPT'
                 and not (self._failed_predeclared_fact(progress_actions[0])
                          and self._read_only_unexecuted_repairs(held.values()))):
@@ -3609,6 +4518,100 @@ class WebAgentProtocolLoop:
         )
         if wrapper_diagnostic:
             return [], [wrapper_diagnostic]
+        # One shared Canonical Resolver for Core Progress, Path and SCR.
+        # Conflict is NOT rewritten; existing Progress diagnostics decide.
+        from agent_core.canonical_contract_resolver import resolve_core_progress_fields
+        core_progress_receipt = None
+        try:
+            normalized_progress_action, core_progress_receipt = (
+                resolve_core_progress_fields(normalized_progress_action)
+            )
+        except ValueError:
+            pass
+        from agent_core.initial_progress_normalization import (
+            normalize_initial_progress, materialize_unadmitted_first_full,
+        )
+        from agent_core.progress_reply_contract import has_accepted_plan
+        # The first rejected FULL is not an accepted plan, but in a bounded
+        # format-only repair the Planner may reuse its own earlier *plan*
+        # fields. Never inherit evidence, decision, Action, scope or authority.
+        # Explicit PATCH with no accepted ledger remains invalid.
+        initial_draft = getattr(self, "_first_full_progress_draft", {})
+        ccrc = getattr(self, "_ccrc", None)
+        if not has_accepted_plan(self.progress_ledger) and not self.action_result_ledger:
+            normalized_progress_action, filled_draft_fields = (
+                materialize_unadmitted_first_full(
+                    normalized_progress_action, initial_draft,
+                    request_id=getattr(self, 'run_id', ''),
+                    task_epoch=getattr(self, 'task_epoch', ''),
+                    field_repair_active=bool(
+                        ccrc is not None and ccrc.active
+                        and ccrc.mode == "FIELD_REPAIR"
+                        and not ccrc.replan_required
+                    ),
+                )
+            )
+            if filled_draft_fields:
+                self._emit(
+                    "unadmitted_first_full_draft_materialized",
+                    request_id=self.run_id, round=self.turn_id,
+                    inherited_planner_fields=filled_draft_fields,
+                    accepted=False, executed=False,
+                    authorization_granted=False, evidence_created=False,
+                )
+        normalized_progress_action, bootstrap_normalization = normalize_initial_progress(
+            normalized_progress_action,
+            has_plan=has_accepted_plan(self.progress_ledger),
+            action_result_count=len(self.action_result_ledger),
+        )
+        if bootstrap_normalization["applied"]:
+            self._emit(
+                "initial_progress_deterministic_normalization",
+                request_id=self.run_id, task_id=self.task_id, round=self.turn_id,
+                fields=bootstrap_normalization["normalized_fields"],
+                status_marker_only=bootstrap_normalization["status_marker_only"],
+                action_executed=False, terminal_evidence_created=False,
+                authorization_granted=False,
+            )
+        # P1: A PATCH repeats plan fields only when they really change.
+        # Identical already-accepted fields are inherited from Ledger, not
+        # copied into the next schema repair. Changed explicit fields remain
+        # subject to ordinary Progress validation (fail closed).
+        from agent_core.progress_reply_contract import reconcile_redundant_patch_fields
+        try:
+            normalized_progress_action, redundant_fields = (
+                reconcile_redundant_patch_fields(
+                    normalized_progress_action, self.progress_ledger))
+        except ValueError:
+            redundant_fields = []  # ordinary materialization reports conflict
+        if redundant_fields:
+            self._emit(
+                "protocol_repair_redundant_patch_fields_inherited",
+                request_id=self.run_id, round=self.turn_id,
+                fields=redundant_fields,
+                authorization_granted=False, executed=False,
+            )
+        # P0: A previously validated Progress proposal can survive a rejected
+        # query_project Action schema. Never restore changed Goal, Evidence,
+        # decision, or accepted Plan fields; FULL admission still follows.
+        tx = getattr(self, "_protocol_repair_tx", None)
+        if tx is not None:
+            restored, repair_mode = tx.restore_progress(
+                normalized_progress_action, submitted,
+                ledger=self.progress_ledger,
+                action_results=self.action_result_ledger,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
+            if repair_mode:
+                normalized_progress_action = restored
+                self._emit(
+                    "protocol_repair_valid_progress_candidate_restored",
+                    request_id=self.run_id, round=self.turn_id,
+                    mode=repair_mode, transaction_revision=tx.revision,
+                    persisted=False, admitted=False,
+                    executed=False, authorization_granted=False,
+                )
+
         # Shared Tri-One Completion Contract: only the trusted, no-action,
         # exclusive final_response terminal may omit evidence_refs. This is
         # transport-neutral (Telegram/WebCopilot/Local Test) and does not
@@ -3659,10 +4662,68 @@ class WebAgentProtocolLoop:
                                action_ids=[a.get('action_id') for a in reads])
                 return admitted, errors
             return [], [diagnostic]
+        # Resolve only proven structural equivalence before the existing
+        # semantic, schema, scope, ACL and human-approval admission gates.
+        # No Action can execute merely because a contract was rewritten.
+        from agent_core.canonical_contract_resolver import resolve_planner_contracts
+        normalized_progress_action, contract_receipts, contract_errors = (
+            resolve_planner_contracts(
+                normalized_progress_action,
+                path_document=self._spr_path_resolution,
+            )
+        )
+        merged_contract_receipts = (
+            ([core_progress_receipt]
+             if core_progress_receipt is not None
+             and core_progress_receipt["rewrite_applied"] else [])
+            + contract_receipts
+        )
+        self._last_canonical_contract_receipts = merged_contract_receipts[-6:]
+        for receipt in merged_contract_receipts:
+            self._emit(
+                "planner_contract_resolved",
+                request_id=self.run_id, round=self.turn_id, **receipt,
+            )
+        if contract_errors:
+            return [], contract_errors
         progress_index = actions.index(progress_actions[0])
         actions[progress_index] = normalized_progress_action
         progress_actions = [normalized_progress_action]
+        # P2: deterministic query_project reshaping only when the Planner has
+        # explicitly selected the operation and its query arguments. No
+        # operation/path/symbol is guessed, no admission can be skipped.
+        from agent_core.protocol_repair_transaction import normalize_query_project
+        query_modes = []
+        for index, action in enumerate(actions):
+            if action.get("tool") != "query_project":
+                continue
+            normalized_query, mode = normalize_query_project(action)
+            if mode:
+                actions[index] = normalized_query
+                query_modes.append((str(action.get("action_id", "")), mode))
+        if query_modes:
+            self._emit(
+                "query_project_deterministic_schema_repair",
+                request_id=self.run_id, round=self.turn_id,
+                action_ids=[item[0] for item in query_modes],
+                modes=[item[1] for item in query_modes],
+                inferred_operation=False, authorization_granted=False,
+                executed=False, admission_required=True,
+            )
         operational = [action for action in actions if action.get("tool") != "report_progress"]
+        # A pre-execution strategy revision cannot be bypassed by changing
+        # only Action ID or restating the same denied command. A new strategy
+        # still passes every normal V9 admission check below.
+        from agent_core.preexecution_replan import repeats_rejected_strategy
+        if any(repeats_rejected_strategy(item, self._preexec_strategy_blocked)
+               for item in operational):
+            return [], [{
+                "marker": "[RUNTIME_PREEXECUTION_REPLAN_REQUIRED]",
+                "reason": "preexecution_identical_strategy_replay",
+                "detail": "Unexecuted identical command/CWD after verified missing-CWD strategy revision",
+                "suggestion": "Choose a materially new, authorized canonical Tool Action; "
+                              "do not retry the old command with a new action_id.",
+            }]
         # Accept only finite semantic capabilities, with request/epoch identity.
         from agent_core.semantic_capability_resolution import (
             SCHEMA as SCR_SCHEMA, SemanticCapabilityError, verify_resolution_for_actions,
@@ -3683,9 +4744,20 @@ class WebAgentProtocolLoop:
                 old_resolution, operational,
             )
         except SemanticCapabilityError as exc:
+            from agent_core.semantic_capability_resolution import describe_resolution_repair
+            diagnostic = describe_resolution_repair(
+                normalized_progress_action.get("capability_resolution"),
+                old_resolution, operational,
+            )
             return [], [{"marker": "[WEBAGENT_SEMANTIC_CAPABILITY_REJECTED]",
-                "reason": str(exc), "suggestion":
-                "Use the finite read-only SCR registry. Do not change permission or scope."}]
+                "reason": str(exc),
+                "repair_scope": "SCR_SCHEMA",
+                "capability_repair": diagnostic,
+                "suggestion": (
+                    "Fix report_progress.capability_resolution using the "
+                    "canonical two-key shape in SCR_SCHEMA_REPAIR. "
+                    "Capability selection never grants permission or scope."
+                )}]
         # Model-proposed path selection cannot expand the trusted original
         # request: compare against the request/epoch preflight's exact result.
         proposal = normalized_progress_action.get("path_resolution")
@@ -3721,6 +4793,23 @@ class WebAgentProtocolLoop:
                 or not str(query.get("operation", "") or "").strip()
             ]
             if invalid_indexes:
+                # Save only a fully valid, unadmitted Progress *proposal*.
+                # Invalid query payloads cannot be executed; the candidate is
+                # never stored in TaskProgressLedger until full admission.
+                tx = getattr(self, "_protocol_repair_tx", None)
+                if tx is not None and tx.capture_query_rejection(
+                    progress_actions[0], operational,
+                    ledger=self.progress_ledger,
+                    action_results=self.action_result_ledger,
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                ):
+                    self._emit(
+                        "protocol_repair_valid_progress_candidate_preserved",
+                        request_id=self.run_id, round=self.turn_id,
+                        transaction_revision=tx.revision,
+                        persisted=False, admitted=False, executed=False,
+                        authorization_granted=False,
+                    )
                 return [], [{
                     "marker": "[WEBAGENT_QUERY_PROJECT_REJECTED]",
                     "reason": "query_project_structured_queries_required",
@@ -3728,7 +4817,14 @@ class WebAgentProtocolLoop:
                         "queries[] must contain explicit operation objects; invalid_indexes="
                         + json.dumps(invalid_indexes, separators=(",", ":"))
                     ),
-                    "suggestion": PROJECT_EVIDENCE_ACTION_CONTRACT,
+                    "suggestion": (
+                        "Repair only query_project.queries[] into explicit "
+                        "{operation: canonical_name, ...arguments} objects; "
+                        "never infer a missing operation or broaden a path. "
+                        "For report_progress use a minimal PATCH, preserve "
+                        "the accepted Goal, status/evidence and condition. "
+                        + PROJECT_EVIDENCE_ACTION_CONTRACT
+                    ),
                 }]
         pending_edit_recovery = dict(self.pending_result_recovery or {})
         if (
@@ -3961,6 +5057,65 @@ class WebAgentProtocolLoop:
                         ),
                     }]
                 cwd_scope = self.tools.preview_tool_scope(action)
+                if not cwd_scope.get('allowed', True):
+                    # Rewrite ONLY a recognized, registered, literal remote
+                    # Git HEAD read. Never change the command, target or
+                    # repository; the original absent destination is NOT a CWD.
+                    from agent_core.action_resolution_trace import (
+                        propose_equivalent_bound_cwd_rewrite,
+                    )
+                    from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+                    rewrite = propose_equivalent_bound_cwd_rewrite(
+                        action,
+                        original_cwd_error=str(cwd_scope.get("error") or ""),
+                        bound_workspace=str(self.workspace),
+                        target_contract=getattr(self, "_target_path_contract", None),
+                        goal_gaps=reconstruct_goal_gaps(self),
+                        artifact_view=getattr(self, "_source_discovery_bootstrap", None),
+                    )
+                    if rewrite:
+                        candidate = rewrite["candidate_action"]
+                        next_scope = self.tools.preview_tool_scope(candidate)
+                        if next_scope.get("allowed") is True:
+                            aid = str(action.get("action_id") or "")
+                            if aid:
+                                previous_notes = self._runtime_action_rewrite_notes.get(
+                                    aid, {}
+                                )
+                                self._runtime_action_rewrite_notes[aid] = {
+                                    **previous_notes,
+                                    **{
+                                        k: v for k, v in rewrite.items()
+                                        if k != "candidate_action"
+                                    },
+                                }
+                            action.clear()
+                            action.update(candidate)
+                            cwd_scope = next_scope
+                            self._emit(
+                                "action_runtime_rewrite_applied",
+                                request_id=self.run_id, round=self.turn_id,
+                                action_id=aid, tool="run_command",
+                                changed_fields=["working_directory"],
+                                rewrite_reason_code=rewrite["rewrite_reason_code"],
+                                target_absence_evidence_ref=rewrite[
+                                    "target_absence_evidence_ref"
+                                ],
+                                command_unchanged=True,
+                                semantics_preserved=True,
+                                grant_created=False,
+                                original_scope_denied=True,
+                                rewritten_scope_admitted=True,
+                                executed=False,
+                            )
+                        else:
+                            self._emit(
+                                "action_runtime_rewrite_candidate_rejected",
+                                request_id=self.run_id, round=self.turn_id,
+                                action_id=str(action.get("action_id") or ""),
+                                reason_code="REWRITTEN_CWD_SCOPE_NOT_ADMITTED",
+                                grant_created=False, executed=False,
+                            )
                 if not cwd_scope.get('allowed',True):
                     from agent_core.tools import _path_independent_command_must_use_bound_workspace
                     command = str(action.get('command', '') or '')
@@ -3990,8 +5145,26 @@ class WebAgentProtocolLoop:
                         )
                     else:
                         suggestion = '提供本 request 授權範圍內的絕對目錄 working_directory。'
-                    return [], [{'reason':'run_command_working_directory_rejected',
-                        'detail':scope_error, 'suggestion':suggestion}]
+                    scope_diag = dict(cwd_scope.get("scope_diagnostic") or {})
+                    return [], [{
+                        'reason': 'run_command_working_directory_rejected',
+                        'tool': 'run_command',
+                        'action_id': str(action.get('action_id', '') or ''),
+                        'scope_reason_code': str(
+                            scope_diag.get('reason_code') or "CWD_PREFLIGHT_DENIED"
+                        ),
+                        'scope_category': str(scope_diag.get('category') or "OTHER"),
+                        'scope_path_role': str(scope_diag.get('path_role') or "OTHER"),
+                        'scope_transition': str(
+                            scope_diag.get('eligible_transition') or ""
+                        ),
+                        'scope_required_field': str(
+                            scope_diag.get('required_field') or "working_directory"
+                        ),
+                        'executed': False,
+                        'authorization_granted': False,
+                        'detail': scope_error, 'suggestion': suggestion,
+                    }]
                 if (self._pending_bound_cwd_repair.get('request_id') == self.run_id
                         and self._pending_bound_cwd_repair.get('command') == str(action.get('command', '') or '')
                         and cwd_scope.get('resolved_paths') == [str(self.workspace)]):
@@ -4042,6 +5215,28 @@ class WebAgentProtocolLoop:
             )
         except TaskProgressError as exc:
             from agent_core.progress_recovery import repair_diagnostic, read_only_progress_fallback
+            from agent_core.progress_reply_contract import has_accepted_plan
+            if (not has_accepted_plan(self.progress_ledger)
+                    and not self.action_result_ledger
+                    and normalized_progress_action.get("tool") == "report_progress"
+                    and str(normalized_progress_action.get("decision", "")).upper() == "CONTINUE"
+                    and normalized_progress_action.get("progress_update", "FULL") == "FULL"):
+                from agent_core.initial_progress_normalization import remember_unadmitted_first_full
+                self._first_full_progress_draft = remember_unadmitted_first_full(
+                    getattr(self, "_first_full_progress_draft", {}),
+                    normalized_progress_action, request_id=self.run_id,
+                    task_epoch=getattr(self, 'task_epoch', ''),
+                    round_id=getattr(self, 'turn_id', 0),
+                )
+                self._emit(
+                    "unadmitted_first_full_draft_preserved",
+                    request_id=self.run_id, round=self.turn_id,
+                    preserved_fields=sorted(
+                        (self._first_full_progress_draft.get("fields") or {})
+                    ),
+                    accepted=False, executed=False,
+                    authorization_granted=False, evidence_created=False,
+                )
             diagnostic = self._progress_repair_diagnostic(progress_actions[0], exc)
             fallback = read_only_progress_fallback(progress_actions[0], self.progress_ledger,
                                                   operational, exc, self._runtime_evidence_refs())
@@ -4068,6 +5263,66 @@ class WebAgentProtocolLoop:
             if preserved_action_ids:
                 diagnostic["preserved_action_ids"] = preserved_action_ids
             return [], [diagnostic]
+        # Evidence-Guided Goal Transition: Planner owns semantics, Runtime
+        # checks immutable goal/condition and exact committed evidence refs.
+        # This is optional for ordinary Progress and never bypasses Admission.
+        from agent_core.goal_strategy_transition import (
+            GoalTransitionError, validate_planner_transition,
+            repeat_denied_read_diagnostic, build_transition_readiness,
+        )
+        goal_transition_proposal = progress_actions[0].get("goal_transition")
+        if goal_transition_proposal is not None:
+            try:
+                validated_goal_transition = validate_planner_transition(
+                    goal_transition_proposal,
+                    goal=getattr(self.progress_ledger, "goal", "") or self.task_request,
+                    # Transition anchors to PREVIOUSLY accepted conditions;
+                    # new Planner-authored clauses in the current proposal
+                    # cannot manufacture an eligible Goal link.
+                    contract=(
+                        getattr(self.progress_ledger, "completion_contract", {})
+                        or normalized_progress["completion_contract"]
+                    ),
+                    evidence=self.action_result_ledger,
+                    action_ledger=self.action_ledger,
+                    operational=operational,
+                    request_id=self.run_id,
+                    task_epoch=self.task_epoch,
+                )
+                if validated_goal_transition["evidence_ref"] not in normalized_progress["evidence_refs"]:
+                    raise GoalTransitionError("goal_transition_progress_evidence_ref_missing")
+            except GoalTransitionError as exc:
+                return [], [{
+                    "marker": "[GOAL_ALIGNMENT_REJECTED]",
+                    "reason": exc.code,
+                    "repair_scope": "GOAL_TRANSITION",
+                    "suggestion": (
+                        "Repair report_progress.goal_transition only: preserve "
+                        "the immutable goal_anchor_sha256, choose one existing "
+                        "completion condition_id, cite the exact current Action "
+                        "evidence_ref in both goal_transition and Progress, "
+                        "and match next_tool to a submitted Action. "
+                        "Do not claim missing prerequisites from a rejected read; "
+                        "this is not an authorization grant."
+                    ),
+                }]
+        replay = repeat_denied_read_diagnostic(
+            operational, evidence=self.action_result_ledger,
+            action_ledger=self.action_ledger,
+        )
+        if replay:
+            return [], [replay]
+        # A confirmed missing workspace is a standing prerequisite, not the
+        # transient latest Action failure. Reject incompatible root readers
+        # before dispatch; the existing security/admission gates still own writes.
+        from agent_core.goal_gap_ledger import (
+            reconstruct_goal_gaps, decision_grounding_diagnostics,
+        )
+        gap_errors = decision_grounding_diagnostics(
+            operational, reconstruct_goal_gaps(self),
+        )
+        if gap_errors:
+            return [], gap_errors
         decision = normalized_progress["decision"]
         outcome = normalized_progress["outcome"]
         if (decision == 'COMPLETE' and getattr(self,'deferred_action_repairs',{})
@@ -4080,6 +5335,174 @@ class WebAgentProtocolLoop:
             from agent_core.context_acquisition import context_interrupt_allowed
             capabilities = self._context_capabilities()
             request = normalized_progress.get('context_request') or {}
+            from agent_core.goal_gap_ledger import reconstruct_goal_gaps
+            from agent_core.interrupt_readiness import (
+                interrupt_readiness, proposed_interrupt_constraint, _read_attempts,
+            )
+            from agent_core.goal_prerequisite_resolution import (
+                resolve_goal_prerequisites, premature_source_interrupt_diagnostic,
+            )
+            from agent_core.source_candidate_ledger import build_source_candidate_ledger
+            from agent_core.source_integrity_resolution import reconcile_source_integrity
+            gap_view = reconstruct_goal_gaps(self)
+            source_view = build_source_candidate_ledger(self, gap_view)
+            source_integrity_view = reconcile_source_integrity(self, source_view)
+            interruption_view = interrupt_readiness(
+                gap_view, capabilities, attempted_reads=_read_attempts(self),
+                source_candidates=source_view,
+            )
+            capabilities = dict(capabilities)
+            capabilities["grounded_scoped_read_candidate_count"] = (
+                interruption_view["candidate_count"]
+            )
+            self._emit(
+                "goal_interrupt_readiness_evaluated",
+                request_id=self.run_id,
+                round=self.turn_id,
+                context_kind=str(request.get("kind", "") or ""),
+                active_goal_gap_count=int(gap_view.get("active_count", 0)),
+                scoped_read_candidate_count=interruption_view["candidate_count"],
+                next_safe_category=interruption_view["next_safe_category"],
+                write_authorization_granted=False,
+                tool_executed=False,
+            )
+            interrupt_diagnostic = proposed_interrupt_constraint(request, interruption_view)
+            if interrupt_diagnostic:
+                return [], [interrupt_diagnostic]
+            from agent_core.remote_artifact_access_readiness import (
+                resolve_remote_artifact_access, derive_admitted_git_read_receipt,
+            )
+            artifact_view = getattr(self, "_source_discovery_bootstrap", None) or {}
+            access_receipt = derive_admitted_git_read_receipt(
+                artifact_view, action_ledger=self.action_ledger,
+                result_ledger=self.action_result_ledger,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            ) or getattr(self, "_remote_artifact_access_runtime_receipt", None)
+            remote_view = resolve_remote_artifact_access(
+                artifact_view,
+                environment=getattr(self, "_planner_environment_snapshot", None),
+                runtime_receipt=access_receipt,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
+            prerequisite_view = resolve_goal_prerequisites(
+                gap_view, interruption_view, source_view, source_integrity_view,
+                artifact_view, remote_view,
+            )
+            # Carry the Environment/Prerequisite evaluation into Progress:
+            # a single instruction to try the registered Git read is NEVER
+            # evidence that the read was attempted or its blocker verified.
+            from agent_core.prerequisite_transition_gate import (
+                build_prerequisite_transition, premature_interrupt_diagnostic,
+            )
+            transition = build_prerequisite_transition(
+                artifact_view=artifact_view, prerequisite_view=prerequisite_view,
+                remote_view=remote_view, request_id=self.run_id,
+                task_epoch=self.task_epoch,
+                bound_workspace=str(self.workspace),
+                tool_scope_preview=getattr(self.tools, "preview_tool_scope", None),
+                action_ledger=self.action_ledger,
+                result_ledger=self.action_result_ledger,
+                guidance_issued=bool(
+                    getattr(self, "_remote_access_probe_guidance_issued", False)
+                ),
+            )
+            self._last_prerequisite_transition_receipt = dict(transition)
+            self._emit(
+                "prerequisite_transition_evaluated",
+                request_id=self.run_id, round=self.turn_id,
+                stage=transition["stage"],
+                progress_transition=transition["progress_transition"],
+                access_state=transition["access_state"],
+                scope_preflight_status=transition["scope_preflight_status"],
+                scope_preflight_reason_code=transition["scope_preflight_reason_code"],
+                probe_evidence_present=transition["probe_evidence_present"],
+                latest_probe_failure_category=transition.get(
+                    "latest_probe_failure_category", ""
+                ),
+                latest_probe_failure_ref=(
+                    (transition.get("latest_probe_failure") or {}).get("action_id", "")
+                ),
+                next_failure_evaluation=transition.get("next_failure_evaluation", ""),
+                guidance_is_evidence=False,
+                authorization_granted=False, executed=False,
+            )
+            prerequisite_view["remote_access_probe_guidance_already_issued"] = bool(
+                getattr(self, "_remote_access_probe_guidance_issued", False)
+            )
+            prerequisite_diagnostic = premature_source_interrupt_diagnostic(
+                request, prerequisite_view,
+            )
+            # A verified CWD Scope denial is NOT an untried runnable Probe.
+            # Do not tell Planner to try a command that the Runtime's own
+            # preflight already rejected. Existing exact user consent remains.
+            if (prerequisite_diagnostic
+                    and prerequisite_diagnostic.get("reason") ==
+                    "remote_access_unknown_git_capability_probe_required"
+                    and transition["stage"] != "READY_FOR_TOOL_ADMISSION"):
+                prerequisite_diagnostic = None
+            # Initial soft guidance remains for compatible Planner messages,
+            # but it cannot release the hard Evidence/Scope transition gate.
+            if prerequisite_diagnostic and prerequisite_diagnostic.get("reason") == (
+                "remote_access_unknown_git_capability_probe_required"
+            ):
+                self._remote_access_probe_guidance_issued = True
+                prerequisite_diagnostic["prerequisite_transition"] = dict(transition)
+                prerequisite_diagnostic["detail"] = (
+                    "Remote access is UNKNOWN and no current-epoch Git read "
+                    "result exists. The next Planner decision must follow "
+                    "prerequisite_transition.progress_transition; an issued "
+                    "guidance does not prove the prerequisite."
+                )
+                return [], [prerequisite_diagnostic]
+            gated = premature_interrupt_diagnostic(request, transition)
+            if gated:
+                return [], [gated]
+            if prerequisite_diagnostic:
+                return [], [prerequisite_diagnostic]
+            from agent_core.shared_blackboard import (
+                evaluate_terminal_readiness, interrupt_terminal_diagnostic,
+            )
+            terminal_readiness = evaluate_terminal_readiness(
+                getattr(self, "_last_strategy_candidate_registry", {}),
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
+            self._last_terminal_readiness = dict(terminal_readiness)
+            self._emit(
+                "strategy_terminal_readiness_evaluated",
+                request_id=self.run_id, round=self.turn_id,
+                decision=terminal_readiness.get("decision", "UNKNOWN"),
+                reason_code=terminal_readiness.get("reason_code", "UNKNOWN"),
+                strategy_space_state=terminal_readiness.get(
+                    "strategy_space_state", "UNKNOWN"
+                ),
+                candidate_count=terminal_readiness.get("candidate_count", 0),
+                strategy_candidate_route_ids=[
+                    str(item.get("route_id") or "")[:100]
+                    for item in list(
+                        (getattr(self, "_last_strategy_candidate_registry", {}) or {})
+                        .get("candidates") or []
+                    )[:8] if isinstance(item, dict)
+                ],
+                strategy_candidate_statuses=[
+                    str(item.get("status") or "")[:100]
+                    for item in list(
+                        (getattr(self, "_last_strategy_candidate_registry", {}) or {})
+                        .get("candidates") or []
+                    )[:8] if isinstance(item, dict)
+                ],
+                untried_candidate_count=terminal_readiness.get(
+                    "untried_candidate_count", 0
+                ),
+                blocking_candidate_ids=list(
+                    terminal_readiness.get("blocking_candidate_ids") or []
+                )[:8],
+                authorization_granted=False, tool_executed=False,
+            )
+            strategy_terminal_diagnostic = interrupt_terminal_diagnostic(
+                terminal_readiness
+            )
+            if strategy_terminal_diagnostic:
+                return [], [strategy_terminal_diagnostic]
             spec = self._safe_protocol_spec_rejection()
             if (spec and request.get('kind') == 'BLOCKED'
                     and request.get('blocking_action_id') == spec['action_id']):
@@ -4218,6 +5641,51 @@ class WebAgentProtocolLoop:
         # One initial Progress-only condition-registration exchange, not a
         # reusable no-action loophole. Normal ACK, ledger and stagnation guards
         # still apply, and no Runtime Tool Action is dispatched on this turn.
+        # A failed, evidence-bound prerequisite may not be "continued" by
+        # committing Progress prose without the next Action.  Check BEFORE
+        # record_model_progress/ack_accepted to avoid a false step advance.
+        # Normal initial plan registration and WAIT_RUNTIME remain unaffected.
+        if (decision == "CONTINUE" and not operational
+                and self.action_result_ledger
+                and not getattr(self, "_single_action_probe", False)
+                and not getattr(self, "_action_admission_probe", False)
+                and not (self.pending_result_recovery or {}).get("active")
+                and str((self.action_loop_state or {}).get(
+                    "required_transition", "")) != "WAIT_RUNTIME"):
+            from agent_core.failure_causal_receipt import recent_failure_receipts
+            failures = recent_failure_receipts(
+                action_ledger=self.action_ledger,
+                result_ledger=self.action_result_ledger,
+                request_id=self.run_id, task_epoch=self.task_epoch,
+            )
+            active_failure = next((
+                item for item in reversed(failures)
+                if item.get("execution", {}).get("status")
+                in {"FAILED", "REJECTED", "PARTIAL"}
+            ), None)
+            if active_failure:
+                return [], [{
+                    "marker": "[WEBAGENT_FAILURE_CAUSAL_ACTION_REQUIRED]",
+                    "reason": "failed_prerequisite_continue_requires_action",
+                    "tool": "report_progress",
+                    "action_id": str(progress_actions[0].get("action_id") or ""),
+                    "blocking_evidence_ref": active_failure["action_id"],
+                    "failure_category": active_failure["failure"]["category"],
+                    "next_evaluation": active_failure["replan"]["next_evaluation"],
+                    "field_issues": [{
+                        "field": "operational_action",
+                        "code": "CONTINUE_REQUIRES_CAUSALLY_GROUNDED_ACTION",
+                    }],
+                    "suggestion": (
+                        "The previous Runtime Tool Result is FAILED, REJECTED "
+                        "or PARTIAL. Do not commit CONTINUE without an actionable "
+                        "next step. Use this current-epoch causal evidence and "
+                        "the verified environment, then choose one safe, materially "
+                        "different diagnostic with full Tool/Scope Admission, "
+                        "or an evidence-bound interruption if genuinely blocked. "
+                        "A failure diagnostic is neither permission nor execution."
+                    ),
+                }]
         action_consistency = None if (
             getattr(self, '_single_action_probe', False) or strict_first_registration
         ) else self._progress_action_consistency_diagnostic(normalized_progress, operational)
@@ -4371,6 +5839,78 @@ class WebAgentProtocolLoop:
             matched_condition=str(normalized_progress.get("matched_condition", "") or ""),
             fact_assertion=normalized_progress.get("fact_assertion"),
         )
+        # Terminal Goal Contract: an Action PASS is necessary but does not
+        # prove that the user's original deployment destination was honored.
+        # This gate is read-only and checks the immutable target bound before
+        # the first action. Unknown scope, mismatch, and unproven relocation
+        # never become terminal SUCCESS.
+        if (decision == "COMPLETE" and outcome == "SUCCESS"
+                and getattr(self, "_target_path_contract", None)
+                and terminal_evidence_verdict == "PASS"):
+            from agent_core.target_path_contract import verify_target_completion
+            from agent_core.terminal_evidence_reconciliation import (
+                qualifying_reuse_verifier,
+            )
+            from agent_core.security_context import SecurityContext
+            reuse_verifier_ref = qualifying_reuse_verifier(
+                self.action_ledger, self.action_result_ledger,
+                evidence_refs,
+                self._target_path_contract["requested_target"],
+                self.run_id, self.task_epoch,
+            )
+            final_action = next(
+                (item for item in operational
+                 if item.get("tool") == "final_response"), {})
+            target_verdict = verify_target_completion(
+                self._target_path_contract, self._target_pre_mutation,
+                SecurityContext.from_agent(
+                    self.tools, fallback_workspace=self.workspace),
+                final_text=str(final_action.get("content", "") or ""),
+                evidence_pass=True,
+                reuse_verification_ref=reuse_verifier_ref,
+            )
+            self._target_path_verdict = target_verdict
+            self._emit(
+                "terminal_target_path_evaluated",
+                request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, round=self.turn_id,
+                **target_verdict,
+            )
+            if target_verdict["status"] != "PASS":
+                return [], [{
+                    "marker": "[WEBAGENT_TARGET_PATH_CONTRACT_REJECTED]",
+                    "reason": "terminal_goal_target_unverified",
+                    "detail": json.dumps(target_verdict, ensure_ascii=False,
+                                         separators=(",", ":")),
+                    "suggestion": (
+                        "Action PASS is not Goal Path PASS. Preserve the original "
+                        "requested_target and original completion contract. "
+                        "Inspect the requested root and its direct contents. "
+                        "If existing artifacts are found, compare and reuse "
+                        "them only when independently verified. If the exact "
+                        "target is still required, perform a new authorized "
+                        "non-destructive deployment into that root and verify "
+                        "the required entries. Relocation needs pre-mutation "
+                        "entry collision evidence and the original request's "
+                        "explicit exception; disclose the actual target. "
+                        "For PREEXISTING_CONTENT_EVIDENCE_UNVERIFIED, do not "
+                        "repeat a mutation or accept changed original files: "
+                        "the pre-mutation proof cannot be recreated afterward. "
+                        "For PREEXISTING_FILE_CONTENT_CHANGED or "
+                        "PREEXISTING_ENTRY_REMOVED, report the protected data "
+                        "conflict and request a safe, authorized recovery. "
+                        "If the exact root was already complete at request entry, "
+                        "only a current run_command VERIFY PASS using the exact "
+                        "requested_target as working_directory, referenced in "
+                        "terminal evidence_refs, may prove safe reuse when the "
+                        "original user requested revalidation. Do not mutate "
+                        "an already compliant root merely to create new files. "
+                        "For layout-only blockers, use a small bounded "
+                        "read-only directory probe, not a complex inline script. "
+                        "Do not move, overwrite, infer permission, or change "
+                        "the Goal merely to pass this gate."
+                    ),
+                }]
         # Explicit four-Action B-P1 observations have their own scope-limited
         # success contract. PR-A Action SATISFIED does NOT verify PR-C/D.
         bp1_observation_admission = False
@@ -4702,7 +6242,12 @@ class WebAgentProtocolLoop:
         self.v8_admitted_actions = admitted
         self.tools._v8_admitted_actions = admitted
         self.protocol_state = "ACCEPTED"
+        tx = getattr(self, "_protocol_repair_tx", None)
+        if tx is not None:
+            tx.clear()  # Close only on FULL admission; no early commit.
         self.pending_progress_repair_actions = []
+        self._pending_progress_repair_binding = {}
+        self._first_full_progress_draft = {}
         self.pending_action_repair = {}
         self.pending_result_ack_id = ""
         self.pending_web_ack_id = "WEBACK-V8-" + uuid.uuid4().hex[:16].upper()
@@ -4715,17 +6260,47 @@ class WebAgentProtocolLoop:
         )
         return actions, []
 
-    def _execute_action(self, action: dict) -> str:
+    def _execute_runtime_action(self, action: dict) -> str:
+        """Dispatch for Runtime consumers that project their own Planner payload."""
+        return self._execute_action(action, runtime_receipt=True)
+
+    def _execute_action(self, action: dict, *, runtime_receipt: bool = False) -> str:
         if action.get('tool') == 'delete_path' and self.resolved_delete_target and str(action.get('path', '')).casefold() != self.resolved_delete_target.casefold():
             from agent_core.tool_result_contract import encode_result
             return encode_result('REJECTED', 'TARGET_MISMATCH', requested_path=action.get('path', ''), detail='Use only the exact target proven by Runtime discovery')
         action_id = str(action.get("action_id", "") or "")
-        signature = action_signature(action)
+        try:
+            signature = action_signature(action)
+        except ProtocolV8Error as exc:
+            from agent_core.tool_result_contract import encode_result
+            return encode_result(
+                "REJECTED", "ACTION_CONTRACT_REJECTED_BEFORE_DISPATCH",
+                tool=action.get("tool", ""), executed=False,
+                data={"protocol_error_code": exc.code},
+            )
         cached = self.action_ledger.get(action_id)
         if cached:
             if cached["signature"] != signature:
                 raise RuntimeError(f"action_id payload mismatch: {action_id}")
-            return str(cached["result"])
+            cached_result = str(cached["result"])
+            if runtime_receipt and not cached.get("result_is_runtime_receipt"):
+                from agent_core.runtime_evidence_store import (
+                    RuntimeEvidenceError, read_runtime_action_result,
+                )
+                pointer = cached.get("runtime_evidence_store") or {}
+                if pointer.get("store_status") == "PERSISTED_AND_READBACK_VERIFIED":
+                    try:
+                        return read_runtime_action_result(
+                            self.progress_root if self.progress_root is not None else self.workspace,
+                            task_id=self.task_id, request_id=self.run_id,
+                            task_epoch=self.task_epoch, action_id=action_id,
+                            evidence_ref=pointer["evidence_ref"],
+                        )
+                    except RuntimeEvidenceError:
+                        pass  # Never replay an action to recover lost evidence.
+            if not runtime_receipt and cached.get("result_is_runtime_receipt"):
+                return prepare_tool_result(action, cached_result, self.tools)
+            return cached_result
         if self.continuation_source:
             from agent_core.task_continuation import guard_continuation_action
             guard_continuation_action(action, self._continuation_guard_source(), self.continuation_mode)
@@ -4812,18 +6387,152 @@ class WebAgentProtocolLoop:
                     state="PLAN_FROZEN",
                 )
         evidence = self._classify_action_evidence(action, str(raw_result))
-        result = prepare_tool_result(action, raw_result, self.tools)
+        # Planner transport can replace the full receipt with a local
+        # reference and a clipped preview. Runtime must keep the original.
+        result = str(raw_result) if runtime_receipt else prepare_tool_result(
+            action, raw_result, self.tools,
+        )
         from agent_core.progress_recovery import read_fact_digest
+        from agent_core.runtime_fact_ledger import build_action_provenance
+        provenance = build_action_provenance(
+            self._planner_original_actions.get(action_id, action),
+            self._canonical_action_proposals.get(action_id, action),
+            action, raw_result,
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            round_id=self.turn_id,
+        )
+        # Emit a bounded, credential-safe lifecycle receipt on real dispatch.
+        # The full original/canonical/dispatched commands stay in the Runtime
+        # provenance ledger and only safe projections reach Planner context.
+        from agent_core.action_resolution_trace import executed_trace
+        trace = executed_trace(
+            provenance,
+            rewrite_info=self._runtime_action_rewrite_notes.get(action_id),
+            request_id=self.run_id, task_epoch=self.task_epoch,
+        )
+        if trace is not None:
+            execution = trace["execution"]
+            resolution = trace["runtime_resolved"]
+            self._emit(
+                "action_resolution_recorded",
+                request_id=self.run_id, round=self.turn_id,
+                action_id=action_id, tool=str(action.get("tool") or ""),
+                disposition=resolution["disposition"],
+                changed_fields=resolution.get("changed_fields", []),
+                rewrite_reason_code=resolution.get("rewrite_reason_code", ""),
+                rewrite_rule_ids=resolution.get("rewrite_rule_ids", []),
+                rewrite_rule_schema=resolution.get("rewrite_rule_schema", ""),
+                original_command_sha256=(
+                    (trace.get("planner_requested") or {}).get("command_sha256", "")
+                ),
+                dispatched_command_sha256=(
+                    (execution.get("dispatched_action") or {}).get("command_sha256", "")
+                ),
+                execution_status=execution["status"],
+                executed=execution["executed"],
+                evidence_kind="ACTUAL_TOOL_RESULT",
+                execution_evidence_ref=execution.get("execution_evidence_ref", ""),
+                grant_created=False,
+            )
         self.action_ledger[action_id] = {
+            "provenance": provenance,
             "signature": signature,
             "result": result,
+            "result_is_runtime_receipt": runtime_receipt,
             'raw_result_digest': hashlib.sha256(str(raw_result).encode('utf-8')).hexdigest(),
             'read_fact_digest': read_fact_digest(action, raw_result),
             "action": dict(action),
             "recovery_context": recovery_context,
             **evidence,
         }
+        # Shared source of truth for Executor-only, Goal Driver and legacy
+        # protocol actions alike. The PokeClaw adapter uses the same digest
+        # and evidence ref, so its later readback is strictly idempotent.
+        from agent_core.runtime_evidence_store import persist_runtime_evidence
+        from agent_core.tool_result_contract import decode_result as _decode_source_result
+        _final_result = str(raw_result)
+        _final_receipt = _decode_source_result(_final_result)
+        if isinstance(_final_receipt, dict) and action_id:
+            _result_digest = hashlib.sha256(_final_result.encode("utf-8")).hexdigest()
+            _source_ref = "MIN-EV-" + hashlib.sha256(
+                (action_id + "\0" + _result_digest).encode("utf-8")
+            ).hexdigest()[:24]
+            try:
+                _source = persist_runtime_evidence(
+                    self.progress_root if self.progress_root is not None else self.workspace,
+                    task_id=self.task_id, request_id=self.run_id,
+                    task_epoch=self.task_epoch, action_id=action_id,
+                    evidence_ref=_source_ref, raw_result=_final_result,
+                    receipt=_final_receipt,
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                _source = {
+                    "evidence_ref": _source_ref, "store_status": "PERSIST_FAILED",
+                    "error_class": type(exc).__name__,
+                }
+            self.action_ledger[action_id]["runtime_evidence_store"] = dict(_source)
+            self._emit(
+                "runtime_source_evidence_recorded",
+                request_id=self.run_id, round=self.turn_id,
+                action_id=action_id, evidence_ref=_source_ref,
+                store_status=_source["store_status"],
+                no_authorization_granted=True,
+            )
+        # Index a successfully observed source structure only in Agent-owned
+        # metadata, isolated by owner, instance, workspace and Goal Identity.
+        # No current read permission or content-integrity assertion follows.
+        contract = getattr(self, "_target_path_contract", None) or {}
+        if (action.get("tool") == "list_directory"
+                and contract.get("required_top_level_entries")):
+            from agent_core.source_goal_identity import (
+                goal_identity, normalized_path,
+            )
+            from agent_core.source_reference_index import publish_reference
+            from agent_core.historical_source_resolver import _listed_required
+            from agent_core.tool_result_contract import decode_result
+            receipt = decode_result(str(result))
+            ident = goal_identity(contract)
+            source_path = str(action.get("path", ""))
+            valid = (
+                isinstance(receipt, dict)
+                and receipt.get("tool") == "list_directory"
+                and receipt.get("status") == "SUCCEEDED"
+                and receipt.get("executed") is True
+                and receipt.get("reason") == "DIRECTORY_LISTED"
+                and normalized_path(receipt.get("requested_path")) ==
+                    normalized_path(source_path)
+                and normalized_path(source_path) != ident.get("target")
+                and ident.get("status") == "READY"
+                and _listed_required(receipt, ident)
+            )
+            saved = False
+            if valid and self.continuation_store and self.continuation_owner:
+                saved = publish_reference(
+                    self.continuation_store.root,
+                    owner=self.continuation_owner,
+                    instance=self.continuation_store.instance,
+                    workspace=str(self.workspace),
+                    goal_digest=ident["digest"],
+                    path=source_path,
+                    provenance_ref=str(self.task_id) + "/" + str(action_id),
+                    origin="PREVIOUS_TASK_RECEIPT",
+                    evidence_level="E2",
+                )
+            self._emit("source_history_record_attempted",
+                       request_id=self.run_id, action_id=action_id,
+                       recorded=saved, current_structure_receipt_valid=bool(valid),
+                       scope_or_write_granted=False)
         self.execution_state = evidence["execution_status"]
+        fact = provenance.get("fact") or {}
+        self._emit("runtime_action_provenance_recorded",
+                   request_id=self.run_id, round=self.turn_id,
+                   action_id=action_id, tool=action.get("tool", ""),
+                   canonical_changed=(provenance["original_action"] !=
+                                      provenance["canonical_action"]),
+                   actual_status=provenance["actual_result"]["status"],
+                   fact_predicate=fact.get("predicate", ""),
+                   fact_value=fact.get("value") if fact else None,
+                   goal_verified=False)
         stagnation_guard = getattr(self, "_semantic_stagnation", None)
         if stagnation_guard is not None:
             stagnation = stagnation_guard.observe(action, evidence)
@@ -4870,6 +6579,53 @@ class WebAgentProtocolLoop:
         trusted_authorized_paths: list[str] | None = None,
     ) -> str:
         """Run one request and always release its browser ownership on failure."""
+        # A human-authored, standalone Turbo control is a host setting, not an
+        # Agent action. Do not ask the model to interpret authorization text.
+        from agent_core.turbo_settings_command import (
+            parse_turbo_control, apply_turbo_control, turbo_control_reply,
+        )
+        if parse_turbo_control(request) is not None:
+            # This is original authenticated user input, not model output.
+            # Give it a distinct Runtime-owned terminal receipt: the normal
+            # evidence-backed goal terminal must never be forged for settings.
+            import hashlib
+            from agent_core.tri_one_runtime_terminal import TERMINAL_SCHEMA
+            self.run_id = request_id or ("WA-" + uuid.uuid4().hex[:16].upper())
+            self.task_id = task_id or ("TASK-" + uuid.uuid4().hex[:20].upper())
+            self.task_epoch = task_epoch or uuid.uuid4().hex
+            self.task_request = request
+            self._turbo_user_control_applied = True
+            outcome = None
+            try:
+                outcome = apply_turbo_control(request, workspace=self.workspace)
+                answer = turbo_control_reply(outcome)
+                status = "SUCCESS"
+            except (ValueError, OSError, RuntimeError) as exc:
+                answer = "Turbo Mode 拒絕：" + str(exc)[:400]
+                status = "FAILED"
+            self.terminal_outcome = status
+            self.protocol_state = "COMPLETED"
+            self.terminal_acceptance = {
+                "schema": TERMINAL_SCHEMA,
+                "admission_status": "ACCEPTED",
+                "decision": "RUNTIME_TURBO_CONTROL_V1",
+                "completion_kind": "OPERATOR_CONTROL",
+                "request_id": self.run_id,
+                "task_id": self.task_id,
+                "task_epoch": self.task_epoch,
+                "runtime_state": "COMPLETED",
+                "task_outcome": status,
+                "final_verdict": "PASS" if status == "SUCCESS" else "FAIL",
+                "verification_status": "PASS" if status == "SUCCESS" else "FAIL",
+                "evidence_verdict": "PASS" if status == "SUCCESS" else "FAIL",
+                "evidence_refs": [],
+                "workspace": str(self.workspace),
+                "turbo_status": str((outcome or {}).get("status") or "REJECTED"),
+                "turbo_path": str((outcome or {}).get("path") or ""),
+                "turbo_policy_revision": int((outcome or {}).get("revision") or 0),
+                "control_sha256": hashlib.sha256(request.encode("utf-8")).hexdigest(),
+            }
+            return answer
         self.continuation_source = None
         self.continuation_mode = ""
         self._protocol_spec_rejection = {}
@@ -4917,7 +6673,15 @@ class WebAgentProtocolLoop:
             )
             if self.continuation_store:
                 self.continuation_store.snapshot(self)
-                self.continuation_store.finish(task_id, 'COMPLETED', result, outcome=self.terminal_outcome)
+                # Unverified model finish is not a verified goal completion.
+                minimal = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower() == "minimal"
+                finished_state = (
+                    "PAUSED" if minimal and self.terminal_outcome != "SUCCESS"
+                    else "COMPLETED"
+                )
+                self.continuation_store.finish(
+                    task_id, finished_state, result, outcome=self.terminal_outcome
+                )
             return result
         except BaseException as exc:
             if registered:
@@ -5012,6 +6776,12 @@ class WebAgentProtocolLoop:
         self.terminal_outcome = "UNKNOWN"
         self.terminal_acceptance = {}
         self._answer_only_admitted = False
+        self._target_path_contract = None
+        self._target_pre_mutation = None
+        self._target_path_verdict = {}
+        self._preexec_strategy_blocked = {}
+        self._runtime_strategy_replan_note = ""
+        self._planner_context_diagnostics = []
         self._bp1_observation_admitted = False
         # An already queued attachment or skill is an external dependency,
         # even if the original prose itself contains no file path.
@@ -5078,12 +6848,32 @@ class WebAgentProtocolLoop:
         repair_base = self.progress_root if self.progress_root is not None else self.workspace
         self._repair_stagnation = RepairStagnation(
             root=repair_base, task_id=self.task_id, request_id=self.run_id)
+        from agent_core.cross_contract_repair import CrossContractRepairCoordinator
+        self._ccrc = CrossContractRepairCoordinator(
+            request_id=self.run_id, task_epoch=self.task_epoch,
+            goal=str(gar_goal))
+        from agent_core.protocol_repair_transaction import ProtocolRepairTransaction
+        self._protocol_repair_tx = ProtocolRepairTransaction(
+            self.run_id, self.task_epoch)
+        # New request: never inherit an earlier request's unexecuted proposal.
+        self._planner_original_actions = {}
+        self._canonical_action_proposals = {}
+        self._rejected_action_resolution_traces = []
+        self._runtime_action_rewrite_notes = {}
         self.tools.current_task_epoch = self.task_epoch
+        # Runtime-owned evidence store binding, never a Planner-supplied path.
+        self.tools._runtime_evidence_root = (self.progress_root if self.progress_root is not None else self.workspace)
         self.tools.current_intent_digest = self.intent_digest
         # SPR V1 runs before first Planner Progress and before any Tool action.
         # Saved-plan and external trusted scope are NEVER reconstructed from
         # model prose. Original-request candidate evidence grants no write.
         self._spr_path_resolution = None
+        self._last_canonical_contract_receipts = []
+        self._last_unified_contract_receipt = {}
+        self._unified_action_recovery_events = []
+        self._pending_progress_repair_binding = {}
+        self._last_prerequisite_transition_receipt = {}
+        self._remote_access_probe_guidance_issued = False
         spr_candidate_request = (
             trusted_authorized_paths is None
             and _SAVED_PLAN_OPEN not in request
@@ -5114,7 +6904,11 @@ class WebAgentProtocolLoop:
                 ledger_path=str(path_ledger),
                 grants_authorization=False,
             )
-            authorized = require_resolved_paths(self._spr_path_resolution)
+            # Keep candidates for Planner context; don't reject a message
+            # just because a log/prose path has ambiguous lexical boundaries.
+            authorized = (list(self._spr_path_resolution.get("paths") or [])
+                          if self._spr_path_resolution.get("status") != "AMBIGUOUS"
+                          else [])
         else:
             authorized = resolve_authorized_paths(
                 request,
@@ -5135,7 +6929,120 @@ class WebAgentProtocolLoop:
             explicit_path_count=len(self.authorized_paths),
             request_paths_grant_write=False,
         )
-        self.tools.begin_run(self.run_id, request, authorized)
+        # Only signed continuation/ledger scope can reach the legacy
+        # request-bound action hints. Raw prose paths are non-authorizing
+        # context and cannot become filesystem Read Roots or action ceilings.
+        self.tools.begin_run(self.run_id, request,
+                             list(trusted_authorized_paths or []))
+        # Bind the immutable original deployment destination before the first
+        # Tool Action. A read-only observation is never a write authorization
+        # and does not assert that the deployment has succeeded.
+        from agent_core.target_path_contract import (
+            extract_target_contract, observe_target,
+        )
+        from agent_core.security_context import SecurityContext
+        self._target_path_contract = extract_target_contract(gar_goal)
+        from agent_core.source_discovery_bootstrap import bootstrap_source_discovery
+        from agent_core.paths import install_root as smartagent_install_root
+        # Three distinct authorities: packaged catalog from installation,
+        # owner metadata from Task state, and user files from Workspace.
+        # Never infer the installation root from continuation_store.root.
+        artifact_state_root = (
+            self.continuation_store.root if self.continuation_store else self.workspace
+        )
+        self._source_discovery_bootstrap = bootstrap_source_discovery(
+            artifact_state_root, self._target_path_contract,
+            installation_root=smartagent_install_root(),
+            owner=str(self.continuation_owner or ""),
+            instance=str(self.continuation_store.instance if self.continuation_store else ""),
+            workspace=str(self.workspace),
+        )
+        # This is a Runtime-owned scoped reference, NOT a permission grant.
+        # Used only for exact Git remote-read classification/admission.
+        self.tools._registered_remote_artifact_view = self._source_discovery_bootstrap
+        self._emit(
+            "source_discovery_bootstrap_completed",
+            request_id=self.run_id, task_id=self.task_id,
+            state=self._source_discovery_bootstrap["state"],
+            catalog_status=self._source_discovery_bootstrap["catalog_status"],
+            registration_status=self._source_discovery_bootstrap["registration_status"],
+            catalog_path_authority=self._source_discovery_bootstrap["catalog_path_authority"],
+            registration_path_authority=self._source_discovery_bootstrap["registration_path_authority"],
+            goal_identity_status=self._source_discovery_bootstrap["goal_identity_status"],
+            catalog_records_examined=self._source_discovery_bootstrap["catalog_records_examined"],
+            catalog_matched_count=self._source_discovery_bootstrap["catalog_matched_count"],
+            catalog_goal_mismatch_count=self._source_discovery_bootstrap["catalog_goal_mismatch_count"],
+            catalog_invalid_record_count=self._source_discovery_bootstrap["catalog_invalid_record_count"],
+            registration_records_examined=self._source_discovery_bootstrap["registration_records_examined"],
+            registration_matched_count=self._source_discovery_bootstrap["registration_matched_count"],
+            artifact_candidate_count=self._source_discovery_bootstrap["artifact_count"],
+            repository_access_verified=False,
+            authorization_granted=False, filesystem_scan_performed=False,
+        )
+        from agent_core.historical_source_resolver import bootstrap_historical_sources
+        from agent_core.project_ledger import query_project_history
+        project_source_events = []
+        try:
+            project_source_events = query_project_history(
+                self.workspace, event_types=["source_reference_verified"],
+                limit=32,
+            ).get("events", [])
+        except (OSError, ValueError, RuntimeError):
+            # Incomplete/corrupt Project Ledger is not proof that sources
+            # do not exist. Other source metadata remains usable.
+            pass
+        history_root = (
+            self.continuation_store.root if self.continuation_store else self.workspace
+        )
+        self._source_candidate_history = bootstrap_historical_sources(
+            agent_root=history_root,
+            workspace=self.workspace,
+            owner=str(self.continuation_owner or ""),
+            instance=str(self.continuation_store.instance if self.continuation_store else ""),
+            target_contract=self._target_path_contract,
+            task_store=self.continuation_store,
+            exclude_task_id=str(self.task_id),
+            project_events=project_source_events,
+        )
+        self._emit(
+            "source_candidate_bootstrap_completed",
+            request_id=self.run_id, task_id=self.task_id,
+            state=self._source_candidate_history["bootstrap_state"],
+            index_status=self._source_candidate_history["index_status"],
+            candidate_count=len(self._source_candidate_history["candidates"]),
+            task_records_examined=self._source_candidate_history["task_records_examined"],
+            authorization_granted=False,
+        )
+        self._target_pre_mutation = None
+        self._target_path_verdict = {}
+        if self._target_path_contract is not None:
+            context = SecurityContext.from_agent(
+                self.tools, fallback_workspace=self.workspace)
+            self._target_pre_mutation = observe_target(
+                self._target_path_contract["requested_target"], context,
+                capture_preexisting=True)
+            self._emit(
+                "target_path_contract_bound", request_id=self.run_id,
+                task_id=self.task_id, task_epoch=self.task_epoch,
+                requested_target=self._target_path_contract["requested_target"],
+                binding_status=self._target_path_contract["binding_status"],
+                pre_mutation_state=self._target_pre_mutation["state"],
+                pre_mutation_reason=self._target_pre_mutation["reason"],
+                preexisting_preservation_snapshot_status=(
+                    (self._target_pre_mutation.get("preservation_baseline") or {})
+                    .get("status", "NOT_REQUIRED")),
+                preexisting_preservation_snapshot_reason=(
+                    (self._target_pre_mutation.get("preservation_baseline") or {})
+                    .get("reason", "NO_PREEXISTING_ENTRIES")),
+                preexisting_preservation_snapshot_node_count=(
+                    (self._target_pre_mutation.get("preservation_baseline") or {})
+                    .get("node_count", 0)),
+                required_entry_count=len(
+                    self._target_path_contract["required_top_level_entries"]),
+                relocation_exception_declared=self._target_path_contract[
+                    "relocation_permitted_if_collision"],
+                read_only=True, authorization_granted=False,
+                mutation_applied=False)
         # Negative user write constraints must narrow tool execution even
         # when the configured workspace policy is broader. This request-owned
         # ceiling never creates new write permission or performs remediation.
@@ -5182,7 +7089,9 @@ class WebAgentProtocolLoop:
                 authorized_paths=bool(authorized),
                 image_or_artifact_request=bool(self.image_delivery_plan),
                 continuation=bool(self.continuation_source),
-            ) if pr0_enabled() else {}
+            ) if pr0_enabled() and not getattr(
+                self, "executor_only_mode", False
+            ) else {}
         )
         if self.task_requirement:
             self._emit(
@@ -5283,6 +7192,9 @@ class WebAgentProtocolLoop:
                 "tools": {},
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
+        # Request-local probe evidence; later Planner rounds reuse the actual
+        # installed-tool probe rather than mistaking missing receipts for denial.
+        self._planner_environment_snapshot = environment_snapshot
         # PR-B/C/D complements PR-A; never authorizes operations by probing.
         self._pr_v3_ledger = None
         self._environment_fact_refs = {}
@@ -5397,6 +7309,7 @@ class WebAgentProtocolLoop:
                 if getattr(self, "_pr_v3_project_root_explicit", False)
                 else self.workspace
             )
+            self._project_environment_hint = known_environment
             if known_environment.get("index_status") in {"ABSENT", "INVALID", "UNKNOWN", "PRESENT"}:
                 prompt += ("\n[PROJECT_ENVIRONMENT_DISCOVERY_FACT]\n"
                            + json.dumps({"index_status": known_environment["index_status"],
@@ -5492,6 +7405,21 @@ class WebAgentProtocolLoop:
             selection_owner="WEBGPT",
         )
 
+        # New default main architecture: one model JSON decision at a time.
+        # The previous v9 multi-block transport is retained only as an explicit
+        # rollback option; this is not a per-tool fast-path.
+        core_mode = os.environ.get("SMARTAGENT_CORE_LOOP", "minimal").strip().lower()
+        if core_mode not in {"minimal", "legacy_v9"}:
+            raise ValueError("SMARTAGENT_CORE_LOOP must be minimal or legacy_v9")
+        if core_mode == "minimal":
+            from .minimal_core_loop import run_minimal_core
+            self._emit(
+                "minimal_core_selected", request_id=self.run_id, task_id=self.task_id,
+                task_epoch=self.task_epoch, state_owner="RUNTIME",
+                planner_transport="SINGLE_JSON_DECISION",
+            )
+            return run_minimal_core(self, request)
+
         for _ in range(self.max_turns):
             self._check_cancelled()
             # Only a continuous stretch of rejected Planner turns without
@@ -5585,11 +7513,67 @@ class WebAgentProtocolLoop:
                 round=self.turn_id,
                 response=response,
             )
+            self._emit(
+                "planner_context_response_correlated",
+                request_id=self.run_id, round=self.turn_id,
+                context_snapshot_id=getattr(self, "_last_planner_context_snapshot_id", ""),
+                context_digest=getattr(self, "_last_planner_context_digest", ""),
+                planner_response_received=True,
+                failure_causal_receipt_count=len(getattr(
+                    self, "_last_planner_failure_action_ids", []
+                )),
+                planner_failure_action_ids=list(getattr(
+                    self, "_last_planner_failure_action_ids", []
+                )),
+                last_failure_category=getattr(
+                    self, "_last_planner_failure_category", ""
+                ),
+            )
             action_id_seed = f"{expected.get('run_id', '')}:{expected.get('turn_id', '')}"
-            calls, v8_parse_diagnostics = parse_v9_tool_transport(
+            PIT.record("11_parser_input", response, evidence_status="PARSER_BOUNDARY", extra={"round": self.turn_id})
+            parsed_transport = parse_v9_tool_transport_detailed(
                 response,
                 action_id_seed=action_id_seed,
             )
+            calls, v8_parse_diagnostics = (
+                parsed_transport.calls, parsed_transport.diagnostics
+            )
+            # Even transport-only canonicalization counts as a Rewrite.
+            # Record documented rule IDs without elevating parser normalization
+            # into permission, execution, or semantic equivalence evidence.
+            transport_rules = [
+                str(value).split(":", 1)[0]
+                for value in parsed_transport.normalizations
+            ]
+            global_transport_rules = [
+                value for value in transport_rules
+                if value != "RUNTIME_ACTION_ID_ASSIGNED"
+            ]
+            if not v8_parse_diagnostics:
+                for index, submitted in enumerate(calls, 1):
+                    if not isinstance(submitted, dict) or submitted.get("tool") in {
+                            "report_progress", "turn_commit", "final_response"}:
+                        continue
+                    aid = submitted.get("action_id")
+                    if isinstance(aid, str) and aid:
+                        # First proposal retained across field-only repairs.
+                        self._planner_original_actions.setdefault(aid, deepcopy(submitted))
+                        per_action_rules = list(global_transport_rules)
+                        if any(
+                            str(value).startswith(
+                                f"RUNTIME_ACTION_ID_ASSIGNED:index={index};"
+                            )
+                            for value in parsed_transport.normalizations
+                        ):
+                            per_action_rules.append("RUNTIME_ACTION_ID_ASSIGNED")
+                        if per_action_rules:
+                            notes = self._runtime_action_rewrite_notes.setdefault(
+                                aid, {}
+                            )
+                            notes["transport_rule_ids"] = list(dict.fromkeys(
+                                list(notes.get("transport_rule_ids") or [])
+                                + per_action_rules
+                            ))[:12]
             diagnostics = [
                 {
                     "marker": "[WEBAGENT_V8_PARSE_ERROR]",
@@ -5612,6 +7596,8 @@ class WebAgentProtocolLoop:
                         "WebAgent 連續回傳相同的無效協議內容，Runtime 已暫停重複問答"
                     )
                 last_rejected_exchange_signature = rejection_signature
+                self._record_rejected_action_resolutions(calls, diagnostics)
+                self._planner_context_diagnostics = list(diagnostics)
                 self._emit("protocol_rejected", request_id=self.run_id, round=self.turn_id, diagnostics=diagnostics)
                 repair_budget = self._admit_bounded_repair(diagnostics)
                 gar_prompt = self._gar_rejection(
@@ -5660,6 +7646,7 @@ class WebAgentProtocolLoop:
                 actions, ack_diagnostics = self._accept_ack(calls, expected)
             if ack_diagnostics:
                 self._record_preexecution_predicate_rejection(calls, ack_diagnostics)
+                ccrc_decision = self._ccrc_rejected(calls, ack_diagnostics)
                 self.protocol_state = "REJECTED"
                 if self.pending_action_repair and not any(
                     item.get("repair_scope") == "ACTION_BATCH"
@@ -5676,22 +7663,45 @@ class WebAgentProtocolLoop:
                         action_ids=invalidated_ids,
                         reason="non_action_batch_rejection",
                     )
-                if self.pending_progress_repair_actions and not any(
-                    item.get("reason") == "invalid_progress_payload"
-                    for item in ack_diagnostics
-                ):
-                    invalidated_ids = [
-                        str(action.get("action_id", "") or "")
-                        for action in self.pending_progress_repair_actions
-                    ]
-                    self.pending_progress_repair_actions = []
-                    self._emit(
-                        "progress_repair_actions_invalidated",
-                        request_id=self.run_id,
-                        round=self.turn_id,
-                        action_ids=invalidated_ids,
-                        reason="non_progress_admission_rejection",
-                    )
+                from agent_core.unified_contract_transaction import (
+                    retain_hold_for_progress_repair,
+                )
+                if self.pending_progress_repair_actions:
+                    if retain_hold_for_progress_repair(
+                        ack_diagnostics, submitted=calls,
+                    ):
+                        self._record_unified_action_recovery(
+                            "RETAINED_FOR_PROGRESS_REPAIR",
+                            self.pending_progress_repair_actions,
+                        )
+                    else:
+                        abandoned = list(self.pending_progress_repair_actions)
+                        invalidated_ids = [
+                            str(action.get("action_id", "") or "")
+                            for action in abandoned
+                        ]
+                        self.pending_progress_repair_actions = []
+                        self._pending_progress_repair_binding = {}
+                        self._record_unified_action_recovery(
+                            "INVALIDATED_BY_NON_PROGRESS_ADMISSION", abandoned,
+                        )
+                        self._emit(
+                            "progress_repair_actions_invalidated",
+                            request_id=self.run_id,
+                            round=self.turn_id,
+                            action_ids=invalidated_ids,
+                            reason="non_progress_admission_rejection",
+                        )
+                # Publish after invalidation/retention, so Planner sees the
+                # *effective* never-executed recovery state, not a stale hold.
+                unified_receipt = self._publish_unified_contract(
+                    calls=calls, diagnostics=ack_diagnostics,
+                    ccrc=ccrc_decision, phase="REJECTED",
+                )
+                if ack_diagnostics:
+                    ack_diagnostics[0]["unified_contract"] = unified_receipt
+                self._record_rejected_action_resolutions(calls, ack_diagnostics)
+                self._planner_context_diagnostics = list(ack_diagnostics)
                 self._emit(
                     "protocol_rejected",
                     request_id=self.run_id,
@@ -5699,6 +7709,12 @@ class WebAgentProtocolLoop:
                     diagnostics=ack_diagnostics,
                 )
                 repair_budget = self._admit_bounded_repair(ack_diagnostics)
+                # Pre-execution missing-CWD evidence is a strategy blocker,
+                # not a reason to repeat the rejected command indefinitely.
+                # Keep ordinary Bounded Repair accounting unchanged.
+                strategy_replan_note = self._runtime_preexecution_strategy_replan(
+                    ack_diagnostics, calls,
+                )
                 from agent_core.task_progress import record_progress_repair
                 progress_diagnostic = next((row for row in ack_diagnostics if row.get('reason')=='invalid_progress_payload' and row.get('field_issues')), None)
                 if progress_diagnostic:
@@ -5737,6 +7753,8 @@ class WebAgentProtocolLoop:
                     ack_diagnostics, repair_budget=repair_budget,
                 )
                 repair_note = ""
+                if strategy_replan_note:
+                    repair_note += "\n" + strategy_replan_note
                 spec = self._safe_protocol_spec_rejection()
                 if spec:
                     repair_note += (
@@ -5752,13 +7770,48 @@ class WebAgentProtocolLoop:
                           "Runtime 會重新檢查同 Request/Epoch、無已執行操作及待決副作用。"
                           "不要用 read_file 等替代操作繞過原始限制。"
                     )
-                field_repairs = [repair for diagnostic in ack_diagnostics for repair in diagnostic.get('command_field_repairs',[])]
-                if field_repairs:
-                    repair_note += '\n[COMMAND_FIELD_REPAIR]\n' + json.dumps(field_repairs,ensure_ascii=False) + '\n[/COMMAND_FIELD_REPAIR]\n只回覆同一 tool/action_id 與 required_fields；不必重寫 command、operation、working_directory。仍需 report_progress 與 turn_commit。'
+                field_repairs = [
+                    repair for diagnostic in ack_diagnostics
+                    for repair in diagnostic.get('command_field_repairs', [])
+                    if isinstance(repair, dict)
+                ]
+                patch_repairs = [
+                    repair for repair in field_repairs
+                    if repair.get('mode') == 'FIELD_REPAIR'
+                ]
+                reconstruction_repairs = [
+                    repair for repair in field_repairs
+                    if repair.get('mode') == 'ACTION_RECONSTRUCTION'
+                ]
+                if patch_repairs:
+                    repair_note += (
+                        '\n[COMMAND_FIELD_REPAIR]\n'
+                        + json.dumps(patch_repairs, ensure_ascii=False, separators=(',', ':'))
+                        + '\n[/COMMAND_FIELD_REPAIR]\n'
+                        'These are ONLY field repairs. Keep the same tool/action_id; '
+                        'return the required_fields in a canonical JSON object, '
+                        'along with a valid report_progress and turn_commit. '
+                        'Do not echo or alter the command, cwd, dependencies, or scope. '
+                        'No command was executed; all normal Tool Admission still applies.'
+                    )
+                if reconstruction_repairs:
+                    repair_note += (
+                        '\n[COMMAND_ACTION_RECONSTRUCTION]\n'
+                        + json.dumps(reconstruction_repairs, ensure_ascii=False, separators=(',', ':'))
+                        + '\n[/COMMAND_ACTION_RECONSTRUCTION]\n'
+                        'The original command cannot be repaired by changing verify alone. '
+                        'Planner must choose an authorized, fully canonical NEW action with '
+                        'new action_id and replaces_action_id for the unexecuted original. '
+                        'Do not put full script source into run_command; invoke an existing '
+                        'verified script with a short command when appropriate. '
+                        'Include the complete operation, verify and success_criteria '
+                        'as needed. Never change original Goal or scope, claim success, '
+                        'or treat this instruction as execution authorization.'
+                    )
                 if any(item.get("reason") == "unexpected_field" for item in ack_diagnostics):
                     if any(item.get("tool") == "report_progress"
                            for item in ack_diagnostics if item.get("reason") == "unexpected_field"):
-                        repair_note = (
+                        repair_note += (
                             "\n這是 PROGRESS_SCHEMA_REPAIR：只保留 report_progress 的 "
                             "canonical 欄位（tool/action_id/decision/outcome/"
                             "current_step/total_steps/current_focus/steps/"
@@ -5768,15 +7821,76 @@ class WebAgentProtocolLoop:
                             "已接受的 Progress 計畫欄位可在 PATCH 省略並由 Runtime 沿用。"
                         )
                     else:
-                        repair_note = (
+                        repair_note += (
                             "\n這不是 FIELD_REPAIR，而是 ACTION_REPLAN：原 action 含有未定義或放錯層級的欄位。"
                             "請使用新的 action_id，依 tool 的 canonical schema 重建完整 action；"
                             "不得保留 diagnostic 指出的欄位。query_project 的 operation/path/symbol "
                             "只能放在 queries[] 物件內。"
                         )
+                # CanonicalResolver may reject the SCR shape before the
+                # older SCR-specific validator runs. Keep ONE equivalent
+                # Planner-facing repair instruction for both entry points.
+                if any(
+                    item.get("reason") == "semantic_capability_schema_invalid"
+                    for item in ack_diagnostics
+                ):
+                    repair_note += (
+                        "\n[SCR_SCHEMA_REPAIR]\n"
+                        "capability_resolution is a strict two-key object: "
+                        "{schema: SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1, "
+                        "capabilities: [finite canonical capability names]}. "
+                        "Remove Runtime-owned fields, including "
+                        "runtime_capability_state. Preserve previously selected "
+                        "read capabilities, add only capabilities required by "
+                        "the submitted Action, and do not infer Scope, "
+                        "execution or authorization. This is FIELD_REPAIR, "
+                        "not a request for a new Goal strategy.\n"
+                        "[/SCR_SCHEMA_REPAIR]"
+                    )
+                scr_repairs = [
+                    item.get("capability_repair")
+                    for item in ack_diagnostics
+                    if isinstance(item.get("capability_repair"), dict)
+                ]
+                if scr_repairs:
+                    repair_note += (
+                        "\n[SCR_SCHEMA_REPAIR]\n"
+                        + json.dumps(scr_repairs, ensure_ascii=False, separators=(",", ":"))
+                        + "\n[/SCR_SCHEMA_REPAIR]\n"
+                        "This is schema/selection repair, not Strategy Replan. "
+                        "Return report_progress.capability_resolution as EXACTLY "
+                        "{schema: SMARTAGENT_SEMANTIC_CAPABILITY_RESOLUTION_V1, "
+                        "capabilities: [selected canonical registry keys]}. "
+                        "Choose from allowed_capabilities, preserve previously_selected, "
+                        "and include read capabilities required by the actual actions. "
+                        "Never copy Runtime snapshot fields into the Planner proposal. "
+                        "Capability selection does not expand Scope/ACL."
+                    )
                 if any(item.get("reason") == "MISSING_OR_INVALID_FIELD" for item in ack_diagnostics):
-                    repair_note = (
+                    repair_note += (
                         "\n這是 FIELD_REPAIR：保留原 tool、action_id 與所有已提供欄位，只補 diagnostic 指定欄位。"
+                    )
+                context_request_repairs = [
+                    item["context_request_repair"]
+                    for item in ack_diagnostics
+                    if item.get("reason") == "invalid_progress_payload"
+                    and isinstance(item.get("context_request_repair"), dict)
+                    and item["context_request_repair"]
+                ]
+                if context_request_repairs:
+                    repair_note += (
+                        "\n[CONTEXT_REQUEST_FIELD_REPAIR]\n"
+                        + json.dumps(context_request_repairs, ensure_ascii=False, separators=(",", ":"))
+                        + "\n[/CONTEXT_REQUEST_FIELD_REPAIR]\n"
+                        "Repair ONLY report_progress.context_request. Valid kinds are "
+                        "RUNTIME_READ, USER_INPUT, BLOCKED; only keys are kind, detail, "
+                        "blocking_action_id. BLOCKED must cite an exact Runtime "
+                        "objective_blocker_ids reference and a concrete detail. "
+                        "If no eligible objective blocker exists, do not invent one: "
+                        "use CONTINUE with an authorized read action, or USER_INPUT "
+                        "only when a genuine user choice is required. "
+                        "Do not convert a preexecution scope refusal into proof of "
+                        "a missing directory, SUCCESS, or broader authorization."
                     )
                 progress_details = "\n".join(
                     str(item.get("detail", "") or "")
@@ -5888,6 +8002,32 @@ class WebAgentProtocolLoop:
                         "\n[PARTIAL_REPAIR] PARTIAL 不能作為未查證完成的捷徑；"
                         "請只使用 Runtime 已支持且有實際 Evidence 的狀態。"
                     )
+                if ccrc_decision:
+                    from agent_core.cross_contract_repair import (
+                        repair_instruction, REPLAN_REQUIRED,
+                    )
+                    if ccrc_decision["mode"] == REPLAN_REQUIRED:
+                        # The repair transaction has been handed to Goal
+                        # Replan. Do not concatenate earlier single-field
+                        # commands that would restart the exhausted cycle.
+                        repair_note = ("\n" + strategy_replan_note
+                                       if strategy_replan_note else "")
+                        repair_note += (
+                            "\n[CCRC_HANDOFF_TO_GOAL_DRIVEN] Previous "
+                            "field-repair instructions are superseded. "
+                            "Do not keep patching the prior Action or reset "
+                            "the counter by changing action_id. Replan from "
+                            "the original trusted Goal and existing Runtime "
+                            "Evidence, then pass all normal admission gates.\n"
+                            "[/CCRC_HANDOFF_TO_GOAL_DRIVEN]"
+                        )
+                    from agent_core.progress_reply_contract import has_accepted_plan
+                    repair_note += "\n" + repair_instruction(
+                        ccrc_decision,
+                        accepted_plan=has_accepted_plan(self.progress_ledger),
+                    )
+                from agent_core.unified_contract_transaction import render_transaction
+                repair_note += "\n" + render_transaction(unified_receipt)
                 prompt = (
                     "[WEBAGENT_ACK_REJECTED]\n"
                     + format_tool_parse_diagnostics(ack_diagnostics)
@@ -5901,6 +8041,27 @@ class WebAgentProtocolLoop:
                     prompt += "\n" + gar_prompt
                 continue
             last_rejected_exchange_signature = None
+            self._planner_context_diagnostics = []
+            self._publish_unified_contract(
+                calls=calls, phase="ADMITTED", admitted=actions,
+            )
+            for admitted_action in actions:
+                if admitted_action.get("tool") in {"report_progress", "turn_commit", "final_response"}:
+                    continue
+                aid = str(admitted_action.get("action_id", "") or "")
+                if aid:
+                    self._canonical_action_proposals[aid] = deepcopy(admitted_action)
+            # Close CCRC only when the complete decision is admitted with no
+            # unresolved held actions. Merely changing an Action ID or Progress
+            # prose cannot close a repair transaction.
+            if (self._ccrc is not None
+                    and not getattr(self, "current_action_repairs", [])
+                    and not self.pending_command_field_repairs
+                    and not self.pending_progress_repair_actions):
+                closed = self._ccrc.admitted()
+                if closed:
+                    self._emit("cross_contract_repair_admitted",
+                        round=self.turn_id, **closed)
 
             progress_action = next(action for action in actions if action.get("tool") == "report_progress")
             from agent_core.task_progress import record_progress_repair
@@ -5920,6 +8081,39 @@ class WebAgentProtocolLoop:
                         round_id=self.turn_id, root=self.progress_root) or self.progress_ledger
                 self.deferred_progress_repair = {}
                 self.last_deferred_read_signature = None
+            # Preserve the accepted Planner strategy link in the existing
+            # TaskProgressLedger. The runtime-owned strategy revision counter
+            # and immutable Goal are not changed by this Planner proposal.
+            proposal = progress_action.get("goal_transition")
+            if proposal is not None and not self.read_only_progress_deferred:
+                from agent_core.goal_strategy_transition import validate_planner_transition
+                from agent_core.task_progress import record_planner_goal_transition
+                grounded = validate_planner_transition(
+                    proposal,
+                    goal=self.progress_ledger.goal,
+                    contract=self.progress_ledger.completion_contract,
+                    evidence=self.action_result_ledger,
+                    action_ledger=self.action_ledger,
+                    operational=[item for item in actions if item.get("tool") != "report_progress"],
+                    request_id=self.run_id,
+                    task_epoch=self.task_epoch,
+                )
+                self.progress_ledger = record_planner_goal_transition(
+                    self.task_id, request_id=self.run_id,
+                    decision=grounded, round_id=self.turn_id,
+                    root=self.progress_root,
+                )
+                self._emit(
+                    "goal_transition_accepted",
+                    request_id=self.run_id, task_id=self.task_id,
+                    round=self.turn_id,
+                    kind=grounded["kind"],
+                    goal_condition_id=grounded["goal_condition_id"],
+                    evidence_ref=grounded["evidence_ref"],
+                    evidence_classification=grounded["evidence_classification"],
+                    next_tool=grounded["next_tool"],
+                    authorization_granted=False, completion_verified=False,
+                )
             # Admission is request-scoped. Install only the accepted,
             # Runtime-recorded progress clauses (never raw Planner action
             # fields), after progress persistence but before any Tool Action.
@@ -6147,7 +8341,12 @@ class WebAgentProtocolLoop:
                     sort_keys=True,
                     separators=(",", ":"),
                 )
-                if decision_signature == last_no_action_decision_signature:
+                from agent_core.runtime_fact_ledger import decision_action_consistency
+                action_policy = decision_action_consistency(
+                    self.progress_ledger.decision, actions,
+                    runtime_transition=str((self.action_loop_state or {}).get("required_transition", "")),
+                )
+                if last_no_action_decision_signature is not None and action_policy == "ACTION_REQUIRED":
                     reason = "semantic_stagnation:repeated_model_decision_without_new_runtime_evidence"
                     recovery = self._gar_semantic_supervision(reason)
                     if recovery:
@@ -6167,6 +8366,26 @@ class WebAgentProtocolLoop:
                         "WebAgent 持續回傳相同 Progress 決策且沒有新的 Runtime evidence 或 action；Runtime 已暫停"
                     )
                 last_no_action_decision_signature = decision_signature
+                if action_policy == "ACTION_REQUIRED":
+                    # One bounded guidance turn, then pause if Planner still
+                    # has no action. Text changes cannot reset the no-action
+                    # budget without fresh Runtime evidence.
+                    self._emit("decision_action_repair_required",
+                               request_id=self.run_id, round=self.turn_id,
+                               evidence_total=len(self.action_result_ledger),
+                               decision="CONTINUE", executed=False)
+                    from agent_core.planner_context_snapshot import render_planner_context_snapshot
+                    planner_context, _ = render_planner_context_snapshot(self)
+                    prompt = (
+                        "[RUNTIME_DECISION_ACTION_REQUIRED]\n"
+                        "CONTINUE contains no operational Action and Runtime is "
+                        "not waiting for an in-flight Action. Use the current "
+                        "Runtime facts and original Goal to propose one authorized "
+                        "new observation, prerequisite strategy, or a supported "
+                        "truthful interruption. Do not replay an unchanged Action.\n"
+                        + planner_context + "\n[/RUNTIME_DECISION_ACTION_REQUIRED]"
+                    )
+                    continue
             else:
                 last_no_action_decision_signature = None
                 last_dead_end_recovery_signature = None
@@ -6297,6 +8516,13 @@ class WebAgentProtocolLoop:
                     resolved_paths=scope.get("resolved_paths", []),
                     scope_source=scope.get("scope_source", "none"),
                     scope_allowed=scope.get("allowed", True),
+                    scope_reason_code=(scope.get("scope_diagnostic") or {}).get(
+                        "reason_code", "SCOPE_ALLOWED" if scope.get("allowed") else "OTHER_SCOPE_REJECTION"
+                    ),
+                    scope_category=(scope.get("scope_diagnostic") or {}).get("category", "OTHER"),
+                    scope_path_role=(scope.get("scope_diagnostic") or {}).get("path_role", "OTHER"),
+                    scope_transition=(scope.get("scope_diagnostic") or {}).get("eligible_transition", ""),
+                    scope_required_field=(scope.get("scope_diagnostic") or {}).get("required_field", ""),
                     scope_error_code=(
                         next((code for code in (
                             "explicit_path_scope_requires_workspace",
@@ -6372,6 +8598,16 @@ class WebAgentProtocolLoop:
                     )
                     ledger_entry.update(action_evidence)
                     ledger_entry = self._record_action_result_evidence(action, ledger_entry)
+                    # Scope diagnostics are Runtime-owned admission observations,
+                    # not verified filesystem absence or permission to mutate.
+                    if isinstance(scope.get("scope_diagnostic"), dict):
+                        ledger_entry["scope_diagnostic"] = dict(scope["scope_diagnostic"])
+                    if (ledger_entry.get("result_status") == "SUCCEEDED"
+                            and ledger_entry.get("effective_verification_status") == "PASS"):
+                        self._runtime_strategy_replan_note = ""
+                    self._runtime_verified_failure_strategy_replan(
+                        action, ledger_entry, action_result_id,
+                    )
                     from agent_core.pr_bcd_observation_evidence import observation_receipt
                     receipt = observation_receipt(action, result, ledger_entry)
                     ledger_entry["observation_proof_admitted"] = bool(
@@ -6577,6 +8813,38 @@ class WebAgentProtocolLoop:
                     tool=action.get("tool", ""),
                     result=result,
                 )
+                from agent_core.failure_causal_receipt import build_failure_receipt
+                failure_receipt = build_failure_receipt(
+                    str(action.get("action_id", "") or ""),
+                    action_ledger=self.action_ledger,
+                    result_ledger=self.action_result_ledger,
+                    request_id=self.run_id, task_epoch=self.task_epoch,
+                )
+                if failure_receipt:
+                    self._emit(
+                        "tool_failure_causal_receipt_recorded",
+                        request_id=self.run_id, round=self.turn_id,
+                        task_epoch=self.task_epoch,
+                        action_id=failure_receipt["action_id"],
+                        tool=failure_receipt["tool"],
+                        operation=failure_receipt["operation"],
+                        result_status=failure_receipt["execution"]["status"],
+                        result_reason=failure_receipt["execution"]["reason_code"],
+                        executed=failure_receipt["execution"]["executed"],
+                        exit_code=failure_receipt["execution"]["exit_code"],
+                        timed_out=failure_receipt["execution"]["timed_out"],
+                        failure_category=failure_receipt["failure"]["category"],
+                        classification_verified=failure_receipt["failure"][
+                            "classification_verified"
+                        ],
+                        stderr_present=failure_receipt["failure"]["stderr_present"],
+                        stderr_sha256=failure_receipt["failure"]["stderr_sha256"],
+                        blocking_evidence_ref=failure_receipt["prerequisite"][
+                            "blocking_evidence_ref"
+                        ],
+                        next_evaluation=failure_receipt["replan"]["next_evaluation"],
+                        authorization_granted=False,
+                    )
                 return result
             if self.active_stage_manifest is not None and WEBAGENT_STAGED_PROTOCOL == "on":
                 stage_result = execute_stage(self.active_stage_manifest, actions, execute_with_events, workspace=str(self.workspace))

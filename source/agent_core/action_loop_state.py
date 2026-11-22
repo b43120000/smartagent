@@ -39,7 +39,7 @@ PLAN_TOOLS = {
 }
 VERIFY_TOOLS = {"aggregate_verification"}
 MUTATION_TOOLS = {
-    "apply_edit_plan", "execute_frozen_plan", "write_file", "delete_path",
+    "apply_edit_plan", "execute_frozen_plan", "write_file", "create_directory", "delete_path",
     "begin_file_write", "write_file_chunk", "commit_file_write",
     "abort_file_write", "run_command", "update_semantic_map",
     "update_semantic_map_file", "web_edit_file",
@@ -65,7 +65,7 @@ def semantic_action_signature(action: Mapping[str, Any]) -> str:
         if key not in {
             "action_id", "run_id", "turn_id", "request_id", "task_id",
             "task_epoch", "local_nonce", "protocol_version",
-            "depends_on", "replaces_action_id",
+            "depends_on", "replaces_action_id", "strategy_id",
         }
     }
     encoded = json.dumps(
@@ -244,6 +244,14 @@ def classify_evidence_state(
         if _query_result_has_evidence(payload):
             return "AVAILABLE", []
         return "MISSING", ["query_project returned no usable source evidence"]
+    if tool == "inspect_directory":
+        from .tool_result_contract import decode_result
+        observed = decode_result(result) or {}
+        if (execution == "SUCCEEDED" and observed.get("status") == "SUCCEEDED"
+                and observed.get("executed") is True
+                and observed.get("reason") == "DIRECTORY_ABSENCE_OBSERVED"):
+            # A native negative observation is a known fact, not goal success.
+            return "OBSERVED_NEGATIVE", ["directory absence observed; evaluate original Goal prerequisites"]
     if tool in DISCOVERY_TOOLS:
         text = str(result or "").strip()
         if not text or any(marker in text for marker in (
@@ -288,6 +296,8 @@ def build_action_loop_state(
     action_records: Sequence[Mapping[str, Any]] | None = None,
     admission_records: Sequence[Mapping[str, Any]] | None = None,
     available_tools: Sequence[str] | None = None,
+    goal_gap_view: Mapping[str, Any] | None = None,
+    directory_decision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one complete, model-readable, Runtime-owned state snapshot."""
     progress = dict(progress or {})
@@ -365,6 +375,11 @@ def build_action_loop_state(
         transition = 'WAIT_RUNTIME'
         allowed = sorted(DISCOVERY_TOOLS | VERIFY_TOOLS | {'run_command','final_response'})
         blocked_signatures = [semantic_action_signature(action)]
+    elif action and evidence_state == 'OBSERVED_NEGATIVE':
+        transition = 'REPLAN_REQUIRED'
+        allowed = ['propose_task_plan', 'query_project', 'read_file',
+                   'list_directory', 'find_file', 'inspect_directory', 'run_command']
+        blocked_signatures = [semantic_action_signature(action)]
     elif action and evidence_state == 'OBSERVATION_UNKNOWN':
         # A completed read with an indeterminate fact is not a pending action.
         # Replanning is optional; an objectively BLOCKED interruption may be
@@ -387,6 +402,40 @@ def build_action_loop_state(
         available = set(available_tools)
         allowed = [name for name in allowed if name in available]
 
+    # DIR-001 and Action Loop consume the SAME trusted current-epoch native
+    # observation; there is no independent natural-language inference here.
+    rule = dict(directory_decision or {})
+    rule_ref = str(rule.get("observed_evidence_ref") or "")
+    candidate = rule.get("candidate") or {}
+    if not isinstance(candidate, Mapping):
+        candidate = {}
+    permit_directory_create = bool(
+        action and action.get("tool") == "inspect_directory"
+        and evidence_state == "OBSERVED_NEGATIVE"
+        and rule.get("decision") == "CREATE_DIRECTORY_REQUIRED"
+        and rule.get("candidate_status") == "UNTRIED"
+        and rule.get("rule_id") == "DIR-001"
+        and rule_ref and rule_ref == action.get("action_id")
+        and candidate.get("tool") == "create_directory"
+        and candidate.get("status") == "UNTRIED"
+        and (available_tools is None or "create_directory" in set(available_tools))
+        and not recovery.get("active") and not verification
+        and transition == "REPLAN_REQUIRED"
+    )
+    if permit_directory_create:
+        allowed = ["create_directory"]
+        missing = [
+            "confirmed absent original Goal directory; create exact target "
+            "subject to ordinary Runtime write admission"
+        ]
+        directory_reason_code = "GOAL_DIRECTORY_ABSENCE_CONFIRMED"
+    else:
+        directory_reason_code = ""
+    if tool == "create_directory" and evidence_state == "UNVERIFIED" and (
+        available_tools is None or "inspect_directory" in set(available_tools)
+    ):
+        allowed.append("inspect_directory")
+
     blockers = []
     if transition in {'PREREQUISITE_REQUIRED','VERIFY_REQUIRED','REPLAN_REQUIRED'} or evidence_state == 'PENDING':
         pending_kind = str(execution_status or '').upper()
@@ -406,6 +455,8 @@ def build_action_loop_state(
             release_kind = 'SCOPED_VERIFICATION_PASS_OR_FAIL'
         elif evidence_state == 'OBSERVATION_UNKNOWN':
             release_kind = 'NEW_VALID_FACT_OR_OBJECTIVE_INTERRUPTION'
+        elif evidence_state == 'OBSERVED_NEGATIVE':
+            release_kind = 'AUTHORIZED_PREREQUISITE_OR_GOAL_REEVALUATION'
         elif recovery.get('active'):
             release_kind = 'RUNTIME_PREREQUISITE_SATISFIED'
         else:
@@ -539,11 +590,26 @@ def build_action_loop_state(
         "verification_status": str(verification_status or "UNKNOWN").upper(),
         "expectation_status": str(expectation_status or "").upper(),
         "evidence_state": evidence_state,
+        "decision_rule_id": "DIR-001" if permit_directory_create else "",
+        "decision_reason_code": directory_reason_code,
+        "decision_evidence_ref": rule_ref if permit_directory_create else "",
+        "decision_target": str(rule.get("target") or "") if permit_directory_create else "",
+        "decision_strategy_id": str(candidate.get("strategy_id") or "") if permit_directory_create else "",
+        "decision_source": "RUNTIME_DIRECTORY_RULE" if permit_directory_create else "ACTION_LOOP_STATE_MACHINE",
+        "decision_grants_authorization": False,
         "required_transition": transition if transition in TRANSITIONS else "REPLAN_REQUIRED",
         "allowed_next_actions": list(dict.fromkeys(allowed)),
         "blocked_actions": list(dict.fromkeys(blocked)),
         "blocked_action_signatures": blocked_signatures,
         "missing_evidence": [item for item in missing if item],
+        "goal_gap_state": {
+            "schema": "SMARTAGENT_ACTIVE_GOAL_GAPS_V1",
+            "active_count": int((goal_gap_view or {}).get("active_count", 0)),
+            "unresolved_gap_ids": [str(g.get("gap_id", "")) for g in
+                                   list((goal_gap_view or {}).get("active_gaps") or [])[:32]],
+            "fact_based_prerequisites_remain_active": True,
+            "does_not_grant_mutation": True,
+        },
         "last_action": {
             "tool": tool,
             "semantic_signature": semantic_action_signature(action) if action else "",
@@ -588,6 +654,8 @@ def render_action_loop_state(state: Mapping[str, Any]) -> str:
         + "此狀態由 Runtime 持有。完整使用其 evidence、限制與 prerequisite。"
         "runtime_state_ref、next_phase、selected_action、execution_status、verification_status "
         "皆為 Runtime-owned；模型不得複製或推測。模型只輸出語意 decision 欄位與本輪 canonical action。"
+        "allowed_next_actions 僅表示狀態機候選工具，並非已通過 SCR 選取、路徑授權或 Tool Admission；"
+        "請依 SMARTAGENT_PLANNER_CONTEXT_V1 的 tool_readiness 檢查額外前置條件。"
     )
 
 

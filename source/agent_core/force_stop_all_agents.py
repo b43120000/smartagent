@@ -4,6 +4,7 @@ from __future__ import annotations
 """Force-stop only processes owned by this SmartAgent checkout."""
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .conversation_ownership import ConversationOwnershipRegistry
-from .protocol_manifest import validate_protocol_manifest, write_protocol_manifest
+from .protocol_manifest import CORE_FILES, validate_protocol_manifest
 from .paths import force_stop_flag_path, webgpt_submit_lock_path
 from .paths import runtime_root
 from .process_file_lock import exclusive_process_lock
@@ -94,24 +95,47 @@ def discover_agent_pids(
         rows[pid] = row
         children.setdefault(ppid, set()).add(pid)
 
+    # Only Agent executables/scripts or explicit --root can establish
+    # installation ownership. A foreign Agent whose --workspace refers to
+    # this checkout must NOT become a kill candidate.
+    rooted_arg = re.compile(
+        r"(?:^|\s)--root(?:=|\s+)[\"']?"
+        + re.escape(root_text)
+        + r"(?=$|[\s\"'])"
+    )
+    rooted_scripts = (
+        root_text + "\\smart_agent.py",
+        root_text + "\\web_copilot.py",
+        root_text + "\\source\\",
+        root_text + "\\remoteagent\\",
+    )
+    explicit_root_arg = re.compile(
+        r"(?:^|\s)--root(?:=|\s+)(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
+    )
     seeds: set[int] = set()
     for pid, row in rows.items():
         command = str(row.get("CommandLine") or "").replace("/", "\\").lower()
         executable = str(row.get("ExecutablePath") or "").replace("/", "\\").lower()
-        belongs_to_checkout = bool(re.search(
-            r"(?:^|[\s\"'=])" + re.escape(root_text) + r"(?=[\\\s\"']|$)", command
-        )) or executable.startswith(root_text + "\\")
+        explicit = explicit_root_arg.search(command)
+        if explicit:
+            declared = next((part for part in explicit.groups() if part), "")
+            # A local Python executable may be reused to run an Agent with
+            # a foreign explicit --root. Respect the runtime owner, not the
+            # interpreter's location.
+            if declared.rstrip("\\") != root_text:
+                continue
+        belongs_to_checkout = (
+            executable.startswith(root_text + "\\")
+            or bool(rooted_arg.search(command))
+            or any(script in command for script in rooted_scripts)
+        )
         if belongs_to_checkout and any(marker in command for marker in AGENT_COMMAND_MARKERS):
             seeds.add(pid)
 
+    # Never recursively select all child PIDs: a legitimate Agent may spawn
+    # a program located in another checkout. Stopping it would violate the
+    # local-install boundary. Only independently attested Agent PIDs qualify.
     selected = set(seeds)
-    frontier = list(seeds)
-    while frontier:
-        parent = frontier.pop()
-        for child in children.get(parent, set()):
-            if child not in selected:
-                selected.add(child)
-                frontier.append(child)
 
     launchers: set[int] = set()
     for seed in list(seeds):
@@ -122,7 +146,11 @@ def discover_agent_pids(
             row = rows[parent]
             name = str(row.get("Name") or "").lower()
             command = str(row.get("CommandLine") or "").replace("/", "\\").lower()
-            if name in {"cmd.exe", "cmd"} and any(value in command for value in LAUNCHER_NAMES):
+            if (name in {"cmd.exe", "cmd"}
+                    and any(root_text + "\\" + value in command
+                            for value in LAUNCHER_NAMES)):
+                # Kill only a CMD that names a launcher *inside this checkout*.
+                # A generic shared CMD ancestor is not owned by SmartAgent.
                 launchers.add(parent)
                 selected.add(parent)
                 break
@@ -162,9 +190,9 @@ def _request_orderly_shutdown(root: Path) -> dict[str, bool]:
     return requested
 
 
-def _taskkill_tree(pid: int) -> bool:
+def _taskkill_owned_pid(pid: int) -> bool:
     result = subprocess.run(
-        ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+        ["taskkill", "/PID", str(int(pid)), "/F"],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -192,29 +220,192 @@ def _finalize_runtime_states(root: Path) -> dict[str, bool]:
     return finalized
 
 
-def _sync_startup_contract(root: Path) -> dict[str, Any]:
-    """Rebuild and validate manifests only after all Agent writers are stopped."""
-    import compileall
+def _verify_startup_contract(root: Path) -> dict[str, Any]:
+    report = validate_protocol_manifest(root)
+    if report["hash_verification"] != "PASS":
+        raise RuntimeError("protocol_manifest_source_unverified")
+    return {"manifest_roots": [str(root)], "hash_verification": "PASS"}
 
-    checked: list[str] = []
-    for tree in (root, root / "release"):
-        if tree == root / "release" and not tree.is_dir():
-            continue
-        write_protocol_manifest(tree)
-        validate_protocol_manifest(tree)
-        checked.append(str(tree))
-    compile_ok = all(
-        compileall.compile_dir(str(root / folder), quiet=1, force=True)
-        for folder in ("agent_core", "RemoteAgent", "WebAgent")
-        if (root / folder).is_dir()
+
+def _machine_manifest_status(root: Path) -> str:
+    from .windows_security import load_machine_authorization, machine_authorization_path
+
+    path = machine_authorization_path()
+    if not path.is_file():
+        return "machine_authorization_missing"
+    authorization = json.loads(path.read_bytes())
+    if Path(authorization["install_root"]).resolve() != root:
+        return "machine_authorization_install_root_mismatch"
+    try:
+        if load_machine_authorization() is None:
+            return "machine_authorization_missing"
+    except RuntimeError as exc:
+        return str(exc).split(":", 1)[0]
+    return "MATCH"
+
+
+def _verified_install_root(root: str | Path) -> Path:
+    """Fail before changing any Runtime state if the launcher selected a foreign root.
+
+    A BAT argument is not sufficient to authorize cleanup of another instance.
+    The running module must belong to the same physically resolved install.
+    """
+    requested = Path(root).expanduser().resolve()
+    running_code = Path(__file__).resolve().parents[2]
+    if requested != running_code:
+        raise RuntimeError(
+            f"force_stop_install_root_mismatch:requested={requested}:module={running_code}"
+        )
+    required = (
+        requested / "config" / "protocol_manifest.json",
+        requested / "source" / "agent_core" / "force_stop_all_agents.py",
     )
-    if not compile_ok:
-        raise RuntimeError("startup_contract_python_compile_failed")
-    return {"manifest_roots": checked, "python_compile": True}
+    for marker in required:
+        if not marker.is_file():
+            raise RuntimeError(f"force_stop_install_marker_missing:{marker}")
+    return requested
+
+
+def _deployed_git_source(root: Path) -> Path:
+    """Recover the original Git checkout from an installation deployment receipt.
+
+    Deployed installations deliberately exclude .git. This receipt only locates
+    a candidate checkout; the requested SHA and every protected installed
+    source byte are verified against Git before any authorization transition.
+    """
+    receipt = root / "localdata" / "update" / "deployment_baseline.json"
+    if not receipt.is_file():
+        raise RuntimeError(
+            "force_stop_upgrade_source_checkout_required:"
+            "deployed_install_has_no_git_and_no_deployment_receipt"
+        )
+    try:
+        value = json.loads(receipt.read_text(encoding="utf-8-sig"))
+        if (value.get("schema") != "SMARTAGENT_DEPLOYMENT_BASELINE_V1"
+                or Path(str(value["install_root"])).resolve() != root):
+            raise ValueError("deployment_receipt_root_mismatch")
+        candidate = Path(str(value["source_root"])).expanduser()
+        if not candidate.is_absolute() or candidate.resolve() == root:
+            raise ValueError("deployment_receipt_source_invalid")
+        return candidate.resolve()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            "force_stop_upgrade_deployment_receipt_untrusted"
+        ) from exc
+
+
+def _verify_upgrade_commit(
+    root: Path, commit: str, git_source_root: str | Path | None = None,
+) -> None:
+    """Pin a verified Git commit to installed bytes, with no on-disk Git requirement."""
+    root = Path(root).resolve()
+    source = (Path(git_source_root).expanduser().resolve()
+              if git_source_root is not None else root)
+    git_exe = root / ".venv" / "git" / "cmd" / "git.exe"
+    git_binary = str(git_exe) if git_exe.is_file() else "git"
+
+    def git(*args: str) -> bytes:
+        return subprocess.check_output(
+            [git_binary, "-C", str(source), *args],
+            stderr=subprocess.PIPE,
+        )
+
+    if git_source_root is None:
+        # An installed release must not be treated as a Git working copy
+        # simply because a 'git.exe' binary exists in its virtual environment.
+        try:
+            recorded_root = Path(os.fsdecode(
+                git("rev-parse", "--show-toplevel").rstrip()
+            )).resolve()
+        except (OSError, subprocess.SubprocessError):
+            source = _deployed_git_source(root)
+        else:
+            if recorded_root != root:
+                source = _deployed_git_source(root)
+
+    if not source.is_dir():
+        raise RuntimeError(f"force_stop_upgrade_source_checkout_missing:{source}")
+    try:
+        head = git("rev-parse", "HEAD").decode("ascii").strip()
+        worktree = Path(os.fsdecode(
+            git("rev-parse", "--show-toplevel").rstrip()
+        )).resolve()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            f"force_stop_upgrade_source_not_git_repository:{source}"
+        ) from exc
+    if worktree != source:
+        raise RuntimeError("force_stop_upgrade_source_git_root_mismatch")
+    if head.lower() != commit.lower():
+        raise RuntimeError("force_stop_upgrade_source_head_mismatch")
+
+    relative = "config/protocol_manifest.json"
+    manifest = root / relative
+    if not manifest.is_file():
+        raise RuntimeError(f"force_stop_upgrade_installed_manifest_missing:{manifest}")
+    if hashlib.sha256(manifest.read_bytes()).digest() != hashlib.sha256(
+        git("show", f"{commit}:{relative}")
+    ).digest():
+        raise RuntimeError("force_stop_upgrade_manifest_differs_from_commit")
+    dirty = git("status", "--porcelain", "--untracked-files=all", "--",
+                relative, *CORE_FILES)
+    if dirty:
+        raise RuntimeError("force_stop_upgrade_source_managed_files_modified")
+    # Installed core files are verified against the commit's complete hash
+    # ledger, not against a mutable deployment receipt or checkout directory.
+    _verify_startup_contract(root)
+
+
+def _apply_git_upgrade(
+    root: Path, commit: str, git_source_root: str | Path | None = None,
+) -> None:
+    from .security_preflight import preflight
+    from .windows_security import acl_mode
+
+    _verify_upgrade_commit(root, commit, git_source_root)
+    profile = root / "localdata" / "secure" / "windows_security" / "security_profile.json"
+    if not profile.is_file() or acl_mode(profile, allow_on_transition=True) not in {"on", "transitioning_on"}:
+        raise RuntimeError("force_stop_upgrade_requires_existing_acl_on")
+    status = _machine_manifest_status(root)
+    from .workspace_access import load_workspace_access_policy
+    from .turbo_os_broker_client import active_broker_available
+
+    policy = load_workspace_access_policy()
+    turbo_requested = policy.get("turbo_requested") is True
+
+    def turbo_ready():
+        # Verify EVERY enrolled Root; a writable Workspace parent is not a
+        # Native SID selector and cannot establish multi-root readiness.
+        roots = tuple(policy.get("turbo_roots") or ())
+        return bool(roots) and all(active_broker_available(p) for p in roots)
+
+    needs_restore = status == "MATCH" and (
+        acl_mode(profile, allow_on_transition=True) == "transitioning_on"
+        or (turbo_requested and not turbo_ready())
+    )
+    if status == "machine_authorization_manifest_mismatch" or needs_restore:
+        powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        subprocess.run(
+            [str(powershell), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+             str(root / "install_smart_agent/acl_mode_launcher.ps1"), "-Mode", "on",
+             "-ProjectRoot", str(root), "-RestoreTurboAfterUpgrade"],
+            cwd=root, check=True,
+        )
+        _verify_upgrade_commit(root, commit, git_source_root)
+        status = _machine_manifest_status(root)
+    if status != "MATCH":
+        raise RuntimeError(status)
+    if turbo_requested and not turbo_ready():
+        raise RuntimeError("force_stop_upgrade_turbo_restore_unverified")
+    report = preflight("remote")
+    if report.get("status") != "PASS":
+        reasons = (report.get("attestation") or {}).get("reasons") or []
+        raise RuntimeError("force_stop_upgrade_preflight_failed:" + ",".join(reasons))
 
 
 def force_stop_all(
-    root: str | Path, *, dry_run: bool = False, exclude_pids: set[int] | None = None
+    root: str | Path, *, dry_run: bool = False, exclude_pids: set[int] | None = None,
+    initialize: bool = True,
 ) -> dict[str, Any]:
     if dry_run:
         return _force_stop_all_locked(root, dry_run=True, exclude_pids=exclude_pids)
@@ -222,7 +413,48 @@ def force_stop_all(
         runtime_root(root) / "force_stop_cleanup.lock",
         timeout_sec=5.0, label="force-stop/startup barrier",
     ):
-        return _force_stop_all_locked(root, exclude_pids=exclude_pids)
+        result = _force_stop_all_locked(root, exclude_pids=exclude_pids)
+        if initialize:
+            _record_initialization(root, result)
+        return result
+
+
+def _record_initialization(root: str | Path, result: dict[str, Any]) -> None:
+    """Confirm the archive/cancel/clean-start transaction left no old task."""
+    from .paths import remote_tasks_path
+    from .task_state import TaskStateStore
+    from .force_stop_cleanup import INCOMPLETE
+
+    if not result.get("success"):
+        result["initialization"] = {"status": "SKIPPED", "reason": "force_stop_failed"}
+        return
+    try:
+        store = TaskStateStore(remote_tasks_path(root))
+        with store.process_lock():
+            store.load()
+            pending = store.list_by_state(INCOMPLETE)
+            if pending:
+                result["initialization"] = {
+                    "status": "FAIL", "reason": "remote_binding_update_requires_idle_runtime",
+                    "blocking_tasks": [
+                        {"task_id": task.task_id, "state": task.state}
+                        for task in pending
+                    ],
+                }
+                result["success"] = False
+                return
+        _verify_startup_contract(Path(root))
+        result["initialization"] = {
+            "status": "PASS", "state": "IDLE",
+            "binding_update_ready": True,
+            "tasks_cancelled": result.get("work_cleanup", {}).get("tasks_cancelled", []),
+            "archive": result.get("work_cleanup", {}).get("archive"),
+        }
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        result["initialization"] = {
+            "status": "FAIL", "reason": f"{type(exc).__name__}: {exc}",
+        }
+        result["success"] = False
 
 
 def _force_stop_all_locked(
@@ -248,7 +480,7 @@ def _force_stop_all_locked(
     stopped: list[int] = []
     failed: list[int] = []
     for pid in discovered["root_pids"]:
-        (stopped if _taskkill_tree(pid) else failed).append(pid)
+        (stopped if _taskkill_owned_pid(pid) else failed).append(pid)
     time.sleep(0.5)
     # One bounded second sweep closes a launcher/worker that crossed the first
     # inventory boundary.  This is intentionally not an endless kill loop.
@@ -258,7 +490,7 @@ def _force_stop_all_locked(
     second_stopped: list[int] = []
     second_failed: list[int] = []
     for pid in second["root_pids"]:
-        (second_stopped if _taskkill_tree(pid) else second_failed).append(pid)
+        (second_stopped if _taskkill_owned_pid(pid) else second_failed).append(pid)
     if second["root_pids"]:
         time.sleep(0.5)
     final_inventory = _powershell_process_inventory()
@@ -288,7 +520,8 @@ def _force_stop_all_locked(
             # All incomplete tasks are now terminal; this only clears remaining
             # control/approval/ownership reservations, never raw metadata PIDs.
             result["remote_clean_start"] = remote_clean_start(
-                project, reason="FORCE_STOP_ALL_AGENTS"
+                project, reason="FORCE_STOP_ALL_AGENTS",
+                local_checkout_only=True,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             result["remote_clean_start"] = {"error": f"{type(exc).__name__}: {exc}"}
@@ -319,9 +552,10 @@ def _force_stop_all_locked(
         try:
             result["startup_contract"] = {
                 "status": "PASS",
-                **_sync_startup_contract(project),
+                **_verify_startup_contract(project),
+                "machine_authorization": _machine_manifest_status(project),
             }
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
             result["startup_contract"] = {
                 "status": "FAIL",
                 "error": f"{type(exc).__name__}: {exc}",
@@ -333,7 +567,6 @@ def _force_stop_all_locked(
         and lock_clean
         and work_clean
         and controls_clean
-        and result["startup_contract"].get("status") == "PASS"
     )
     # Still inside the startup barrier: include excluded/blocked new launchers.
     last = discover_agent_pids(_powershell_process_inventory(), project, exclude_pids={os.getpid()})
@@ -346,14 +579,49 @@ def _force_stop_all_locked(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Force-stop this checkout's Agent processes")
-    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[2]))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--exclude-pid", action="append", type=int, default=[])
+    parser.add_argument("--after-git-update", metavar="COMMIT")
+    parser.add_argument("--git-source-root", metavar="CHECKOUT")
+    parser.add_argument("--require-startup-contract", action="store_true")
+    parser.add_argument("--init", action="store_true",
+                        help="Compatibility flag; idle initialization is performed by default")
     args = parser.parse_args(argv)
+    if args.after_git_update is not None and (
+        args.dry_run or not re.fullmatch(r"[0-9a-fA-F]{40}", args.after_git_update)
+    ):
+        parser.error("--after-git-update requires a full commit SHA and a real stop")
+    if args.git_source_root is not None and args.after_git_update is None:
+        parser.error("--git-source-root requires --after-git-update")
     try:
-        result = force_stop_all(
-            args.root, dry_run=args.dry_run, exclude_pids=set(args.exclude_pid)
-        )
+        _verified_install_root(args.root)
+        exclusions = set(args.exclude_pid)
+        if args.after_git_update is None:
+            result = force_stop_all(args.root, dry_run=args.dry_run, exclude_pids=exclusions)
+            if args.require_startup_contract and result.get("startup_contract", {}).get("status") != "PASS":
+                result["success"] = False
+                result["recovery_admission"] = {"status": "BLOCKED", "reason": "startup_contract_not_verified"}
+        else:
+            root = Path(args.root).resolve()
+            with exclusive_process_lock(
+                runtime_root(root) / "force_stop_cleanup.lock",
+                timeout_sec=5.0, label="force-stop/startup barrier",
+            ):
+                result = _force_stop_all_locked(root, exclude_pids=exclusions)
+                if args.require_startup_contract and result.get("startup_contract", {}).get("status") != "PASS":
+                    result["success"] = False
+                    result["recovery_admission"] = {"status": "BLOCKED", "reason": "startup_contract_not_verified"}
+                if result.get("success"):
+                    try:
+                        _apply_git_upgrade(root, args.after_git_update, args.git_source_root)
+                        result["git_upgrade"] = {"status": "PASS"}
+                    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+                        result["git_upgrade"] = {"status": "FAIL", "error": str(exc)}
+                        result["success"] = False
+                else:
+                    result["git_upgrade"] = {"status": "SKIPPED", "reason": "force_stop_or_startup_contract_failed"}
+                _record_initialization(root, result)
     except Exception as exc:
         print(json.dumps({"success": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False))
         return 1
