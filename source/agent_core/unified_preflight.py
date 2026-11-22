@@ -95,7 +95,7 @@ def _probe(install, probe=None):
 
 def _digest(row):
     basis={k:row.get(k) for k in ("workspace_root","revision",
-          "environment_source","runtime_signature","effective_state","project_sync")}
+          "environment_source","runtime_signature","effective_state","project_sync","scoped_projects")}
     return hashlib.sha256(json.dumps(basis,sort_keys=True,default=str).encode("utf-8")).hexdigest()
 
 def _write(base,cache,taskfile,row):
@@ -109,8 +109,30 @@ def _event(base,row,kind,**facts):
         "request_id":row.get("request_id",""),"preflight_id":row.get("preflight_id",""),
         "revision":row.get("revision",0),"workspace_id":_id(row["workspace_root"]),
         "at":time.time(),**facts}
-    with (base/"events.jsonl").open("a",encoding="utf-8") as out:
-        out.write(json.dumps(payload,ensure_ascii=False,sort_keys=True)+"\n")
+    with exclusive_process_lock(base/"events.lock",label="unified-preflight-events"):
+        with (base/"events.jsonl").open("a",encoding="utf-8") as out:
+            out.write(json.dumps(payload,ensure_ascii=False,sort_keys=True)+"\n")
+
+def _scoped_hints(workspace, previous):
+    """Check existing exact Project Sync pointers, never crawl broad roots."""
+    results={}
+    for raw,prior in list(sorted((previous or {}).items()))[:8]:
+        try:
+            target=Path(raw).resolve()
+            if (target==workspace or not target.is_relative_to(workspace)
+                    or not target.is_dir() or target.is_symlink()):
+                continue
+            current=_pointer(target)
+            if current["snapshot_id"]==(prior or {}).get("snapshot_id") and (
+                    (prior or {}).get("status")=="STALE_REINDEX_REQUIRED"):
+                current["status"]="STALE_REINDEX_REQUIRED"
+            elif current["snapshot_id"]!=(prior or {}).get("snapshot_id"):
+                current["status"]="INDEX_CHANGED_EXTERNALLY"
+            results[str(target)]=current
+        except (ValueError,OSError,TypeError):
+            continue
+    return results
+
 
 def begin_task(install,workspace,*,task_id,request_id,probe=None):
     """Read a single combined baseline; reuse binary probes across tasks."""
@@ -133,12 +155,14 @@ def begin_task(install,workspace,*,task_id,request_id,probe=None):
             project["status"]="STALE_REINDEX_REQUIRED"
         elif old_project.get("snapshot_id")!=project["snapshot_id"] and old_project.get("snapshot_id"):
             project["status"]="INDEX_CHANGED_EXTERNALLY"
+        scoped=_scoped_hints(workspace,old.get("scoped_projects"))
         effective=_effective(workspace)
         row={"schema":SCHEMA,"workspace_root":str(workspace),
             "task_id":task_id,"request_id":str(request_id),
             "runtime_signature":signature,"runtime":runtime,
             "environment_source":("IDENTITY_MATCHED_CACHE" if cached else "RUNTIME_PROBED"),
             "effective_state":effective,"project_sync":project,
+            "scoped_projects":scoped,
             "revision":int(old.get("revision",0) or 0)+1,
             "reprobe_required":False,"last_action_id":"","last_evidence_ref":"",
             "updated_at":time.time(),"authorization_granted":False,
@@ -170,6 +194,7 @@ def summary(row):
         "status":row.get("status","UNVERIFIED"),
         "environment_source":row.get("environment_source","UNVERIFIED"),
         "effective":dict(effective),"project_sync":dict(row.get("project_sync") or {}),
+        "scoped_projects":dict(list((row.get("scoped_projects") or {}).items())[:8]),
         "tools":{k:{"status":v.get("status"),"path":v.get("path"),
             "version":str(v.get("version",""))[:100]}
             for k,v in tools.items() if isinstance(v,Mapping)},
@@ -187,6 +212,15 @@ def inventory(install,workspace,row):
             if item.get("availability")=="CURRENT_AVAILABLE":
                 item["availability"]="CACHED_PROBE_RECHECK_ON_EXECUTION"
                 item["execution_authorized"]=False
+    scoped=[]
+    for raw in list((row.get("scoped_projects") or {}))[:4]:
+        try:
+            hint=planner_environment_hint(raw)
+            if hint.get("index_status")=="PRESENT":
+                scoped.append({"project_root":raw,"candidate_index":hint})
+        except (ValueError,OSError,RuntimeError,TypeError):
+            continue
+    inv["scoped_project_environment_indexes"]=scoped
     inv["external_software_registry"]=software_registry_snapshot()
     return inv
 
@@ -202,6 +236,13 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
             row.get("workspace_root")!=str(workspace)):
             raise ValueError("preflight_action_not_bound_to_task")
         action_id=str(action.get("action_id",""))
+        newest=_read(cache)
+        if int(newest.get("revision",0) or 0)>int(row.get("revision",0) or 0):
+            # Another task in this workspace may have updated a sibling index.
+            common=dict(newest.get("scoped_projects") or {})
+            common.update(row.get("scoped_projects") or {})
+            row["scoped_projects"]=common
+            row["revision"]=newest["revision"]
         if receipt.get("executed") is not True:
             _event(base,row,"PREFLIGHT_NONEXECUTED_ADMISSION",
                    action_id=action_id,reason_code=str(receipt.get("reason",""))[:80])
@@ -217,12 +258,37 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
                  tool=="run_command" and operation in MUTATING_OPERATIONS)
         project=_pointer(workspace)
         previous=row.get("project_sync") or {}
-        if tool in {"project_sync","query_project","inspect_project_scope"} and state=="SUCCEEDED":
-            if project["snapshot_id"]:project["status"]="INDEX_REFRESHED_BY_ADMITTED_ACTION"
-        elif project["snapshot_id"] and (
-            changed or drift or previous.get("status")=="STALE_REINDEX_REQUIRED"):
-            if project["snapshot_id"]==previous.get("snapshot_id") or drift:
-                project["status"]="STALE_REINDEX_REQUIRED"
+        scoped=_scoped_hints(workspace,row.get("scoped_projects"))
+        selected=workspace
+        if tool in {"project_sync","query_project","inspect_project_scope"}:
+            try:
+                target=Path(str(action.get("project_root") or workspace)).resolve()
+                if target.is_dir() and target.is_relative_to(workspace):
+                    selected=target
+            except (ValueError,OSError):
+                pass
+        if selected!=workspace and len(scoped)<8:
+            scoped[str(selected)]=_pointer(selected)
+        target_state=project if selected==workspace else scoped.get(str(selected),{})
+        prior=previous if selected==workspace else (row.get("scoped_projects") or {}).get(str(selected),{})
+        indexed=(tool=="project_sync" and
+                 str(action.get("strategy") or "INDEX_ONLY").upper()=="INDEX_ONLY"
+                 and state=="SUCCEEDED")
+        new_id=(target_state.get("snapshot_id") and
+                target_state["snapshot_id"]!=prior.get("snapshot_id"))
+        if ((indexed or new_id and tool=="query_project") and
+                target_state.get("snapshot_id")):
+            target_state["status"]="INDEX_REFRESHED_BY_ADMITTED_ACTION"
+        elif (prior.get("status")=="STALE_REINDEX_REQUIRED" and
+              prior.get("snapshot_id")==target_state.get("snapshot_id")):
+            target_state["status"]="STALE_REINDEX_REQUIRED"
+        if changed or drift:
+            for key,old_project in [(str(workspace),previous),*list(
+                    (row.get("scoped_projects") or {}).items())]:
+                candidate=project if key==str(workspace) else scoped.get(key)
+                if (candidate and candidate.get("snapshot_id") and
+                        candidate["snapshot_id"]==old_project.get("snapshot_id")):
+                    candidate["status"]="STALE_REINDEX_REQUIRED"
         if drift:
             try:
                 row["runtime"]=_probe(install,probe)
@@ -235,6 +301,7 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
                        action_id=action_id,error_class=type(err).__name__)
         row["effective_state"]=_effective(workspace)
         row["project_sync"]=project
+        row["scoped_projects"]=scoped
         row["last_action_id"]=action_id
         row["last_evidence_ref"]=str(evidence_ref)[:100]
         row["revision"]=int(row.get("revision",0))+1
@@ -248,5 +315,6 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
               evidence_ref=str(evidence_ref)[:100],match_state=match,
               execution_status=state,project_status=project["status"],
               project_snapshot_id=project["snapshot_id"],
+              scoped_project_count=len(scoped),
               environment_source=row["environment_source"])
         return row
