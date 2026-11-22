@@ -29,6 +29,12 @@ from agent_core.finish_contract_adapter_v2 import adapt_finish_contract_v2
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
 from .github_stage_diagnostics import github_source_stage_evidence
+from agent_core.goal75_stage_ledger import GoalStageLedger
+from agent_core.goal75_goal_coverage import (
+    requires_stage_control, original_goal_stage_ids,
+    validate_stage_plan_coverage, final_stage_coverage,
+)
+from agent_core.goal75_recovery import repair_single_decision, choose_stage_recovery
 
 
 def _digest(value: object) -> str:
@@ -193,7 +199,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             evidence_requirement=None, goal_state_contract=None,
             environment_inventory=None, unified_preflight=None,
             runtime_status_catalog=None, turbo_planning_context=None,
-            preexecution_rejections=None) -> str:
+            preexecution_rejections=None, stage_context="") -> str:
     from .minimal_core_loop import tool_catalog
     catalog = tool_catalog(tools)
     native_child_hint = (
@@ -281,7 +287,8 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "when the admitted action actually runs an OS command or changes "
         "user filesystem state; natural-language file-edit requests are "
         "still real mutations.\n"
-        "Goal Driver and Prerequisite decision engines are DISABLED. "
+        "Git74.1 legacy Goal Driver and Prerequisite engines are DISABLED. "
+        "Git75 Stage Controller is active for compound goals. "
         "There is no fixed task-specific sequence gate. "
         "Shared Blackboard records each round automatically; never ask a tool "
         "to write its own evidence record. At Finish report the actual status "
@@ -325,6 +332,8 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Available tools: " + json.dumps(
             catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
         "Original user request:\n" + request + "\n"
+        + ("[GIT75_FROZEN_STAGE_CONTROL]\n" + stage_context
+           + "\n[/GIT75_FROZEN_STAGE_CONTROL]\n" if stage_context else "")
         "Frozen Requirement-to-Goal State Contract (Runtime compiled before "
         "any ToolCall; source-grounded and NOT a permission grant):\n"
         + json.dumps(goal_state_contract or {}, ensure_ascii=False,
@@ -569,6 +578,16 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     invalids = 0
     finish_repairs = 0
     max_finish_repairs = 2
+    stage_required = requires_stage_control(
+        request, goal_state_contract=goal_state_contract,
+        answer_only_eligible=requirement.get("answer_only_eligible", False),
+    )
+    stage_ledger = (GoalStageLedger(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch, goal=request,
+    ) if stage_required else None)
+    stage_recovery_attempts = 0
+    failed_action_signatures = set()
     finish_grace_rounds = 2
     finish_repair_only = False
     last_finish_reason = ""
@@ -653,6 +672,38 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "native_broker_tools": list(turbo_context.get("native_broker_tools") or ()),
                 "executed": False, "authorization_granted": False,
             })
+        stage_context = ""
+        if stage_ledger is not None:
+            view = stage_ledger.readiness()
+            if view["status"] == "NO_STAGE_PLAN":
+                stage_context = (
+                    "MANDATORY before any ToolCall: submit one stage_plan "
+                    "with every original explicit phase ID "
+                    + json.dumps(original_goal_stage_ids(request)) +
+                    ". JSON schema: {type:stage_plan, stages:[{stage_id:P0,"
+                    "description:goal requirement,depends_on:[],"
+                    "acceptance:[{field:data.verification_status,"
+                    "operator:eq,expected:PASS}]}]}. Quote JSON strings. "
+                    "Each Stage must have substantive, observable data.* "
+                    "postconditions (not exit_code=0 alone). Frozen Stage "
+                    "plan cannot authorize operations or permissions."
+                )
+            elif view.get("current_stage_id"):
+                stage_context = (
+                    "PREVIOUS STAGES FROZEN. Work only on CURRENT Stage. "
+                    "On real acceptance submit {type:stage_commit,"
+                    "stage_id:<current_stage_id>,evidence_refs:[<MIN-EV>]}. "
+                    "After failure choose a DIFFERENT authorized approach; "
+                    "never replay a committed mutation. Current ledger="
+                    + json.dumps(view, ensure_ascii=False,
+                                 separators=(",", ":"))[:6000]
+                )
+            else:
+                stage_context = (
+                    "All frozen Stages are committed. Only now submit "
+                    "Git74.1 Finish V2. Final Runtime Goal Comparator must "
+                    "still verify the ORIGINAL request."
+                )
         prompt = _prompt(
             request, loop.tools, recent, round_id=turn,
             max_rounds=max_rounds, hint=hint,
@@ -668,6 +719,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             ),
             turbo_planning_context=turbo_context,
             preexecution_rejections=native_preexecution_rejections[-3:],
+            stage_context=stage_context,
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()
