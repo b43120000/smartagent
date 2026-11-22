@@ -32,6 +32,9 @@ jobs:
           source/agent_core/goal75_blackboard.py
           source/agent_core/goal75_stage_ledger.py
           source/agent_core/goal75_recovery.py
+          source/agent_core/goal75_goal_coverage.py
+          source/WebAgent/pokeclaw_executor_loop.py
+          source/agent_core/protocol_manifest.py
           source/agent_core/goal75_sidecar_it.py
           source/WebAgent/minimal_decision.py
           source/WebAgent/minimal_core_loop.py
@@ -39,6 +42,12 @@ jobs:
           source/agent_core/executor_run_blackboard.py
           source/agent_core/task_progress.py
           source/WebAgent/tests/test_git75_goal_driven_runtime.py
+          source/WebAgent/tests/test_git75_live_goal_truth.py
+      - name: Git75 pinned release hash inventory
+        run: >-
+          python -B -c "import hashlib,json; from pathlib import Path;
+          paths='.github/workflows/git75-goal-driven-runtime.yml source/WebAgent/pokeclaw_executor_loop.py source/agent_core/goal75_goal_coverage.py source/agent_core/goal75_stage_ledger.py source/WebAgent/tests/test_git75_live_goal_truth.py source/agent_core/protocol_manifest.py config/protocol_manifest.json'.split();
+          print('GIT75_FILE_SHA256_JSON='+json.dumps({p:hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths},sort_keys=True))"
       - name: Protocol release integrity
         run: >-
           python -B -c "from agent_core.protocol_manifest import require_protocol_manifest;
@@ -58,6 +67,7 @@ jobs:
         run: >-
           python -B -m pytest -q
           source/WebAgent/tests/test_git75_goal_driven_runtime.py
+          source/WebAgent/tests/test_git75_live_goal_truth.py
           source/WebAgent/tests/test_git70_goal_evidence.py
           source/WebAgent/tests/test_git71_timeout_reconciliation.py
           source/WebAgent/tests/test_git74_long_execution_supervisor.py
