@@ -252,8 +252,19 @@ class GoalStageLedger:
             modify(stage)
             return self._save(before, after, event, sid)
 
+    def committed_mutation_fingerprints(self) -> set[str]:
+        row = self.read()
+        return {
+            str(item["mutation_fingerprint"])
+            for stage in (row or {}).get("stages", [])
+            if stage["status"] == "VERIFIED_COMMITTED"
+            for item in stage.get("observations", [])
+            if item.get("mutating") is True and item.get("mutation_fingerprint")
+        }
+
     def record_action(self, sid: str, *, action_id: str, evidence_ref: str,
-                      receipt: Mapping) -> dict:
+                      receipt: Mapping, mutation_fingerprint: str = "",
+                      mutating: bool = False) -> dict:
         """Bind only completed, actually executed Runtime receipts to this stage."""
         if (not isinstance(receipt, Mapping)
                 or receipt.get("status") not in {"SUCCEEDED", "FAILED"}
@@ -274,6 +285,9 @@ class GoalStageLedger:
                 "receipt_sha256": digest(receipt),
                 "status": receipt["status"],
                 "acceptance_matched": matches,
+                "mutating": bool(mutating),
+                "mutation_fingerprint": str(mutation_fingerprint)[:64]
+                if mutating else "",
             })
             stage["status"] = "VERIFYING" if matches else "RECOVERING"
         return self._change(sid, "STAGE_ACTION_OBSERVED", apply)
