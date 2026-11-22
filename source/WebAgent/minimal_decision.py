@@ -30,6 +30,9 @@ class MinimalDecision:
     expected_runtime: list[dict] | None = None
     goal_checks: list[dict] | None = None
     contract_version: int = 1
+    stage_plan: list[dict] | None = None
+    stage_id: str = ""
+    evidence_refs: list[str] | None = None
 
 
 def _unique_keys(pairs):
@@ -126,6 +129,20 @@ def _to_decision(data: dict, meta: dict) -> MinimalDecision:
     if not isinstance(data, dict) or not isinstance(data.get("type"), str):
         raise MinimalDecisionError("decision_type_required", meta)
     kind = data["type"].strip().lower()
+    if kind == "stage_plan":
+        if set(data) != {"type", "stages"} or not isinstance(data["stages"], list):
+            raise MinimalDecisionError("goal75_stage_plan_schema_invalid", meta)
+        return MinimalDecision("stage_plan", stage_plan=data["stages"])
+    if kind == "stage_commit":
+        if set(data) != {"type", "stage_id", "evidence_refs"}:
+            raise MinimalDecisionError("goal75_stage_commit_schema_invalid", meta)
+        sid, refs = data["stage_id"], data["evidence_refs"]
+        if (not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", sid)
+                or not isinstance(refs, list) or not refs
+                or len(refs) > 64 or not all(isinstance(x, str) and
+                    re.fullmatch(r"MIN-EV-[a-f0-9]{24}", x) for x in refs)):
+            raise MinimalDecisionError("goal75_stage_commit_invalid", meta)
+        return MinimalDecision("stage_commit", stage_id=sid, evidence_refs=refs)
     if kind in {"tool_call", "tool", "action"}:
         if not set(data).issubset({"type", "name", "tool", "arguments", "params"}):
             raise MinimalDecisionError("tool_call_fields_invalid", meta)
