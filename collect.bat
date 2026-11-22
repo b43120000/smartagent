@@ -593,6 +593,99 @@ if (Test-Path -LiteralPath $preLog -PathType Leaf) {
 Write-Json (Join-Path $stage 'unified_preflight_task.json') $preTask
 Write-Json (Join-Path $stage 'unified_preflight_events.json') @($preEvents.ToArray())
 
+# Git75: one Task/Request Big Blackboard change timeline across all modules.
+# The on-disk JSONL is intentionally diagnostic-only; never export raw
+# model prompts, commands, tool output or complete Planner Stage descriptions.
+$goal75TraceRows = New-Object 'System.Collections.Generic.List[object]'
+$goal75TracePath = if ($task) {
+    Join-Path $root ('localdata\runtime\goal75_big_blackboard\' + $task + '.jsonl')
+} else { '' }
+$goal75Chain = 'NOT_FOUND'
+$goal75Previous = 'GENESIS'
+$goal75ExpectedSequence = 1
+if ($goal75TracePath -and (Test-Path -LiteralPath $goal75TracePath -PathType Leaf)) {
+    $goal75Chain = 'SEQUENCE_AND_PARENT_LINKS_VALID'
+    Get-Content -LiteralPath $goal75TracePath -Encoding UTF8 | ForEach-Object {
+        try {
+            $e = $_ | ConvertFrom-Json -ErrorAction Stop
+            if ([string]$e.task_id -cne [string]$task -or
+                ($request -and [string]$e.request_id -cne [string]$request)) { return }
+            if ([int]$e.sequence -ne $goal75ExpectedSequence -or
+                [string]$e.prev_event_sha256 -cne [string]$goal75Previous) {
+                $goal75Chain = 'CHAIN_LINK_MISMATCH'
+            }
+            $goal75ExpectedSequence++
+            $goal75Previous = [string]$e.event_sha256
+            # Explicit allowlist prevents future schema expansion from
+            # accidentally exporting credentials, paths or ToolResult bodies.
+            $goal75TraceRows.Add([ordered]@{
+                sequence=[int]$e.sequence
+                time_unix=$e.time_unix
+                task_id=(Safe-Code $e.task_id)
+                request_id=(Safe-Code $e.request_id)
+                task_epoch=(Safe-Code $e.task_epoch)
+                module=(Safe-Code $e.module)
+                event=(Safe-Code $e.event)
+                stage_id=(Safe-Code $e.stage_id)
+                reason_code=(Safe-Code $e.reason_code)
+                before_sha256=(Safe-Code $e.before_sha256)
+                after_sha256=(Safe-Code $e.after_sha256)
+                changed_fields=(Safe-CodeList $e.changed_fields)
+                changed_sections=(Safe-CodeList $e.changed_sections)
+                visible_changes=$e.visible_changes
+                evidence_refs=(Safe-CodeList $e.evidence_refs)
+                prev_event_sha256=(Safe-Code $e.prev_event_sha256)
+                event_sha256=(Safe-Code $e.event_sha256)
+                authorization_granted=$false
+            })
+        } catch {
+            $goal75Chain = 'PARSE_OR_EVENT_VALIDATION_FAILED'
+        }
+    }
+}
+$goal75Stages = @()
+$goal75StagePath = if ($task) {
+    Join-Path $root ('localdata\runtime\goal75_stages\' + $task + '.json')
+} else { '' }
+$goal75StageDoc = if ($goal75StagePath) { Read-Json $goal75StagePath } else { $null }
+$goal75StageState = 'NOT_FOUND'
+if ($goal75StageDoc -and [string]$goal75StageDoc.task_id -ceq [string]$task -and
+    ((-not $request) -or [string]$goal75StageDoc.request_id -ceq [string]$request)) {
+    $goal75StageState = Safe-Code $goal75StageDoc.status
+    foreach ($item in @($goal75StageDoc.stages)) {
+        $receipt = $item.commit
+        $goal75Stages += [ordered]@{
+            stage_id=(Safe-Code $item.stage_id)
+            status=(Safe-Code $item.status)
+            strategy_revision=[int]$item.strategy_revision
+            accepted_check_count=@($item.acceptance).Count
+            observation_count=@($item.observations).Count
+            failure_count=@($item.failures).Count
+            depends_on=(Safe-CodeList $item.depends_on)
+            commit_sha256=if ($receipt) { Safe-Code $receipt.commit_sha256 } else { '' }
+            evidence_refs=if ($receipt) { Safe-CodeList $receipt.evidence_refs } else { @() }
+        }
+    }
+}
+$goal75Modules = @($goal75TraceRows.ToArray() |
+    Group-Object module | ForEach-Object {
+        [ordered]@{ module=(Safe-Code $_.Name); event_count=[int]$_.Count }
+    })
+$goal75Summary = [ordered]@{
+    schema='SMARTAGENT_GOAL75_COLLECT_SUMMARY_V1'
+    trace_status=$goal75Chain
+    trace_digest_verification='NOT_PERFORMED_BY_POWERSHELL'
+    event_count=$goal75TraceRows.Count
+    modules=$goal75Modules
+    stage_ledger_status=$goal75StageState
+    stage_count=@($goal75Stages).Count
+    frozen_stage_count=@($goal75Stages | Where-Object {
+        $_.status -ceq 'VERIFIED_COMMITTED'
+    }).Count
+}
+Write-Json (Join-Path $stage 'goal75_big_blackboard_events.json') @($goal75TraceRows.ToArray())
+Write-Json (Join-Path $stage 'goal75_stage_progress.json') @($goal75Stages)
+Write-Json (Join-Path $stage 'goal75_flow_summary.json') $goal75Summary
 
 $sources = @(
     @{ name = 'webagent_runtime'; path = (Join-Path $root 'localdata\logs\webagent_runtime.jsonl') },
@@ -2589,6 +2682,13 @@ try {
                              'source\WebAgent\tests\test_git67_raw_evidence_collector.py',
                              'source\WebAgent\tests\test_git67_collect_bat_windows.py',
                              'source\WebAgent\tests\test_git67_minimal_trace.py',
+                             'source\agent_core\goal75_blackboard.py',
+                             'source\agent_core\goal75_stage_ledger.py',
+                             'source\agent_core\goal75_recovery.py',
+                             'source\WebAgent\minimal_core_loop.py',
+                             'source\agent_core\shared_blackboard.py',
+                             'source\agent_core\executor_run_blackboard.py',
+                             'source\agent_core\task_progress.py',
                              'collect.bat',
                              'config\protocol_manifest.json')) {
         $fp = Join-Path $root $relative
@@ -2606,6 +2706,10 @@ try {
         task_id=(Safe-Code $task)
         request_id=(Safe-Code $request)
         event_count=$timeline.Count
+        goal75_trace_status=$goal75Summary.trace_status
+        goal75_trace_event_count=$goal75Summary.event_count
+        goal75_stage_ledger_status=$goal75Summary.stage_ledger_status
+        goal75_frozen_stage_count=$goal75Summary.frozen_stage_count
         causal_coverage_schema='SMARTAGENT_RCA_CAUSAL_COVERAGE_V1'
         causal_coverage_status=$coverage.status
         causal_coverage_issues=@($coverage.issues)
@@ -2669,6 +2773,8 @@ try {
     Write-Host ('[COLLECT] Task: ' + $task)
     Write-Host ('[COLLECT] Request: ' + $request)
     Write-Host ('[COLLECT] Matched events: ' + $timeline.Count)
+    Write-Host ('[COLLECT] Git75 Blackboard: ' + $goal75Summary.trace_status + '; events=' + $goal75Summary.event_count)
+    Write-Host ('[COLLECT] Git75 Stages: ' + $goal75Summary.stage_ledger_status + '; frozen=' + $goal75Summary.frozen_stage_count)
     Write-Host ('[COLLECT] GAR snapshots: ' + @($snapshots).Count)
     Write-Host ('[COLLECT] IT10 raw: ' + [string]$it10.status + '; blobs=' + [string]$it10.raw_blob_count)
     if ($collectIt10Raw) {
