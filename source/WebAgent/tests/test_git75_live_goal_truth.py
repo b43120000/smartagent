@@ -138,7 +138,7 @@ def test_executed_comparator_pass_does_not_green_without_stage_coverage(
     monkeypatch.setattr(exe, "record_finish_comparison",
                         lambda *a, **k: board)
     monkeypatch.setattr(exe, "append_executor_event",
-                        lambda *a, **k: events.append(k))
+                        lambda *a, **k: events.append(a[2] if len(a) > 2 else k))
     monkeypatch.setattr(exe, "compare_runtime_finish",
                         lambda *a, **k: comparison)
     monkeypatch.setattr(exe, "set_runtime_state", lambda *a, **k: None)
