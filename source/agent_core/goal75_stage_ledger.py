@@ -97,6 +97,30 @@ def _read(path: Path) -> dict | None:
     ]
     if digest(basis) != row["plan_sha256"]:
         raise ValueError("goal75_frozen_plan_tampered")
+    for stage in row["stages"]:
+        receipt = stage.get("commit")
+        if stage.get("status") == "VERIFIED_COMMITTED" and not isinstance(receipt, dict):
+            raise ValueError("goal75_stage_commit_missing")
+        if receipt is not None:
+            if not isinstance(receipt, dict):
+                raise ValueError("goal75_stage_commit_invalid")
+            body = {key: value for key, value in receipt.items()
+                    if key != "commit_sha256"}
+            if digest(body) != receipt.get("commit_sha256"):
+                raise ValueError("goal75_stage_commit_tampered")
+            if (receipt.get("stage_id") != stage.get("stage_id")
+                    or receipt.get("plan_sha256") != row["plan_sha256"]):
+                raise ValueError("goal75_stage_commit_plan_binding_invalid")
+            observed = {item.get("evidence_ref"): item
+                        for item in stage.get("observations", [])}
+            refs = list(receipt.get("evidence_refs") or [])
+            if (not refs or len(refs) != len(set(refs))
+                    or any(ref not in observed for ref in refs)):
+                raise ValueError("goal75_stage_commit_observation_missing")
+            coverage = {i for ref in refs
+                        for i in observed[ref].get("acceptance_matched", [])}
+            if coverage != set(range(len(stage["acceptance"]))):
+                raise ValueError("goal75_stage_commit_coverage_tampered")
     return row
 
 
