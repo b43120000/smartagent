@@ -896,7 +896,7 @@
     "source/WebAgent/tests/test_git74_long_execution_supervisor.py": "9f9116bbc2c3fb71f93a0a5fea836273e0c4fc372a2a3879c6d479d5aac1a366",
     "source/WebAgent/tests/test_git74_unified_preflight.py": "fdf326ba0623c975e58b3c7b8d0c2b3058551c3c78ccc6579080ea36fdb5c208",
     "source/WebAgent/tests/test_git75_goal_driven_runtime.py": "4d20fd4037fdfb06894f205f488177b7fdc034c5353ba06dec3c1d07b70e2343",
-    "source/WebAgent/tests/test_git75_live_goal_truth.py": "6850cda038d19faa1dfd73daedb68a3aa3a9f67aaa4b43673379c6461a43b209",
+    "source/WebAgent/tests/test_git75_live_goal_truth.py": "4d95bb9f6bc16677930a7f52a000ceea48eba408addd9a1c10c902fac98c773d",
     "source/WebAgent/tests/test_goal_directed_prerequisite_resolution.py": "4e31a737f8876ba5cfa5786f12d8191bcdd39ca34fdcf5ec5837951f8d5361fb",
     "source/WebAgent/tests/test_goal_grounded_gap_p0_p3.py": "39f6aacc7a8b72d5ddc077159e9ee852921d905b92b37c78f229c7cce402b031",
     "source/WebAgent/tests/test_goal_repair_p0_env.py": "8834cec3b4ed8c26a23a63344895953755fd5e09062643dad3c8db36646c7d3f",
