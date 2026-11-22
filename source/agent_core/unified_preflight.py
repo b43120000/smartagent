@@ -1,0 +1,252 @@
+"""Runtime-owned dynamic Project Sync and environment preflight.
+
+A snapshot is a candidate and never a permission, immutable ToolResult,
+or replacement for per-action execution Admission. Only admitted, observed
+actions can advance project-index state.
+"""
+from __future__ import annotations
+import hashlib
+import json
+import re
+import time
+from pathlib import Path
+from collections.abc import Mapping
+from .json_state_io import read_json_retry, write_json_atomic
+from .process_file_lock import exclusive_process_lock
+
+SCHEMA = "SMARTAGENT_UNIFIED_PREFLIGHT_V1"
+TASK_ID = re.compile(r"^TASK-[A-Za-z0-9_-]{5,90}$")
+SHA = re.compile(r"^[a-f0-9]{64}$")
+MUTATING = frozenset({"create_directory","write_file","delete_path",
+                      "apply_edit_plan","install_toolchain","web_edit_file"})
+MUTATING_OPERATIONS = frozenset({"MUTATE","BUILD","GIT_MUTATE","TRANSFER"})
+ENV_ERRORS = frozenset({"EXECUTABLE_NOT_FOUND","COMMAND_NOT_FOUND",
+    "TOOLCHAIN_UNAVAILABLE","PYTHON_UNAVAILABLE","GIT_UNAVAILABLE",
+    "WORKSPACE_NOT_FOUND","PATH_NOT_FOUND","MISSING_DEPENDENCY"})
+
+def root_dir(install):
+    return Path(install).expanduser().resolve() / "localdata" / "runtime" / "unified_preflight"
+
+def _id(workspace):
+    return hashlib.sha256(str(Path(workspace).resolve()).replace("\\","/").casefold().encode("utf-8")).hexdigest()[:32]
+
+def _paths(install,workspace,task):
+    if not TASK_ID.fullmatch(str(task)): raise ValueError("preflight_task_id_invalid")
+    root=root_dir(install);wid=_id(workspace)
+    return root,root/("WORKSPACE-"+wid+".json"),root/"tasks"/(task+".json"),root/("WORKSPACE-"+wid+".lock")
+
+def _read(path):
+    try:
+        row=read_json_retry(path)
+        return row if isinstance(row,dict) else {}
+    except (ValueError, OSError, TypeError): return {}
+
+def _signature(install):
+    from .runtime_environment import runtime_tool_paths
+    facts={}
+    for name,path in sorted(runtime_tool_paths(install).items()):
+        try:
+            st=path.stat()
+            facts[name]=(str(path),st.st_size,st.st_mtime_ns)
+        except OSError:
+            facts[name]=(str(path),"MISSING")
+    head=Path(install)/".git"/"HEAD"
+    try:
+        entry=head.read_text(encoding="utf-8").strip()[:150]
+        if entry.startswith("ref: "):
+            candidate=Path(install)/".git"/entry[5:]
+            entry+="|"+(candidate.read_text(encoding="utf-8").strip()[:64]
+                        if candidate.is_file() else "UNRESOLVED")
+        facts["source"]=entry
+    except OSError:
+        facts["source"]="NO_GIT_HEAD"
+    return hashlib.sha256(json.dumps(facts,sort_keys=True).encode("utf-8")).hexdigest()
+
+def _pointer(workspace):
+    root=Path(workspace)/".agents"/"project_context"
+    item=_read(root/"current.json")
+    sid=str(item.get("snapshot_id") or "").lower()
+    if not SHA.fullmatch(sid):return {"snapshot_id":"","status":"NOT_INDEXED"}
+    try:
+        if Path(str(item.get("workspace_root"))).resolve()!=Path(workspace).resolve():
+            return {"snapshot_id":"","status":"INVALID_POINTER"}
+        path=root/"snapshots"/(sid+".json")
+        if not path.is_file() or path.is_symlink():
+            return {"snapshot_id":"","status":"INVALID_POINTER"}
+    except (OSError, ValueError):
+        return {"snapshot_id":"","status":"INVALID_POINTER"}
+    return {"snapshot_id":sid,"status":"CACHED_INDEX_HINT"}
+
+def _effective(workspace):
+    from .auto_approve_mode import auto_approve_snapshot
+    row=auto_approve_snapshot(workspace,working_directory=workspace)
+    return {k:row.get(k) for k in ("acl","turbo_requested","turbo_effective",
+        "auto_approve_requested","auto_approve_effective","executor_backend",
+        "policy_revision","reason_code")}
+
+def _probe(install, probe=None):
+    if probe is None:
+        from .runtime_environment import planner_environment_snapshot
+        probe=planner_environment_snapshot
+    facts=probe(install)
+    if not isinstance(facts,Mapping) or not isinstance(facts.get("tools"),Mapping):
+        raise ValueError("preflight_probe_invalid")
+    return dict(facts)
+
+def _digest(row):
+    basis={k:row.get(k) for k in ("workspace_root","revision",
+          "environment_source","runtime_signature","effective_state","project_sync")}
+    return hashlib.sha256(json.dumps(basis,sort_keys=True,default=str).encode("utf-8")).hexdigest()
+
+def _write(base,cache,taskfile,row):
+    base.mkdir(parents=True,exist_ok=True)
+    write_json_atomic(cache,{k:v for k,v in row.items() if k not in ("task_id","request_id")})
+    write_json_atomic(taskfile,row)
+
+def _event(base,row,kind,**facts):
+    base.mkdir(parents=True,exist_ok=True)
+    payload={"schema":SCHEMA,"event":kind,"task_id":row.get("task_id",""),
+        "request_id":row.get("request_id",""),"preflight_id":row.get("preflight_id",""),
+        "revision":row.get("revision",0),"workspace_id":_id(row["workspace_root"]),
+        "at":time.time(),**facts}
+    with (base/"events.jsonl").open("a",encoding="utf-8") as out:
+        out.write(json.dumps(payload,ensure_ascii=False,sort_keys=True)+"\n")
+
+def begin_task(install,workspace,*,task_id,request_id,probe=None):
+    """Read a single combined baseline; reuse binary probes across tasks."""
+    install=Path(install).resolve();workspace=Path(workspace).resolve()
+    base,cache,taskfile,lock=_paths(install,workspace,task_id)
+    base.mkdir(parents=True,exist_ok=True)
+    with exclusive_process_lock(lock,label="unified-preflight"):
+        old=_read(cache)
+        signature=_signature(install)
+        cached=(old.get("schema")==SCHEMA and
+            old.get("workspace_root")==str(workspace) and
+            old.get("runtime_signature")==signature and
+            isinstance((old.get("runtime") or {}).get("tools"),dict) and
+            not old.get("reprobe_required"))
+        runtime=old["runtime"] if cached else _probe(install,probe)
+        project=_pointer(workspace)
+        old_project=old.get("project_sync") or {}
+        if (old_project.get("snapshot_id")==project["snapshot_id"] and
+                old_project.get("status")=="STALE_REINDEX_REQUIRED"):
+            project["status"]="STALE_REINDEX_REQUIRED"
+        elif old_project.get("snapshot_id")!=project["snapshot_id"] and old_project.get("snapshot_id"):
+            project["status"]="INDEX_CHANGED_EXTERNALLY"
+        effective=_effective(workspace)
+        row={"schema":SCHEMA,"workspace_root":str(workspace),
+            "task_id":task_id,"request_id":str(request_id),
+            "runtime_signature":signature,"runtime":runtime,
+            "environment_source":("IDENTITY_MATCHED_CACHE" if cached else "RUNTIME_PROBED"),
+            "effective_state":effective,"project_sync":project,
+            "revision":int(old.get("revision",0) or 0)+1,
+            "reprobe_required":False,"last_action_id":"","last_evidence_ref":"",
+            "updated_at":time.time(),"authorization_granted":False,
+            "source_snapshot_is_current_byte_evidence":False,
+            "status":("READY_FOR_ADMISSION" if workspace.is_dir() and
+                effective.get("reason_code") not in {"ACL_UNVERIFIED",
+                "POLICY_OR_SCOPE_UNVERIFIED","WORKSPACE_NOT_AUTHORIZED_WRITABLE"}
+                else "PRECHECK_UNVERIFIED")}
+        row["preflight_id"]=_digest(row)
+        _write(base,cache,taskfile,row)
+        _event(base,row,"PREFLIGHT_TASK_STARTED",
+            environment_source=row["environment_source"],
+            preflight_status=row["status"],project_status=project["status"],
+            project_snapshot_id=project["snapshot_id"],
+            effective_acl=effective.get("acl"),
+            effective_backend=effective.get("executor_backend"))
+        return row
+
+def task_fact(install,task_id):
+    if not TASK_ID.fullmatch(str(task_id)):return {}
+    return _read(root_dir(install)/"tasks"/(task_id+".json"))
+
+def summary(row):
+    effective=row.get("effective_state") or {}
+    runtime=row.get("runtime") or {}
+    tools=runtime.get("tools") or {}
+    return {"schema":SCHEMA,"preflight_id":row.get("preflight_id",""),
+        "revision":row.get("revision",0),
+        "status":row.get("status","UNVERIFIED"),
+        "environment_source":row.get("environment_source","UNVERIFIED"),
+        "effective":dict(effective),"project_sync":dict(row.get("project_sync") or {}),
+        "tools":{k:{"status":v.get("status"),"path":v.get("path"),
+            "version":str(v.get("version",""))[:100]}
+            for k,v in tools.items() if isinstance(v,Mapping)},
+        "authorization_granted":False,"source_snapshot_is_current_byte_evidence":False,
+        "next":"NORMAL_ACTION_ADMISSION_ONLY"}
+
+def inventory(install,workspace,row):
+    from .project_environment import planner_environment_hint
+    from .runtime_software_inventory import build_runtime_software_inventory
+    from .software_registry import software_registry_snapshot
+    inv=build_runtime_software_inventory(
+        row.get("runtime"),planner_environment_hint(workspace),installation_root=install)
+    if row.get("environment_source")=="IDENTITY_MATCHED_CACHE":
+        for item in inv.get("bundled_tool_probes",[]):
+            if item.get("availability")=="CURRENT_AVAILABLE":
+                item["availability"]="CACHED_PROBE_RECHECK_ON_EXECUTION"
+                item["execution_authorized"]=False
+    inv["external_software_registry"]=software_registry_snapshot()
+    return inv
+
+def action_observed(install,workspace,*,task_id,request_id,action,receipt,
+                    match_report=None,evidence_ref="",probe=None):
+    """Update state only after actual ToolResult; never replay side effects."""
+    install=Path(install).resolve();workspace=Path(workspace).resolve()
+    base,cache,taskfile,lock=_paths(install,workspace,task_id)
+    with exclusive_process_lock(lock,label="unified-preflight"):
+        row=_read(taskfile)
+        if (row.get("schema")!=SCHEMA or
+            row.get("request_id")!=request_id or
+            row.get("workspace_root")!=str(workspace)):
+            raise ValueError("preflight_action_not_bound_to_task")
+        action_id=str(action.get("action_id",""))
+        if receipt.get("executed") is not True:
+            _event(base,row,"PREFLIGHT_NONEXECUTED_ADMISSION",
+                   action_id=action_id,reason_code=str(receipt.get("reason",""))[:80])
+            return row
+        tool=str(action.get("tool",""))
+        operation=str(action.get("operation","")).upper()
+        state=str(receipt.get("status",""))
+        reason=str(receipt.get("reason",""))[:80]
+        match=str((match_report or {}).get("match_state",""))
+        drift=(match in {"MISMATCH","RECOLLECT_EVIDENCE"} or
+               (state in {"FAILED","UNKNOWN","REJECTED"} and reason in ENV_ERRORS))
+        changed=(tool in MUTATING or
+                 tool=="run_command" and operation in MUTATING_OPERATIONS)
+        project=_pointer(workspace)
+        previous=row.get("project_sync") or {}
+        if tool in {"project_sync","query_project","inspect_project_scope"} and state=="SUCCEEDED":
+            if project["snapshot_id"]:project["status"]="INDEX_REFRESHED_BY_ADMITTED_ACTION"
+        elif project["snapshot_id"] and (
+            changed or drift or previous.get("status")=="STALE_REINDEX_REQUIRED"):
+            if project["snapshot_id"]==previous.get("snapshot_id") or drift:
+                project["status"]="STALE_REINDEX_REQUIRED"
+        if drift:
+            try:
+                row["runtime"]=_probe(install,probe)
+                row["environment_source"]="RUNTIME_REPROBED_AFTER_CONTRADICTION"
+                row["reprobe_required"]=False
+            except (ValueError,RuntimeError,OSError,TypeError) as err:
+                row["reprobe_required"]=True
+                row["environment_source"]="RUNTIME_REPROBE_FAILED"
+                _event(base,row,"PREFLIGHT_RUNTIME_REPROBE_FAILED",
+                       action_id=action_id,error_class=type(err).__name__)
+        row["effective_state"]=_effective(workspace)
+        row["project_sync"]=project
+        row["last_action_id"]=action_id
+        row["last_evidence_ref"]=str(evidence_ref)[:100]
+        row["revision"]=int(row.get("revision",0))+1
+        row["updated_at"]=time.time()
+        row["status"]="REPROBE_REQUIRED" if row.get("reprobe_required") else "READY_FOR_ADMISSION"
+        row["preflight_id"]=_digest(row)
+        _write(base,cache,taskfile,row)
+        _event(base,row,"PREFLIGHT_REPROBED_AFTER_CONTRADICTION" if drift
+              else "PREFLIGHT_ACTION_OBSERVED",
+              action_id=action_id,tool=tool,operation=operation,
+              evidence_ref=str(evidence_ref)[:100],match_state=match,
+              execution_status=state,project_status=project["status"],
+              project_snapshot_id=project["snapshot_id"],
+              environment_source=row["environment_source"])
+        return row

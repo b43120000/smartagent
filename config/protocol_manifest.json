@@ -146,7 +146,7 @@
     "source/agent_core/project_sync_runner.py": "7a7c17e9b376b2f26b869a8acfdb9e4dd325cd2924579cfd58cb8109bd3f8d46",
     "source/agent_core/project_sync_transaction.py": "2e8514576da80223d521ab716226ebd0a2a14a4077cc68b00807148c7be5543f",
     "source/agent_core/project_sync.py": "614aad90249e003b5cb6a5d96ffdc95069819777c6f9c6d967286a4dd8d38c82",
-    "source/agent_core/protocol_manifest.py": "5811df041c69fbfb37ad8b4d8882bcfc0d8bc06617b5a09c9d4ac71044b278b0",
+    "source/agent_core/protocol_manifest.py": "4c65f7c2950104b824ebedfb7e9254a892cde99c69479435faa3caa31643dc87",
     "source/agent_core/protocol_repair_transaction.py": "c80a3b045fd03e01655298574c2935135ef58359bc808922b17e03d11b0e053a",
     "source/agent_core/protocol_v8.py": "c89e12ff41b7364ee3263a61a0ae59b81546b0e2395b80423b34abaf87459504",
     "source/agent_core/protocol_v9.py": "26932c3fa2bc41edfc16bc80613953e4c16f0e3a4ecfa42c6d7af5fdb3d8e51a",
@@ -305,7 +305,8 @@
     "update.bat": "1d92febcfb4c43b6e2b631d94a2bfc909bce87ffdefef1212bcb5d870f728651",
     "source/agent_core/timeout_reconciliation.py": "57294c995a414e8392c40e30edc695a1cc11be38276c1573ea3b136baa8284ec",
     "source/RemoteAgent/telegram_long_message_merge.py": "6b5368fe670d8f7e3a213a201db57a7a503395e8e239820b31ccb97bfaeb3392",
-    "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df"
+    "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df",
+    "source/agent_core/unified_preflight.py": "c58fc9336ac48578403bd6ecb131f02f7d1737aa335d3652435948719665674c"
   },
   "manifest_schema_version": 1,
   "missing_files": [],

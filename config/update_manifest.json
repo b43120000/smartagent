@@ -107,7 +107,7 @@
     "config/debug_config.defaults.json": "789f845b1a55db9d1772c3b5a5fde78b070a3c9c281a69d51fb8bc55680eb68a",
     "config/feature_flags.defaults.json": "c02d0ba5b29d77b04225b3f772daf9e27af5aba88fe2a45d7f855c683fe51e5e",
     "config/managed_toolchains_catalog.json": "bb6061dc0620b7d52031dd387716c7b78c8277025d075f4c062fb12af04843d3",
-    "config/protocol_manifest.json": "1c6d6ce21c910cb66f174d2453bcc619935a5a44a0f9819e0ba4dcd7c077988d",
+    "config/protocol_manifest.json": "fdf16e24c17c450e50c23ad1f4414343e251ec2ac5a3f87643b0baed88b26ffc",
     "config/source_discovery_catalog.json": "ff00a70ade698cdc4f2c82e15b45f2fb8aeb0e07b2367bcb3a9f5861d9e03644",
     "doc/action_resolution_trace_and_missing_target_prereqs.md": "e224b6c593c85d8bf8fcdcba5352b7871e4e78c769f702f3edb6242b879a73d8",
     "doc/action_scoped_admission.md": "12d6eafd1a1b70ea456281eb3bc6c8053a264907a06c62ed7599fbb83ed7ea75",
@@ -445,7 +445,7 @@
     "source/agent_core/project_sync_runner.py": "7a7c17e9b376b2f26b869a8acfdb9e4dd325cd2924579cfd58cb8109bd3f8d46",
     "source/agent_core/project_sync_transaction.py": "2e8514576da80223d521ab716226ebd0a2a14a4077cc68b00807148c7be5543f",
     "source/agent_core/project_sync.py": "614aad90249e003b5cb6a5d96ffdc95069819777c6f9c6d967286a4dd8d38c82",
-    "source/agent_core/protocol_manifest.py": "5811df041c69fbfb37ad8b4d8882bcfc0d8bc06617b5a09c9d4ac71044b278b0",
+    "source/agent_core/protocol_manifest.py": "4c65f7c2950104b824ebedfb7e9254a892cde99c69479435faa3caa31643dc87",
     "source/agent_core/protocol_repair_transaction.py": "c80a3b045fd03e01655298574c2935135ef58359bc808922b17e03d11b0e053a",
     "source/agent_core/protocol_v8.py": "c89e12ff41b7364ee3263a61a0ae59b81546b0e2395b80423b34abaf87459504",
     "source/agent_core/protocol_v9.py": "26932c3fa2bc41edfc16bc80613953e4c16f0e3a4ecfa42c6d7af5fdb3d8e51a",
@@ -1089,7 +1089,8 @@
     ".github/workflows/git73-p7-timeout-admission.yml": "b01efc2ad5a91639d9d80be1b74fb072c9be6dfef23b13e04a3fe15c4d150803",
     "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df",
     "source/WebAgent/tests/test_git74_long_execution_supervisor.py": "9f9116bbc2c3fb71f93a0a5fea836273e0c4fc372a2a3879c6d479d5aac1a366",
-    ".github/workflows/git74-dynamic-execution-supervisor.yml": "8cb717e77b3a0753a4101bfe9a333b408f8edf3c70d796ee33d8d70c7e144f68"
+    ".github/workflows/git74-dynamic-execution-supervisor.yml": "8cb717e77b3a0753a4101bfe9a333b408f8edf3c70d796ee33d8d70c7e144f68",
+    "source/agent_core/unified_preflight.py": "c58fc9336ac48578403bd6ecb131f02f7d1737aa335d3652435948719665674c"
   },
   "protocol_family": "SMARTAGENT_V9",
   "protocol_version": 9,
