@@ -34,6 +34,14 @@ def _path(root: str | Path, task_id: str) -> Path:
 
 
 def _atomic(path: Path, record: dict) -> None:
+    # The old persisted state is the only valid before-image. Model prose
+    # and cached projections must never claim to be a Blackboard write.
+    prior = None
+    if path.is_file():
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prior = None
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     fd, temporary = tempfile.mkstemp(prefix=".executor-run-", suffix=".tmp", dir=path.parent)
@@ -46,6 +54,13 @@ def _atomic(path: Path, record: dict) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+    try:
+        from .goal75_blackboard import record_blackboard_write
+        record_blackboard_write(path, prior, record,
+                                module="EXECUTOR_RUN_BLACKBOARD")
+    except (OSError, ValueError, RuntimeError):
+        # Logging is observational, never additional Tool admission.
+        pass
 
 
 def _digest(value: object) -> str:
