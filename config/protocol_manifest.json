@@ -294,7 +294,7 @@
     "source/WebAgent/fresh_context.py": "40ff5b427eb240056f5a1e738f70022765095504057407544ffed5a539564615",
     "source/WebAgent/github_stage_diagnostics.py": "d5cbd6b6bc8b73e4e2ea6def03d77b2ef586de133a6f9f3427843a67b80e37d5",
     "source/WebAgent/minimal_admission.py": "74e8f1f4b1fbedd896542fd57be9d2fa2195de31a2db9398e42b17e25ac87398",
-    "source/WebAgent/minimal_core_loop.py": "6635f6de1660936bfd76c22f5ac038e62467df8ae41e41ce5e4af58df68da6a4",
+    "source/WebAgent/minimal_core_loop.py": "0d873e18cc959363b95af038e4a5d80919c71049ee89b4a39595f8bdbe07d4d9",
     "source/WebAgent/minimal_decision.py": "56acf818af9744a7770173c202a0dcb19e7d95965db87af87ef3777d5800e56b",
     "source/WebAgent/minimal_goal_driver.py": "f7d58f8fe27a15916aceb2c34a0ebbd34e0ca2615a0778ffa3ecae59af41436b",
     "source/WebAgent/pokeclaw_executor_loop.py": "65937bbe91cdda0bba15c88cd6fd88b00f34cf56687a6f7a89e7a458ff979892",

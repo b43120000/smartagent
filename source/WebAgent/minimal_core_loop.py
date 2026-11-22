@@ -391,6 +391,8 @@ def run_minimal_core(loop, request: str) -> str:
     loop.executor_result = {}
     loop.executor_blackboard_terminal = {}
     executor_only = executor_only_enabled(loop)
+    # Git74.1: text-only tasks never pay for a local preflight.
+    unified_state = None
     executor_sequence = (
         directory_sequence_contract(request) if executor_only else {}
     )
@@ -620,6 +622,14 @@ def run_minimal_core(loop, request: str) -> str:
             goal_context = build_goal_driver_context(
                 loop, request, history, action_rejections)
             goal_context_text = compact_goal_driver_context(goal_context)
+        if unified_state is not None and unified_state.get("status") != "UNAVAILABLE":
+            from agent_core.unified_preflight import summary as unified_summary
+            goal_context_text += (
+                "\n[UNIFIED_PREFLIGHT] "
+                + json.dumps(unified_summary(unified_state), ensure_ascii=False,
+                             separators=(",", ":"))[:3000]
+                + " -- candidates only; every Action retains normal Admission."
+            )
         context_digest = hashlib.sha256(goal_context_text.encode("utf-8")).hexdigest()
         journal.append(
             "executor_only_context_ready" if executor_only else "goal_driver_context_ready",
@@ -1151,6 +1161,25 @@ def run_minimal_core(loop, request: str) -> str:
             return ("此 Action 涉及本機 OS 執行或檔案異動，但 Native "
                     "Turbo Broker 尚未通過安全檢查；禁止退回普通 Executor。")
 
+        # Git74.1: initialize only when a local ToolCall is about to execute.
+        if (unified_state is None and action["tool"] in {
+                "run_command", "project_sync", "query_project",
+                "list_directory", "inspect_directory", "read_file",
+                "observe_fact", "inspect_project_scope", "write_file",
+                "create_directory", "delete_path"}):
+            try:
+                from agent_core.unified_preflight import begin_task
+                unified_state = begin_task(
+                    root, loop.workspace, task_id=loop.task_id,
+                    request_id=loop.run_id)
+                journal.append("unified_preflight_started",
+                               preflight_id=unified_state["preflight_id"],
+                               revision=unified_state["revision"],
+                               status=unified_state["status"])
+            except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                unified_state = {"status": "UNAVAILABLE"}
+                journal.append("unified_preflight_unavailable",
+                               error_class=type(exc).__name__)
         # Write an execution-intent receipt BEFORE any side effect.
         journal.append("action_prepared", round=round_id, tool=action["tool"],
                        action_id=action["action_id"], fingerprint=fingerprint,
@@ -1227,6 +1256,22 @@ def run_minimal_core(loop, request: str) -> str:
         }
         publish_executor_result(action_result_receipt(
             action, receipt, ref, round_id))
+        if isinstance(unified_state, dict) and unified_state.get("status") != "UNAVAILABLE":
+            try:
+                from agent_core.unified_preflight import action_observed
+                unified_state = action_observed(
+                    root, loop.workspace, task_id=loop.task_id,
+                    request_id=loop.run_id, action=action,
+                    receipt=receipt, evidence_ref=ref)
+                journal.append("unified_preflight_updated",
+                               action_id=action["action_id"],
+                               preflight_id=unified_state["preflight_id"],
+                               revision=unified_state["revision"],
+                               project_status=(unified_state.get("project_sync") or {}).get("status"))
+            except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                journal.append("unified_preflight_update_failed",
+                               action_id=action["action_id"],
+                               error_class=type(exc).__name__)
         journal.append("action_observed", round=round_id, tool=action["tool"],
                        action_id=action["action_id"], fingerprint=fingerprint,
                        result_sha256=result_digest, evidence_ref=ref,
