@@ -183,3 +183,135 @@ def test_all_real_stages_committed_removes_additional_gate(tmp_path):
         GOAL, ledger.read(), control_required=True)
     assert state["status"] == "PASS"
     assert state["stage_count"] == 10
+
+def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2(
+    tmp_path, monkeypatch,
+):
+    """Production Executor-only loop, actual ledger+MIN-EV with simulated tool.
+
+    A false exit-code green at P0 and a premature Planner BLOCKED must cause
+    recovery, not a terminal SUCCESS. Earlier verified stages never replay.
+    """
+    import json
+    from agent_core.executor_run_blackboard import read_executor_run
+    from agent_core.tool_result_contract import encode_result
+    from WebAgent.tests.test_minimal_core_v10 import FakeLoop, tool_json
+
+    monkeypatch.setattr(
+        "agent_core.task_progress.set_runtime_state", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "agent_core.turbo_broker_admission.admit_action",
+        lambda *a, **k: {"decision": "NORMAL",
+                         "reason_code": "TEST_ACL_OFF"},
+    )
+    request = (
+        "請確實執行三階段驗證：P0 Git 狀態查詢，"
+        "P1 Git 分支資訊，P2 Git 版本庫根目錄。"
+        "每個階段有獨立真實證據，失敗要改方法且不可假報成功。"
+    )
+    loop = FakeLoop(tmp_path, request, [], "")
+    loop.executor_only_mode = True
+    loop.max_turns = 15
+    phases = [
+        {"stage_id": f"P{i}", "description": f"Original phase P{i}",
+         "depends_on": [f"P{i-1}"] if i else [],
+         "acceptance": [
+             {"field": "data.fixture_phase",
+              "operator": "eq", "expected": f"P{i}"},
+             {"field": "data.verification_status",
+              "operator": "eq", "expected": "PASS"},
+         ]}
+        for i in range(3)
+    ]
+    commands = [
+        ("git status --short", "P0", "FAIL"),
+        ("git log -1 --oneline", "P0", "PASS"),
+        ("git branch --show-current", "P1", "PASS"),
+        ("git rev-parse --show-toplevel", "P2", "PASS"),
+    ]
+    sequence = {"turn": 0}
+
+    def planner(prompt, *_):
+        loop.prompts.append(prompt)
+        sequence["turn"] += 1
+        t = sequence["turn"]
+        if t == 1:
+            return json.dumps({"type": "stage_plan", "stages": phases})
+        if t == 2:
+            return tool_json(
+                "run_command", command=commands[0][0], operation="GIT_INSPECT")
+        if t == 3:
+            return json.dumps({"type": "blocked", "reason": "P0 first failed"})
+        if t in (4, 6, 8):
+            command = {4: commands[1][0], 6: commands[2][0],
+                       8: commands[3][0]}[t]
+            return tool_json(
+                "run_command", command=command, operation="GIT_INSPECT")
+        if t in (5, 7, 9):
+            target = {5: "P0", 7: "P1", 9: "P2"}[t]
+            ref = list(loop.action_result_ledger.values())[-1]["result_id"]
+            return json.dumps({
+                "type": "stage_commit", "stage_id": target,
+                "evidence_refs": [ref],
+            })
+        if t == 10:
+            ref = list(loop.action_result_ledger.values())[-1]["result_id"]
+            return json.dumps({
+                "type": "finish", "contract_version": 2,
+                "summary": "P0～P2 的觀測與驗證已完成",
+                "goal_checks": [{
+                    "criterion": "P2 的 Git 根目錄驗證",
+                    "evidence_ref": ref, "field": "data.fixture_phase",
+                    "operator": "eq", "expected": "P2",
+                }],
+            }, ensure_ascii=False)
+        raise AssertionError(f"Unexpected Planner round {t}")
+
+    def execute(action):
+        loop.executed.append(dict(action))
+        command = action.get("command")
+        matches = [entry for entry in commands if entry[0] == command]
+        assert len(matches) == 1, command
+        _, phase, verification = matches[0]
+        return encode_result(
+            "SUCCEEDED", "COMMAND_EXITED", tool="run_command",
+            executed=True, data={
+                "exit_code": 0, "process_started": True,
+                "process_state": "EXITED",
+                "verification_status": verification,
+                "fixture_phase": phase,
+                "stdout": "test result", "stderr": "",
+                "timed_out": False,
+            },
+        )
+
+    loop.planner = planner
+    loop._execute_action = execute
+    answer = exe.run_pokeclaw_executor(loop, request)
+    ledger = _ledger(tmp_path, goal=request)  # Override FakeLoop task IDs.
+    ledger = GoalStageLedger(
+        tmp_path, task_id=loop.task_id,
+        request_id=loop.run_id, task_epoch=loop.task_epoch, goal=request,
+    )
+    state = ledger.read()
+    assert state is not None, answer
+    assert [stage["status"] for stage in state["stages"]] == [
+        "VERIFIED_COMMITTED",
+    ] * 3
+    assert len(loop.executed) == 4
+    assert [e["command"] for e in loop.executed] == [
+        value[0] for value in commands
+    ]
+    assert state["stages"][0]["strategy_revision"] >= 1
+    assert len(state["stages"][0]["observations"]) == 2
+    board = read_executor_run(
+        tmp_path, task_id=loop.task_id,
+        request_id=loop.run_id, task_epoch=loop.task_epoch,
+    )
+    assert any(row["kind"] == "GOAL75_STAGE_LOCAL_RECOVERY"
+               for row in board["events"])
+    assert sum(row["kind"] == "GOAL75_STAGE_VERIFIED_COMMITTED"
+               for row in board["events"]) == 3
+    assert loop.terminal_outcome == "SUCCESS", answer
+    assert loop.terminal_acceptance["final_verdict"] == "PASS"
