@@ -293,6 +293,12 @@ def _condition_class_for_decision(decision: str, outcome: str) -> str:
 
 
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
+    prior = None
+    if path.is_file():
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prior = None
     temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
     try:
         temporary.write_text(
@@ -305,6 +311,12 @@ def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
+    try:
+        from .goal75_blackboard import record_blackboard_write
+        record_blackboard_write(path, prior, payload,
+                                module="TASK_PROGRESS_LEDGER")
+    except (OSError, ValueError, RuntimeError):
+        pass
 
 
 def read_progress(task_id: str, root: str | Path | None = None) -> TaskProgressLedger | None:
