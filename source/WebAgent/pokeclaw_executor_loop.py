@@ -812,6 +812,115 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             )
             continue
         invalids = 0
+        # Git75: these are Planner *decisions*, not tool actions.
+        # A StagePlan never authorizes a path, shell or security bypass.
+        if decision.kind == "stage_plan":
+            if stage_ledger is None or stage_ledger.read() or recent:
+                hint = "STAGE_PLAN_NOT_ADMITTED: only before first Action."
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_STAGE_PLAN_REJECTED",
+                    "reason_code": "PLAN_LATE_OR_NOT_REQUIRED",
+                    "executed": False,
+                })
+                continue
+            coverage = validate_stage_plan_coverage(request, decision.stage_plan)
+            if coverage["status"] != "PASS":
+                hint = (
+                    "STAGE_PLAN_COVERAGE_INVALID: " +
+                    json.dumps(coverage, ensure_ascii=False)[:1800] +
+                    ". Preserve every explicit original Goal phase."
+                )
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_STAGE_PLAN_REJECTED",
+                    "coverage": coverage, "executed": False,
+                })
+                continue
+            try:
+                frozen = stage_ledger.create(decision.stage_plan)
+            except ValueError as exc:
+                hint = "STAGE_PLAN_SCHEMA_INVALID: " + str(exc)[:180]
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_STAGE_PLAN_REJECTED",
+                    "reason_code": str(exc)[:160], "executed": False,
+                })
+                continue
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "GOAL75_STAGE_PLAN_FROZEN",
+                "stage_count": len(frozen["stages"]),
+                "coverage": coverage, "executed": False,
+            })
+            continue
+        if decision.kind == "stage_commit":
+            if stage_ledger is None or stage_ledger.read() is None:
+                hint = "STAGE_COMMIT_REJECTED: no frozen Stage plan."
+                continue
+            active = stage_ledger.current()
+            if active is None or active["stage_id"] != decision.stage_id:
+                hint = ("STAGE_COMMIT_REJECTED: only current uncommitted "
+                        "Stage can be committed; never reopen frozen Stages.")
+                continue
+            try:
+                stage_ledger.commit(
+                    decision.stage_id,
+                    evidence_refs=decision.evidence_refs or [],
+                )
+                stage_recovery_attempts = 0
+                failed_action_signatures.clear()
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_STAGE_VERIFIED_COMMITTED",
+                    "stage_id": decision.stage_id,
+                    "evidence_refs": decision.evidence_refs,
+                    "executed": False,
+                })
+            except ValueError as exc:
+                stage_recovery_attempts += 1
+                recovery = choose_stage_recovery(
+                    reason_code="STAGE_ACCEPTANCE_UNVERIFIED",
+                    stage_id=decision.stage_id,
+                    attempt=stage_recovery_attempts,
+                )
+                stage_ledger.recover(
+                    decision.stage_id, reason_code=str(exc)[:120],
+                    strategy_id=recovery["strategy_id"],
+                )
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
+                    "stage_id": decision.stage_id, "reason_code": str(exc)[:120],
+                    "strategy_id": recovery["strategy_id"],
+                    "executed": False,
+                })
+                hint = (
+                    "STAGE_ACCEPTANCE_NOT_PROVEN: obtain new actual evidence "
+                    "or choose a different authorized strategy. Never weaken "
+                    "a frozen predicate. " + str(exc)[:120]
+                )
+            continue
+        if stage_ledger is not None and decision.kind == "tool_call" and (
+                stage_ledger.read() is None):
+            hint = (
+                "GOAL75_STAGE_PLAN_REQUIRED: submit a complete frozen "
+                "stage_plan before any tool_call; no tool executed."
+            )
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "GOAL75_TOOL_DEFERRED_FOR_STAGE_PLAN",
+                "executed": False, "authorization_granted": False,
+            })
+            continue
+        if stage_ledger is not None and decision.kind == "finish":
+            view = stage_ledger.readiness()
+            if view["status"] == "NO_STAGE_PLAN" or view.get("current_stage_id"):
+                hint = (
+                    "GOAL75_EARLY_FINISH_REJECTED: complete ORIGINAL user "
+                    "Goal first. Current Stage: " +
+                    str(view.get("current_stage_id") or "UNFROZEN_PLAN") +
+                    ". Recover with a different authorized method and "
+                    "actual Evidence. Finish cannot create Stage commits."
+                )
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "GOAL75_EARLY_FINISH_REJECTED",
+                    "stage_readiness": view, "executed": False,
+                })
+                continue
         if decision.kind == "finish" and pending_unknown_timeout:
             # An unexecuted approval-gated action cannot be hidden by a
             # model Finish or mistaken for positive goal evidence.
