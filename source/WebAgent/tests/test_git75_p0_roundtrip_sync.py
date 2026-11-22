@@ -221,3 +221,37 @@ def test_project_sync_real_file_index_staleness_and_recovery(tmp_path):
     assert result["previous_bytes_absent_after_refresh"]
     assert result["outside_scope_rejected"]
     assert result["telegram_live_verified"] is False
+
+def test_project_sync_mutator_never_executes_after_native_broker_denial(
+    tmp_path, monkeypatch,
+):
+    """Full production dispatch fails closed, regardless of sidecar success."""
+    from agent_core.tools import execute_tool
+    from agent_core.tool_result_contract import decode_result
+    from agent_core.goal75_project_sync_it import FixtureAgent
+
+    workspace = tmp_path / "workspace"
+    project = workspace / "project"
+    project.mkdir(parents=True)
+    (project / "proof.py").write_text("VALUE = 1\\n", encoding="utf-8")
+    agent = FixtureAgent(workspace, project)
+
+    def deny(*_args, **_kwargs):
+        return {
+            "decision": "BLOCKED",
+            "reason_code": "TEST_NATIVE_BROKER_NOT_AVAILABLE",
+            "evidence": {
+                "reason": "TEST_DENIAL_NO_HOST_FALLBACK",
+                "authorization_granted": False,
+            },
+        }
+
+    monkeypatch.setattr("agent_core.turbo_broker_admission.assess", deny)
+    result = decode_result(execute_tool({
+        "tool": "project_sync", "strategy": "INDEX_ONLY",
+        "project_root": str(project), "action_id": "ACT-P0-BROKER-DENIED",
+    }, agent=agent))
+    assert result and result["status"] == "REJECTED"
+    assert result["executed"] is False
+    assert result["reason"] == "TURBO_OS_BROKER_BLOCKED"
+    assert not (project / ".agents" / "project_context" / "current.json").exists()
