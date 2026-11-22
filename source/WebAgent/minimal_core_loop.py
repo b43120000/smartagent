@@ -1502,6 +1502,34 @@ def run_minimal_core(loop, request: str) -> str:
                         current_stage["stage_id"], action_id=action["action_id"],
                         evidence_ref=ref, receipt=receipt,
                         mutation_fingerprint=fingerprint, mutating=mutating)
+                    if receipt.get("status") == "FAILED":
+                        stage_recovery_attempts += 1
+                        failure_code = str(receipt.get("reason") or "FAILED_ACTION")
+                        recovery = choose_stage_recovery(
+                            reason_code=failure_code,
+                            stage_id=current_stage["stage_id"],
+                            attempt=stage_recovery_attempts,
+                        )
+                        # No Side effect retry. Record a new local strategy
+                        # revision while preserving existing accepted evidence.
+                        stage_ledger.recover(
+                            current_stage["stage_id"],
+                            reason_code=failure_code,
+                            strategy_id=recovery["strategy_id"],
+                        )
+                        repair_hint = (
+                            "GOAL75_STAGE_EXECUTION_FAILED: previous Action "
+                            "completed with an observed failure, not a Goal "
+                            "terminal. Replan ONLY current Stage with a "
+                            "materially different authorized strategy; do not "
+                            "change earlier frozen stages or replay mutation. "
+                            + recovery["strategy_id"]
+                        )
+                        journal.append(
+                            "stage_local_recovery", round=round_id,
+                            stage_id=current_stage["stage_id"],
+                            reason_code="EXECUTED_ACTION_FAILED",
+                        )
                 except ValueError as exc:
                     journal.append(
                         "stage_local_recovery", round=round_id,
