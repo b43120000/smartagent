@@ -103,7 +103,7 @@
     "adapterUI/9.blockingState.bat": "afbc2ec146f5185db50e8875d2c6c80c67c5bc13b5986ebca67e5a8ec2efe383",
     "adapterUI/dom.md": "f30d593bbfa6cb44cf96c778a949bb237a2a1301d31b3843290b29c97f9e5311",
     "adapterUI/README.md": "028a402460fec18317685c0ed809a5facd12289a875e4c572e83612a9209981c",
-    "collect.bat": "37f541d408d1b1f542a10f40e596123db712ec21ed8b3fa2cbc0ce96f22d45df",
+    "collect.bat": "56ab253c594f4496bc9e0b2e96228a98956dab8df709731dd47baf1ad19bfd9c",
     "config/debug_config.defaults.json": "789f845b1a55db9d1772c3b5a5fde78b070a3c9c281a69d51fb8bc55680eb68a",
     "config/feature_flags.defaults.json": "c02d0ba5b29d77b04225b3f772daf9e27af5aba88fe2a45d7f855c683fe51e5e",
     "config/managed_toolchains_catalog.json": "bb6061dc0620b7d52031dd387716c7b78c8277025d075f4c062fb12af04843d3",
@@ -1089,7 +1089,7 @@
     ".github/workflows/git73-p7-timeout-admission.yml": "b01efc2ad5a91639d9d80be1b74fb072c9be6dfef23b13e04a3fe15c4d150803",
     "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df",
     "source/WebAgent/tests/test_git74_long_execution_supervisor.py": "9f9116bbc2c3fb71f93a0a5fea836273e0c4fc372a2a3879c6d479d5aac1a366",
-    ".github/workflows/git74-dynamic-execution-supervisor.yml": "8cb717e77b3a0753a4101bfe9a333b408f8edf3c70d796ee33d8d70c7e144f68",
+    ".github/workflows/git74-dynamic-execution-supervisor.yml": "995449f148cab101349ad359e63f6ab06fe38bc91b1611e4d1512f5577cda7fc",
     "source/agent_core/unified_preflight.py": "c58fc9336ac48578403bd6ecb131f02f7d1737aa335d3652435948719665674c",
     "source/WebAgent/tests/test_git74_unified_preflight.py": "f8b6309028bb3a6e3fb7086ba849b90fddf736fb475ce6ed0e1b960abbaf9a1a"
   },

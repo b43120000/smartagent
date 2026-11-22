@@ -56,7 +56,7 @@ jobs:
           source/WebAgent/minimal_admission.py
           source/WebAgent/pokeclaw_executor_loop.py
           source/WebAgent/tests/test_git69_execution_fidelity.py
-          source/WebAgent/tests/test_git69_open_execution_it.py source/WebAgent/tests/test_git70_goal_evidence.py source/WebAgent/tests/test_git70_open_goal_evidence_it.py source/WebAgent/tests/test_git71_timeout_reconciliation.py source/WebAgent/tests/test_git71_timeout_pipeline_it.py source/RemoteAgent/telegram_long_message_merge.py source/RemoteAgent/telegram_transport.py source/WebAgent/tests/test_git72_telegram_long_message_merge.py source/WebAgent/tests/test_git73_timeout_admission_repair.py source/agent_core/long_execution_supervisor.py source/WebAgent/tests/test_git74_long_execution_supervisor.py
+          source/WebAgent/tests/test_git69_open_execution_it.py source/WebAgent/tests/test_git70_goal_evidence.py source/WebAgent/tests/test_git70_open_goal_evidence_it.py source/WebAgent/tests/test_git71_timeout_reconciliation.py source/WebAgent/tests/test_git71_timeout_pipeline_it.py source/RemoteAgent/telegram_long_message_merge.py source/RemoteAgent/telegram_transport.py source/WebAgent/tests/test_git72_telegram_long_message_merge.py source/WebAgent/tests/test_git73_timeout_admission_repair.py source/agent_core/long_execution_supervisor.py source/WebAgent/tests/test_git74_long_execution_supervisor.py source/agent_core/unified_preflight.py source/WebAgent/tests/test_git74_unified_preflight.py
       - name: UT and Windows sidecar process IT
         run: >-
           python -B -m pytest -q
@@ -71,6 +71,7 @@ jobs:
           source/WebAgent/tests/test_git72_telegram_long_message_merge.py
           source/WebAgent/tests/test_git73_timeout_admission_repair.py
           source/WebAgent/tests/test_git74_long_execution_supervisor.py
+          source/WebAgent/tests/test_git74_unified_preflight.py
           --tb=short
           --junitxml=git74-evidence.xml
       - name: Publish CI test evidence

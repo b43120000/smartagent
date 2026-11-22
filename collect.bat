@@ -564,6 +564,34 @@ if (Test-Path -LiteralPath $longRoot -PathType Container) {
 }
 Write-Json (Join-Path $stage 'git74_long_execution_states.json') @($longRows.ToArray())
 Write-Json (Join-Path $stage 'git74_long_execution_events.json') @($longEvents.ToArray())
+# Git74.1: unencrypted task-bound preflight and Project Sync drift journal.
+$preRoot = Join-Path $root 'localdata\runtime\unified_preflight'
+$preTaskPath = Join-Path $preRoot ('tasks\' + $task + '.json')
+$preTask = @{}
+$preEvents = New-Object 'System.Collections.Generic.List[object]'
+if (Test-Path -LiteralPath $preTaskPath -PathType Leaf) {
+    try {
+        $doc = Get-Content -LiteralPath $preTaskPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$doc.task_id -ceq [string]$task -and
+            ((-not $request) -or [string]$doc.request_id -ceq [string]$request)) {
+            $preTask = $doc
+        }
+    } catch { }
+}
+$preLog = Join-Path $preRoot 'events.jsonl'
+if (Test-Path -LiteralPath $preLog -PathType Leaf) {
+    Get-Content -LiteralPath $preLog -Encoding UTF8 | ForEach-Object {
+        try {
+            $item = $_ | ConvertFrom-Json
+            if ([string]$item.task_id -ceq [string]$task -and
+                ((-not $request) -or [string]$item.request_id -ceq [string]$request)) {
+                $preEvents.Add($item)
+            }
+        } catch { }
+    }
+}
+Write-Json (Join-Path $stage 'unified_preflight_task.json') $preTask
+Write-Json (Join-Path $stage 'unified_preflight_events.json') @($preEvents.ToArray())
 
 
 $sources = @(
