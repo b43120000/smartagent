@@ -1169,6 +1169,39 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 complete=False,
             )
         if decision.kind == "blocked":
+            if stage_ledger is not None:
+                active = stage_ledger.current()
+                if active is not None:
+                    stage_recovery_attempts += 1
+                    recovery = choose_stage_recovery(
+                        reason_code="PLANNER_CANNOT_PROGRESS",
+                        stage_id=active["stage_id"],
+                        attempt=stage_recovery_attempts,
+                    )
+                    # An unsupported Planner BLOCKED is not proof that the
+                    # original user Goal is impossible. The Stage remains
+                    # mutable, while all committed predecessors stay frozen.
+                    stage_ledger.recover(
+                        active["stage_id"],
+                        reason_code="PLANNER_CANNOT_PROGRESS",
+                        strategy_id=recovery["strategy_id"],
+                    )
+                    append_executor_event(root, loop, {
+                        "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
+                        "stage_id": active["stage_id"],
+                        "reason_code": "PLANNER_BLOCKED_UNVERIFIED",
+                        "strategy_id": recovery["strategy_id"],
+                        "executed": False,
+                    })
+                    if stage_recovery_attempts < 8:
+                        hint = (
+                            "Planner BLOCKED has no objective terminal proof. "
+                            "Try a distinct valid prerequisite, tool or "
+                            "read-only check for the CURRENT Stage. Keep "
+                            "Git74.1 tool admission and ACL/Turbo rules. "
+                            "Do not replay any uncertain mutation."
+                        )
+                        continue
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_BLOCKED",
                 "reason_sha256": _digest(decision.message),
@@ -1188,6 +1221,21 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         proposed = {"tool": decision.tool, **dict(decision.arguments or {})}
         PIT.record("13_minimal_admission_input", proposed, evidence_status="PROPOSED_ACTION_VALUE", extra={"round": turn})
         signature = _digest(proposed)
+        if stage_ledger is not None and (
+                signature in failed_action_signatures or
+                signature in stage_ledger.committed_mutation_fingerprints()):
+            append_executor_event(root, loop, {
+                "round": turn, "kind": "GOAL75_ACTION_REPLAY_REJECTED",
+                "action_sha256": signature,
+                "reason_code": "FAILED_OR_FROZEN_STAGE_ACTION",
+                "executed": False, "authorization_granted": False,
+            })
+            hint = (
+                "REPLAY_REJECTED: choose a different authorized strategy, "
+                "or collect new read-only evidence. Do not repeat the last "
+                "failed action or a committed mutation."
+            )
+            continue
         repeated = repeated + 1 if signature == last_fingerprint else 0
         last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
