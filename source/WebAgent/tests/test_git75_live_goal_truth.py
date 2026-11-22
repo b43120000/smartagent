@@ -266,7 +266,18 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
                     "operator": "eq", "expected": "P2",
                 }],
             }, ensure_ascii=False)
-        raise AssertionError(f"Unexpected Planner round {t}")
+        board = read_executor_run(
+            tmp_path, task_id=loop.task_id,
+            request_id=loop.run_id, task_epoch=loop.task_epoch,
+        ) or {}
+        markers = [
+            (row.get("kind"), row.get("comparator_reason_code"),
+             row.get("reason_code"), row.get("stage_id"))
+            for row in board.get("events", ())
+            if "FINISH" in str(row.get("kind"))
+               or "GOAL75" in str(row.get("kind"))
+        ]
+        raise AssertionError(f"Unexpected Planner round {t}; events={markers[-16:]}; repair={prompt.split('Runtime repair information:')[-1][-1000:]}")
 
     def execute(action):
         loop.executed.append(dict(action))
