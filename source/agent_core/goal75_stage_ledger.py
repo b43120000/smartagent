@@ -264,7 +264,8 @@ class GoalStageLedger:
 
     def record_action(self, sid: str, *, action_id: str, evidence_ref: str,
                       receipt: Mapping, mutation_fingerprint: str = "",
-                      mutating: bool = False) -> dict:
+                      mutating: bool = False,
+                      expected_match: bool | None = None) -> dict:
         """Bind only completed, actually executed Runtime receipts to this stage."""
         if (not isinstance(receipt, Mapping)
                 or receipt.get("status") not in {"SUCCEEDED", "FAILED"}
@@ -281,7 +282,7 @@ class GoalStageLedger:
             # That receipt is *not* acceptance evidence, regardless of what
             # planner-authored predicates say. Negative tests which match
             # their frozen Expected have verification_status=PASS.
-            verified = not (
+            verified = expected_match is not False and not (
                 isinstance(receipt.get("data"), Mapping)
                 and receipt["data"].get("verification_status")
                     in {"FAIL", "MISMATCH", "UNVERIFIED"}
@@ -295,6 +296,7 @@ class GoalStageLedger:
                 "receipt_sha256": digest(receipt),
                 "status": receipt["status"],
                 "acceptance_matched": matches,
+                "expected_matched": expected_match,
                 "mutating": bool(mutating),
                 "mutation_fingerprint": str(mutation_fingerprint)[:64]
                 if mutating else "",
