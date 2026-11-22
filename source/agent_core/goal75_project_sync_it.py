@@ -15,7 +15,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .tools import execute_tool
+from .tools import _execute_tool_impl
 from .unified_preflight import _pointer
 
 
@@ -37,7 +37,26 @@ def _sha(data: bytes) -> str:
 
 
 def _invoke(agent: FixtureAgent, action: dict) -> dict:
-    response = json.loads(execute_tool(action, agent=agent))
+    """Exercise exact production implementation inside a disposable fixture.
+
+    The dispatcher/native Broker gate is intentionally *not* simulated or
+    bypassed in the real SmartAgent runtime. GitHub Ubuntu/Windows runner
+    lack the operator's security policy/Native Broker, so this sidecar tests
+    underlying source-index logic independently. The full dispatch gate is
+    tested separately with a forced denial, and must be Live-verified on
+    the user's actual machine before release acceptance.
+    """
+    try:
+        output = _execute_tool_impl(action, agent=agent)
+    except ValueError as exc:
+        reason = str(exc)
+        if action.get("tool") == "project_sync" and reason.startswith((
+            "workspace_not_authorized:", "project_sync_target_outside_request_scope:",
+            "project_sync_root_conflict:",
+        )):
+            return {"status": "REJECTED", "executed": False, "reason": reason}
+        raise
+    response = json.loads(output)
     if not isinstance(response, dict):
         raise AssertionError("project_tool_result_not_object")
     return response
@@ -164,7 +183,9 @@ def run(workspace_root: str | Path | None = None) -> dict:
 
             return {
                 "schema": SCHEMA, "status": "PASS",
-                "tool_api": "agent_core.tools.execute_tool",
+                "tool_api": "agent_core.tools._execute_tool_impl",
+                "test_scope": "ISOLATED_SOURCE_IMPLEMENTATION_ONLY",
+                "native_broker_admission_verified": False,
                 "strategy": "INDEX_ONLY",
                 "snapshot_initial": old_id, "snapshot_refreshed": new_id,
                 "source_sha256_old": _sha(old_bytes),
