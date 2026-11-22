@@ -276,9 +276,19 @@ class GoalStageLedger:
         def apply(stage):
             if any(item["action_id"] == action_id for item in stage["observations"]):
                 raise ValueError("goal75_action_duplicate")
+            # Git75 Live RCA: a tool may return status=SUCCEEDED, exit_code=0
+            # while the predeclared Expected-vs-Observed verification is FAIL.
+            # That receipt is *not* acceptance evidence, regardless of what
+            # planner-authored predicates say. Negative tests which match
+            # their frozen Expected have verification_status=PASS.
+            verified = not (
+                isinstance(receipt.get("data"), Mapping)
+                and receipt["data"].get("verification_status")
+                    in {"FAIL", "MISMATCH", "UNVERIFIED"}
+            )
             matches = [
                 index for index, check in enumerate(stage["acceptance"])
-                if _matches(check, receipt)
+                if verified and _matches(check, receipt)
             ]
             stage["observations"].append({
                 "action_id": action_id, "evidence_ref": evidence_ref,
