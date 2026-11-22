@@ -798,7 +798,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     summary="FAIL：Finish 修復回合輸出無效：" + exc.code,
                     complete=False,
                 )
-            if invalids >= 3:
+            if invalids >= (12 if stage_ledger is not None else 3):
                 return _finish(
                     loop, root, request, kind="FORMAT_ERROR",
                     summary="模型決策格式連續三次無效：" + exc.code,
@@ -1790,6 +1790,36 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 )
             if (repairs_for_same_issue >= 3
                     or consecutive_admission_rejections >= max_consecutive_admission_rejections):
+                if stage_ledger is not None and stage_ledger.current() is not None:
+                    stage_recovery_attempts += 1
+                    active = stage_ledger.current()
+                    recovery = choose_stage_recovery(
+                        reason_code="ADMISSION_REJECTED",
+                        stage_id=active["stage_id"],
+                        attempt=stage_recovery_attempts,
+                    )
+                    stage_ledger.recover(
+                        active["stage_id"], reason_code="ADMISSION_REJECTED",
+                        strategy_id=recovery["strategy_id"],
+                    )
+                    append_executor_event(root, loop, {
+                        "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
+                        "stage_id": active["stage_id"],
+                        "reason_code": "ADMISSION_REJECTED",
+                        "strategy_id": recovery["strategy_id"],
+                        "executed": False,
+                    })
+                    if stage_recovery_attempts < 8:
+                        admission_repair_counts.clear()
+                        consecutive_admission_rejections = 0
+                        hint = (
+                            "Repeated Tool Admission failure. This is NOT "
+                            "a green Goal completion. Choose a DISTINCT "
+                            "normally admitted approach within CURRENT "
+                            "authorization and immutable Goal; no Host "
+                            "fallback or permission bypass."
+                        )
+                        continue
                 budget_reason = (
                     "同一個 Action 契約問題三次未解："
                     if repairs_for_same_issue >= 3 else
@@ -2064,7 +2094,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "reason_code": str(exc)[:120], "executed": False,
                     })
             failed_stage_action = bool(active is not None and (
-                runtime_status == "FAILED"
+                (runtime_status == "FAILED"
+                    and (match_report is None
+                         or match_report.get("match_state") != "MATCH"))
                 or (isinstance(result_data, Mapping)
                     and result_data.get("verification_status")
                     in {"FAIL", "MISMATCH", "UNVERIFIED"})
