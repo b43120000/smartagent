@@ -1502,6 +1502,34 @@ def build_shared_blackboard(runtime, payload: Mapping) -> dict:
     board_digest = _digest(board)
     board["snapshot_id"] = "BB-" + board_digest[:20].upper()
     board["snapshot_sha256"] = board_digest
+    # Git75: publish a task-scoped, before/after digest and section-level
+    # ownership diff. No raw command, ToolResult, prompt or secret is copied.
+    current_trace = {
+        "snapshot_id": board["snapshot_id"],
+        "sections": {
+            name: value["section_sha256"]
+            for name, value in board["sections"].items()
+        },
+        "round": identity["round"],
+        "runtime_state": str(getattr(progress, "runtime_state", "") or ""),
+        "strategy_revision": identity["strategy_revision"],
+    }
+    previous_trace = getattr(runtime, "_goal75_last_board_snapshot", None)
+    if previous_trace != current_trace and task_id and request_id and epoch:
+        try:
+            from .goal75_blackboard import emit_transition
+            emit_transition(
+                getattr(runtime, "progress_root", None) or
+                getattr(runtime, "workspace", "."),
+                task_id=task_id, request_id=request_id, task_epoch=epoch,
+                module="SHARED_BLACKBOARD", event="SNAPSHOT_CHANGED",
+                before=previous_trace, after=current_trace,
+            )
+        except (OSError, ValueError, RuntimeError):
+            # This is telemetry; owner ledgers and security admission remain
+            # authoritative even if diagnostic storage becomes unavailable.
+            pass
+    runtime._goal75_last_board_snapshot = current_trace
     return board
 
 
