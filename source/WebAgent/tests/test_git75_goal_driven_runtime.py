@@ -232,6 +232,7 @@ def test_default_minimal_core_executes_frozen_stage_plan(tmp_path, monkeypatch):
     ]
 
     class LocalTools:
+        interface_name = "webdirect"
         workspace_root = tmp_path
         current_request_text = goal
         _protocol_turn_seq = 0
