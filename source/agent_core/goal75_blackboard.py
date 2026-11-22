@@ -115,16 +115,39 @@ def emit_transition(
     path = _root(root) / (task + ".jsonl")
     path.parent.mkdir(parents=True, exist_ok=True)
     changed, safe = _delta(before, after)
+    sections_changed = []
+    old_sections = before.get("sections", {}) if isinstance(before, Mapping) else {}
+    new_sections = after.get("sections", {}) if isinstance(after, Mapping) else {}
+    if isinstance(old_sections, Mapping) and isinstance(new_sections, Mapping):
+        sections_changed = [
+            str(key)[:80] for key in sorted(set(old_sections) | set(new_sections))
+            if old_sections.get(key) != new_sections.get(key)
+        ][:64]
     with exclusive_process_lock(
         path.with_suffix(".lock"), timeout_sec=10.0, label="goal75-big-blackboard"
     ):
-        prior = read_events(root, task)
-        if prior and (prior[0]["request_id"] != request
-                      or prior[0]["task_epoch"] != epoch):
-            raise ValueError("goal75_trace_identity_conflict")
+        # Read only the last complete bounded event; never rescan an
+        # increasingly large Task log for every Action/Stage transition.
+        last = None
+        if path.is_file():
+            with path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - 65536))
+                rows = stream.read().splitlines()
+                if rows:
+                    last = json.loads(rows[-1].decode("utf-8"))
+        if last:
+            check = {k: v for k, v in last.items() if k != "event_sha256"}
+            if (last.get("schema") != SCHEMA
+                    or digest(check) != last.get("event_sha256")
+                    or last.get("request_id") != request
+                    or (last.get("task_epoch") != epoch
+                        and "LEGACY" not in {last.get("task_epoch"), epoch})):
+                raise ValueError("goal75_trace_identity_conflict_or_corrupt")
         body = {
             "schema": SCHEMA,
-            "sequence": len(prior) + 1,
+            "sequence": int(last["sequence"]) + 1 if last else 1,
             "time_unix": time.time(),
             "task_id": task, "request_id": request, "task_epoch": epoch,
             "module": _code(module), "event": _code(event),
@@ -133,12 +156,13 @@ def emit_transition(
             "before_sha256": digest(before),
             "after_sha256": digest(after),
             "changed_fields": changed,
+            "changed_sections": sections_changed,
             "visible_changes": safe,
             "evidence_refs": [
                 _code(ref) for ref in evidence_refs[:24]
             ],
             "prev_event_sha256": (
-                prior[-1]["event_sha256"] if prior else "GENESIS"
+                last["event_sha256"] if last else "GENESIS"
             ),
             "authorization_granted": False,
             "goal_completion_inferred": False,
