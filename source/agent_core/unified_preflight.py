@@ -60,6 +60,15 @@ def _signature(install):
         facts["source"]=entry
     except OSError:
         facts["source"]="NO_GIT_HEAD"
+    # Fingerprint installed protocol material as well as bundled executables.
+    # A packed Git ref or manual source update must not preserve stale hints.
+    for relative in ("config/protocol_manifest.json","source/agent_core/unified_preflight.py"):
+        candidate=Path(install)/relative
+        try:
+            st=candidate.stat()
+            facts[relative]=(st.st_size,st.st_mtime_ns)
+        except OSError:
+            facts[relative]="MISSING"
     return hashlib.sha256(json.dumps(facts,sort_keys=True).encode("utf-8")).hexdigest()
 
 def _pointer(workspace):
@@ -239,9 +248,14 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
         newest=_read(cache)
         if int(newest.get("revision",0) or 0)>int(row.get("revision",0) or 0):
             # Another task in this workspace may have updated a sibling index.
-            common=dict(newest.get("scoped_projects") or {})
-            common.update(row.get("scoped_projects") or {})
+            common=dict(row.get("scoped_projects") or {})
+            common.update(newest.get("scoped_projects") or {})
             row["scoped_projects"]=common
+            if ((newest.get("project_sync") or {}).get("status")
+                    =="STALE_REINDEX_REQUIRED" and
+                (newest.get("project_sync") or {}).get("snapshot_id")
+                    ==(row.get("project_sync") or {}).get("snapshot_id")):
+                row["project_sync"]=dict(newest["project_sync"])
             row["revision"]=newest["revision"]
         if receipt.get("executed") is not True:
             _event(base,row,"PREFLIGHT_NONEXECUTED_ADMISSION",
@@ -253,7 +267,8 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
         reason=str(receipt.get("reason",""))[:80]
         match=str((match_report or {}).get("match_state",""))
         drift=(match in {"MISMATCH","RECOLLECT_EVIDENCE"} or
-               (state in {"FAILED","UNKNOWN","REJECTED"} and reason in ENV_ERRORS))
+               (state in {"FAILED","UNKNOWN","REJECTED"} and reason in ENV_ERRORS)
+               or (tool=="install_toolchain" and state=="SUCCEEDED"))
         changed=(tool in MUTATING or
                  tool=="run_command" and operation in MUTATING_OPERATIONS)
         project=_pointer(workspace)
@@ -283,11 +298,20 @@ def action_observed(install,workspace,*,task_id,request_id,action,receipt,
               prior.get("snapshot_id")==target_state.get("snapshot_id")):
             target_state["status"]="STALE_REINDEX_REQUIRED"
         if changed or drift:
+            try:
+                touched=Path(str(action.get("working_directory") or
+                                 action.get("path") or workspace)).resolve()
+            except (OSError,ValueError):
+                touched=workspace
             for key,old_project in [(str(workspace),previous),*list(
                     (row.get("scoped_projects") or {}).items())]:
                 candidate=project if key==str(workspace) else scoped.get(key)
-                if (candidate and candidate.get("snapshot_id") and
-                        candidate["snapshot_id"]==old_project.get("snapshot_id")):
+                project_root=Path(key)
+                overlaps=(drift or touched==workspace or
+                          touched.is_relative_to(project_root) or
+                          project_root.is_relative_to(touched))
+                if (overlaps and candidate and candidate.get("snapshot_id")
+                        and candidate["snapshot_id"]==old_project.get("snapshot_id")):
                     candidate["status"]="STALE_REINDEX_REQUIRED"
         if drift:
             try:

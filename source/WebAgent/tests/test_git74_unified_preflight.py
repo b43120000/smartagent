@@ -136,3 +136,37 @@ def test_real_collect_bat_contains_task_scoped_plaintext_evidence(tmp_path,monke
     finally:
         path.unlink(missing_ok=True)
         for archive in archives:archive.unlink(missing_ok=True)
+
+
+def test_nested_indexes_reused_and_only_touched_project_invalidated(tmp_path,monkeypatch):
+    fake_mode(monkeypatch)
+    install=tmp_path/"app";install.mkdir();ws=tmp_path/"ws";ws.mkdir()
+    p1=ws/"camera";p2=ws/"isp";p1.mkdir();p2.mkdir()
+    for project,sha in ((p1,"a"*64),(p2,"b"*64)):
+        root=project/".agents"/"project_context";snap=root/"snapshots"
+        snap.mkdir(parents=True)
+        (snap/(sha+".json")).write_text("{}",encoding="utf-8")
+        (root/"current.json").write_text(json.dumps(
+           {"snapshot_id":sha,"workspace_root":str(project)}),encoding="utf-8")
+    task="TASK-SUBROOT-12345";req="RR-SUBROOT"
+    pf.begin_task(install,ws,task_id=task,request_id=req,probe=fake_probe([]))
+    for i,project in enumerate((p1,p2)):
+        r=pf.action_observed(install,ws,task_id=task,request_id=req,
+            action={"tool":"project_sync","strategy":"INDEX_ONLY",
+                    "project_root":str(project),"action_id":f"ACT-INDEX-{i}"},
+            receipt=receipt(),probe=fake_probe([]))
+    assert set(r["scoped_projects"])=={str(p1),str(p2)}
+    task2="TASK-SUBROOT-99999";req2="RR-SUBROOT-2"
+    previous=pf.begin_task(install,ws,task_id=task2,request_id=req2,probe=fake_probe([]))
+    assert previous["scoped_projects"][str(p1)]["snapshot_id"]=="a"*64
+    result=pf.action_observed(install,ws,task_id=task2,request_id=req2,
+        action={"tool":"run_command","operation":"BUILD",
+                "working_directory":str(p1),"action_id":"ACT-CAMERA-BUILD"},
+        receipt=receipt(),evidence_ref="MIN-EV-CAMERA",probe=fake_probe([]))
+    assert result["scoped_projects"][str(p1)]["status"]=="STALE_REINDEX_REQUIRED"
+    assert result["scoped_projects"][str(p2)]["status"]!="STALE_REINDEX_REQUIRED"
+    result=pf.action_observed(install,ws,task_id=task2,request_id=req2,
+        action={"tool":"query_project","project_root":str(p1),
+                "action_id":"ACT-CAMERA-QUERY"},receipt=receipt(),
+        probe=fake_probe([]))
+    assert result["scoped_projects"][str(p1)]["status"]=="STALE_REINDEX_REQUIRED"

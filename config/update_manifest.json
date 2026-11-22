@@ -107,7 +107,7 @@
     "config/debug_config.defaults.json": "789f845b1a55db9d1772c3b5a5fde78b070a3c9c281a69d51fb8bc55680eb68a",
     "config/feature_flags.defaults.json": "c02d0ba5b29d77b04225b3f772daf9e27af5aba88fe2a45d7f855c683fe51e5e",
     "config/managed_toolchains_catalog.json": "bb6061dc0620b7d52031dd387716c7b78c8277025d075f4c062fb12af04843d3",
-    "config/protocol_manifest.json": "dc1768ffe7126ff91fe4eed0a870682d25b7d88220225c53e7980d819afded5a",
+    "config/protocol_manifest.json": "34cdc14e6d10a321aa363b8dcd3bb790b0ea62c493f1f8e3a9f727682b58285a",
     "config/source_discovery_catalog.json": "ff00a70ade698cdc4f2c82e15b45f2fb8aeb0e07b2367bcb3a9f5861d9e03644",
     "doc/action_resolution_trace_and_missing_target_prereqs.md": "e224b6c593c85d8bf8fcdcba5352b7871e4e78c769f702f3edb6242b879a73d8",
     "doc/action_scoped_admission.md": "12d6eafd1a1b70ea456281eb3bc6c8053a264907a06c62ed7599fbb83ed7ea75",
@@ -1090,8 +1090,8 @@
     "source/agent_core/long_execution_supervisor.py": "e801d1265168a7dfcc4ca0da6a9e47d171ae75ffb7e40d887242765909ff04df",
     "source/WebAgent/tests/test_git74_long_execution_supervisor.py": "9f9116bbc2c3fb71f93a0a5fea836273e0c4fc372a2a3879c6d479d5aac1a366",
     ".github/workflows/git74-dynamic-execution-supervisor.yml": "995449f148cab101349ad359e63f6ab06fe38bc91b1611e4d1512f5577cda7fc",
-    "source/agent_core/unified_preflight.py": "568c8f58e3370a83e24e858ebd7f169fc4c8fa3e4e5b16b0de1ee73686a7119e",
-    "source/WebAgent/tests/test_git74_unified_preflight.py": "f8b6309028bb3a6e3fb7086ba849b90fddf736fb475ce6ed0e1b960abbaf9a1a"
+    "source/agent_core/unified_preflight.py": "655a5d5eb16a90270215fdd1a036932695cf26fc172111afff0b3691db21528b",
+    "source/WebAgent/tests/test_git74_unified_preflight.py": "7cf409f650a10c61927d6c6d42d355c76d026bf7c581ec5c41bd8a990043e895"
   },
   "protocol_family": "SMARTAGENT_V9",
   "protocol_version": 9,
