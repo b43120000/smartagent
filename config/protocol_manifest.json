@@ -116,7 +116,7 @@
     "source/agent_core/goal75_blackboard.py": "1333adffea63d57fc10dabf2fd0a55eeab98c374451d8873ce188a165f2b430f",
     "source/agent_core/goal75_collector_it.py": "1372524681171a5a3948ccfddd04291782805e3b6eecbc728216604d59a51cfc",
     "source/agent_core/goal75_goal_coverage.py": "8693d71d1c4afeff2d77e0ae20cb5b5fea392f5d8028f3d330dd0770b6d6a14a",
-    "source/agent_core/goal75_project_sync_it.py": "6ef7623a4cbf025e1dbdf3752c55ab2443031182e5894247db3187245acd87e1",
+    "source/agent_core/goal75_project_sync_it.py": "d406901f679007fac4a6a6a1821bdb83e3568cd33236e6012752b0e19f7a5778",
     "source/agent_core/goal75_recovery.py": "0434ecd34af6dcf73bad1545f1366f34784de63051133efe4cd7ae9a189cc7c3",
     "source/agent_core/goal75_sidecar_it.py": "b35a6616614cad589eabefd2775e48fb720ba2bf29d6c80edf1af6f3881ae61c",
     "source/agent_core/goal75_stage_ledger.py": "0c0b092a739d647c87699200015b1b782859928f9984396b4705212919155bb9",
