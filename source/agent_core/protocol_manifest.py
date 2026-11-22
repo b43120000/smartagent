@@ -45,6 +45,7 @@ CORE_FILES = (
     'source/agent_core/goal75_stage_ledger.py',
     'source/agent_core/goal75_recovery.py',
     'source/agent_core/goal75_goal_coverage.py',
+    'source/agent_core/goal75_project_sync_it.py',
     'source/WebAgent/github_stage_diagnostics.py',
     'source/WebAgent/minimal_admission.py',
     'source/WebAgent/minimal_core_loop.py',
