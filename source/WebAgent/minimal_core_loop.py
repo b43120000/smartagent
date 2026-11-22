@@ -1004,6 +1004,30 @@ def run_minimal_core(loop, request: str) -> str:
                 if executor_sequence else _verified_proof(request, history, loop)
             )
             verified = proof.verified
+            if stage_ledger and stage_ledger.read():
+                finality = goal_finish_readiness(
+                    stage_ledger.read(),
+                    independent_goal_verified=proof.verified,
+                    unsafe_effects_pending=any(
+                        entry["receipt"].get("status") in
+                        {"UNKNOWN", "RUNNING", "PARTIAL"}
+                        for entry in history
+                    ),
+                )
+                journal.append("model_finish_rejected", round=round_id,
+                               reason_code="GOAL75_GOAL_FINALITY_REQUIRED"
+                               if not finality["goal_success_accepted"]
+                               else "GOAL75_GOAL_FINALITY_VERIFIED",
+                               stage_id="")
+                if not finality["goal_success_accepted"]:
+                    repair_hint = (
+                        "GOAL75_GOAL_FINISH_NOT_READY: stage commits are "
+                        "immutable. Obtain a fresh, authorized independent "
+                        "final Goal verification using read-only ToolCalls. "
+                        "Do not replay any earlier Stage mutation. "
+                        + json.dumps(finality, separators=(",", ":"))
+                    )
+                    continue
             if verified:
                 receipt = _accept_and_record_goal(loop, proof, journal,
                                                  round_id=round_id)
@@ -1343,6 +1367,19 @@ def run_minimal_core(loop, request: str) -> str:
 
         fingerprint = _digest({k: v for k, v in action.items() if k != "action_id"})
         mutating = action_is_mutating(action)
+        if (mutating and stage_ledger and stage_ledger.read()
+                and fingerprint in stage_ledger.committed_mutation_fingerprints()):
+            # Immutable Stage replay guard survives task process recovery.
+            stage_view = stage_ledger.readiness()
+            journal.append("stage_local_recovery", round=round_id,
+                           stage_id=stage_view.get("current_stage_id", ""),
+                           reason_code="FROZEN_STAGE_MUTATION_REPLAY_DENIED")
+            repair_hint = (
+                "FROZEN_STAGE_MUTATION_REPLAY_DENIED: this exact mutation "
+                "belongs to an already committed Stage. Select a different "
+                "authorized action for the current Stage; do not replay."
+            )
+            continue
         if mutating and fingerprint in seen_mutations:
             loop.protocol_state = "BLOCKED"
             journal.append("mutation_replay_blocked", round=round_id,
@@ -1463,7 +1500,8 @@ def run_minimal_core(loop, request: str) -> str:
                 try:
                     stage_ledger.record_action(
                         current_stage["stage_id"], action_id=action["action_id"],
-                        evidence_ref=ref, receipt=receipt)
+                        evidence_ref=ref, receipt=receipt,
+                        mutation_fingerprint=fingerprint, mutating=mutating)
                 except ValueError as exc:
                     journal.append(
                         "stage_local_recovery", round=round_id,
