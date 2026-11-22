@@ -265,7 +265,8 @@ class GoalStageLedger:
     def record_action(self, sid: str, *, action_id: str, evidence_ref: str,
                       receipt: Mapping, mutation_fingerprint: str = "",
                       mutating: bool = False,
-                      expected_match: bool | None = None) -> dict:
+                      expected_match: bool | None = None,
+                      evidence_store_verified: bool = False) -> dict:
         """Bind only completed, actually executed Runtime receipts to this stage."""
         if (not isinstance(receipt, Mapping)
                 or receipt.get("status") not in {"SUCCEEDED", "FAILED"}
@@ -297,12 +298,45 @@ class GoalStageLedger:
                 "status": receipt["status"],
                 "acceptance_matched": matches,
                 "expected_matched": expected_match,
+                "evidence_store_verified": evidence_store_verified is True,
                 "mutating": bool(mutating),
                 "mutation_fingerprint": str(mutation_fingerprint)[:64]
                 if mutating else "",
             })
             stage["status"] = "VERIFYING" if matches else "RECOVERING"
         return self._change(sid, "STAGE_ACTION_OBSERVED", apply)
+
+    def commit_if_independently_verified(self, sid: str) -> dict | None:
+        """Skip a redundant Planner StageCommit when Runtime has all proof.
+
+        This is an optimization of the *existing* commit() verifier, not a
+        Planner-completion claim or a new acceptance predicate. Every selected
+        receipt must be a persisted/read-back MIN-EV with its predeclared
+        Expected matching actual Observed. Unverified, absent-Expected and
+        failed-verification actions cannot be auto-committed.
+        """
+        stage = self.current()
+        if stage is None or stage["stage_id"] != sid:
+            return None
+        needed = set(range(len(stage["acceptance"])))
+        selected = []
+        covered = set()
+        for item in stage["observations"]:
+            if (item.get("expected_matched") is not True
+                    or item.get("evidence_store_verified") is not True):
+                continue
+            newly_covered = set(item.get("acceptance_matched") or []) & needed
+            if not newly_covered - covered:
+                continue
+            selected.append(item["evidence_ref"])
+            covered.update(newly_covered)
+            if covered == needed:
+                break
+        if not selected or covered != needed:
+            return None
+        # commit() supplies immutable plan binding, observation hash,
+        # accepted_check_ids, and the same Stage-frozen Event/Hash semantics.
+        return self.commit(sid, evidence_refs=selected)
 
     def recover(self, sid: str, *, reason_code: str, strategy_id: str) -> dict:
         def apply(stage):
