@@ -35,7 +35,10 @@ def _digest(value) -> str:
 
 class MinimalCoreJournal:
     """Append-only task receipts with no raw prompts, commands or tool output."""
-    def __init__(self, base: Path, task_id: str):
+    def __init__(self, base: Path, task_id: str, request_id: str = "",
+                 task_epoch: str = ""):
+        self.base, self.task_id = base, task_id
+        self.request_id, self.task_epoch = request_id, task_epoch
         name = re.sub(r"[^A-Za-z0-9_-]", "_", task_id)[:110]
         self.path = base / "localdata" / "runtime" / "minimal_core" / (name + ".jsonl")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +50,31 @@ class MinimalCoreJournal:
             stream.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
+        # Mirror task lifecycle decisions to the unified diagnostic Blackboard.
+        # Original commands and ToolResults remain in their trusted ledgers.
+        if (self.request_id and self.task_epoch and event in {
+                "task_started", "decision_rejected", "decision_accepted",
+                "action_rejected", "action_prepared", "action_observed",
+                "model_finish_rejected", "model_blocked", "model_finish",
+                "runtime_autofinish", "goal_driven_replan_requested",
+                "stage_plan_accepted", "stage_commit_accepted",
+                "stage_local_recovery", "transport_interrupted",
+                "max_rounds_exhausted", "mutation_replay_blocked",
+                "stuck_action", "unified_preflight_updated",
+        }):
+            try:
+                from agent_core.goal75_blackboard import emit_transition
+                emit_transition(
+                    self.base, task_id=self.task_id, request_id=self.request_id,
+                    task_epoch=self.task_epoch, module="MINIMAL_CORE",
+                    event=event.upper(), stage_id=str(fields.get("stage_id") or ""),
+                    reason_code=str(fields.get("reason_code") or fields.get("status") or ""),
+                    after=fields,
+                    evidence_refs=[str(fields["evidence_ref"])]
+                    if fields.get("evidence_ref") else [],
+                )
+            except (OSError, ValueError, RuntimeError):
+                pass
 
 
 _ATOMIC_TOOL_HINTS = {
@@ -145,7 +173,8 @@ def recent_results(history: list[dict]) -> list[dict]:
 def build_minimal_prompt(request: str, context, history: list[dict],
                          *, round_id: int, max_turns: int, repair_hint: str = "",
                          goal_driver_context: str = "",
-                         executor_only_mode: bool = False) -> str:
+                         executor_only_mode: bool = False,
+                         stage_context: str = "") -> str:
     return (
         "[SMARTAGENT_MINIMAL_CORE_V1]\n"
         "PRIMARY DECISION PROTOCOL FOR THIS REQUEST. This is NOT a legacy v9 "
@@ -181,6 +210,8 @@ def build_minimal_prompt(request: str, context, history: list[dict],
         "Workspace: " + str(context.workspace_root) + "\n"
         "Available tools: " + json.dumps(tool_catalog(context), separators=(",", ":")) + "\n"
         "Original goal: " + request + "\n"
+        + ("[GOAL75_STAGE_CONTROL] " + stage_context
+           + "\n[/GOAL75_STAGE_CONTROL]\n" if stage_context else "")
         + ("Runtime Executor-only context (Goal Driver and Prerequisite decision"
          " engines DISABLED, no new permission): "
          if executor_only_mode else
@@ -374,7 +405,8 @@ def run_minimal_core(loop, request: str) -> str:
     # Do not create an invisible shadow journal under source/.
     if root.name.casefold() == "source" and (root.parent / "collect.bat").is_file():
         root = root.parent
-    journal = MinimalCoreJournal(root, loop.task_id)
+    journal = MinimalCoreJournal(
+        root, loop.task_id, request_id=loop.run_id, task_epoch=loop.task_epoch)
     journal.append("task_started", request_id=loop.run_id,
                    task_id=loop.task_id, task_epoch=loop.task_epoch,
                    goal_sha256=hashlib.sha256(request.encode("utf-8")).hexdigest())
@@ -391,6 +423,15 @@ def run_minimal_core(loop, request: str) -> str:
     loop.executor_result = {}
     loop.executor_blackboard_terminal = {}
     executor_only = executor_only_enabled(loop)
+    from agent_core.goal75_stage_ledger import GoalStageLedger
+    from agent_core.goal75_recovery import (
+        repair_single_decision, choose_stage_recovery,
+        verify_terminal_blocker, goal_finish_readiness,
+    )
+    stage_ledger = (None if executor_only else GoalStageLedger(
+        root, task_id=loop.task_id, request_id=loop.run_id,
+        task_epoch=loop.task_epoch, goal=request))
+    stage_recovery_attempts = 0
     # Git74.1: text-only tasks never pay for a local preflight.
     unified_state = None
     executor_sequence = (
@@ -650,11 +691,45 @@ def run_minimal_core(loop, request: str) -> str:
                    terminal_readiness_status=goal_context.get("terminal_readiness_status"),
                    source_requirement=goal_context.get("source_requirement"),
                    context_sha256=context_digest)
+        stage_view = stage_ledger.readiness() if stage_ledger else {}
+        stage_context = ""
+        if (stage_ledger and stage_view.get("status") == "NO_STAGE_PLAN"
+                and atomic_budget is None and not history):
+            stage_context = (
+                "For a compound multi-step Goal, before the first ToolCall "
+                "submit one immutable stage_plan JSON decision: "
+                '{"type":"stage_plan","stages":[{"stage_id":"S01",'
+                '"description":"goal-aligned step","depends_on":[],'
+                '"acceptance":[{"field":"data.exit_code","operator":"eq",'
+                '"expected":0}]}]}. Use real, anticipated typed postconditions "
+                "in each stage; for a simple Goal use tool_call/finish. "
+                "A stage_plan does not authorize any Tool."
+            )
+        elif stage_ledger and stage_view.get("current_stage_id"):
+            stage_context = (
+                "Prior stages are FROZEN. Only execute and recover the CURRENT "
+                "Stage. Current Stage context: "
+                + json.dumps(stage_view, ensure_ascii=False, separators=(",", ":"))[:6000]
+                + ". When and ONLY when frozen acceptance predicates are backed "
+                "by actual current-stage evidence, respond with JSON "
+                '{"type":"stage_commit","stage_id":"'
+                + stage_view["current_stage_id"]
+                + '","evidence_refs":["MIN-EV-..."]}. '
+                "Failed Action means choose an alternative admitted strategy, "
+                "not replay earlier Stage mutations."
+            )
+        elif stage_ledger and stage_view.get("status") == "STAGES_VERIFIED_GOAL_FINAL_CHECK_REQUIRED":
+            stage_context = (
+                "All Stages are frozen and committed. Do not replay any "
+                "previous mutation. Independently confirm the original Goal "
+                "before finish; no stage-commit receipt alone proves Goal PASS."
+            )
         prompt = build_minimal_prompt(request, loop.tools, history,
                                       round_id=round_id, max_turns=loop.max_turns,
                                       repair_hint=repair_hint,
                                       goal_driver_context=goal_context_text,
-                                      executor_only_mode=executor_only)
+                                      executor_only_mode=executor_only,
+                                      stage_context=stage_context)
         attachments = loop.tools.take_pending_attachments()
         loop.protocol_state = "DECIDING"
         try:
