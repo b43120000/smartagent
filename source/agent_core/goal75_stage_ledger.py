@@ -342,6 +342,15 @@ class GoalStageLedger:
             if item.get("mutating") is True and item.get("mutation_fingerprint")
         }
 
+    def completed_bound_mutation_fingerprints(self) -> set[str]:
+        stage = self.current()
+        if not stage or not any(c.get("binding", {}).get("before_mutation") is True
+                                for c in stage["acceptance"]):
+            return set()
+        return {str(item["mutation_fingerprint"]) for item in stage["observations"]
+                if item.get("mutating") is True and item.get("status") == "SUCCEEDED"
+                and item.get("mutation_fingerprint")}
+
     def _read_bound_receipt(self, item: Mapping) -> dict | None:
         if (item.get("evidence_store_verified") is not True
                 or item.get("expected_matched") is not True
@@ -468,6 +477,30 @@ class GoalStageLedger:
                 "mutation_fingerprint": str(mutation_fingerprint)[:64]
                 if mutating else "",
             })
+            item = stage["observations"][-1]
+            # A confirmed, complete Git identity is an observation, not a
+            # successful mutation or a retroactive override of FAIL. Permit
+            # only the typed identity fields with a matching frozen Expected
+            # and a persisted producer readback.
+            if not verified:
+                readback = self._read_bound_receipt(item)
+                if readback is not None:
+                    d = readback.get("data") or {}
+                    if (readback.get("tool") == "run_command"
+                            and readback.get("status") == "SUCCEEDED"
+                            and d.get("operation") == "GIT_INSPECT"
+                            and d.get("verification_status") == "UNVERIFIED"
+                            and d.get("execution_status") == "SUCCEEDED"
+                            and d.get("exit_code") == 0
+                            and d.get("git_observation_confirmed") is True
+                            and d.get("output_complete") is True):
+                        allowed = {"data.git_local_head_sha", "data.git_remote_head_sha",
+                                   "data.git_remote_ref", "data.git_remote_repository"}
+                        matched = [i for i, check in enumerate(stage["acceptance"])
+                                   if "binding" not in check and check["field"] in allowed
+                                   and _matches(check, readback)]
+                        item["acceptance_matched"] = matched
+                        item["git_observation_matched"] = matched
             self._reconcile_bindings(stage)
             stage["status"] = ("VERIFYING" if stage["observations"][-1]["acceptance_matched"]
                                else "RECOVERING")
