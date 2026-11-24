@@ -385,3 +385,128 @@ def test_git76_indexed_field_does_not_override_failed_verification(tmp_path):
     assert ledger.commit_if_independently_verified("S01") is None
     with pytest.raises(ValueError, match="acceptance_unverified"):
         ledger.commit("S01", evidence_refs=[ref])
+
+
+def _git76_bound_plan(target):
+    plan = _stages(1)
+    plan[0]["acceptance"] = [
+        {"field": "data.observations.0.value", "operator": "eq", "expected": False,
+         "binding": {"kind": "file.exists", "subject": str(target),
+                     "before_mutation": True}},
+        {"field": "data.exit_code", "operator": "eq", "expected": 0},
+    ]
+    return plan
+
+
+def _git76_persist_fact(ledger, target, tag, *, expected_match=True, **changes):
+    from agent_core.evidence_foundation import probe_file_exists
+    from agent_core.tool_result_contract import attach_runtime_result, decode_result
+    from agent_core.runtime_evidence_store import persist_runtime_evidence
+    from agent_core.goal_evidence_matching import match_expected
+    action = "ACT-" + tag
+    ref = "MIN-EV-" + __import__("hashlib").sha256(tag.encode()).hexdigest()[:24]
+    fact = probe_file_exists(target, raw_ref=action)
+    data = {"observations": [fact], "execution_finality": "COMPLETED",
+            "observation_status": fact["observation_status"],
+            "verification_status": "UNVERIFIED", "terminal_eligible": True,
+            **changes}
+    raw = attach_runtime_result("{}", "SUCCEEDED", "FACT_OBSERVED",
+        tool="observe_fact", executed=True, data=data,
+        requested_path=str(target), resolved_path=str(target),
+        task_id=ledger.task_id, request_id=ledger.request_id, action_id=action)
+    receipt = decode_result(raw)
+    pointer = persist_runtime_evidence(
+        ledger.root, task_id=ledger.task_id, request_id=ledger.request_id,
+        task_epoch=ledger.task_epoch, action_id=action, evidence_ref=ref,
+        raw_result=raw, receipt=receipt)
+    expected = {"contract_version": 1, "aggregation": "ALL", "assertions": [
+        {"field": "data.observations.0.value", "operator": "eq", "value": False}
+    ]}
+    matched = match_expected(expected, receipt, evidence_ref=ref,
+        evidence_store_status=pointer["store_status"], action_id=action)
+    ledger.record_action("S01", action_id=action, evidence_ref=ref, receipt=receipt,
+        expected_match=expected_match and matched["match_state"] == "MATCH",
+        evidence_store_verified=True)
+    return ref
+
+
+def test_git76_real_mutation_historical_binding_roundtrip(tmp_path):
+    import subprocess
+    import sys
+    from agent_core.runtime_evidence_store import read_runtime_action_result
+
+    target = tmp_path / "clone-target"
+    ledger = _ledger(tmp_path)
+    initial = ledger.create(_git76_bound_plan(target))
+    with pytest.raises(ValueError, match="pre_mutation_evidence_missing"):
+        ledger.note_mutation_boundary("S01")
+    pre = _git76_persist_fact(ledger, target, "PRE")
+    pre_raw = read_runtime_action_result(
+        tmp_path, task_id=ledger.task_id, request_id=ledger.request_id,
+        task_epoch=ledger.task_epoch, action_id="ACT-PRE", evidence_ref=pre)
+    assert ledger.missing_pre_mutation_bindings() == []
+    ledger.note_mutation_boundary("S01")
+    proc = subprocess.run([sys.executable, "-c",
+        "import pathlib,sys; pathlib.Path(sys.argv[1]).mkdir()", str(target)],
+        capture_output=True, check=True, timeout=30)
+    assert target.is_dir()
+    ref = "MIN-EV-" + "d" * 24
+    ledger.record_action("S01", action_id="MUTATION", evidence_ref=ref,
+        receipt={"tool": "run_command", "status": "SUCCEEDED", "executed": True,
+                 "data": {"exit_code": proc.returncode}},
+        mutating=True, mutation_fingerprint="mutation")
+    # Reopen the ledger and re-use the original observation, without probing
+    # current filesystem state as a substitute for the pre-mutation fact.
+    reopened = _ledger(tmp_path)
+    final = reopened.commit("S01", evidence_refs=[pre, ref])
+    stage = final["stages"][0]
+    assert final["plan_sha256"] == initial["plan_sha256"]
+    assert stage["commit"]["binding_proofs_sha256"]
+    assert stage["observations"][0]["binding_proofs"][0]["evidence_ref"] == pre
+    assert read_runtime_action_result(
+        tmp_path, task_id=ledger.task_id, request_id=ledger.request_id,
+        task_epoch=ledger.task_epoch, action_id="ACT-PRE", evidence_ref=pre) == pre_raw
+    with pytest.raises(ValueError, match="frozen"):
+        reopened.recover("S01", reason_code="REWRITE", strategy_id="BAD")
+
+
+@pytest.mark.parametrize("case", ["wrong_subject", "late", "mismatch", "verification_fail",
+                                  "unconfirmed", "corrupt"])
+def test_git76_bound_fact_rejects_invalid_provenance(tmp_path, case):
+    target = tmp_path / "clone-target"
+    ledger = _ledger(tmp_path)
+    ledger.create(_git76_bound_plan(target))
+    if case == "late":
+        ledger.record_action("S01", action_id="EARLY-MUTATION",
+            evidence_ref="MIN-EV-" + "f" * 24,
+            receipt={"status": "SUCCEEDED", "executed": True, "data": {"exit_code": 0}},
+            mutating=True)
+    kwargs = {}
+    if case == "mismatch":
+        kwargs["expected_match"] = False
+    if case == "verification_fail":
+        kwargs["verification_status"] = "FAIL"
+    if case == "unconfirmed":
+        kwargs["observation_status"] = "UNKNOWN"
+    ref = _git76_persist_fact(ledger, tmp_path / "other" if case == "wrong_subject" else target,
+                               "FACT", **kwargs)
+    if case == "corrupt":
+        stored = tmp_path / "localdata" / "runtime" / "evidence_store" / ledger.task_id / (ref + ".json")
+        stored.write_text("{}", encoding="utf-8")
+    assert ledger.missing_pre_mutation_bindings() == [0]
+    with pytest.raises(ValueError, match="pre_mutation_evidence_missing"):
+        ledger.note_mutation_boundary("S01")
+    with pytest.raises(ValueError, match="acceptance_unverified"):
+        ledger.commit("S01", evidence_refs=[ref])
+
+
+def test_git76_semantic_binding_is_frozen_and_typed(tmp_path):
+    ledger = _ledger(tmp_path)
+    plan = _git76_bound_plan(tmp_path / "target")
+    ledger.create(plan)
+    plan[0]["acceptance"][0]["binding"]["subject"] = str(tmp_path / "other")
+    with pytest.raises(ValueError, match="immutable"):
+        ledger.create(plan)
+    plan[0]["acceptance"][0]["expected"] = 0
+    with pytest.raises(ValueError, match="binding_invalid"):
+        _ledger(tmp_path, "TASK-G76-BAD").create(plan)
