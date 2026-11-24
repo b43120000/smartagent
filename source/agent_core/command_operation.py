@@ -251,6 +251,25 @@ def build_operation_result(
         result["git_identity"] = reference
         if value == "GIT_INSPECT":
             result["stdout_or_local_ref"] = reference
+            # Project only a single unambiguous Git identity from complete
+            # output. Preserve the raw output and verification verdict.
+            from .action_dependencies import exact_git_head_query
+            query = exact_git_head_query(command)
+            if (query and execution == "SUCCEEDED" and not stdout_truncated
+                    and not stderr_truncated and stdout_complete):
+                if query["kind"] == "LOCAL_HEAD":
+                    match = re.fullmatch(r"([0-9a-fA-F]{40}|[0-9a-fA-F]{64})\r?\n?", output)
+                    if match:
+                        result["git_local_head_sha"] = match.group(1).lower()
+                        result["git_observation_confirmed"] = True
+                elif query["kind"] == "REMOTE_BRANCH":
+                    match = re.fullmatch(
+                        r"([0-9a-fA-F]{40}|[0-9a-fA-F]{64})\t([^\r\n]+)\r?\n?", output)
+                    if match and match.group(2) == query["ref"]:
+                        result["git_remote_head_sha"] = match.group(1).lower()
+                        result["git_remote_ref"] = match.group(2)
+                        result["git_remote_repository"] = query["repository"]
+                        result["git_observation_confirmed"] = True
     elif value == "PROCESS":
         result["process_evidence"] = evidence
     elif value == "TRANSFER":
