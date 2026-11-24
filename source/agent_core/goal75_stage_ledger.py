@@ -141,9 +141,21 @@ def _atomic(path: Path, record: dict) -> None:
 def _actual(receipt: Mapping, field: str) -> tuple[bool, object]:
     value: object = receipt
     for segment in field.split("."):
-        if not isinstance(value, Mapping) or segment not in value:
+        if isinstance(value, Mapping):
+            if segment not in value:
+                return False, None
+            value = value[segment]
+        elif isinstance(value, list):
+            # JSON array indexes must be canonical, non-negative decimals.
+            # Missing paths never become a false Boolean observation.
+            if not re.fullmatch(r"0|[1-9][0-9]*", segment):
+                return False, None
+            index = int(segment)
+            if index >= len(value):
+                return False, None
+            value = value[index]
+        else:
             return False, None
-        value = value[segment]
     return True, value
 
 
@@ -292,11 +304,17 @@ class GoalStageLedger:
                 index for index, check in enumerate(stage["acceptance"])
                 if verified and _matches(check, receipt)
             ]
+            unobserved = [
+                index for index, check in enumerate(stage["acceptance"])
+                if not _actual(receipt, check["field"])[0]
+            ]
             stage["observations"].append({
                 "action_id": action_id, "evidence_ref": evidence_ref,
                 "receipt_sha256": digest(receipt),
                 "status": receipt["status"],
                 "acceptance_matched": matches,
+                "acceptance_unobserved": unobserved,
+                "acceptance_receipt_eligible": verified,
                 "expected_matched": expected_match,
                 "evidence_store_verified": evidence_store_verified is True,
                 "mutating": bool(mutating),
@@ -393,6 +411,20 @@ class GoalStageLedger:
             "current_stage_id": stage["stage_id"] if stage else "",
             "current_description": stage["description"] if stage else "",
             "current_acceptance": stage["acceptance"] if stage else [],
+            "current_unproven_acceptance": [
+                {
+                    "check_index": index,
+                    "field": check["field"],
+                    "unobserved_receipt_count": sum(
+                        index in item.get("acceptance_unobserved", [])
+                        for item in stage["observations"]
+                    ),
+                    "receipt_count": len(stage["observations"]),
+                }
+                for index, check in enumerate(stage["acceptance"])
+                if not any(index in item.get("acceptance_matched", [])
+                           for item in stage["observations"])
+            ] if stage else [],
             "current_evidence_refs": [
                 x["evidence_ref"] for x in stage["observations"]
             ] if stage else [],
