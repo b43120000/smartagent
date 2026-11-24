@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - git75/goal-driven-runtime
+      - git76/stage-contract-grounding-and-recovery
   workflow_dispatch:
 permissions:
   contents: read
