@@ -644,6 +644,7 @@ if ($goal75TracePath -and (Test-Path -LiteralPath $goal75TracePath -PathType Lea
     }
 }
 $goal75Stages = @()
+$goal76Bindings = @()
 $goal75StagePath = if ($task) {
     Join-Path $root ('localdata\runtime\goal75_stages\' + $task + '.json')
 } else { '' }
@@ -654,6 +655,52 @@ if ($goal75StageDoc -and [string]$goal75StageDoc.task_id -ceq [string]$task -and
     $goal75StageState = Safe-Code $goal75StageDoc.status
     foreach ($item in @($goal75StageDoc.stages)) {
         $receipt = $item.commit
+        $checkIndex = 0
+        foreach ($check in @($item.acceptance)) {
+            $proven = @()
+            $proofs = @()
+            foreach ($obs in @($item.observations)) {
+                if (@($obs.acceptance_matched) -contains $checkIndex) {
+                    $proven += (Safe-Code $obs.evidence_ref)
+                }
+                foreach ($proof in @($obs.binding_proofs)) {
+                    if ($null -ne $proof -and [int]$proof.check_index -eq $checkIndex) {
+                        $proofs += [ordered]@{
+                            evidence_ref=(Safe-Code $proof.evidence_ref)
+                            receipt_sha256=(Safe-Code $proof.receipt_sha256)
+                            subject_sha256=(Safe-Code $proof.subject_sha256)
+                            expected_sha256=(Safe-Code $proof.expected_sha256)
+                            field=(Safe-Code $proof.field)
+                            kind=(Safe-Code $proof.kind)
+                            schema=(Safe-Code $proof.schema)
+                            before_mutation=[bool]$proof.before_mutation
+                        }
+                    }
+                }
+            }
+            $expectedScalar = if ($check.expected -is [bool] -or
+                $check.expected -is [int] -or $check.expected -is [long] -or
+                $check.expected -is [double]) { $check.expected } else { $null }
+            $goal76Bindings += [ordered]@{
+                stage_id=(Safe-Code $item.stage_id)
+                check_index=$checkIndex
+                field=(Safe-Code $check.field)
+                operator=(Safe-Code $check.operator)
+                expected_scalar=$expectedScalar
+                expected_json_sha256=(Hash-Text (ConvertTo-Json -InputObject $check.expected -Compress -Depth 4))
+                binding_kind=if ($check.binding) { Safe-Code $check.binding.kind } else { '' }
+                subject_text_sha256=if ($check.binding) { Hash-Text ([string]$check.binding.subject) } else { '' }
+                before_mutation=if ($check.binding) { [bool]$check.binding.before_mutation } else { $null }
+                mutation_boundary=$item.mutation_boundary
+                matching_evidence_refs=@($proven)
+                unobserved_evidence_refs=@($item.observations | Where-Object {
+                    @($_.acceptance_unobserved) -contains $checkIndex
+                } | ForEach-Object { Safe-Code $_.evidence_ref })
+                binding_proofs=@($proofs)
+                binding_proofs_sha256=if ($receipt) { Safe-Code $receipt.binding_proofs_sha256 } else { '' }
+            }
+            $checkIndex++
+        }
         $goal75Stages += [ordered]@{
             stage_id=(Safe-Code $item.stage_id)
             status=(Safe-Code $item.status)
@@ -686,6 +733,16 @@ $goal75Summary = [ordered]@{
 Write-Json (Join-Path $stage 'goal75_big_blackboard_events.json') @($goal75TraceRows.ToArray())
 Write-Json (Join-Path $stage 'goal75_stage_progress.json') @($goal75Stages)
 Write-Json (Join-Path $stage 'goal75_flow_summary.json') $goal75Summary
+Write-Json (Join-Path $stage 'goal76_stage_binding_audit.json') ([ordered]@{
+    schema='SMARTAGENT_GOAL76_STAGE_BINDING_AUDIT_V1'
+    task_id=(Safe-Code $task)
+    request_id=(Safe-Code $request)
+    plan_sha256=if ($goal75StageDoc -and $goal75StageState -ne 'NOT_FOUND') { Safe-Code $goal75StageDoc.plan_sha256 } else { '' }
+    predicate_count=$goal76Bindings.Count
+    predicates=@($goal76Bindings)
+    source='TASK_BOUND_STAGE_LEDGER_PROJECTION'
+    authority='DIAGNOSTIC_ONLY'
+})
 
 $sources = @(
     @{ name = 'webagent_runtime'; path = (Join-Path $root 'localdata\logs\webagent_runtime.jsonl') },
