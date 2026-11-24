@@ -510,3 +510,48 @@ def test_git76_semantic_binding_is_frozen_and_typed(tmp_path):
     plan[0]["acceptance"][0]["expected"] = 0
     with pytest.raises(ValueError, match="binding_invalid"):
         _ledger(tmp_path, "TASK-G76-BAD").create(plan)
+
+
+@pytest.mark.parametrize("command", [
+    "git rev-parse --verify HEAD",
+    "git.exe rev-parse --verify HEAD",
+    "git ls-remote --exit-code --heads https://github.com/a/b.git refs/heads/git75/fixture",
+    r"& 'C:\smartagent\.venv\git\cmd\git.exe' ls-remote --exit-code --heads https://github.com/a/b.git refs/heads/git75/fixture",
+])
+def test_git76_exact_git_read_grammar(command):
+    from agent_core.action_dependencies import command_is_proven_observation
+    assert command_is_proven_observation({"operation": "GIT_INSPECT", "command": command})
+
+
+@pytest.mark.parametrize("command", [
+    "git rev-parse --verify HEAD && git reset --hard",
+    "git ls-remote --exit-code --heads https://github.com/a/b.git refs/heads/main; git pull",
+    "git ls-remote --exit-code --heads https://github.com/a/b.git refs/heads/*",
+    "git ls-remote --exit-code --heads origin refs/heads/main",
+    "git ls-remote --exit-code --heads https://github.com/a/b.git refs/heads/main refs/heads/other",
+])
+def test_git76_git_read_grammar_never_approves_compound_or_unknown(command):
+    from agent_core.action_dependencies import command_is_proven_observation
+    assert not command_is_proven_observation({"operation": "GIT_INSPECT", "command": command})
+
+
+def test_git76_git_identity_projection_preserves_verification():
+    from agent_core.command_operation import build_operation_result
+    sha = "a" * 40
+    branch = "refs/heads/git75/fixture"
+    command = "git ls-remote --exit-code --heads https://github.com/a/b.git " + branch
+    local = build_operation_result("GIT_INSPECT", command="git rev-parse --verify HEAD",
+        execution_status="SUCCEEDED", verification_status="UNVERIFIED", stdout=sha + "\n")
+    remote = build_operation_result("GIT_INSPECT", command=command,
+        execution_status="SUCCEEDED", verification_status="FAIL", stdout=sha + "\t" + branch + "\r\n")
+    assert local["git_local_head_sha"] == remote["git_remote_head_sha"] == sha
+    assert remote["git_remote_ref"] == branch
+    assert remote["stdout"] == sha + "\t" + branch + "\r\n"
+    assert remote["verification_status"] == "FAIL"
+    for output in (sha + "\trefs/heads/wrong\n", sha + "\t" + branch + "\nextra\n"):
+        bad = build_operation_result("GIT_INSPECT", command=command, execution_status="SUCCEEDED",
+                                     verification_status="PASS", stdout=output)
+        assert "git_remote_head_sha" not in bad
+    bad = build_operation_result("GIT_INSPECT", command=command, execution_status="SUCCEEDED",
+                                 verification_status="PASS", stdout=remote["stdout"], stdout_truncated=True)
+    assert "git_remote_head_sha" not in bad
