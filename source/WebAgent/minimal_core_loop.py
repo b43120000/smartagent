@@ -703,7 +703,13 @@ def run_minimal_core(loop, request: str) -> str:
                 '"acceptance":[{"field":"data.exit_code","operator":"eq",'
                 '"expected":0}]}]}. Use real, anticipated typed postconditions '
                 "in each stage; for a simple Goal use tool_call/finish. "
-                "A stage_plan does not authorize any Tool."
+                "A stage_plan does not authorize any Tool. "
+                "For path existence use a typed observe_fact binding: "
+                '{"field":"data.observations.0.value","operator":"eq",'
+                '"expected":false,"binding":{"kind":"file.exists",'
+                '"subject":"<absolute path from goal>","before_mutation":true}}. '
+                "Set expected and before_mutation according to the original goal. "
+                "For the observe_fact action predeclare Expected on the Boolean field."
             )
         elif stage_ledger and stage_view.get("current_stage_id"):
             stage_context = (
@@ -1443,6 +1449,17 @@ def run_minimal_core(loop, request: str) -> str:
                 unified_state = {"status": "UNAVAILABLE"}
                 journal.append("unified_preflight_unavailable",
                                error_class=type(exc).__name__)
+        if mutating and stage_ledger:
+            active = stage_ledger.current()
+            if active:
+                try:
+                    stage_ledger.note_mutation_boundary(active["stage_id"])
+                except (ValueError, OSError) as exc:
+                    journal.append("stage_local_recovery", round=round_id,
+                                   stage_id=active["stage_id"],
+                                   reason_code="GOAL76_PRE_MUTATION_EVIDENCE_REQUIRED")
+                    repair_hint = "GOAL76_PRE_MUTATION_EVIDENCE_REQUIRED: " + str(exc)[:120]
+                    continue
         # Write an execution-intent receipt BEFORE any side effect.
         journal.append("action_prepared", round=round_id, tool=action["tool"],
                        action_id=action["action_id"], fingerprint=fingerprint,
@@ -1498,10 +1515,34 @@ def run_minimal_core(loop, request: str) -> str:
             if (current_stage and receipt.get("status") in {"SUCCEEDED", "FAILED"}
                     and receipt.get("executed") is True):
                 try:
+                    bound = any("binding" in check for check in current_stage["acceptance"])
+                    expected_match = None
+                    persisted = False
+                    if bound and action["tool"] == "observe_fact":
+                        from agent_core.runtime_evidence_store import (
+                            persist_runtime_evidence, read_runtime_action_result,
+                        )
+                        from agent_core.goal_evidence_matching import match_expected
+                        pointer = persist_runtime_evidence(
+                            root, task_id=loop.task_id, request_id=loop.run_id,
+                            task_epoch=loop.task_epoch, action_id=action["action_id"],
+                            evidence_ref=ref, raw_result=str(result), receipt=receipt)
+                        persisted = pointer["store_status"] == "PERSISTED_AND_READBACK_VERIFIED"
+                        if persisted and isinstance(action.get("expected"), dict):
+                            observed = decode_result(read_runtime_action_result(
+                                root, task_id=loop.task_id, request_id=loop.run_id,
+                                task_epoch=loop.task_epoch, action_id=action["action_id"],
+                                evidence_ref=ref))
+                            matched = match_expected(
+                                action["expected"], observed, evidence_ref=ref,
+                                evidence_store_status=pointer["store_status"],
+                                action_id=action["action_id"])
+                            expected_match = matched["match_state"] == "MATCH"
                     stage_ledger.record_action(
                         current_stage["stage_id"], action_id=action["action_id"],
                         evidence_ref=ref, receipt=receipt,
-                        mutation_fingerprint=fingerprint, mutating=mutating)
+                        mutation_fingerprint=fingerprint, mutating=mutating,
+                        expected_match=expected_match, evidence_store_verified=persisted)
                     if receipt.get("status") == "FAILED":
                         stage_recovery_attempts += 1
                         failure_code = str(receipt.get("reason") or "FAILED_ACTION")
