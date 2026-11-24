@@ -52,6 +52,31 @@ def unsatisfied_dependencies(action, result_ledger, request_id, task_epoch):
     return blocked
 
 
+# Exact command grammar for the two Git75 Live read failures. This is
+# classification only; executable trust, scope, network and approval
+# continue through their original gates.
+_G76_GIT = r"""(?:git(?:\.exe)?|&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe"))"""
+_G76_LOCAL_HEAD = re.compile(_G76_GIT + r"\s+rev-parse\s+--verify\s+HEAD", re.I)
+_G76_REMOTE_HEAD = re.compile(
+    _G76_GIT + r"\s+ls-remote\s+--exit-code\s+--heads\s+"
+    r"https://github\.com/([A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100})\s+"
+    r"(refs/heads/[A-Za-z0-9_][A-Za-z0-9_./-]{0,250})", re.I)
+
+
+def exact_git_head_query(command):
+    """Return only an unambiguous one-ref read descriptor, not authority."""
+    command = str(command or "").strip()
+    if _G76_LOCAL_HEAD.fullmatch(command):
+        return {"kind": "LOCAL_HEAD"}
+    match = _G76_REMOTE_HEAD.fullmatch(command)
+    if not match:
+        return None
+    repo, ref = match.groups()
+    if ".." in repo or ".." in ref or "//" in ref or ref.endswith(("/", ".")):
+        return None
+    return {"kind": "REMOTE_BRANCH", "repository": repo, "ref": ref}
+
+
 def command_is_proven_observation(action):
     """Narrow positive grammar, not the model's operation label or a blacklist.
 
@@ -97,6 +122,8 @@ def command_is_proven_observation(action):
         r'''&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe")\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}''',
         r'''&\s+(?:'[A-Za-z]:[\\/][^'\r\n]*[\\/]git\.exe'|"[A-Za-z]:[\\/][^"$\x60\r\n]*[\\/]git\.exe")\s+-C\s+(?:'[^'\r\n]+'|"[^"$\x60\r\n]+")\s+merge-base\s+--is-ancestor\s+[0-9a-fA-F]{40}\s+[0-9a-fA-F]{40}''',
     )
+    if action.get("operation") == "GIT_INSPECT" and exact_git_head_query(command):
+        return True
     from .python_https_probe import is_bounded_python_https_probe
     if action.get('operation') in {'INSPECT', 'VERIFY'} and is_bounded_python_https_probe(command):
         return True
