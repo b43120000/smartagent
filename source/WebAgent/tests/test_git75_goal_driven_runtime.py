@@ -580,13 +580,30 @@ def test_git76_terminal_conflict_requires_real_user_bound_fact(tmp_path, case):
         stored = tmp_path / "localdata" / "runtime" / "evidence_store" / ledger.task_id / (ref + ".json")
         stored.write_text("{}", encoding="utf-8")
     proof = ledger.verified_precondition_conflict(goal + " changed" if case == "wrong_goal" else goal)
-    if case == "valid":
+    if case in {"valid", "mismatch"}:
         assert proof["terminal_authorized"] is True
         assert proof["status"] == "TERMINAL_BLOCKED_VERIFIED"
         assert proof["disposition"] == "NEEDS_USER_INPUT"
         assert proof["evidence_ref"] == ref
         assert proof["expected"] is False and proof["observed"] is True
         assert target.is_dir()
+        saved = ledger.record_terminal_conflict(goal)
+        assert saved == proof
+        audited = ledger.current()["terminal_conflict"]
+        assert audited["evidence_ref"] == ref
+        assert audited["proof_sha256"]
+        assert "subject" not in audited
     else:
         assert proof is None
     assert ledger.current()["status"] != "VERIFIED_COMMITTED"
+
+
+@pytest.mark.parametrize("attempt", [8, 16, 100, 999])
+def test_git76_recovery_escalation_never_grants_terminal(attempt):
+    decision = choose_stage_recovery(reason_code="PLANNER_CANNOT_PROGRESS",
+        stage_id="P0", attempt=attempt)
+    assert decision["status"] == "RECOVERING"
+    assert decision["terminal_authorized"] is False
+    assert decision["strategy_id"] in {
+        "DECOMPOSE_CURRENT_STAGE_AND_CHANGE_STRATEGY",
+        "REASSESS_AUTHORIZED_ROUTE_AND_EVIDENCE_GAPS"}

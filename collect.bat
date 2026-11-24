@@ -645,6 +645,7 @@ if ($goal75TracePath -and (Test-Path -LiteralPath $goal75TracePath -PathType Lea
 }
 $goal75Stages = @()
 $goal76Bindings = @()
+$goal76TerminalProofs = @()
 $goal75StagePath = if ($task) {
     Join-Path $root ('localdata\runtime\goal75_stages\' + $task + '.json')
 } else { '' }
@@ -655,6 +656,24 @@ if ($goal75StageDoc -and [string]$goal75StageDoc.task_id -ceq [string]$task -and
     $goal75StageState = Safe-Code $goal75StageDoc.status
     foreach ($item in @($goal75StageDoc.stages)) {
         $receipt = $item.commit
+        if ($item.terminal_conflict) {
+            $proof = $item.terminal_conflict
+            $goal76TerminalProofs += [ordered]@{
+                stage_id=(Safe-Code $proof.stage_id)
+                reason_code=(Safe-Code $proof.reason_code)
+                status=(Safe-Code $proof.status)
+                disposition=(Safe-Code $proof.disposition)
+                evidence_ref=(Safe-Code $proof.evidence_ref)
+                receipt_sha256=(Safe-Code $proof.receipt_sha256)
+                goal_sha256=(Safe-Code $proof.goal_sha256)
+                subject_sha256=(Safe-Code $proof.subject_sha256)
+                proof_sha256=(Safe-Code $proof.proof_sha256)
+                check_index=[int]$proof.check_index
+                expected=$proof.expected
+                observed=$proof.observed
+                terminal_authorized=($proof.terminal_authorized -is [bool] -and $proof.terminal_authorized)
+            }
+        }
         $checkIndex = 0
         foreach ($check in @($item.acceptance)) {
             $proven = @()
@@ -740,6 +759,8 @@ Write-Json (Join-Path $stage 'goal76_stage_binding_audit.json') ([ordered]@{
     plan_sha256=if ($goal75StageDoc -and $goal75StageState -ne 'NOT_FOUND') { Safe-Code $goal75StageDoc.plan_sha256 } else { '' }
     predicate_count=$goal76Bindings.Count
     predicates=@($goal76Bindings)
+    terminal_proof_count=$goal76TerminalProofs.Count
+    terminal_proofs=@($goal76TerminalProofs)
     source='TASK_BOUND_STAGE_LEDGER_PROJECTION'
     authority='DIAGNOSTIC_ONLY'
 })

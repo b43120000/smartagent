@@ -148,6 +148,10 @@ def choose_stage_recovery(
             next_strategy = "SCHEMA_CANONICALIZE"
         elif attempt <= 1:
             next_strategy = "REOBSERVE_OR_FIX_PREREQUISITE"
+        elif attempt >= 16:
+            next_strategy = "REASSESS_AUTHORIZED_ROUTE_AND_EVIDENCE_GAPS"
+        elif attempt >= 8:
+            next_strategy = "DECOMPOSE_CURRENT_STAGE_AND_CHANGE_STRATEGY"
         else:
             next_strategy = "ALTERNATIVE_TOOL_OR_STAGE_REPLAN"
     else:

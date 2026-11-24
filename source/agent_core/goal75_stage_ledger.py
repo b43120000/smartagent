@@ -351,9 +351,10 @@ class GoalStageLedger:
                 if item.get("mutating") is True and item.get("status") == "SUCCEEDED"
                 and item.get("mutation_fingerprint")}
 
-    def _read_bound_receipt(self, item: Mapping) -> dict | None:
+    def _read_bound_receipt(self, item: Mapping, *,
+                            require_expected_match: bool = True) -> dict | None:
         if (item.get("evidence_store_verified") is not True
-                or item.get("expected_matched") is not True
+                or (require_expected_match and item.get("expected_matched") is not True)
                 or item.get("mutating") is not False):
             return None
         from .runtime_evidence_store import read_runtime_action_result
@@ -443,7 +444,9 @@ class GoalStageLedger:
             # Latest trustworthy observation of this specific subject wins.
             # Do not promote a previous contradiction after a newer success.
             for row in reversed(stage["observations"]):
-                receipt = self._read_bound_receipt(row)
+                # A confirmed producer fact can contradict an Action's Expected.
+                # It can prove a blocker but cannot prove Stage acceptance.
+                receipt = self._read_bound_receipt(row, require_expected_match=False)
                 if receipt is None:
                     continue
                 if _bound_fact(check, receipt, row["action_id"]):
@@ -463,6 +466,22 @@ class GoalStageLedger:
                         "goal_sha256": self.goal_sha256,
                         "subject": target, "expected": False, "observed": True}
         return None
+
+    def record_terminal_conflict(self, goal: str) -> dict | None:
+        """Persist only Runtime-derived, task-bound terminal evidence."""
+        proof = self.verified_precondition_conflict(goal)
+        if not proof or proof.get("terminal_authorized") is not True:
+            return None
+        def apply(stage):
+            current = self.verified_precondition_conflict(goal)
+            if current != proof:
+                raise ValueError("goal76_terminal_proof_changed")
+            public = {k: v for k, v in proof.items() if k != "subject"}
+            public["subject_sha256"] = digest(proof["subject"])
+            public["proof_sha256"] = digest(public)
+            stage["terminal_conflict"] = public
+        self._change(proof["stage_id"], "STAGE_TERMINAL_CONFLICT_VERIFIED", apply)
+        return proof
 
     def note_mutation_boundary(self, sid: str) -> None:
         stage = self.current()

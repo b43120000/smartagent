@@ -25,13 +25,22 @@ def run_collector_it(root: str | Path = ".") -> dict:
     task, request, epoch = (
         "TASK-G75-CI-COLLECT", "RR-G75-CI-COLLECT", "EPOCH-G75-CI"
     )
-    goal = "Observe a completed, bounded CI diagnostic task"
+    target = base / "localdata" / "runtime" / "goal76-ci-clone-conflict"
+    target.mkdir(parents=True, exist_ok=True)
+    goal = ("Clone 目標：" + str(target) + "\n"
+            "先確認 Clone 目標不存在，不得刪除既有資料。")
     stage = GoalStageLedger(
         base, task_id=task, request_id=request, task_epoch=epoch, goal=goal)
     stage.create([{
         "stage_id": "S01", "description": "Record verified diagnostic fact",
         "depends_on": [], "acceptance": [
             {"field": "data.exit_code", "operator": "eq", "expected": 0}
+        ],
+    }, {
+        "stage_id": "S02", "description": "Fresh clone precondition",
+        "depends_on": ["S01"], "acceptance": [
+            {"field": "data.observations.0.value", "operator": "eq", "expected": False,
+             "binding": {"kind": "file.exists", "subject": str(target), "before_mutation": True}}
         ],
     }])
     receipt = {
@@ -43,6 +52,26 @@ def run_collector_it(root: str | Path = ".") -> dict:
         "S01", action_id="ACT-G75-COLLECT", evidence_ref=evidence,
         receipt=receipt)
     stage.commit("S01", evidence_refs=[evidence])
+    from .evidence_foundation import probe_file_exists
+    from .runtime_evidence_store import persist_runtime_evidence
+    from .tool_result_contract import attach_runtime_result, decode_result
+    conflict_action = "ACT-G76-COLLECT-CONFLICT"
+    conflict_ref = "MIN-EV-" + "b" * 24
+    fact = probe_file_exists(target, raw_ref=conflict_action)
+    raw = attach_runtime_result("{}", "SUCCEEDED", "FACT_OBSERVED",
+        tool="observe_fact", executed=True, requested_path=str(target),
+        resolved_path=str(target), task_id=task, request_id=request, action_id=conflict_action,
+        data={"observations": [fact], "execution_finality": "COMPLETED",
+              "observation_status": "CONFIRMED", "terminal_eligible": True,
+              "verification_status": "UNVERIFIED"})
+    observed = decode_result(raw)
+    pointer = persist_runtime_evidence(base, task_id=task, request_id=request,
+        task_epoch=epoch, action_id=conflict_action, evidence_ref=conflict_ref,
+        raw_result=raw, receipt=observed)
+    stage.record_action("S02", action_id=conflict_action, evidence_ref=conflict_ref,
+        receipt=observed, expected_match=False,
+        evidence_store_verified=pointer["store_status"] == "PERSISTED_AND_READBACK_VERIFIED")
+    assert stage.record_terminal_conflict(goal)["evidence_ref"] == conflict_ref
     emit_transition(
         base, task_id=task, request_id=request, task_epoch=epoch,
         module="COLLECTOR_SIDECAR", event="INTEGRATION_SOURCE_PERSISTED",
@@ -86,7 +115,15 @@ def run_collector_it(root: str | Path = ".") -> dict:
                     for key in expected}
         audit = data["goal76_stage_binding_audit.json"]
         assert audit["task_id"] == task and audit["request_id"] == request
-        assert audit["predicate_count"] == 1
+        assert audit["predicate_count"] == 2
+        assert audit["terminal_proof_count"] == 1
+        terminal = audit["terminal_proofs"][0]
+        assert terminal["terminal_authorized"] is True
+        assert terminal["status"] == "TERMINAL_BLOCKED_VERIFIED"
+        assert terminal["evidence_ref"] == conflict_ref
+        assert terminal["observed"] is True and terminal["expected"] is False
+        assert terminal["proof_sha256"] and terminal["subject_sha256"]
+        assert "subject" not in terminal
         assert audit["predicates"][0]["field"] == "data.exit_code"
         assert audit["predicates"][0]["matching_evidence_refs"] == [evidence]
         summary = data["goal75_flow_summary.json"]

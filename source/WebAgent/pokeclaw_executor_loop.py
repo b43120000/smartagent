@@ -1203,6 +1203,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                            else "請提交新的 finish（而非 tool_call）。")
                     )
                     continue
+                if stage_ledger is not None and preview.get("verdict") != "PASS":
+                    last_finish_reason = str(preview.get("reason_code") or "FINISH_UNVERIFIED")
+                    finish_repair_only = True
+                    hint = ("FINISH_UNVERIFIED_NOT_TERMINAL: correct the Finish "
+                            "using persisted evidence. No mutation, no invented claims. "
+                            "reason=" + last_finish_reason)
+                    append_executor_event(root, loop, {
+                        "round": turn, "kind": "GOAL76_FINISH_REPLAN",
+                        "reason_code": last_finish_reason, "executed": False,
+                    })
+                    continue
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_FINISH",
                 "summary_sha256": hashlib.sha256(
@@ -1239,6 +1250,26 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             if stage_ledger is not None:
                 active = stage_ledger.current()
                 if active is not None:
+                    proof = (stage_ledger.record_terminal_conflict(request)
+                             if pending_timeout_reconciliation is None
+                             and pending_unknown_timeout is None else None)
+                    if proof and proof.get("terminal_authorized") is True:
+                        append_executor_event(root, loop, {
+                            "round": turn, "kind": "GOAL76_TERMINAL_GATE",
+                            "proof": {k: v for k, v in proof.items() if k != "subject"},
+                            "executed": False,
+                            "authorization_granted": False,
+                        })
+                        return _finish(
+                            loop, root, request, kind="BLOCKED",
+                            summary=("NEEDS_USER_INPUT: verified fresh-clone "
+                                     "precondition conflict. Target exists: "
+                                     + proof["subject"] + "; evidence="
+                                     + proof["evidence_ref"]
+                                     + ". Preserve existing data; request an "
+                                       "explicit new target or user resolution."),
+                            complete=False,
+                        )
                     stage_recovery_attempts += 1
                     recovery = choose_stage_recovery(
                         reason_code="PLANNER_CANNOT_PROGRESS",
@@ -1260,29 +1291,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "strategy_id": recovery["strategy_id"],
                         "executed": False,
                     })
-                    proof = stage_ledger.verified_precondition_conflict(request)
-                    if proof and proof.get("terminal_authorized") is True:
-                        append_executor_event(root, loop, {
-                            "round": turn, "kind": "GOAL76_TERMINAL_GATE",
-                            "proof": proof, "executed": False,
-                            "authorization_granted": False,
-                        })
-                        return _finish(
-                            loop, root, request, kind="BLOCKED",
-                            summary=("NEEDS_USER_INPUT: verified fresh-clone "
-                                     "precondition conflict. Target exists: "
-                                     + proof["subject"] + "; evidence="
-                                     + proof["evidence_ref"]
-                                     + ". Preserve existing data; request an "
-                                       "explicit new target or user resolution."),
-                            complete=False,
-                        )
                     hint = (
                         "Planner BLOCKED has no objective terminal proof. "
                         "Try a DISTINCT valid prerequisite or strategy for "
                         "the CURRENT Stage. Keep Git74.1 admission and ACL/Turbo. "
                         "Do not replay uncertain mutation. Recovery count is "
-                        "not terminal authorization."
+                        "not terminal authorization. Strategy=" + recovery["strategy_id"]
                     )
                     continue
                 # No active Stage (all committed or plan not yet frozen) is
@@ -1586,7 +1600,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "replan_exhausted": bool(recoverable),
                     "executed": False, "authorization_granted": False,
                 })
-                if stage_ledger is not None and recoverable:
+                if stage_ledger is not None:
                     hint = ("NATIVE_ACTION_DENIED: choose a different authorized "
                             "native strategy; never fallback to Host.")
                     continue
@@ -2182,6 +2196,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # Assertion mismatch is an explicit rejection of Stage acceptance,
         # not a license for the Planner to change frozen Expected values.
         stage_independent_observation = False
+        stage_conflict = None
         if stage_ledger is not None:
             active = stage_ledger.current()
             if (active is not None and runtime_status in {"SUCCEEDED", "FAILED"}
@@ -2207,6 +2222,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     stage_independent_observation = bool(
                         observation.get("binding_proofs") or
                         observation.get("git_observation_matched"))
+                    stage_conflict = stage_ledger.verified_precondition_conflict(request)
+                    if stage_conflict:
+                        append_executor_event(root, loop, {
+                            "round": turn, "kind": "GOAL76_PRECONDITION_CONTRADICTION",
+                            "stage_id": active["stage_id"],
+                            "evidence_ref": stage_conflict["evidence_ref"],
+                            "expected": stage_conflict["expected"],
+                            "observed": stage_conflict["observed"],
+                            "reason_code": stage_conflict["reason_code"],
+                            "executed": False, "authorization_granted": False,
+                        })
                 except ValueError as exc:
                     append_executor_event(root, loop, {
                         "round": turn,
@@ -2215,7 +2241,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "evidence_ref": evidence_ref,
                         "reason_code": str(exc)[:120], "executed": False,
                     })
-            failed_stage_action = bool(active is not None and (
+            failed_stage_action = bool(active is not None and not stage_conflict and (
                 (runtime_status == "FAILED"
                     and (match_report is None
                          or match_report.get("match_state") != "MATCH"))
@@ -2513,6 +2539,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 ". Choose a DISTINCT permitted tool or prerequisite strategy "
                 "for the current Stage; no same-Action replay."
             )
+        if stage_conflict and pending_timeout_reconciliation is None:
+            hint = ("GOAL76_PRECONDITION_CONTRADICTION_VERIFIED: actual "
+                    "filesystem fact disproves the mandatory fresh-clone "
+                    "precondition. Preserve data; report blocked with the "
+                    "verified evidence and propose a new target for user approval. "
+                    "Do not repeat the observation or mutate the target. evidence_ref="
+                    + stage_conflict["evidence_ref"])
         if (match_report
                 and match_report["safety_decision"] == "PAUSE_AND_RECONCILE"
                 and mutating and pending_timeout_reconciliation is None):

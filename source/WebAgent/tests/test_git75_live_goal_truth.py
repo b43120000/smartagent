@@ -184,8 +184,11 @@ def test_all_real_stages_committed_removes_additional_gate(tmp_path):
     assert state["status"] == "PASS"
     assert state["stage_count"] == 10
 
+@pytest.mark.parametrize("recovery_kind,count", [
+    ("blocked", 10), ("admission", 27), ("format", 13),
+])
 def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, recovery_kind, count,
 ):
     """Production Executor-only loop, actual ledger+MIN-EV with simulated tool.
 
@@ -212,7 +215,7 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
     )
     loop = FakeLoop(tmp_path, request, [], "")
     loop.executor_only_mode = True
-    loop.max_turns = 30
+    loop.max_turns = 50
     phases = [
         {"stage_id": f"P{i}", "description": f"Original phase P{i}",
          "depends_on": [f"P{i-1}"] if i else [],
@@ -241,10 +244,14 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
         if t == 2:
             return tool_json(
                 "run_command", command=commands[0][0], operation="GIT_INSPECT")
-        if 3 <= t <= 12:
-            return json.dumps({"type": "blocked", "reason": "P0 first failed"})
-        if t >= 13:
-            t -= 9
+        if 3 <= t < 3 + count:
+            if recovery_kind == "blocked":
+                return json.dumps({"type": "blocked", "reason": "P0 first failed"})
+            if recovery_kind == "admission":
+                return tool_json("run_command", command="git status --short", operation="READ")
+            return "not a JSON decision"
+        if t >= 3 + count:
+            t -= count - 1
         if t in (4, 6, 8):
             command = {4: commands[1][0], 6: commands[2][0],
                        8: commands[3][0]}[t]
@@ -317,7 +324,7 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
     assert [e["command"] for e in loop.executed] == [
         value[0] for value in commands
     ]
-    assert state["stages"][0]["strategy_revision"] >= 10
+    assert state["stages"][0]["strategy_revision"] >= (1 if recovery_kind == "format" else 9)
     assert len(state["stages"][0]["observations"]) == 2
     board = read_executor_run(
         tmp_path, task_id=loop.task_id,
@@ -329,3 +336,71 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
                for row in board["events"]) == 3
     assert loop.terminal_outcome == "SUCCESS", answer
     assert loop.terminal_acceptance["final_verdict"] == "PASS"
+
+
+def test_git76_executor_loop_verified_clone_conflict_no_mutation(tmp_path, monkeypatch):
+    """Real filesystem stat and real evidence persistence through production loop."""
+    import json
+    from agent_core.evidence_foundation import probe_file_exists
+    from agent_core.executor_run_blackboard import read_executor_run
+    from agent_core.tool_result_contract import attach_runtime_result
+    from WebAgent.tests.test_minimal_core_v10 import FakeLoop, tool_json
+    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **k: None)
+    monkeypatch.setattr("agent_core.turbo_broker_admission.admit_action",
+                        lambda *a, **k: {"decision": "NORMAL", "reason_code": "TEST_ACL_OFF"})
+    target = tmp_path / "clone-target"
+    target.mkdir()
+    sentinel = target / "preserve.txt"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    request = ("Clone 目標：" + str(target) + "\n"
+               "P0 Clone。\n先確認 Clone 目標不存在，不得刪除既有資料。\n"
+               "P1 驗證。")
+    phases = [
+        {"stage_id": "P0", "description": "fresh clone",
+         "depends_on": [], "acceptance": [
+             {"field": "data.observations.0.value", "operator": "eq", "expected": False,
+              "binding": {"kind": "file.exists", "subject": str(target), "before_mutation": True}},
+         ]},
+        {"stage_id": "P1", "description": "verify clone",
+         "depends_on": ["P0"], "acceptance": [
+             {"field": "data.git_local_head_sha", "operator": "eq", "expected": "a" * 40},
+         ]},
+    ]
+    loop = FakeLoop(tmp_path, request, [
+        json.dumps({"type": "stage_plan", "stages": phases}),
+        tool_json("observe_fact", path=str(target), expected={
+            "contract_version": 1, "aggregation": "ALL", "assertions": [
+                {"field": "data.observations.0.value", "operator": "eq", "value": False}]}),
+        json.dumps({"type": "blocked", "reason": "Mandatory precondition contradicted"}),
+    ], "")
+    loop.executor_only_mode = True
+    def execute(action):
+        loop.executed.append(dict(action))
+        assert action["tool"] == "observe_fact"
+        fact = probe_file_exists(target, raw_ref=action["action_id"])
+        return attach_runtime_result("{}", "SUCCEEDED", "FACT_OBSERVED",
+            tool="observe_fact", executed=True, requested_path=str(target),
+            resolved_path=str(target), task_id=loop.task_id, request_id=loop.run_id,
+            action_id=action["action_id"], data={
+                "observations": [fact], "execution_finality": "COMPLETED",
+                "observation_status": "CONFIRMED", "terminal_eligible": True,
+                "verification_status": "UNVERIFIED",
+            })
+    loop._execute_action = execute
+    reply = exe.run_pokeclaw_executor(loop, request)
+    assert "NEEDS_USER_INPUT" in reply
+    assert loop.turn_id == 3 and len(loop.executed) == 1
+    assert sentinel.read_text(encoding="utf-8") == "unchanged"
+    ledger = GoalStageLedger(tmp_path, task_id=loop.task_id, request_id=loop.run_id,
+                             task_epoch=loop.task_epoch, goal=request)
+    stage = ledger.current()
+    assert stage["strategy_revision"] == 0
+    proof = stage["terminal_conflict"]
+    assert proof["terminal_authorized"] is True
+    assert proof["evidence_ref"].startswith("MIN-EV-")
+    assert proof["observed"] is True and proof["expected"] is False
+    board = read_executor_run(tmp_path, task_id=loop.task_id,
+                              request_id=loop.run_id, task_epoch=loop.task_epoch)
+    assert any(e["kind"] == "GOAL76_TERMINAL_GATE" for e in board["events"])
+    assert board["terminal"]["kind"] == "BLOCKED"
+    assert not loop.terminal_acceptance

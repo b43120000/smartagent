@@ -909,6 +909,23 @@ def run_minimal_core(loop, request: str) -> str:
             if stage_ledger and stage_ledger.read():
                 active_stage = stage_ledger.current() or {}
                 if active_stage:
+                    terminal_proof = stage_ledger.record_terminal_conflict(request)
+                    if terminal_proof:
+                        code = terminal_proof["reason_code"]
+                        journal.append("stage_terminal_conflict_verified", round=round_id,
+                                       stage_id=terminal_proof["stage_id"], reason_code=code,
+                                       evidence_ref=terminal_proof["evidence_ref"])
+                        result = blocked_result("BLOCKED", "NEEDS_USER_INPUT:" + code, round_id)
+                        result["evidence_refs"] = [terminal_proof["evidence_ref"]]
+                        loop.protocol_state = "BLOCKED"
+                        loop.terminal_outcome = "UNKNOWN"
+                        loop.terminal_acceptance = {}
+                        publish_executor_result(result)
+                        set_runtime_state(loop.task_id, "PAUSED", reason=result["reason_code"],
+                                          root=loop.progress_root)
+                        return ("NEEDS_USER_INPUT: Clone target exists; preserve existing "
+                                "data and request a new explicitly authorized target. "
+                                + terminal_proof["subject"] + "; " + terminal_proof["evidence_ref"])
                     last_denial = action_rejections[-1] if action_rejections else {}
                     blocker = verify_terminal_blocker(
                         last_denial.get("root_cause_code") or
@@ -943,6 +960,9 @@ def run_minimal_core(loop, request: str) -> str:
                                        stage_id=active_stage["stage_id"],
                                        reason_code=blocker["reason_code"])
                         continue
+                else:
+                    repair_hint = "All Stages are committed; verify Finish from immutable evidence."
+                    continue
             disposition, blocker_reason = blocked_disposition(
                 goal_context, history, action_rejections,
             )
@@ -1092,7 +1112,7 @@ def run_minimal_core(loop, request: str) -> str:
             journal.append("model_finish_rejected", round=round_id,
                            outcome="UNKNOWN", reason=proof.reason,
                            pending_gap_count=len(pending_gaps))
-            if can_replan:
+            if can_replan or (stage_ledger and stage_ledger.read()):
                 consecutive_unverified_finishes += 1
                 repair_hint = (
                     "Finish rejected: Executor-only sequence is incomplete. "
@@ -1292,6 +1312,12 @@ def run_minimal_core(loop, request: str) -> str:
                        proposal_sha256=_digest(decision.arguments),
                        goal_context_sha256=context_digest,
                        executed=False)
+            if (consecutive_action_rejections >= ATOMIC_MODEL_DECISION_LIMIT
+                    and stage_ledger and stage_ledger.read()):
+                consecutive_action_rejections = 0
+                journal.append("stage_local_recovery", round=round_id,
+                               reason_code="ADMISSION_STRATEGY_CHANGE")
+                continue
             if consecutive_action_rejections >= ATOMIC_MODEL_DECISION_LIMIT:
                 loop.protocol_state = "BLOCKED"
                 publish_executor_result(blocked_result(
@@ -1331,6 +1357,12 @@ def run_minimal_core(loop, request: str) -> str:
                 "Use the Blackboard's next_category, find a genuinely "
                 "admitted prerequisite, then retry only after new evidence."
             )
+            if (consecutive_action_rejections >= ATOMIC_MODEL_DECISION_LIMIT
+                    and stage_ledger and stage_ledger.read()):
+                consecutive_action_rejections = 0
+                journal.append("stage_local_recovery", round=round_id,
+                               reason_code="PREREQUISITE_STRATEGY_CHANGE")
+                continue
             if consecutive_action_rejections >= ATOMIC_MODEL_DECISION_LIMIT:
                 loop.protocol_state = "BLOCKED"
                 publish_executor_result(blocked_result(
@@ -1387,6 +1419,11 @@ def run_minimal_core(loop, request: str) -> str:
             )
             continue
         if mutating and fingerprint in seen_mutations:
+            if stage_ledger and stage_ledger.read():
+                journal.append("stage_local_recovery", round=round_id,
+                               reason_code="MUTATION_REPLAY_DENIED")
+                repair_hint = "Mutation replay denied. Reconcile read-only; use a distinct authorized strategy."
+                continue
             loop.protocol_state = "BLOCKED"
             journal.append("mutation_replay_blocked", round=round_id,
                            tool=action["tool"], fingerprint=fingerprint)
@@ -1397,6 +1434,11 @@ def run_minimal_core(loop, request: str) -> str:
             return "Executor 拒絕重複執行可能已發生副作用的動作。"
         repeated = repeated + 1 if fingerprint == last_action_digest else 0
         if repeated >= 1:
+            if stage_ledger and stage_ledger.read():
+                journal.append("stage_local_recovery", round=round_id,
+                               reason_code="REPEATED_ACTION_NO_PROGRESS")
+                repair_hint = "Repeated Action denied; choose a distinct authorized strategy."
+                continue
             loop.protocol_state = "BLOCKED"
             journal.append("stuck_action", round=round_id,
                            tool=action["tool"], fingerprint=fingerprint)
