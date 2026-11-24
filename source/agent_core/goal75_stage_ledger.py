@@ -139,6 +139,12 @@ def _read(path: Path) -> dict | None:
                         for i in observed[ref].get("acceptance_matched", [])}
             if coverage != set(range(len(stage["acceptance"]))):
                 raise ValueError("goal75_stage_commit_coverage_tampered")
+            if any("binding" in check for check in stage["acceptance"]):
+                proofs = [observed[ref].get("binding_proofs", []) for ref in refs]
+                if (digest(proofs) != receipt.get("binding_proofs_sha256")
+                        or {p["check_index"] for group in proofs for p in group}
+                        != {i for i, c in enumerate(stage["acceptance"]) if "binding" in c}):
+                    raise ValueError("goal76_binding_commit_tampered")
     return row
 
 
@@ -363,7 +369,8 @@ class GoalStageLedger:
         if not bound:
             return
         mutation_seen = False
-        for item in stage["observations"]:
+        boundary = stage.get("mutation_boundary")
+        for ordinal, item in enumerate(stage["observations"]):
             item["acceptance_matched"] = sorted(
                 set(item["acceptance_matched"]) - set(bound))
             item["binding_proofs"] = []
@@ -374,7 +381,8 @@ class GoalStageLedger:
             if receipt is None:
                 continue
             for index, check in bound.items():
-                if check["binding"]["before_mutation"] and mutation_seen:
+                if check["binding"]["before_mutation"] and (
+                        mutation_seen or (boundary is not None and ordinal >= boundary)):
                     continue
                 proof = _bound_fact(check, receipt, item["action_id"])
                 if proof is not None:
@@ -385,6 +393,22 @@ class GoalStageLedger:
                         "receipt_sha256": item["receipt_sha256"],
                     })
             item["acceptance_matched"].sort()
+
+    def note_mutation_boundary(self, sid: str) -> None:
+        stage = self.current()
+        if not stage or stage["stage_id"] != sid:
+            raise ValueError("goal76_stage_not_current")
+        if not any(c.get("binding", {}).get("before_mutation") is True
+                   for c in stage["acceptance"]):
+            return
+        def apply(active):
+            self._reconcile_bindings(active)
+            covered = {i for row in active["observations"] for i in row["acceptance_matched"]}
+            if any(i not in covered and c.get("binding", {}).get("before_mutation") is True
+                   for i, c in enumerate(active["acceptance"])):
+                raise ValueError("goal76_pre_mutation_evidence_missing")
+            active.setdefault("mutation_boundary", len(active["observations"]))
+        self._change(sid, "STAGE_MUTATION_BOUNDARY", apply)
 
     def missing_pre_mutation_bindings(self) -> list[int]:
         stage = self.current()
@@ -513,6 +537,10 @@ class GoalStageLedger:
                 "observed_receipt_sha256": [r["receipt_sha256"] for r in selected],
                 "accepted_check_ids": sorted(covered),
             }
+            if any("binding" in check for check in stage["acceptance"]):
+                stage["commit"]["binding_proofs_sha256"] = digest([
+                    r.get("binding_proofs", []) for r in selected
+                ])
             stage["commit"]["commit_sha256"] = digest(stage["commit"])
         row = self._change(sid, "STAGE_VERIFIED_COMMITTED", apply)
         if all(s["status"] == "VERIFIED_COMMITTED" for s in row["stages"]):
