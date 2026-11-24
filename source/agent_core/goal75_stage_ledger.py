@@ -65,7 +65,9 @@ def _stage_plan(stages: object) -> list[dict]:
             raise ValueError("goal75_acceptance_required")
         normalized_checks = []
         for check in checks:
-            if not isinstance(check, Mapping) or set(check) != {"field", "operator", "expected"}:
+            if not isinstance(check, Mapping) or set(check) not in (
+                    {"field", "operator", "expected"},
+                    {"field", "operator", "expected", "binding"}):
                 raise ValueError("goal75_check_schema_invalid")
             if (not isinstance(check["field"], str) or not _FIELD.fullmatch(check["field"])
                     or check["operator"] not in _OPERATORS or not _plain(check["expected"])):
@@ -74,7 +76,23 @@ def _stage_plan(stages: object) -> list[dict]:
                 type(check["expected"]) not in {int, float}
             ):
                 raise ValueError("goal75_numeric_check_invalid")
-            normalized_checks.append(dict(check))
+            if "binding" in check:
+                binding = check["binding"]
+                if (not isinstance(binding, Mapping)
+                        or set(binding) != {"kind", "subject", "before_mutation"}
+                        or binding["kind"] != "file.exists"
+                        or check["field"] != "data.observations.0.value"
+                        or check["operator"] != "eq"
+                        or type(check["expected"]) is not bool
+                        or type(binding["subject"]) is not str
+                        or not os.path.isabs(binding["subject"])
+                        or len(binding["subject"]) > 1024
+                        or any(c in binding["subject"] for c in ("*", "?", "\x00"))
+                        or type(binding["before_mutation"]) is not bool):
+                    raise ValueError("goal76_file_exists_binding_invalid")
+                normalized_checks.append({**check, "binding": dict(binding)})
+            else:
+                normalized_checks.append(dict(check))
         identifiers.add(sid)
         output.append({
             "stage_id": sid,
@@ -178,6 +196,50 @@ def _matches(check: Mapping, receipt: Mapping) -> bool:
     }[op]()
 
 
+# A frozen semantic binding is not an arbitrary field alias.
+def _bound_fact(check: Mapping, receipt: Mapping, action_id: str) -> dict | None:
+    binding = check["binding"]
+    data = receipt.get("data")
+    if (receipt.get("tool") != "observe_fact"
+            or receipt.get("status") != "SUCCEEDED"
+            or receipt.get("executed") is not True
+            or receipt.get("action_id") != action_id
+            or not isinstance(data, Mapping)
+            or data.get("execution_finality") != "COMPLETED"
+            or data.get("observation_status") != "CONFIRMED"
+            or data.get("terminal_eligible") is not True
+            or data.get("verification_status") not in {"PASS", "UNVERIFIED"}):
+        return None
+    facts = data.get("observations")
+    if not isinstance(facts, list) or len(facts) != 1:
+        return None
+    fact = facts[0]
+    subject = binding["subject"]
+    scope = fact.get("scope") if isinstance(fact, Mapping) else None
+    resolved = receipt.get("resolved_path")
+    if (not isinstance(fact, Mapping)
+            or fact.get("schema") != "SMARTAGENT_EVIDENCE_V1"
+            or fact.get("field") != "file.exists"
+            or fact.get("source") != "filesystem.stat"
+            or fact.get("raw_evidence_ref") != action_id
+            or fact.get("observation_status") != "CONFIRMED"
+            or fact.get("freshness") != "CURRENT"
+            or not isinstance(scope, str)
+            or not isinstance(resolved, str)
+            or not os.path.isabs(scope)
+            or not os.path.isabs(resolved)
+            or os.path.normcase(os.path.normpath(scope)) != os.path.normcase(os.path.normpath(subject))
+            or os.path.normcase(os.path.normpath(resolved)) != os.path.normcase(os.path.normpath(subject))
+            or type(fact.get("value")) is not bool
+            or fact["value"] is not check["expected"]):
+        return None
+    return {"field": "data.observations.0.value",
+            "kind": "file.exists", "subject_sha256": digest(subject),
+            "expected_sha256": digest(check["expected"]),
+            "before_mutation": binding["before_mutation"],
+            "schema": fact["schema"]}
+
+
 class GoalStageLedger:
     def __init__(self, root: str | Path, *, task_id: str, request_id: str,
                  task_epoch: str, goal: str):
@@ -274,6 +336,67 @@ class GoalStageLedger:
             if item.get("mutating") is True and item.get("mutation_fingerprint")
         }
 
+    def _read_bound_receipt(self, item: Mapping) -> dict | None:
+        if (item.get("evidence_store_verified") is not True
+                or item.get("expected_matched") is not True
+                or item.get("mutating") is not False):
+            return None
+        from .runtime_evidence_store import read_runtime_action_result
+        from .tool_result_contract import decode_result
+        try:
+            raw = read_runtime_action_result(
+                self.root, task_id=self.task_id, request_id=self.request_id,
+                task_epoch=self.task_epoch, action_id=item["action_id"],
+                evidence_ref=item["evidence_ref"],
+            )
+            receipt = decode_result(raw)
+            if not isinstance(receipt, dict) or digest(receipt) != item["receipt_sha256"]:
+                return None
+            return receipt
+        except (ValueError, OSError, TypeError, KeyError):
+            return None
+
+    def _reconcile_bindings(self, stage: dict) -> None:
+        # Re-evaluate only frozen semantic predicates, in original action order.
+        # No historical action or immutable producer receipt is rewritten.
+        bound = {i: c for i, c in enumerate(stage["acceptance"]) if "binding" in c}
+        if not bound:
+            return
+        mutation_seen = False
+        for item in stage["observations"]:
+            item["acceptance_matched"] = sorted(
+                set(item["acceptance_matched"]) - set(bound))
+            item["binding_proofs"] = []
+            if item.get("mutating") is True:
+                mutation_seen = True
+                continue
+            receipt = self._read_bound_receipt(item)
+            if receipt is None:
+                continue
+            for index, check in bound.items():
+                if check["binding"]["before_mutation"] and mutation_seen:
+                    continue
+                proof = _bound_fact(check, receipt, item["action_id"])
+                if proof is not None:
+                    item["acceptance_matched"].append(index)
+                    item["binding_proofs"].append({
+                        **proof, "check_index": index,
+                        "evidence_ref": item["evidence_ref"],
+                        "receipt_sha256": item["receipt_sha256"],
+                    })
+            item["acceptance_matched"].sort()
+
+    def missing_pre_mutation_bindings(self) -> list[int]:
+        stage = self.current()
+        if not stage:
+            return []
+        self._reconcile_bindings(stage)
+        covered = {index for row in stage["observations"]
+                   for index in row["acceptance_matched"]}
+        return [i for i, check in enumerate(stage["acceptance"])
+                if check.get("binding", {}).get("before_mutation") is True
+                and i not in covered]
+
     def record_action(self, sid: str, *, action_id: str, evidence_ref: str,
                       receipt: Mapping, mutation_fingerprint: str = "",
                       mutating: bool = False,
@@ -302,7 +425,7 @@ class GoalStageLedger:
             )
             matches = [
                 index for index, check in enumerate(stage["acceptance"])
-                if verified and _matches(check, receipt)
+                if "binding" not in check and verified and _matches(check, receipt)
             ]
             unobserved = [
                 index for index, check in enumerate(stage["acceptance"])
@@ -321,7 +444,9 @@ class GoalStageLedger:
                 "mutation_fingerprint": str(mutation_fingerprint)[:64]
                 if mutating else "",
             })
-            stage["status"] = "VERIFYING" if matches else "RECOVERING"
+            self._reconcile_bindings(stage)
+            stage["status"] = ("VERIFYING" if stage["observations"][-1]["acceptance_matched"]
+                               else "RECOVERING")
         return self._change(sid, "STAGE_ACTION_OBSERVED", apply)
 
     def commit_if_independently_verified(self, sid: str) -> dict | None:
@@ -336,6 +461,7 @@ class GoalStageLedger:
         stage = self.current()
         if stage is None or stage["stage_id"] != sid:
             return None
+        self._reconcile_bindings(stage)
         needed = set(range(len(stage["acceptance"])))
         selected = []
         covered = set()
@@ -369,6 +495,7 @@ class GoalStageLedger:
 
     def commit(self, sid: str, *, evidence_refs: list[str]) -> dict:
         def apply(stage):
+            self._reconcile_bindings(stage)
             observed = {row["evidence_ref"]: row for row in stage["observations"]}
             selected = [observed[ref] for ref in evidence_refs if ref in observed]
             if not selected or len(selected) != len(set(evidence_refs)):
@@ -424,6 +551,12 @@ class GoalStageLedger:
                 for index, check in enumerate(stage["acceptance"])
                 if not any(index in item.get("acceptance_matched", [])
                            for item in stage["observations"])
+            ] if stage else [],
+            "current_pre_mutation_binding_missing": [
+                i for i, check in enumerate(stage["acceptance"])
+                if check.get("binding", {}).get("before_mutation") is True
+                and not any(i in item.get("acceptance_matched", [])
+                            for item in stage["observations"])
             ] if stage else [],
             "current_evidence_refs": [
                 x["evidence_ref"] for x in stage["observations"]
