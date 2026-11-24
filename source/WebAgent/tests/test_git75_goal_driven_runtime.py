@@ -315,3 +315,73 @@ def test_default_minimal_core_executes_frozen_stage_plan(tmp_path, monkeypatch):
     assert all(row["tool"] == "list_directory" for row in runtime.executed)
     chain = read_events(tmp_path, runtime.task_id)
     assert sum(row["event"] == "STAGE_VERIFIED_COMMITTED" for row in chain) == 2
+
+
+# Git76 first regression: indexed receipt paths and fail-closed acceptance.
+def test_git76_indexed_receipt_field_is_a_typed_observation(tmp_path):
+    ledger = _ledger(tmp_path)
+    plan = _stages(1)
+    plan[0]["acceptance"] = [
+        {"field": "data.observations.0.value", "operator": "eq", "expected": False}
+    ]
+    ledger.create(plan)
+    ref = "MIN-EV-" + "a" * 24
+    receipt = {"status": "SUCCEEDED", "executed": True,
+               "data": {"observations": [{"value": False}]}}
+    ledger.record_action("S01", action_id="INDEXED", evidence_ref=ref,
+                         receipt=receipt, expected_match=True,
+                         evidence_store_verified=True)
+    observed = ledger.current()["observations"][0]
+    assert observed["acceptance_matched"] == [0]
+    assert observed["acceptance_unobserved"] == []
+    assert ledger.readiness()["current_unproven_acceptance"] == []
+    assert ledger.commit_if_independently_verified("S01") is not None
+
+
+@pytest.mark.parametrize("field", [
+    "data.exists", "data.observations.1.value",
+    "data.observations.00.value", "data.observations.value",
+    "data.observations.0.missing",
+])
+def test_git76_missing_field_never_means_false(tmp_path, field):
+    ledger = _ledger(tmp_path)
+    plan = _stages(1)
+    plan[0]["acceptance"] = [
+        {"field": field, "operator": "eq", "expected": False}
+    ]
+    ledger.create(plan)
+    ref = "MIN-EV-" + "b" * 24
+    ledger.record_action("S01", action_id="MISSING", evidence_ref=ref,
+                         receipt={"status": "SUCCEEDED", "executed": True,
+                                  "data": {"observations": [{"value": False}]}},
+                         expected_match=True, evidence_store_verified=True)
+    assert ledger.current()["observations"][0]["acceptance_matched"] == []
+    assert ledger.readiness()["current_unproven_acceptance"] == [
+        {"check_index": 0, "field": field, "unobserved_receipt_count": 1,
+         "receipt_count": 1}
+    ]
+    assert ledger.commit_if_independently_verified("S01") is None
+    with pytest.raises(ValueError, match="acceptance_unverified"):
+        ledger.commit("S01", evidence_refs=[ref])
+
+
+def test_git76_indexed_field_does_not_override_failed_verification(tmp_path):
+    ledger = _ledger(tmp_path)
+    plan = _stages(1)
+    plan[0]["acceptance"] = [
+        {"field": "data.observations.0.value", "operator": "eq", "expected": False}
+    ]
+    ledger.create(plan)
+    ref = "MIN-EV-" + "c" * 24
+    ledger.record_action("S01", action_id="REJECTED", evidence_ref=ref,
+                         receipt={"status": "SUCCEEDED", "executed": True,
+                                  "data": {"observations": [{"value": False}],
+                                           "verification_status": "FAIL"}},
+                         expected_match=True, evidence_store_verified=True)
+    item = ledger.current()["observations"][0]
+    assert item["acceptance_unobserved"] == []
+    assert item["acceptance_receipt_eligible"] is False
+    assert item["acceptance_matched"] == []
+    assert ledger.commit_if_independently_verified("S01") is None
+    with pytest.raises(ValueError, match="acceptance_unverified"):
+        ledger.commit("S01", evidence_refs=[ref])
