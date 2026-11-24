@@ -737,6 +737,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "required by the goal. Never use the invented data.exists. "
                     "For the observe_fact action expected contract assert "
                     "data.observations.0.value and the required Boolean. "
+                    "For exact Git HEAD reads use GIT_INSPECT with "
+                    "git rev-parse --verify HEAD (data.git_local_head_sha) or "
+                    "git ls-remote --exit-code --heads <literal GitHub HTTPS URL> "
+                    "refs/heads/<branch> (data.git_remote_head_sha and "
+                    "data.git_remote_ref). Compare typed identities, not the "
+                    "raw stdout containing tabs or a ref suffix. Do not treat "
+                    "one directory existence check as full repository proof. "
                     "All remaining substantive requirements need distinct checks."
                 )
             elif view.get("current_stage_id"):
@@ -885,8 +892,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 continue
             try:
                 for stage in decision.stage_plan:
-                    for check in stage.get("acceptance", []):
-                        if check.get("field") == "data.exists":
+                    if not isinstance(stage, Mapping) or not isinstance(stage.get("acceptance"), list):
+                        continue
+                    for check in stage["acceptance"]:
+                        if isinstance(check, Mapping) and check.get("field") == "data.exists":
                             raise ValueError("goal76_ambiguous_exists_field_use_bound_observe_fact")
                 frozen = stage_ledger.create(decision.stage_plan)
             except ValueError as exc:
@@ -1275,7 +1284,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         signature = _digest(proposed)
         if stage_ledger is not None and (
                 signature in failed_action_signatures or
-                signature in stage_ledger.committed_mutation_fingerprints()):
+                signature in stage_ledger.committed_mutation_fingerprints() or
+                signature in stage_ledger.completed_bound_mutation_fingerprints()):
             append_executor_event(root, loop, {
                 "round": turn, "kind": "GOAL75_ACTION_REPLAY_REJECTED",
                 "action_sha256": signature,
@@ -2138,12 +2148,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # Git75: bind the *original persisted* MIN-EV to the current Stage.
         # Assertion mismatch is an explicit rejection of Stage acceptance,
         # not a license for the Planner to change frozen Expected values.
+        stage_independent_observation = False
         if stage_ledger is not None:
             active = stage_ledger.current()
             if (active is not None and runtime_status in {"SUCCEEDED", "FAILED"}
                     and receipt.get("executed") is True):
                 try:
-                    stage_ledger.record_action(
+                    stage_after_action = stage_ledger.record_action(
                         active["stage_id"],
                         action_id=action["action_id"],
                         evidence_ref=evidence_ref, receipt=receipt,
@@ -2157,6 +2168,12 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                                 == "PERSISTED_AND_READBACK_VERIFIED"
                         ),
                     )
+                    observed_stage = next(s for s in stage_after_action["stages"]
+                                          if s["stage_id"] == active["stage_id"])
+                    observation = observed_stage["observations"][-1]
+                    stage_independent_observation = bool(
+                        observation.get("binding_proofs") or
+                        observation.get("git_observation_matched"))
                 except ValueError as exc:
                     append_executor_event(root, loop, {
                         "round": turn,
@@ -2170,8 +2187,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     and (match_report is None
                          or match_report.get("match_state") != "MATCH"))
                 or (isinstance(result_data, Mapping)
-                    and result_data.get("verification_status")
-                    in {"FAIL", "MISMATCH", "UNVERIFIED"})
+                    and (result_data.get("verification_status") in {"FAIL", "MISMATCH"}
+                         or (result_data.get("verification_status") == "UNVERIFIED"
+                             and not stage_independent_observation)))
                 or (match_report is not None
                     and match_report.get("match_state") != "MATCH")
             ))
@@ -2391,8 +2409,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 and pending_unknown_timeout is None
                 and runtime_status in {"SUCCEEDED", "FAILED"}
                 and (not isinstance(result_data, Mapping)
-                     or result_data.get("verification_status")
-                        not in {"FAIL", "MISMATCH", "UNVERIFIED"})):
+                     or result_data.get("verification_status") not in {"FAIL", "MISMATCH", "UNVERIFIED"}
+                     or (result_data.get("verification_status") == "UNVERIFIED"
+                         and stage_independent_observation))):
             active = stage_ledger.current()
             if active is not None:
                 try:
