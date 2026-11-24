@@ -76,6 +76,7 @@ def run_collector_it(root: str | Path = ".") -> dict:
                 "goal75_big_blackboard_events.json",
                 "goal75_stage_progress.json",
                 "goal75_flow_summary.json",
+                "goal76_stage_binding_audit.json",
                 "manifest.json",
             }
             missing = expected - set(names)
@@ -83,6 +84,11 @@ def run_collector_it(root: str | Path = ".") -> dict:
                 raise AssertionError("COLLECT_G75_FILES_MISSING:" + ",".join(sorted(missing)))
             data = {key: json.loads(bundle.read(key).decode("utf-8-sig"))
                     for key in expected}
+        audit = data["goal76_stage_binding_audit.json"]
+        assert audit["task_id"] == task and audit["request_id"] == request
+        assert audit["predicate_count"] == 1
+        assert audit["predicates"][0]["field"] == "data.exit_code"
+        assert audit["predicates"][0]["matching_evidence_refs"] == [evidence]
         summary = data["goal75_flow_summary.json"]
         if summary["trace_status"] != "SEQUENCE_AND_PARENT_LINKS_VALID":
             raise AssertionError("COLLECT_TRACE_CHAIN_REJECTED:" + summary["trace_status"])
