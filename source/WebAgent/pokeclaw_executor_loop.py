@@ -841,6 +841,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "decision_sha256": _digest(str(response)),
                 "error_code": exc.code, "executed": False,
             })
+            if finish_repair_only and stage_ledger is not None:
+                hint = "FINISH_REPAIR_FORMAT: submit valid Finish V2; no new tools."
+                continue
             if finish_repair_only:
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
@@ -853,7 +856,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     summary="FAIL：Finish 修復回合輸出無效：" + exc.code,
                     complete=False,
                 )
-            if invalids >= (12 if stage_ledger is not None else 3):
+            if invalids >= 3 and stage_ledger is None:
                 return _finish(
                     loop, root, request, kind="FORMAT_ERROR",
                     summary="模型決策格式連續三次無效：" + exc.code,
@@ -1005,7 +1008,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "executed": False, "authorization_granted": False,
             })
             finish_repairs += 1
-            if finish_repairs > max_finish_repairs:
+            if finish_repairs > max_finish_repairs and stage_ledger is None:
                 return _finish(
                     loop, root, request, kind="FINISH_CONTRACT_INVALID",
                     summary="工具型任務禁止 Legacy V1 Finish，且修復次數已耗盡。",
@@ -1109,7 +1112,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         binding_gap or status_repair_diagnostic or postrun_gap or semantic_repair
                         or contract_gap or preview.get("finish_diagnostic")
                     )
-                    if (finish_repairs >= max_finish_repairs
+                    if ((finish_repairs >= max_finish_repairs and stage_ledger is None)
                             or turn >= max_rounds + finish_grace_rounds):
                         append_executor_event(root, loop, {
                             "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
@@ -1219,6 +1222,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # No ToolCall is permitted in a Finish-only grace turn. Refusing to
         # execute is essential: repairs must never create new side effects.
         if finish_repair_only and decision.kind != "blocked":
+            if stage_ledger is not None:
+                hint = "FINISH_REPAIR_ONLY: submit corrected Finish V2; no new tool authorized."
+                continue
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
                 "reason_code": "REPAIR_ONLY_TOOLCALL_PROHIBITED",
@@ -1254,15 +1260,36 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "strategy_id": recovery["strategy_id"],
                         "executed": False,
                     })
-                    if stage_recovery_attempts < 8:
-                        hint = (
-                            "Planner BLOCKED has no objective terminal proof. "
-                            "Try a distinct valid prerequisite, tool or "
-                            "read-only check for the CURRENT Stage. Keep "
-                            "Git74.1 tool admission and ACL/Turbo rules. "
-                            "Do not replay any uncertain mutation."
+                    proof = stage_ledger.verified_precondition_conflict(request)
+                    if proof and proof.get("terminal_authorized") is True:
+                        append_executor_event(root, loop, {
+                            "round": turn, "kind": "GOAL76_TERMINAL_GATE",
+                            "proof": proof, "executed": False,
+                            "authorization_granted": False,
+                        })
+                        return _finish(
+                            loop, root, request, kind="BLOCKED",
+                            summary=("NEEDS_USER_INPUT: verified fresh-clone "
+                                     "precondition conflict. Target exists: "
+                                     + proof["subject"] + "; evidence="
+                                     + proof["evidence_ref"]
+                                     + ". Preserve existing data; request an "
+                                       "explicit new target or user resolution."),
+                            complete=False,
                         )
-                        continue
+                    hint = (
+                        "Planner BLOCKED has no objective terminal proof. "
+                        "Try a DISTINCT valid prerequisite or strategy for "
+                        "the CURRENT Stage. Keep Git74.1 admission and ACL/Turbo. "
+                        "Do not replay uncertain mutation. Recovery count is "
+                        "not terminal authorization."
+                    )
+                    continue
+                # No active Stage (all committed or plan not yet frozen) is
+                # not objective infeasibility either.
+                hint = ("BLOCKED_UNVERIFIED: finish from committed evidence "
+                        "or propose the required frozen Stage plan.")
+                continue
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_BLOCKED",
                 "reason_sha256": _digest(decision.message),
@@ -1559,6 +1586,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "replan_exhausted": bool(recoverable),
                     "executed": False, "authorization_granted": False,
                 })
+                if stage_ledger is not None and recoverable:
+                    hint = ("NATIVE_ACTION_DENIED: choose a different authorized "
+                            "native strategy; never fallback to Host.")
+                    continue
                 return _finish(
                     loop, root, request, kind="BLOCKED",
                     summary="FAIL：TURBO_NATIVE_CONFIRMATION_BLOCKED：" + reason[:120]
@@ -1871,17 +1902,15 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "strategy_id": recovery["strategy_id"],
                         "executed": False,
                     })
-                    if stage_recovery_attempts < 8:
-                        admission_repair_counts.clear()
-                        consecutive_admission_rejections = 0
-                        hint = (
-                            "Repeated Tool Admission failure. This is NOT "
-                            "a green Goal completion. Choose a DISTINCT "
-                            "normally admitted approach within CURRENT "
-                            "authorization and immutable Goal; no Host "
-                            "fallback or permission bypass."
-                        )
-                        continue
+                    admission_repair_counts.clear()
+                    consecutive_admission_rejections = 0
+                    hint = (
+                        "Repeated Tool Admission failure is not terminal proof. "
+                        "Choose a DISTINCT normally admitted approach within "
+                        "CURRENT authorization and immutable Goal; no Host "
+                        "fallback or permission bypass."
+                    )
+                    continue
                 budget_reason = (
                     "同一個 Action 契約問題三次未解："
                     if repairs_for_same_issue >= 3 else
@@ -1916,6 +1945,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "action_id":action.get("action_id"),"reason_code":"DECLARED_READ_ONLY_OBSERVATION_REQUIRED",
                     "executed":False,"authorization_granted":False,
                 })
+                if stage_ledger is not None:
+                    hint = ("GIT71_RECONCILIATION_SCOPE_REQUIRED: submit only "
+                            "the frozen read-only observation; no replay.")
+                    continue
                 return _finish(
                     loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
                     summary="GIT71_RECONCILIATION_SCOPE_REQUIRED: use the frozen "
@@ -2524,7 +2557,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         )
     return _finish(
         loop, root, request, kind="MAX_ROUNDS",
-        summary="PokeClaw Executor 已達決策回合上限，尚未收到 Finish。",
+        summary="PokeClaw Executor 已達決策回合上限，尚未收到 Finish；僅為執行預算 Checkpoint，不代表 Goal 不可達。",
         complete=False,
     )
 

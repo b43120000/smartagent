@@ -403,6 +403,67 @@ class GoalStageLedger:
                     })
             item["acceptance_matched"].sort()
 
+    def verified_precondition_conflict(self, goal: str) -> dict | None:
+        """Narrow proof for an explicit fresh-clone/no-delete user contract.
+
+        Planner predicates alone do not establish that an alternative is forbidden.
+        Unsupported natural-language contracts remain recoverable. No mutation,
+        inferred scope expansion, or invented evidence is authorized here.
+        """
+        if digest(str(goal)) != self.goal_sha256:
+            return None
+        stage = self.current()
+        if not stage or stage.get("mutation_boundary") is not None:
+            return None
+        if any(row.get("mutating") for row in stage["observations"]):
+            return None
+        # Only the explicit, unqualified user contract is supported here.
+        # Other wording, alternative targets, or later modifications require
+        # Planner recovery rather than a guessed terminal authorization.
+        lines = [line.strip() for line in str(goal).splitlines()]
+        targets = [line[len("Clone 目標："):].strip()
+                   for line in lines if line.startswith("Clone 目標：")]
+        if (len(targets) != 1
+                or "先確認 Clone 目標不存在，不得刪除既有資料。" not in lines
+                or any(word in goal for word in (
+                    "替代路徑", "其他路徑", "另選", "可更換", "可改用",
+                    "可使用新", "允許變更", "調整需求", "alternative", "fallback"))):
+            return None
+        target = targets[0]
+        if not os.path.isabs(target):
+            return None
+        for index, check in enumerate(stage["acceptance"]):
+            binding = check.get("binding") or {}
+            if (binding.get("kind") != "file.exists"
+                    or binding.get("before_mutation") is not True
+                    or binding.get("subject") != target
+                    or check.get("expected") is not False):
+                continue
+            opposite = {**check, "expected": True}
+            # Latest trustworthy observation of this specific subject wins.
+            # Do not promote a previous contradiction after a newer success.
+            for row in reversed(stage["observations"]):
+                receipt = self._read_bound_receipt(row)
+                if receipt is None:
+                    continue
+                if _bound_fact(check, receipt, row["action_id"]):
+                    break
+                if not _bound_fact(opposite, receipt, row["action_id"]):
+                    continue
+                from .goal75_recovery import verify_terminal_blocker
+                verdict = verify_terminal_blocker(
+                    "USER_FORBIDDEN_OPERATION", evidence={
+                        "runtime_verified": True, "scope_bound": True,
+                        "goal_required": True, "alternative_exhausted": True,
+                    }, authorized_alternatives=0)
+                return {**verdict, "disposition": "NEEDS_USER_INPUT",
+                        "stage_id": stage["stage_id"], "check_index": index,
+                        "evidence_ref": row["evidence_ref"],
+                        "receipt_sha256": row["receipt_sha256"],
+                        "goal_sha256": self.goal_sha256,
+                        "subject": target, "expected": False, "observed": True}
+        return None
+
     def note_mutation_boundary(self, sid: str) -> None:
         stage = self.current()
         if not stage or stage["stage_id"] != sid:

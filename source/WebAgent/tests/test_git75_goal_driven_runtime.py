@@ -398,7 +398,7 @@ def _git76_bound_plan(target):
     return plan
 
 
-def _git76_persist_fact(ledger, target, tag, *, expected_match=True, **changes):
+def _git76_persist_fact(ledger, target, tag, *, expected_match=True, expected_value=False, **changes):
     from agent_core.evidence_foundation import probe_file_exists
     from agent_core.tool_result_contract import attach_runtime_result, decode_result
     from agent_core.runtime_evidence_store import persist_runtime_evidence
@@ -420,7 +420,7 @@ def _git76_persist_fact(ledger, target, tag, *, expected_match=True, **changes):
         task_epoch=ledger.task_epoch, action_id=action, evidence_ref=ref,
         raw_result=raw, receipt=receipt)
     expected = {"contract_version": 1, "aggregation": "ALL", "assertions": [
-        {"field": "data.observations.0.value", "operator": "eq", "value": False}
+        {"field": "data.observations.0.value", "operator": "eq", "value": expected_value}
     ]}
     matched = match_expected(expected, receipt, evidence_ref=ref,
         evidence_store_status=pointer["store_status"], action_id=action)
@@ -555,3 +555,38 @@ def test_git76_git_identity_projection_preserves_verification():
     bad = build_operation_result("GIT_INSPECT", command=command, execution_status="SUCCEEDED",
                                  verification_status="PASS", stdout=remote["stdout"], stdout_truncated=True)
     assert "git_remote_head_sha" not in bad
+
+
+@pytest.mark.parametrize("case", ["valid", "alternative", "wrong_goal", "corrupt",
+                                  "missing", "late", "mismatch"])
+def test_git76_terminal_conflict_requires_real_user_bound_fact(tmp_path, case):
+    target = tmp_path / "clone-target"
+    if case != "missing":
+        target.mkdir()
+    goal = ("Clone 目標：" + str(target)
+            + "\n先確認 Clone 目標不存在，不得刪除既有資料。")
+    if case == "alternative":
+        goal += "\n允許替代路徑"
+    ledger = GoalStageLedger(tmp_path, task_id="TASK-G76-TERMINAL",
+        request_id="RR-G76-TERMINAL", task_epoch="EPOCH-G76-TERMINAL", goal=goal)
+    ledger.create(_git76_bound_plan(target))
+    if case == "late":
+        ledger.record_action("S01", action_id="MUT",
+            evidence_ref="MIN-EV-" + "e" * 24, mutating=True,
+            receipt={"status": "SUCCEEDED", "executed": True, "data": {}})
+    ref = _git76_persist_fact(ledger, target, "CONFLICT",
+        expected_value=True, expected_match=case != "mismatch")
+    if case == "corrupt":
+        stored = tmp_path / "localdata" / "runtime" / "evidence_store" / ledger.task_id / (ref + ".json")
+        stored.write_text("{}", encoding="utf-8")
+    proof = ledger.verified_precondition_conflict(goal + " changed" if case == "wrong_goal" else goal)
+    if case == "valid":
+        assert proof["terminal_authorized"] is True
+        assert proof["status"] == "TERMINAL_BLOCKED_VERIFIED"
+        assert proof["disposition"] == "NEEDS_USER_INPUT"
+        assert proof["evidence_ref"] == ref
+        assert proof["expected"] is False and proof["observed"] is True
+        assert target.is_dir()
+    else:
+        assert proof is None
+    assert ledger.current()["status"] != "VERIFIED_COMMITTED"

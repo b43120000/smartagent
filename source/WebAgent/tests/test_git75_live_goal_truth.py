@@ -212,7 +212,7 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
     )
     loop = FakeLoop(tmp_path, request, [], "")
     loop.executor_only_mode = True
-    loop.max_turns = 15
+    loop.max_turns = 30
     phases = [
         {"stage_id": f"P{i}", "description": f"Original phase P{i}",
          "depends_on": [f"P{i-1}"] if i else [],
@@ -241,8 +241,10 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
         if t == 2:
             return tool_json(
                 "run_command", command=commands[0][0], operation="GIT_INSPECT")
-        if t == 3:
+        if 3 <= t <= 12:
             return json.dumps({"type": "blocked", "reason": "P0 first failed"})
+        if t >= 13:
+            t -= 9
         if t in (4, 6, 8):
             command = {4: commands[1][0], 6: commands[2][0],
                        8: commands[3][0]}[t]
@@ -315,7 +317,7 @@ def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2
     assert [e["command"] for e in loop.executed] == [
         value[0] for value in commands
     ]
-    assert state["stages"][0]["strategy_revision"] >= 1
+    assert state["stages"][0]["strategy_revision"] >= 10
     assert len(state["stages"][0]["observations"]) == 2
     board = read_executor_run(
         tmp_path, task_id=loop.task_id,
