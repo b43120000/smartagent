@@ -727,7 +727,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "operator:eq,expected:PASS}]}]}. Quote JSON strings. "
                     "Each Stage must have substantive, observable data.* "
                     "postconditions (not exit_code=0 alone). Frozen Stage "
-                    "plan cannot authorize operations or permissions."
+                    "plan cannot authorize operations or permissions. "
+                    "For path existence use observe_fact with the exact authorized "
+                    "absolute subject and the frozen acceptance shape "
+                    '{"field":"data.observations.0.value","operator":"eq",'
+                    '"expected":false,"binding":{"kind":"file.exists",'
+                    '"subject":"<absolute path from goal>","before_mutation":true}}. '
+                    "Set before_mutation only for preconditions; use true/false as "
+                    "required by the goal. Never use the invented data.exists. "
+                    "For the observe_fact action expected contract assert "
+                    "data.observations.0.value and the required Boolean. "
+                    "All remaining substantive requirements need distinct checks."
                 )
             elif view.get("current_stage_id"):
                 stage_context = (
@@ -739,7 +749,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "{type:stage_commit,stage_id:<current_stage_id>,"
                     "evidence_refs:[<MIN-EV>]}. "
                     "After failure choose a DIFFERENT authorized approach; "
-                    "never replay a committed mutation. Current ledger="
+                    "never replay a committed mutation. For a frozen file.exists "
+                "binding the Runtime reads the same-task historical MIN-EV; "
+                "never re-observe a before_mutation fact after the mutation. "
+                "Current ledger="
                     + json.dumps(view, ensure_ascii=False,
                                  separators=(",", ":"))[:6000]
                 )
@@ -871,6 +884,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 })
                 continue
             try:
+                for stage in decision.stage_plan:
+                    for check in stage.get("acceptance", []):
+                        if check.get("field") == "data.exists":
+                            raise ValueError("goal76_ambiguous_exists_field_use_bound_observe_fact")
                 frozen = stage_ledger.create(decision.stage_plan)
             except ValueError as exc:
                 hint = "STAGE_PLAN_SCHEMA_INVALID: " + str(exc)[:180]
@@ -1904,6 +1921,22 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             **proposed, "action_id": action["action_id"],
         }
         mutating = _possibly_mutating(action, broker_gate["decision"])
+        if mutating and stage_ledger is not None:
+            active = stage_ledger.current()
+            if active is not None:
+                try:
+                    stage_ledger.note_mutation_boundary(active["stage_id"])
+                except (ValueError, OSError) as exc:
+                    append_executor_event(root, loop, {
+                        "round": turn, "kind": "GOAL76_PRE_MUTATION_GATE_REJECTED",
+                        "stage_id": active["stage_id"], "reason_code": str(exc)[:120],
+                        "executed": False, "authorization_granted": False,
+                    })
+                    hint = ("GOAL76_PRE_MUTATION_EVIDENCE_REQUIRED: obtain the "
+                            "frozen subject-bound read-only evidence with a matching "
+                            "predeclared Expected contract before any mutation. "
+                            "Do not modify the Stage acceptance.")
+                    continue
         # Git70: freeze the Planner's action assertions before execution.
         # The digest is recorded independently of subsequent ToolResults.
         from agent_core.goal_evidence_matching import frozen_expected_sha256
