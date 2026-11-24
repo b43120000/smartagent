@@ -374,6 +374,12 @@ def test_git76_executor_loop_verified_clone_conflict_no_mutation(tmp_path, monke
         json.dumps({"type": "blocked", "reason": "Mandatory precondition contradicted"}),
     ], "")
     loop.executor_only_mode = True
+    # The production PokeClaw stage prompt includes the complete tool catalog.
+    # FakeLoop's historical Minimal Core 24k assertion is not its contract.
+    def planner(prompt, *_):
+        loop.prompts.append(prompt)
+        return next(loop.replies)
+    loop.planner = planner
     def execute(action):
         loop.executed.append(dict(action))
         assert action["tool"] == "observe_fact"
