@@ -87,82 +87,42 @@ def test_stage_auto_commit_requires_persisted_expected_and_frozen_acceptance(tmp
     assert ledger.current()["stage_id"] == "P1"
 
 
-def test_real_executor_only_loop_auto_commits_stages_without_extra_planner_turn(
-    tmp_path, monkeypatch,
-):
-    """Actual Planner->Admission->MIN-EV->Ledger->Finish; OS tool mocked."""
+def test_lean_loop_two_actions_one_finish_without_stage_rounds(tmp_path, monkeypatch):
+    """Production loop, actual admission and evidence persistence, OS mocked."""
     goal = "請完成 P0 Git 查詢與 P1 Git 查詢並取得真實驗證，不得假報完成"
     loop = _runtime_fixture(tmp_path, monkeypatch, goal=goal)
-    phases = [_stage("P0"), _stage("P1", "P0")]
-    expected = {
-        "contract_version": 1, "aggregation": "ALL",
-        "assertions": [{"field": "data.exit_code", "operator": "eq",
-                        "value": 0}],
-    }
     commands = ["git status --short", "git log -1 --oneline"]
 
     def planner(prompt, *_):
         loop.prompts.append(prompt)
         turn = len(loop.prompts)
-        if turn == 1:
-            return json.dumps({"type": "stage_plan", "stages": phases})
-        if turn in (2, 3):
-            command = commands[turn - 2]
-            if turn == 3:
-                assert '"current_stage_id":"P1"' in prompt, prompt[-1300:]
-            return json.dumps({
-                "type": "tool_call", "name": "run_command",
-                "arguments": {"command": command,
-                              "operation": "GIT_INSPECT",
-                              "expected": expected},
-            })
-        if turn == 4:
-            last = list(loop.action_result_ledger.values())[-1]["result_id"]
-            return json.dumps({
-                "type": "finish", "contract_version": 2,
-                "summary": "P0、P1 的真實命令驗證完成",
-                "goal_checks": [{
-                    "criterion": "P1 命令已返回",
-                    "evidence_ref": last, "field": "data.exit_code",
-                    "operator": "eq", "expected": 0,
-                }],
-            }, ensure_ascii=False)
+        if turn in (1, 2):
+            return json.dumps({"type":"tool_call","name":"run_command",
+                "arguments":{"command":commands[turn-1],"operation":"GIT_INSPECT"}})
+        if turn == 3:
+            refs=[v["result_id"] for v in loop.action_result_ledger.values()]
+            return json.dumps({"type":"finish","summary":"P0 P1 已確認",
+                "goal_checks":[{"criterion":f"P{i} Git evidence","evidence_ref":ref,
+                    "field":"data.fixture_phase","operator":"eq","expected":f"P{i}"}
+                    for i,ref in enumerate(refs)]})
         raise AssertionError(f"redundant Planner round {turn}")
 
     def execute(action):
         loop.executed.append(dict(action))
-        sid = "P0" if action["command"] == commands[0] else "P1"
+        sid="P0" if action["command"]==commands[0] else "P1"
         assert action["command"] in commands
-        return encode_result(
-            "SUCCEEDED", "COMMAND_EXITED", tool="run_command",
-            executed=True, data={
-                "exit_code": 0, "process_state": "EXITED",
-                "process_started": True, "fixture_phase": sid,
-                "verification_status": "PASS", "stdout": "",
-                "stderr": "", "timed_out": False,
-            },
-        )
-
-    loop.planner = planner
-    loop._execute_action = execute
-    reply = run_pokeclaw_executor(loop, goal)
-    ledger = GoalStageLedger(
-        tmp_path, task_id=loop.task_id, request_id=loop.run_id,
-        task_epoch=loop.task_epoch, goal=goal)
-    record = ledger.read()
-    assert record and all(
-        s["status"] == "VERIFIED_COMMITTED" for s in record["stages"]
-    ), reply
-    assert len(loop.executed) == 2
-    assert len(loop.prompts) == 4, reply
-    board = read_executor_run(
-        tmp_path, task_id=loop.task_id, request_id=loop.run_id,
-        task_epoch=loop.task_epoch)
-    savings = [e for e in board["events"]
-               if e["kind"] == "GOAL75_PLANNER_ROUND_SAVED"]
-    assert len(savings) == 2, board["events"][-8:]
-    assert sum(e["rounds_saved"] for e in savings) == 2
-    assert loop.terminal_outcome == "SUCCESS", reply
+        return encode_result("SUCCEEDED","COMMAND_EXITED",tool="run_command",
+            executed=True,data={"exit_code":0,"process_state":"EXITED",
+                "process_started":True,"fixture_phase":sid,"verification_status":"PASS",
+                "stdout":"","stderr":"","timed_out":False})
+    loop.planner,loop._execute_action=planner,execute
+    reply=run_pokeclaw_executor(loop,goal)
+    assert loop.terminal_outcome=="SUCCESS",reply
+    assert len(loop.executed)==2 and len(loop.prompts)==3
+    board=read_executor_run(tmp_path,task_id=loop.task_id,request_id=loop.run_id,
+                            task_epoch=loop.task_epoch)
+    assert board["terminal"]["goal_verified"]
+    assert not (tmp_path/"localdata/runtime/goal75_stages").exists()
 
 
 def test_schema_alias_can_be_repaired_without_second_planner_round(

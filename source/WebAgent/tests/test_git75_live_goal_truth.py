@@ -216,7 +216,8 @@ def test_lean_actual_loop_explores_existing_target_and_selects_next(tmp_path, mo
     def execute(action):
         loop.executed.append(dict(action))
         path=action["path"]
-        fact=probe_file_exists(path,raw_ref=action["action_id"])
+        from pathlib import Path
+        fact=probe_file_exists(Path(path),raw_ref=action["action_id"])
         return attach_runtime_result("{}", "SUCCEEDED", "FACT_OBSERVED", tool="observe_fact",
             executed=True,requested_path=path,resolved_path=path,task_id=loop.task_id,
             request_id=loop.run_id,action_id=action["action_id"],data={
@@ -238,3 +239,13 @@ def test_lean_external_blocker_distinguishes_permission_and_schema():
     assert exe._lean_external_blocker(board("scope_rejected:PATH_NOT_AUTHORIZED","SCOPE_PREFLIGHT"))
     assert exe._lean_external_blocker(board("wrong_field_type","SCHEMA_VALIDATION")) is None
     assert exe._lean_external_blocker(board("PERMISSION_DENIED","SCHEMA_VALIDATION")) is None
+
+
+def test_lean_read_uncertainty_is_not_mutation_uncertainty():
+    from agent_core.runtime_finish_comparator import _execution_uncertainty
+    item={"evidence_ref":"MIN-EV-"+"a"*24,"receipt":{"status":"UNKNOWN"},
+          "action":{"tool":"observe_fact"},"mutating":False}
+    blocked,recovered=_execution_uncertainty([item],lean_goal=True)
+    assert not blocked and recovered[0]["reason_code"]=="READ_ATTEMPT_NOT_GOAL_EVIDENCE"
+    assert _execution_uncertainty([{**item,"mutating":True}],lean_goal=True)[0]
+    assert _execution_uncertainty([{**item,"mutating":None}],lean_goal=True)[0]

@@ -7412,13 +7412,14 @@ class WebAgentProtocolLoop:
         if core_mode not in {"minimal", "legacy_v9"}:
             raise ValueError("SMARTAGENT_CORE_LOOP must be minimal or legacy_v9")
         if core_mode == "minimal":
-            from .minimal_core_loop import run_minimal_core
+            from .pokeclaw_executor_loop import run_pokeclaw_executor
             self._emit(
                 "minimal_core_selected", request_id=self.run_id, task_id=self.task_id,
                 task_epoch=self.task_epoch, state_owner="RUNTIME",
                 planner_transport="SINGLE_JSON_DECISION",
+                runtime_architecture="LEAN_GOAL_DRIVEN",
             )
-            return run_minimal_core(self, request)
+            return run_pokeclaw_executor(self, request)
 
         for _ in range(self.max_turns):
             self._check_cancelled()

@@ -158,7 +158,7 @@ def _fail(reason: str, refs: list[str] | None = None, *,
 
 
 def _readback(loop, root: str | Path, *, allow_open: bool = False,
-              max_actions: int = _MAX_CLAIMS) -> tuple[list[dict], list[str], dict | None, str]:
+              max_actions: int = _MAX_CLAIMS, lean_goal: bool = False) -> tuple[list[dict], list[str], dict | None, str]:
     """Replay all current-request actions, not model-selected evidence alone."""
     board = read_executor_run(
         root, task_id=loop.task_id, request_id=loop.run_id,
@@ -191,6 +191,10 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
     events = [row for row in source_events if row.get("kind") == "TOOL_RESULT"]
     # Match evidence is independent of execution, but must be tied to a
     # pre-dispatch frozen Expected SHA and task-bound producer MIN-EV.
+    admitted_mutation = {
+        row.get("action_id"): row.get("mutating")
+        for row in source_events if row.get("kind") == "ACTION_ADMITTED"
+    }
     admitted_expected = {
         row.get("action_id"): row.get("expected_contract_sha256")
         for row in source_events
@@ -275,6 +279,25 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
             "tool": action["tool"], "execution_status": receipt["status"],
             "executed": receipt["executed"],
         })
+        if lean_goal:
+            from .runtime_evidence_store import (
+                read_runtime_action_result, persist_runtime_evidence, RuntimeEvidenceError)
+            try:
+                if (entry.get("evidence_store") or {}).get("store_status") == "PERSIST_FAILED":
+                    # Retry metadata persistence, not the original Action.
+                    pointer = persist_runtime_evidence(
+                        root, task_id=loop.task_id, request_id=loop.run_id,
+                        task_epoch=loop.task_epoch, action_id=action_id,
+                        evidence_ref=ref, raw_result=raw, receipt=receipt)
+                    if isinstance(entry, dict):
+                        entry["evidence_store"] = pointer
+                if read_runtime_action_result(
+                        root, task_id=loop.task_id, request_id=loop.run_id,
+                        task_epoch=loop.task_epoch, action_id=action_id,
+                        evidence_ref=ref) != raw:
+                    return [], [], None, "MIN_EV_PRODUCER_READBACK_MISMATCH"
+            except (RuntimeEvidenceError, OSError, ValueError, TypeError):
+                return [], [], None, "MIN_EV_PRODUCER_READBACK_UNAVAILABLE"
         expected_match = None
         if isinstance(action.get("expected"), Mapping):
             from .goal_evidence_matching import (
@@ -291,7 +314,7 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
                     or entry.get("expected_contract_sha256") != frozen):
                 return [], [], None, "EXPECTED_CONTRACT_FROZEN_DIGEST_MISMATCH"
             store_status = str((entry.get("evidence_store") or {}).get("store_status") or "")
-            if store_status == "PERSISTED_AND_READBACK_VERIFIED":
+            if store_status == "PERSISTED_AND_READBACK_VERIFIED" and not lean_goal:
                 try:
                     reread = read_runtime_action_result(
                         root, task_id=loop.task_id, request_id=loop.run_id,
@@ -320,7 +343,8 @@ def _readback(loop, root: str | Path, *, allow_open: bool = False,
         history.append({"action": action, "receipt": receipt,
                         "evidence_ref": ref, "raw_result": raw,
                         "sequence":len(history)+1,
-                        "expected_match": expected_match})
+                        "expected_match": expected_match,
+                        "mutating": admitted_mutation.get(action_id)})
     if set(actions) != {row["action_id"] for row in results} or set(ledger) != set(actions):
         return [], [], None, "ACTION_COVERAGE_INCOMPLETE"
     if not allow_open and list(board["terminal"].get("tool_evidence_refs", [])) != refs:
@@ -682,7 +706,8 @@ def _observed_paths(item: dict) -> dict[str, str]:
 
 
 def _execution_uncertainty(history: list[dict],
-                           resolved_timeout_refs: set[str] | None = None) -> tuple[list[dict], list[dict]]:
+                           resolved_timeout_refs: set[str] | None = None,
+                           *, lean_goal: bool = False) -> tuple[list[dict], list[dict]]:
     # Walk newest first, so each observation can only resolve an older one.
     observations = {}
     blocked, recovered = [], []
@@ -704,6 +729,11 @@ def _execution_uncertainty(history: list[dict],
                 recovered.append({"evidence_ref": ref, "resolved_by": sorted({
                     observations[path][1] for path in missing
                 })})
+            elif lean_goal and item.get("mutating") is False:
+                # Read attempts have no unresolved side effect and provide
+                # no completion proof. They may be replaced by valid reads.
+                recovered.append({"evidence_ref": ref,
+                                  "reason_code": "READ_ATTEMPT_NOT_GOAL_EVIDENCE"})
             else:
                 blocked.append({
                     "evidence_ref": ref, "status": status, "tool": item["action"]["tool"],
@@ -763,6 +793,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     history, refs, context, error = _readback(
         loop, root, allow_open=allow_open,
         max_actions=_MAX_CANONICAL_ACTIONS if v2 else _MAX_CLAIMS,
+        lean_goal=lean_goal,
     )
     if error:
         return _fail(error)
@@ -872,7 +903,7 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     from .timeout_reconciliation import read_reconciliation_resolution
     resolved_timeout_refs = read_reconciliation_resolution(
         context.get("events", []), history)
-    blocked, recovered = _execution_uncertainty(history, resolved_timeout_refs)
+    blocked, recovered = _execution_uncertainty(history, resolved_timeout_refs, lean_goal=lean_goal)
     if blocked:
         return _fail("RUNTIME_EXECUTION_NOT_CONFIRMED", refs, tool_results=results,
                      finish_diagnostic={"unconfirmed_evidence": blocked,
@@ -890,6 +921,23 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     ]
     if not valid_goal_history:
         return _fail("NO_EXECUTED_GOAL_EVIDENCE", refs, tool_results=results)
+    if lean_goal:
+        valid_goal_history = [item for item in valid_goal_history if (
+            item["receipt"].get("status") == "SUCCEEDED"
+            and (item["receipt"].get("data") or {}).get("verification_status")
+                not in {"FAIL", "MISMATCH"}
+            and not (item.get("mutating") is True
+                     and (item["receipt"].get("data") or {}).get("verification_status") == "UNVERIFIED")
+        ) or (
+            (item.get("expected_match") or {}).get("match_state") == "MATCH"
+            and (item.get("expected_match") or {}).get("observed_integrity") == "VERIFIED"
+            and (item.get("expected_match") or {}).get("safety_decision") == "CONTINUE_OR_REPLAN"
+            and (item["receipt"].get("status") == "FAILED"
+                 or negative_assertion_goal_evidence_eligible(
+                     item["action"], item["receipt"], item.get("expected_match")))
+        )]
+        if not valid_goal_history:
+            return _fail("NO_VERIFIED_GOAL_EVIDENCE", refs, tool_results=results)
     good_refs = {item["evidence_ref"] for item in valid_goal_history}
     model_declares_goal_fact = (
         bool(goal_checks) if v2 else any(
@@ -899,6 +947,8 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
     if any(item["receipt"]["status"] not in {"SUCCEEDED", "FAILED", "REJECTED", "PARTIAL"}
            and not (item["receipt"]["status"]=="UNKNOWN"
                     and item["evidence_ref"] in resolved_timeout_refs)
+           and not (lean_goal and item.get("mutating") is False
+                    and item["receipt"]["status"] in {"UNKNOWN", "RUNNING"})
            for item in history):
         return _fail("RUNTIME_RESULT_STATUS_UNSUPPORTED", refs, tool_results=results)
     # The same source-grounded contract is fixed before execution. For a

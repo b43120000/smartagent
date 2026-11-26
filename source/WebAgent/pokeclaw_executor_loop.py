@@ -201,6 +201,14 @@ def _lean_external_blocker(board: Mapping) -> dict | None:
     for row in reversed(board.get("events") or []):
         kind = row.get("kind")
         if kind in {"TURBO_SANDBOX_BLOCKED", "TURBO_NATIVE_CONFIRMATION_BLOCKED"}:
+            if kind == "TURBO_NATIVE_CONFIRMATION_BLOCKED" and row.get("reason_code") not in {
+                    "TURBO_NATIVE_BROKER_CWD_OUTSIDE_ROOT",
+                    "TURBO_NATIVE_BROKER_CWD_UNAVAILABLE",
+                    "TURBO_NATIVE_BROKER_POLICY_NOT_ADMITTED",
+                    "TURBO_NATIVE_BROKER_STATE_MISSING",
+                    "TURBO_NATIVE_BROKER_POLICY_REVISION_UNVERIFIED",
+                    "TURBO_NATIVE_BROKER_SCOPE_UNVERIFIED"}:
+                return None
             if row.get("executed") is False and row.get("authorization_granted") is False:
                 return {"kind": kind, "sequence": row.get("sequence"),
                         "reason_code": row.get("reason_code")}
@@ -618,11 +626,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 hint = ("RECONCILIATION_REQUIRED: finish cannot hide uncertain effects; "
                         "perform the exact frozen readonly checks first.")
                 continue
-            if pending_unknown_timeout:
-                return _finish(loop, root, request, kind="BLOCKED",
-                    summary="WAITING_EXTERNAL: UNKNOWN_COMMAND_APPROVAL_TIMEOUT; "
-                            "a required action still needs authorization.",
-                    complete=False)
+            # Prior approval timeout does not veto independently proven Goal.
             # Transport version is Runtime-owned. No invented checks.
             if decision.contract_version != 2 and (
                 getattr(loop, "action_result_ledger", None)
@@ -670,7 +674,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "blocker": blocker, "executed": False,
                 "authorization_granted": False,
             })
-            if blocker and pending_timeout_reconciliation is None:
+            if (blocker or pending_unknown_timeout) and pending_timeout_reconciliation is None:
                 return _finish(loop, root, request, kind="BLOCKED",
                     summary="WAITING_EXTERNAL: " + decision.message,
                     complete=False)
@@ -1085,18 +1089,6 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             if fingerprint in seen_mutations:
                 action = None
                 rejected = "MUTATION_REPLAY_DENIED_WITHOUT_INDEPENDENT_PROOF"
-            else:
-                # An admitted action may have a side effect even when the
-                # executor or transport fails after the side effect.
-                seen_mutations.add(fingerprint)
-        if action is None and pending_unknown_timeout:
-            return _finish(
-                loop, root, request, kind="BLOCKED",
-                summary="FAIL：UNKNOWN_COMMAND_APPROVAL_TIMEOUT；替代 Action"
-                        " 也未通過 Admission：" + str(rejected)
-                        + "。接續任務可重新發起精確命令授權。",
-                complete=False,
-            )
         if action is None:
             diagnosis = dict(getattr(
                 loop.tools, "_last_minimal_admission_diagnostic", {},
@@ -1312,6 +1304,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             ),
             "command_risk_class": risk_class,
         })
+        # Register only actually dispatched mutations, not rejected proposals.
+        if mutating:
+            seen_mutations.add(fingerprint)
         PIT.record("13_minimal_pre_dispatch_action", action, evidence_status="PRE_DISPATCH_ACTION_VALUE", extra={"round": turn})
         loop.protocol_state = "EXECUTING"
         try:
@@ -1576,6 +1571,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             begin_timeout_reconciliation, check_reconciliation_observation,
             append_reconciliation_report,
         )
+        reconciliation_retry = ""
         if pending_timeout_reconciliation is not None:
             observed_recovery = check_reconciliation_observation(
                 pending_timeout_reconciliation, action, receipt,
@@ -1592,11 +1588,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "executed":False,"authorization_granted":False,
             })
             if observed_recovery["state"] not in {"OBSERVATION_REQUIRED", "RECONCILED"}:
-                return _finish(loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
-                    summary="GIT71_RECONCILIATION_OBSERVATION_UNVERIFIED; "
-                            "no replay; source="+pending_timeout_reconciliation["source_evidence_ref"],
-                    complete=False)
-            timeout_reconciliation_witnesses.append(action["action_id"])
+                # Preserve the frozen scope; a bad read can be corrected.
+                reconciliation_retry = str(observed_recovery["reason"])
+            else:
+                timeout_reconciliation_witnesses.append(action["action_id"])
             if observed_recovery["state"]=="RECONCILED":
                 completed_recovery={
                     **observed_recovery,
@@ -1620,7 +1615,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                                              completed_recovery)
                 pending_timeout_reconciliation=None
                 timeout_reconciliation_witnesses=[]
-            else:
+            elif observed_recovery["state"]=="OBSERVATION_REQUIRED":
                 pending_timeout_reconciliation=observed_recovery
         elif (action["tool"]=="run_command" and runtime_status=="UNKNOWN"
               and isinstance(result_data, Mapping) and
@@ -1690,6 +1685,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "observed facts or declare terminal FAIL solely because "
                     "this attempt was unsuccessful. evidence_ref=" + evidence_ref
                 )
+        if reconciliation_retry:
+            hint = ("RECONCILIATION_READ_RETRY: " + reconciliation_retry
+                    + ". Use exact frozen path and Expected; no mutation. checks="
+                    + json.dumps(pending_timeout_reconciliation["checks"], ensure_ascii=False))
         if (match_report
                 and match_report["safety_decision"] == "PAUSE_AND_RECONCILE"
                 and mutating and pending_timeout_reconciliation is None):
@@ -1699,19 +1698,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                         "must not be replayed: " + evidence_ref,
                 complete=False,
             )
-        if after_approval_timeout:
-            if runtime_status == "SUCCEEDED" and receipt.get("executed") is True:
-                pending_unknown_timeout = None
-                if getattr(loop, "continuation_store", None):
-                    loop.continuation_store.pending_batch(loop.task_id, [])
-            elif runtime_status not in {"UNKNOWN", "RUNNING", "PARTIAL"}:
-                return _finish(
-                    loop, root, request, kind="BLOCKED",
-                    summary="FAIL：UNKNOWN_COMMAND_APPROVAL_TIMEOUT；"
-                            "替代 Action 執行或驗證失敗：" + runtime_reason
-                            + "。接續任務可重新發起精確命令授權。",
-                    complete=False,
-                )
+        if after_approval_timeout and runtime_status not in {"SUCCEEDED", "UNKNOWN", "RUNNING", "PARTIAL"}:
+            hint = ("ALTERNATIVE_ACTION_FAILED: " + runtime_reason
+                    + ". Prior approval unavailable; try another lawful route "
+                      "or request user authorization only if indispensable.")
         if (runtime_status in {"UNKNOWN", "RUNNING", "PARTIAL"}
                 and mutating and pending_timeout_reconciliation is None):
             return _finish(
