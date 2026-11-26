@@ -4,6 +4,7 @@ on:
     branches:
       - git75/goal-driven-runtime
       - git76/stage-contract-grounding-and-recovery
+      - git76/codex
   workflow_dispatch:
 permissions:
   contents: read

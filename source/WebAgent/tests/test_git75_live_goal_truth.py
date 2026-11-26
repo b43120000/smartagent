@@ -107,65 +107,14 @@ def test_uncompiled_small_goal_keeps_git74_1_path():
         GOAL, answer_only_eligible=True)
 
 
-def test_executed_comparator_pass_does_not_green_without_stage_coverage(
-    tmp_path, monkeypatch,
-):
-    """Actual executor-only _finish with simulated immutable comparator PASS.
-
-    Reproduces GAR: one real Git query exists, while nine original requested
-    stages are unverified. Must be FAILED, not task_outcome=SUCCESS.
-    """
-    board = {
-        "goal_state_contract": {"status": "UNCOMPILED"},
-        "evidence_requirement": {"answer_only_eligible": False},
-        "events": [], "executor_state": "FINISHED",
-        "handoff_id": "HO-G75-RCA",
-        "terminal": {"tool_evidence_refs": ["MIN-EV-" + "a" * 24],
-                     "finish_comparison": {}},
-    }
-    comparison = {
-        "verdict": "PASS", "failure_origin": "NONE",
-        "reason_code": "MODEL_RUNTIME_AND_GOAL_MATCH",
-        "goal_evidence_reason": "MODEL_DECLARED_GOAL_CHECKS_CONFIRMED",
-        "goal_kind": "MODEL_GENERATED_GOAL_CHECKS",
-        "coverage_basis": "MODEL_DECLARED_RUNTIME_EVIDENCE_MATCH",
-        "evidence_refs": ["MIN-EV-" + "a" * 24],
-        "mismatches": [], "tool_results": [],
-    }
-    events = []
-    monkeypatch.setattr(exe, "finish_executor_run",
-                        lambda *a, **k: board)
-    monkeypatch.setattr(exe, "record_finish_comparison",
-                        lambda *a, **k: board)
-    monkeypatch.setattr(exe, "append_executor_event",
-                        lambda *a, **k: events.append(a[2] if len(a) > 2 else k))
-    monkeypatch.setattr(exe, "compare_runtime_finish",
-                        lambda *a, **k: comparison)
-    monkeypatch.setattr(exe, "set_runtime_state", lambda *a, **k: None)
-    monkeypatch.setattr(exe, "projection", lambda _b: {
-        "executor_state": "FINISHED", "goal_driver_state": "DISABLED",
-        "prerequisite_state": "DISABLED", "handoff_id": "HO-G75-RCA",
-        "tool_evidence_refs": ["MIN-EV-" + "a" * 24],
-        "parent_dispatch_state": "DELIVERED",
-        "parent_consumption_state": "CONSUMED",
-    })
-    loop = SimpleNamespace(
-        task_id="TASK-G75-LIVE-RCA", run_id="RR-G75-LIVE-RCA",
-        task_epoch="EPOCH-G75-LIVE-RCA",
-        task_request=GOAL, progress_root=tmp_path, turn_id=3,
-        terminal_outcome="UNKNOWN", terminal_acceptance={},
-        _emit=lambda *a, **k: None,
-    )
-    reply = exe._finish(
-        loop, tmp_path, GOAL, kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
-        summary="Git HEAD command completed", complete=True,
-        expected_runtime=None, goal_checks=[],
-    )
-    assert loop.terminal_outcome == "FAILED"
-    assert loop.terminal_acceptance["verification_status"] == "FAIL"
-    assert loop.executor_result["goal_verified"] is False
-    assert any(e["kind"] == "GOAL75_TERMINAL_COVERAGE_GATE" for e in events)
-    assert "GOAL75_ORIGINAL_GOAL_COVERAGE_NOT_VERIFIED" in reply
+def test_lean_goal_coverage_cannot_be_satisfied_by_one_fact():
+    from agent_core.runtime_finish_comparator import _lean_missing_goal_phases
+    ref = "MIN-EV-" + "a" * 24
+    history = [{"evidence_ref": ref, "receipt": _receipt("PASS")}]
+    checks = [{"criterion": f"P{i} original requirement", "evidence_ref": ref,
+               "field": "data.verification_status", "operator": "eq", "expected": "PASS"}
+              for i in range(10)]
+    assert len(_lean_missing_goal_phases(GOAL, checks, history)) == 10
 
 
 def test_all_real_stages_committed_removes_additional_gate(tmp_path):
@@ -185,228 +134,107 @@ def test_all_real_stages_committed_removes_additional_gate(tmp_path):
     assert state["stage_count"] == 10
 
 @pytest.mark.parametrize("recovery_kind,count", [
-    ("blocked", 10), ("admission", 27), ("format", 13),
+    ("blocked", 10), ("admission", 27), ("format", 13), ("finish", 5),
 ])
-def test_executor_only_actual_planner_loop_recovers_failed_p0_then_freezes_p0_p2(
-    tmp_path, monkeypatch, recovery_kind, count,
-):
-    """Production Executor-only loop, actual ledger+MIN-EV with simulated tool.
-
-    A false exit-code green at P0 and a premature Planner BLOCKED must cause
-    recovery, not a terminal SUCCESS. Earlier verified stages never replay.
-    """
+def test_lean_actual_loop_recovers_then_completes(tmp_path, monkeypatch, recovery_kind, count):
     import json
     from agent_core.executor_run_blackboard import read_executor_run
     from agent_core.tool_result_contract import encode_result
     from WebAgent.tests.test_minimal_core_v10 import FakeLoop, tool_json
-
-    monkeypatch.setattr(
-        "agent_core.task_progress.set_runtime_state", lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        "agent_core.turbo_broker_admission.admit_action",
-        lambda *a, **k: {"decision": "NORMAL",
-                         "reason_code": "TEST_ACL_OFF"},
-    )
-    request = (
-        "請確實執行三階段驗證：P0 Git 狀態查詢，"
-        "P1 Git 分支資訊，P2 Git HEAD。"
-        "每個階段有獨立真實證據，失敗要改方法且不可假報成功。"
-    )
-    loop = FakeLoop(tmp_path, request, [], "")
-    loop.executor_only_mode = True
-    loop.max_turns = 50
-    phases = [
-        {"stage_id": f"P{i}", "description": f"Original phase P{i}",
-         "depends_on": [f"P{i-1}"] if i else [],
-         "acceptance": [
-             {"field": "data.fixture_phase",
-              "operator": "eq", "expected": f"P{i}"},
-             {"field": "data.verification_status",
-              "operator": "eq", "expected": "PASS"},
-         ]}
-        for i in range(3)
-    ]
-    commands = [
-        ("git status --short", "P0", "FAIL"),
-        ("git log -1 --oneline", "P0", "PASS"),
-        ("git branch --show-current", "P1", "PASS"),
-        ("git rev-parse HEAD", "P2", "PASS"),
-    ]
-    sequence = {"turn": 0}
-
-    def planner(prompt, *_):
-        loop.prompts.append(prompt)
-        sequence["turn"] += 1
-        t = sequence["turn"]
-        if t == 1:
-            return json.dumps({"type": "stage_plan", "stages": phases})
-        if t == 2:
-            return tool_json(
-                "run_command", command=commands[0][0], operation="GIT_INSPECT")
-        if 3 <= t < 3 + count:
-            if recovery_kind == "blocked":
-                return json.dumps({"type": "blocked", "reason": "P0 first failed"})
-            if recovery_kind == "admission":
-                return tool_json("run_command", command="git status --short", operation="READ")
-            return "not a JSON decision"
-        if t >= 3 + count:
-            t -= count - 1
-        if t in (4, 6, 8):
-            command = {4: commands[1][0], 6: commands[2][0],
-                       8: commands[3][0]}[t]
-            return tool_json(
-                "run_command", command=command, operation="GIT_INSPECT")
-        if t in (5, 7, 9):
-            target = {5: "P0", 7: "P1", 9: "P2"}[t]
-            ref = list(loop.action_result_ledger.values())[-1]["result_id"]
-            return json.dumps({
-                "type": "stage_commit", "stage_id": target,
-                "evidence_refs": [ref],
-            })
-        if t == 10:
-            ref = list(loop.action_result_ledger.values())[-1]["result_id"]
-            return json.dumps({
-                "type": "finish", "contract_version": 2,
-                "summary": "P0～P2 的觀測與驗證已完成",
-                "goal_checks": [{
-                    "criterion": "P2 的 Git 根目錄驗證",
-                    "evidence_ref": ref, "field": "data.fixture_phase",
-                    "operator": "eq", "expected": "P2",
-                }],
-            }, ensure_ascii=False)
-        board = read_executor_run(
-            tmp_path, task_id=loop.task_id,
-            request_id=loop.run_id, task_epoch=loop.task_epoch,
-        ) or {}
-        markers = [
-            (row.get("kind"), row.get("comparator_reason_code"),
-             row.get("reason_code"), row.get("stage_id"))
-            for row in board.get("events", ())
-            if "FINISH" in str(row.get("kind"))
-               or "GOAL75" in str(row.get("kind"))
-               or row.get("kind") == "ADMISSION_REJECTED"
-        ]
-        raise AssertionError(f"Unexpected Planner round {t}; events={markers[-16:]}; repair={prompt.split('Runtime repair information:')[-1][-1000:]}")
-
-    def execute(action):
-        loop.executed.append(dict(action))
-        command = action.get("command")
-        matches = [entry for entry in commands if entry[0] == command]
-        assert len(matches) == 1, command
-        _, phase, verification = matches[0]
-        return encode_result(
-            "SUCCEEDED", "COMMAND_EXITED", tool="run_command",
-            executed=True, data={
-                "exit_code": 0, "process_started": True,
-                "process_state": "EXITED",
-                "verification_status": verification,
-                "fixture_phase": phase,
-                "stdout": "test result", "stderr": "",
-                "timed_out": False,
-            },
-        )
-
-    loop.planner = planner
-    loop._execute_action = execute
-    answer = exe.run_pokeclaw_executor(loop, request)
-    ledger = _ledger(tmp_path, goal=request)  # Override FakeLoop task IDs.
-    ledger = GoalStageLedger(
-        tmp_path, task_id=loop.task_id,
-        request_id=loop.run_id, task_epoch=loop.task_epoch, goal=request,
-    )
-    state = ledger.read()
-    assert state is not None, answer
-    assert [stage["status"] for stage in state["stages"]] == [
-        "VERIFIED_COMMITTED",
-    ] * 3
-    assert len(loop.executed) == 4
-    assert [e["command"] for e in loop.executed] == [
-        value[0] for value in commands
-    ]
-    assert state["stages"][0]["strategy_revision"] >= (1 if recovery_kind == "format" else 9)
-    assert len(state["stages"][0]["observations"]) == 2
-    board = read_executor_run(
-        tmp_path, task_id=loop.task_id,
-        request_id=loop.run_id, task_epoch=loop.task_epoch,
-    )
-    assert any(row["kind"] == "GOAL75_STAGE_LOCAL_RECOVERY"
-               for row in board["events"])
-    assert sum(row["kind"] == "GOAL75_STAGE_VERIFIED_COMMITTED"
-               for row in board["events"]) == 3
-    assert loop.terminal_outcome == "SUCCESS", answer
-    assert loop.terminal_acceptance["final_verdict"] == "PASS"
-
-
-def test_git76_executor_loop_verified_clone_conflict_no_mutation(tmp_path, monkeypatch):
-    """Real filesystem stat and real evidence persistence through production loop."""
-    import json
-    from agent_core.evidence_foundation import probe_file_exists
-    from agent_core.executor_run_blackboard import read_executor_run
-    from agent_core.tool_result_contract import attach_runtime_result
-    from WebAgent.tests.test_minimal_core_v10 import FakeLoop, tool_json
-    monkeypatch.setattr("agent_core.task_progress.set_runtime_state", lambda *a, **k: None)
+    monkeypatch.setattr(exe, "set_runtime_state", lambda *a, **k: None)
     monkeypatch.setattr("agent_core.turbo_broker_admission.admit_action",
                         lambda *a, **k: {"decision": "NORMAL", "reason_code": "TEST_ACL_OFF"})
-    target = tmp_path / "clone-target"
-    target.mkdir()
-    sentinel = target / "preserve.txt"
-    sentinel.write_text("unchanged", encoding="utf-8")
-    request = ("Clone 目標：" + str(target) + "\n"
-               "P0 Clone。\n先確認 Clone 目標不存在，不得刪除既有資料。\n"
-               "P1 驗證。")
-    phases = [
-        {"stage_id": "P0", "description": "fresh clone",
-         "depends_on": [], "acceptance": [
-             {"field": "data.observations.0.value", "operator": "eq", "expected": False,
-              "binding": {"kind": "file.exists", "subject": str(target), "before_mutation": True}},
-         ]},
-        {"stage_id": "P1", "description": "verify clone",
-         "depends_on": ["P0"], "acceptance": [
-             {"field": "data.git_local_head_sha", "operator": "eq", "expected": "a" * 40},
-         ]},
-    ]
-    loop = FakeLoop(tmp_path, request, [
-        json.dumps({"type": "stage_plan", "stages": phases}),
-        tool_json("observe_fact", path=str(target), expected={
-            "contract_version": 1, "aggregation": "ALL", "assertions": [
-                {"field": "data.observations.0.value", "operator": "eq", "value": False}]}),
-        json.dumps({"type": "blocked", "reason": "Mandatory precondition contradicted"}),
-    ], "")
-    loop.executor_only_mode = True
-    # The production PokeClaw stage prompt includes the complete tool catalog.
-    # FakeLoop's historical Minimal Core 24k assertion is not its contract.
+    request = "請確實執行 P0 Git 狀態、P1 Git 分支、P2 Git HEAD，保留證據。"
+    loop = FakeLoop(tmp_path, request, [], "")
+    loop.max_turns = 60
+    commands = ["git status --short", "git branch --show-current", "git rev-parse HEAD"]
+    def finish(checks=None):
+        return json.dumps({"type": "finish", "summary": "P0 P1 P2 完成",
+                           "goal_checks": checks})
+    if recovery_kind == "blocked":
+        retries = [json.dumps({"type":"blocked","reason":"schema issue"})] * count
+    elif recovery_kind == "admission":
+        retries = [tool_json("run_command", command=commands[0], operation="READ")] * count
+    elif recovery_kind == "format":
+        retries = ["invalid json"] * count
+    else:
+        retries = [finish()] * count
+    steps = [tool_json("run_command", command=commands[0], operation="GIT_INSPECT")]
+    steps += retries + [tool_json("run_command", command=cmd, operation="GIT_INSPECT")
+                        for cmd in commands[1:]]
     def planner(prompt, *_):
         loop.prompts.append(prompt)
-        return next(loop.replies)
-    loop.planner = planner
+        if steps:
+            return steps.pop(0)
+        refs = [entry["result_id"] for entry in loop.action_result_ledger.values()]
+        assert len(refs) == 3
+        return finish([{"criterion": f"P{i} actual evidence", "evidence_ref": ref,
+                        "field": "data.fixture_phase", "operator": "eq", "expected": f"P{i}"}
+                       for i, ref in enumerate(refs)])
     def execute(action):
         loop.executed.append(dict(action))
-        assert action["tool"] == "observe_fact"
-        fact = probe_file_exists(target, raw_ref=action["action_id"])
-        return attach_runtime_result("{}", "SUCCEEDED", "FACT_OBSERVED",
-            tool="observe_fact", executed=True, requested_path=str(target),
-            resolved_path=str(target), task_id=loop.task_id, request_id=loop.run_id,
-            action_id=action["action_id"], data={
-                "observations": [fact], "execution_finality": "COMPLETED",
-                "observation_status": "CONFIRMED", "terminal_eligible": True,
-                "verification_status": "UNVERIFIED",
-            })
-    loop._execute_action = execute
-    reply = exe.run_pokeclaw_executor(loop, request)
-    assert "NEEDS_USER_INPUT" in reply
-    assert loop.turn_id == 3 and len(loop.executed) == 1
-    assert sentinel.read_text(encoding="utf-8") == "unchanged"
-    ledger = GoalStageLedger(tmp_path, task_id=loop.task_id, request_id=loop.run_id,
-                             task_epoch=loop.task_epoch, goal=request)
-    stage = ledger.current()
-    assert stage["strategy_revision"] == 0
-    proof = stage["terminal_conflict"]
-    assert proof["terminal_authorized"] is True
-    assert proof["evidence_ref"].startswith("MIN-EV-")
-    assert proof["observed"] is True and proof["expected"] is False
-    board = read_executor_run(tmp_path, task_id=loop.task_id,
-                              request_id=loop.run_id, task_epoch=loop.task_epoch)
-    assert any(e["kind"] == "GOAL76_TERMINAL_GATE" for e in board["events"])
-    assert board["terminal"]["kind"] == "BLOCKED"
-    assert not loop.terminal_acceptance
+        i = commands.index(action["command"])
+        return encode_result("SUCCEEDED", "COMMAND_EXITED", tool="run_command",
+            executed=True, data={"exit_code":0,"process_started":True,"process_state":"EXITED",
+                "verification_status":"PASS","fixture_phase":f"P{i}","stdout":f"P{i}",
+                "stderr":"","timed_out":False})
+    loop.planner, loop._execute_action = planner, execute
+    answer = exe.run_pokeclaw_executor(loop, request)
+    assert loop.terminal_outcome == "SUCCESS", answer
+    assert len(loop.executed) == 3
+    assert loop.turn_id == count + 4
+    assert [a["command"] for a in loop.executed] == commands
+    board = read_executor_run(tmp_path, task_id=loop.task_id, request_id=loop.run_id,
+                              task_epoch=loop.task_epoch)
+    assert board["terminal"]["goal_verified"]
+    assert not (tmp_path / "localdata/runtime/goal75_stages").exists()
+
+
+def test_lean_actual_loop_explores_existing_target_and_selects_next(tmp_path, monkeypatch):
+    import json
+    from agent_core.evidence_foundation import probe_file_exists
+    from agent_core.tool_result_contract import attach_runtime_result
+    from WebAgent.tests.test_minimal_core_v10 import FakeLoop, tool_json
+    monkeypatch.setattr(exe, "set_runtime_state", lambda *a, **k: None)
+    monkeypatch.setattr("agent_core.turbo_broker_admission.admit_action",
+                        lambda *a, **k: {"decision":"NORMAL","reason_code":"TEST_ACL_OFF"})
+    first, second = tmp_path / "Live_01", tmp_path / "Live_02"
+    first.mkdir()
+    sentinel = first / "preserve.txt"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    goal = "P0 檢查 " + str(first) + "；P1 找到不存在的候選 " + str(second) + "；不可刪除。"
+    loop = FakeLoop(tmp_path, goal, [], "")
+    steps = [tool_json("observe_fact", path=str(first)), tool_json("observe_fact", path=str(second))]
+    def planner(prompt, *_):
+        if steps:
+            return steps.pop(0)
+        refs = [x["result_id"] for x in loop.action_result_ledger.values()]
+        return json.dumps({"type":"finish","summary":"已觀測兩候選；未刪除",
+            "goal_checks":[{"criterion":f"P{i} candidate fact","evidence_ref":ref,
+                "field":"data.observations.0.value","operator":"eq","expected":i==0}
+                for i,ref in enumerate(refs)]})
+    def execute(action):
+        loop.executed.append(dict(action))
+        path=action["path"]
+        fact=probe_file_exists(path,raw_ref=action["action_id"])
+        return attach_runtime_result("{}", "SUCCEEDED", "FACT_OBSERVED", tool="observe_fact",
+            executed=True,requested_path=path,resolved_path=path,task_id=loop.task_id,
+            request_id=loop.run_id,action_id=action["action_id"],data={
+                "observations":[fact],"execution_finality":"COMPLETED",
+                "observation_status":"CONFIRMED","terminal_eligible":True,
+                "verification_status":"UNVERIFIED"})
+    loop.planner, loop._execute_action=planner,execute
+    answer=exe.run_pokeclaw_executor(loop,goal)
+    assert loop.terminal_outcome=="SUCCESS",answer
+    assert loop.turn_id==3 and len(loop.executed)==2
+    assert sentinel.read_text(encoding="utf-8")=="unchanged" and not second.exists()
+
+
+def test_lean_external_blocker_distinguishes_permission_and_schema():
+    def board(reason, stage):
+        return {"events":[{"kind":"ADMISSION_REJECTED","sequence":1,
+            "admission_diagnostic":{"stage":stage},
+            "runtimeEvidence":{"status":"REJECTED","reason_code":reason}}]}
+    assert exe._lean_external_blocker(board("scope_rejected:PATH_NOT_AUTHORIZED","SCOPE_PREFLIGHT"))
+    assert exe._lean_external_blocker(board("wrong_field_type","SCHEMA_VALIDATION")) is None
+    assert exe._lean_external_blocker(board("PERMISSION_DENIED","SCHEMA_VALIDATION")) is None

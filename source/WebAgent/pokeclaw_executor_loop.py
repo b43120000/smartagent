@@ -29,12 +29,9 @@ from agent_core.finish_contract_adapter_v2 import adapt_finish_contract_v2
 from .minimal_admission import admit_minimal_action, action_is_mutating
 from .minimal_decision import MinimalDecisionError, parse_minimal_decision_with_diagnostics
 from .github_stage_diagnostics import github_source_stage_evidence
-from agent_core.goal75_stage_ledger import GoalStageLedger
-from agent_core.goal75_goal_coverage import (
-    requires_stage_control, original_goal_stage_ids,
-    validate_stage_plan_coverage, final_stage_coverage,
-)
-from agent_core.goal75_recovery import repair_single_decision, choose_stage_recovery
+from agent_core.goal75_goal_coverage import original_goal_stage_ids
+from agent_core.goal75_recovery import repair_single_decision
+from dataclasses import replace
 
 
 def _digest(value: object) -> str:
@@ -194,6 +191,35 @@ def _blocking_runtime_evidence(loop, board=None) -> dict:
     return {"status": "NO_RUNTIME_BLOCKER"}
 
 
+def _lean_external_blocker(board: Mapping) -> dict | None:
+    """Recent Runtime-origin authority/resource denials, not schema errors."""
+    authority = {
+        "ACCESS_DENIED", "PERMISSION_DENIED", "PATH_NOT_AUTHORIZED",
+        "SCOPE_ACCESS_DENIED", "USER_APPROVAL_DENIED", "TURBO_OS_BROKER_BLOCKED",
+        "REQUIRED_SOURCE_INACCESSIBLE", "REQUIRED_WEBSITE_UNAVAILABLE",
+    }
+    for row in reversed(board.get("events") or []):
+        kind = row.get("kind")
+        if kind in {"TURBO_SANDBOX_BLOCKED", "TURBO_NATIVE_CONFIRMATION_BLOCKED"}:
+            if row.get("executed") is False and row.get("authorization_granted") is False:
+                return {"kind": kind, "sequence": row.get("sequence"),
+                        "reason_code": row.get("reason_code")}
+            return None
+        if kind in {"TOOL_RESULT", "ADMISSION_REJECTED"}:
+            ev = row.get("runtimeEvidence") or {}
+            reason = str(ev.get("reason_code") or "")
+            if reason.upper().removeprefix("SCOPE_REJECTED:") in authority:
+                if kind == "ADMISSION_REJECTED" and (
+                        (row.get("admission_diagnostic") or {}).get("stage") != "SCOPE_PREFLIGHT"):
+                    return None
+                if ev.get("status") in {"REJECTED", "FAILED"}:
+                    return {"kind": kind, "sequence": row.get("sequence"),
+                            "evidence_ref": ev.get("evidence_ref"),
+                            "reason_code": reason}
+            return None
+    return None
+
+
 def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             max_rounds: int, hint: str = "", field_catalog=None,
             evidence_requirement=None, goal_state_contract=None,
@@ -201,188 +227,65 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
             runtime_status_catalog=None, turbo_planning_context=None,
             preexecution_rejections=None, stage_context="") -> str:
     from .minimal_core_loop import tool_catalog
-    catalog = tool_catalog(tools)
-    native_child_hint = (
-        "For native Windows child processes, use the attested physical working directory. "
-        "If CMD absolute cd fails but the physical CWD matches, use relative paths "
-        "or safe direct tool invocations; a BAT that repeats absolute cd can still fail. "
-        "Record child exit codes separately and never infer build success from a parent exit.\n"
-        if (turbo_planning_context or {}).get("turbo_requested") == "ON" else ""
-    )
     return (
         "[POKECLAW_EXECUTOR_LOOP_V1]\n"
-        "You are the planning/decision brain. The local Runtime owns execution.\n"
-        "Respond with exactly ONE JSON object per round:\n"
-        'Tool call: {"type":"tool_call","name":"observe_fact","arguments":{"path":"C:\\\\example"}}\n'
-        'Finish V2 (required for tool tasks): {"type":"finish","contract_version":2,"summary":"brief factual completion report","goal_checks":[{"criterion":"<requirement>","evidence_ref":"<actual MIN-EV reference>","field":"data.<observed scalar>","operator":"eq","expected":"<typed actual value>"}]}\n'
-        'For V2, omit expected_runtime: Runtime automatically verifies its complete action/evidence ledger. For UNCOMPILED multi-step goals include evidence-backed goal_checks; concise summary <=3000 characters. Legacy V1 Finish is reserved for eligible answer-only tasks; no tool-task fallback.\n'
-        'Finish for eligible text: {"type":"finish","summary":"the complete answer","expected_runtime":[]}\n'
-        'Blocked: {"type":"blocked","reason":"specific tool/error blocker"}\n'
-        "No Markdown fences, no invented observations, no claimed success without results.\n"
-        "For pinned GitHub fixture deployment, verify source preconditions before "
-        "any deletion: GitHub DNS/reachability, repository read access, the exact "
-        "commit object, commit-tree archive blob, and local archive Git blob/SHA256 "
-        "must have separate real Evidence references. A successful ls-remote "
-        "only proves remote refs were read, NOT that an arbitrary commit or ZIP "
-        "was verified. A local Git object/hash only proves local identity; "
-        "match it explicitly to the pinned remote tree and requested checksum. "
-        "Treat failed required preflight as blocked; never delete or deploy.\n"
-        "Git70: For each tool action, predeclare expected in its arguments as a "
-        "typed contract: expected={contract_version:1,aggregation:ALL,assertions:"
-        "[{field:data.exit_code,operator:eq,value:0}]}. Expected is a prior "
-        "assertion, not a positive execution bias; negative tests may expect "
-        "process_started=false and exit_code=null. Runtime freezes its SHA and "
-        "matches only immutable MIN-EV Observed facts. If evidence is missing, "
-        "recollect with read_runtime_evidence or typed observation tools, "
-        "NEVER replay a possibly side-effecting action. If a trustworthy fact "
-        "contradicts Expected, replan toward the original frozen user goal. "
-        "Assertion PASS never overrides the independent Safety Gate. "
-        "Only final user-goal completion or proven infeasibility deserves a "
-        "terminal PASS/FAIL; interim errors require recovery, not closure.\\n"
-        "Git73 P7 intentional Timeout: use bounded run_command operation=TEST "
-        "with timeout=1 and a command expected to take longer (e.g. Python sleep 4). "
-        "Predeclare expected.assertions for data.timed_out=true, "
-        "data.process_started=true and data.exit_code is_null. "
-        "Predeclare reconciliation={version:1,checks:[{tool:observe_fact,"
-        "path:<absolute Windows fixture goal path strictly below working_directory>,"
-        "expected_exists:true}]}; no extra keys, strings or parent traversal. "
-        "Use the actual task-scoped fixture root as working_directory. "
-        "If admission returns timeout_reconciliation_invalid, inspect "
-        "admission_diagnostic.field_issues.constraint_code and repair the "
-        "nonexecuted proposal; do not weaken the scope or replay an executed action. "
-        "After observed Timeout, preserve UNKNOWN and use only frozen read-only "
-        "reconciliation before any unrelated next action.\\n"
-        
-        "Git74 long-running commands: for a process-owned Python, EXE or build launcher "
-        "whose completion is its own process exit, use run_command.wait_policy=UNTIL_EXIT "
-        "only with ACL OFF, Turbo OFF and Auto Approve Effective ON. The Runtime waits "
-        "on the actual OS-owned process handle, not a guessed number of seconds; "
-        "the Telegram wait prompt has a 600-second nonresponse auto-continue, NOT "
-        "a command approval. If the process exits earlier, resume immediately. "
-        "The process exit does not prove a detached child, GUI service or LLM server "
-        "request finished: verify separate postconditions. Keep wait_policy=BOUNDED "
-        "for intentional Git71 P7 one-second Timeout testing. Do not retry or bypass "
-        "security checks when UNTIL_EXIT is rejected.\\n"
-        "Observe first; decide from actual ToolResult. If missing, a permitted "
-        "tool may create the requested target. Independently inspect after mutation. "
-        "Use observe_fact for exact file existence and type. For an inspect_directory "
-        "PARTIAL with not_a_directory, obtain a fresh observe_fact on each affected file. "
-        "Do not repeat potentially executed mutations without new evidence. "
-        "ToolResult.isSuccess means the tool succeeded, NOT that an observed "
-        "boolean was true or that the whole user task is verified.\n"
-        "Each ToolResult uses EXACT PokeClaw fields: isSuccess, data, error. "
-        "Admission rejection is a separate REJECTED event, never an executed "
-        "ToolResult. A rejected proposal cannot prove filesystem absence. "
-        "Resolve all Admission field_issues before resubmitting; "
-        "Runtime never rewrites the command or grants authority. "
-        "Incomplete outputs cannot prove missing content. "
-        "Runtime security and precise path authorization always apply.\n"
-        "For natural-language questions, external news comparison, research, "
-        "summaries and reasoning with no machine action, behave exactly like "
-        "normal ACL OFF dialogue in ALL ACL/Turbo modes. If English news "
-        "verification needs current evidence, use web_search; never invent "
-        "sources, and never replace web_search with run_command, PowerShell, "
-        "Python, curl or a local shell. Non-command actions do NOT require "
-        "Turbo Sandbox or a native OS Broker. Native Broker is required only "
-        "when the admitted action actually runs an OS command or changes "
-        "user filesystem state; natural-language file-edit requests are "
-        "still real mutations.\n"
-        "Git74.1 legacy Goal Driver and Prerequisite engines are DISABLED. "
-        "Git75 Stage Controller is active for compound goals. "
-        "There is no fixed task-specific sequence gate. "
-        "Shared Blackboard records each round automatically; never ask a tool "
-        "to write its own evidence record. At Finish report the actual status "
-        "of every requested step. For tool tasks REQUIRE contract_version=2 with a concise "
-        "summary and task-relevant goal_checks from real MIN-EV refs. "
-        "Do NOT copy all ToolResults into expected_runtime for V2; the Runtime "
-        "loads and validates every action itself, including failed and rejected "
-        "operations. Legacy V1 is only accepted for answer-only responses; the historical V1 comparator requires one expected_runtime entry for "
-        "EACH ToolResult. For an uncompiled multi-step goal, include typed "
-        "data.* predicates for all essential completion criteria, using "
-        "actual observed scalar values, never fabricated evidence. The "
-        "Runtime alone decides PASS, based on its immutable history and "
-        "original goal.\n"
-        f"Task working directory (NOT authorization workspace): {tools.workspace_root}\n"
-        "Native preexecution denials are NOT executed ToolResults and cannot "
-        "prove filesystem facts or permission. If an explicit external script "
-        "or executable is untrusted, replan a DISTINCT, scope-compliant action. "
-        "Do not repeat the rejected command or use a host-executor fallback. "
-        "Native rejection history (nonexecuted): "
-        + json.dumps(preexecution_rejections or [], ensure_ascii=False,
-                     separators=(",", ":"))[-1500:] + "\n"
-        "When Turbo status is BROKER_ENROLLED with native_broker_tools, "
-        "turbo_effective=OFF and sandbox_status=NOT_READY indicate that "
-        "per-action OS attestation is pending, NOT that a tool call is forbidden. "
-        "Propose an allowed tool_call; Runtime must attest or reject it. "
-        "Never claim OS execution or isolation without actual ToolResult evidence.\n"
-        + native_child_hint
-        + "Turbo configured scope (advisory only; every Action is independently "
-        "readmitted, never assume this grants permission):\n"
-        + json.dumps(turbo_planning_context or {}, ensure_ascii=False,
-                     separators=(",", ":"))[:1600] + "\n"
-        "Environment Inventory (Runtime-owned; recorded paths require a fresh scoped re-probe):\n"
-        + json.dumps(environment_inventory or {}, ensure_ascii=False,
-                     separators=(",", ":"))[:5000] + "\n"
-        "If an extra tool was installed, verify its executable using an admitted "
-        "absolute-path --version command; only Runtime evidence may update the "
-        "shared Software Registry. Reuse existing probed environments before "
-        "installing. Recorded paths never grant ACL or execution authority.\n"
-        "For local Project Sync, use strategy=INDEX_ONLY (including text-only "
-        "browser transport); FULL_BUNDLE and DELTA need browser upload.\n"
-        "Available tools: " + json.dumps(
-            catalog, ensure_ascii=False, separators=(",", ":")) + "\n"
+        "You are the Goal-driven Planner. Use real tools to complete the original "
+        "request. Return exactly ONE JSON decision.\n"
+        'Action: {"type":"tool_call","name":"observe_fact","arguments":{"path":"C:\\\\example"}}\n'
+        'Finish: {"type":"finish","summary":"actual result","goal_checks":[{"criterion":"original requirement (include its P0/Case A label if any)","evidence_ref":"actual MIN-EV","field":"data.actual_field","operator":"eq","expected":"actual required value"}]}\n'
+        'Blocked: {"type":"blocked","reason":"specific external constraint, exhausted lawful alternatives and concrete user action needed"}\n'
+        "No mandatory StagePlan or StageCommit. Revise the plan freely within "
+        "original constraints; preserve completed work. A failed attempt, schema "
+        "error, rejection or missing evidence means replan, not terminate. "
+        "Blocked requires actual Runtime permission/resource evidence. "
+        "Do not invent facts or claim success without evidence.\n"
+        "Security: every action is independently admitted. Never bypass ACL, "
+        "approval, native broker, scope, or user prohibitions; no Host fallback "
+        "when native Turbo is required. Never disguise mutation as read-only. "
+        "Non-command observations and web_search do not need a command sandbox.\n"
+        "Observe actual state; do not guess Expected on exploratory reads. "
+        "Expected is optional except when needed for explicit negative tests "
+        "or timeout reconciliation. Mutations still need the tool's required "
+        "verification/postcondition. Do not replay uncertain mutations. "
+        "For pinned source deployments verify remote commit, tree/blob and local "
+        "archive hash before deletion or deployment.\n"
+        "Intentional Timeout test: BOUNDED, freeze expected timed_out, process_started "
+        "and exit_code is_null, and reconciliation={version:1,checks:[{tool:observe_fact,"
+        "path:<absolute scoped path below working_directory>,expected_exists:true}]}. "
+        "After timeout perform only frozen readonly checks; no replay. "
+        "UNTIL_EXIT only with ACL OFF, Turbo OFF, Auto Approve Effective ON; process "
+        "exit does not prove detached child completion.\n"
+        "For local Project Sync use INDEX_ONLY. Verify actual current bytes. "
+        "Use read_runtime_evidence for truncated or older MIN-EV "
+        "(raw_result/receipt/stdout/stderr/metadata); do not rerun to obtain saved output. "
+        "For older events use read_runtime_blackboard.\n"
+        "For compiled goals Runtime checks original conditions automatically. For "
+        "uncompiled goals provide typed goal_checks covering every essential "
+        "requirement, including each original explicitly numbered phase. A repeated "
+        "fact cannot substitute for separate requirements. No need to restate all "
+        "Runtime records or send expected_runtime. Pure text may finish with "
+        "summary alone only when answer-only eligible.\n"
+        f"Working directory (not an authorization grant): {tools.workspace_root}\n"
         "Original user request:\n" + request + "\n"
-        + ("[GIT75_FROZEN_STAGE_CONTROL]\n" + stage_context
-           + "\n[/GIT75_FROZEN_STAGE_CONTROL]\n" if stage_context else "")
-        + "Frozen Requirement-to-Goal State Contract (Runtime compiled before "
-        "any ToolCall; source-grounded and NOT a permission grant):\n"
-        + json.dumps(goal_state_contract or {}, ensure_ascii=False,
-                     separators=(",", ":"))[:5500] + "\n"
-        "For COMPILED contracts, final Goal acceptance is computed from this "
-        "frozen contract and actual ToolResults, NOT Planner-authored goal_checks. "
-        "A diagnostic goal can be satisfied by truthful UNVERIFIED findings "
-        "when the request explicitly permits this; it does not prove a "
-        "Git/Python child process ran. Report every unknown explicitly. "
-        "For UNCOMPILED requirements, no generic goal state is invented; "
-        "legacy evidence-backed checks remain in force.\n"
-        f"Round: {round_id}/{max_rounds}\n"
-        "Unified P0 Preflight (Runtime-owned single snapshot, NOT permission and NOT an accepted MIN-EV):\n"
-        + json.dumps(unified_preflight or {}, ensure_ascii=False, separators=(",", ":"))[:3500]
-        + "\nIf READY_FOR_ADMISSION, do not repeat broad environment/security directory "
-        "exploration. Proceed with the first task Action using normal Admission. "
-        "On a source index STALE_REINDEX_REQUIRED use a scoped, normally admitted "
-        "INDEX_ONLY/query_project refresh, not assumed cached source bytes. "
-        "If actual ToolResult contradicts cached facts, use refreshed Runtime "
-        "facts and REPLAN without replaying uncertain actions.\n"
-        "Runtime ToolResult Status Ledger (all actual results, not only recent six; "
-        "rejected admissions are NOT ToolResults):\n"
-        + json.dumps(runtime_status_catalog or [], ensure_ascii=False,
-                     separators=(",", ":"))[:8500] + "\n"
-        "Runtime evidence is lossless and task-bound: small stdout/stderr "
-        "are in ToolResult.data. If a result has truncated=true or missing "
-        "required content, call read_runtime_evidence using the real MIN-EV "
-        "reference, section=raw_result/receipt/stdout/stderr/metadata and "
-        "offset/max_chars for pagination; do not replay commands to recover "
-        "previously observed facts. A pointer is not a proof of a fact until "
-        "you read it. No evidence read grants OS command authorization.\n"
-        "Executor Blackboard is a bounded projection plus an append-only event archive. "
-        "For historical events, use read_runtime_blackboard section=events_index "
-        "to find sequence IDs, then section=event with sequence and offset/max_chars. "
-        "section=terminal and section=metadata show task-bound state. Do not infer "
-        "absence from a last-six-result preview. Evidence and Blackboard reads "
-        "never authorize command execution.\n"
-        "Recent actual PokeClaw ToolResults:\n" + json.dumps(
-            recent[-6:], ensure_ascii=False, separators=(",", ":")) + "\n"
-        "Upstream evidence requirement (Runtime-owned minimum, not task plan):\n"
-        + json.dumps(evidence_requirement or {}, ensure_ascii=False, separators=(",", ":")) + "\n"
-        "Finish without ToolResult is allowed ONLY if answer_only_eligible=true, "
-        "no action was attempted and the answer is valid. For TEXT-only, "
-        "expected_runtime must be [] (or omitted), goal_checks need no tool. "
-        "For tasks requiring tools or external state, text alone is NEVER "
-        "completion evidence. Mixed tasks must retain all ToolResults.\n"
-        "Runtime available Finish fields (derived, NOT a required template):\n"
-        + json.dumps(field_catalog or [], ensure_ascii=False, separators=(",", ":"))[:6800] + "\n"
-        + (f"Runtime repair information: {hint}\n" if hint else "")
+        "Original phase labels (coverage, not execution order): "
+        + json.dumps(original_goal_stage_ids(request), ensure_ascii=False) + "\n"
+        "Tool catalog: " + json.dumps(tool_catalog(tools), ensure_ascii=False,
+                                      separators=(",", ":")) + "\n"
+        "Goal conditions: " + json.dumps(goal_state_contract or {}, ensure_ascii=False,
+                                          separators=(",", ":"))[:5500] + "\n"
+        "Evidence requirement: " + json.dumps(evidence_requirement or {},
+                                                ensure_ascii=False) + "\n"
+        "Turbo: " + json.dumps(turbo_planning_context or {}, ensure_ascii=False)[:1600] + "\n"
+        "Environment (advisory): " + json.dumps(environment_inventory or {},
+                                                 ensure_ascii=False)[:3000] + "\n"
+        "Recent real results: " + json.dumps(recent[-6:], ensure_ascii=False,
+                                              separators=(",", ":")) + "\n"
+        "Evidence field catalog (reuse these facts): " +
+        json.dumps(field_catalog or [], ensure_ascii=False, separators=(",", ":"))[:6800] + "\n"
+        "Recent native denials: " + json.dumps(preexecution_rejections or [],
+                                               ensure_ascii=False)[-1500:] + "\n"
+        f"Round {round_id}/{max_rounds}\n"
+        + (f"Runtime feedback: {hint}\n" if hint else "")
         + "[/POKECLAW_EXECUTOR_LOOP_V1]"
     )
 
@@ -438,58 +341,20 @@ def _terminal_receipt(loop, summary: str, board: Mapping,
 
 def _finish(loop, root: Path, request: str, *, kind: str,
             summary: str, complete: bool, expected_runtime=None,
-            goal_checks=None, canonical_finish=None) -> str:
-    # The Executor Blackboard is OPEN until finish_executor_run().
-    # Persist the Stage coverage gate *before* closing it. Never append an
-    # event to a terminalized ledger (would raise not_open and lose delivery).
-    goal75_coverage = None
-    if complete:
-        source_board = read_executor_run(
-            root, task_id=loop.task_id, request_id=loop.run_id,
-            task_epoch=loop.task_epoch,
-        ) or {}
-        required = requires_stage_control(
-            request,
-            goal_state_contract=source_board.get("goal_state_contract") or {},
-            answer_only_eligible=(
-                source_board.get("evidence_requirement") or {}
-            ).get("answer_only_eligible", False),
-        )
-        if required:
-            ledger = GoalStageLedger(
-                root, task_id=loop.task_id, request_id=loop.run_id,
-                task_epoch=loop.task_epoch, goal=request)
-            goal75_coverage = final_stage_coverage(
-                request, ledger.read(), control_required=True)
-            append_executor_event(root, loop, {
-                "round": getattr(loop, "turn_id", 0),
-                "kind": "GOAL75_TERMINAL_COVERAGE_GATE",
-                "stage_coverage": goal75_coverage,
-                "executed": False, "authorization_granted": False,
-            })
+            goal_checks=None, canonical_finish=None, comparison=None) -> str:
+    # Only the decision loop's verified open-ledger verdict may close success.
+    if complete and (not isinstance(comparison, Mapping)
+                     or comparison.get("verdict") != "PASS"):
+        raise ValueError("lean_finish_requires_verified_open_ledger")
     board = finish_executor_run(
         root, loop, terminal_kind=kind, summary=summary,
         reported_outcome="UNKNOWN",
     )
-    comparison = None
     if complete:
-        comparison = compare_runtime_finish(loop, root, request, expected_runtime,
-                                            goal_checks=goal_checks,
-                                            answer=summary,
-                                            canonical_finish=canonical_finish)
-        # Git74.1 final Comparator is the unmodified authority.
-        # Git75 Stage coverage is a *prerequisite* to terminal SUCCESS.
-        if (goal75_coverage is not None
-                and goal75_coverage["status"] != "PASS"
-                and comparison["verdict"] == "PASS"):
-            comparison = {
-                **comparison, "verdict": "FAIL",
-                "reason_code": "GOAL75_ORIGINAL_GOAL_COVERAGE_NOT_VERIFIED",
-                "failure_origin": "GOAL_EVIDENCE_INCOMPLETE",
-                "goal_evidence_reason": goal75_coverage["reason_code"],
-                "coverage_basis": "GOAL75_STAGE_COVERAGE_NOT_VERIFIED",
-                "goal75_coverage": goal75_coverage,
-            }
+        if (board["terminal"]["tool_evidence_refs"] != comparison["evidence_refs"]
+                or board["terminal"]["summary_sha256"] != hashlib.sha256(
+                    summary.encode("utf-8")).hexdigest()):
+            raise ValueError("lean_finish_evidence_changed_during_commit")
         board = record_finish_comparison(root, loop, comparison)
     loop.executor_blackboard_terminal = board
     blocking_evidence = _blocking_runtime_evidence(loop, board) if not complete else None
@@ -510,9 +375,11 @@ def _finish(loop, root: Path, request: str, *, kind: str,
     else:
         loop.terminal_acceptance = {}
         loop.terminal_outcome = "BLOCKED" if kind == "BLOCKED" else "UNKNOWN"
-        loop.protocol_state = "BLOCKED"
+        loop.protocol_state = "BLOCKED" if kind != "MAX_ROUNDS" else "INTERRUPTED"
         set_runtime_state(
-            loop.task_id, "PAUSED", reason=kind, root=loop.progress_root,
+            loop.task_id, "INTERRUPTED" if kind == "MAX_ROUNDS" else "PAUSED",
+            reason=("EXECUTION_BUDGET_CHECKPOINT" if kind == "MAX_ROUNDS" else kind),
+            root=loop.progress_root,
         )
     if hasattr(loop, "_emit"):
         loop._emit(
@@ -614,28 +481,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
     loop.terminal_acceptance = {}
     loop.terminal_outcome = "UNKNOWN"
     recent = []
-    last_fingerprint = ""
-    repeated = 0
-    invalids = 0
-    finish_repairs = 0
-    max_finish_repairs = 2
-    stage_required = requires_stage_control(
-        request, goal_state_contract=goal_state_contract,
-        answer_only_eligible=requirement.get("answer_only_eligible", False),
-    )
-    stage_ledger = (GoalStageLedger(
-        root, task_id=loop.task_id, request_id=loop.run_id,
-        task_epoch=loop.task_epoch, goal=request,
-    ) if stage_required else None)
-    stage_recovery_attempts = 0
-    failed_action_signatures = set()
-    finish_grace_rounds = 2
-    finish_repair_only = False
-    last_finish_reason = ""
-    last_finish_diagnostic = None
     admission_repair_counts = {}
     consecutive_admission_rejections = 0
-    max_consecutive_admission_rejections = 10
     hint = ""
     source = getattr(loop, "continuation_source", None) or {}
     if isinstance(source, Mapping) and source:
@@ -668,30 +515,11 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         summary as unified_summary,
         action_observed as unified_action_observed,
     )
-    try:
-        preflight = begin_unified_preflight(
-            root, loop.workspace, task_id=loop.task_id, request_id=loop.run_id)
-        environment_inventory = unified_inventory(root, loop.workspace, preflight)
-        append_executor_event(root, loop, {
-            "round": 0, "kind": "UNIFIED_PREFLIGHT",
-            "preflight": unified_summary(preflight),
-            "executed": False, "authorization_granted": False,
-        })
-    except (OSError, ValueError, RuntimeError, TypeError) as exc:
-        preflight = {"status": "UNAVAILABLE", "error_class": type(exc).__name__}
-        environment_inventory = {
-            "status": "PREFLIGHT_UNAVAILABLE", "execution_authorized": False,
-        }
-        append_executor_event(root, loop, {
-            "round": 0, "kind": "UNIFIED_PREFLIGHT_UNAVAILABLE",
-            "error_class": type(exc).__name__, "authorization_granted": False,
-        })
+    # Lazy advisory inventory, not a prerequisite for reads or text.
+    preflight = {"status": "DEFERRED"}
+    environment_inventory = {}
     max_rounds = min(int(loop.max_turns), 1000)
-    for turn in range(1, max_rounds + finish_grace_rounds + 1):
-        # Extra turns are strictly for repairing an already submitted Finish;
-        # they do not increase the number of executable ToolCall rounds.
-        if turn > max_rounds and not finish_repair_only:
-            break
+    for turn in range(1, max_rounds + 1):
         loop._check_cancelled()
         loop.turn_id = turn
         loop.tools._protocol_turn_seq = turn
@@ -713,78 +541,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "native_broker_tools": list(turbo_context.get("native_broker_tools") or ()),
                 "executed": False, "authorization_granted": False,
             })
-        stage_context = ""
-        if stage_ledger is not None:
-            view = stage_ledger.readiness()
-            if view["status"] == "NO_STAGE_PLAN":
-                stage_context = (
-                    "MANDATORY before any ToolCall: submit one stage_plan "
-                    "with every original explicit phase ID "
-                    + json.dumps(original_goal_stage_ids(request)) +
-                    ". JSON schema: {type:stage_plan, stages:[{stage_id:P0,"
-                    "description:goal requirement,depends_on:[],"
-                    "acceptance:[{field:data.verification_status,"
-                    "operator:eq,expected:PASS}]}]}. Quote JSON strings. "
-                    "Each Stage must have substantive, observable data.* "
-                    "postconditions (not exit_code=0 alone). Frozen Stage "
-                    "plan cannot authorize operations or permissions. "
-                    "For path existence use observe_fact with the exact authorized "
-                    "absolute subject and the frozen acceptance shape "
-                    '{"field":"data.observations.0.value","operator":"eq",'
-                    '"expected":false,"binding":{"kind":"file.exists",'
-                    '"subject":"<absolute path from goal>","before_mutation":true}}. '
-                    "Set before_mutation only for preconditions; use true/false as "
-                    "required by the goal. Never use the invented data.exists. "
-                    "For the observe_fact action expected contract assert "
-                    "data.observations.0.value and the required Boolean. "
-                    "For exact Git HEAD reads use GIT_INSPECT with "
-                    "git rev-parse --verify HEAD (data.git_local_head_sha) or "
-                    "git ls-remote --exit-code --heads <literal GitHub HTTPS URL> "
-                    "refs/heads/<branch> (data.git_remote_head_sha and "
-                    "data.git_remote_ref). Compare typed identities, not the "
-                    "raw stdout containing tabs or a ref suffix. Do not treat "
-                    "one directory existence check as full repository proof. "
-                    "All remaining substantive requirements need distinct checks."
-                )
-            elif view.get("current_stage_id"):
-                stage_context = (
-                    "PREVIOUS STAGES FROZEN. Work only on CURRENT Stage. "
-                    "Runtime auto-commits when persisted MIN-EV passes "
-                    "predeclared Expected/Observed and every frozen Stage "
-                    "acceptance predicate; do not submit redundant StageCommit. "
-                    "If not independently proven, submit "
-                    "{type:stage_commit,stage_id:<current_stage_id>,"
-                    "evidence_refs:[<MIN-EV>]}. "
-                    "After failure choose a DIFFERENT authorized approach; "
-                    "never replay a committed mutation. For a frozen file.exists "
-                "binding the Runtime reads the same-task historical MIN-EV; "
-                "never re-observe a before_mutation fact after the mutation. "
-                "Current ledger="
-                    + json.dumps(view, ensure_ascii=False,
-                                 separators=(",", ":"))[:6000]
-                )
-            else:
-                stage_context = (
-                    "All frozen Stages are committed. Only now submit "
-                    "Git74.1 Finish V2. Final Runtime Goal Comparator must "
-                    "still verify the ORIGINAL request."
-                )
         prompt = _prompt(
-            request, loop.tools, recent, round_id=turn,
-            max_rounds=max_rounds, hint=hint,
-            field_catalog=finish_runtime_field_catalog(loop),
-            evidence_requirement=requirement,
-            goal_state_contract=goal_state_contract,
+            request, loop.tools, recent, round_id=turn, max_rounds=max_rounds,
+            hint=hint, field_catalog=finish_runtime_field_catalog(loop),
+            evidence_requirement=requirement, goal_state_contract=goal_state_contract,
             environment_inventory=environment_inventory,
-            unified_preflight=unified_summary(preflight),
-            runtime_status_catalog=(
-                __import__("agent_core.runtime_finish_status_repair",
-                           fromlist=["finish_runtime_status_catalog"])
-                .finish_runtime_status_catalog(loop)
-            ),
             turbo_planning_context=turbo_context,
             preexecution_rejections=native_preexecution_rejections[-3:],
-            stage_context=stage_context,
         )
         hint = ""
         attachments = loop.tools.take_pending_attachments()
@@ -835,512 +598,88 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     str(response).encode("utf-8")
                 ).hexdigest(),
             }, evidence_status="PARSE_REJECTED", extra={"round": turn})
-            invalids += 1
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_DECISION_REJECTED",
                 "decision_sha256": _digest(str(response)),
                 "error_code": exc.code, "executed": False,
             })
-            if finish_repair_only and stage_ledger is not None:
-                hint = "FINISH_REPAIR_FORMAT: submit valid Finish V2; no new tools."
-                continue
-            if finish_repair_only:
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
-                    "reason_code": "REPAIR_DECISION_FORMAT_INVALID",
-                    "error_code": exc.code, "repair_attempts": finish_repairs,
-                    "executed": False,
-                })
-                return _finish(
-                    loop, root, request, kind="FINISH_CONTRACT_INVALID",
-                    summary="FAIL：Finish 修復回合輸出無效：" + exc.code,
-                    complete=False,
-                )
-            if invalids >= 3 and stage_ledger is None:
-                return _finish(
-                    loop, root, request, kind="FORMAT_ERROR",
-                    summary="模型決策格式連續三次無效：" + exc.code,
-                    complete=False,
-                )
-            hint = (
-                "上一輪 Finish 訊息無效：summary 或 reason 必須為 1..3000 字元；"
-                "請使用 contract_version=2 的簡短 summary；不要抄錄所有 Runtime Evidence。"
-                if exc.code == "decision_message_invalid" else
-                "上一輪 JSON 格式無效：" + exc.code
-            )
+            hint = "DECISION_REPAIR: " + exc.code + ". Return one valid JSON decision."
             continue
-        invalids = 0
-        # Git75: these are Planner *decisions*, not tool actions.
-        # A StagePlan never authorizes a path, shell or security bypass.
-        if decision.kind == "stage_plan":
-            if stage_ledger is None or stage_ledger.read() or recent:
-                hint = "STAGE_PLAN_NOT_ADMITTED: only before first Action."
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "GOAL75_STAGE_PLAN_REJECTED",
-                    "reason_code": "PLAN_LATE_OR_NOT_REQUIRED",
-                    "executed": False,
-                })
-                continue
-            coverage = validate_stage_plan_coverage(request, decision.stage_plan)
-            if coverage["status"] != "PASS":
-                hint = (
-                    "STAGE_PLAN_COVERAGE_INVALID: " +
-                    json.dumps(coverage, ensure_ascii=False)[:1800] +
-                    ". Preserve every explicit original Goal phase."
-                )
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "GOAL75_STAGE_PLAN_REJECTED",
-                    "coverage": coverage, "executed": False,
-                })
-                continue
-            try:
-                for stage in decision.stage_plan:
-                    if not isinstance(stage, Mapping) or not isinstance(stage.get("acceptance"), list):
-                        continue
-                    for check in stage["acceptance"]:
-                        if isinstance(check, Mapping) and check.get("field") == "data.exists":
-                            raise ValueError("goal76_ambiguous_exists_field_use_bound_observe_fact")
-                frozen = stage_ledger.create(decision.stage_plan)
-            except ValueError as exc:
-                hint = "STAGE_PLAN_SCHEMA_INVALID: " + str(exc)[:180]
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "GOAL75_STAGE_PLAN_REJECTED",
-                    "reason_code": str(exc)[:160], "executed": False,
-                })
-                continue
+        if decision.kind in {"stage_plan", "stage_commit"}:
             append_executor_event(root, loop, {
-                "round": turn, "kind": "GOAL75_STAGE_PLAN_FROZEN",
-                "stage_count": len(frozen["stages"]),
-                "coverage": coverage, "executed": False,
+                "round": turn, "kind": "LEAN_LEGACY_STAGE_ADVISORY",
+                "decision_kind": decision.kind, "executed": False,
+                "authorization_granted": False,
             })
-            continue
-        if decision.kind == "stage_commit":
-            if stage_ledger is None or stage_ledger.read() is None:
-                hint = "STAGE_COMMIT_REJECTED: no frozen Stage plan."
-                continue
-            active = stage_ledger.current()
-            if active is None or active["stage_id"] != decision.stage_id:
-                hint = ("STAGE_COMMIT_REJECTED: only current uncommitted "
-                        "Stage can be committed; never reopen frozen Stages.")
-                continue
-            try:
-                stage_ledger.commit(
-                    decision.stage_id,
-                    evidence_refs=decision.evidence_refs or [],
-                )
-                stage_recovery_attempts = 0
-                failed_action_signatures.clear()
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "GOAL75_STAGE_VERIFIED_COMMITTED",
-                    "stage_id": decision.stage_id,
-                    "evidence_refs": decision.evidence_refs,
-                    "executed": False,
-                })
-            except ValueError as exc:
-                stage_recovery_attempts += 1
-                recovery = choose_stage_recovery(
-                    reason_code="STAGE_ACCEPTANCE_UNVERIFIED",
-                    stage_id=decision.stage_id,
-                    attempt=stage_recovery_attempts,
-                )
-                stage_ledger.recover(
-                    decision.stage_id, reason_code=str(exc)[:120],
-                    strategy_id=recovery["strategy_id"],
-                )
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
-                    "stage_id": decision.stage_id, "reason_code": str(exc)[:120],
-                    "strategy_id": recovery["strategy_id"],
-                    "executed": False,
-                })
-                hint = (
-                    "STAGE_ACCEPTANCE_NOT_PROVEN: obtain new actual evidence "
-                    "or choose a different authorized strategy. Never weaken "
-                    "a frozen predicate. " + str(exc)[:120]
-                )
-            continue
-        if stage_ledger is not None and decision.kind == "tool_call" and (
-                stage_ledger.read() is None):
-            hint = (
-                "GOAL75_STAGE_PLAN_REQUIRED: submit a complete frozen "
-                "stage_plan before any tool_call; no tool executed."
-            )
-            append_executor_event(root, loop, {
-                "round": turn, "kind": "GOAL75_TOOL_DEFERRED_FOR_STAGE_PLAN",
-                "executed": False, "authorization_granted": False,
-            })
-            continue
-        if stage_ledger is not None and decision.kind == "finish":
-            view = stage_ledger.readiness()
-            if view["status"] == "NO_STAGE_PLAN" or view.get("current_stage_id"):
-                hint = (
-                    "GOAL75_EARLY_FINISH_REJECTED: complete ORIGINAL user "
-                    "Goal first. Current Stage: " +
-                    str(view.get("current_stage_id") or "UNFROZEN_PLAN") +
-                    ". Recover with a different authorized method and "
-                    "actual Evidence. Finish cannot create Stage commits."
-                )
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "GOAL75_EARLY_FINISH_REJECTED",
-                    "stage_readiness": view, "executed": False,
-                })
-                continue
-        if decision.kind == "finish" and pending_unknown_timeout:
-            # An unexecuted approval-gated action cannot be hidden by a
-            # model Finish or mistaken for positive goal evidence.
-            return _finish(
-                loop, root, request, kind="BLOCKED",
-                summary="FAIL：UNKNOWN_COMMAND_APPROVAL_TIMEOUT；尚缺執行證據。"
-                        "可接續任務並重新授權，不會重播原指令。"
-                        " approval_id=" + pending_unknown_timeout["approval_id"],
-                complete=False,
-            )
-        if decision.kind == "finish" and decision.contract_version != 2 and (
-            bool(getattr(loop, "action_result_ledger", None))
-            or bool(getattr(loop, "_canonical_action_proposals", None))
-            or not requirement.get("answer_only_eligible", False)
-        ):
-            # No silent V1 -> V2 conversion: existing claims are not evidence.
-            append_executor_event(root, loop, {
-                "round": turn, "kind": "MODEL_FINISH_V2_REQUIRED",
-                "reason_code": "LEGACY_FINISH_TOOL_TASK_FORBIDDEN",
-                "submitted_contract_version": decision.contract_version,
-                "executed": False, "authorization_granted": False,
-            })
-            finish_repairs += 1
-            if finish_repairs > max_finish_repairs and stage_ledger is None:
-                return _finish(
-                    loop, root, request, kind="FINISH_CONTRACT_INVALID",
-                    summary="工具型任務禁止 Legacy V1 Finish，且修復次數已耗盡。",
-                    complete=False,
-                )
-            finish_repair_only = True
-            hint = (
-                "工具型任務的 V1 Finish 已拒絕，原始工具結果不變。"
-                "請改成 contract_version=2 的 finish，完全省略 expected_runtime；"
-                "goal_checks 僅引用確實觀測的 data.* scalar。"
-                "若必要前置條件失敗，請回覆 blocked 而非 finish。"
-                "禁止新的 ToolCall、刪除或其他副作用。"
-            )
+            hint = "Stages are advisory. Proceed with the next useful Action or Finish."
             continue
         if decision.kind == "finish":
-            canonical_finish = (
-                adapt_finish_contract_v2(
-                    decision, task_id=loop.task_id, request_id=loop.run_id,
-                    task_epoch=loop.task_epoch, frozen_goal_contract=goal_state_contract,
-                ) if decision.contract_version == 2 else None
-            )
-            preview = (
-                compare_runtime_finish(
-                    loop, root, request, decision.expected_runtime,
-                    goal_checks=decision.goal_checks, allow_open=True,
-                    answer=decision.message, canonical_finish=canonical_finish,
-                )
-                if decision.expected_runtime or canonical_finish else None
+            if pending_timeout_reconciliation is not None:
+                hint = ("RECONCILIATION_REQUIRED: finish cannot hide uncertain effects; "
+                        "perform the exact frozen readonly checks first.")
+                continue
+            if pending_unknown_timeout:
+                return _finish(loop, root, request, kind="BLOCKED",
+                    summary="WAITING_EXTERNAL: UNKNOWN_COMMAND_APPROVAL_TIMEOUT; "
+                            "a required action still needs authorization.",
+                    complete=False)
+            # Transport version is Runtime-owned. No invented checks.
+            if decision.contract_version != 2 and (
+                getattr(loop, "action_result_ledger", None)
+                or not requirement.get("answer_only_eligible", False)
+            ):
+                if decision.expected_runtime not in (None, []):
+                    hint = "FINISH: omit legacy expected_runtime; reuse actual goal_checks."
+                    continue
+                decision = replace(decision, contract_version=2)
+            canonical_finish = (adapt_finish_contract_v2(
+                decision, task_id=loop.task_id, request_id=loop.run_id,
+                task_epoch=loop.task_epoch, frozen_goal_contract=goal_state_contract,
+            ) if decision.contract_version == 2 else None)
+            preview = compare_runtime_finish(
+                loop, root, request, decision.expected_runtime,
+                goal_checks=decision.goal_checks, allow_open=True,
+                answer=decision.message, canonical_finish=canonical_finish,
+                lean_goal=True,
             )
             append_executor_event(root, loop, {
                 "round": turn, "kind": "MODEL_FINISH_PROPOSAL",
-                "expected_runtime_sha256": _digest(decision.expected_runtime),
-                "goal_checks_sha256": _digest(decision.goal_checks),
                 "finish_input": finish_input_projection(
-                    decision.expected_runtime, decision.goal_checks,
-                ),
-                "contract_version": decision.contract_version,
-                "canonical_finish_schema": (
-                    canonical_finish["schema"] if canonical_finish else ""
-                ),
-                "comparator_reason_code": preview["reason_code"] if preview else "",
-                "good_refs": [
-                    row["evidence_ref"] for row in preview.get("tool_results", ())
-                    if row["executed"] is True
-                    and row["execution_status"] in {"SUCCEEDED", "FAILED"}
-                ] if preview else [],
+                    decision.expected_runtime, decision.goal_checks),
+                "comparator_reason_code": preview["reason_code"],
+                "verdict": preview["verdict"], "executed": False,
             })
-            # Each Finish is checked against read-back Runtime evidence before
-            # terminalization. Repairable schema failures get precise, bounded
-            # diagnostics; the Runtime never modifies claims on the model's behalf.
-            if preview is not None:
-                from agent_core.runtime_finish_status_repair import diagnose_finish_status_mismatch
-                status_repair_diagnostic = diagnose_finish_status_mismatch(preview)
-                from agent_core.runtime_finish_status_repair import diagnose_missing_postrun_evidence
-                postrun_gap = diagnose_missing_postrun_evidence(preview)
-                binding_gap = (
-                    preview.get("finish_diagnostic")
-                    if preview["reason_code"] == "GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE"
-                    else None
-                )
-                from agent_core.finish_semantic_repair import diagnose_finish_semantic_mismatch
-                semantic_repair = diagnose_finish_semantic_mismatch(preview, request)
-                if semantic_repair and not semantic_repair.get("repair_only"):
-                    # A real desired-state failure is not a recoverable
-                    # model formatting problem. Preserve comparator FAIL.
-                    semantic_repair = None
-                repairable = {
-                    "MODEL_FINISH_GOAL_FACT_NOT_DECLARED",
-                    "MODEL_GOAL_CHECKS_REQUIRED",
-                    "MODEL_GOAL_CHECK_SCHEMA_INVALID",
-                    "MODEL_GOAL_CHECK_OPERATOR_TYPE_INVALID",
-                    "EXPECTED_RUNTIME_FIELDS_INVALID",
-                    "EXPECTED_RUNTIME_SCHEMA_INVALID",
-                    "EXPECTED_RUNTIME_FIELD_TYPE_INVALID",
-                }
-                if status_repair_diagnostic is not None:
-                    repairable.add("MODEL_RUNTIME_MISMATCH")
-                if postrun_gap is not None:
-                    repairable.add("GOAL_CHECK_RUNTIME_MISMATCH")
-                if semantic_repair is not None:
-                    repairable.add(str(preview.get("reason_code") or ""))
-                # A frozen Goal Contract can request further read-only
-                # evidence or a corrected diagnostic report, but neither
-                # its expected values nor source SHA may be rewritten.
-                contract_gap = (
-                    preview.get("finish_diagnostic")
-                    if preview.get("reason_code") == "FROZEN_GOAL_STATE_NOT_SATISFIED"
-                    else None
-                )
-                if contract_gap is not None:
-                    repairable.add("FROZEN_GOAL_STATE_NOT_SATISFIED")
-                if binding_gap and binding_gap.get("good_refs"):
-                    repairable.add("GOAL_CHECK_LACKS_SUCCEEDED_EVIDENCE")
-                # A repeatedly malformed or semantically incorrect Finish is
-                # a Planner contract failure, NOT evidence the user's desired
-                # environment state failed. Keep that distinction at the
-                # repair budget boundary, without ever granting a PASS.
-                if preview["reason_code"] in repairable:
-                    last_finish_reason = str(preview["reason_code"])
-                    last_finish_diagnostic = (
-                        binding_gap or status_repair_diagnostic or postrun_gap or semantic_repair
-                        or contract_gap or preview.get("finish_diagnostic")
-                    )
-                    if ((finish_repairs >= max_finish_repairs and stage_ledger is None)
-                            or turn >= max_rounds + finish_grace_rounds):
-                        append_executor_event(root, loop, {
-                            "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
-                            "reason_code": last_finish_reason,
-                            "finish_diagnostic": last_finish_diagnostic,
-                            "repair_attempts": finish_repairs,
-                            "executed": False,
-                        })
-                        return _finish(
-                            loop, root, request, kind="FINISH_CONTRACT_INVALID",
-                            summary="FAIL：Finish 契約多次無效："
-                                    + last_finish_reason + "；未執行新工具，證據未變。",
-                            complete=False,
-                        )
-                    finish_repairs += 1
-                    # Status-only Finish repair can never authorize another
-                    # tool, even when ordinary Action rounds remain available.
-                    if (turn >= max_rounds or status_repair_diagnostic is not None
-                            or semantic_repair is not None or binding_gap is not None):
-                        finish_repair_only = True
-                    if contract_gap:
-                        unsatisfied = contract_gap.get("state_table") or []
-                        if unsatisfied and all(
-                            row.get("condition_type") == "REPORT"
-                            for row in unsatisfied if isinstance(row, Mapping)
-                        ):
-                            finish_repair_only = True
-                    append_executor_event(root, loop, {
-                        "round": turn, "kind": (
-                            "MODEL_FINISH_EVIDENCE_BINDING_REPAIR" if binding_gap
-                            else "MODEL_FINISH_STATUS_REPAIR" if status_repair_diagnostic
-                            else "MODEL_FINISH_SEMANTIC_REPAIR" if semantic_repair
-                            else "MODEL_FINISH_SCHEMA_REPAIR"
-                        ),
-                        "reason_code": last_finish_reason,
-                        "finish_diagnostic": last_finish_diagnostic,
-                        "failure_origin": (
-                            "PLANNER_ASSERTION_MISMATCH" if semantic_repair
-                            else "GOAL_EVIDENCE_INCOMPLETE" if postrun_gap or contract_gap
-                            else "MODEL_FINISH_CONTRACT_ERROR"
-                        ),
-                        "repair_attempt": finish_repairs,
-                        "repair_only": finish_repair_only,
-                        "expected_runtime_sha256": _digest(decision.expected_runtime),
-                        "executed": False,
-                    })
-                    diagnostic = json.dumps(
-                        last_finish_diagnostic or {},
-                        ensure_ascii=False, sort_keys=True,
-                        separators=(",", ":"),
-                    )[:1800]
-                    hint = (
-                        ("實際驗證缺失：必須提出一筆新的、可授權的唯讀 ToolCall，"
-                         "重新觀察最後狀態並取得新的 Runtime Evidence；"
-                         "不得重播原修改或宣稱原 UNVERIFIED 為 PASS。"
-                         if postrun_gap and not finish_repair_only
-                         else "Finish Schema 不完整；")
-                        + "reason_code=" + last_finish_reason
-                        + "；欄位級診斷=" + diagnostic
-                        + "。FINISH_STATUS_REPAIR 必須依 Runtime 實值修正 status 或 data.verification_status；"
-                        "UNVERIFIED 不等於 PASS；不得補造後置驗證或改寫 Evidence。"
-                        "不可把 REJECTED 當 FAILED；其他錯誤只修指定的 check_index / field / constraint_code；"
-                        "使用實際 Runtime field catalog 的 data.* 與真實 Evidence Reference。"
-                        "不得重寫工具輸出、增加虛構 Evidence 或更改原始要求。"
-                        + (
-                            "請保留全部 expected_runtime（含原始 PARTIAL）和使用者驗收條件。"
-                            "逐項修正 Goal Check 引用與欄位，使用 good_refs 並確認路徑相符。"
-                            "多個目標請分別引用各自的觀察，禁止新增 ToolCall。"
-                            if binding_gap else ""
-                        )
-                        + (
-                            "Git56 Planner Semantic Repair：僅能修正對 Runtime "
-                            "實際欄位的聲明，不得把未完成的原始 Goal 改寫成已完成。"
-                            "請重新閱讀原始需求，判斷是查詢型還是指定目標狀態；"
-                            "無新工具指令、無新授權、無 Evidence 覆寫。"
-                            if semantic_repair else ""
-                        )
-                        + (
-                            "本次需修復執行前凍結的 Goal State Conditions；"
-                            "診斷結果 UNVERIFIED 可以被如實回報，"
-                            "但缺失的 Action Evidence 不可捏造；"
-                            + json.dumps(contract_gap or {}, ensure_ascii=False,
-                                         separators=(",", ":"))[:1800]
-                            if contract_gap else ""
-                        )
-                        + ("請先提交新的唯讀 tool_call，驗證後才可 Finish。"
-                           if (postrun_gap or contract_gap) and not finish_repair_only
-                           else "請提交新的 finish（而非 tool_call）。")
-                    )
-                    continue
-                if stage_ledger is not None and preview.get("verdict") != "PASS":
-                    last_finish_reason = str(preview.get("reason_code") or "FINISH_UNVERIFIED")
-                    finish_repair_only = True
-                    hint = ("FINISH_UNVERIFIED_NOT_TERMINAL: correct the Finish "
-                            "using persisted evidence. No mutation, no invented claims. "
-                            "reason=" + last_finish_reason)
-                    append_executor_event(root, loop, {
-                        "round": turn, "kind": "GOAL76_FINISH_REPLAN",
-                        "reason_code": last_finish_reason, "executed": False,
-                    })
-                    continue
-            append_executor_event(root, loop, {
-                "round": turn, "kind": "MODEL_FINISH",
-                "summary_sha256": hashlib.sha256(
-                    decision.message.encode("utf-8")
-                ).hexdigest(),
-                "prior_tool_observation_count": len(recent),
-                "expected_runtime_sha256": _digest(decision.expected_runtime),
-                "goal_checks_sha256": _digest(decision.goal_checks),
-            })
-            return _finish(
-                loop, root, request, kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
-                summary=decision.message, complete=True,
-                expected_runtime=decision.expected_runtime,
-                goal_checks=decision.goal_checks,
-                canonical_finish=canonical_finish,
-            )
-        # No ToolCall is permitted in a Finish-only grace turn. Refusing to
-        # execute is essential: repairs must never create new side effects.
-        if finish_repair_only and decision.kind != "blocked":
-            if stage_ledger is not None:
-                hint = "FINISH_REPAIR_ONLY: submit corrected Finish V2; no new tool authorized."
+            if preview["verdict"] != "PASS":
+                hint = ("GOAL_NOT_YET_VERIFIED: " + preview["reason_code"]
+                        + "; missing/mismatch="
+                        + json.dumps(preview.get("finish_diagnostic") or
+                                     preview.get("mismatches") or {},
+                                     ensure_ascii=False, default=str)[:3500]
+                        + ". Continue with a useful admitted Action or correct Finish. "
+                          "Do not invent evidence, weaken the original goal or replay "
+                          "an unresolved mutation.")
                 continue
-            append_executor_event(root, loop, {
-                "round": turn, "kind": "MODEL_FINISH_CONTRACT_INVALID",
-                "reason_code": "REPAIR_ONLY_TOOLCALL_PROHIBITED",
-                "repair_attempts": finish_repairs, "executed": False,
-            })
-            return _finish(
-                loop, root, request, kind="FINISH_CONTRACT_INVALID",
-                summary="FAIL：Finish 修復僅允許 finish 或 blocked，不得再執行工具。",
-                complete=False,
-            )
+            return _finish(loop, root, request, kind="MODEL_REPORTED_COMPLETE_UNVERIFIED",
+                           summary=decision.message, complete=True, comparison=preview)
         if decision.kind == "blocked":
-            if stage_ledger is not None:
-                active = stage_ledger.current()
-                if active is not None:
-                    proof = (stage_ledger.record_terminal_conflict(request)
-                             if pending_timeout_reconciliation is None
-                             and pending_unknown_timeout is None else None)
-                    if proof and proof.get("terminal_authorized") is True:
-                        append_executor_event(root, loop, {
-                            "round": turn, "kind": "GOAL76_TERMINAL_GATE",
-                            "proof": {k: v for k, v in proof.items() if k != "subject"},
-                            "executed": False,
-                            "authorization_granted": False,
-                        })
-                        return _finish(
-                            loop, root, request, kind="BLOCKED",
-                            summary=("NEEDS_USER_INPUT: verified fresh-clone "
-                                     "precondition conflict. Target exists: "
-                                     + proof["subject"] + "; evidence="
-                                     + proof["evidence_ref"]
-                                     + ". Preserve existing data; request an "
-                                       "explicit new target or user resolution."),
-                            complete=False,
-                        )
-                    stage_recovery_attempts += 1
-                    recovery = choose_stage_recovery(
-                        reason_code="PLANNER_CANNOT_PROGRESS",
-                        stage_id=active["stage_id"],
-                        attempt=stage_recovery_attempts,
-                    )
-                    # An unsupported Planner BLOCKED is not proof that the
-                    # original user Goal is impossible. The Stage remains
-                    # mutable, while all committed predecessors stay frozen.
-                    stage_ledger.recover(
-                        active["stage_id"],
-                        reason_code="PLANNER_CANNOT_PROGRESS",
-                        strategy_id=recovery["strategy_id"],
-                    )
-                    append_executor_event(root, loop, {
-                        "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
-                        "stage_id": active["stage_id"],
-                        "reason_code": "PLANNER_BLOCKED_UNVERIFIED",
-                        "strategy_id": recovery["strategy_id"],
-                        "executed": False,
-                    })
-                    hint = (
-                        "Planner BLOCKED has no objective terminal proof. "
-                        "Try a DISTINCT valid prerequisite or strategy for "
-                        "the CURRENT Stage. Keep Git74.1 admission and ACL/Turbo. "
-                        "Do not replay uncertain mutation. Recovery count is "
-                        "not terminal authorization. Strategy=" + recovery["strategy_id"]
-                    )
-                    continue
-                # No active Stage (all committed or plan not yet frozen) is
-                # not objective infeasibility either.
-                hint = ("BLOCKED_UNVERIFIED: finish from committed evidence "
-                        "or propose the required frozen Stage plan.")
-                continue
+            board = read_executor_run(root, task_id=loop.task_id,
+                request_id=loop.run_id, task_epoch=loop.task_epoch) or {}
+            blocker = _lean_external_blocker(board)
             append_executor_event(root, loop, {
-                "round": turn, "kind": "MODEL_BLOCKED",
-                "reason_sha256": _digest(decision.message),
-                "blocking_runtime_evidence": _blocking_runtime_evidence(
-                    loop, read_executor_run(
-                        root, task_id=loop.task_id, request_id=loop.run_id,
-                        task_epoch=loop.task_epoch,
-                    )
-                ),
-                "executed": False, "authorization_granted": False,
+                "round": turn, "kind": "LEAN_BLOCKER_ASSESSED",
+                "blocker": blocker, "executed": False,
+                "authorization_granted": False,
             })
-            return _finish(
-                loop, root, request, kind="BLOCKED",
-                summary="Planner 回報無法繼續：" + decision.message,
-                complete=False,
-            )
+            if blocker and pending_timeout_reconciliation is None:
+                return _finish(loop, root, request, kind="BLOCKED",
+                    summary="WAITING_EXTERNAL: " + decision.message,
+                    complete=False)
+            hint = ("BLOCKED_WITHOUT_EXTERNAL_PROOF: ordinary Runtime errors, failed "
+                    "commands and exhausted strategies are not terminal. Reassess "
+                    "the original Goal and choose another lawful action; preserve evidence.")
+            continue
         proposed = {"tool": decision.tool, **dict(decision.arguments or {})}
         PIT.record("13_minimal_admission_input", proposed, evidence_status="PROPOSED_ACTION_VALUE", extra={"round": turn})
-        signature = _digest(proposed)
-        if stage_ledger is not None and (
-                signature in failed_action_signatures or
-                signature in stage_ledger.committed_mutation_fingerprints() or
-                signature in stage_ledger.completed_bound_mutation_fingerprints()):
-            append_executor_event(root, loop, {
-                "round": turn, "kind": "GOAL75_ACTION_REPLAY_REJECTED",
-                "action_sha256": signature,
-                "reason_code": "FAILED_OR_FROZEN_STAGE_ACTION",
-                "executed": False, "authorization_granted": False,
-            })
-            hint = (
-                "REPLAY_REJECTED: choose a different authorized strategy, "
-                "or collect new read-only evidence. Do not repeat the last "
-                "failed action or a committed mutation."
-            )
-            continue
-        repeated = repeated + 1 if signature == last_fingerprint else 0
-        last_fingerprint = signature
         action, rejected = admit_minimal_action(decision, loop.tools)
         PIT.record("13_minimal_admission_output", {
             "admitted_action": action, "rejection_reason": str(rejected or ""),
@@ -1369,12 +708,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "admission_reason_code": str(rejected or "")[:128],
                 "action_requires_broker": True,
             })
-            return _finish(
-                loop, root, request, kind="BLOCKED",
-                summary="FAIL：TURBO_SANDBOX_BLOCKED：" + reason[:120]
-                + "；此工具涉及本機 OS 執行或檔案異動；未執行動作且禁止退回普通 Executor。",
-                complete=False,
-            )
+            hint = ("NATIVE_BROKER_UNAVAILABLE: " + reason[:120]
+                    + "; action not executed. Select a lawful alternative or "
+                      "report the concrete external dependency. Never fall back to Host.")
+            continue
         unknown_approval = None
         risk_class = ""
         turbo = None
@@ -1600,19 +937,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "replan_exhausted": bool(recoverable),
                     "executed": False, "authorization_granted": False,
                 })
-                if stage_ledger is not None:
-                    hint = ("NATIVE_ACTION_DENIED: choose a different authorized "
-                            "native strategy; never fallback to Host.")
-                    continue
-                return _finish(
-                    loop, root, request, kind="BLOCKED",
-                    summary="FAIL：TURBO_NATIVE_CONFIRMATION_BLOCKED：" + reason[:120]
-                    + ("；command_security_code=" + str(turbo["command_security_code"])[:80]
-                       if turbo.get("command_security_code") else "")
-                    + ("；REPLAN_EXHAUSTED_OR_REPEATED" if recoverable else "")
-                    + "；沒有要求人工授權、沒有執行被拒命令或退回 Host Executor。",
-                    complete=False,
-                )
+                hint = ("NATIVE_ACTION_DENIED: choose a different authorized "
+                        "native strategy or report the verified permission dependency; "
+                        "never fallback to Host.")
+                continue
             if auto_confirm:
                 append_executor_event(root, loop, {
                     "round": turn, "kind": "TURBO_AUTO_ADMITTED",
@@ -1749,7 +1077,10 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     continue
         if action and _possibly_mutating(action, broker_gate["decision"]):
             fingerprint = _digest({
-                key: value for key, value in action.items() if key != "action_id"
+                key: value for key, value in action.items() if key not in {
+                    "action_id", "expected", "success_criteria", "verify",
+                    "verifies_action_id", "condition_id", "reconciliation"}
+
             })
             if fingerprint in seen_mutations:
                 action = None
@@ -1895,46 +1226,8 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "safe observation is possible, report that blocker instead of "
                     "resubmitting the rejected proposal."
                 )
-            if (repairs_for_same_issue >= 3
-                    or consecutive_admission_rejections >= max_consecutive_admission_rejections):
-                if stage_ledger is not None and stage_ledger.current() is not None:
-                    stage_recovery_attempts += 1
-                    active = stage_ledger.current()
-                    recovery = choose_stage_recovery(
-                        reason_code="ADMISSION_REJECTED",
-                        stage_id=active["stage_id"],
-                        attempt=stage_recovery_attempts,
-                    )
-                    stage_ledger.recover(
-                        active["stage_id"], reason_code="ADMISSION_REJECTED",
-                        strategy_id=recovery["strategy_id"],
-                    )
-                    append_executor_event(root, loop, {
-                        "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
-                        "stage_id": active["stage_id"],
-                        "reason_code": "ADMISSION_REJECTED",
-                        "strategy_id": recovery["strategy_id"],
-                        "executed": False,
-                    })
-                    admission_repair_counts.clear()
-                    consecutive_admission_rejections = 0
-                    hint = (
-                        "Repeated Tool Admission failure is not terminal proof. "
-                        "Choose a DISTINCT normally admitted approach within "
-                        "CURRENT authorization and immutable Goal; no Host "
-                        "fallback or permission bypass."
-                    )
-                    continue
-                budget_reason = (
-                    "同一個 Action 契約問題三次未解："
-                    if repairs_for_same_issue >= 3 else
-                    "連續 Admission 拒絕達上限："
-                )
-                return _finish(
-                    loop, root, request, kind="BLOCKED",
-                    summary=budget_reason + str(rejected),
-                    complete=False,
-                )
+            if repairs_for_same_issue >= 3 or consecutive_admission_rejections >= 10:
+                hint += " Repeated rejection: change approach rather than repeat the same proposal."
             continue
 
         # The only follow-up while a timed-out mutation is unresolved is
@@ -1959,16 +1252,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "action_id":action.get("action_id"),"reason_code":"DECLARED_READ_ONLY_OBSERVATION_REQUIRED",
                     "executed":False,"authorization_granted":False,
                 })
-                if stage_ledger is not None:
-                    hint = ("GIT71_RECONCILIATION_SCOPE_REQUIRED: submit only "
-                            "the frozen read-only observation; no replay.")
-                    continue
-                return _finish(
-                    loop, root, request, kind="EXECUTION_OUTCOME_UNKNOWN",
-                    summary="GIT71_RECONCILIATION_SCOPE_REQUIRED: use the frozen "
-                            "read-only observation, not a new command or Finish.",
-                    complete=False,
-                )
+                hint = ("RECONCILIATION_SCOPE_REQUIRED: submit only "
+                        "the frozen read-only observation; no replay.")
+                continue
         # An admitted action is independent progress. Its actual ToolResult
         # will determine what to do next; no prior rejection grants proof.
         consecutive_admission_rejections = 0
@@ -1978,22 +1264,23 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             **proposed, "action_id": action["action_id"],
         }
         mutating = _possibly_mutating(action, broker_gate["decision"])
-        if mutating and stage_ledger is not None:
-            active = stage_ledger.current()
-            if active is not None:
-                try:
-                    stage_ledger.note_mutation_boundary(active["stage_id"])
-                except (ValueError, OSError) as exc:
-                    append_executor_event(root, loop, {
-                        "round": turn, "kind": "GOAL76_PRE_MUTATION_GATE_REJECTED",
-                        "stage_id": active["stage_id"], "reason_code": str(exc)[:120],
-                        "executed": False, "authorization_granted": False,
-                    })
-                    hint = ("GOAL76_PRE_MUTATION_EVIDENCE_REQUIRED: obtain the "
-                            "frozen subject-bound read-only evidence with a matching "
-                            "predeclared Expected contract before any mutation. "
-                            "Do not modify the Stage acceptance.")
-                    continue
+        if preflight.get("status") == "DEFERRED" and action["tool"] in {
+                "run_command", "project_sync", "query_project", "install_toolchain"}:
+            try:
+                preflight = begin_unified_preflight(
+                    root, loop.workspace, task_id=loop.task_id, request_id=loop.run_id)
+                environment_inventory = unified_inventory(root, loop.workspace, preflight)
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "UNIFIED_PREFLIGHT",
+                    "preflight": unified_summary(preflight),
+                    "executed": False, "authorization_granted": False,
+                })
+            except (OSError, ValueError, RuntimeError, TypeError) as exc:
+                preflight = {"status": "UNAVAILABLE", "error_class": type(exc).__name__}
+                append_executor_event(root, loop, {
+                    "round": turn, "kind": "UNIFIED_PREFLIGHT_UNAVAILABLE",
+                    "error_class": type(exc).__name__, "authorization_granted": False,
+                })
         # Git70: freeze the Planner's action assertions before execution.
         # The digest is recorded independently of subsequent ToolResults.
         from agent_core.goal_evidence_matching import frozen_expected_sha256
@@ -2192,90 +1479,18 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 ),
             },
         })
-        # Git75: bind the *original persisted* MIN-EV to the current Stage.
-        # Assertion mismatch is an explicit rejection of Stage acceptance,
-        # not a license for the Planner to change frozen Expected values.
-        stage_independent_observation = False
-        stage_conflict = None
-        if stage_ledger is not None:
-            active = stage_ledger.current()
-            if (active is not None and runtime_status in {"SUCCEEDED", "FAILED"}
-                    and receipt.get("executed") is True):
-                try:
-                    stage_after_action = stage_ledger.record_action(
-                        active["stage_id"],
-                        action_id=action["action_id"],
-                        evidence_ref=evidence_ref, receipt=receipt,
-                        mutation_fingerprint=signature, mutating=mutating,
-                        expected_match=(
-                            (match_report or {}).get("match_state") == "MATCH"
-                            if match_report is not None else None
-                        ),
-                        evidence_store_verified=(
-                            evidence_pointer.get("store_status")
-                                == "PERSISTED_AND_READBACK_VERIFIED"
-                        ),
-                    )
-                    observed_stage = next(s for s in stage_after_action["stages"]
-                                          if s["stage_id"] == active["stage_id"])
-                    observation = observed_stage["observations"][-1]
-                    stage_independent_observation = bool(
-                        observation.get("binding_proofs") or
-                        observation.get("git_observation_matched"))
-                    stage_conflict = stage_ledger.verified_precondition_conflict(request)
-                    if stage_conflict:
-                        append_executor_event(root, loop, {
-                            "round": turn, "kind": "GOAL76_PRECONDITION_CONTRADICTION",
-                            "stage_id": active["stage_id"],
-                            "evidence_ref": stage_conflict["evidence_ref"],
-                            "expected": stage_conflict["expected"],
-                            "observed": stage_conflict["observed"],
-                            "reason_code": stage_conflict["reason_code"],
-                            "executed": False, "authorization_granted": False,
-                        })
-                except ValueError as exc:
-                    append_executor_event(root, loop, {
-                        "round": turn,
-                        "kind": "GOAL75_STAGE_OBSERVATION_REJECTED",
-                        "stage_id": active["stage_id"],
-                        "evidence_ref": evidence_ref,
-                        "reason_code": str(exc)[:120], "executed": False,
-                    })
-            failed_stage_action = bool(active is not None and not stage_conflict and (
-                (runtime_status == "FAILED"
-                    and (match_report is None
-                         or match_report.get("match_state") != "MATCH"))
-                or (isinstance(result_data, Mapping)
-                    and (result_data.get("verification_status") in {"FAIL", "MISMATCH"}
-                         or (result_data.get("verification_status") == "UNVERIFIED"
-                             and not stage_independent_observation)))
-                or (match_report is not None
-                    and match_report.get("match_state") != "MATCH")
-            ))
-            if failed_stage_action:
-                stage_recovery_attempts += 1
-                failed_action_signatures.add(signature)
-                recovery = choose_stage_recovery(
-                    reason_code="ACTION_VERIFICATION_FAILED",
-                    stage_id=active["stage_id"],
-                    attempt=stage_recovery_attempts,
-                )
-                stage_ledger.recover(
-                    active["stage_id"],
-                    reason_code="ACTION_VERIFICATION_FAILED",
-                    strategy_id=recovery["strategy_id"],
-                )
-                append_executor_event(root, loop, {
-                    "round": turn, "kind": "GOAL75_STAGE_LOCAL_RECOVERY",
-                    "stage_id": active["stage_id"],
-                    "evidence_ref": evidence_ref,
-                    "reason_code": "ACTION_VERIFICATION_FAILED",
-                    "strategy_id": recovery["strategy_id"],
-                    "executed": False,
-                })
+        # Definitively not-started commands may be retried after re-admission.
+        # Never unlock completed or uncertain mutations using exit code alone.
+        if (mutating and receipt.get("executed") is False
+                and runtime_status == "FAILED" and isinstance(result_data, Mapping)
+                and result_data.get("process_state") == "NOT_STARTED"
+                and result_data.get("process_started") is False
+                and result_data.get("possible_partial_execution") is False
+                and evidence_pointer.get("store_status") == "PERSISTED_AND_READBACK_VERIFIED"):
+            seen_mutations.discard(fingerprint)
         # Git74.1: update the persisted cross-task state only after the
         # immutable observed ToolResult has been committed.
-        if preflight.get("status") != "UNAVAILABLE":
+        if preflight.get("status") not in {"UNAVAILABLE", "DEFERRED"}:
             try:
                 old_source = preflight.get("environment_source")
                 old_project = dict(preflight.get("project_sync") or {})
@@ -2455,61 +1670,6 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         )
         if getattr(loop, "continuation_store", None):
             loop.continuation_store.snapshot(loop)
-        # Git75 P0: the Planner is never required to recite evidence that
-        # Runtime already matched to ALL immutable Stage postconditions.
-        # No auto-commit on absent Expected, unsafe timeout/reconciliation,
-        # corrupt/unreadable MIN-EV or failed execution verification.
-        if (stage_ledger is not None
-                and match_report is not None
-                and match_report.get("match_state") == "MATCH"
-                and evidence_pointer.get("store_status")
-                    == "PERSISTED_AND_READBACK_VERIFIED"
-                and pending_timeout_reconciliation is None
-                and pending_unknown_timeout is None
-                and runtime_status in {"SUCCEEDED", "FAILED"}
-                and (not isinstance(result_data, Mapping)
-                     or result_data.get("verification_status") not in {"FAIL", "MISMATCH", "UNVERIFIED"}
-                     or (result_data.get("verification_status") == "UNVERIFIED"
-                         and stage_independent_observation))):
-            active = stage_ledger.current()
-            if active is not None:
-                try:
-                    stage_after = stage_ledger.commit_if_independently_verified(
-                        active["stage_id"])
-                    if stage_after is not None:
-                        stage_recovery_attempts = 0
-                        failed_action_signatures.clear()
-                        frozen = next(
-                            item for item in stage_after["stages"]
-                            if item["stage_id"] == active["stage_id"]
-                        )
-                        frozen_refs = list(frozen["commit"]["evidence_refs"])
-                        append_executor_event(root, loop, {
-                            "round": turn,
-                            "kind": "GOAL75_STAGE_VERIFIED_COMMITTED",
-                            "stage_id": active["stage_id"],
-                            "evidence_refs": frozen_refs,
-                            "commit_origin": "RUNTIME_FROZEN_EVIDENCE_GATE",
-                            "planner_round_saved": 1,
-                            "executed": False,
-                            "authorization_granted": False,
-                        })
-                        append_executor_event(root, loop, {
-                            "round": turn, "kind": "GOAL75_PLANNER_ROUND_SAVED",
-                            "optimization": "EVIDENCE_GATED_STAGE_AUTO_COMMIT",
-                            "stage_id": active["stage_id"],
-                            "rounds_saved": 1, "executed": False,
-                            "authorization_granted": False,
-                        })
-                except (ValueError, OSError, RuntimeError, TypeError) as exc:
-                    append_executor_event(root, loop, {
-                        "round": turn,
-                        "kind": "GOAL75_STAGE_AUTO_COMMIT_DEFERRED",
-                        "stage_id": active["stage_id"],
-                        "reason_code": type(exc).__name__,
-                        "executed": False,
-                        "authorization_granted": False,
-                    })
         if match_report:
             # Git70 recovery is a *new observation*, never an automatic retry
             # of the command that produced this immutable MIN-EV.
@@ -2530,22 +1690,6 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                     "observed facts or declare terminal FAIL solely because "
                     "this attempt was unsuccessful. evidence_ref=" + evidence_ref
                 )
-        if (stage_ledger is not None
-                and signature in failed_action_signatures
-                and pending_timeout_reconciliation is None):
-            hint = (
-                "GOAL75_STAGE_RECOVERY_REQUIRED: last Action failed execution "
-                "or frozen verification. Retain real evidence " + evidence_ref +
-                ". Choose a DISTINCT permitted tool or prerequisite strategy "
-                "for the current Stage; no same-Action replay."
-            )
-        if stage_conflict and pending_timeout_reconciliation is None:
-            hint = ("GOAL76_PRECONDITION_CONTRADICTION_VERIFIED: actual "
-                    "filesystem fact disproves the mandatory fresh-clone "
-                    "precondition. Preserve data; report blocked with the "
-                    "verified evidence and propose a new target for user approval. "
-                    "Do not repeat the observation or mutate the target. evidence_ref="
-                    + stage_conflict["evidence_ref"])
         if (match_report
                 and match_report["safety_decision"] == "PAUSE_AND_RECONCILE"
                 and mutating and pending_timeout_reconciliation is None):
@@ -2575,22 +1719,9 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 summary="可能產生副作用的工具結果未確定，禁止重送：" + runtime_reason,
                 complete=False,
             )
-    if finish_repair_only:
-        append_executor_event(root, loop, {
-            "round": loop.turn_id, "kind": "MODEL_FINISH_CONTRACT_INVALID",
-            "reason_code": last_finish_reason or "FINISH_REPAIR_BUDGET_EXHAUSTED",
-            "finish_diagnostic": last_finish_diagnostic,
-            "repair_attempts": finish_repairs, "executed": False,
-        })
-        return _finish(
-            loop, root, request, kind="FINISH_CONTRACT_INVALID",
-            summary="FAIL：Finish 修復預算已耗盡，未通過欄位契約驗證："
-                    + (last_finish_reason or "FINISH_REPAIR_BUDGET_EXHAUSTED"),
-            complete=False,
-        )
     return _finish(
         loop, root, request, kind="MAX_ROUNDS",
-        summary="PokeClaw Executor 已達決策回合上限，尚未收到 Finish；僅為執行預算 Checkpoint，不代表 Goal 不可達。",
+        summary="EXECUTION_BUDGET_CHECKPOINT: decision budget exhausted; Goal not verified, no task infeasibility claimed.",
         complete=False,
     )
 

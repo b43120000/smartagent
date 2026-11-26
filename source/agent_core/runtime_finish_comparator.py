@@ -716,10 +716,48 @@ def _execution_uncertainty(history: list[dict],
     return blocked[::-1], recovered[::-1]
 
 
+def _lean_missing_goal_phases(goal: str, checks: object, history: list[dict]) -> list[str]:
+    """Structural phase coverage, not a universal semantic proof."""
+    from .goal75_goal_coverage import original_goal_stage_ids
+    required = original_goal_stage_ids(goal)
+    if len(required) <= 1:
+        return []
+    eligible = {item["evidence_ref"]: item for item in history}
+    candidates = {phase: set() for phase in required}
+    for check in checks if isinstance(checks, list) else []:
+        if not isinstance(check, Mapping):
+            continue
+        labels = original_goal_stage_ids(str(check.get("criterion") or ""))
+        field = check.get("field")
+        ref = check.get("evidence_ref")
+        item = eligible.get(ref) if isinstance(ref, str) else None
+        if (len(labels) != 1 or labels[0] not in candidates or not item
+                or not isinstance(field, str) or not field.startswith("data.")
+                or field in {"data.exit_code", "data.process_started", "data.process_state",
+                             "data.verification_status", "data.execution_status"}):
+            continue
+        found, value = _lookup(item["receipt"], field)
+        if not found or type(value) not in (str, int, float, bool, type(None)):
+            continue
+        candidates[labels[0]].add((ref, field))
+    assigned = {}
+    def match(phase, seen):
+        for fact in sorted(candidates[phase]):
+            if fact in seen:
+                continue
+            seen.add(fact)
+            if fact not in assigned or match(assigned[fact], seen):
+                assigned[fact] = phase
+                return True
+        return False
+    return [phase for phase in required if not match(phase, set())]
+
+
 def compare_runtime_finish(loop, root: str | Path, goal: str,
                            expected_runtime: object, goal_checks: object = None,
                            *, allow_open: bool = False,
-                           answer: str = "", canonical_finish: object = None) -> dict:
+                           answer: str = "", canonical_finish: object = None,
+                           lean_goal: bool = False) -> dict:
     """Binary verdict. Dynamic model fields, Runtime facts and goal validation."""
     v2 = canonical_finish is not None
     history, refs, context, error = _readback(
@@ -917,6 +955,12 @@ def compare_runtime_finish(loop, root: str | Path, goal: str,
             "evidence_refs": refs, "mismatches": [], "tool_results": results,
             **({"reconciled_observations": recovered} if recovered else {}),
         }
+    if lean_goal:
+        missing = _lean_missing_goal_phases(goal, goal_checks, valid_goal_history)
+        if missing:
+            return _fail("ORIGINAL_GOAL_COVERAGE_INCOMPLETE", refs,
+                         tool_results=results,
+                         finish_diagnostic={"missing_original_phases": missing})
     proof = _goal_proof(goal, valid_goal_history)
     if proof is None and _recognized_but_unsatisfied(goal, valid_goal_history):
         return _fail("KNOWN_GOAL_POSTCONDITION_NOT_SATISFIED", refs, tool_results=results)
