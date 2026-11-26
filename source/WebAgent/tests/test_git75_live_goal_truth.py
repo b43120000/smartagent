@@ -249,3 +249,103 @@ def test_lean_read_uncertainty_is_not_mutation_uncertainty():
     assert not blocked and recovered[0]["reason_code"]=="READ_ATTEMPT_NOT_GOAL_EVIDENCE"
     assert _execution_uncertainty([{**item,"mutating":True}],lean_goal=True)[0]
     assert _execution_uncertainty([{**item,"mutating":None}],lean_goal=True)[0]
+
+
+def test_git77_batch_real_loop_one_round_three_distinct_receipts(tmp_path, monkeypatch):
+    import json
+    from agent_core.executor_run_blackboard import read_executor_run
+    from agent_core.tool_result_contract import attach_runtime_result
+    from WebAgent.tests.test_minimal_core_v10 import FakeLoop
+    monkeypatch.setattr(exe, "set_runtime_state", lambda *a, **k: None)
+    monkeypatch.setattr("agent_core.turbo_broker_admission.admit_action",
+        lambda *a, **k: {"decision":"NORMAL","reason_code":"TEST_ACL_OFF"})
+    paths = [str(tmp_path / f"p{i}.txt") for i in range(3)]
+    for i, path in enumerate(paths):
+        from pathlib import Path
+        Path(path).write_text(f"P{i}", encoding="utf-8")
+    goal = "P0 P1 P2 read and verify three files " + " ".join(paths)
+    loop = FakeLoop(tmp_path, goal, [], "")
+    def planner(prompt, *_):
+        loop.prompts.append(prompt)
+        if len(loop.prompts) == 1:
+            return json.dumps({"type":"tool_batch","actions":[
+                {"type":"tool_call","name":"observe_fact","arguments":{"path":p}}
+                for p in paths]})
+        refs = [x["result_id"] for x in loop.action_result_ledger.values()]
+        assert len(refs) == 3
+        assert all(ref in prompt for ref in refs)
+        return json.dumps({"type":"finish","summary":"P0 P1 P2 verified",
+            "goal_checks":[{"criterion":f"P{i} actual value","evidence_ref":ref,
+                "field":"data.fixture_phase","operator":"eq","expected":f"P{i}"}
+                for i, ref in enumerate(refs)]})
+    def execute(action):
+        from pathlib import Path
+        loop.executed.append(action)
+        value = Path(action["path"]).read_text(encoding="utf-8")
+        return attach_runtime_result("{}", "SUCCEEDED", "FACT_OBSERVED",
+            tool="observe_fact", executed=True, action_id=action["action_id"],
+            data={"fixture_phase":value,"terminal_eligible":True})
+    loop.planner, loop._execute_action = planner, execute
+    answer = exe.run_pokeclaw_executor(loop, goal)
+    assert loop.terminal_outcome == "SUCCESS", answer
+    assert loop.turn_id == 2 and len(loop.executed) == 3
+    assert len({a["action_id"] for a in loop.executed}) == 3
+    board = read_executor_run(tmp_path, task_id=loop.task_id, request_id=loop.run_id,
+                              task_epoch=loop.task_epoch)
+    assert board["terminal"]["goal_verified"]
+
+
+def test_git77_batch_failed_item_never_dispatches_tail(tmp_path, monkeypatch):
+    import json
+    from agent_core.tool_result_contract import encode_result
+    from WebAgent.tests.test_minimal_core_v10 import FakeLoop
+    monkeypatch.setattr(exe, "set_runtime_state", lambda *a, **k: None)
+    monkeypatch.setattr("agent_core.turbo_broker_admission.admit_action",
+        lambda *a, **k: {"decision":"NORMAL","reason_code":"TEST_ACL_OFF"})
+    paths = [str(tmp_path / f"p{i}") for i in range(3)]
+    goal = "P0 P1 P2 inspect paths " + " ".join(paths)
+    loop = FakeLoop(tmp_path, goal, [], "")
+    loop.max_turns = 1
+    loop.planner = lambda *_: json.dumps({"type":"tool_batch","actions":[
+        {"type":"tool_call","name":"observe_fact","arguments":{"path":p}}
+        for p in paths]})
+    def execute(action):
+        loop.executed.append(action)
+        ok = action["path"] == paths[0]
+        return encode_result("SUCCEEDED" if ok else "FAILED", "FACT_TEST",
+            tool="observe_fact", executed=True, data={"value":ok})
+    loop._execute_action = execute
+    exe.run_pokeclaw_executor(loop, goal)
+    assert [a["path"] for a in loop.executed] == paths[:2]
+    assert loop.terminal_outcome != "SUCCESS"
+
+
+def test_git77_batch_parser_is_opt_in_and_rejects_mixed_finish():
+    import json
+    from WebAgent.minimal_decision import parse_minimal_decision_with_diagnostics, MinimalDecisionError
+    child = {"type":"tool_call","name":"observe_fact","arguments":{"path":r"E:\\AIspace"}}
+    raw = json.dumps({"type":"tool_batch","actions":[child,child]})
+    with pytest.raises(MinimalDecisionError):
+        parse_minimal_decision_with_diagnostics(raw)
+    decision, _ = parse_minimal_decision_with_diagnostics(raw, allow_batch=True)
+    assert len(decision.batch_calls) == 2
+    with pytest.raises(MinimalDecisionError):
+        parse_minimal_decision_with_diagnostics(json.dumps({"type":"tool_batch",
+            "actions":[child,{"type":"finish","summary":"fake"}]}), allow_batch=True)
+
+
+def test_git77_projection_retains_business_payload_without_fabricating_finish_fields():
+    import json
+    receipt = {"status":"SUCCEEDED","executed":True,
+               "data":{"snapshot_id":"abc","count":2,"stdout":"x"*10000}}
+    raw = json.dumps({"_runtime_result":receipt,"events":[{"event_id":"old"},{"event_id":"new"}],
+                      "snapshot_id":"abc","password":"must-not-project"})
+    p = exe._planner_projection(receipt, raw, {"evidence_ref":"MIN-EV-actual",
+        "store_status":"PERSISTED_AND_READBACK_VERIFIED"})
+    assert p["receipt"]["facts"]["data.snapshot_id"] == "abc"
+    assert p["receipt"]["facts"]["data.count"] == 2
+    assert "data.stdout" not in p["receipt"]["facts"]
+    assert p["receipt"]["omitted"] is True
+    assert p["business_output"]["facts"]["events.1.event_id"] == "new"
+    assert "events.1.event_id" not in p["receipt"]["facts"]
+    assert "must-not-project" not in json.dumps(p)

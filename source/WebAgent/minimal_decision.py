@@ -33,6 +33,7 @@ class MinimalDecision:
     stage_plan: list[dict] | None = None
     stage_id: str = ""
     evidence_refs: list[str] | None = None
+    batch_calls: tuple[MinimalDecision, ...] = ()
 
 
 def _unique_keys(pairs):
@@ -125,10 +126,21 @@ def _field(data: dict, names: tuple[str, ...], meta: dict):
     return data[existing[0]]
 
 
-def _to_decision(data: dict, meta: dict) -> MinimalDecision:
+def _to_decision(data: dict, meta: dict, *, allow_batch: bool = False) -> MinimalDecision:
     if not isinstance(data, dict) or not isinstance(data.get("type"), str):
         raise MinimalDecisionError("decision_type_required", meta)
     kind = data["type"].strip().lower()
+    if kind == "tool_batch" and allow_batch:
+        if set(data) != {"type", "actions"} or not isinstance(data["actions"], list):
+            raise MinimalDecisionError("batch_schema_invalid", meta)
+        if not 2 <= len(data["actions"]) <= 6:
+            raise MinimalDecisionError("batch_size_requires_2_to_6", meta)
+        children = []
+        for child in data["actions"]:
+            if not isinstance(child, dict) or child.get("type") != "tool_call":
+                raise MinimalDecisionError("batch_only_tool_calls", meta)
+            children.append(_to_decision(child, meta))
+        return MinimalDecision("tool_batch", batch_calls=tuple(children))
     if kind == "stage_plan":
         if set(data) != {"type", "stages"} or not isinstance(data["stages"], list):
             raise MinimalDecisionError("goal75_stage_plan_schema_invalid", meta)
@@ -230,7 +242,7 @@ def _model_dropped_explicit_dot_separator(decision: MinimalDecision, original_go
     return False
 
 def parse_minimal_decision_with_diagnostics(
-    response: str, *, original_goal: str = "",
+    response: str, *, original_goal: str = "", allow_batch: bool = False,
 ) -> tuple[MinimalDecision, dict]:
     text = str(response or "")
     meta = _diagnostic(text)
@@ -303,11 +315,12 @@ def parse_minimal_decision_with_diagnostics(
         if path_repaired:
             meta["normalization"] = "EXPLICIT_WINDOWS_PATH_BACKSLASH_ESCAPED"
         try:
-            decision = _to_decision(parsed, meta)
+            decision = _to_decision(parsed, meta, allow_batch=allow_batch)
         except MinimalDecisionError as exc:
             first_problem = first_problem or exc.code
             continue
-        if _model_dropped_explicit_dot_separator(decision, original_goal):
+        if any(_model_dropped_explicit_dot_separator(item, original_goal)
+               for item in (decision.batch_calls or (decision,))):
             # The raw candidate and decoded value were recorded separately.
             # Refuse the mutated action; never guess/rewrite a filesystem path.
             meta["path_integrity_reason_code"] = "EXPLICIT_DOT_SEGMENT_SEPARATOR_DROPPED"

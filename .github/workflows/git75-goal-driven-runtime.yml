@@ -5,6 +5,7 @@ on:
       - git75/goal-driven-runtime
       - git76/stage-contract-grounding-and-recovery
       - git76/codex
+      - git77/planner-efficiency
   workflow_dispatch:
 permissions:
   contents: read
