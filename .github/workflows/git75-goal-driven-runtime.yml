@@ -67,6 +67,14 @@ jobs:
           {'delta':[k for k,v in generated['files'].items() if recorded['files'].get(k)!=v],
           'extra':[k for k in recorded['files'] if k not in generated['files']]};
           assert generated['release_sequence']==recorded['release_sequence']"
+      - name: Native indefinite-wait syntax and CSharp compile
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens=$null; $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'install_smart_agent/turbo_os_execute.ps1').Path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count) { throw ($errors | Out-String) }
+          Add-Type -Path (Resolve-Path 'install_smart_agent/turbo_appcontainer_probe.cs').Path -ErrorAction Stop
       - name: Git75 UT and existing regression
         run: >-
           python -B -m pytest -q
@@ -76,6 +84,8 @@ jobs:
           source/WebAgent/tests/test_git70_goal_evidence.py
           source/WebAgent/tests/test_git71_timeout_reconciliation.py
           source/WebAgent/tests/test_git74_long_execution_supervisor.py
+          source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
+          source/WebAgent/tests/test_git63_native_liveness_p0_p2.py
           source/WebAgent/tests/test_git74_unified_preflight.py
           source/WebAgent/tests/test_shared_blackboard_strategy.py
           --tb=short

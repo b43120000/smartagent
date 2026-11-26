@@ -1,9 +1,8 @@
 """Git74: process-exit supervised waiting, independent of the fixed P7 timeout.
 
-The OS-owned Popen handle establishes child identity. Telegram consent only
-controls whether the user wishes to keep waiting; silence after 600 seconds
-means continue waiting, NEVER execute/authorize another command. Child exit
-and postconditions remain separate. No PID-only success or replay.
+The OS-owned Popen handle establishes child identity. Waiting is automatic,
+without user consent or a deadline. This NEVER grants command authorization.
+Child exit and postconditions remain separate. No PID-only success or replay.
 """
 from __future__ import annotations
 
@@ -78,8 +77,9 @@ def begin_wait(*, install: str | Path | None, task_id: str, request_id: str,
         "request_id": str(request_id), "action_id": str(action_id),
         "execution_id": str(execution_id), "pid": int(pid),
         "worker_pid": os.getpid(), "state": "RUNNING",
-        "decision": "PENDING", "notification": "PENDING",
-        "chat_id": 0, "created_at": now, "deadline_at": now + CONSENT_SECONDS,
+        "decision": "AUTO_CONTINUE", "notification": "NOT_REQUIRED",
+        "chat_id": 0, "created_at": now, "deadline_at": None,
+        "decided_at": now, "wait_confirmation_required": False,
         "last_os_observed_at": now, "last_os_state": "UNKNOWN",
         "last_os_source": "UNAVAILABLE", "liveness_sample_count": 0,
         "exit_code": None, "finished_at": None, "policy": WAIT_POLICY,
@@ -99,61 +99,27 @@ def read_wait(install: str | Path | None, wait_id: str) -> dict:
 
 
 def pending_notifications(install: str | Path | None) -> list[dict]:
-    root = root_dir(install)
-    if not root.is_dir():
-        return []
-    rows = []
-    for path in root.glob("WAIT-*.json"):
-        if path.is_symlink():
-            continue
-        try:
-            row = read_wait(install, path.stem)
-            if row.get("state") == "RUNNING" and row.get("notification") == "PENDING":
-                rows.append(row)
-        except (ValueError, OSError):
-            continue
-    return rows
+    # Kept for old transport consumers. New and historical wait records
+    # must never generate another confirmation request.
+    return []
 
 
 def bind_notice(install: str | Path | None, wait_id: str, *, chat_id: int) -> bool:
-    root = root_dir(install)
-    def apply(row):
-        if row["state"] != "RUNNING" or row["notification"] != "PENDING":
-            return None
-        row.update(notification="SENDING", chat_id=int(chat_id))
-        return row
-    row = _modify(root, wait_id, apply)
-    return row.get("notification") == "SENDING" and row.get("chat_id") == int(chat_id)
+    return False
 
 
 def finish_notice(install: str | Path | None, wait_id: str, *, success: bool) -> None:
-    root = root_dir(install)
-    def apply(row):
-        if row.get("notification") != "SENDING":
-            return None
-        row["notification"] = "SENT" if success else "PENDING"
-        if success:
-            _event(root, row, "LONG_EXEC_WAIT_PROMPT_SENT", chat_id=row["chat_id"])
-        return row
-    _modify(root, wait_id, apply)
+    return None
 
 
 def set_decision(install: str | Path | None, wait_id: str, *,
                  task_id: str, chat_id: int, choice: str) -> dict:
-    if choice not in {"CONTINUE", "PAUSE_AFTER_EXIT"}:
-        raise ValueError("long_execution_decision_invalid")
-    root = root_dir(install)
-    def apply(row):
-        if (row.get("task_id") != task_id or row.get("chat_id") != int(chat_id)
-                or row.get("notification") != "SENT"):
-            raise ValueError("long_execution_binding_mismatch")
-        if row["state"] != "RUNNING" or row["decision"] != "PENDING":
-            return None
-        row["decision"] = choice
-        row["decided_at"] = time.time()
-        _event(root, row, "LONG_EXEC_USER_DECISION", decision=choice)
-        return row
-    return _modify(root, wait_id, apply)
+    # Stale Y/N buttons cannot pause a running task or authorize execution.
+    row = read_wait(install, wait_id)
+    if (not row or row.get("task_id") != task_id
+            or row.get("chat_id") != int(chat_id) or int(chat_id) <= 0):
+        raise ValueError("long_execution_binding_mismatch")
+    return row
 
 
 def record_observation(install: str | Path | None, wait_id: str, observation: dict) -> None:
@@ -167,11 +133,11 @@ def record_observation(install: str | Path | None, wait_id: str, observation: di
         row["last_os_state"] = observation["process_state"]
         row["last_os_source"] = observation["evidence_source"]
         row["liveness_sample_count"] += 1
-        if row["decision"] == "PENDING" and time.time() >= float(row["deadline_at"]):
-            row["decision"] = "AUTO_CONTINUE"
-            row["decided_at"] = time.time()
-            _event(root, row, "LONG_EXEC_WAIT_AUTO_CONTINUED", decision="AUTO_CONTINUE",
-                   consent_timeout_seconds=600)
+        # Normalize legacy in-flight records as well.
+        if row.get("decision") != "AUTO_CONTINUE" or row.get("notification") != "NOT_REQUIRED":
+            row.update(decision="AUTO_CONTINUE", notification="NOT_REQUIRED",
+                       deadline_at=None, decided_at=time.time(),
+                       wait_confirmation_required=False)
         _event(root, row, "LONG_EXEC_OS_SAMPLE",
                process_state=observation["process_state"],
                evidence_source=observation["evidence_source"],
@@ -198,8 +164,8 @@ def finish_wait(install: str | Path | None, wait_id: str,
         row["exit_code"] = exit_code if same_identity else None
         row["last_os_state"] = observation.get("process_state", "UNKNOWN")
         row["last_os_source"] = observation.get("evidence_source", "UNAVAILABLE")
-        if row["decision"] == "PENDING":
-            row["decision"] = "COMPLETED_BEFORE_DECISION"
+        row.update(decision="AUTO_CONTINUE", notification="NOT_REQUIRED",
+                   deadline_at=None, wait_confirmation_required=False)
         _event(root, row, "LONG_EXEC_EXIT_OBSERVED", state=row["state"],
                decision=row["decision"], exit_code=row["exit_code"],
                evidence_source=row["last_os_source"],

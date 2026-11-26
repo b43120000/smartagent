@@ -92,3 +92,22 @@ def test_broker_failure_is_never_normal_executor_fallback(requested, monkeypatch
     assert result["exit_code"] is None
     assert result["sandbox_evidence"]["executed"] is False
     assert "TURBO_OS_BROKER_NATIVE_EXECUTOR_REJECTED" in result["error"]
+
+
+def test_until_exit_stays_in_native_broker(requested, monkeypatch, tmp_path):
+    calls = []
+    def broker(command, **kwargs):
+        calls.append(kwargs)
+        return {"exit_code":0,"wait_policy":kwargs["wait_policy"],
+                "process_started":True,"security_rejected":False}
+    monkeypatch.setattr(turbo_os_broker_client, "execute_turbo_command", broker)
+    def fail_host(*args, **kwargs):
+        raise AssertionError("host fallback forbidden")
+    monkeypatch.setattr(bounded_process.subprocess, "Popen", fail_host)
+    result = bounded_process.run_bounded_process(
+        ["powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 5"],
+        cwd=tmp_path, security_command="Start-Sleep -Seconds 5",
+        timeout=1, wait_policy="UNTIL_EXIT")
+    assert result["exit_code"] == 0
+    assert calls[0]["wait_policy"] == "UNTIL_EXIT"
+    assert calls[0]["timeout"] == 1

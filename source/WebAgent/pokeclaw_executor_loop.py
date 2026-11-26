@@ -261,8 +261,10 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "and exit_code is_null, and reconciliation={version:1,checks:[{tool:observe_fact,"
         "path:<absolute scoped path below working_directory>,expected_exists:true}]}. "
         "After timeout perform only frozen readonly checks; no replay. "
-        "UNTIL_EXIT only with ACL OFF, Turbo OFF, Auto Approve Effective ON; process "
-        "exit does not prove detached child completion.\n"
+        "Ordinary scripts/commands default to UNTIL_EXIT in every ACL/Turbo mode, "
+        "without wait confirmation. BOUNDED only for explicit timeout requirements. "
+        "Waiting never grants execution permission; native Turbo stays native. "
+        "Process exit does not prove detached child completion.\n"
         "For local Project Sync use INDEX_ONLY. Verify actual current bytes. "
         "Use read_runtime_evidence for truncated or older MIN-EV "
         "(raw_result/receipt/stdout/stderr/metadata); do not rerun to obtain saved output. "
@@ -1561,12 +1563,6 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # Git71: reconcile *after* ToolResult and MIN-EV have been persisted.
         # Never alter the original UNKNOWN receipt or declare a mutation
         # successful because the timeout assertion happened to match.
-        if (isinstance(receipt.get("data"), dict)
-                and receipt["data"].get("long_wait_decision") == "PAUSE_AFTER_EXIT"):
-            return _finish(loop, root, request, kind="BLOCKED",
-                summary="LONG_EXECUTION_USER_PAUSED_AFTER_EXIT: result is retained; "
-                        "no additional Planner actions are dispatched. Evidence="
-                        + evidence_ref, complete=False)
         from agent_core.timeout_reconciliation import (
             begin_timeout_reconciliation, check_reconciliation_observation,
             append_reconciliation_report,

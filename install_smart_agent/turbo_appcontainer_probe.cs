@@ -377,7 +377,8 @@ public static class SmartAgentGit47AppContainerProbe
             || string.IsNullOrWhiteSpace(executable)
             || !System.IO.Path.IsPathRooted(executable)
             || !System.IO.Directory.Exists(cwd)
-            || timeoutMilliseconds == 0 || timeoutMilliseconds > 300000)
+            || timeoutMilliseconds == 0
+            || (timeoutMilliseconds > 300000 && timeoutMilliseconds != UInt32.MaxValue))
             throw new ArgumentException("launch_preflight_invalid");
         string sidString = DeriveSid(moniker);
         IntPtr sid = IntPtr.Zero, attributeList = IntPtr.Zero, environment = IntPtr.Zero;
@@ -501,8 +502,10 @@ public static class SmartAgentGit47AppContainerProbe
             double lastRunningObservedAt = 0;
             while (true)
             {
-                long remaining = (long)timeoutMilliseconds -
-                    runningClock.ElapsedMilliseconds;
+                // Infinite policy still samples the same attested process
+                // handle in finite intervals and retains Job ownership.
+                long remaining = timeoutMilliseconds == UInt32.MaxValue
+                    ? 2000L : (long)timeoutMilliseconds - runningClock.ElapsedMilliseconds;
                 if (remaining <= 0)
                 {
                     wait = WAIT_TIMEOUT;
@@ -512,7 +515,7 @@ public static class SmartAgentGit47AppContainerProbe
                 wait = WaitForSingleObject(pi.hProcess, interval);
                 if (wait == WAIT_TIMEOUT)
                 {
-                    runningSampleCount++;
+                    if (runningSampleCount < Int32.MaxValue) runningSampleCount++;
                     lastRunningObservedAt = (DateTime.UtcNow -
                         new DateTime(1970, 1, 1, 0, 0, 0,
                             DateTimeKind.Utc)).TotalSeconds;

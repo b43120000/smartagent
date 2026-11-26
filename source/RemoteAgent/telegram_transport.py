@@ -958,74 +958,16 @@ class TelegramReceiver:
         with self.binding_lock:
             accepted = self._process_updates(updates)
             self._process_timed_out_pre_resume()
-            self._deliver_long_wait_prompts()
             return accepted
 
     def _deliver_long_wait_prompts(self) -> None:
-        """Send software-owned wait decisions; never authorize a command."""
-        from agent_core.long_execution_supervisor import (
-            pending_notifications, bind_notice, finish_notice,
-        )
-        from agent_core.task_state import TaskStateStore
-        from agent_core.paths import remote_tasks_path
-        from RemoteAgent.remote_feature_catalog import long_wait_inline_keyboard
-        for row in pending_notifications(self.install_root):
-            try:
-                task_store = TaskStateStore(remote_tasks_path(self.install_root))
-                task_store.load()
-                task = task_store.get(row["task_id"])
-                route = dict(getattr(task, "reply_route", {}) or {})
-                if (task is None or task.request_id != row["request_id"]
-                        or str(route.get("transport", "")).upper() != "TELEGRAM"):
-                    continue
-                chat_id = int(route.get("chat_id", 0) or 0)
-                if chat_id <= 0 or not self.adapter.is_authorized(
-                        user_id=chat_id, chat_id=chat_id):
-                    continue
-                if not bind_notice(self.install_root, row["wait_id"], chat_id=chat_id):
-                    continue
-                try:
-                    self._send_message(chat_id,
-                        "⏳ SmartAgent 正在監測執行中的程序\\n"
-                        "Task: " + row["task_id"] + "\\n"
-                        "等待方式：監測 OS 程序直到退出，不設定執行 Timeout。\\n"
-                        "10 分鐘內不回覆會自動繼續等待；若程序先完成則直接往下執行。\\n"
-                        "安全暫停不會直接殺死程序，會在本次程序退出後停止新的 Planner Action。",
-                        reply_markup=long_wait_inline_keyboard(row["wait_id"]))
-                except Exception:
-                    finish_notice(self.install_root, row["wait_id"], success=False)
-                    raise
-                finish_notice(self.install_root, row["wait_id"], success=True)
-                self._log("STATUS", stage="LONG_EXEC_WAIT_PROMPT_SENT",
-                          task_id=row["task_id"], wait_id=row["wait_id"])
-            except Exception as exc:
-                self._log("ERROR", stage="LONG_EXEC_WAIT_PROMPT_FAILED",
-                          wait_id=row["wait_id"], error=type(exc).__name__)
+        """Deprecated compatibility hook: waiting never requires a prompt."""
+        return None
 
     def _process_long_wait_choice(self, message: NormalizedInboundMessage) -> bool:
-        match = re.fullmatch(r"long_wait_choice (WAIT-[0-9A-F]{20}) ([YN])",
-                             str(message.text or ""))
-        if not match:
-            return False
-        from agent_core.long_execution_supervisor import read_wait, set_decision
-        row = read_wait(self.install_root, match.group(1))
-        chat_id = int(message.reply_context.get("chat_id", 0) or 0)
-        if not row or chat_id <= 0 or str(message.sender_id) != str(chat_id):
-            self._log("ERROR", stage="LONG_EXEC_WAIT_CALLBACK_REJECTED",
-                      wait_id=match.group(1), reason="unauthorized_or_missing")
-            return True
-        try:
-            result = set_decision(self.install_root, match.group(1),
-                task_id=row["task_id"], chat_id=chat_id,
-                choice="CONTINUE" if match.group(2) == "Y" else "PAUSE_AFTER_EXIT")
-            self._send_message(chat_id, "已記錄等待選擇：" + result["decision"])
-            self._log("STATUS", stage="LONG_EXEC_WAIT_CALLBACK_ACCEPTED",
-                      task_id=row["task_id"], wait_id=match.group(1),
-                      decision=result["decision"])
-        except (ValueError, OSError, KeyError) as exc:
-            self._log("ERROR", stage="LONG_EXEC_WAIT_CALLBACK_REJECTED",
-                      wait_id=match.group(1), reason=type(exc).__name__)
-        return True
+        # Consume old inline buttons without changing task or permission state.
+        return bool(re.fullmatch(r"long_wait_choice (WAIT-[0-9A-F]{20}) ([YN])",
+                                 str(message.text or "")))
 
     def _long_message_eligible(self, update: dict[str, Any]) -> bool:
         """Only normal, authorized, unthreaded long text may be delayed."""

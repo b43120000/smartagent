@@ -12,6 +12,7 @@ param(
     [Parameter(Mandatory=$true)][string]$ActionId,
     [Parameter(Mandatory=$true)][string]$CommandBase64,
     [int]$TimeoutSeconds = 30,
+    [switch]$WaitUntilExit,
     [int]$MaxOutputBytes = 1048576,
     [ValidateSet("","git","python")][string]$NativeVersionProbe = ""
 )
@@ -563,8 +564,10 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
     $nativeScript=$taskCwdSetup+[Environment]::NewLine+$envSetup+
         [Environment]::NewLine+$script+[Environment]::NewLine+
         '[void]$script:smartagentTrace.Add(''COMMAND_DISPATCH.FINISH'');'
+    # Explicit sentinel recognized only by the protected kernel wait loop.
+    $nativeWaitMilliseconds=if($WaitUntilExit){[uint32]::MaxValue}else{[uint32]($TimeoutSeconds*1000)}
     $nativeRaw=[SmartAgentGit47AppContainerProbe]::LaunchPowerShellCaptured(
-        $moniker,$nativeScript,$state.cwd,[uint32]($TimeoutSeconds*1000),
+        $moniker,$nativeScript,$state.cwd,$nativeWaitMilliseconds,
         [int]$MaxOutputBytes,[string]$toolchain.path)
     $native=$nativeRaw | ConvertFrom-Json -ErrorAction Stop
 
@@ -576,7 +579,7 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
     $nativeRunningAt=[double]$native.native_last_running_observed_at
     $nativeRunningEvidence=@{}
     if ($nativePid -le 0 -or $nativeRunningSamples -lt 0 -or
-        $nativeRunningSamples -gt 150 -or
+        (-not $WaitUntilExit -and $nativeRunningSamples -gt 150) -or
         ($nativeRunningSamples -eq 0 -and $nativeRunningAt -ne 0) -or
         ($nativeRunningSamples -gt 0 -and
          ($nativeRunningAt -le 0 -or
@@ -697,7 +700,7 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
         try {
             $git59Raw=[SmartAgentGit47AppContainerProbe]::LaunchVersionCaptured(
                 $moniker,$git59ProbeExecutable,$state.cwd,
-                [uint32]($TimeoutSeconds*1000),[string]$toolchain.path)
+                $nativeWaitMilliseconds,[string]$toolchain.path)
             $git59Os=$git59Raw | ConvertFrom-Json -ErrorAction Stop
             if ($git59Os.schema -ne 'SMARTAGENT_GIT47_APP_CONTAINER_PROCESS_V1' -or
                 $git59Os.sandbox_backend -ne 'WIN32_APPCONTAINER' -or
@@ -769,6 +772,7 @@ if(-not [string]::Equals($script:verifiedProviderCwd,'__CWD_LITERAL__',[StringCo
         native_direct_child_attestation=$git59Child
         native_executable_identity_verified=[bool]$git59Verified
         native_process_pid=$nativePid
+        wait_policy=$(if($WaitUntilExit){'UNTIL_EXIT'}else{'BOUNDED'})
         native_running_sample_count=$nativeRunningSamples
         native_last_running_evidence=$nativeRunningEvidence
         native_failure_stage=$nativeFailureStage

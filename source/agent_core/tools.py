@@ -616,18 +616,6 @@ def tool_run_command(
     if wait_policy not in {"BOUNDED", "UNTIL_EXIT"}:
         from .tool_result_contract import encode_result
         return encode_result("REJECTED", "RUN_COMMAND_WAIT_POLICY_INVALID", tool="run_command", executed=False)
-    if wait_policy == "UNTIL_EXIT":
-        from .auto_approve_mode import auto_approve_snapshot
-        from .tool_result_contract import encode_result
-        from .turbo_broker_admission import assess
-        state = auto_approve_snapshot(
-            security_context.workspace_root if security_context else None,
-            working_directory=cwd,
-        )
-        if (state.get("acl") != "OFF" or state.get("turbo_effective") != "OFF"
-                or state.get("auto_approve_effective") != "ON"
-                or assess(cwd, tool="run_command").get("decision") == "BROKER_REQUIRED"):
-            return encode_result("REJECTED", "LONG_EXECUTION_MODE_NOT_AUTHORIZED", tool="run_command", executed=False)
     from .action_dependencies import command_is_proven_observation
     observation_confirmed = command_is_proven_observation({'operation':operation,'command':policy_command})
     def finish(operation_result):
@@ -2325,7 +2313,11 @@ def _execute_tool_impl(tool_call: dict, agent=None, models: dict | None = None) 
             security_context=security_context, approval_manifest=approval_manifest,
             working_directory=tool_call.get('working_directory'),
             action_id=str(tool_call.get('action_id', '') or ''),
-            wait_policy=str(tool_call.get('wait_policy', "BOUNDED")),
+            # Ordinary run_command waits for process exit by default.
+            # Explicit BOUNDED/timeout reconciliation preserves negative tests.
+            wait_policy=str(tool_call.get('wait_policy',
+                "BOUNDED" if tool_call.get("reconciliation") is not None
+                else "UNTIL_EXIT")),
         )
         if agent:
             if "VERIFICATION_STATUS: PASS" in result:

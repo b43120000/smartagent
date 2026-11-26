@@ -378,6 +378,7 @@ def execute_turbo_command(
     max_stream_bytes: int = 1048576,
     task_id: str | None = None,
     action_id: str | None = None,
+    wait_policy: str = "BOUNDED",
 ) -> dict[str, Any]:
     """Run a PowerShell command only through the OS-attested native broker.
 
@@ -386,8 +387,12 @@ def execute_turbo_command(
     """
     if not isinstance(command, str) or not command.strip() or len(command) > 8192:
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_COMMAND_INVALID")
-    if type(timeout) is not int or timeout < 1 or timeout > 300:
+    if wait_policy not in {"BOUNDED", "UNTIL_EXIT"}:
+        raise TurboOSBrokerUnavailable("RUN_COMMAND_WAIT_POLICY_INVALID")
+    until_exit = wait_policy == "UNTIL_EXIT"
+    if type(timeout) is not int or timeout < 1 or (not until_exit and timeout > 300):
         raise TurboOSBrokerUnavailable("TURBO_OS_BROKER_TIMEOUT_INVALID")
+    broker_timeout = min(timeout, 300)
     limit = min(max(int(max_stream_bytes), 1), 2 * 1024 * 1024)
     workspace, actual_cwd = _resolve_workspace_and_cwd(cwd)
     activation, state, broker = _load_activation(actual_cwd)
@@ -414,16 +419,18 @@ def execute_turbo_command(
         "-TaskId", request_task,
         "-ActionId", request_action,
         "-CommandBase64", base64.b64encode(command.encode("utf-8")).decode("ascii"),
-        "-TimeoutSeconds", str(timeout),
+        "-TimeoutSeconds", str(broker_timeout),
         "-MaxOutputBytes", str(limit),
     ]
+    if until_exit:
+        args.append("-WaitUntilExit")
     native_version_probe = _git59_native_version_probe(command, _install_root())
     if native_version_probe:
         args.extend(["-NativeVersionProbe", native_version_probe])
     try:
         completed = subprocess.run(
             args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=timeout + 75,
+            stderr=subprocess.PIPE, timeout=None if until_exit else timeout + 75,
             check=False, text=True, encoding="utf-8", errors="replace",
             shell=False, env=_broker_process_env(),
         )
@@ -460,6 +467,7 @@ def execute_turbo_command(
         and receipt.get("executed") is True
         and receipt.get("output_is_authoritative") is False
         and receipt.get("status") == "EXECUTED_IN_OS_APPCONTAINER"
+        and (not until_exit or receipt.get("wait_policy") == "UNTIL_EXIT")
         and str(receipt.get("turbo_root", "")).casefold() ==
             str(activation["turbo_root"]).casefold()
     ):
@@ -506,7 +514,7 @@ def execute_turbo_command(
     native_last = receipt.get("native_last_running_evidence")
     if (type(process_pid) is not int or process_pid <= 0
             or type(native_samples) is not int
-            or not 0 <= native_samples <= 150
+            or not 0 <= native_samples <= (2147483647 if until_exit else 150)
             or not isinstance(native_last, dict)
             or bool(native_last) != (native_samples > 0)):
         raise TurboOSBrokerUnavailable("GIT63_NATIVE_RUNNING_EVIDENCE_INVALID")
@@ -524,7 +532,8 @@ def execute_turbo_command(
                 or native_last.get("pid") != process_pid
                 or native_last.get("running_sample_count") != native_samples
                 or type(observed) not in (int, float)
-                or not 0 <= now - float(observed) <= timeout + 75
+                or not 0 <= now - float(observed)
+                or (not until_exit and now - float(observed) > timeout + 75)
                 or native_last.get("terminal_eligible") is not False):
             raise TurboOSBrokerUnavailable("GIT63_NATIVE_RUNNING_EVIDENCE_INVALID")
 
@@ -685,6 +694,10 @@ def execute_turbo_command(
         "stdout_ref": "", "stderr_ref": "",
         "output_complete": not (out_cut or err_cut),
         "timed_out": False,
+        "wait_policy": wait_policy,
+        "long_wait_decision": "AUTO_CONTINUE" if until_exit else "",
+        "long_wait_state": "COMPLETED" if until_exit else "",
+        "long_wait_os_samples": native_samples if until_exit else 0,
         "process_started": True,
         "process_state": "EXITED",
         "execution_id": request_action,

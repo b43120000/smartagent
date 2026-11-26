@@ -41,7 +41,7 @@ def test_wait_policy_canonical_admission():
     assert issue["reason"] == "RUN_COMMAND_WAIT_POLICY_INVALID"
 
 
-def test_no_reply_auto_accept_only_after_ten_minutes(tmp_path, monkeypatch):
+def test_automatic_wait_from_first_sample_and_after_ten_minutes(tmp_path, monkeypatch):
     row = begin_wait(install=tmp_path, task_id="TASK-ONE", request_id="RR-ONE",
                      action_id="ACT-ONE", execution_id="exec-a", pid=123)
     import agent_core.long_execution_supervisor as sup
@@ -51,7 +51,9 @@ def test_no_reply_auto_accept_only_after_ten_minutes(tmp_path, monkeypatch):
            "process_state":"RUNNING", "evidence_source":"OWNED_POPEN_WAITPID",
            "liveness_verified":True}
     record_observation(tmp_path, row["wait_id"], obs)
-    assert read_wait(tmp_path, row["wait_id"])["decision"] == "PENDING"
+    assert read_wait(tmp_path, row["wait_id"])["decision"] == "AUTO_CONTINUE"
+    assert pending_notifications(tmp_path) == []
+    assert row["deadline_at"] is None
     fake["clock"] += 2
     obs["observed_at"] = fake["clock"]
     record_observation(tmp_path, row["wait_id"], obs)
@@ -59,23 +61,16 @@ def test_no_reply_auto_accept_only_after_ten_minutes(tmp_path, monkeypatch):
     assert read_wait(tmp_path, row["wait_id"])["state"] == "RUNNING"
 
 
-def test_callback_binding_and_safe_pause(tmp_path):
+def test_wait_never_offers_pause_or_requires_reply(tmp_path):
     row = begin_wait(install=tmp_path, task_id="TASK-ONE", request_id="RR-ONE",
                      action_id="ACT-ONE", execution_id="exec-a", pid=123)
-    assert len(pending_notifications(tmp_path)) == 1
-    assert bind_notice(tmp_path, row["wait_id"], chat_id=8765)
-    finish_notice(tmp_path, row["wait_id"], success=True)
-    with pytest.raises(ValueError):
-        set_decision(tmp_path, row["wait_id"], task_id="TASK-WRONG",
-                     chat_id=8765, choice="CONTINUE")
+    assert row["decision"] == "AUTO_CONTINUE"
+    assert row["notification"] == "NOT_REQUIRED"
+    assert pending_notifications(tmp_path) == []
+    assert not bind_notice(tmp_path, row["wait_id"], chat_id=8765)
     with pytest.raises(ValueError):
         set_decision(tmp_path, row["wait_id"], task_id="TASK-ONE",
-                     chat_id=8888, choice="CONTINUE")
-    updated = set_decision(tmp_path, row["wait_id"], task_id="TASK-ONE",
-                           chat_id=8765, choice="PAUSE_AFTER_EXIT")
-    assert updated["decision"] == "PAUSE_AFTER_EXIT"
-    assert set_decision(tmp_path, row["wait_id"], task_id="TASK-ONE",
-                        chat_id=8765, choice="CONTINUE")["decision"] == "PAUSE_AFTER_EXIT"
+                     chat_id=8765, choice="PAUSE_AFTER_EXIT")
 
 
 def test_completed_before_reply_and_os_identity_proven(tmp_path):
@@ -85,7 +80,7 @@ def test_completed_before_reply_and_os_identity_proven(tmp_path):
              "evidence_source":"OWNED_POPEN_WAITPID", "process_identity_verified":True}
     end = finish_wait(tmp_path, row["wait_id"], proof, 0)
     assert end["state"] == "COMPLETED"
-    assert end["decision"] == "COMPLETED_BEFORE_DECISION"
+    assert end["decision"] == "AUTO_CONTINUE"
     assert pending_notifications(tmp_path) == []
     assert end["exit_code"] == 0
 
@@ -104,7 +99,7 @@ def test_real_sidecar_python_process_waits_beyond_bounded_timeout(tmp_path):
         assert end["state"] == "COMPLETED"
         assert end["exit_code"] == 0
         assert end["liveness_sample_count"] >= 1
-        assert end["decision"] == "COMPLETED_BEFORE_DECISION"
+        assert end["decision"] == "AUTO_CONTINUE"
         assert (tmp_path / "localdata" / "runtime" / "long_execution" / "events.jsonl").exists()
     finally:
         if process.poll() is None:
@@ -150,7 +145,7 @@ def test_full_real_run_bounded_process_until_exit_sidecar(tmp_path, monkeypatch)
     assert response["long_wait_id"].startswith("WAIT-")
 
 
-def test_receiver_delivers_wait_prompt_and_accepts_bound_callback(tmp_path, monkeypatch):
+def test_receiver_sends_no_prompt_and_ignores_stale_callback(tmp_path, monkeypatch):
     """Telegram transport sidecar without network or a second Task."""
     from types import SimpleNamespace
     from RemoteAgent.telegram_transport import TelegramReceiver
@@ -177,17 +172,13 @@ def test_receiver_delivers_wait_prompt_and_accepts_bound_callback(tmp_path, monk
     receiver.client = SimpleNamespace(send_message=lambda chat_id, text, **kw:
                                        sent.append((chat_id,text,kw)))
     receiver._deliver_long_wait_prompts()
-    assert len(sent) == 1
-    assert "10 分鐘" in sent[0][1]
-    assert read_wait(tmp_path,row["wait_id"])["notification"] == "SENT"
-    receiver._deliver_long_wait_prompts()
-    assert len(sent) == 1
-    callback = SimpleNamespace(
-        sender_id="555", reply_context={"chat_id":555},
+    assert sent == []
+    assert read_wait(tmp_path,row["wait_id"])["notification"] == "NOT_REQUIRED"
+    callback = SimpleNamespace(sender_id="555", reply_context={"chat_id":555},
         text="long_wait_choice " + row["wait_id"] + " N")
     assert receiver._process_long_wait_choice(callback)
-    assert read_wait(tmp_path,row["wait_id"])["decision"] == "PAUSE_AFTER_EXIT"
-    assert len(sent) == 2
+    assert read_wait(tmp_path,row["wait_id"])["decision"] == "AUTO_CONTINUE"
+    assert sent == []
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows collect.bat is PowerShell backed")
