@@ -349,3 +349,36 @@ def test_git77_projection_retains_business_payload_without_fabricating_finish_fi
     assert p["business_output"]["facts"]["events.1.event_id"] == "new"
     assert "events.1.event_id" not in p["receipt"]["facts"]
     assert "must-not-project" not in json.dumps(p)
+
+
+def test_git77_explicit_evidence_slice_is_not_truncated_again():
+    import json
+    content = ('\\n"' * 800)[:2400]
+    receipt = {"tool":"read_runtime_evidence", "status":"SUCCEEDED",
+               "executed":True, "data":{"content":content, "offset":0,
+               "next_offset":len(content), "total_chars":len(content),
+               "complete":True}}
+    p = exe._planner_projection(receipt, json.dumps(receipt),
+        {"evidence_ref":"MIN-EV-test", "store_status":"PERSISTED_AND_READBACK_VERIFIED"})
+    assert p["receipt"]["facts"]["data.content"] == content
+    assert p["receipt"]["facts"]["data.next_offset"] == len(content)
+
+
+def test_git77_context_preserves_current_batch_and_bounded_older_witnesses():
+    import json
+    rows = []
+    for i in range(12):
+        receipt = {"status":"SUCCEEDED","executed":True,
+                   "data":{"fixture_phase":f"P{i}","stdout":"x"*7000}}
+        rows.append({"round":i+1 if i < 9 else 10,
+                     "tool":"observe_fact","evidence_ref":f"MIN-EV-{i}",
+                     "planner_evidence":exe._planner_projection(receipt,
+                        json.dumps(receipt),{"evidence_ref":f"MIN-EV-{i}",
+                        "store_status":"PERSISTED_AND_READBACK_VERIFIED"}),
+                     "toolResult":{"data":"x"*6000}})
+    p = exe._compact_recent(rows)
+    assert len(p["recent"]) == 3
+    assert len(p["older_evidence"]) == 9
+    assert p["older_evidence"][0]["facts"]["data.fixture_phase"] == "P0"
+    assert all("toolResult" not in row for row in p["recent"])
+    assert len(json.dumps(p)) < len(json.dumps(rows[-6:]))

@@ -21,7 +21,7 @@ from agent_core.task_progress import set_runtime_state
 from agent_core import path_integrity_trace as PIT
 from agent_core.tool_result_contract import decode_result
 from agent_core.runtime_finish_comparator import (
-    compare_runtime_finish, finish_input_projection, finish_runtime_field_catalog,
+    compare_runtime_finish, finish_input_projection,
 )
 from agent_core.finish_evidence_requirement import assess_finish_evidence_requirement
 from agent_core.finish_contract_adapter_v2 import adapt_finish_contract_v2
@@ -246,7 +246,8 @@ def _priority_key(key: str) -> tuple[int, str]:
         key, re.I) else 1, key)
 
 
-def _scalar_projection(value, *, prefix="", budget=2800, limit=72) -> dict:
+def _scalar_projection(value, *, prefix="", budget=2800, limit=72,
+                       string_limit=640) -> dict:
     """Bounded exact scalar facts, with explicit omissions; never invent fields.
 
     Breadth-first traversal keeps later sibling fields visible when one branch
@@ -277,8 +278,8 @@ def _scalar_projection(value, *, prefix="", budget=2800, limit=72) -> dict:
             for i, child in enumerate(item[:16]):
                 queue.append((f"{path}.{i}", child, depth+1))
         elif type(item) in (str, int, float, bool, type(None)):
-            is_preview = isinstance(item, str) and len(item) > 640
-            val = item[:640] if is_preview else item
+            is_preview = isinstance(item, str) and len(item) > string_limit
+            val = item[:string_limit] if is_preview else item
             charge = len(_json_compact({path: val})) + 1
             if used + charge > budget:
                 omitted = True
@@ -299,16 +300,32 @@ def _planner_projection(receipt, raw_result, pointer):
     # The decoded Runtime receipt is authoritative. Business JSON is an
     # observation of the original tool output, NOT a new Finish field.
     persisted = pointer.get("store_status") == "PERSISTED_AND_READBACK_VERIFIED"
-    result = {"receipt": _scalar_projection(receipt, budget=2700),
+    # Keep the explicit evidence slice losslessly. A second truncation
+    # would make offset/next_offset misleading and force additional calls.
+    body = receipt.get("data")
+    is_slice = (receipt.get("tool") == "read_runtime_evidence"
+                and isinstance(body, Mapping)
+                and isinstance(body.get("content"), str))
+    projected_receipt = receipt
+    if is_slice:
+        projected_receipt = {**receipt, "data": {
+            k: v for k, v in body.items() if k != "content"}}
+    result = {"receipt": _scalar_projection(projected_receipt, budget=2400,
+                                            string_limit=1600),
               "evidence_ref": pointer.get("evidence_ref"),
               "store_status": pointer.get("store_status")}
+    if is_slice:
+        result["receipt"]["facts"]["data.content"] = body["content"]
     try:
-        raw = json.loads(str(raw_result))
+        raw = json.loads(re.sub(r"^\\[(?:TOOL_RESULT|CHUNKED_WRITE_(?:SUCCESS|FAILED)|"
+                                r"SECURITY_DELETE_(?:SUCCESS|FAILED|REJECTED))\\]\\s*",
+                                "", str(raw_result).strip()))
     except (ValueError, TypeError):
         raw = None
     if isinstance(raw, dict) and isinstance(raw.get("_runtime_result"), dict):
         business = {k: v for k, v in raw.items() if k != "_runtime_result"}
-        result["business_output"] = _scalar_projection(business, budget=3000)
+        result["business_output"] = _scalar_projection(business, budget=2400,
+                                                       string_limit=1600)
         result["business_output_note"] = "raw tool output; not a receipt field or Finish witness"
     if persisted:
         result["read_tool"] = "read_runtime_evidence"
@@ -316,35 +333,47 @@ def _planner_projection(receipt, raw_result, pointer):
 
 
 def _compact_recent(recent):
-    # Latest batch (at most six actions) is retained in full projection.
-    # Older exact scalar facts stay in a bounded index, not repeated raw JSON.
-    latest = recent[-6:]
+    """Keep the latest round and a bounded index of prior verified receipts.
+
+    Use actual scalar values instead of repeating six verbose results plus
+    the old field-name-only catalog. Omitted facts remain in immutable MIN-EV.
+    """
+    newest_round = recent[-1].get("round") if recent else None
+    latest = [row for row in recent if row.get("round") == newest_round]
+    previous = [row for row in recent if row.get("round") != newest_round]
     older = []
     used = 0
-    for row in reversed(recent[:-6]):
+    for row in reversed(previous):
         p = row.get("planner_evidence") or {}
         facts = (p.get("receipt") or {}).get("facts") or {}
-        facts = {k: v for k, v in facts.items()
-                 if k in {"status", "reason", "executed"} or
-                 k.startswith("data.") and _priority_key(k)[0] == 0
-                 and not isinstance(v, str) or
-                 k.startswith("data.") and isinstance(v, str) and len(v) <= 160
-                 and re.search(r"snapshot|sha256|context_ref|revision|event_id|state|status|path|value", k, re.I)}
         card = {"round": row.get("round"), "tool": row.get("tool"),
                 "action_id": row.get("action_id"), "evidence_ref": row.get("evidence_ref"),
-                "facts": facts}
+                "store_status": row.get("evidence_store_status"),
+                "facts": {}}
         if not card["evidence_ref"]:
             continue
+        # Keep short arbitrary scalar values as well as common project facts.
+        # No task-specific fields are prerequisites or new Finish contracts.
+        for key, value in sorted(facts.items(), key=lambda item: _priority_key(item[0])):
+            if not (key in {"status", "reason", "executed"} or key.startswith("data.")):
+                continue
+            if isinstance(value, str) and len(value) > 160:
+                continue
+            trial = {**card["facts"], key: value}
+            if len(_json_compact(trial)) <= 440:
+                card["facts"] = trial
+        card["omitted"] = len(card["facts"]) < len(facts) or bool(
+            (p.get("receipt") or {}).get("omitted"))
         size = len(_json_compact(card))
         if used + size > 6500:
             continue
         older.append(card)
         used += size
-    # Do not send the old ToolResult string again alongside its projection.
     return {"recent": [{k: v for k, v in row.items() if k != "toolResult"}
                        if row.get("planner_evidence") else row for row in latest],
             "older_evidence": older[::-1],
-            "older_evidence_index_omitted": len(older) < max(0, len(recent)-6)}
+            "older_evidence_index_omitted": len(older) < sum(
+                bool(row.get("evidence_ref")) for row in previous)}
 
 
 def _compact_tool_catalog(tools):
@@ -827,7 +856,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "action_count": len(batch), "executed": False,
                 "authorization_granted": False,
             })
-        batch_completed = 0
+        batch_observed = 0
         for batch_index, decision in enumerate(batch, 1):
             loop._check_cancelled()
             proposed = {"tool": decision.tool, **dict(decision.arguments or {})}
@@ -1856,7 +1885,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
             # Do not execute the remaining preplanned actions if the result
             # is not proven successful, a postcondition failed, or a recovery
             # is required. Never re-execute successful prefix actions.
-            batch_completed += 1
+            batch_observed += 1
             if (runtime_status != "SUCCEEDED"
                     or receipt.get("executed") is not True
                     or evidence_pointer.get("store_status") != "PERSISTED_AND_READBACK_VERIFIED"
@@ -1870,7 +1899,7 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         if len(batch) > 1:
             append_executor_event(root, loop, {
                 "round": turn, "kind": "PLANNER_BATCH_RETURNED",
-                "action_count": len(batch), "observed_count": batch_completed,
+                "action_count": len(batch), "observed_count": batch_observed,
                 "unprocessed_count": len(batch) - batch_index,
                 "executed": False, "authorization_granted": False,
             })
