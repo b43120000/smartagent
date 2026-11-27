@@ -86,6 +86,8 @@ jobs:
           source/WebAgent/tests/test_git71_timeout_reconciliation.py
           source/WebAgent/tests/test_git74_long_execution_supervisor.py
           source/WebAgent/tests/test_git50_turbo_broker_dispatch.py
+          source/WebAgent/tests/test_git52_executor_command_rca.py
+          source/WebAgent/tests/test_git37_executor_admission_collector.py
           source/WebAgent/tests/test_git63_native_liveness_p0_p2.py
           source/WebAgent/tests/test_git74_unified_preflight.py
           source/WebAgent/tests/test_shared_blackboard_strategy.py

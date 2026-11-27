@@ -209,3 +209,56 @@ def test_collector_exports_readable_commands_and_stderr(tmp_path):
     assert "Could not resolve host" in text
     assert summary["capture_status"] == "CAPTURED"
     assert summary["command_result_captured_count"] == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows collector integration")
+def test_git77_collector_recovers_archives_and_same_round_commands(tmp_path):
+    import hashlib
+    shutil.copy2(_REPO / "collect.bat", tmp_path / "collect.bat")
+    skeleton=tmp_path/"source"/"WebAgent"
+    skeleton.mkdir(parents=True)
+    (skeleton/"protocol_loop.py").write_text("# fixture\n")
+    task,request,epoch="TASK-G77-ARCHIVE","RR-G77-ARCHIVE","EPOCH-G77"
+    target=tmp_path/"localdata"/"runtime"/"executor_run_blackboard"
+    archive_dir=target/"event_archive"/task
+    archive_dir.mkdir(parents=True)
+    events=[]
+    for i in range(2):
+        action=f"MIN-CMD-{i}"
+        cmd="git status --short"
+        capture=capture_command_rca({"command":cmd,"operation":"GIT_INSPECT"},
+                                    {"command":cmd,"operation":"GIT_INSPECT"})
+        events.append({"kind":"ACTION_ADMITTED","toolName":"run_command","round":1,
+                       "action_id":action,"command_rca":capture})
+        events.append({"kind":"TOOL_RESULT","toolName":"run_command","round":1,
+                       "action_id":action,"runtimeEvidence":{"status":"SUCCEEDED",
+                       "executed":True,"evidence_ref":f"MIN-EV-{i}"}})
+    events.append({"kind":"ADMISSION_REJECTED","toolName":"observe_fact","round":2,
+                   "runtimeEvidence":{"status":"REJECTED","executed":False,"reason_code":"TEST_REJECT"}})
+    events.append({"kind":"PLANNER_CONTEXT_PREPARED","round":1,"prompt_chars":1234,
+                   "prompt_utf8_bytes":1300,"context_digest":"a"*64,"evidence_total":0})
+    for i,event in enumerate(events,1):event["sequence"]=i
+    archive={"schema":"SMARTAGENT_EXECUTOR_RUN_EVENTS_ARCHIVE_V1","task_id":task,
+             "request_id":request,"task_epoch":epoch,"first_sequence":1,"last_sequence":5,
+             "events":events[:5]}
+    digest=hashlib.sha256(json.dumps(archive,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+    archive["sha256"]=digest
+    (archive_dir/"1-5.json").write_text(json.dumps(archive),encoding="utf-8")
+    board={"schema":"SMARTAGENT_EXECUTOR_RUN_BLACKBOARD_V1","task_id":task,
+           "request_id":request,"task_epoch":epoch,"event_count_total":6,
+           "archive_chunks":[{"first_sequence":1,"last_sequence":5,"archive_name":"1-5.json","sha256":digest}],
+           "events":events[5:],"terminal":{"kind":"MODEL_REPORTED_COMPLETE_UNVERIFIED","admission_rejection_count":1}}
+    (target/f"{task}.json").write_text(json.dumps(board),encoding="utf-8")
+    result=subprocess.run(["cmd.exe","/c",str(tmp_path/"collect.bat"),task,request],
+                          cwd=tmp_path,capture_output=True,text=True,timeout=120)
+    assert result.returncode==0,(result.stdout,result.stderr)
+    z=next((tmp_path/"localdata"/"diagnostics"/"gar_live_rca").glob("*.zip"))
+    with zipfile.ZipFile(z) as bundle:
+        commands=json.loads(bundle.read("executor_run_commands.json"))
+        rejected=json.loads(bundle.read("action_admission_rejections.json"))
+        context=json.loads(bundle.read("planner_context_delivery.json"))
+        admission=json.loads(bundle.read("executor_admission_summary.json"))
+    assert {r["action_id"] for r in commands}=={"MIN-CMD-0","MIN-CMD-1"}
+    assert len(rejected)==1 and rejected[0]["executed"] is False
+    assert admission["archive_chunks_read"]==1
+    assert any(r.get("prompt_chars")==1234 for r in context)
