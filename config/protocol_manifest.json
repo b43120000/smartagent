@@ -16,7 +16,7 @@
     "adapterUI/7.stopButton.bat": "daed1516b14838e64c3fe26818e09d2eedb00088ac5f08f1295bf4c694d62cbb",
     "adapterUI/8.generationState.bat": "4ff66ebe6f50063a1f94446ff16f992f033ebaf53020aeb8fddfc896f87432a0",
     "adapterUI/9.blockingState.bat": "afbc2ec146f5185db50e8875d2c6c80c67c5bc13b5986ebca67e5a8ec2efe383",
-    "collect.bat": "f1ccade0b1b35bab99a939b25fe17eb91c31ca1e46e6c5aaf9b4a6590bd553a8",
+    "collect.bat": "4010c9d897bb6cab2c645dc8c77e07ad66fcfb5597c352673d4aa1a84265bcc2",
     "config/debug_config.defaults.json": "789f845b1a55db9d1772c3b5a5fde78b070a3c9c281a69d51fb8bc55680eb68a",
     "config/feature_flags.defaults.json": "c02d0ba5b29d77b04225b3f772daf9e27af5aba88fe2a45d7f855c683fe51e5e",
     "config/managed_toolchains_catalog.json": "bb6061dc0620b7d52031dd387716c7b78c8277025d075f4c062fb12af04843d3",
