@@ -382,3 +382,49 @@ def test_git77_context_preserves_current_batch_and_bounded_older_witnesses():
     assert p["older_evidence"][0]["facts"]["data.fixture_phase"] == "P0"
     assert all("toolResult" not in row for row in p["recent"])
     assert len(json.dumps(p)) < len(json.dumps(rows[-6:]))
+
+
+def test_git77_project_observation_fields_and_priority():
+    from agent_core.tool_result_policy import structured_outcome
+    payload = {"schema":"PROJECT_ACCESS_QUERY_RESULT_V1","status":"READY",
+        "snapshot_id":"snap","results":[{"status":"OK","operation":"get_file_metadata",
+        "file":{"path":"src/a.py","sha256":"a"*64,"size_bytes":303},
+        "context_ref":"reference"}]}
+    status, reason, executed, data = structured_outcome("query_project", payload)
+    assert executed and status == "SUCCEEDED"
+    assert data["project_facts"]["results"][0]["file"]["sha256"] == "a"*64
+    receipt = {"status":status,"data":{**data,"stdout":"x"*20000}}
+    p = exe._scalar_projection(receipt, budget=1000, string_limit=100)
+    assert p["facts"]["data.project_facts.results.0.file.sha256"] == "a"*64
+    assert p["facts"]["data.project_facts.results.0.context_ref"] == "reference"
+
+
+def test_git77_audit_reads_do_not_evict_primary_witnesses():
+    rows = []
+    for i in range(50):
+        primary = i < 8
+        facts = {"data.project_facts.latest_snapshot_id": str(i)*32,
+                 "data.fixture_phase": "P"+str(i),
+                 "data.stdout": "a"*1000}
+        rows.append({"round": i+1, "tool":"query_project" if primary else "read_runtime_evidence",
+                     "evidence_ref":"MIN-EV-"+str(i),
+                     "planner_evidence":{"receipt":{"facts":facts,"omitted":False}}})
+    p=exe._compact_recent(rows)
+    refs={r["evidence_ref"]:r for r in p["older_evidence"]}
+    assert all("MIN-EV-"+str(i) in refs for i in range(8))
+    assert refs["MIN-EV-0"]["facts"]["data.fixture_phase"]=="P0"
+
+
+def test_git77_finish_length_diagnostic_preserves_goal_checks():
+    import json
+    from WebAgent.minimal_decision import parse_minimal_decision_with_diagnostics, MinimalDecisionError
+    checks=[{"criterion":"P0","evidence_ref":"MIN-EV-test","field":"data.value","operator":"eq","expected":1}]
+    decision={"type":"finish","contract_version":2,"summary":"x"*3001,"goal_checks":checks}
+    with pytest.raises(MinimalDecisionError) as error:
+        parse_minimal_decision_with_diagnostics(json.dumps(decision))
+    assert error.value.code=="decision_message_invalid"
+    assert error.value.diagnostic["message_issue"]=="TOO_LONG"
+    assert error.value.diagnostic["message_chars"]==3001
+    decision["summary"]="  "+"x"*3000+"  "
+    result,_=parse_minimal_decision_with_diagnostics(json.dumps(decision))
+    assert len(result.message)==3000 and result.goal_checks==checks

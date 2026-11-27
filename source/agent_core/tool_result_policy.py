@@ -26,6 +26,64 @@ def business_payload(result):
     return value if isinstance(value,dict) else None
 
 
+def _project_facts(tool, payload):
+    """Exact bounded producer observations; never infer completion claims."""
+    top = {
+        'inspect_project_ledger': ('event_count','event_type_counts','latest_event_id',
+            'latest_snapshot_id','project_id','index_consistency','recent_events'),
+        'query_project_history': ('project_id','match_count','events'),
+        'query_project': ('snapshot_id','project_handle','query_id','result_count',
+            'response_truncated','results'),
+        'project_sync': ('snapshot_id','project_handle','strategy','sync_status',
+            'attachments_uploaded','source_state','changed_files'),
+    }.get(tool, ())
+    nested = {'event_id','event_type','snapshot_id','parent_snapshot_id','changed_files',
+        'status','operation','query_index','error','path','file',
+        'sha256','file_sha256','context_ref','size_bytes','mtime_ns','content',
+        'start_line','end_line','truncated','next_cursor','page_cursor','line_count'}
+    def copy(value, depth=0):
+        if type(value) in (bool,int,float,type(None)):
+            return value
+        if isinstance(value,str):
+            return value if len(value)<=2400 else None
+        if depth>=5:
+            return None
+        if isinstance(value,list):
+            if len(value)>16:
+                return None
+            out=[]
+            for item in value:
+                v=copy(item,depth+1)
+                if v is None and item is not None:
+                    return None
+                out.append(v)
+            return out
+        if isinstance(value,dict):
+            out={}
+            for k,item in value.items():
+                if k not in nested:
+                    continue
+                v=copy(item,depth+1)
+                if v is not None or item is None:
+                    out[k]=v
+            return out
+        return None
+    facts={}
+    for key in top:
+        if key not in payload:
+            continue
+        value=payload[key]
+        if key=='event_type_counts':
+            if isinstance(value,dict):
+                facts[key]={k:v for k,v in value.items() if isinstance(k,str)
+                            and k.isidentifier() and type(v) is int}
+            continue
+        observed=copy(value)
+        if observed is not None or value is None:
+            facts[key]=observed
+    return facts
+
+
 def structured_outcome(tool, payload, *, expected_outcome=None):
     if not isinstance(payload,dict):
         return 'UNKNOWN','INVALID_BUSINESS_RESULT',False,{}
@@ -214,4 +272,6 @@ def structured_outcome(tool, payload, *, expected_outcome=None):
         status,reason,executed='SUCCEEDED','PROJECT_LEDGER_READ',True
     elif tool=='query_project_history' and payload.get('schema')=='PROJECT_LEDGER_QUERY_RESULT_V1':
         status,reason,executed='SUCCEEDED','PROJECT_HISTORY_READ',True
+    if executed and tool in {'inspect_project_ledger','query_project_history','query_project','project_sync'}:
+        data['project_facts'] = _project_facts(tool, payload)
     return status,reason,executed,data

@@ -239,11 +239,16 @@ def _safe_projection_key(key) -> bool:
 
 def _priority_key(key: str) -> tuple[int, str]:
     # Preserve business identifiers and verdicts ahead of verbose diagnostics.
-    return (0 if re.search(
-        r"snapshot|sha256|context_ref|revision|event_count|sync_completed|changed_files|"
-        r"status|reason|exit_code|exists|count|value|path|error|verification|state|"
-        r"content|stdout|stderr|event_id|event_type|mtime|size|observations|history|ledger",
-        key, re.I) else 1, key)
+    if re.search(r"(^|\.)(?:stdout|stderr|content|text|detail)$", key, re.I):
+        return (3, key)
+    if re.search(r"snapshot|context_ref|revision|event_count|sync_completed|changed_files|"
+                 r"exit_code|exists|value|file_sha256|event_id|mtime|size|fixture|target_luma",
+                 key, re.I):
+        return (0, key)
+    if re.search(r"status|reason|sha256|count|path|error|verification|state|event_type",
+                 key, re.I):
+        return (1, key)
+    return (2, key)
 
 
 def _scalar_projection(value, *, prefix="", budget=2800, limit=72,
@@ -259,7 +264,10 @@ def _scalar_projection(value, *, prefix="", budget=2800, limit=72,
     previews = {}
     omitted = False
     used = 0
-    while queue and len(fields) + len(previews) < limit:
+    candidates = []
+    scanned = 0
+    while queue and scanned < 4096:
+        scanned += 1
         path, item, depth = queue.popleft()
         if depth > 9:
             omitted = True
@@ -278,20 +286,24 @@ def _scalar_projection(value, *, prefix="", budget=2800, limit=72,
             for i, child in enumerate(item[:16]):
                 queue.append((f"{path}.{i}", child, depth+1))
         elif type(item) in (str, int, float, bool, type(None)):
-            is_preview = isinstance(item, str) and len(item) > string_limit
-            val = item[:string_limit] if is_preview else item
-            charge = len(_json_compact({path: val})) + 1
-            if used + charge > budget:
-                omitted = True
-                continue
-            used += charge
-            if is_preview:
-                previews[path] = val
-                omitted = True
-            else:
-                fields[path] = val
+            candidates.append((path, item))
         else:
             omitted = True
+    for path, item in sorted(candidates, key=lambda pair: (
+            isinstance(pair[1], str) and len(pair[1]) > string_limit,
+            _priority_key(pair[0]))):
+        is_preview = isinstance(item, str) and len(item) > string_limit
+        val = item[:string_limit] if is_preview else item
+        charge = len(_json_compact({path: val})) + 1
+        if used + charge > budget or len(fields) + len(previews) >= limit:
+            omitted = True
+            continue
+        used += charge
+        if is_preview:
+            previews[path] = val
+            omitted = True
+        else:
+            fields[path] = val
     return {"facts": fields, "string_previews": previews,
             "omitted": bool(omitted or queue)}
 
@@ -310,8 +322,8 @@ def _planner_projection(receipt, raw_result, pointer):
     if is_slice:
         projected_receipt = {**receipt, "data": {
             k: v for k, v in body.items() if k != "content"}}
-    result = {"receipt": _scalar_projection(projected_receipt, budget=2400,
-                                            string_limit=1600),
+    result = {"receipt": _scalar_projection(projected_receipt, budget=5200, limit=112,
+                                            string_limit=2400),
               "evidence_ref": pointer.get("evidence_ref"),
               "store_status": pointer.get("store_status")}
     if is_slice:
@@ -326,6 +338,11 @@ def _planner_projection(receipt, raw_result, pointer):
         business = {k: v for k, v in raw.items() if k != "_runtime_result"}
         result["business_output"] = _scalar_projection(business, budget=2400,
                                                        string_limit=1600)
+        known = result["receipt"]["facts"]
+        result["business_output"]["facts"] = {
+            k: v for k, v in result["business_output"]["facts"].items()
+            if "data.project_facts."+k not in known
+            or known["data.project_facts."+k] != v}
         result["business_output_note"] = "raw tool output; not a receipt field or Finish witness"
     if persisted:
         result["read_tool"] = "read_runtime_evidence"
@@ -343,7 +360,9 @@ def _compact_recent(recent):
     previous = [row for row in recent if row.get("round") != newest_round]
     older = []
     used = 0
-    for row in reversed(previous):
+    audit_tools = {"read_runtime_evidence", "read_runtime_blackboard"}
+    for row in sorted(reversed(previous), key=lambda r: r.get("tool") in audit_tools):
+        audit = row.get("tool") in audit_tools
         p = row.get("planner_evidence") or {}
         facts = (p.get("receipt") or {}).get("facts") or {}
         card = {"round": row.get("round"), "tool": row.get("tool"),
@@ -357,21 +376,21 @@ def _compact_recent(recent):
         for key, value in sorted(facts.items(), key=lambda item: _priority_key(item[0])):
             if not (key in {"status", "reason", "executed"} or key.startswith("data.")):
                 continue
-            if isinstance(value, str) and len(value) > 160:
+            if isinstance(value, str) and len(value) > (160 if audit else 1200):
                 continue
             trial = {**card["facts"], key: value}
-            if len(_json_compact(trial)) <= 440:
+            if len(_json_compact(trial)) <= (300 if audit else 1600):
                 card["facts"] = trial
         card["omitted"] = len(card["facts"]) < len(facts) or bool(
             (p.get("receipt") or {}).get("omitted"))
         size = len(_json_compact(card))
-        if used + size > 6500:
+        if used + size > 16000:
             continue
         older.append(card)
         used += size
     return {"recent": [{k: v for k, v in row.items() if k != "toolResult"}
                        if row.get("planner_evidence") else row for row in latest],
-            "older_evidence": older[::-1],
+            "older_evidence": sorted(older, key=lambda row: row["round"] or 0),
             "older_evidence_index_omitted": len(older) < sum(
                 bool(row.get("evidence_ref")) for row in previous)}
 
@@ -402,7 +421,7 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "Finish or Blocked inside batches. Stop on failure/rejection/uncertain effects; "
         "unexecuted tail is not evidence. Replan only unfinished work. Use one action "
         "for decisions that require inspecting earlier results. Reconciliation stays single-action.\n"
-        'Finish: {"type":"finish","summary":"actual result","goal_checks":[{"criterion":"original requirement (include its P0/Case A label if any)","evidence_ref":"actual MIN-EV","field":"data.actual_field","operator":"eq","expected":"actual required value"}]}\n'
+        'Finish: {"type":"finish","contract_version":2,"summary":"actual result","goal_checks":[{"criterion":"original requirement (include its P0/Case A label if any)","evidence_ref":"actual MIN-EV","field":"data.actual_field","operator":"eq","expected":"actual required value"}]}\n'
         'Blocked: {"type":"blocked","reason":"specific external constraint, exhausted lawful alternatives and concrete user action needed"}\n'
         "No mandatory StagePlan or StageCommit. Revise the plan freely within "
         "original constraints; preserve completed work. A failed attempt, schema "
@@ -434,7 +453,10 @@ def _prompt(request: str, tools, recent: list[dict], *, round_id: int,
         "For compiled goals Runtime checks original conditions automatically. For "
         "uncompiled goals provide typed goal_checks covering every essential "
         "requirement, including each original explicitly numbered phase. A repeated "
-        "fact cannot substitute for separate requirements. No need to restate all "
+        "fact cannot substitute for separate requirements. Use exact receipt facts, not raw business previews. "
+        "Finish summary MUST be a nonempty string, max 3000 characters; aim below 2500. "
+        "Keep essential results and requested metrics; avoid repeating evidence already in goal_checks. "
+        "No need to restate all "
         "Runtime records or send expected_runtime. Pure text may finish with "
         "summary alone only when answer-only eligible.\n"
         f"Working directory (not an authorization grant): {tools.workspace_root}\n"
@@ -727,6 +749,13 @@ def run_pokeclaw_executor(loop, request: str) -> str:
         # different from the legacy protocol_loop planner/parser branch.
         # A browser-extracted model response is NOT server/network raw bytes.
         PIT.record("08_minimal_prompt", prompt, evidence_status="PLANNER_PROMPT_STRING", extra={"round": turn})
+        append_executor_event(root, loop, {
+            "round": turn, "kind": "PLANNER_CONTEXT_PREPARED",
+            "prompt_chars": len(prompt), "prompt_utf8_bytes": len(prompt.encode("utf-8")),
+            "context_digest": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "evidence_total": len(loop.action_result_ledger),
+            "executed": False, "authorization_granted": False,
+        })
         # Model DOM transport interruption may have sent a turn. Do not retry
         # the transport without its established correlation protocol.
         response = loop.planner(prompt, None, attachments)
@@ -774,8 +803,17 @@ def run_pokeclaw_executor(loop, request: str) -> str:
                 "round": turn, "kind": "MODEL_DECISION_REJECTED",
                 "decision_sha256": _digest(str(response)),
                 "error_code": exc.code, "executed": False,
+                "decision_diagnostic": {k: exc.diagnostic[k] for k in (
+                    "message_field","message_type","message_chars","message_limit",
+                    "message_issue","response_chars","response_bytes") if k in exc.diagnostic},
             })
             hint = "DECISION_REPAIR: " + exc.code + ". Return one valid JSON decision."
+            if exc.code == "decision_message_invalid":
+                hint += (" Finish summary must be a nonempty string of at most 3000 characters. "
+                         "Retain all goal_checks; shorten redundant prose only. "
+                         "Do not repeat tool actions already completed. Diagnosis=" +
+                         _json_compact({k: exc.diagnostic.get(k) for k in
+                            ("message_issue","message_type","message_chars","message_limit")}))
             continue
         if decision.kind in {"stage_plan", "stage_commit"}:
             append_executor_event(root, loop, {

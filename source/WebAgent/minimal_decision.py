@@ -172,7 +172,12 @@ def _to_decision(data: dict, meta: dict, *, allow_batch: bool = False) -> Minima
         if type(version) is not int or version not in (1, 2):
             raise MinimalDecisionError("finish_contract_version_invalid", meta)
         value = _field(data, ("summary", "answer", "text"), meta)
-        if not isinstance(value, str) or not value.strip() or len(value) > 3000:
+        meta.update(message_field="summary", message_type=type(value).__name__,
+                    message_chars=len(value) if isinstance(value, str) else None,
+                    message_limit=3000)
+        if not isinstance(value, str) or not value.strip() or len(value.strip()) > 3000:
+            meta["message_issue"] = ("WRONG_TYPE" if not isinstance(value, str)
+                else "EMPTY" if not value.strip() else "TOO_LONG")
             raise MinimalDecisionError("decision_message_invalid", meta)
         expectations = data.get("expected_runtime")
         if version == 2 and expectations not in (None, []):
