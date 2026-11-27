@@ -125,6 +125,10 @@ def test_executor_blackboard_persists_command_without_executing_twice(
             proposal.get("tool") == "run_command"
             else {"decision": "NOT_APPLICABLE", "state": None, "evidence": {}},
     )
+    # This capture-only harness supplies exactly two model decisions. The
+    # lean Runtime correctly refuses an unproven blocked decision; bound the
+    # harness, not the production loop, so its iterator cannot exhaust.
+    loop.max_turns = 2
     run_minimal_core(loop, request)
     board = read_executor_run(tmp_path, task_id=loop.task_id)
     admitted = next(x for x in board["events"] if x["kind"] == "ACTION_ADMITTED")
